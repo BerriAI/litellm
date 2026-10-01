@@ -189,8 +189,12 @@ async def test_insert_validates_values_without_pydantic_copy(recording_server: R
     invalid: Final = object()
     with pytest.raises(ValueError, match=type(invalid).__name__):
         await storage.insert_rows("otel_traces", [{"ResourceAttributes": invalid}])
-    await storage.insert_rows("otel_traces", (MappingProxyType({"Timestamp": 1}),))
-    assert (
-        json.loads(gzip.decompress(recording_server.requests[0].raw_body))["Timestamp"]
-        == "1970-01-01T00:00:00.000000001Z"
+    attributes: Final = MappingProxyType({"service.name": "trace-test"})
+    await storage.insert_rows(
+        "otel_traces",
+        (MappingProxyType({"Timestamp": 1, "ResourceAttributes": attributes, "SpanAttributes": attributes}),),
     )
+    stored: Final = json.loads(gzip.decompress(recording_server.requests[0].raw_body))
+    assert stored["Timestamp"] == "1970-01-01T00:00:00.000000001Z"
+    assert stored["ResourceAttributes"] == attributes
+    assert stored["SpanAttributes"] == attributes

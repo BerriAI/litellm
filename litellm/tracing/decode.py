@@ -18,6 +18,7 @@ from types import MappingProxyType
 from typing import Final
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import OTLP_MAX_ATTRIBUTE_VALUE_BYTES, OTLP_MAX_BODY_BYTES
 from litellm.rust_bridge.traces import DecodedSpan
@@ -48,6 +49,20 @@ class InvalidOTLPPayloadError(ValueError):
 
 class OTLPPayloadTooLargeError(OverflowError):
     pass
+
+
+class MessageExtras(TypedDict):
+    tool_calls: ReadOnly[NotRequired[JsonValue]]
+    name: ReadOnly[NotRequired[str]]
+
+
+class NormalizedMessage(MessageExtras):
+    role: ReadOnly[str]
+    content: ReadOnly[str]
+
+
+class OTLPError(TypedDict):
+    message: ReadOnly[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +138,9 @@ def _span_row(span: DecodedSpan) -> SpanRow:
         ResourceAttributes=span["resource_attributes"],
         ScopeName=span["scope_name"],
         ScopeVersion=span["scope_version"],
-        SpanAttributes={key: _truncate(value) for key, value in attributes.items() if key not in normalized.consumed},
+        SpanAttributes=MappingProxyType(
+            {key: _truncate(value) for key, value in attributes.items() if key not in normalized.consumed}
+        ),
         Duration=span["end_ns"] - span["start_ns"],
         StatusCode=span["status_code"],
         StatusMessage=span["status_message"] or _exception_message(span),
@@ -153,7 +170,7 @@ def _text(value: JsonValue) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _message(value: JsonValue) -> dict[str, JsonValue] | None:
+def _message(value: JsonValue) -> NormalizedMessage | None:
     if not isinstance(value, dict):
         return None
     kwargs: Final = value.get("kwargs", value)
@@ -167,12 +184,16 @@ def _message(value: JsonValue) -> dict[str, JsonValue] | None:
         return None
     role: Final = _LC_ROLES.get(kind, kind)
     content: Final = kwargs.get("content", "")
-    return {
+    name: Final = kwargs.get("name")
+    tool_calls: Final = MessageExtras(tool_calls=calls) if calls else MessageExtras()
+    tool_name: Final = MessageExtras(name=name) if role == "tool" and isinstance(name, str) else MessageExtras()
+    message: Final[NormalizedMessage] = {
         "role": role,
         "content": content if isinstance(content, str) else json.dumps(content),
-        **({"tool_calls": calls} if calls else {}),
-        **({"name": kwargs["name"]} if role == "tool" and isinstance(kwargs.get("name"), str) else {}),
+        **tool_calls,
+        **tool_name,
     }
+    return message
 
 
 def _messages(value: JsonValue, raw: str) -> str:
@@ -306,7 +327,8 @@ def normalize(span: DecodedSpan) -> NormalizedSpan:
 def encode_otlp_response(content_type: str | None, error: str | None = None) -> tuple[bytes, str]:
     media_type: Final = (content_type or "application/x-protobuf").split(";", 1)[0].strip().lower()
     if media_type == "application/json":
-        return (json.dumps({"message": error}).encode() if error else b"{}"), "application/json"
+        response: Final[OTLPError] = {"message": error or ""}
+        return (json.dumps(response).encode() if error else b"{}"), "application/json"
     if error is None:
         return b"", "application/x-protobuf"
     return native_encode_error(error), "application/x-protobuf"

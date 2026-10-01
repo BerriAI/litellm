@@ -10,6 +10,7 @@ GET  /v1/traces/{trace_id}/spans/{span_id}   SpanDetail
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -82,7 +83,7 @@ def _otlp_error(content_type: str | None, status_code: int, message: str, retry:
         content=body,
         status_code=status_code,
         media_type=media_type,
-        headers={"Retry-After": str(OTLP_RETRY_AFTER_SECONDS)} if retry else None,
+        headers=MappingProxyType({"Retry-After": str(OTLP_RETRY_AFTER_SECONDS)}) if retry else None,
     )
 
 

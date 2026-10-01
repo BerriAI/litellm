@@ -9,7 +9,7 @@ A trace is one agent run. It's made of spans (agent / llm / tool / chain / frame
 
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -113,10 +113,10 @@ class SpanRow(TypedDict):
     SpanName: ReadOnly[str]
     SpanKind: ReadOnly[str]
     ServiceName: ReadOnly[str]
-    ResourceAttributes: ReadOnly[dict[str, str]]
+    ResourceAttributes: ReadOnly[Mapping[str, str]]
     ScopeName: ReadOnly[str]
     ScopeVersion: ReadOnly[str]
-    SpanAttributes: ReadOnly[dict[str, str]]
+    SpanAttributes: ReadOnly[Mapping[str, str]]
     Duration: ReadOnly[int]  # ns
     StatusCode: ReadOnly[str]
     StatusMessage: ReadOnly[str]

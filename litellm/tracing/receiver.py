@@ -14,7 +14,7 @@ The proxy endpoints are thin wrappers: auth -> build tenant/scope -> call one me
 
 import asyncio
 import os
-from collections.abc import AsyncIterable, Callable
+from collections.abc import AsyncIterable, Callable, Mapping
 from io import BytesIO
 from threading import BoundedSemaphore
 from types import MappingProxyType
@@ -63,24 +63,27 @@ class Tenant:
         resources: Final = MappingProxyType({id(row["ResourceAttributes"]): row["ResourceAttributes"] for row in rows})
         stamped: Final = MappingProxyType(
             {
-                identity: {
-                    **attributes,
-                    "litellm.team_id": self.team_id,
-                    "litellm.api_key_hash": self.api_key_hash,
-                    "litellm.org_id": self.org_id,
-                }
+                identity: MappingProxyType(
+                    {
+                        **attributes,
+                        "litellm.team_id": self.team_id,
+                        "litellm.api_key_hash": self.api_key_hash,
+                        "litellm.org_id": self.org_id,
+                    }
+                )
                 for identity, attributes in resources.items()
             }
         )
-        return tuple(
-            {
-                **row,
-                "TeamId": self.team_id,
-                "ApiKeyHash": self.api_key_hash,
-                "ResourceAttributes": stamped[id(row["ResourceAttributes"])],
-            }
-            for row in rows
-        )
+        return tuple(self._stamp_row(row, stamped[id(row["ResourceAttributes"])]) for row in rows)
+
+    def _stamp_row(self, row: SpanRow, resource: Mapping[str, str]) -> SpanRow:
+        stamped: Final[SpanRow] = {
+            **row,
+            "TeamId": self.team_id,
+            "ApiKeyHash": self.api_key_hash,
+            "ResourceAttributes": resource,
+        }
+        return stamped
 
 
 class TraceReceiver:
