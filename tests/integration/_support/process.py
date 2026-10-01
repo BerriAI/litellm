@@ -133,7 +133,7 @@ def owned_proxy_process(
         )
         try:
             with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=15, trust_env=False) as client:
-                deadline: Final = time.monotonic() + 70
+                deadline: Final = time.monotonic() + float(os.environ.get("INTEGRATION_PROXY_READY_SECONDS", "70"))
                 while True:
                     assert process.poll() is None, "Owned proxy exited before readiness"
                     try:
