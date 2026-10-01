@@ -15,6 +15,7 @@ from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling, CeilingResolver
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
     AgentAccess,
+    AgentAccessLookup,
     AgentRequestHandler,
     RestrictedAgentAccess,
     UnrestrictedAgentAccess,
@@ -41,6 +42,15 @@ def _agent_id(registry: AgentRegistry, agent_name: str) -> str:
     agent: Final = registry.get_agent_by_name(agent_name)
     assert agent is not None
     return agent.agent_id
+
+
+def _lookup(result: AgentAccess | Exception) -> AgentAccessLookup:
+    async def lookup(_user_api_key_auth: UserAPIKeyAuth | None, /, *, strict: bool) -> AgentAccess:
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    return lookup
 
 
 async def _single_context(user_api_key_auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
@@ -135,39 +145,48 @@ class TestAgentRequestHandler:
 
     async def test_require_key_agent_access_defined_is_opt_in(self):
         auth: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="test-team")
+        key_lookup: Final = _lookup(UnrestrictedAgentAccess())
+        team_lookup: Final = _lookup(UnrestrictedAgentAccess())
 
-        with patch.object(AgentRequestHandler, "get_allowed_agents_for_key") as mock_key:
-            with patch.object(AgentRequestHandler, "_get_allowed_agents_for_team") as mock_team:
-                mock_key.return_value = UnrestrictedAgentAccess()
-                mock_team.return_value = UnrestrictedAgentAccess()
-
-                assert (
-                    await AgentRequestHandler.resolve_agent_access(auth, require_access_defined=lambda: False)
-                    == UnrestrictedAgentAccess()
-                )
-                assert await AgentRequestHandler.resolve_agent_access(
-                    auth, require_access_defined=lambda: True
-                ) == RestrictedAgentAccess(frozenset())
-                assert await AgentRequestHandler.resolve_agent_access(
-                    None, require_access_defined=lambda: True
-                ) == RestrictedAgentAccess(frozenset())
+        assert (
+            await AgentRequestHandler.resolve_agent_access(
+                auth,
+                require_access_defined=lambda: False,
+                lookup_key_access=key_lookup,
+                lookup_team_access=team_lookup,
+            )
+            == UnrestrictedAgentAccess()
+        )
+        assert await AgentRequestHandler.resolve_agent_access(
+            auth,
+            require_access_defined=lambda: True,
+            lookup_key_access=key_lookup,
+            lookup_team_access=team_lookup,
+        ) == RestrictedAgentAccess(frozenset())
+        assert await AgentRequestHandler.resolve_agent_access(
+            None,
+            require_access_defined=lambda: True,
+            lookup_key_access=key_lookup,
+            lookup_team_access=team_lookup,
+        ) == RestrictedAgentAccess(frozenset())
 
     async def test_explicit_key_and_team_grants_work_with_key_agent_access_required(self):
         auth: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="test-team")
+        unrestricted_lookup: Final = _lookup(UnrestrictedAgentAccess())
 
-        with patch.object(AgentRequestHandler, "get_allowed_agents_for_key") as mock_key:
-            with patch.object(AgentRequestHandler, "_get_allowed_agents_for_team") as mock_team:
-                mock_key.return_value = UnrestrictedAgentAccess()
-                mock_team.return_value = RestrictedAgentAccess(frozenset({"team-agent"}))
-                assert await AgentRequestHandler.resolve_agent_access(
-                    auth, require_access_defined=lambda: True
-                ) == RestrictedAgentAccess(frozenset({"team-agent"}))
+        assert await AgentRequestHandler.resolve_agent_access(
+            auth,
+            require_access_defined=lambda: True,
+            lookup_key_access=unrestricted_lookup,
+            lookup_team_access=_lookup(RestrictedAgentAccess(frozenset({"team-agent"}))),
+        ) == RestrictedAgentAccess(frozenset({"team-agent"}))
 
-                mock_key.return_value = RestrictedAgentAccess(frozenset({"key-agent"}))
-                mock_team.return_value = UnrestrictedAgentAccess()
-                assert await AgentRequestHandler.resolve_agent_access(
-                    auth, require_access_defined=lambda: True
-                ) == RestrictedAgentAccess(frozenset({"key-agent"}))
+        assert await AgentRequestHandler.resolve_agent_access(
+            auth,
+            require_access_defined=lambda: True,
+            lookup_key_access=_lookup(RestrictedAgentAccess(frozenset({"key-agent"}))),
+            lookup_team_access=unrestricted_lookup,
+        ) == RestrictedAgentAccess(frozenset({"key-agent"}))
 
     async def test_proxy_admin_is_exempt_from_key_agent_access_requirement(self):
         admin: Final = UserAPIKeyAuth(
@@ -176,19 +195,27 @@ class TestAgentRequestHandler:
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
         string_admin: Final = admin.model_copy(update={"user_role": LitellmUserRoles.PROXY_ADMIN.value})
+        key_lookup: Final = _lookup(UnrestrictedAgentAccess())
+        team_lookup: Final = _lookup(UnrestrictedAgentAccess())
 
-        with patch.object(AgentRequestHandler, "get_allowed_agents_for_key") as mock_key:
-            with patch.object(AgentRequestHandler, "_get_allowed_agents_for_team") as mock_team:
-                mock_key.return_value = UnrestrictedAgentAccess()
-                mock_team.return_value = UnrestrictedAgentAccess()
-                assert (
-                    await AgentRequestHandler.resolve_agent_access(admin, require_access_defined=lambda: True)
-                    == UnrestrictedAgentAccess()
-                )
-                assert (
-                    await AgentRequestHandler.resolve_agent_access(string_admin, require_access_defined=lambda: True)
-                    == UnrestrictedAgentAccess()
-                )
+        assert (
+            await AgentRequestHandler.resolve_agent_access(
+                admin,
+                require_access_defined=lambda: True,
+                lookup_key_access=key_lookup,
+                lookup_team_access=team_lookup,
+            )
+            == UnrestrictedAgentAccess()
+        )
+        assert (
+            await AgentRequestHandler.resolve_agent_access(
+                string_admin,
+                require_access_defined=lambda: True,
+                lookup_key_access=key_lookup,
+                lookup_team_access=team_lookup,
+            )
+            == UnrestrictedAgentAccess()
+        )
 
     async def test_key_agent_access_requirement_precedes_agent_access_group_ceiling(self):
         agent_key: Final = UserAPIKeyAuth(
@@ -197,42 +224,54 @@ class TestAgentRequestHandler:
             agent_id="caller-agent",
         )
         resolve, _ = self._ceiling_resolver(frozenset({"agent-beta"}))
+        unrestricted_lookup: Final = _lookup(UnrestrictedAgentAccess())
 
-        with patch.object(AgentRequestHandler, "get_allowed_agents_for_key") as mock_key:
-            with patch.object(AgentRequestHandler, "_get_allowed_agents_for_team") as mock_team:
-                mock_key.return_value = UnrestrictedAgentAccess()
-                mock_team.return_value = UnrestrictedAgentAccess()
-                assert await AgentRequestHandler.resolve_agent_access(
-                    agent_key,
-                    resolve,
-                    require_access_defined=lambda: True,
-                ) == RestrictedAgentAccess(frozenset())
+        assert await AgentRequestHandler.resolve_agent_access(
+            agent_key,
+            resolve,
+            require_access_defined=lambda: True,
+            lookup_key_access=unrestricted_lookup,
+            lookup_team_access=unrestricted_lookup,
+        ) == RestrictedAgentAccess(frozenset())
 
     async def test_key_agent_access_requirement_fails_closed_on_lookup_errors(self):
         auth: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="test-team")
+        unrestricted_lookup: Final = _lookup(UnrestrictedAgentAccess())
+        key_error_lookup: Final = _lookup(Exception("DB Error"))
 
-        with patch.object(AgentRequestHandler, "get_allowed_agents_for_key") as mock_key:
-            with patch.object(AgentRequestHandler, "_get_allowed_agents_for_team") as mock_team:
-                mock_key.side_effect = Exception("DB Error")
-                mock_team.return_value = UnrestrictedAgentAccess()
-                assert await AgentRequestHandler.resolve_agent_access(
-                    auth, require_access_defined=lambda: True
-                ) == RestrictedAgentAccess(frozenset())
-                assert (
-                    await AgentRequestHandler.resolve_agent_access(auth, require_access_defined=lambda: False)
-                    == UnrestrictedAgentAccess()
-                )
+        assert await AgentRequestHandler.resolve_agent_access(
+            auth,
+            require_access_defined=lambda: True,
+            lookup_key_access=key_error_lookup,
+            lookup_team_access=unrestricted_lookup,
+        ) == RestrictedAgentAccess(frozenset())
+        assert (
+            await AgentRequestHandler.resolve_agent_access(
+                auth,
+                require_access_defined=lambda: False,
+                lookup_key_access=key_error_lookup,
+                lookup_team_access=unrestricted_lookup,
+            )
+            == UnrestrictedAgentAccess()
+        )
 
-                mock_key.side_effect = None
-                mock_key.return_value = RestrictedAgentAccess(frozenset({"key-agent"}))
-                mock_team.side_effect = Exception("DB Error")
-                assert await AgentRequestHandler.resolve_agent_access(
-                    auth, require_access_defined=lambda: True
-                ) == RestrictedAgentAccess(frozenset())
-                assert (
-                    await AgentRequestHandler.resolve_agent_access(auth, require_access_defined=lambda: False)
-                    == UnrestrictedAgentAccess()
-                )
+        team_error_lookup: Final = _lookup(Exception("DB Error"))
+        key_grant_lookup: Final = _lookup(RestrictedAgentAccess(frozenset({"key-agent"})))
+        assert await AgentRequestHandler.resolve_agent_access(
+            auth,
+            require_access_defined=lambda: True,
+            lookup_key_access=key_grant_lookup,
+            lookup_team_access=team_error_lookup,
+        ) == RestrictedAgentAccess(frozenset())
+        assert (
+            await AgentRequestHandler.resolve_agent_access(
+                auth,
+                require_access_defined=lambda: False,
+                lookup_key_access=key_grant_lookup,
+                lookup_team_access=team_error_lookup,
+            )
+            == UnrestrictedAgentAccess()
+        )
 
     async def test_require_key_agent_access_defined_reads_general_settings(self, monkeypatch: pytest.MonkeyPatch):
         from litellm.proxy import proxy_server
