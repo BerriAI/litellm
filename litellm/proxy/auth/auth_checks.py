@@ -6648,11 +6648,11 @@ async def vector_store_access_check(
             non_default_params=request_body, tools=request_body.get("tools", None)
         )
         if litellm.vector_store_registry is not None
-        else []
-    ) or []
+        else None
+    ) or ()
     rag_vector_store_id: Final = _get_rag_query_vector_store_id(request_body)
-    requested_ids: Final = (*registry_ids, rag_vector_store_id) if rag_vector_store_id is not None else registry_ids
-    vector_store_ids_to_run: Final = list(dict.fromkeys(requested_ids))
+    rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
+    vector_store_ids_to_run: Final = tuple(dict.fromkeys((*registry_ids, *rag_ids)))
     if not vector_store_ids_to_run:
         verbose_proxy_logger.debug("Vector store to run not found, skipping vector store access check")
         return True
@@ -6692,7 +6692,7 @@ async def vector_store_access_check(
 
 def _can_object_call_vector_stores(
     object_type: Literal["key", "team", "org"],
-    vector_store_ids_to_run: list[str],
+    vector_store_ids_to_run: Sequence[str],
     object_permissions: _VectorStorePermissionsRow | None,
 ):
     """

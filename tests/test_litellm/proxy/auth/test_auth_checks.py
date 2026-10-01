@@ -1762,8 +1762,11 @@ async def test_vector_store_access_check_with_team_permissions():
         ("KBALLOWED123", None),
     ],
 )
+@pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
 async def test_vector_store_access_check_enforces_team_allowlist_for_rag_query(
-    requested_vector_store_id: str, expected_error_type: ProxyErrorTypes | None
+    requested_vector_store_id: str,
+    expected_error_type: ProxyErrorTypes | None,
+    vector_store_registry: VectorStoreRegistry | None,
 ):
     """
     /v1/rag/query carries its vector store in retrieval_config.vector_store_id,
@@ -1789,7 +1792,7 @@ async def test_vector_store_access_check_enforces_team_allowlist_for_rag_query(
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
-        patch("litellm.vector_store_registry", VectorStoreRegistry()),
+        patch("litellm.vector_store_registry", vector_store_registry),
     ):
         if expected_error_type is None:
             result = await vector_store_access_check(
