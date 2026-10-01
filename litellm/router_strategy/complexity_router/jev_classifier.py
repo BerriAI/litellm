@@ -130,8 +130,8 @@ class HttpJevClassifierClient:
                 for key, value in TypeAdapter(Mapping[str, object]).validate_python(metadata).items()
             }
         )
-        params: Final = {  # mutable-ok: Logging's kwargs and litellm_params require dicts
-            "metadata": {  # mutable-ok: Logging enriches metadata in place before dispatching callbacks
+        params: Final = {
+            "metadata": {
                 **forwarded_internal_call_metadata(parent_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN),
                 INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
             },
@@ -140,7 +140,7 @@ class HttpJevClassifierClient:
         }
         logging_obj: Final = Logging(
             model=f"typesafe/{request.model}",
-            messages=[{"role": "user", "content": request.state}],  # mutable-ok: callbacks require JSON message lists
+            messages=[{"role": "user", "content": request.state}],
             stream=False,
             call_type="pass_through_endpoint",
             start_time=start_time,
@@ -152,7 +152,7 @@ class HttpJevClassifierClient:
         logging_obj.update_environment_variables(
             model=f"typesafe/{request.model}",
             user=parent_user if isinstance(parent_user := parent.get("user"), str) else None,
-            optional_params={},  # mutable-ok: Logging's optional_params contract requires a dict
+            optional_params={},
             litellm_params=params,
         )
         normalized: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(

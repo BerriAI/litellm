@@ -88,9 +88,15 @@ from .types_utils.utils import get_instance_fn, validate_custom_validate_return_
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.tracing import TraceReceiver
+
     Span = _Span | Any
 else:
     Span = Any
+
+
+class ProxyLifespanState(TypedDict):
+    tracing_receiver: ReadOnly["TraceReceiver | None"]
 
 
 class ReconcileOutcome(NamedTuple):
@@ -4060,7 +4066,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     pointfive: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="pointfive",
         ui_callback_name="PointFive",
-        litellm_callback_params=[  # mutable-ok: the registry field is typed list
+        litellm_callback_params=[
             "POINTFIVE_API_KEY",
             "POINTFIVE_API_URL",
         ],
@@ -4075,7 +4081,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     zerobus: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="zerobus",
         ui_callback_name="Databricks Zerobus",
-        litellm_callback_params=[  # mutable-ok: the registry field is typed list
+        litellm_callback_params=[
             "ZEROBUS_WORKSPACE_URL",
             "ZEROBUS_SERVER_ENDPOINT",
             "ZEROBUS_CLIENT_ID",

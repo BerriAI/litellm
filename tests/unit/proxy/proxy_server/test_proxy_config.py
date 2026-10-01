@@ -14,6 +14,7 @@ import logging
 import os
 import re
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -44,48 +45,51 @@ from .conftest import normalize
 
 
 @pytest.mark.asyncio
-async def test_tracing_config_automatically_logs_spend_without_callback_setting():
+@pytest.mark.parametrize("shutdown_error", [False, True])
+async def test_tracing_config_automatically_logs_spend_without_callback_setting(shutdown_error: bool) -> None:
     from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
-    from litellm.proxy import tracing_endpoints
-    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.tracing_runtime import manage_tracing
     from litellm.tracing import TraceReceiver
-    from litellm.tracing.store import ClickHouseTraceStore
+    from litellm.tracing.store import TraceStore
 
-    storage = MagicMock()
+    storage: Final = MagicMock()
     storage.ensure_schema = AsyncMock()
     storage.insert_rows = AsyncMock()
-    receiver = TraceReceiver(ClickHouseTraceStore(storage))
-    prior_receiver = tracing_endpoints.receiver
+    receiver: Final = TraceReceiver(TraceStore(storage))
 
-    try:
-        await ProxyStartupEvent.init_tracing({"tracing": {"store": "clickhouse"}}, receiver=receiver)
-        storage.ensure_schema.assert_awaited_once()
-        logger = next(
-            callback for callback in litellm._async_success_callback if isinstance(callback, ClickHouseSpendLogger)
-        )
-        now = datetime.now()
-        await logger.async_log_success_event(
-            {
-                "standard_logging_object": {
-                    "id": "response-1",
-                    "startTime": now.timestamp(),
-                    "endTime": now.timestamp(),
-                    "response_cost": 0.25,
-                }
-            },
-            None,
-            now,
-            now,
-        )
-        await logger.flush_queue()
-        assert storage.insert_rows.await_args.args[0] == "spend_logs"
-        assert storage.insert_rows.await_args.args[1][0]["spend"] == 0.25
+    outcome: Final = pytest.raises(RuntimeError, match="shutdown failure") if shutdown_error else nullcontext()
+    with outcome:
+        async with manage_tracing(enabled=True, receiver_factory=lambda: receiver):
+            storage.ensure_schema.assert_awaited_once()
+            logger: Final = next(
+                callback
+                for callback in litellm._async_success_callback
+                if isinstance(callback, ClickHouseSpendLogger) and callback.storage is storage
+            )
+            now: Final = datetime.now()
+            await logger.async_log_success_event(
+                {
+                    "standard_logging_object": {
+                        "id": "response-1",
+                        "startTime": now.timestamp(),
+                        "endTime": now.timestamp(),
+                        "response_cost": 0.25,
+                    }
+                },
+                None,
+                now,
+                now,
+            )
+            storage.insert_rows.assert_not_awaited()
 
-        await ProxyStartupEvent.init_tracing({})
-        assert all(not isinstance(callback, ClickHouseSpendLogger) for callback in litellm._async_success_callback)
-    finally:
-        await ProxyStartupEvent.init_tracing({})
-        tracing_endpoints.receiver = prior_receiver
+            if shutdown_error:
+                raise RuntimeError("shutdown failure")
+
+    assert storage.insert_rows.await_args.args[0] == "spend_logs"
+    assert storage.insert_rows.await_args.args[1][0]["spend"] == 0.25
+    assert logger not in litellm._async_success_callback
+    assert logger._flush_task is not None and logger._flush_task.done()
+    assert not logger._flush_task.cancelled()
 
 
 # ---------------------------------------------------------------------------
