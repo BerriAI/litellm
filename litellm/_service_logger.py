@@ -141,7 +141,9 @@ class ServiceLogging(CustomLogger):
         database queries with ``SynchronousOnlyOperation``. So skip it when there is
         no service callback (or test counter) to receive the event.
         """
-        return bool(litellm.service_callback) or self.mock_testing
+        if litellm.service_callback:
+            return True
+        return self.mock_testing
 
     @staticmethod
     def _dispatch_from_sync(hook: Callable[[], Coroutine[object, object, None]]) -> None:
