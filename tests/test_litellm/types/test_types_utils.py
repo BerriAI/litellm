@@ -100,7 +100,7 @@ def test_prompt_tokens_details_maps_nested_cache_creation_input_tokens():
     assert explicit.cache_creation_tokens == 100
 
     non_int: Final = PromptTokensDetailsWrapper(cache_creation_input_tokens=None)
-    assert not hasattr(non_int, "cache_write_tokens")
+    assert non_int.cache_write_tokens is None
 
 
 def test_usage_server_tool_use_dict_is_coerced_and_round_trips():
