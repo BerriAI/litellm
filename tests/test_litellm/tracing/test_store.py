@@ -307,11 +307,16 @@ async def test_get_span_not_found_and_found():
     store = ClickHouseTraceStore(client)
     scope: TraceScope = {"all_teams": 1, "user_id": "", "team_ids": (), "api_key_hash": ""}
     assert await store.get_span("t", "s", scope, "ref") is None
-    client.query = AsyncMock(return_value=[{"span_id": "s", "input": "i", "output": "o", "attributes": {"k": "v"}}])
+    stored_input = '[{"role": "user", "content": "hi"}]'
+    client.query = AsyncMock(
+        return_value=[{"span_id": "s", "input": stored_input, "output": '{"ok": true}', "attributes": {"k": "v"}}]
+    )
     assert await store.get_span("t", "s", scope, "ref") == {
         "span_id": "s",
-        "input": "i",
-        "output": "o",
+        "input": stored_input,
+        "output": '{"ok": true}',
+        "input_ui": {"kind": "messages", "messages": ({"role": "user", "content": "hi"},)},
+        "output_ui": {"kind": "fields", "fields": ({"key": "ok", "value": "true"},)},
         "attributes": {"k": "v"},
     }
 
@@ -373,7 +378,14 @@ async def test_unambiguous_legacy_span_lookup_uses_scoped_reference():
 
     span = await ClickHouseTraceStore(client).get_span("reused", "span", scope)
 
-    assert span == {"span_id": "span", "input": "in", "output": "out", "attributes": {}}
+    assert span == {
+        "span_id": "span",
+        "input": "in",
+        "output": "out",
+        "input_ui": {"kind": "text", "text": "in"},
+        "output_ui": {"kind": "text", "text": "out"},
+        "attributes": {},
+    }
     assert [call.args[0] for call in client.query.await_args_list] == ["trace_identity", "span_detail"]
     assert client.query.await_args_list[1].args[1]["trace_ref"] == "ref-a"
 
