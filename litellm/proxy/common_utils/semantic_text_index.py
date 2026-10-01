@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
@@ -13,7 +14,7 @@ from fastapi import HTTPException
 from openai import OpenAIError
 from pydantic import BaseModel, ConfigDict
 
-from litellm.exceptions import BudgetExceededError
+from litellm.exceptions import BudgetExceededError, ContextWindowExceededError
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -32,6 +33,11 @@ class Embedder(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class EmbeddingFailed:
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class _InputTooLong:
     reason: str
 
 
@@ -101,16 +107,64 @@ def router_embedder(
 _CacheKey: TypeAlias = tuple[str, str]
 
 
-async def _embed_all(embed: Embedder, texts: Sequence[str]) -> tuple[Vector, ...] | EmbeddingFailed:
+async def _embed_all(embed: Embedder, texts: Sequence[str]) -> tuple[Vector, ...] | EmbeddingFailed | _InputTooLong:
     try:
         vectors: Final = tuple(await embed(texts))
     except HTTPException:
         raise
+    except ContextWindowExceededError as exc:
+        return _InputTooLong(reason=f"embedding the search query failed: {exc}")
     except (OpenAIError, ValueError, BudgetExceededError) as exc:
         return EmbeddingFailed(reason=f"embedding the search query failed: {exc}")
     if len(vectors) != len(texts):
         return EmbeddingFailed(reason=f"embedding model returned {len(vectors)} vectors for {len(texts)} inputs")
     return vectors
+
+
+async def _embed_texts(embed: Embedder, texts: Sequence[str]) -> Mapping[str, Vector] | EmbeddingFailed:
+    if not texts:
+        return MappingProxyType({})
+    embedded: Final = await _embed_all(embed, texts)
+    if isinstance(embedded, EmbeddingFailed):
+        return embedded
+    if not isinstance(embedded, _InputTooLong):
+        return MappingProxyType(dict(zip(texts, embedded, strict=True)))
+    if len(texts) == 1:
+        return MappingProxyType({})
+    middle: Final = len(texts) // 2
+    left, right = await asyncio.gather(_embed_texts(embed, texts[:middle]), _embed_texts(embed, texts[middle:]))
+    if isinstance(left, EmbeddingFailed):
+        return left
+    if isinstance(right, EmbeddingFailed):
+        return right
+    return MappingProxyType({**left, **right})
+
+
+async def _embed_query_with(
+    embed: Embedder, query: str, texts: Sequence[str]
+) -> tuple[Vector, Mapping[str, Vector]] | EmbeddingFailed:
+    if not texts:
+        embedded_query: Final = await _embed_all(embed, (query,))
+        if isinstance(embedded_query, EmbeddingFailed):
+            return embedded_query
+        if isinstance(embedded_query, _InputTooLong):
+            return EmbeddingFailed(reason=embedded_query.reason)
+        return embedded_query[0], MappingProxyType({})
+
+    embedded: Final = await _embed_all(embed, (query, *texts))
+    if isinstance(embedded, EmbeddingFailed):
+        return embedded
+    if not isinstance(embedded, _InputTooLong):
+        return embedded[0], MappingProxyType(dict(zip(texts, embedded[1:], strict=True)))
+    query_embedding: Final = await _embed_all(embed, (query,))
+    if isinstance(query_embedding, EmbeddingFailed):
+        return query_embedding
+    if isinstance(query_embedding, _InputTooLong):
+        return EmbeddingFailed(reason=query_embedding.reason)
+    vectors: Final = await _embed_texts(embed, texts)
+    if isinstance(vectors, EmbeddingFailed):
+        return vectors
+    return query_embedding[0], vectors
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,26 +174,26 @@ class _Embedded:
 
 
 def _same_dimension(query_vector: Vector, vectors: Mapping[str, Vector], texts: Sequence[str]) -> bool:
-    return all(len(vectors[text]) == len(query_vector) for text in texts)
+    return all(len(vectors[text]) == len(query_vector) for text in texts if text in vectors)
 
 
 async def _embed_query_and_texts(
     embed: Embedder, query: str, texts: Sequence[str], cached: Mapping[str, Vector]
 ) -> _Embedded | EmbeddingFailed:
     missing: Final = tuple(dict.fromkeys(text for text in texts if text not in cached))
-    embedded: Final = await _embed_all(embed, (query, *missing))
-    if isinstance(embedded, EmbeddingFailed):
-        return embedded
-    vectors: Final = MappingProxyType(dict(chain(cached.items(), zip(missing, embedded[1:], strict=True))))
-    if _same_dimension(embedded[0], vectors, texts):
-        return _Embedded(query_vector=embedded[0], vectors=vectors)
-    unique: Final = tuple(dict.fromkeys(texts))
-    reembedded: Final = await _embed_all(embed, (query, *unique))
+    query_embedding: Final = await _embed_query_with(embed, query, missing)
+    if isinstance(query_embedding, EmbeddingFailed):
+        return query_embedding
+    query_vector, newly_embedded = query_embedding
+    vectors: Final = MappingProxyType(dict(chain(cached.items(), newly_embedded.items())))
+    if _same_dimension(query_vector, vectors, texts):
+        return _Embedded(query_vector=query_vector, vectors=vectors)
+    unique: Final = tuple(dict.fromkeys(text for text in texts if text in vectors))
+    reembedded: Final = await _embed_query_with(embed, query, unique)
     if isinstance(reembedded, EmbeddingFailed):
         return reembedded
-    return _Embedded(
-        query_vector=reembedded[0], vectors=MappingProxyType(dict(zip(unique, reembedded[1:], strict=True)))
-    )
+    reembedded_query, reembedded_vectors = reembedded
+    return _Embedded(query_vector=reembedded_query, vectors=reembedded_vectors)
 
 
 class SemanticTextIndex:
@@ -158,7 +212,9 @@ class SemanticTextIndex:
 
     def _merged(self, embedding_model: str, embedded: _Embedded, texts: Sequence[str]) -> Mapping[_CacheKey, Vector]:
         dimension: Final = len(embedded.query_vector)
-        touched: Final = MappingProxyType({(embedding_model, text): embedded.vectors[text] for text in texts})
+        touched: Final = MappingProxyType(
+            {(embedding_model, text): embedded.vectors[text] for text in texts if text in embedded.vectors}
+        )
         untouched: Final = MappingProxyType(
             {
                 key: vector
@@ -174,8 +230,8 @@ class SemanticTextIndex:
 
     async def scores(
         self, query: str, texts: Sequence[str], embed: Embedder, embedding_model: str
-    ) -> tuple[float, ...] | EmbeddingFailed:
-        """Cosine similarity of `query` to each entry of `texts`, in the same order."""
+    ) -> tuple[float | None, ...] | EmbeddingFailed:
+        """Cosine similarity for embeddable entries of `texts`, with None for omitted entries."""
         if not texts:
             return ()
         embedded: Final = await _embed_query_and_texts(embed, query, texts, self._cached(embedding_model))
@@ -184,4 +240,7 @@ class SemanticTextIndex:
         if not _same_dimension(embedded.query_vector, embedded.vectors, texts):
             return EmbeddingFailed(reason=f"embedding model {embedding_model} returned vectors of mixed dimensions")
         self._vectors = self._merged(embedding_model, embedded, texts)
-        return tuple(cosine_similarity(embedded.query_vector, embedded.vectors[text]) for text in texts)
+        return tuple(
+            cosine_similarity(embedded.query_vector, embedded.vectors[text]) if text in embedded.vectors else None
+            for text in texts
+        )

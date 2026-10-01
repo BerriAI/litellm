@@ -183,9 +183,11 @@ def _split_core_tools(tools: Sequence[Tool], core_tools: Sequence[str]) -> tuple
 
 
 def _top_hits(
-    tools: Sequence[Tool], scores: Sequence[float], minimum: float, limit: int
+    tools: Sequence[Tool], scores: Sequence[float | None], minimum: float, limit: int
 ) -> tuple[tuple[float, Tool], ...]:
-    hits: Final = ((score, tool) for score, tool in zip(scores, tools, strict=True) if score >= minimum)
+    hits: Final = (
+        (score, tool) for score, tool in zip(scores, tools, strict=True) if score is not None and score >= minimum
+    )
     return tuple(sorted(hits, key=lambda hit: hit[0], reverse=True)[:limit])
 
 

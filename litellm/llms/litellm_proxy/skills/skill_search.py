@@ -105,7 +105,11 @@ class SkillSearchIndex:
         if isinstance(scores, EmbeddingFailed):
             return SkillSearchEmbeddingFailed(reason=scores.reason)
         ranked: Final = sorted(
-            (SkillSearchHit(skill=skill, score=score) for skill, score in zip(skills, scores, strict=True)),
+            (
+                SkillSearchHit(skill=skill, score=score)
+                for skill, score in zip(skills, scores, strict=True)
+                if score is not None
+            ),
             key=lambda hit: hit.score,
             reverse=True,
         )

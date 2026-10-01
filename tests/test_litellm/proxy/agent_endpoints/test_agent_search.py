@@ -88,6 +88,19 @@ class FixedDimensionEmbedder:
         return tuple((1.0,) * self.dimensions for _ in texts)
 
 
+class OversizedAwareEmbedder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []  # mutable-ok: test spy recording embed inputs
+
+    async def __call__(self, texts: Sequence[str]) -> Sequence[Vector]:
+        self.calls.append(tuple(texts))
+        if any("OVERSIZED" in text for text in texts):
+            raise litellm.ContextWindowExceededError(
+                message="input is too long", model="text-embedding-3-large", llm_provider="openai"
+            )
+        return tuple(VECTORS[text] for text in texts)
+
+
 class TestAgentSearchText:
     def test_joins_name_description_and_skills_with_tags(self) -> None:
         assert agent_search_text(TRANSLATOR) == (
@@ -126,6 +139,21 @@ class TestAgentSearchIndex:
         assert isinstance(outcome, AgentSearchHits)
         assert [hit.agent.agent_id for hit in outcome.hits] == ["translator", "trip"]
         assert outcome.hits[0].score > outcome.hits[1].score
+
+    @pytest.mark.asyncio
+    async def test_omits_agents_with_oversized_search_text(self) -> None:
+        oversized: Final = AgentResponse(
+            agent_id="oversized",
+            agent_name="oversized-agent",
+            agent_card_params={"description": "OVERSIZED description"},
+        )
+
+        outcome: Final = await AgentSearchIndex().search(
+            "language translation", (*AGENTS, oversized), top_k=5, embed=OversizedAwareEmbedder(), embedding_model="m"
+        )
+
+        assert isinstance(outcome, AgentSearchHits)
+        assert {hit.agent.agent_id for hit in outcome.hits} == {agent.agent_id for agent in AGENTS}
 
     @pytest.mark.asyncio
     async def test_second_search_only_embeds_the_query(self) -> None:
