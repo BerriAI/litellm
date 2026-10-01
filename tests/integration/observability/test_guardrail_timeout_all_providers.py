@@ -10,6 +10,7 @@ handler default. All probes are sent concurrently so their waits overlap.
 from __future__ import annotations
 
 import json
+import re
 import socket
 import threading
 import time
@@ -222,12 +223,14 @@ class Sink:
         self.thread = None
 
     def calls_for(self, name: str) -> tuple[Seen, ...]:
-        token: Final = f"key-{name}"
+        mention: Final = re.compile(rf"(?:/|key-){re.escape(name)}(?![\w-])")
         with self.lock:
             return tuple(
                 s
                 for s in self.seen
-                if f"/{name}" in s.target or any(token in v for v in s.headers.values()) or token in s.body
+                if mention.search(s.target)
+                or any(mention.search(v) for v in s.headers.values())
+                or mention.search(s.body)
             )
 
 
