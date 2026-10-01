@@ -1,12 +1,18 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "@/../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { apiClient } from "@/components/networking";
+import EnginePage from "../page";
 import { EngineView } from "./EngineView";
-import { nextCheckStatus, type Engine, type Finding } from "./engineData";
+import { nextCheckStatus, type Engine, type EngineList, type Finding } from "./engineData";
 
-vi.mock("@/components/networking", () => ({ apiClient: { get: vi.fn() } }));
+const useAuthorizedMock = vi.hoisted(() =>
+  vi.fn<() => { accessToken: string; userRole: string; isViewOnly: boolean }>(),
+);
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: useAuthorizedMock }));
+vi.mock("@/components/networking", () => ({ apiClient: { get: vi.fn(), post: vi.fn() }, proxyBaseUrl: "" }));
 
 const executionId = btoa(JSON.stringify(["traces", "", "trace-42"]));
 const pattern: Finding = {
@@ -118,6 +124,7 @@ const engine: Engine = {
 
 describe("Lens findings and runs", () => {
   beforeEach(() => {
+    testQueryClient.clear();
     vi.mocked(apiClient.get).mockReset();
     vi.mocked(apiClient.get).mockImplementation(async (path) =>
       path === "/engine" ? { engines: [engine], workers: [], tracing_enabled: true } : { data: [] },
@@ -148,6 +155,109 @@ describe("Lens findings and runs", () => {
     expect(screen.getByText("Release-42")).toBeInTheDocument();
     expect(screen.getByText("trace-42")).toBeInTheDocument();
     expect(screen.getByText(/1 selected from 1 matches/)).toBeInTheDocument();
+  });
+});
+
+describe("Lens getting started", () => {
+  const empty: EngineList = { engines: [], workers: [], tracing_enabled: false };
+  const worker: EngineList["workers"][number] = {
+    id: "analyzer",
+    name: "Lens analyzer",
+    last_seen: new Date().toISOString(),
+    revoked: false,
+    scope: engine.scope,
+  };
+
+  beforeEach(() => {
+    testQueryClient.clear();
+    vi.mocked(apiClient.get).mockReset();
+    vi.mocked(apiClient.post).mockReset();
+    vi.mocked(apiClient.get).mockImplementation(async (path) => (path === "/engine" ? empty : { data: [] }));
+    vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, executions: [] });
+    useAuthorizedMock.mockReset().mockReturnValue({ accessToken: "test", userRole: "Admin", isViewOnly: false });
+  });
+
+  it("explains the prerequisites and opens the existing analyzer and lens setup dialogs", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<EnginePage />);
+    const guide = within(await screen.findByRole("region", { name: "Turn agent activity into answers" }));
+    expect(guide.getByRole("heading", { name: "Record activity" })).toBeVisible();
+    expect(guide.getByText("Tracing not configured")).toBeVisible();
+    expect(guide.getByText("Analyzer not connected")).toBeVisible();
+    expect(guide.getByText("Where do agents get stuck or repeat the same work?")).toBeVisible();
+    expect(guide.getByRole("link", { name: "Open logs" })).toHaveAttribute("href", "/ui/logs");
+
+    await user.click(guide.getByRole("button", { name: "Connect analyzer" }));
+    const analyzer = within(screen.getByRole("dialog", { name: "Set up Lens analysis" }));
+    expect(analyzer.getByRole("textbox", { name: "Your LiteLLM deployment URL" })).toBeVisible();
+    expect(analyzer.getByRole("button", { name: "Generate setup command" })).toBeEnabled();
+    await user.click(analyzer.getByRole("button", { name: "Close" }));
+
+    await user.click(guide.getByRole("button", { name: "Create a lens" }));
+    const setup = within(screen.getByRole("dialog", { name: "Set up a lens" }));
+    expect(setup.getByRole("textbox", { name: "Name" })).toBeVisible();
+    expect(setup.getByRole("combobox", { name: "Activity type" })).toBeVisible();
+    expect(await setup.findByText("0 matching runs")).toBeVisible();
+  });
+
+  it.each([
+    { name: "a connected analyzer", revoked: false, age: 0, connected: true },
+    { name: "an offline analyzer", revoked: false, age: 180000, connected: false },
+    { name: "a revoked analyzer", revoked: true, age: 0, connected: false },
+  ])("reports configured tracing and the current status of $name", async ({ revoked, age, connected }) => {
+    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+      path === "/engine"
+        ? {
+            ...empty,
+            tracing_enabled: true,
+            workers: [{ ...worker, revoked, last_seen: new Date(Date.now() - age).toISOString() }],
+          }
+        : { data: [] },
+    );
+    renderWithProviders(<EngineView accessToken="test" />);
+    expect(await screen.findByText("Tracing configured")).toBeVisible();
+    expect(screen.getByText(connected ? "Analyzer connected" : "Analyzer not connected")).toBeVisible();
+    expect(screen.getByRole("button", { name: connected ? "Manage analyzer" : "Connect analyzer" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Create a lens" })).toBeEnabled();
+  });
+
+  it.each([
+    { userRole: "Admin", isViewOnly: true },
+    { userRole: "Internal User", isViewOnly: false },
+  ])(
+    "gives $userRole with isViewOnly=$isViewOnly an admin handoff without write controls",
+    async ({ userRole, isViewOnly }) => {
+      useAuthorizedMock.mockReturnValue({ accessToken: "test", userRole, isViewOnly });
+      renderWithProviders(<EnginePage />);
+      expect(await screen.findByText(/Ask a proxy admin to connect an analyzer and create a lens/)).toBeVisible();
+      expect(screen.getByText("No lenses available yet")).toBeVisible();
+      expect(screen.getByRole("link", { name: "Open logs" })).toBeVisible();
+      expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    },
+  );
+
+  it("waits for a successful response before showing the getting started guide", () => {
+    vi.mocked(apiClient.get).mockImplementation((path) =>
+      path === "/engine" ? new Promise(() => {}) : Promise.resolve({ data: [] }),
+    );
+    renderWithProviders(<EngineView accessToken="test" />);
+    expect(screen.getByRole("status")).toHaveTextContent("Loading lenses…");
+    expect(screen.queryByRole("region", { name: "Turn agent activity into answers" })).not.toBeInTheDocument();
+  });
+
+  it("shows a retryable error instead of treating a failed request as an empty list", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === "/engine") throw new Error("Could not load lenses");
+      return { data: [] };
+    });
+    renderWithProviders(<EngineView accessToken="test" />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load lenses");
+    expect(screen.queryByRole("region", { name: "Turn agent activity into answers" })).not.toBeInTheDocument();
+    vi.mocked(apiClient.get).mockImplementation(async (path) => (path === "/engine" ? empty : { data: [] }));
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("region", { name: "Turn agent activity into answers" })).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
 

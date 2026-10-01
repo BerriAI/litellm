@@ -14,6 +14,7 @@ import { EngineSetup } from "./EngineSetup";
 import { RunList } from "./ActivityScope";
 import { EngineProgress, NextCheck } from "./EngineProgress";
 import { WorkerSetup } from "./WorkerSetup";
+import { LensGettingStarted } from "./LensGettingStarted";
 import {
   engineStatus,
   evidenceTarget,
@@ -144,7 +145,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
             Understand your agent activity. Find patterns worth acting on.
           </p>
         </div>
-        {!readOnly && (
+        {!readOnly && !showEmpty && (
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setWorkerSetup(true)}>
               <Circle
@@ -175,26 +176,13 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
         </p>
       )}
       {showEmpty && (
-        <section className="flex min-h-[430px] flex-col items-center justify-center rounded-xl border bg-card px-6 text-center">
-          <div className="mb-5 rounded-xl border p-3">
-            <Aperture className="size-6 text-muted-foreground" strokeWidth={1.75} />
-          </div>
-          <h2 className="text-xl font-medium">What would you like to understand?</h2>
-          <p className="mt-3 max-w-md text-sm leading-6 text-muted-foreground">
-            Choose the activity to review, ask your questions, and get findings linked to the runs that explain them.
-          </p>
-          {!readOnly && (
-            <Button className="mt-6" onClick={() => setEditing("new")}>
-              Set up your first lens
-              <ArrowUpRight className="size-4" />
-            </Button>
-          )}
-          <div className="mt-10 flex flex-wrap justify-center gap-6 text-xs text-muted-foreground">
-            <span>Recurring failures</span>
-            <span>Unnecessary work</span>
-            <span>How people use your agent</span>
-          </div>
-        </section>
+        <LensGettingStarted
+          tracingEnabled={query.data?.tracing_enabled ?? false}
+          connected={connected}
+          readOnly={readOnly}
+          onConnect={() => setWorkerSetup(true)}
+          onCreate={() => setEditing("new")}
+        />
       )}
       {engine && (
         <div className="grid gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
@@ -516,7 +504,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
           </section>
         </div>
       )}
-      {editing && (
+      {editing && !readOnly && (
         <EngineSetup
           initial={editing === "edit" ? engine?.settings : undefined}
           models={models.data?.data.map((m) => m.id) ?? []}
@@ -528,7 +516,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
           onSave={save}
         />
       )}
-      {workerSetup && (
+      {workerSetup && !readOnly && (
         <WorkerSetup
           accessToken={accessToken}
           workers={query.data?.workers ?? []}
