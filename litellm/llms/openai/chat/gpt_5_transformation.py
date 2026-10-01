@@ -193,21 +193,20 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return False
 
     @classmethod
-    def _is_reasoning_effort_level_explicitly_disabled(cls, model: str, level: str) -> bool:
+    def is_reasoning_effort_level_explicitly_disabled(cls, model: str, level: str) -> bool:
         """Return True only when the model map explicitly sets the capability to False.
 
-        Unlike ``_supports_reasoning_effort_level`` (which requires an explicit True),
-        this method returns True only when ``supports_{level}_reasoning_effort`` is
-        explicitly set to ``False`` in the model map.  A missing key is treated as
-        supported (i.e. this method returns False = not disabled).
-
-        Use this for opt-out checks where unknown models should be allowed through.
+        A missing key is not a disable. Unknown models pass through.
         """
         return is_explicitly_disabled_factory(
             model=cls._model_map_lookup_name(model),
             custom_llm_provider=None,
             key=f"supports_{level}_reasoning_effort",
         )
+
+    @classmethod
+    def _is_reasoning_effort_level_explicitly_disabled(cls, model: str, level: str) -> bool:
+        return cls.is_reasoning_effort_level_explicitly_disabled(model, level)
 
     def get_supported_openai_params(self, model: str) -> list:
         if self.is_model_gpt_5_search_model(model):

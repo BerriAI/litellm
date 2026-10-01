@@ -137,6 +137,16 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return supports_none_reasoning_effort(model=model, custom_llm_provider=None)
 
     @staticmethod
+    def _effort_level_is_disabled(model: str, level: str) -> bool:
+        """Whether the cost map explicitly turns this effort level off.
+
+        Azure overrides this so a bare deployment name reads the azure/ entry.
+        """
+        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+
+        return OpenAIGPT5Config.is_reasoning_effort_level_explicitly_disabled(model, level)
+
+    @staticmethod
     def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
         """Whether this request's reasoning effort ends up as "none", the one condition
         under which a non-default temperature is accepted.
@@ -244,9 +254,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             reasoning: Final = params.get("reasoning") or {}
             effort = reasoning.get("effort") if isinstance(reasoning, dict) else None
             if isinstance(reasoning, dict) and isinstance(effort, str) and effort in ("none", "minimal", "low"):
-                from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
-
-                if OpenAIGPT5Config._is_reasoning_effort_level_explicitly_disabled(lookup_name, effort):
+                if self._effort_level_is_disabled(lookup_name, effort):
                     if drop_params or litellm.drop_params:
                         remaining: Final = {  # mutable-ok: outgoing JSON reasoning object with one key removed
                             key: value for key, value in reasoning.items() if key != "effort"
