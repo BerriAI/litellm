@@ -11,13 +11,18 @@ Tests:
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     FallbackCreateRequest,
     create_fallback,
     delete_fallback,
     get_fallback,
+)
+from litellm.proxy.management_endpoints.fallback_management_endpoints import (
+    router as fallback_router,
 )
 
 
@@ -553,3 +558,62 @@ class TestDeleteFallback:
 
         assert exc_info.value.status_code == 400
         assert "Database storage not enabled" in str(exc_info.value.detail)
+
+
+class TestSlashedModelRouting:
+    """Routing regression tests for provider-prefixed model names containing a slash.
+
+    These exercise the real FastAPI route matching (not the handler directly), so they
+    fail if the path parameter reverts to the default `str` converter, which only matches
+    a single path segment and returns Starlette's 404 for names like `openrouter/gpt-4`.
+    """
+
+    @pytest.fixture
+    def client(self):
+        app = FastAPI()
+        app.include_router(fallback_router)
+        app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+        return TestClient(app)
+
+    def test_get_fallback_slashed_model_reaches_handler(self, client):
+        router = MagicMock()
+        router.fallbacks = [{"openrouter/gpt-4": ["gpt-4", "claude-3-haiku"]}]
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+
+        with patch("litellm.proxy.proxy_server.llm_router", router):
+            response = client.get("/fallback/openrouter/gpt-4")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["model"] == "openrouter/gpt-4"
+        assert body["fallback_models"] == ["gpt-4", "claude-3-haiku"]
+
+    def test_delete_fallback_slashed_model_reaches_handler(self, client):
+        router = MagicMock()
+        router.fallbacks = [{"openrouter/gpt-4": ["gpt-4"]}]
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_config.upsert = AsyncMock()
+
+        proxy_config = MagicMock()
+        proxy_config.get_config = AsyncMock(
+            return_value={
+                "router_settings": {"fallbacks": [{"openrouter/gpt-4": ["gpt-4"]}]}
+            }
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        ):
+            response = client.delete("/fallback/openrouter/gpt-4")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["model"] == "openrouter/gpt-4"
+        assert "deleted" in body["message"].lower()
