@@ -123,7 +123,19 @@ describe("AgentTracesSection", () => {
     const failed = rows.find((row) => row.textContent?.includes("acme-404")) as HTMLElement;
     expect(within(failed).getByLabelText("2 errors")).toBeInTheDocument();
     expect(screen.getByText(`${runs.length} runs`)).toBeInTheDocument();
-    expect(screen.queryByRole("columnheader", { name: "Cost" })).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Cost" })).toBeInTheDocument();
+    expect(within(failed).getByText("—")).toBeInTheDocument();
+  });
+
+  it("shows the spend returned for a run", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue({
+      ...(traceList as TracePage),
+      data: [{ ...runs[0], spend: 0.025 }],
+    });
+    renderSection();
+
+    const row = await screen.findByTestId("agent-trace-row");
+    expect(within(row).getByText("$0.03")).toBeInTheDocument();
   });
 
   it("filters by input text and by trace id", async () => {

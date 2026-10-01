@@ -87,6 +87,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     is_registered_custom_provider,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     declares_ptu,
@@ -8813,6 +8814,41 @@ class Router:
                     model_info[field] = backend_value
 
     @staticmethod
+    def _cost_map_backend_model(deployment: Deployment) -> str:
+        model_info_base_model: Final = deployment.model_info.base_model
+        if isinstance(model_info_base_model, str) and model_info_base_model:
+            return model_info_base_model
+        params_base_model: Final = deployment.litellm_params.get("base_model")
+        if isinstance(params_base_model, str) and params_base_model:
+            return params_base_model
+        return deployment.litellm_params.model
+
+    @staticmethod
+    def _inherit_builtin_service_tier_pricing(
+        model_info: dict,  # mutable-ok: deployment cost-map entry filled in place
+        backend_model: str,
+        custom_llm_provider: str | None,
+    ) -> None:
+        """Inherit missing tier rates so a standalone entry does not fall back to custom standard rates."""
+        if ptu_terms(model_info) is not None and is_ptu_cost_attribution_enabled():
+            return
+        if all(model_info.get(field) is None for field in ("input_cost_per_token", "output_cost_per_token")):
+            return
+        try:
+            backend_info: Final = litellm.get_model_info(model=backend_model, custom_llm_provider=custom_llm_provider)
+        except Exception:  # noqa: BLE001  # get_model_info raises plain Exception for an unmapped backend model
+            return
+        backend_entry: Final = litellm.model_cost.get(backend_info.get("key") or "")
+        if not isinstance(backend_entry, dict):
+            return
+        for field, backend_value in backend_entry.items():
+            if not field.endswith(SERVICE_TIER_COST_KEY_SUFFIXES):
+                continue
+            if model_info.get(field) is not None or backend_value is None:
+                continue
+            model_info[field] = copy.deepcopy(backend_value)
+
+    @staticmethod
     def _inherit_builtin_base_rates_for_off_peak(
         model_info: dict,  # mutable-ok: cost-map entry filled in place
         backend_model: str,
@@ -8960,6 +8996,11 @@ class Router:
                     backend_model=deployment.litellm_params.model,
                     custom_llm_provider=deployment.litellm_params.custom_llm_provider,
                 )
+            Router._inherit_builtin_service_tier_pricing(
+                model_info=_model_info,
+                backend_model=Router._cost_map_backend_model(deployment),
+                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            )
             Router._inherit_builtin_tiered_output_rate(
                 model_info=_model_info,
                 backend_model=deployment.litellm_params.model,
@@ -10000,6 +10041,11 @@ class Router:
                 backend_model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             )
+        Router._inherit_builtin_service_tier_pricing(
+            model_info=model_info,
+            backend_model=Router._cost_map_backend_model(deployment),
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+        )
         Router._inherit_builtin_tiered_output_rate(
             model_info=model_info,
             backend_model=deployment.litellm_params.model,

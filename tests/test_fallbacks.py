@@ -1,3 +1,6 @@
+import os
+from typing import Final
+
 # What is this?
 ## This tests if the proxy fallbacks work as expected
 import pytest
@@ -6,6 +9,9 @@ import aiohttp
 from tests.large_text import text
 import time
 from typing import Optional
+from openai import AsyncOpenAI, PermissionDeniedError
+
+PROXY_BASE_URL: Final = os.environ.get("LITELLM_PROXY_BASE_URL", "http://0.0.0.0:4000")
 
 
 async def generate_key(
@@ -14,7 +20,7 @@ async def generate_key(
     models: list,
     calling_key="sk-1234",
 ):
-    url = "http://0.0.0.0:4000/key/generate"
+    url: Final = f"{PROXY_BASE_URL}/key/generate"
     headers = {
         "Authorization": f"Bearer {calling_key}",
         "Content-Type": "application/json",
@@ -48,7 +54,7 @@ async def chat_completion(
     extra_headers: Optional[dict] = None,
     **kwargs,
 ):
-    url = "http://0.0.0.0:4000/chat/completions"
+    url: Final = f"{PROXY_BASE_URL}/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -94,42 +100,30 @@ async def test_chat_completion():
 
 @pytest.mark.parametrize("has_access", [True, False])
 @pytest.mark.asyncio
-async def test_chat_completion_client_fallbacks(has_access):
-    """
-    make chat completion call with prompt > context window. expect it to work with fallback
-    """
-
+async def test_chat_completion_client_fallbacks(has_access: bool) -> None:
+    models: Final = ["gpt-3.5-turbo", "gpt-6-luna"] if has_access else ["gpt-3.5-turbo"]
     async with aiohttp.ClientSession() as session:
-        models = ["gpt-3.5-turbo"]
-
-        if has_access:
-            models.append("gpt-instruct")
-
-        ## CREATE KEY WITH MODELS
-        generated_key = await generate_key(session=session, i=0, models=models)
-        calling_key = generated_key["key"]
-        model = "gpt-3.5-turbo"
-        messages = [
-            {"role": "user", "content": "Who was Alexander?"},
-        ]
-
-        ## CALL PROXY
-        try:
-            await chat_completion(
-                session=session,
-                key=calling_key,
-                model=model,
-                messages=messages,
-                mock_testing_fallbacks=True,
-                fallbacks=["gpt-instruct"],
-            )
-            if not has_access:
-                pytest.fail(
-                    "Expected this to fail, submitted fallback model that key did not have access to"
-                )
-        except Exception as e:
-            if has_access:
-                pytest.fail("Expected this to work: {}".format(str(e)))
+        generated_key: Final = await generate_key(session=session, i=0, models=models)
+    async with AsyncOpenAI(api_key=generated_key["key"], base_url=PROXY_BASE_URL, max_retries=0) as client:
+        request: Final = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "Who was Alexander?"}],
+            "max_tokens": 32,
+            "temperature": 0,
+            "extra_body": {
+                "mock_testing_fallbacks": True,
+                "fallbacks": ["gpt-6-luna"],
+            },
+        }
+        if not has_access:
+            with pytest.raises(PermissionDeniedError) as denied:
+                await client.chat.completions.create(**request)
+            assert denied.value.status_code == 403
+            assert "gpt-6-luna" in str(denied.value)
+            return
+        response: Final = await client.chat.completions.create(**request)
+        assert response.model == "gpt-6-luna"
+        assert response.choices[0].message.content
 
 
 @pytest.mark.asyncio
@@ -241,55 +235,66 @@ async def test_chat_completion_with_timeout_from_request():
 
 @pytest.mark.parametrize("has_access", [True, False])
 @pytest.mark.asyncio
-async def test_chat_completion_client_fallbacks_with_custom_message(has_access):
-    """
-    make chat completion call with prompt > context window. expect it to work with fallback
-    """
-
+async def test_chat_completion_client_fallbacks_with_custom_message(has_access: bool) -> None:
+    original_messages: Final = [{"role": "user", "content": "Who was Alexander?"}]
+    custom_messages: Final = [
+        {
+            "role": "user",
+            "content": (
+                "Describe the weather in a coastal city during winter, including the usual temperature, rain, wind, "
+                "and the clothing a visitor should bring."
+            ),
+        }
+    ]
+    models: Final = ["gpt-3.5-turbo", "gpt-6-luna"] if has_access else ["gpt-3.5-turbo"]
     async with aiohttp.ClientSession() as session:
-        models = ["gpt-3.5-turbo"]
-
-        if has_access:
-            models.append("gpt-instruct")
-
-        ## CREATE KEY WITH MODELS
-        generated_key = await generate_key(session=session, i=0, models=models)
-        calling_key = generated_key["key"]
-        model = "gpt-3.5-turbo"
-        messages = [
-            {"role": "user", "content": "Who was Alexander?"},
-        ]
-
-        ## CALL PROXY
-        try:
-            await chat_completion(
-                session=session,
-                key=calling_key,
-                model=model,
-                messages=messages,
-                mock_testing_fallbacks=True,
-                fallbacks=[
+        generated_key: Final = await generate_key(session=session, i=0, models=models)
+    async with AsyncOpenAI(api_key=generated_key["key"], base_url=PROXY_BASE_URL, max_retries=0) as client:
+        request: Final = {
+            "model": "gpt-3.5-turbo",
+            "messages": original_messages,
+            "max_tokens": 32,
+            "temperature": 0,
+            "extra_body": {
+                "mock_testing_fallbacks": True,
+                "fallbacks": [
                     {
-                        "model": "gpt-instruct",
-                        "messages": [
-                            {
-                                "role": "assistant",
-                                "content": "This is a custom message",
-                            }
-                        ],
+                        "model": "gpt-6-luna",
+                        "messages": custom_messages,
                     }
                 ],
-            )
-            if not has_access:
-                pytest.fail(
-                    "Expected this to fail, submitted fallback model that key did not have access to"
-                )
-        except Exception as e:
-            if has_access:
-                pytest.fail("Expected this to work: {}".format(str(e)))
+            },
+        }
+        if not has_access:
+            with pytest.raises(PermissionDeniedError) as denied:
+                await client.chat.completions.create(**request)
+            assert denied.value.status_code == 403
+            assert "gpt-6-luna" in str(denied.value)
+            return
+        response: Final = await client.chat.completions.create(**request)
+        assert response.model == "gpt-6-luna"
+        assert response.choices[0].message.content
+        custom_control: Final = await client.chat.completions.create(
+            model="gpt-6-luna",
+            messages=custom_messages,
+            max_tokens=32,
+            temperature=0,
+        )
+        original_control: Final = await client.chat.completions.create(
+            model="gpt-6-luna",
+            messages=original_messages,
+            max_tokens=32,
+            temperature=0,
+        )
+        assert response.usage is not None
+        assert custom_control.usage is not None
+        assert original_control.usage is not None
+        assert custom_control.usage.completion_tokens > 0
+        assert original_control.usage.completion_tokens > 0
+        assert custom_control.usage.prompt_tokens != original_control.usage.prompt_tokens
+        assert response.usage.prompt_tokens == custom_control.usage.prompt_tokens
 
 
-from openai import AsyncOpenAI
 from typing import List
 
 

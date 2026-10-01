@@ -9,6 +9,7 @@ A trace is one agent run. It's made of spans (agent / llm / tool / chain / frame
 
 """
 
+from collections.abc import Sequence
 from typing import Literal
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -32,6 +33,7 @@ class Span(TypedDict):
     input_tokens: ReadOnly[int]
     output_tokens: ReadOnly[int]
     litellm_request_id: ReadOnly[str | None]
+    spend: ReadOnly[float | None]
 
 
 class AgentNode(TypedDict):
@@ -43,6 +45,7 @@ class AgentNode(TypedDict):
     llm_calls: int
     tool_calls: int
     duration_ms: float
+    spend: ReadOnly[float | None]
 
 
 class TraceSummary(TypedDict):
@@ -63,6 +66,7 @@ class TraceSummary(TypedDict):
     input_tokens: ReadOnly[int]
     output_tokens: ReadOnly[int]
     models: ReadOnly[tuple[str, ...]]
+    spend: ReadOnly[float | None]
 
 
 class Trace(TypedDict):
@@ -118,3 +122,42 @@ class SpanRow(TypedDict):
     OutputTokens: int
     Input: str
     Output: str
+
+
+class SpendLogRecord(TypedDict):
+    """One LiteLLM request, as written by the `clickhouse` logging callback."""
+
+    request_id: ReadOnly[str]
+    response_id: ReadOnly[str]
+    call_type: ReadOnly[str]
+    api_key: ReadOnly[str]
+    key_alias: ReadOnly[str]
+    team_id: ReadOnly[str]
+    team_alias: ReadOnly[str]
+    organization_id: ReadOnly[str]
+    user: ReadOnly[str]
+    end_user: ReadOnly[str]
+    model: ReadOnly[str]
+    model_group: ReadOnly[str]
+    model_id: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str]
+    api_base: ReadOnly[str]
+    spend: ReadOnly[float]
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+    cache_read_tokens: ReadOnly[int]
+    cache_write_tokens: ReadOnly[int]
+    start_time: ReadOnly[int]  # unix ms
+    end_time: ReadOnly[int]  # unix ms
+    completion_start_time: ReadOnly[int | None]
+    status: ReadOnly[str]
+    error_str: ReadOnly[str]
+    cache_hit: ReadOnly[bool]
+    session_id: ReadOnly[str]
+    trace_id: ReadOnly[str]  # from an incoming W3C traceparent, if any
+    span_id: ReadOnly[str]
+    request_tags: ReadOnly[Sequence[str]]
+    metadata: ReadOnly[str]
+    messages: ReadOnly[str]
+    response: ReadOnly[str]
