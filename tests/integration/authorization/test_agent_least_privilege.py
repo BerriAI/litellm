@@ -13,10 +13,20 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 
 
-def _write_access_config(directory: Path, *, require_access_defined: bool) -> Path:
+def _write_access_config(directory: Path, *, require_access_defined: bool, model_name: str) -> Path:
     source: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config: Final = {
         **source,
+        "model_list": [
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "integration-provider-key",
+                    "api_base": "http://127.0.0.1:15772/v1",
+                },
+            }
+        ],
         "general_settings": {
             **source["general_settings"],
             "require_key_agent_access_defined": require_access_defined,
@@ -181,8 +191,9 @@ def _assert_denial(response: httpx.Response, agent_id: str) -> None:
 def test_require_key_agent_access_defined_denies_ungranted_key_but_keeps_explicit_grants(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    config: Final = _write_access_config(tmp_path, require_access_defined=True)
     agent_name: Final = "least-privilege-" + uuid.uuid4().hex
+    v2_model: Final = "listing-" + agent_name
+    config: Final = _write_access_config(tmp_path, require_access_defined=True, model_name=v2_model)
 
     def upstream(request: Request) -> Reply:
         return _peer_response(request, wire, agent_name)
@@ -224,17 +235,16 @@ def test_require_key_agent_access_defined_denies_ungranted_key_but_keeps_explici
             }
         }, denied_completion.text
         denied_agents: Final = tuple(
-            candidate.request(
-                "GET", f"/v1/agents/{agent_id}", key=key_a, headers={"Connection": "close"}
-            )
+            candidate.request("GET", f"/v1/agents/{agent_id}", key=key_a, headers={"Connection": "close"})
             for _ in range(8)
         )
         _assert_denial(denied_agents[0], agent_id)
         assert all(response.json() == denied_agents[0].json() for response in denied_agents), [
             response.text for response in denied_agents
         ]
+        assert v2_model in _model_names(candidate, "/v2/model/info", candidate.key)
         assert _listed_agent_ids(candidate, key_a) == frozenset()
-        assert f"a2a/{agent_name}" not in _model_names(candidate, "/v1/model/info", key_a)
+        assert f"a2a/{agent_name}" not in _model_names(candidate, "/v2/model/info", key_a)
         assert f"a2a/{agent_name}" not in _model_names(candidate, "/model_group/info", key_a)
         assert tuple(item for item in wire.drain() if item.method == "POST") == ()
 
@@ -252,7 +262,7 @@ def test_require_key_agent_access_defined_denies_ungranted_key_but_keeps_explici
                 assert len(posts) == 1, posts
             if key != candidate.key:
                 assert agent_id in _listed_agent_ids(candidate, key)
-                assert f"a2a/{agent_name}" in _model_names(candidate, "/v1/model/info", key)
+                assert f"a2a/{agent_name}" in _model_names(candidate, "/v2/model/info", key)
 
 
 @pytest.mark.timeout(180)
