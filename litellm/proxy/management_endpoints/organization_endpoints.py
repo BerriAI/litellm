@@ -14,6 +14,7 @@ Endpoints for /organization operations
 #### ORGANIZATION MANAGEMENT ####
 
 from collections.abc import Mapping, Sequence
+from datetime import timedelta
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -40,7 +41,6 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
     update_budget,
@@ -60,7 +60,7 @@ from litellm.proxy.management_helpers.utils import (
     get_new_internal_user_defaults,
     management_endpoint_wrapper,
 )
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import PrismaClient
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -205,6 +205,15 @@ class _TransactionTables(Protocol):
 
     @property
     def litellm_organizationtable(self) -> "_OrganizationTableClient": ...
+
+    @property
+    def litellm_teamtable(self) -> "_TeamTableClient": ...
+
+    @property
+    def litellm_organizationmembership(self) -> "_OrganizationMembershipTableClient": ...
+
+    @property
+    def litellm_verificationtoken(self) -> "_VerificationTokenTableClient": ...
 
 
 class _TransactionManager(Protocol):
@@ -995,55 +1004,66 @@ async def delete_organization(
             detail={"error": "Only proxy admins can delete organizations"},
         )
 
-    deleted_orgs: Final = []
-    for organization_id in data.organization_ids:
-        # delete all teams in the organization
-        await _table(TeamRepository(prisma_client)).delete_many(where={"organization_id": organization_id})
-        # delete all members in the organization
-        await _table(OrganizationMembershipRepository(prisma_client)).delete_many(
-            where={"organization_id": organization_id}
+    requested_ids: Final = tuple(dict.fromkeys(data.organization_ids))
+    tx_manager: Final[_TransactionManager] = prisma_client.db.tx(timeout=timedelta(minutes=2))
+    async with tx_manager as tx:
+        existing_rows: Final = await tx.litellm_organizationtable.find_many(
+            where={"organization_id": {"in": list(requested_ids)}}  # mutable-ok: Prisma filter
         )
-        await _delete_organization_keys(
-            organization_id=organization_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
+        existing_ids: Final = frozenset(row.organization_id for row in existing_rows)
+        missing: Final = tuple(
+            organization_id for organization_id in requested_ids if organization_id not in existing_ids
         )
-        # delete the organization
-        deleted_org = await _table(OrganizationRepository(prisma_client)).delete(
-            where={"organization_id": organization_id},
-            include={"members": True, "teams": True, "litellm_budget_table": True},
-        )
-        if deleted_org is None:
+        if missing:
             raise HTTPException(
                 status_code=404,
-                detail={"error": f"Organization={organization_id} not found"},
+                detail={"error": f"Organization(s) not found: {', '.join(missing)}"},  # mutable-ok: error envelope
             )
-        deleted_orgs.append(deleted_org)
 
-    return deleted_orgs
+        keys_to_delete: Final = await tx.litellm_verificationtoken.find_many(
+            where={"organization_id": {"in": list(requested_ids)}}  # mutable-ok: Prisma filter
+        )
+        hashed_tokens_to_delete: Final = tuple(key.token for key in keys_to_delete)
+        jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_tokens(
+            hashed_tokens=hashed_tokens_to_delete,
+            prisma_client=prisma_client,
+        )
+        deleted_orgs: Final = await _delete_organizations_in_tx(tx=tx, organization_ids=requested_ids)
 
-
-async def _delete_organization_keys(
-    organization_id: str,
-    prisma_client: PrismaClient,
-    user_api_key_cache: UserApiKeyCache,
-    proxy_logging_obj: ProxyLogging | None,
-) -> None:
-    key_filter: Final[_OrganizationIdFilter] = {"organization_id": organization_id}
-    keys_to_delete: Final = await _table(VerificationTokenRepository(prisma_client)).find_many(where=key_filter)
-    hashed_tokens_to_delete: Final = tuple(key.token for key in keys_to_delete)
-    jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_tokens(
-        hashed_tokens=hashed_tokens_to_delete,
-        prisma_client=prisma_client,
-    )
-    await _table(VerificationTokenRepository(prisma_client)).delete_many(where=key_filter)
     await delete_cache_key_objects(
         hashed_tokens=hashed_tokens_to_delete,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
     await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
+
+    return deleted_orgs
+
+
+async def _delete_organizations_in_tx(
+    tx: _TransactionTables,
+    organization_ids: tuple[str, ...],
+) -> tuple["PrismaOrganizationTable | None", ...]:
+    return tuple(
+        [
+            await _delete_organization_in_tx(tx=tx, organization_id=organization_id)
+            for organization_id in organization_ids
+        ]
+    )
+
+
+async def _delete_organization_in_tx(
+    tx: _TransactionTables,
+    organization_id: str,
+) -> "PrismaOrganizationTable | None":
+    org_filter: Final[_OrganizationIdFilter] = {"organization_id": organization_id}
+    await tx.litellm_teamtable.delete_many(where=org_filter)
+    await tx.litellm_organizationmembership.delete_many(where=org_filter)
+    await tx.litellm_verificationtoken.delete_many(where=org_filter)
+    return await tx.litellm_organizationtable.delete(
+        where=org_filter,
+        include={"members": True, "teams": True, "litellm_budget_table": True},  # mutable-ok: Prisma include
+    )
 
 
 @router.get(

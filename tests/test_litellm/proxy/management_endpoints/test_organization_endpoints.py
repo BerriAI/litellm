@@ -1520,17 +1520,24 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
         cache.set_cache(key=cache_key, value={"retained": True})
 
     prisma_client: Final = AsyncMock()
-    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
-        return_value=[SimpleNamespace(token="hashed-org-key")]
-    )
 
     async def cascading_delete_many(where):
         jwt_table.cascade(("hashed-org-key",))
         return 1
 
-    prisma_client.db.litellm_verificationtoken.delete_many = AsyncMock(side_effect=cascading_delete_many)
+    tx: Final = MagicMock()
+    tx.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(organization_id="org-doomed")]
+    )
+    tx.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[SimpleNamespace(token="hashed-org-key")]
+    )
+    tx.litellm_teamtable.delete_many = AsyncMock(return_value=0)
+    tx.litellm_organizationmembership.delete_many = AsyncMock(return_value=0)
+    tx.litellm_verificationtoken.delete_many = AsyncMock(side_effect=cascading_delete_many)
+    tx.litellm_organizationtable.delete = AsyncMock(return_value=MagicMock())
+    prisma_client.db.tx = MagicMock(return_value=_FakeTxContext(tx))
     prisma_client.db.litellm_jwtkeymapping = jwt_table
-    prisma_client.db.litellm_organizationtable.delete = AsyncMock(return_value=MagicMock())
 
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
@@ -1545,3 +1552,157 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
     assert all(cache.get_cache(key=cache_key) is None for cache_key in doomed_cache_keys)
     assert all(cache.get_cache(key=cache_key) == {"retained": True} for cache_key in kept_cache_keys)
     assert jwt_table.rows == (kept_row,)
+
+
+@pytest.mark.asyncio
+async def test_delete_organization_unknown_id_rejects_before_any_delete(monkeypatch):
+    """One unknown id in organization_ids must 404 the whole request before any write: the
+    old per-org loop deleted the earlier orgs first, so [existing, missing] removed the
+    existing org and then failed (LIT-8570)."""
+    from litellm.proxy._types import DeleteOrganizationRequest, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import delete_organization
+
+    prisma_client: Final = AsyncMock()
+    tx: Final = MagicMock()
+    tx.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(organization_id="org-present")]
+    )
+    prisma_client.db.tx = MagicMock(return_value=_FakeTxContext(tx))
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await delete_organization(
+            data=DeleteOrganizationRequest(organization_ids=["org-present", "org-missing"]),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.status_code == 404
+    assert "org-missing" in str(exc_info.value.detail)
+    tx.litellm_teamtable.delete_many.assert_not_called()
+    tx.litellm_organizationmembership.delete_many.assert_not_called()
+    tx.litellm_verificationtoken.find_many.assert_not_called()
+    tx.litellm_organizationtable.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_organization_writes_inside_tx_and_evicts_after_commit(monkeypatch):
+    """Every org-cascade write must run inside prisma_client.db.tx() so a batch cannot
+    half-commit, and the key/jwt cache eviction must run only after the transaction
+    has committed (LIT-8570)."""
+    from litellm.proxy._types import DeleteOrganizationRequest, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import delete_organization
+
+    events: Final[list[str]] = []
+    tx: Final = MagicMock()
+
+    def record(table):
+        return AsyncMock(side_effect=lambda **kwargs: events.append(table) or 0)
+
+    tx.litellm_teamtable.delete_many = record("teams")
+    tx.litellm_organizationmembership.delete_many = record("members")
+    tx.litellm_verificationtoken.delete_many = record("keys")
+    tx.litellm_organizationtable.delete = AsyncMock(
+        side_effect=lambda **kwargs: events.append("org") or MagicMock()
+    )
+
+    class _RecordingTxContext:
+        async def __aenter__(self):
+            events.append("tx_enter")
+            return tx
+
+        async def __aexit__(self, exc_type, exc, tb):
+            events.append("tx_exit")
+            return False
+
+    tx.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(organization_id="org-1"), SimpleNamespace(organization_id="org-2")]
+    )
+    tx.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_jwtkeymapping = CascadingJWTMappingTable([])
+    prisma_client.db.tx = MagicMock(return_value=_RecordingTxContext())
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+    monkeypatch.setattr(
+        organization_endpoints,
+        "delete_cache_key_objects",
+        AsyncMock(side_effect=lambda **kwargs: events.append("evict_keys")),
+    )
+    monkeypatch.setattr(
+        organization_endpoints,
+        "evict_and_broadcast",
+        AsyncMock(side_effect=lambda **kwargs: events.append("broadcast")),
+    )
+
+    await delete_organization(
+        data=DeleteOrganizationRequest(organization_ids=["org-1", "org-2"]),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert events == [
+        "tx_enter",
+        "teams",
+        "members",
+        "keys",
+        "org",
+        "teams",
+        "members",
+        "keys",
+        "org",
+        "tx_exit",
+        "evict_keys",
+        "broadcast",
+    ]
+    prisma_client.db.litellm_teamtable.delete_many.assert_not_called()
+    prisma_client.db.litellm_organizationmembership.delete_many.assert_not_called()
+    prisma_client.db.litellm_verificationtoken.delete_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_organization_tx_failure_evicts_nothing(monkeypatch):
+    """If a delete inside the transaction raises, the exception must propagate and the
+    key/jwt cache eviction must not run: evicting entries for keys the rollback kept
+    would leave them unable to authenticate (LIT-8570)."""
+    from litellm.proxy._types import DeleteOrganizationRequest, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import delete_organization
+
+    tx: Final = MagicMock()
+    tx.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(organization_id="org-1")]
+    )
+    tx.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    tx.litellm_teamtable.delete_many = AsyncMock(return_value=0)
+    tx.litellm_organizationmembership.delete_many = AsyncMock(return_value=0)
+    tx.litellm_verificationtoken.delete_many = AsyncMock(side_effect=RuntimeError("db write failed"))
+
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_jwtkeymapping = CascadingJWTMappingTable([])
+    prisma_client.db.tx = MagicMock(return_value=_FakeTxContext(tx))
+
+    evict_keys: Final = AsyncMock()
+    broadcast: Final = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+    monkeypatch.setattr(organization_endpoints, "delete_cache_key_objects", evict_keys)
+    monkeypatch.setattr(organization_endpoints, "evict_and_broadcast", broadcast)
+
+    with pytest.raises(RuntimeError, match="db write failed"):
+        await delete_organization(
+            data=DeleteOrganizationRequest(organization_ids=["org-1"]),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    evict_keys.assert_not_called()
+    broadcast.assert_not_called()
