@@ -11,7 +11,14 @@ import { type Sample, type Settings, runTime, durationLabel } from "./engineData
 
 import { DurationInput } from "./DurationInput";
 
-export type ActivitySelection = Pick<Settings, "source" | "service" | "filters" | "lookback_hours">;
+export type ActivitySelection = Pick<Settings, "source"> &
+  Partial<
+    Pick<
+      Settings,
+      "service" | "filters" | "lookback_hours" | "sample_percent" | "sample_size" | "team_id" | "execution_ids"
+    >
+  >;
+
 const selectClass = "h-9 w-full rounded-md border border-input bg-background px-3 text-sm";
 
 export function RunList({ executions }: { executions: Sample["executions"] }) {
@@ -42,26 +49,40 @@ export function ActivityScope({
   accessToken: string;
 }) {
   const id = useId();
+  const [offset, setOffset] = useState(0);
   const [scope, setScope] = useState(value);
   const [trace, setTrace] = useState<{ id: string; ref?: string } | null>(null);
-  const serialized = JSON.stringify(value);
+  const [asOf, setAsOf] = useState(() => new Date().toISOString());
+  const serialized = JSON.stringify({ ...value, execution_ids: [] });
   useEffect(() => {
-    const timer = setTimeout(() => setScope(JSON.parse(serialized) as ActivitySelection), 350);
+    const timer = setTimeout(() => {
+      setScope(JSON.parse(serialized) as ActivitySelection);
+      setOffset(0);
+      setAsOf(new Date().toISOString());
+    }, 350);
     return () => clearTimeout(timer);
   }, [serialized]);
   const historyHours = value.lookback_hours ?? 24;
   const validWindow = Number.isInteger(historyHours) && historyHours >= 1 && historyHours <= 720;
-  const valid = validWindow && (scope.filters ?? []).every((f) => f.key.trim() && f.value.trim());
-  const load = (selection: ActivitySelection) => {
+  const percent = scope.sample_percent ?? 100;
+  const cap = scope.sample_size;
+  const validCap = cap == null || (Number.isInteger(cap) && cap > 0);
+  const validSampling = percent > 0 && percent <= 100 && validCap;
+  const validFilters = (scope.filters ?? []).every((f) => f.key.trim() && f.value.trim());
+  const valid = validWindow && validSampling && validFilters;
+  const load = (selection: ActivitySelection, pageOffset = 0) => {
     const { lookback_hours, ...selectionSettings } = selection;
     return apiClient.post<Sample>("/engine/preview/sample", {
       accessToken,
       body: {
+        offset: pageOffset,
+        as_of: asOf,
         settings: {
           ...selectionSettings,
+          execution_ids: [],
           name: "Preview",
           model: "preview",
-          sample_size: 100,
+
           checks: [{ id: "preview", instruction: "Preview recorded activity" }],
         },
         lookback_hours: lookback_hours ?? 24,
@@ -82,8 +103,8 @@ export function ActivityScope({
   };
   const discovery = useQuery(discoveryOptions);
   const previewOptions = {
-    queryKey: ["lens-activity-preview", scope, accessToken],
-    queryFn: () => load(scope),
+    queryKey: ["lens-activity-preview", scope, offset, asOf, accessToken],
+    queryFn: () => load(scope, offset),
     enabled: valid,
     staleTime: 30000,
   };
@@ -99,7 +120,7 @@ export function ActivityScope({
     onChange({ ...value, filters: filters.map((f, i) => (i === index ? { ...f, [field]: text } : f)) });
 
   const changeSource = (source: Settings["source"]) => {
-    const selection = { ...value, source, service: "", filters: [] };
+    const selection = { ...value, source, service: "", filters: [], execution_ids: [] };
     onChange(selection);
   };
   const windowLabel = validWindow
@@ -219,6 +240,14 @@ export function ActivityScope({
             Suggestions come from up to 100 recent runs. You can also type a recorded key or value.
           </p>
         </div>
+        <label className="grid gap-2 text-sm">
+          Team ID (optional)
+          <Input
+            value={value.team_id ?? ""}
+            placeholder="All teams you can access"
+            onChange={(e) => onChange({ ...value, team_id: e.target.value })}
+          />
+        </label>
         <DurationInput
           label="Review the last"
           value={value.lookback_hours ?? 24}
@@ -227,10 +256,58 @@ export function ActivityScope({
           onChange={(lookback_hours) => onChange({ ...value, lookback_hours })}
         />
         <p className="text-xs text-muted-foreground">
-          History for the first scan, from 1 hour to 30 days. Later scans review new activity.
+          Time window used by each scan. Activity becomes eligible two minutes after it finishes.
         </p>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="grid gap-2 text-sm">
+            Sample (%)
+            <Input
+              type="number"
+              min="0.01"
+              max="100"
+              step="any"
+              value={value.sample_percent ?? 100}
+              onChange={(e) => onChange({ ...value, sample_percent: Number(e.target.value) })}
+            />
+          </label>
+          <label className="grid gap-2 text-sm">
+            Maximum runs (optional)
+            <Input
+              type="number"
+              min="1"
+              placeholder="No limit"
+              value={value.sample_size ?? ""}
+              onChange={(e) => onChange({ ...value, sample_size: e.target.value ? Number(e.target.value) : null })}
+            />
+          </label>
+        </div>
+        <p className="text-xs text-muted-foreground">100% with no limit selects all matching activity.</p>
+        {!!value.execution_ids?.length && (
+          <Button variant="outline" onClick={() => onChange({ ...value, execution_ids: [] })}>
+            Clear {value.execution_ids.length} selected runs
+          </Button>
+        )}
       </div>
       <MatchingActivity
+        offset={offset}
+        onPage={setOffset}
+        onSelect={(runId, checked) =>
+          onChange({
+            ...value,
+            execution_ids: checked
+              ? [...(value.execution_ids ?? []), runId]
+              : (value.execution_ids ?? []).filter((id) => id !== runId),
+          })
+        }
+        selectedIds={value.execution_ids ?? []}
+        selectedCount={
+          value.execution_ids?.length
+            ? Math.min(
+                Math.ceil((value.execution_ids.length * (value.sample_percent ?? 100)) / 100),
+                value.sample_size ?? Infinity,
+              )
+            : preview.data?.selected ?? 0
+        }
         title={previewTitle()}
         windowLabel={windowLabel}
         ready={ready}
@@ -252,6 +329,11 @@ export function ActivityScope({
 }
 
 function MatchingActivity({
+  offset,
+  onPage,
+  onSelect,
+  selectedIds,
+  selectedCount,
   title,
   windowLabel,
   ready,
@@ -259,6 +341,11 @@ function MatchingActivity({
   data,
   onOpen,
 }: {
+  offset: number;
+  onPage: (offset: number) => void;
+  onSelect: (id: string, checked: boolean) => void;
+  selectedIds: string[];
+  selectedCount: number;
   title: string;
   windowLabel: string;
   ready: boolean;
@@ -287,8 +374,14 @@ function MatchingActivity({
           </p>
         )}
         {ready &&
-          data?.executions.slice(0, 10).map((run) => (
+          data?.executions.map((run) => (
             <div key={run.id} className="flex items-center justify-between gap-3 border-b last:border-0">
+              <input
+                type="checkbox"
+                aria-label={`Select ${run.name}`}
+                checked={selectedIds.includes(run.id)}
+                onChange={(e) => onSelect(run.id, e.target.checked)}
+              />
               <div className="min-w-0">
                 <RunList executions={[run]} />
               </div>
@@ -301,10 +394,26 @@ function MatchingActivity({
             </div>
           ))}
       </div>
-      {ready && (data?.eligible ?? 0) > 10 && (
-        <p className="border-t px-4 py-2 text-xs text-muted-foreground">
-          Showing 10 examples. Your scan limit determines how many matching runs are reviewed.
-        </p>
+      {ready && data && (
+        <div className="border-t px-4 py-3 space-y-2">
+          <p className="text-xs text-muted-foreground">
+            {selectedCount} selected for analysis · Showing {offset + (data.executions.length ? 1 : 0)}–
+            {offset + data.executions.length} of {data.eligible}
+          </p>
+          <div className="flex justify-between">
+            <Button size="sm" variant="ghost" disabled={offset === 0} onClick={() => onPage(Math.max(0, offset - 100))}>
+              Previous
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={data.next_offset == null}
+              onClick={() => onPage(data.next_offset ?? offset)}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
       )}
     </section>
   );
