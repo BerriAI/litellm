@@ -4,8 +4,11 @@ Tests for Vertex AI partner models count_tokens location resolution.
 Ref: https://github.com/BerriAI/litellm/issues/23872
 """
 
+from unittest.mock import AsyncMock, Mock
+
 import pytest
 
+from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import (
     VertexAIPartnerModelsTokenCounter,
 )
@@ -32,20 +35,14 @@ class TestCountTokensLocationResolution:
         return params
 
     @pytest.mark.asyncio
-    async def test_count_tokens_location_overrides_vertex_location(
-        self, counter, monkeypatch
-    ):
+    async def test_count_tokens_location_overrides_vertex_location(self, counter, monkeypatch):
         """vertex_count_tokens_location should take precedence over vertex_location."""
         captured = {}
 
-        async def fake_ensure_access_token(
-            self, credentials, project_id, custom_llm_provider
-        ):
+        async def fake_ensure_access_token(self, credentials, project_id, custom_llm_provider):
             return "fake-token", "fake-project"
 
-        def fake_build_endpoint(
-            self, model, project_id, vertex_location, api_base=None
-        ):
+        def fake_build_endpoint(self, model, project_id, vertex_location, api_base=None):
             captured["vertex_location"] = vertex_location
             return "https://fake-endpoint"
 
@@ -76,9 +73,7 @@ class TestCountTokensLocationResolution:
 
         import litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler as handler_mod
 
-        monkeypatch.setattr(
-            handler_mod, "get_async_httpx_client", lambda **kwargs: FakeClient()
-        )
+        monkeypatch.setattr(handler_mod, "get_async_httpx_client", lambda **kwargs: FakeClient())
 
         litellm_params = self._build_litellm_params(
             vertex_location="us-east5",
@@ -94,22 +89,16 @@ class TestCountTokensLocationResolution:
         assert captured["vertex_location"] == "europe-west1"
 
     @pytest.mark.asyncio
-    async def test_claude_without_count_tokens_location_defaults_to_us_east5(
-        self, counter, monkeypatch
-    ):
+    async def test_claude_without_count_tokens_location_defaults_to_us_east5(self, counter, monkeypatch):
         """Claude models without any location should default to us-east5."""
         monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
         monkeypatch.delenv("VERTEX_LOCATION", raising=False)
         captured = {}
 
-        async def fake_ensure_access_token(
-            self, credentials, project_id, custom_llm_provider
-        ):
+        async def fake_ensure_access_token(self, credentials, project_id, custom_llm_provider):
             return "fake-token", "fake-project"
 
-        def fake_build_endpoint(
-            self, model, project_id, vertex_location, api_base=None
-        ):
+        def fake_build_endpoint(self, model, project_id, vertex_location, api_base=None):
             captured["vertex_location"] = vertex_location
             return "https://fake-endpoint"
 
@@ -139,9 +128,7 @@ class TestCountTokensLocationResolution:
 
         import litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler as handler_mod
 
-        monkeypatch.setattr(
-            handler_mod, "get_async_httpx_client", lambda **kwargs: FakeClient()
-        )
+        monkeypatch.setattr(handler_mod, "get_async_httpx_client", lambda **kwargs: FakeClient())
 
         litellm_params = self._build_litellm_params()  # no location at all
 
@@ -158,14 +145,10 @@ class TestCountTokensLocationResolution:
         """Claude models with vertex_location but no count_tokens_location should use vertex_location."""
         captured = {}
 
-        async def fake_ensure_access_token(
-            self, credentials, project_id, custom_llm_provider
-        ):
+        async def fake_ensure_access_token(self, credentials, project_id, custom_llm_provider):
             return "fake-token", "fake-project"
 
-        def fake_build_endpoint(
-            self, model, project_id, vertex_location, api_base=None
-        ):
+        def fake_build_endpoint(self, model, project_id, vertex_location, api_base=None):
             captured["vertex_location"] = vertex_location
             return "https://fake-endpoint"
 
@@ -195,9 +178,7 @@ class TestCountTokensLocationResolution:
 
         import litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler as handler_mod
 
-        monkeypatch.setattr(
-            handler_mod, "get_async_httpx_client", lambda **kwargs: FakeClient()
-        )
+        monkeypatch.setattr(handler_mod, "get_async_httpx_client", lambda **kwargs: FakeClient())
 
         litellm_params = self._build_litellm_params(vertex_location="asia-southeast1")
 
@@ -221,38 +202,26 @@ class TestCountTokensVersionSuffixStripping:
 
     def test_strip_version_suffix_at_default(self):
         counter = VertexAIPartnerModelsTokenCounter()
-        assert (
-            counter._strip_version_suffix("claude-sonnet-4-6@default")
-            == "claude-sonnet-4-6"
-        )
+        assert counter._strip_version_suffix("claude-sonnet-4-6@default") == "claude-sonnet-4-6"
 
     def test_strip_version_suffix_at_date(self):
         counter = VertexAIPartnerModelsTokenCounter()
-        assert (
-            counter._strip_version_suffix("claude-haiku-4-5@20251001")
-            == "claude-haiku-4-5"
-        )
+        assert counter._strip_version_suffix("claude-haiku-4-5@20251001") == "claude-haiku-4-5"
 
     def test_strip_version_suffix_no_suffix(self):
         counter = VertexAIPartnerModelsTokenCounter()
         assert counter._strip_version_suffix("claude-sonnet-4-6") == "claude-sonnet-4-6"
 
     @pytest.mark.asyncio
-    async def test_handle_count_tokens_strips_version_from_request_data(
-        self, monkeypatch
-    ):
+    async def test_handle_count_tokens_strips_version_from_request_data(self, monkeypatch):
         """The model name in request_data sent to the API must have @suffix stripped."""
         counter = VertexAIPartnerModelsTokenCounter()
         captured_json = {}
 
-        async def fake_ensure_access_token(
-            self, credentials, project_id, custom_llm_provider
-        ):
+        async def fake_ensure_access_token(self, credentials, project_id, custom_llm_provider):
             return "fake-token", "fake-project"
 
-        def fake_build_endpoint(
-            self, model, project_id, vertex_location, api_base=None
-        ):
+        def fake_build_endpoint(self, model, project_id, vertex_location, api_base=None):
             return "https://fake-endpoint"
 
         monkeypatch.setattr(
@@ -279,9 +248,7 @@ class TestCountTokensVersionSuffixStripping:
 
         import litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler as handler_mod
 
-        monkeypatch.setattr(
-            handler_mod, "get_async_httpx_client", lambda **kwargs: FakeClient()
-        )
+        monkeypatch.setattr(handler_mod, "get_async_httpx_client", lambda **kwargs: FakeClient())
 
         await counter.handle_count_tokens_request(
             model="claude-sonnet-4-6@default",
@@ -294,3 +261,57 @@ class TestCountTokensVersionSuffixStripping:
 
         # The model name sent to the API must NOT have the @default suffix
         assert captured_json["model"] == "claude-sonnet-4-6"
+
+
+SYSTEM = "You are a careful assistant."
+TOOLS = [
+    {
+        "name": "noop",
+        "description": "Do nothing",
+        "input_schema": {"type": "object", "properties": {}},
+    }
+]
+
+
+class TestCountTokensSystemToolsForwarding:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("system", "tools", "expected_extra"),
+        [
+            (SYSTEM, None, {"system": SYSTEM}),
+            (None, TOOLS, {"tools": TOOLS}),
+            (SYSTEM, TOOLS, {"system": SYSTEM, "tools": TOOLS}),
+            (None, None, {}),
+        ],
+    )
+    async def test_system_and_tools_are_forwarded(self, monkeypatch, system, tools, expected_extra):
+        import litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler as handler_mod
+
+        model = "claude-3-5-sonnet-v2"
+        messages = [{"role": "user", "content": "Hello"}]
+        response = Mock(status_code=200, text="")
+        response.json.return_value = {"input_tokens": 37}
+        http_client = Mock()
+        http_client.post = AsyncMock(return_value=response)
+        monkeypatch.setattr(
+            handler_mod.VertexAIPartnerModelsTokenCounter,
+            "_ensure_access_token_async",
+            AsyncMock(return_value=("test-token", "test-project")),
+        )
+        monkeypatch.setattr(handler_mod, "get_async_httpx_client", lambda **_: http_client)
+        await VertexAITokenCounter().count_tokens(
+            model_to_use=model,
+            messages=messages,
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-east5",
+                }
+            },
+            request_model=model,
+            system=system,
+            tools=tools,
+        )
+        sent = http_client.post.await_args.kwargs["json"]
+        assert sent == {"model": model, "messages": messages, **expected_extra}
