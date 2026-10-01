@@ -477,6 +477,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 url=self.api_base,
                 json=guardrail_request.model_dump(mode="json"),
                 headers=headers,
+                timeout=self.timeout,
             )
 
             response.raise_for_status()

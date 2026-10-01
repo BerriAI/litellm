@@ -57,6 +57,7 @@ import {
   ShieldCheck,
   Tags,
   Terminal,
+  Trophy,
   User,
   Users,
   Wallet,
@@ -70,6 +71,7 @@ import { cn } from "@/lib/cva.config";
 import { rolesWithCapability } from "../utils/capabilities";
 import {
   all_admin_roles,
+  proxyAdminTierRoles,
   internalUserRoles,
   isAdminRole,
   isUserTeamAdminForAnyTeam,
@@ -214,7 +216,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "model-insights",
         page: "model-insights",
-        icon: <BarChart3 {...ICON} />,
+        icon: <Trophy {...ICON} />,
         roles: all_admin_roles,
         label: (
           <span className="flex items-center gap-2">
@@ -254,7 +256,7 @@ const menuGroups: MenuGroup[] = [
           </span>
         ),
         icon: <Aperture {...ICON} />,
-        roles: all_admin_roles,
+        roles: proxyAdminTierRoles,
       },
       {
         key: "guardrails-monitor",

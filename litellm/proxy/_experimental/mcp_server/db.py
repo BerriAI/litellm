@@ -523,9 +523,7 @@ def _identifier_where(value: str, exclude_server_id: str | None) -> "prisma_db_t
                     {"alias": {"equals": value, "mode": "insensitive"}},
                 ]
             },
-            {
-                "OR": [{"approval_status": None}, {"approval_status": {"not": MCPApprovalStatus.draft}}]
-            },  # mutable-ok: prisma where-inputs must be plain dicts
+            {"OR": [{"approval_status": None}, {"approval_status": {"not": MCPApprovalStatus.draft}}]},
             *own_row_guard,
         ]
     }

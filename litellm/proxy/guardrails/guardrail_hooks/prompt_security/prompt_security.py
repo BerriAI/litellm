@@ -290,6 +290,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             f"{self.api_base}/api/protect",
             headers=headers,
             json=payload,
+            timeout=self.timeout,
         )
         response.raise_for_status()
         res: Final[_ProtectResponse] = response.json()
@@ -405,6 +406,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             f"{self.api_base}/api/protect",
             headers=headers,
             json=payload,
+            timeout=self.timeout,
         )
         response.raise_for_status()
         res: Final[_ProtectResponse] = response.json()
@@ -520,6 +522,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             f"{self.api_base}/api/sanitizeFile",
             headers=headers,
             files=files,
+            timeout=self.timeout,
         )
         upload_response.raise_for_status()
         upload_result: Final[_SanitizeUploadResponse] = upload_response.json()
@@ -550,6 +553,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 f"{self.api_base}/api/sanitizeFile",
                 headers=headers,
                 params={"jobId": job_id},
+                timeout=self.timeout,
             )
             poll_response.raise_for_status()
             result: _SanitizeStatusResponse = poll_response.json()

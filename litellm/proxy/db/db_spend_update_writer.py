@@ -474,9 +474,7 @@ class DBSpendUpdateWriter:
         self.daily_org_spend_update_queue = DailySpendUpdateQueue()
         self.daily_tag_spend_update_queue = DailySpendUpdateQueue()
         self.window_spend_update_queue = WindowSpendUpdateQueue()
-        self.interrupted_tag_commits: set[asyncio.Task[None]] = (
-            set()
-        )  # mutable-ok: same registry as DailySpendUpdateQueue.interrupted_commits
+        self.interrupted_tag_commits: set[asyncio.Task[None]] = set()
 
     async def update_database(
         # LiteLLM management object fields
