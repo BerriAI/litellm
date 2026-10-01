@@ -320,6 +320,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     providerKey: "CiscoAiDefense",
   },
   {
+    id: "neuraltrust",
+    name: "NeuralTrust",
+    description:
+      "TrustGuard runtime guardrails: prompt injection, toxicity, DLP, and policy enforcement on LLM input and output.",
+    category: "partner",
+    logo: guardrailLogoMap["NeuralTrust"],
+    tags: ["Security", "Prompt Injection", "DLP"],
+    providerKey: "Neuraltrust",
+  },
+  {
     id: "noma",
     name: "Noma Security",
     description: "AI security platform for detecting and preventing AI-specific threats and vulnerabilities.",
