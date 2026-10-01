@@ -190,7 +190,7 @@ export default function SystemOneResponseView({
             }
           />
           <CollapsibleContent>
-            <pre className="max-h-72 overflow-auto rounded-md bg-muted p-3 font-mono text-xs">
+            <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
               {JSON.stringify(response, null, 2)}
             </pre>
           </CollapsibleContent>

@@ -96,7 +96,7 @@ export default function PlaygroundPage() {
         <TabsContent value="compliance" className="mt-0 h-full data-hidden:hidden" keepMounted>
           <ComplianceUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
         </TabsContent>
-        <TabsContent value="system-one" className="mt-0 h-full data-hidden:hidden" keepMounted>
+        <TabsContent value="system-one" className="mt-0 min-h-0 data-hidden:hidden" keepMounted>
           <SystemOneUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
         </TabsContent>
         <TabsContent value="agent-builder" className="mt-0 h-full data-hidden:hidden" keepMounted>

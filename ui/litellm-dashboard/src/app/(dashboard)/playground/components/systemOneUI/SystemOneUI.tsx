@@ -91,7 +91,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto p-4">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto p-4 xl:overflow-hidden">
       <section className="grid gap-3">
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -171,12 +171,11 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
         </Alert>
       </section>
 
-      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-2">
-        <section className="flex min-h-96 flex-col" aria-label="System One request editor">
+      <div className="grid gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-2">
+        <section className="flex min-h-96 flex-col xl:min-h-0" aria-label="System One request editor">
           <SystemOneJsonEditor value={rawPayload} onChange={handlePayloadChange} validation={validation} />
         </section>
-        <section className="grid content-start gap-4" aria-label="System One results">
-          <SystemOneQuestionBreakdown payload={validation.payload} />
+        <section className="grid content-start gap-4 xl:min-h-0 xl:overflow-auto" aria-label="System One results">
           <SystemOneResponseView
             response={systemOne.data?.response}
             fallbackModel={validation.payload?.model}
@@ -184,6 +183,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
             error={systemOne.error?.message}
             isLoading={isLoading}
           />
+          <SystemOneQuestionBreakdown payload={validation.payload} />
         </section>
       </div>
     </div>
