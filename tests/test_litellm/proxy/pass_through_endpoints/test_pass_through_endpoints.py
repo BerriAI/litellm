@@ -8176,3 +8176,41 @@ async def test_a_config_reload_applies_auth_turned_on_for_a_config_pass_through(
 
     assert (open_before.status_code, locked_after.status_code) == (200, 401)
     assert upstream_requests == []
+
+
+@pytest.mark.asyncio
+async def test_pass_throughs_stay_open_while_a_db_sync_reads_the_database(tmp_path, monkeypatch):
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-open", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[
+            {"id": "db-endpoint", "path": "/db-open", "target": "http://db-upstream.test/api", "auth": False}
+        ],
+        master_key="sk-pass-through-master",
+    )
+    await _run_db_sync_cycle(proxy)
+    database_read_started: Final = asyncio.Event()
+    release_database_read: Final = asyncio.Event()
+    read_row: Final = proxy.config_table.get_generic_data
+
+    async def slow_read(key: str, value: str, table_name: str) -> _StoredConfigRow | None:
+        database_read_started.set()
+        await release_database_read.wait()
+        return await read_row(key=key, value=value, table_name=table_name)
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import utils as proxy_utils
+
+    monkeypatch.setattr(proxy_utils, "litellm_config_cache", DualCache())
+    monkeypatch.setattr(proxy.config_table, "get_generic_data", slow_read)
+    sync: Final = asyncio.create_task(proxy.proxy_config.get_config(config_file_path=proxy.config_path))
+    await asyncio.wait_for(database_read_started.wait(), timeout=5)
+    config_during_sync, _ = await _send_through_proxy("/cfg-open", {})
+    db_during_sync, _ = await _send_through_proxy("/db-open", {})
+    release_database_read.set()
+    await sync
+
+    assert (config_during_sync.status_code, db_during_sync.status_code) == (200, 200)
