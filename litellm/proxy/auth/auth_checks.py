@@ -1106,7 +1106,7 @@ async def common_checks(
                     model=_model,
                     llm_router=llm_router,
                     models=end_user_object.models,
-                    team_model_aliases=valid_token.team_model_aliases if valid_token else None,
+                    team_model_aliases=_team_model_aliases_for_auth_check(valid_token),
                     team_id=valid_token.team_id if valid_token else None,
                     key_model_aliases=key_model_aliases_for_auth_check(valid_token),
                     object_type="customer",
@@ -1116,7 +1116,7 @@ async def common_checks(
                     model=fallback_model,
                     llm_router=llm_router,
                     models=end_user_object.models,
-                    team_model_aliases=valid_token.team_model_aliases if valid_token else None,
+                    team_model_aliases=_team_model_aliases_for_auth_check(valid_token),
                     team_id=valid_token.team_id if valid_token else None,
                     key_model_aliases=key_model_aliases_for_auth_check(valid_token),
                     object_type="customer",
@@ -4706,6 +4706,16 @@ def key_model_aliases_for_auth_check(valid_token: UserAPIKeyAuth | None) -> Mapp
     return alias_map(valid_token.aliases) if valid_token is not None and valid_token.aliases else None
 
 
+def _team_model_aliases_for_auth_check(valid_token: UserAPIKeyAuth | None) -> dict[str, str] | None:
+    if valid_token is None or valid_token.team_model_aliases is None:
+        return None
+    return {
+        alias: target
+        for alias, target in valid_token.team_model_aliases.items()
+        if isinstance(alias, str) and isinstance(target, str)
+    }
+
+
 def _resolve_key_models_for_auth_check(valid_token: UserAPIKeyAuth) -> list[str]:
     """
     Expand key model sentinels before auth checks.
@@ -5061,7 +5071,7 @@ def _check_customer_model_access_for_resolved_model(
         model=model,
         llm_router=llm_router,
         models=valid_token.end_user_models,
-        team_model_aliases=valid_token.team_model_aliases,
+        team_model_aliases=_team_model_aliases_for_auth_check(valid_token),
         team_id=valid_token.team_id,
         key_model_aliases=key_model_aliases_for_auth_check(valid_token),
         object_type="customer",

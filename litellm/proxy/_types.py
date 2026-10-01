@@ -3241,7 +3241,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_models: list = []
     team_blocked: bool = False
     soft_budget: float | None = None
-    team_model_aliases: dict[str, str] | None = None
+    team_model_aliases: dict | None = None
     team_member: Member | None = None
     team_metadata: dict | None = None
     team_object_permission_id: str | None = None
