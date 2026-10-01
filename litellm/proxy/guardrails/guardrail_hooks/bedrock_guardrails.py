@@ -1787,6 +1787,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 url=prepared_request.url,
                 data=prepared_request.body,
                 headers=prepared_request.headers,
+                timeout=self.timeout,
             )
         except HTTPException:
             # Propagate HTTPException (e.g. from non-200 path) as-is

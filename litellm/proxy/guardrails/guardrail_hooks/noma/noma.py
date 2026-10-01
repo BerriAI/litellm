@@ -751,6 +751,7 @@ class NomaGuardrail(CustomGuardrail):
                     "requestId": llm_request_id,
                 },
             },
+            timeout=self.timeout,
         )
         response.raise_for_status()
 

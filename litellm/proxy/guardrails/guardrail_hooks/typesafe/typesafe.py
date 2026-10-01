@@ -161,6 +161,7 @@ class TypeSafeGuardrail(CustomGuardrail):
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
         async_handler: AsyncHTTPHandler | None = None,
+        timeout: float | None = None,
     ) -> None:
         raw_api_base: Final = (api_base or get_secret_str("TYPESAFE_API_BASE") or DEFAULT_API_BASE).rstrip("/")
         self.typesafe_api_base = raw_api_base
@@ -188,6 +189,7 @@ class TypeSafeGuardrail(CustomGuardrail):
             guardrail_name=guardrail_name,
             event_hook=event_hook,
             default_on=default_on,
+            timeout=timeout,
         )
 
     def _handle_failure(self, error: str, log_detail: dict[str, object]) -> None:
@@ -271,7 +273,7 @@ class TypeSafeGuardrail(CustomGuardrail):
                     "Authorization": f"Bearer {self.typesafe_api_key}",
                     "Content-Type": "application/json",
                 },
-                timeout=_JEV_TIMEOUT_SECONDS,
+                timeout=self.timeout if self.timeout is not None else _JEV_TIMEOUT_SECONDS,
             )
         except asyncio.CancelledError:
             raise

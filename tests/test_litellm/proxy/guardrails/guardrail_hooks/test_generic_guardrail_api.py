@@ -630,7 +630,7 @@ class TestStructuredMessagesInResponse:
             {"role": "tool", "tool_call_id": "call_1", "content": '{"ssn": "123-45-6789"}'},
         ]
 
-        def echo_with_tool_output_redacted(url, json, headers):
+        def echo_with_tool_output_redacted(url, json, headers, **_kwargs):
             shown_rows = json["structured_messages"]
             assert "index" not in shown_rows[1]["tool_calls"][0]
             assert "name" not in shown_rows[0]
@@ -670,7 +670,7 @@ class TestStructuredMessagesInResponse:
             {"role": "user", "content": "Look up 123-45-6789 for me."},
         ]
 
-        def echo_rows_and_rewrite_texts(url, json, headers):
+        def echo_rows_and_rewrite_texts(url, json, headers, **_kwargs):
             answer = MagicMock()
             answer.json.return_value = {
                 "action": "NONE",

@@ -8,6 +8,8 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
 
+import httpx
+
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -176,6 +178,8 @@ class CustomGuardrail(CustomLogger):
 
     records_own_guardrail_information: ClassVar[bool] = False
 
+    timeout: float | httpx.Timeout | None = None
+
     def __init_subclass__(cls, **kwargs: object) -> None:  # kwargs-ok: forwarded to cooperative __init_subclass__ hooks
         super().__init_subclass__(**kwargs)
         own_apply_guardrail: Final[object] = cls.__dict__.get("apply_guardrail")
@@ -201,6 +205,7 @@ class CustomGuardrail(CustomLogger):
         run_in_parallel: bool = False,
         scan_raw_request: bool = False,
         only_scan_new_messages: bool = False,
+        timeout: float | None = None,
         **kwargs,
     ):
         """
@@ -229,6 +234,8 @@ class CustomGuardrail(CustomLogger):
                 guardrails: any data this guardrail returns is discarded, matching run_in_parallel's
                 contract, since applying its mutations on top of a stale snapshot would silently
                 undo whatever later guardrails already did to the live request.
+            timeout: Per-request timeout in seconds for the guardrail provider's API call. When
+                None, the guardrail keeps whatever default its HTTP handler or SDK already uses.
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -246,6 +253,8 @@ class CustomGuardrail(CustomLogger):
         self.run_in_parallel: bool = run_in_parallel
         self.scan_raw_request: bool = scan_raw_request
         self.only_scan_new_messages: bool = only_scan_new_messages
+        if timeout is not None:
+            self.timeout = timeout
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks

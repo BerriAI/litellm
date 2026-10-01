@@ -233,7 +233,7 @@ class TestRepelloAIPreCall:
         data = {"messages": [{"role": "user", "content": "check me"}]}
         captured = {}
 
-        async def capture(url, headers, json):
+        async def capture(url, headers, json, **_kwargs):
             captured["url"] = url
             captured["headers"] = headers
             captured["json"] = json
@@ -282,7 +282,7 @@ class TestRepelloAIInputCoverage:
     async def _scanned_prompt(guardrail, data, monkeypatch) -> str:
         captured = {}
 
-        async def capture(url, headers, json):
+        async def capture(url, headers, json, **_kwargs):
             captured["json"] = json
             return _verdict_response("passed", url)
 
@@ -609,7 +609,7 @@ class TestRepelloAIPostCall:
         response = _model_response("the answer content")
         captured = {}
 
-        async def capture(url, headers, json):
+        async def capture(url, headers, json, **_kwargs):
             captured["url"] = url
             captured["json"] = json
             return _verdict_response("passed", url)
@@ -630,7 +630,7 @@ class TestRepelloAIPostCall:
         response = {"choices": [{"text": "text completion answer"}]}
         captured = {}
 
-        async def capture(url, headers, json):
+        async def capture(url, headers, json, **_kwargs):
             captured["url"] = url
             captured["json"] = json
             return _verdict_response("passed", url)
@@ -662,7 +662,7 @@ class TestRepelloAIPostCall:
         )
         captured = {}
 
-        async def capture(url, headers, json):
+        async def capture(url, headers, json, **_kwargs):
             captured["json"] = json
             return _verdict_response("passed", url)
 
@@ -689,7 +689,7 @@ class TestRepelloAIPostCall:
         }
         captured = {}
 
-        async def capture(url, headers, json):
+        async def capture(url, headers, json, **_kwargs):
             captured["json"] = json
             return _verdict_response("passed", url)
 
@@ -720,7 +720,7 @@ class TestRepelloAIPostCall:
         }
         captured = {}
 
-        async def capture(url, headers, json):
+        async def capture(url, headers, json, **_kwargs):
             captured["json"] = json
             return _verdict_response("passed", url)
 
@@ -745,7 +745,7 @@ class TestRepelloAIPostCall:
         )
         captured = {}
 
-        async def capture(url, headers, json):
+        async def capture(url, headers, json, **_kwargs):
             captured["json"] = json
             return _verdict_response("passed", url)
 
@@ -805,7 +805,7 @@ class TestRepelloAIPostCall:
         }
         captured = {}
 
-        async def capture(url, headers, json):
+        async def capture(url, headers, json, **_kwargs):
             captured["json"] = json
             return _verdict_response("passed", url)
 
@@ -839,7 +839,7 @@ class TestRepelloAIPostCall:
         }
         captured = {}
 
-        async def capture(url, headers, json):
+        async def capture(url, headers, json, **_kwargs):
             captured["json"] = json
             return _verdict_response("passed", url)
 
@@ -1057,7 +1057,7 @@ class TestRepelloAIStreaming:
         data = {"messages": [{"role": "user", "content": "q"}]}
         captured = {}
 
-        async def capture(url, headers, json):
+        async def capture(url, headers, json, **_kwargs):
             captured["json"] = json
             return _verdict_response("blocked", url)
 

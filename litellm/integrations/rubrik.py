@@ -1120,6 +1120,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             endpoint,
             json=dict(payload),
             headers=dict(self._headers),
+            timeout=self.timeout,
         )
         http_response.raise_for_status()
         result: Final[_ModerationResponse | None] = http_response.json()
