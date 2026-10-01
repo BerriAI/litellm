@@ -136,7 +136,7 @@ If you're running broader test suites, proxy tests, or anything that touches Pos
 make install-test-deps
 ```
 
-This syncs the locked test environment used across the repo, including `psycopg` v3 plus `psycopg-binary` (used by `pytest-postgresql`), `psycopg2-binary` (used by some proxy E2E tests), and a generated Prisma client for DB-backed proxy tests, so pytest startup matches CI without manual package installs.
+This syncs the locked test environment used across the repo, including `psycopg` v3 plus `psycopg-binary`, `psycopg2-binary` (used by some proxy E2E tests), and a generated Prisma client for DB-backed proxy tests, so pytest startup matches CI without manual package installs.
 
 ### Running Linting and Formatting Checks
 
