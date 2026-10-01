@@ -150,25 +150,6 @@ def _tool_search_function_tool(tool: Mapping[str, object]) -> ChatCompletionTool
     )
 
 
-def _tool_search_call_item(
-    tool_call: Mapping[str, object],
-) -> dict[str, object]:
-    call_id: Final = str(tool_call.get("id") or "")
-    arguments: Final[object] = tool_call.get("arguments")
-    try:
-        parsed_arguments: Final[object] = json.loads(arguments) if isinstance(arguments, str) else arguments
-    except (TypeError, ValueError):
-        parsed_arguments = arguments
-    return {  # mutable-ok: dynamic item consumed immediately by the caller
-        "type": "tool_search_call",
-        "id": str(tool_call.get("id") or f"ts_{uuid.uuid4()}"),
-        "call_id": call_id,
-        "status": "completed",
-        "execution": "client",
-        "arguments": (parsed_arguments if parsed_arguments is not None else {}),  # mutable-ok: default JSON object
-    }
-
-
 def _tool_search_output_messages(input_item: Mapping[str, object]) -> list[ChatCompletionToolMessage]:
     call_id: Final[str] = str(input_item.get("call_id") or "")
     if not call_id:
@@ -178,7 +159,7 @@ def _tool_search_output_messages(input_item: Mapping[str, object]) -> list[ChatC
         found_tools = input_item.get("output")  # rebind-ok: choose the schema field before serialization
     try:
         serialized_tools: Final[str] = json.dumps(found_tools, default=str)
-        content: Final[str] = found_tools if isinstance(found_tools, str) else serialized_tools
+        content: str = found_tools if isinstance(found_tools, str) else serialized_tools
     except (TypeError, ValueError):
         content = str(found_tools or [])  # mutable-ok: fallback payload
     return [  # mutable-ok: single tool message result

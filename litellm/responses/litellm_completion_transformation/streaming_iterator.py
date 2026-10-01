@@ -183,9 +183,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _tool_call_item_kwargs(self, call_id: str, fn_name: str, arguments: str, status: str) -> dict[str, object]:
         if self._tool_search_requested and fn_name == TOOL_SEARCH_FUNCTION_NAME:
             try:
-                arguments_obj: Final[object] = (
-                    json.loads(arguments) if arguments else {}  # mutable-ok: default JSON object
-                )
+                arguments_obj: object = json.loads(arguments) if arguments else {}  # mutable-ok: default JSON object
             except json.JSONDecodeError:
                 arguments_obj = arguments
             return {  # mutable-ok: dynamic event item fields consumed by the response event
