@@ -1,4 +1,4 @@
-use litellm_traces::{OTLP_DEFAULT_MAX_BODY_BYTES, decode_otlp};
+use litellm_traces::decode_otlp;
 use rstest::rstest;
 
 const FIXTURE: &[u8] = include_bytes!(
@@ -31,10 +31,18 @@ fn accepts_trace_larger_than_eight_mib(mut span: opentelemetry_proto::tonic::tra
 }
 
 #[rstest]
-#[case::invalid(b"not protobuf".to_vec(), None)]
-#[case::too_large(vec![b' '; OTLP_DEFAULT_MAX_BODY_BYTES + 1], Some("application/json"))]
-fn rejects_invalid_or_oversized_payload(#[case] body: Vec<u8>, #[case] content_type: Option<&str>) {
-    assert!(decode_otlp(&body, content_type).is_err());
+fn rejects_invalid_payload() {
+    assert!(decode_otlp(b"not protobuf", None).is_err());
+}
+
+#[rstest]
+fn decoder_does_not_enforce_the_http_body_limit() {
+    let body = format!("{{\"ignored\":\"{}\"}}", "x".repeat(16 * 1024 * 1024 + 1));
+    assert!(
+        decode_otlp(body.as_bytes(), Some("application/json"))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 fn request_with(
@@ -148,7 +156,6 @@ fn resource_fanout_is_charged_before_copying(span: opentelemetry_proto::tonic::t
     });
     request.resource_spans[0].scope_spans[0].spans = vec![span; 1024];
     let body = request.encode_to_vec();
-    assert!(body.len() < OTLP_DEFAULT_MAX_BODY_BYTES);
     assert!(matches!(
         decode_otlp(&body, None),
         Err(litellm_traces::DecodeError::TooLarge)
@@ -228,7 +235,6 @@ fn protobuf_preflight_rejects_expansion_before_prost_allocates(
     }];
     request.resource_spans = vec![request.resource_spans[0].clone(); count];
     let body = request.encode_to_vec();
-    assert!(body.len() < OTLP_DEFAULT_MAX_BODY_BYTES);
     assert!(matches!(
         decode_otlp(&body, None),
         Err(litellm_traces::DecodeError::TooLarge)

@@ -8,15 +8,12 @@ use opentelemetry_proto::tonic::{
 use super::{
     DecodedEvent, DecodedSpan,
     attributes::{attribute_size, attributes},
-    limits::{Budget, MAX_ATTRIBUTES, MAX_EVENTS, MAX_SPANS},
+    limits::{Budget, MAX_ATTRIBUTES, MAX_DECODED_SPAN_BYTES, MAX_EVENTS, MAX_SPANS},
 };
 use crate::DecodeError;
 
-pub(super) fn flatten(
-    request: ExportTraceServiceRequest,
-    max_decoded_bytes: usize,
-) -> Result<Vec<DecodedSpan>, DecodeError> {
-    let mut budget = Budget::new(max_decoded_bytes);
+pub(super) fn flatten(request: ExportTraceServiceRequest) -> Result<Vec<DecodedSpan>, DecodeError> {
+    let mut budget = Budget::new(MAX_DECODED_SPAN_BYTES);
     let mut spans = Vec::new();
     for resource in request.resource_spans {
         append_resource(resource, &mut budget, &mut spans)?;

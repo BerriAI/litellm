@@ -9,11 +9,16 @@ use axum::{
     routing::post,
 };
 use flate2::read::MultiGzDecoder;
-use litellm_traces::{
-    DecodeError, DecodedSpan, OTLP_DEFAULT_MAX_BODY_BYTES, decode_otlp, otlp_max_body_bytes,
-};
+use litellm_traces::{DecodeError, DecodedSpan, decode_otlp};
 
-pub const MAX_BODY_BYTES: usize = OTLP_DEFAULT_MAX_BODY_BYTES;
+pub const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+
+fn otlp_max_body_bytes() -> usize {
+    std::env::var("OTLP_MAX_BODY_BYTES")
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(MAX_BODY_BYTES)
+}
 
 pub trait SpanSink: Send + Sync + 'static {
     fn write(&self, spans: Vec<DecodedSpan>) -> impl Future<Output = Result<(), ()>> + Send;

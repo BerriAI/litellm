@@ -19,12 +19,7 @@ enum OtlpMediaType {
 pub(super) fn decode(
     body: &[u8],
     content_type: Option<&str>,
-    max_body_bytes: usize,
 ) -> Result<ExportTraceServiceRequest, DecodeError> {
-    if body.len() > max_body_bytes {
-        return Err(DecodeError::TooLarge);
-    }
-    
     let media_type = content_type
         .unwrap_or("application/x-protobuf")
         .split(';')
@@ -33,8 +28,8 @@ pub(super) fn decode(
         .trim()
         .parse::<OtlpMediaType>()
         .map_err(|_| DecodeError::InvalidPayload)?;
-    
-        let request = match media_type {
+
+    let request = match media_type {
         OtlpMediaType::Json => {
             json_preflight(body)?;
             serde_json::from_slice(body).map_err(|_| DecodeError::InvalidPayload)?

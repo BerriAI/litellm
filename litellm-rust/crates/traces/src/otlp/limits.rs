@@ -10,6 +10,7 @@ pub(super) const MAX_NODES: usize = 65_536;
 pub(super) const MAX_SPANS: usize = 4_096;
 pub(super) const MAX_ATTRIBUTES: usize = 256;
 pub(super) const MAX_EVENTS: usize = 256;
+pub(super) const MAX_DECODED_SPAN_BYTES: usize = 16 * 1024 * 1024;
 
 pub(super) fn json_preflight(payload: &[u8]) -> Result<(), DecodeError> {
     let mut nodes = 0;
