@@ -722,3 +722,25 @@ def test_registered_inference_routes_have_an_explicit_managed_access_decision(ro
     )) or normalized in ("/models", "/cursor/models", "/cursor/v1/models")
     concrete: Final = route.split("?")[0].replace("{model}", "model").replace("{model_name:path}", "model")
     assert managed_agent_route_allowed(concrete, None) is not unsupported, route
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fee", (-1.0, "invalid", float("inf"), float("nan")))
+async def test_unmanaged_invocation_rejects_invalid_configured_fees(
+    monkeypatch: pytest.MonkeyPatch, fee: float | str,
+) -> None:
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+
+    target: Final = AgentResponse(
+        agent_id="fee-target", agent_name="Fee target", agent_card_params={}, litellm_params={"cost_per_query": fee},
+    )
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(target)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    auth: Final = UserAPIKeyAuth(user_role="proxy_admin")
+    with pytest.raises(HTTPException) as exc:
+        await prepare_agent_invocation(auth, "fee-target", None)
+    assert exc.value.status_code == 503
+    assert "Agent invocation price is invalid" in str(exc.value.detail)
+    assert auth.agent_invocation_cost is None
