@@ -29,6 +29,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import cache_end_user_row
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_cache_key,
@@ -416,6 +417,7 @@ async def new_end_user(
         litellm_proxy_admin_name,
         llm_router,
         prisma_client,
+        user_api_key_cache,
     )
 
     if prisma_client is None:
@@ -489,6 +491,14 @@ async def new_end_user(
         )
 
         await _evict_end_user_cache_keys(_end_user_cache_keys((data.user_id,)))
+        try:
+            await cache_end_user_row(
+                end_user_id=data.user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort cache refill after the committed customer create
+            verbose_proxy_logger.warning("Failed to write through customer cache for %s: %s", data.user_id, e)
 
         return _to_customer_response(end_user_record)
     except Exception as e:
@@ -633,7 +643,7 @@ async def update_end_user(
     ```
     """
 
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client, user_api_key_cache
 
     try:
         data_json: Final = _STR_OBJECT_DICT.validate_python(data.json())
@@ -731,6 +741,14 @@ async def update_end_user(
             verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
 
             await _evict_end_user_cache_keys(_end_user_cache_keys((data.user_id,)))
+            try:
+                await cache_end_user_row(
+                    end_user_id=data.user_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
+            except Exception as e:  # noqa: BLE001  # best-effort cache refill after the committed customer update
+                verbose_proxy_logger.warning("Failed to write through customer cache for %s: %s", data.user_id, e)
 
             return _to_customer_response(response)
         else:

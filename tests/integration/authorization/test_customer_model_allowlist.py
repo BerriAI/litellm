@@ -1,15 +1,19 @@
 import json
+import os
 import uuid
 from collections.abc import Mapping
 from typing import Final
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
+from redis import Redis
 
+from litellm.proxy.common_utils.user_api_key_cache import end_user_restricted_registry_cache_key
 from tests.integration._support.client import Gateway, Scenario, object_value, string_value
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_REGISTRY_IDS: Final = TypeAdapter(list[str])
 _CHAT_RESPONSE: Final = {
     "object": "chat.completion",
     "created": 1700000000,
@@ -94,6 +98,32 @@ def _customer_request(
     else:
         _assert_no_request(wire, marker)
     return response
+
+
+def _observe_registry_after_normal_load(
+    gateway: Gateway,
+    key: str,
+    model: str,
+    restricted_customer: str,
+    wire: Wire,
+    redis_cache: Redis,
+) -> tuple[str, str, tuple[str, ...]]:
+    probe_customer: Final = f"integration-registry-probe-{uuid.uuid4().hex}"
+    baseline: Final = _customer_request(gateway, key, model, probe_customer, wire)
+    assert baseline.status_code == 200, baseline.text
+
+    registry_suffix: Final = end_user_restricted_registry_cache_key()
+    registry_keys: Final = tuple(
+        redis_key for redis_key in redis_cache.scan_iter() if redis_key.endswith(registry_suffix)
+    )
+    assert len(registry_keys) == 1, registry_keys
+    redis_key: Final = registry_keys[0]
+    serialized: Final = redis_cache.get(redis_key)
+    assert serialized is not None, redis_key
+    registry_ids: Final = tuple(_REGISTRY_IDS.validate_json(serialized))
+    assert restricted_customer in registry_ids, registry_ids
+    assert probe_customer not in registry_ids, registry_ids
+    return redis_key, serialized, registry_ids
 
 
 def test_customer_models_allowlist_rejects_model_outside_it_for_the_same_key(gateway: Gateway) -> None:
@@ -412,3 +442,65 @@ def test_customer_access_group_matches_key_access_group_semantics(gateway: Gatew
             key_other.status_code,
         ), f"key: {key_member.text} {key_other.text}; customer: {customer_member.text} {customer_other.text}"
         assert _denial_type(customer_other) == "customer_model_access_denied", customer_other.text
+
+
+def test_new_customer_allowlist_is_enforced_when_registry_cache_is_stale(gateway: Gateway) -> None:
+    with (
+        Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]), decode_responses=True) as redis_cache,
+        wire_server(_chat_reply) as wire,
+        gateway.scenario() as scenario,
+    ):
+        allowed: Final = scenario.model(api_base=f"{wire.url}/v1")
+        disallowed: Final = scenario.model(api_base=f"{wire.url}/v1")
+        key: Final = scenario.key(models=[allowed, disallowed])
+        baseline_customer: Final = _customer(scenario, models=[allowed])
+        registry_key, stale_registry, registry_ids = _observe_registry_after_normal_load(
+            gateway,
+            key,
+            allowed,
+            baseline_customer,
+            wire,
+            redis_cache,
+        )
+
+        customer: Final = _customer(scenario, models=[allowed])
+        assert customer not in registry_ids, registry_ids
+        assert redis_cache.set(registry_key, stale_registry)
+        scenario.cleanups.callback(redis_cache.delete, registry_key)
+
+        denied: Final = _customer_request(gateway, key, disallowed, customer, wire)
+        assert _denial_type(denied) == "customer_model_access_denied", denied.text
+        served: Final = _customer_request(gateway, key, allowed, customer, wire)
+        assert served.status_code == 200, served.text
+
+
+def test_updated_customer_allowlist_is_enforced_when_registry_cache_is_stale(gateway: Gateway) -> None:
+    with (
+        Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]), decode_responses=True) as redis_cache,
+        wire_server(_chat_reply) as wire,
+        gateway.scenario() as scenario,
+    ):
+        allowed: Final = scenario.model(api_base=f"{wire.url}/v1")
+        disallowed: Final = scenario.model(api_base=f"{wire.url}/v1")
+        key: Final = scenario.key(models=[allowed, disallowed])
+        customer: Final = _customer(scenario, models=[])
+        baseline_customer: Final = _customer(scenario, models=[allowed])
+        registry_key, stale_registry, registry_ids = _observe_registry_after_normal_load(
+            gateway,
+            key,
+            allowed,
+            baseline_customer,
+            wire,
+            redis_cache,
+        )
+
+        updated: Final = gateway.post("/customer/update", {"user_id": customer, "models": [allowed]})
+        assert updated["models"] == [allowed], updated
+        assert customer not in registry_ids, registry_ids
+        assert redis_cache.set(registry_key, stale_registry)
+        scenario.cleanups.callback(redis_cache.delete, registry_key)
+
+        denied: Final = _customer_request(gateway, key, disallowed, customer, wire)
+        assert _denial_type(denied) == "customer_model_access_denied", denied.text
+        served: Final = _customer_request(gateway, key, allowed, customer, wire)
+        assert served.status_code == 200, served.text

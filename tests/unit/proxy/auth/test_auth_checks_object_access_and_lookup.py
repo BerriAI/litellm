@@ -7120,6 +7120,56 @@ async def test_get_end_user_object_db_fetch_returns_validated_end_user():
     assert result.spend == 3.0
 
 
+@pytest.mark.asyncio
+async def test_cache_end_user_row_caches_a_found_row(end_user_registry_skip_enabled):
+    from litellm.proxy.auth.auth_checks import cache_end_user_row
+
+    end_user_row = MagicMock()
+    end_user_row.dict.return_value = {"user_id": "eu-1", "blocked": False, "spend": 3.0, "models": ["m1"]}
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
+    cache = UserApiKeyCache()
+
+    result = await cache_end_user_row(
+        end_user_id="eu-1",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+    )
+    cached = await cache.async_get_cache(key=end_user_cache_key("eu-1"), model_type=LiteLLM_EndUserTable)
+
+    assert result is not None
+    assert result.user_id == "eu-1"
+    assert result.models == ["m1"]
+    assert cached == result
+    mock_prisma_client.db.litellm_endusertable.find_unique.assert_awaited_once_with(
+        where={"user_id": "eu-1"},
+        include={"litellm_budget_table": True, "object_permission": True},
+    )
+
+
+@pytest.mark.asyncio
+async def test_cache_end_user_row_does_not_cache_a_missing_row(end_user_registry_skip_enabled):
+    from litellm.proxy.auth.auth_checks import cache_end_user_row
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=None)
+    cache = UserApiKeyCache()
+
+    result = await cache_end_user_row(
+        end_user_id="eu-missing",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+    )
+    cached = await cache.async_get_cache(key=end_user_cache_key("eu-missing"), model_type=LiteLLM_EndUserTable)
+
+    assert result is None
+    assert cached is None
+    mock_prisma_client.db.litellm_endusertable.find_unique.assert_awaited_once_with(
+        where={"user_id": "eu-missing"},
+        include={"litellm_budget_table": True, "object_permission": True},
+    )
+
+
 def _end_user_registry_row(user_id: str):
     """A row as the restricted-id registry query sees it: only ``user_id`` is read off it."""
     return SimpleNamespace(user_id=user_id)

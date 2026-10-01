@@ -1907,6 +1907,34 @@ async def _end_user_is_known_unrestricted(
     return registry is not None and end_user_id not in registry
 
 
+async def cache_end_user_row(
+    end_user_id: str,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None = None,
+) -> LiteLLM_EndUserTable | None:
+    response: Final = await _dictable_table(EndUserRepository(prisma_client), "end_user").find_unique(
+        where={"user_id": end_user_id},
+        include={"litellm_budget_table": True, "object_permission": True},
+    )
+    if response is None:
+        return None
+
+    end_user_row: Final = await _apply_default_budget_to_end_user(
+        end_user_obj=LiteLLM_EndUserTable.model_validate(response.dict()),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+    )
+    await user_api_key_cache.async_set_cache(
+        key=end_user_cache_key(end_user_id),
+        value=end_user_row,
+        model_type=LiteLLM_EndUserTable,
+        ttl=get_management_object_ttl(user_api_key_cache),
+    )
+    return end_user_row
+
+
 @log_db_metrics
 async def get_end_user_object(
     end_user_id: str | None,
@@ -1972,27 +2000,14 @@ async def get_end_user_object(
 
     # Fetch from database
     try:
-        response: Final = await _dictable_table(EndUserRepository(prisma_client), "end_user").find_unique(
-            where={"user_id": end_user_id},
-            include={"litellm_budget_table": True, "object_permission": True},
-        )
-
-        if response is None:
-            raise Exception
-
-        end_user_row: Final = await _apply_default_budget_to_end_user(
-            end_user_obj=LiteLLM_EndUserTable.model_validate(response.dict()),
+        end_user_row: Final = await cache_end_user_row(
+            end_user_id=end_user_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
         )
-
-        await user_api_key_cache.async_set_cache(
-            key=_key,
-            value=end_user_row,
-            model_type=LiteLLM_EndUserTable,
-            ttl=get_management_object_ttl(user_api_key_cache),
-        )
+        if end_user_row is None:
+            return None
 
         if key_end_user_budget_id is None:
             return end_user_row
