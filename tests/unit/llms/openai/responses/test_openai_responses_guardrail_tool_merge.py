@@ -93,7 +93,15 @@ def test_edited_client_tool_search_keeps_responses_semantics():
 
     merged = merge_guardrailed_tools(original, groups, edited)
 
-    assert list(merged) == original
+    assert list(merged) == [{**original[0], "description": "guarded tool search"}]
+
+
+def test_dropped_client_tool_search_is_removed():
+    original = [{"type": "tool_search", "execution": "client", "description": "Search tools"}]
+
+    merged = merge_guardrailed_tools(original, _groups(original), [])
+
+    assert list(merged) == []
 
 
 def test_injected_tool_lands_after_the_request_tools_when_request_had_none():

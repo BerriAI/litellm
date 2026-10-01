@@ -147,12 +147,6 @@ def _merged_original(
     group_keys: Sequence[IndexedKey],
     guardrailed_by_key: Mapping[IndexedKey, Tool],
 ) -> tuple[Tool, ...]:
-    if (
-        original.get("type") == TOOL_SEARCH_FUNCTION_NAME
-        and original.get("execution") == "client"
-        and _chat_tool_key(next(iter(flattened_group), MappingProxyType({}))) == f"function:{TOOL_SEARCH_FUNCTION_NAME}"
-    ):
-        return (original,)
     if not group_keys:
         return (original,)
     guardrailed_group: Final = tuple(guardrailed_by_key[key] for key in group_keys if key in guardrailed_by_key)
@@ -161,11 +155,31 @@ def _merged_original(
     members: Final = _namespace_members(original) if original.get("type") == "namespace" else ()
     if members and sum(map(_has_chat_tool, members)) == len(flattened_group):
         return _rebuilt_namespace(original, members, flattened_group, group_keys, guardrailed_by_key)
+    if (
+        original.get("type") == TOOL_SEARCH_FUNCTION_NAME
+        and original.get("execution") == "client"
+        and len(flattened_group) == 1
+        and _chat_tool_key(next(iter(flattened_group), MappingProxyType({}))) == f"function:{TOOL_SEARCH_FUNCTION_NAME}"
+    ):
+        flattened: Final = next(iter(flattened_group))
+        guardrailed: Final = next(iter(guardrailed_group), None)
+        if guardrailed is None:
+            return ()
+        if guardrailed == flattened:
+            return (original,)
+        return _rebuilt_tool_search(original, flattened, guardrailed)
     if not guardrailed_group:
         return ()
     return tuple(
         LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(guardrailed_group)
     )
+
+
+def _rebuilt_tool_search(original: Tool, flattened: Tool, guardrailed: Tool) -> tuple[Tool, ...]:
+    changed_function: Final = {
+        key: value for key, value in _function_fields(guardrailed).items() if _function_fields(flattened).get(key) != value
+    }
+    return ({**original, **changed_function},)
 
 
 def merge_guardrailed_tools(
