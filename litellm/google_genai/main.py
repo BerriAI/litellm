@@ -199,10 +199,7 @@ class GenerateContentHelper:
 
         explicit_vertex_location: Final = VertexBase.explicit_vertex_ai_location(
             MappingProxyType(
-                {
-                    key: getattr(litellm_params, key, None)
-                    for key in ("vertex_location", "vertex_ai_location")
-                }
+                {key: getattr(litellm_params, key, None) for key in ("vertex_location", "vertex_ai_location")}
             )
         )
         vertex_location_params: Final = (

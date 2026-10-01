@@ -262,7 +262,7 @@ async def test_native_fields_forwarded_on_async_stream():
 
 
 def _generate_content_logging_obj(call_id: str):
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     from litellm.litellm_core_utils.litellm_logging import Logging
 
@@ -271,7 +271,7 @@ def _generate_content_logging_obj(call_id: str):
         messages=[],
         stream=False,
         call_type="generate_content",
-        start_time=datetime(2025, 1, 1),
+        start_time=datetime(2025, 1, 1, tzinfo=timezone.utc),
         litellm_call_id=call_id,
         function_id=call_id,
     )
