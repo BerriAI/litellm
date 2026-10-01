@@ -12,9 +12,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from litellm.proxy import tracing_endpoints
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.tracing_lifespan import TracingState, tracing_lifespan
+from litellm.proxy.tracing_lifespan import tracing_lifespan
 from litellm.rust_bridge.traces import TraceStorage
 from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.store import ClickHouseTraceStore
@@ -313,13 +313,15 @@ def test_lifespan_receivers_are_app_local() -> None:
     second_storage.ensure_schema = AsyncMock()
 
     @asynccontextmanager
-    async def first_lifespan(app: FastAPI) -> AsyncGenerator[TracingState, None]:
-        async with tracing_lifespan(True, lambda: first_receiver) as state:
+    async def first_lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
+        async with tracing_lifespan(True, lambda: first_receiver) as receiver:
+            state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
             yield state
 
     @asynccontextmanager
-    async def second_lifespan(app: FastAPI) -> AsyncGenerator[TracingState, None]:
-        async with tracing_lifespan(True, lambda: second_receiver) as state:
+    async def second_lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
+        async with tracing_lifespan(True, lambda: second_receiver) as receiver:
+            state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
             yield state
 
     first_app: Final = FastAPI(lifespan=first_lifespan)
@@ -389,8 +391,9 @@ def test_unavailable_lifespan_receiver_returns_501(enabled: bool) -> None:
     tracing: Final = TraceReceiver(ClickHouseTraceStore(storage))
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncGenerator[TracingState, None]:
-        async with tracing_lifespan(enabled, lambda: tracing) as state:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
+        async with tracing_lifespan(enabled, lambda: tracing) as receiver:
+            state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
             yield state
 
     app: Final = FastAPI(lifespan=lifespan)
@@ -412,8 +415,9 @@ def test_lens_reads_from_the_lifespan_receiver() -> None:
     tracing: Final = TraceReceiver(ClickHouseTraceStore(storage))
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncGenerator[TracingState, None]:
-        async with tracing_lifespan(True, lambda: tracing) as state:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
+        async with tracing_lifespan(True, lambda: tracing) as receiver:
+            state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
             yield state
 
     app: Final = FastAPI(lifespan=lifespan)

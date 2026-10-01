@@ -88,9 +88,15 @@ from .types_utils.utils import get_instance_fn, validate_custom_validate_return_
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.tracing import TraceReceiver
+
     Span = _Span | Any
 else:
     Span = Any
+
+
+class ProxyLifespanState(TypedDict):
+    tracing_receiver: ReadOnly["TraceReceiver | None"]
 
 
 class ReconcileOutcome(NamedTuple):

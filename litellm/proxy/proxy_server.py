@@ -119,6 +119,7 @@ from litellm.proxy._types import (
     PassThroughGenericEndpoint,
     ProxyErrorTypes,
     ProxyException,
+    ProxyLifespanState,
     SpecialModelNames,
     SupportedDBObjectType,
     TeamDefaultSettings,
@@ -791,7 +792,7 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.proxy.tracing_lifespan import TracingState, tracing_lifespan
+from litellm.proxy.tracing_lifespan import tracing_lifespan
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
     router as latest_release_endpoints_router,
@@ -1221,7 +1222,7 @@ async def _connect_to_count_stored_values() -> SupportsRawQueries:
 
 
 @asynccontextmanager
-async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[TracingState, None]:
+async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
     global \
         prisma_client, \
         master_key, \
@@ -1565,8 +1566,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[TracingState, None
     tracing_enabled: Final = TypeAdapter(bool).validate_python(
         isinstance(tracing_settings, dict) and tracing_settings.get("store") == "clickhouse"
     )
-    async with tracing_lifespan(enabled=tracing_enabled) as tracing_state:
-        yield tracing_state
+    async with tracing_lifespan(enabled=tracing_enabled) as receiver:
+        state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
+        yield state
 
         if model_info_scheduler is not None and model_info_scheduler.running:
             model_info_scheduler.remove_job("refresh_model_info")

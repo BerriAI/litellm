@@ -1,20 +1,14 @@
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from typing import Final, TypedDict
+from typing import Final
 
 from fastapi import HTTPException, Request
 from pydantic import ConfigDict, TypeAdapter
-from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
 from litellm.tracing import TraceReceiver
-
-
-class TracingState(TypedDict):
-    tracing_receiver: ReadOnly[TraceReceiver | None]
-
 
 _RECEIVER_ADAPTER: Final[TypeAdapter[TraceReceiver | None]] = TypeAdapter(
     TraceReceiver | None, config=ConfigDict(arbitrary_types_allowed=True)
@@ -47,11 +41,10 @@ async def _start_receiver(factory: Callable[[], TraceReceiver]) -> TraceReceiver
 @asynccontextmanager
 async def tracing_lifespan(
     enabled: bool, receiver_factory: Callable[[], TraceReceiver] = TraceReceiver.from_env
-) -> AsyncGenerator[TracingState, None]:
+) -> AsyncGenerator[TraceReceiver | None, None]:
     tracing: Final = await _start_receiver(receiver_factory) if enabled else None
-    state: Final[TracingState] = {"tracing_receiver": tracing}
     if tracing is None:
-        yield state
+        yield tracing
         return
 
     spend_logger: Final = ClickHouseSpendLogger(storage=tracing.store.storage)
@@ -63,7 +56,7 @@ async def tracing_lifespan(
     manager.add_litellm_async_failure_callback(spend_logger)
     verbose_proxy_logger.info("Agent tracing enabled (store=clickhouse)")
     try:
-        yield state
+        yield tracing
     finally:
         manager.remove_callback_from_all_lists(spend_logger)
         await spend_logger.aclose()
