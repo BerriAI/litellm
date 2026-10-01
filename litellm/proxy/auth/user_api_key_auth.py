@@ -2988,8 +2988,7 @@ async def _run_centralized_common_checks(
     end_user_object: Final[LiteLLM_EndUserTable | None] = (
         None if isinstance(end_user_result, BaseException) else end_user_result
     )
-    if end_user_object is not None:
-        user_api_key_auth_obj.end_user_models = end_user_object.models
+    user_api_key_auth_obj.end_user_models = end_user_object.models if end_user_object is not None else None
     global_proxy_spend: float | None = None if isinstance(global_spend_result, BaseException) else global_spend_result
     carry_team_and_user_budget_state(
         valid_token=user_api_key_auth_obj,

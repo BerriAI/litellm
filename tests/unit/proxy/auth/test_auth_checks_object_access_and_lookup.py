@@ -8861,7 +8861,7 @@ async def _run_common_checks(
 async def _common_checks_for_customer_model(
     *,
     model: str | None,
-    customer_models: list[str],
+    customer_models: list[str] | None,
     team_object: LiteLLM_TeamTable | None = None,
     valid_token: UserAPIKeyAuth | None = None,
     request_overrides: Mapping[str, object] | None = None,
@@ -8876,10 +8876,14 @@ async def _common_checks_for_customer_model(
         },
         team_object=team_object,
         user_object=None,
-        end_user_object=LiteLLM_EndUserTable(
-            user_id="customer-1",
-            blocked=False,
-            models=customer_models,
+        end_user_object=(
+            LiteLLM_EndUserTable(
+                user_id="customer-1",
+                blocked=False,
+                models=customer_models,
+            )
+            if customer_models is not None
+            else None
         ),
         global_proxy_spend=None,
         general_settings={},
@@ -8981,6 +8985,21 @@ async def test_common_checks_allows_fallbacks_for_customer_without_model_restric
 @pytest.mark.asyncio
 async def test_common_checks_allows_customer_allowlist_models(model: str, customer_models: list[str]) -> None:
     assert await _common_checks_for_customer_model(model=model, customer_models=customer_models) is True
+
+
+@pytest.mark.asyncio
+async def test_common_checks_clears_stale_customer_models_when_end_user_is_missing() -> None:
+    from litellm.proxy.auth import auth_checks
+
+    valid_token: Final = UserAPIKeyAuth(token="test-token", end_user_models=["m1"])
+    await _common_checks_for_customer_model(model="m2", customer_models=None, valid_token=valid_token)
+
+    auth_checks._check_customer_model_access_for_resolved_model(
+        model="m2",
+        valid_token=valid_token,
+        llm_router=None,
+    )
+    assert valid_token.end_user_models is None
 
 
 @pytest.mark.asyncio

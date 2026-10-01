@@ -969,8 +969,8 @@ async def common_checks(
         team_id=valid_token.team_id if valid_token is not None else None,
     )
 
-    if valid_token is not None and end_user_object is not None:
-        valid_token.end_user_models = end_user_object.models
+    if valid_token is not None:
+        valid_token.end_user_models = end_user_object.models if end_user_object is not None else None
 
     skip_all_budget_checks: Final = skip_budget_checks or route_skips_budget_checks(route=route)
 

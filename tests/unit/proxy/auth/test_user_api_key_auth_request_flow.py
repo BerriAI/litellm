@@ -12,6 +12,7 @@ from functools import partial
 from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 
@@ -4188,6 +4189,54 @@ async def test_centralized_common_checks_runs_for_standard_auth():
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup_raises", [False, True], ids=["missing", "lookup-error"])
+async def test_centralized_common_checks_clears_stale_customer_models_when_lookup_is_missing(
+    lookup_raises: bool,
+) -> None:
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.auth import auth_checks
+
+    token: Final = UserAPIKeyAuth(api_key="sk-test", end_user_id="customer-1", end_user_models=["m1"])
+    request: Final = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    attrs: Final = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals: Final = {name: getattr(_proxy_server_mod, name, None) for name in attrs}
+    lookup_side_effect: Final = RuntimeError("end-user lookup failed") if lookup_raises else None
+    end_user_lookup: Final = AsyncMock(side_effect=lookup_side_effect, return_value=None)
+    try:
+        for name, value in attrs.items():
+            setattr(_proxy_server_mod, name, value)
+        with (
+            patch("litellm.proxy.auth.user_api_key_auth.get_end_user_object", new=end_user_lookup),
+            patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._reserve_budget_after_common_checks",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "m2", "user": "customer-1"},
+                route="/chat/completions",
+            )
+        end_user_lookup.assert_awaited_once()
+    finally:
+        for name, value in originals.items():
+            setattr(_proxy_server_mod, name, value)
+
+    auth_checks._check_customer_model_access_for_resolved_model(
+        model="m2",
+        valid_token=token,
+        llm_router=None,
+    )
+    assert token.end_user_models is None
 
 
 @pytest.mark.asyncio
