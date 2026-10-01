@@ -1,11 +1,15 @@
+import json
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
+from pathlib import Path
 from typing import Final
 
 import pytest
 
 from tests.integration._support.client import Gateway, eventually, object_value, string_value
 from tests.integration._support.database import read_rows, write_rows
+from tests.integration._support.process import owned_proxy
+from tests.integration.pricing.test_off_peak_pricing import off_peak_window
 
 
 def delete_lens(engine_id: str) -> None:
@@ -14,9 +18,22 @@ def delete_lens(engine_id: str) -> None:
     assert read_rows('SELECT id FROM "LiteLLM_Engine" WHERE id=%s', (engine_id,)) == []
 
 
-def test_lens_bills_selected_key_and_rechecks_its_permissions(gateway: Gateway) -> None:
+@pytest.mark.parametrize("off_peak", (False, True))
+def test_lens_bills_selected_key_and_rechecks_its_permissions(gateway: Gateway, off_peak: bool) -> None:
     with gateway.scenario() as scenario:
-        model: Final = scenario.model(input_cost_per_token=0.000001, output_cost_per_token=0.000002)
+        model: Final = scenario.model(
+            input_cost_per_token=0.000001,
+            output_cost_per_token=0.000002,
+            model_info={
+                "off_peak_pricing": {
+                    **off_peak_window(-1, 1),
+                    "input_cost_per_token": 0.0000005,
+                    "output_cost_per_token": 0.000001,
+                }
+            }
+            if off_peak
+            else None,
+        )
         key: Final = scenario.key(models=[model], max_budget=1)
         key_id: Final = sha256(key.encode()).hexdigest()
         worker: Final = gateway.post(
@@ -56,7 +73,7 @@ def test_lens_bills_selected_key_and_rechecks_its_permissions(gateway: Gateway) 
         job_id: Final = string_value(object_value(claim["job"])["id"])
         path: Final = f"/engine/worker/{engine_id}/{job_id}/model"
         result: Final = gateway.post(path, {"prompt": "Inspect this run", "purpose": "extract"}, key=worker_key)
-        expected: Final = 20 * 0.000001 + 20 * 0.000002
+        expected: Final = (20 * 0.000001 + 20 * 0.000002) * (0.5 if off_peak else 1)
         assert result["cost"] == pytest.approx(expected)
         rows: Final = eventually(
             lambda: read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (key_id,)),
@@ -118,3 +135,65 @@ def test_lens_bills_selected_key_and_rechecks_its_permissions(gateway: Gateway) 
         )
         assert forbidden_change.status_code == 409, forbidden_change.text
         gateway.post(f"/engine/{engine_id}/cancel", {})
+
+
+def test_worker_spend_logs_do_not_expose_investigation_content(gateway: Gateway, tmp_path: Path) -> None:
+    config: Final = tmp_path / "lens-privacy.json"
+    config.write_text(
+        json.dumps(
+            {
+                "model_list": [],
+                "general_settings": {
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                    "database_url": "os.environ/DATABASE_URL",
+                    "store_model_in_db": True,
+                    "store_prompts_in_spend_logs": True,
+                    "proxy_batch_write_at": 1,
+                    "proxy_batch_polling_interval": 1,
+                    "allowed_ips": ["127.0.0.1"],
+                },
+            }
+        )
+    )
+    with owned_proxy(gateway, tmp_path, {}, config=config) as isolated, isolated.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.000001, output_cost_per_token=0.000002)
+        key: Final = scenario.key(models=[model])
+        key_id: Final = sha256(key.encode()).hexdigest()
+        marker: Final = "PRIVATE_OTHER_TEAM_TRACE_CONTENT"
+        ordinary: Final = isolated.chat(model, key=key, text=marker)
+        retained: Final = eventually(
+            lambda: read_rows(
+                'SELECT proxy_server_request FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
+                (string_value(ordinary["id"]),),
+            ),
+            lambda rows: len(rows) == 1,
+            seconds=70,
+        )
+        assert marker in str(retained[0]), "Control must prove this proxy retains ordinary prompts"
+        worker: Final = isolated.post("/engine/workers/register", {"analysis_key_id": key_id})
+        worker_id: Final = string_value(object_value(worker["worker"])["id"])
+        scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_EngineWorker" WHERE id=%s', (worker_id,))
+        engine: Final = isolated.post(
+            "/engine", {"name": "Log privacy", "model": model, "enabled": False, "context": "Find problems"}
+        )
+        engine_id: Final = string_value(engine["id"])
+        scenario.cleanups.callback(delete_lens, engine_id)
+        worker_token: Final = string_value(worker["token"])
+        claim: Final = isolated.post("/engine/worker/claim?protocol_version=2", {}, key=worker_token)
+        job_id: Final = string_value(object_value(claim["job"])["id"])
+        result: Final = isolated.post(
+            f"/engine/worker/{engine_id}/{job_id}/model", {"prompt": marker, "purpose": "extract"}, key=worker_token
+        )
+        assert result["content"], "The worker must still receive model output"
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT spend, proxy_server_request, response FROM "LiteLLM_SpendLogs" WHERE api_key=%s AND request_id<>%s',
+                (key_id, string_value(ordinary["id"])),
+            ),
+            lambda rows: len(rows) == 1,
+            seconds=70,
+        )
+        assert float(rows[0]["spend"]) == pytest.approx(result["cost"])
+        assert marker not in str(rows[0])
+        assert result["content"] not in str(rows[0]["response"])
+        isolated.post(f"/engine/{engine_id}/cancel", {})

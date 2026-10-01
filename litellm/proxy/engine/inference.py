@@ -2,11 +2,12 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 import litellm
 from litellm.integrations.clickhouse.context import lens_analysis
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
 from litellm.proxy.engine.billing import complete, validate_key
 from litellm.proxy.engine.models import Engine, Job, ModelRequest, ModelResult, Worker
 from litellm.proxy.engine.repository import EngineRepository
@@ -85,7 +86,9 @@ def quote(deployments: tuple[Deployment, ...], prompt: str) -> float:
     return ((len((prompt + _SYSTEM).encode()) + 1024) * input_rate + 4096 * output_rate) * 2
 
 
-async def analyze(repo: EngineRepository, engine: Engine, job: Job, worker: Worker, body: ModelRequest) -> ModelResult:
+async def analyze(
+    repo: EngineRepository, engine: Engine, job: Job, worker: Worker, body: ModelRequest, request: Request
+) -> ModelResult:
     from litellm.proxy.proxy_server import llm_router
 
     if llm_router is None:
@@ -145,10 +148,10 @@ async def analyze(repo: EngineRepository, engine: Engine, job: Job, worker: Work
         },
     }
 
-    with lens_analysis():
-        response: Final = await complete(worker.analysis_key_id, data, reserve_budget)
+    with lens_analysis(), inherit_message_logging_privacy(True):
+        response, billed_cost = await complete(worker.analysis_key_id, data, reserve_budget, request)
     parsed: Final = Completion.model_validate_json(response.model_dump_json())
-    cost: Final = completion_charge(deployments, response, estimate)
+    cost: Final = billed_cost if billed_cost is not None else completion_charge(deployments, response, estimate)
 
     def settle(e: Engine) -> Engine:
         charged: Final = next((j for j in e.jobs if j.id == job.id), None)

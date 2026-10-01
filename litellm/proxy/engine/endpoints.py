@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, TypeAlias
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AwareDatetime, BaseModel, Field, TypeAdapter
 
@@ -84,8 +84,6 @@ async def worker_auth(credentials: Annotated[HTTPAuthorizationCredentials, Depen
     worker: Final = await repository().worker(hashlib.sha256(credentials.credentials.encode()).hexdigest())
     if worker is None or worker.revoked:
         raise HTTPException(401, "Worker credential is invalid or revoked")
-    if worker.analysis_key_id is None:
-        raise HTTPException(409, "Assign an analysis key to this worker in Lens setup")
     return worker
 
 
@@ -331,6 +329,8 @@ async def revoke_worker(worker_id: str, auth: Auth) -> bool:
 
 @router.post("/worker/claim", response_model=Claim | None)
 async def claim(worker: WorkerAuth, protocol_version: int = 1) -> Claim | None:
+    if worker.analysis_key_id is None:
+        raise HTTPException(409, "Assign an analysis key to this worker in Lens setup")
     if protocol_version != 2:
         raise HTTPException(409, "Upgrade the Lens worker using the current Connect worker command")
     now: Final = datetime.now(timezone.utc)
@@ -425,11 +425,11 @@ async def content(
 
 
 @router.post("/worker/{engine_id}/{job_id}/model", response_model=ModelResult)
-async def model(engine_id: str, job_id: str, body: ModelRequest, worker: WorkerAuth) -> ModelResult:
+async def model(engine_id: str, job_id: str, body: ModelRequest, worker: WorkerAuth, request: Request) -> ModelResult:
     from litellm.proxy.engine.inference import analyze
 
     engine, job = await assigned(engine_id, job_id, worker)
-    return await analyze(repository(), engine, job, worker, body)
+    return await analyze(repository(), engine, job, worker, body, request)
 
 
 @router.post("/worker/{engine_id}/{job_id}/result", response_model=Engine)

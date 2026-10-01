@@ -4,19 +4,19 @@ import os
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from typing import Final
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials
 
 from litellm import Router
 from litellm.proxy import proxy_server
-from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.engine import endpoints
 from litellm.proxy.engine.models import Check, Coverage, EngineSettings, ModelRequest, Progress, Result, RunRequest
-from litellm.proxy.management_endpoints.key_management_endpoints import generate_key_fn
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
@@ -24,6 +24,8 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 async def lens_database() -> AsyncIterator[PrismaClient]:
     original_db: Final = proxy_server.prisma_client
     original_router: Final = proxy_server.llm_router
+    original_settings: Final = proxy_server.general_settings
+    proxy_server.general_settings = {**original_settings, "allowed_ips": ["127.0.0.1"]}
     client: Final = PrismaClient(os.environ["DATABASE_URL"], ProxyLogging(UserApiKeyCache()))
     await client.connect()
     proxy_server.prisma_client = client
@@ -44,6 +46,7 @@ async def lens_database() -> AsyncIterator[PrismaClient]:
     try:
         yield client
     finally:
+        proxy_server.general_settings = original_settings
         proxy_server.prisma_client = original_db
         proxy_server.llm_router = original_router
         await client.disconnect()
@@ -59,8 +62,8 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         checks=(Check(id="retries", instruction="Find unrecovered retries"),),
     )
     engine: Final = await endpoints.create_engine(settings, admin)
-    key: Final = await generate_key_fn(GenerateKeyRequest(models=["lens-test-analysis"]), admin, None)
-    key_id: Final = hashlib.sha256(key.key.encode()).hexdigest()
+    key_id: Final = hashlib.sha256(uuid4().bytes).hexdigest()
+    await lens_database.db.litellm_verificationtoken.create(data={"token": key_id, "models": ["lens-test-analysis"]})
     registration: Final = await endpoints.register_worker(
         endpoints.WorkerName(name="Test analyzer", analysis_key_id=key_id), admin
     )
@@ -98,8 +101,34 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
             claimed.job.id,
             ModelRequest(prompt="Return an empty observations list", purpose="extract"),
             worker,
+            Request(
+                {
+                    "type": "http",
+                    "scheme": "http",
+                    "path": "/engine/worker/model",
+                    "headers": [],
+                    "client": ("127.0.0.1", 1234),
+                }
+            ),
         )
         assert '"observations"' in response.content
+        with pytest.raises(HTTPException) as denied_ip:
+            await endpoints.model(
+                engine.id,
+                claimed.job.id,
+                ModelRequest(prompt="Must not run", purpose="extract"),
+                worker,
+                Request(
+                    {
+                        "type": "http",
+                        "scheme": "http",
+                        "path": "/engine/worker/model",
+                        "headers": [],
+                        "client": ("192.0.2.1", 1234),
+                    }
+                ),
+            )
+        assert denied_ip.value.status_code == 403
         charged: Final = await endpoints.get_engine(engine.id, worker.scope)
         assert charged.spent == pytest.approx(response.cost)
         assert charged.jobs[0].cost == pytest.approx(response.cost)
@@ -148,6 +177,4 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         await lens_database.db.execute_raw('DELETE FROM "LiteLLM_EngineRun" WHERE engine_id=$1', engine.id)
         await lens_database.db.execute_raw('DELETE FROM "LiteLLM_Engine" WHERE id=$1', engine.id)
         await lens_database.db.execute_raw('DELETE FROM "LiteLLM_EngineWorker" WHERE id=$1', worker.id)
-        await lens_database.db.execute_raw(
-            'DELETE FROM "LiteLLM_VerificationToken" WHERE token=$1', hashlib.sha256(key.key.encode()).hexdigest()
-        )
+        await lens_database.db.execute_raw('DELETE FROM "LiteLLM_VerificationToken" WHERE token=$1', key_id)

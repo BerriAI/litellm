@@ -30,11 +30,16 @@ async def validate_key(key_id: str | None) -> UserAPIKeyAuth | None:
     return key
 
 
-async def complete(key_id: str, data: dict[str, object], reserve: Callable[[], Awaitable[None]]) -> ModelResponse:
+async def complete(
+    key_id: str, data: dict[str, object], reserve: Callable[[], Awaitable[None]], incoming: Request
+) -> tuple[ModelResponse, float | None]:
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import llm_router, proxy_config, proxy_logging_obj, version
 
     payload: Final = orjson.dumps(data)
+    forwarded: Final = tuple(
+        (b"x-forwarded-for", value.encode()) for value in incoming.headers.getlist("x-forwarded-for")
+    )
 
     async def receive() -> Message:
         return {"type": "http.request", "body": payload, "more_body": False}  # mutable-ok: ASGI message contract
@@ -46,8 +51,9 @@ async def complete(key_id: str, data: dict[str, object], reserve: Callable[[], A
             "path": "/v1/chat/completions",
             "raw_path": b"/v1/chat/completions",
             "query_string": b"",
-            "headers": [(b"content-type", b"application/json")],  # mutable-ok: ASGI header contract
-            "scheme": "http",
+            "headers": [(b"content-type", b"application/json"), *forwarded],  # mutable-ok: ASGI header contract
+            "scheme": incoming.url.scheme or "http",
+            "client": (incoming.client.host, incoming.client.port) if incoming.client else None,
             "server": ("litellm.internal", 80),
         },
         receive=receive,
@@ -56,11 +62,12 @@ async def complete(key_id: str, data: dict[str, object], reserve: Callable[[], A
         auth: Final = await authorize_internal_virtual_key(key_id, request, data)
         await reserve()
         processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+        fastapi_response: Final = Response()
         try:
-            return TypeAdapter(ModelResponse).validate_python(
+            response: Final = TypeAdapter(ModelResponse).validate_python(
                 await processor.base_process_llm_request(
                     request=request,
-                    fastapi_response=Response(),
+                    fastapi_response=fastapi_response,
                     user_api_key_dict=auth,
                     route_type="acompletion",
                     proxy_logging_obj=proxy_logging_obj,
@@ -70,6 +77,8 @@ async def complete(key_id: str, data: dict[str, object], reserve: Callable[[], A
                     version=version,
                 )
             )
+            billed: Final = fastapi_response.headers.get("x-litellm-response-cost")
+            return response, float(billed) if billed not in (None, "", "None") else None
         except Exception as exc:
             raise await processor._handle_llm_api_exception(  # pyright: ignore[reportPrivateUsage]  # Standard proxy endpoint failure hook releases limits and records failures
                 e=exc, user_api_key_dict=auth, proxy_logging_obj=proxy_logging_obj, version=version
