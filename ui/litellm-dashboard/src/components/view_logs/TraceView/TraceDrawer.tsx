@@ -11,6 +11,7 @@ import { copyToClipboard } from "@/utils/dataUtils";
 
 import { agentTraceCall, getProxyBaseUrl } from "../../networking";
 import { DetailPane } from "./DetailPane";
+import { formatCost } from "./AgentTracesTable";
 import { SpanTree } from "./SpanTree";
 import type { SpanTreeState, TreeRow } from "./traceTree";
 import type { Trace } from "./traceTypes";
@@ -26,8 +27,8 @@ import {
 } from "./traceUtils";
 
 /** What "Copy for agent" puts on the clipboard: a one-liner Claude Code / Codex can run. */
-export const agentHandoffText = (traceId: string, spanId?: string | null): string => {
-  const url = `${getProxyBaseUrl().replace(/\/$/, "")}/v1/traces/${traceId}?format=md${spanId ? `&span_id=${spanId}` : ""}`;
+export const agentHandoffText = (traceId: string, spanId?: string | null, traceRef?: string): string => {
+  const url = `${getProxyBaseUrl().replace(/\/$/, "")}/v1/traces/${traceId}?format=md${spanId ? `&span_id=${spanId}` : ""}${traceRef ? `&trace_ref=${traceRef}` : ""}`;
   const what = spanId ? "this step of a LiteLLM agent trace" : "this LiteLLM agent trace";
   return `Read ${what} and explain what happened and why it failed:\ncurl -s -H "Authorization: Bearer $LITELLM_API_KEY" "${url}"`;
 };
@@ -40,7 +41,15 @@ const INITIAL_STATE: SpanTreeState = {
 };
 
 /** First failed span if the run has errors (with its tree path opened), otherwise the root agent. */
-export function initialRunSelection(trace: Trace): { selectedId: string; state: SpanTreeState } {
+export function initialRunSelection(
+  trace: Trace,
+  initialSpanId?: string,
+): { selectedId: string; state: SpanTreeState } {
+  if (initialSpanId && trace.spans.some((span) => span.span_id === initialSpanId)) {
+    const selectedId = nearestVisibleSpanId(trace.spans, initialSpanId, false);
+    const state = revealSpanInState(trace.spans, { ...INITIAL_STATE, hideFramework: false }, selectedId);
+    return { selectedId, state };
+  }
   const failed = firstErrorSpan(trace.spans);
   if (!failed || failed.parent_span_id === null) {
     const root = trace.spans.find((s) => s.parent_span_id === null);
@@ -60,7 +69,7 @@ const toggle = (set: ReadonlySet<string>, id: string): Set<string> => {
   return next;
 };
 
-function CopyForAgent({ traceId }: { traceId: string }) {
+function CopyForAgent({ traceId, traceRef }: { traceId: string; traceRef?: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -72,7 +81,9 @@ function CopyForAgent({ traceId }: { traceId: string }) {
       variant="outline"
       size="xs"
       className="shrink-0 gap-1.5 rounded-[4px] font-mono text-[10px] shadow-none"
-      onClick={async () => setCopied(await copyToClipboard(agentHandoffText(traceId), "Command copied"))}
+      onClick={async () =>
+        setCopied(await copyToClipboard(agentHandoffText(traceId, null, traceRef), "Command copied"))
+      }
     >
       {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
       {copied ? "Command copied" : "Copy for agent"}
@@ -118,18 +129,19 @@ function RunHeader({ trace, onBack }: { trace: Trace; onBack: () => void }) {
       <div className="flex min-w-0 items-center gap-4 font-mono text-[11px] text-foreground tabular-nums">
         <Stat label="duration" value={fmtMs(summary.duration_ms)} />
         <Stat label="steps" value={summary.span_count.toLocaleString()} />
+        <Stat label="cost" value={summary.spend == null ? "—" : formatCost(summary.spend)} />
         {failed && <Stat label="failed" value={summary.error_count.toLocaleString()} error />}
       </div>
       <div className="ml-auto">
-        <CopyForAgent traceId={summary.trace_id} />
+        <CopyForAgent traceId={summary.trace_id} traceRef={summary.trace_ref} />
       </div>
     </header>
   );
 }
 
 /** Tree + detail pane for one loaded run, with J/K/arrow keyboard navigation. */
-function RunBody({ trace, accessToken }: { trace: Trace; accessToken: string }) {
-  const initial = useMemo(() => initialRunSelection(trace), [trace]);
+function RunBody({ trace, accessToken, initialSpanId }: { trace: Trace; accessToken: string; initialSpanId?: string }) {
+  const initial = useMemo(() => initialRunSelection(trace, initialSpanId), [trace, initialSpanId]);
   const [state, setState] = useState<SpanTreeState>(initial.state);
   const [selectedId, setSelectedId] = useState<string>(initial.selectedId);
   const [detailOpen, setDetailOpen] = useState(true);
@@ -222,15 +234,17 @@ function RunBody({ trace, accessToken }: { trace: Trace; accessToken: string }) 
 
 interface RunViewProps {
   traceId: string;
+  traceRef?: string;
+  initialSpanId?: string;
   accessToken: string;
   onBack: () => void;
 }
 
 /** One agent run: header with totals and "Copy for agent", span tree on the left, span details on the right. */
-export function RunView({ traceId, accessToken, onBack }: RunViewProps) {
+export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack }: RunViewProps) {
   const traceQuery = useQuery({
-    queryKey: ["agentTrace", traceId, accessToken],
-    queryFn: () => agentTraceCall(accessToken, traceId),
+    queryKey: ["agentTrace", traceId, traceRef, accessToken],
+    queryFn: () => agentTraceCall(accessToken, traceId, traceRef),
     staleTime: 30_000,
   });
   const trace = traceQuery.data;
@@ -263,7 +277,7 @@ export function RunView({ traceId, accessToken, onBack }: RunViewProps) {
       data-testid="run-view"
     >
       <RunHeader trace={trace} onBack={onBack} />
-      <RunBody key={trace.summary.trace_id} trace={trace} accessToken={accessToken} />
+      <RunBody key={trace.summary.trace_id} trace={trace} accessToken={accessToken} initialSpanId={initialSpanId} />
     </div>
   );
 }

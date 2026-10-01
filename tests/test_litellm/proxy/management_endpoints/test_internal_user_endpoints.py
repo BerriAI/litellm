@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-import respx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
@@ -4547,7 +4546,6 @@ async def test_user_update_hashes_and_persists_strong_password(_admin_prisma, mo
 
 
 @pytest.mark.asyncio
-@respx.mock
 async def test_user_update_rejects_breached_password(_admin_prisma):
     """A strength-passing password found in the HIBP corpus must be rejected
     before it ever reaches the DB write."""
@@ -4557,19 +4555,26 @@ async def test_user_update_rejects_breached_password(_admin_prisma):
 
     password = "Str0ng!Passw0rd"
     sha1 = hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()
-    respx.get(f"https://api.pwnedpasswords.com/range/{sha1[:5]}").mock(
-        return_value=httpx.Response(200, text=f"{sha1[5:]}:1387")
-    )
+    lookups: Final[list[tuple[str, str]]] = []  # mutable-ok: capture the injected handler request method and URL
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        lookups.append((request.method, str(request.url)))
+        return httpx.Response(200, text=f"{sha1[5:]}:1387")
 
     user_request = UpdateUserRequest(user_id="target-user", password=password)
     admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
 
     with pytest.raises(ProxyException) as exc_info:
-        await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
+        await _update_single_user_helper(
+            user_request=user_request,
+            user_api_key_dict=admin_caller,
+            hibp_client=_hibp_client_with_handler(handler),
+        )
 
     assert exc_info.value.code == "400"
     assert "data breaches" in exc_info.value.message
     _admin_prisma.db.litellm_usertable.find_first.assert_not_called()
+    assert lookups == [("GET", f"https://api.pwnedpasswords.com/range/{sha1[:5]}")]
 
 
 @pytest.mark.asyncio

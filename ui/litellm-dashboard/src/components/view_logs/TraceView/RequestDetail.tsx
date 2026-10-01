@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 
 import { LogDetailsDrawer } from "../LogDetailsDrawer";
 import { CopyButton } from "./CopyButton";
+import { formatCost } from "./AgentTracesTable";
 import type { Span } from "./traceTypes";
 import { fmtMs, fmtTok } from "./traceUtils";
 import { useSpanRequestLog } from "./useSpanRequestLog";
@@ -36,6 +37,7 @@ export function RequestDetail({ span, accessToken, traceStartMs }: RequestDetail
 
   const rows: [string, string][] = [
     ["Model", span.model ?? "—"],
+    ["Cost", span.spend == null ? "—" : formatCost(span.spend)],
     ["Input tokens", fmtTok(span.input_tokens)],
     ["Output tokens", fmtTok(span.output_tokens)],
     ["Total tokens", fmtTok(span.input_tokens + span.output_tokens)],
