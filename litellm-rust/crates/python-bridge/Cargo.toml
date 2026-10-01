@@ -51,6 +51,7 @@ litellm-llms-types.workspace = true
 litellm-host-python.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
 pyo3.workspace = true
+prost.workspace = true
 pyo3-async-runtimes.workspace = true
 reqwest.workspace = true
 redis = { version = "1.7.0", features = ["tls-rustls"] }

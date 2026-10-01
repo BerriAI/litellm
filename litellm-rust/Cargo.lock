@@ -4103,6 +4103,7 @@ dependencies = [
  "litellm-token-counter",
  "litellm-traces",
  "litellm-tracing",
+ "prost",
  "pyo3",
  "pyo3-async-runtimes",
  "qdrant-client",

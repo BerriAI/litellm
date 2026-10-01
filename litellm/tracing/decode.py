@@ -22,6 +22,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from litellm.constants import OTLP_MAX_ATTRIBUTE_VALUE_BYTES, OTLP_MAX_BODY_BYTES
 from litellm.rust_bridge.traces import DecodedSpan
 from litellm.rust_bridge.traces import decode_otlp as native_decode_otlp
+from litellm.rust_bridge.traces import encode_error as native_encode_error
 from litellm.tracing.types import SpanRow, SpanType
 
 _FRAMEWORK_SUFFIXES: Final = (
@@ -308,6 +309,4 @@ def encode_otlp_response(content_type: str | None, error: str | None = None) -> 
         return (json.dumps({"message": error}).encode() if error else b"{}"), "application/json"
     if error is None:
         return b"", "application/x-protobuf"
-    from google.rpc.status_pb2 import Status
-
-    return Status(message=error).SerializeToString(), "application/x-protobuf"
+    return native_encode_error(error), "application/x-protobuf"

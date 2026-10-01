@@ -347,6 +347,11 @@ def test_encode_otlp_response_matches_request_encoding():
     assert encode_otlp_response("application/json") == (b"{}", "application/json")
     assert encode_otlp_response("application/x-protobuf") == (b"", "application/x-protobuf")
     assert encode_otlp_response(None) == (b"", "application/x-protobuf")
+    body, media_type = encode_otlp_response("application/x-protobuf", "invalid trace")
+    assert media_type == "application/x-protobuf"
+    from google.rpc.status_pb2 import Status
+
+    assert Status.FromString(body).message == "invalid trace"
 
 
 @pytest.mark.parametrize(

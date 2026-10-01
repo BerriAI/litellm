@@ -56,6 +56,8 @@ class NativeTraces(Protocol):
         decode_budget_bytes: int,
     ) -> list[DecodedSpan]: ...
 
+    def trace_encode_error(self, message: str) -> bytes: ...
+
 
 class QueryResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -75,6 +77,10 @@ def _native() -> NativeTraces:
 
 def decode_otlp(body: bytes, content_type: str | None, decode_budget_bytes: int) -> list[DecodedSpan]:
     return _native().trace_decode_otlp(body, content_type, decode_budget_bytes)
+
+
+def encode_error(message: str) -> bytes:
+    return _native().trace_encode_error(message)
 
 
 class TraceStorage:

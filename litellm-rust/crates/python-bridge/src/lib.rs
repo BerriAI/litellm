@@ -44,7 +44,7 @@ mod _native {
     #[pymodule_export]
     use crate::routes::token_counter::TokenCounter;
     #[pymodule_export]
-    use crate::routes::traces::{NativeTraceStorage, trace_decode_otlp};
+    use crate::routes::traces::{NativeTraceStorage, trace_decode_otlp, trace_encode_error};
     #[cfg(feature = "huggingface")]
     #[pymodule_export]
     use crate::tokenizer::HuggingFaceEncoding;

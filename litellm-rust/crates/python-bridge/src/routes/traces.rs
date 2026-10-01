@@ -2,10 +2,29 @@ use std::collections::BTreeMap;
 
 use litellm_http::ClientVariant;
 use litellm_traces::{Connection, Error, InsertTable, Parameter, ReadQuery};
+use prost::Message;
 use pyo3::{
     exceptions::{PyOverflowError, PyRuntimeError, PyValueError},
     prelude::*,
+    types::PyBytes,
 };
+
+#[derive(Message)]
+struct OtlpErrorStatus {
+    #[prost(int32, tag = "1")]
+    code: i32,
+    #[prost(string, tag = "2")]
+    message: String,
+}
+
+#[pyfunction]
+pub fn trace_encode_error<'py>(py: Python<'py>, message: &str) -> Bound<'py, PyBytes> {
+    let status = OtlpErrorStatus {
+        code: 0,
+        message: message.to_owned(),
+    };
+    PyBytes::new(py, &status.encode_to_vec())
+}
 
 fn map_error(error: Error) -> PyErr {
     match error {
