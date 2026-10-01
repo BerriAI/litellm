@@ -41287,6 +41287,39 @@
           "title": "ModelInsightDailyMetric",
           "type": "object"
         },
+        "ModelInsightDailyTotal": {
+          "properties": {
+            "completion_tokens": {
+              "title": "Completion Tokens",
+              "type": "integer"
+            },
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "prompt_tokens": {
+              "title": "Prompt Tokens",
+              "type": "integer"
+            },
+            "requests": {
+              "title": "Requests",
+              "type": "integer"
+            },
+            "spend": {
+              "title": "Spend",
+              "type": "number"
+            }
+          },
+          "required": [
+            "date",
+            "spend",
+            "prompt_tokens",
+            "completion_tokens",
+            "requests"
+          ],
+          "title": "ModelInsightDailyTotal",
+          "type": "object"
+        },
         "ModelInsightMetric": {
           "properties": {
             "completion_tokens": {
@@ -41418,6 +41451,13 @@
               "title": "Daily",
               "type": "array"
             },
+            "daily_totals": {
+              "items": {
+                "$ref": "#/components/schemas/ModelInsightDailyTotal"
+              },
+              "title": "Daily Totals",
+              "type": "array"
+            },
             "end_date": {
               "title": "End Date",
               "type": "string"
@@ -41438,6 +41478,7 @@
             "start_date",
             "end_date",
             "daily",
+            "daily_totals",
             "top_models"
           ],
           "title": "ModelInsightsResponse",

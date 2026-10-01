@@ -14,7 +14,11 @@ vi.mock("@/components/ui/chart", () => ({
 }));
 vi.mock("recharts", () => ({
   Bar: () => null,
-  BarChart: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  BarChart: ({ children, data }: { children: React.ReactNode; data: { date: string }[] }) => (
+    <div data-testid="usage-chart" data-first={data[0]?.date} data-buckets={data.length}>
+      {children}
+    </div>
+  ),
   CartesianGrid: () => null,
   Treemap: () => null,
   XAxis: () => null,
@@ -38,6 +42,7 @@ const response = {
   end_date: "2026-09-28",
   top_models: [metrics],
   daily: [{ ...metrics, date: "2026-09-28" }],
+  daily_totals: [{ date: "2026-09-28", spend: 2.5, prompt_tokens: 1000, completion_tokens: 2000, requests: 12 }],
 };
 
 const taskResponse = {
@@ -144,5 +149,22 @@ describe("ModelInsightsView", () => {
     expect(
       await screen.findByText("Share of spend, with the change between the first and second half of the period"),
     ).toBeInTheDocument();
+  });
+
+  it("charts one bar per day by default and switches to weekly bars", async () => {
+    render(<ModelInsightsView accessToken="token" />);
+    await screen.findByText("fast-chat");
+    const chart = screen.getByTestId("usage-chart");
+    const days = (Date.parse(response.end_date) - Date.parse(response.start_date)) / 86_400_000 + 1;
+
+    expect(screen.getByRole("tab", { name: "Daily" })).toHaveAttribute("aria-selected", "true");
+    expect(chart).toHaveAttribute("data-buckets", String(days));
+    expect(screen.getByText("Daily tokens across your gateway")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Weekly" }));
+
+    expect(chart).toHaveAttribute("data-buckets", String(Math.ceil(days / 7)));
+    expect(chart).toHaveAttribute("data-first", response.start_date);
+    expect(screen.getByText("Weekly tokens across your gateway")).toBeInTheDocument();
   });
 });
