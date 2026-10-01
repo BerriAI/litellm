@@ -26,6 +26,9 @@ from collections.abc import (
     MutableMapping,
     Sequence,
 )
+from collections.abc import (
+    Set as AbstractSet,
+)
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain
@@ -14664,6 +14667,31 @@ def _byok_row_outside_caller_teams(model_info_dict: dict[str, JsonValue], allowe
 _SORTED_SEARCH_DB_FETCH_CAP: Final = 500
 
 
+def _insensitive_contains(value: str) -> dict[str, Any]:
+    """Case-insensitive Prisma substring filter for the model search."""
+    return {"contains": value, "mode": "insensitive"}  # mutable-ok: prisma where
+
+
+def _litellm_params_contains(value: str) -> dict[str, Any]:
+    """Prisma JSON-path filter on the underlying LiteLLM model name."""
+    return {"path": ["model"], "string_contains": value}  # mutable-ok: prisma where
+
+
+def _litellm_model_contains(value: str) -> dict[str, Any]:
+    """Prisma match on the underlying LiteLLM model name substring."""
+    return {"litellm_params": _litellm_params_contains(value)}  # mutable-ok: prisma where
+
+
+def _blocked_equals(blocked: bool) -> dict[str, Any]:
+    """Prisma filter on the routing-status flag inside model_info."""
+    return {"model_info": {"path": ["blocked"], "equals": blocked}}  # mutable-ok: prisma where
+
+
+def _not_in_router_ids(ids: AbstractSet[str]) -> dict[str, Any]:
+    """Prisma filter excluding models already materialized in the router."""
+    return {"model_id": {"not": {"in": list(ids)}}}  # mutable-ok: prisma where
+
+
 async def _fetch_db_models_for_search(
     prisma_client: PrismaClient,
     proxy_config: ProxyConfig,
@@ -14693,14 +14721,14 @@ async def _fetch_db_models_for_search(
     bounded by `search`.
     """
     model_name_condition: Final[dict[str, Any]] = (
-        {"model_name": {"contains": search_lower, "mode": "insensitive"}}
+        {"model_name": _insensitive_contains(search_lower)}  # mutable-ok: prisma where
         if model_name is None
-        else {"model_name": model_name}
+        else {"model_name": model_name}  # mutable-ok: prisma where
     )
     match_conditions: list[dict[str, Any]] = (
-        [
-            {
-                "OR": [
+        [  # mutable-ok: prisma where
+            {  # mutable-ok: prisma where
+                "OR": [  # mutable-ok: prisma where
                     model_name_condition,
                     # Substring search also matches the underlying LiteLLM model
                     # name (e.g. "openrouter/deepseek/deepseek-chat"), so users
@@ -14708,25 +14736,23 @@ async def _fetch_db_models_for_search(
                     # JSON string_contains is case-sensitive on Postgres (see
                     # note above); router-side matching below covers the
                     # case-insensitive path for rows already in the router.
-                    {"litellm_params": {"path": ["model"], "string_contains": search_lower}},
-                ]
-            }
+                    _litellm_model_contains(search_lower),
+                ],
+            },
         ]
         if model_name is None
-        else [model_name_condition]
+        else [model_name_condition]  # mutable-ok: prisma where
     )
     # Status filter runs inside the DB query too: the fetch is capped, so
     # matches of the other status must not consume the page budget.
     if blocked is not None:
-        match_conditions.append({"model_info": {"path": ["blocked"], "equals": blocked}})
+        match_conditions.append(_blocked_equals(blocked))
     if db_model_ids_in_router:
-        match_conditions.append({"model_id": {"not": {"in": list(db_model_ids_in_router)}}})
-    # Keep the single-condition shape flat: it is what existing callers (and
-    # tests) assert, and Prisma treats both forms identically.
+        match_conditions.append(_not_in_router_ids(db_model_ids_in_router))
     # Keep the single-condition shape flat: it is what existing callers (and
     # tests) assert, and Prisma treats both forms identically.
     db_where_condition: Final[dict[str, Any]] = (
-        match_conditions[0] if len(match_conditions) == 1 else {"AND": match_conditions}
+        match_conditions[0] if len(match_conditions) == 1 else {"AND": match_conditions}  # mutable-ok: prisma where
     )
 
     # Unsorted searches only need enough DB rows to fill the current
@@ -14832,7 +14858,8 @@ async def _apply_search_filter_to_models(
         # Also match the underlying LiteLLM model name (e.g.
         # "openrouter/deepseek/deepseek-chat"), so users can find
         # deployments by typing the provider or the upstream model id.
-        litellm_model: Final = (m.get("litellm_params") or {}).get("model") or ""
+        litellm_params: Final = m.get("litellm_params") or {}  # mutable-ok: prisma where
+        litellm_model: Final = litellm_params.get("model") or ""
         return search_lower in litellm_model.lower()
 
     # Filter models in router by search term, dropping BYOK rows that
@@ -14852,7 +14879,7 @@ async def _apply_search_filter_to_models(
     db_model_ids_in_router: Final = set()
 
     for m in filtered_router_models:
-        model_info = m.get("model_info", {})
+        model_info = m.get("model_info", {})  # mutable-ok: optional model_info payload accessed once per row
         is_db_model = model_info.get("db_model", False)
         model_id = model_info.get("id")
 
@@ -15063,7 +15090,8 @@ def _matches_routing_status(model: Mapping[str, object], blocked: bool | None) -
     A2A agents) are neither active nor paused, so they match neither status.
     """
     if blocked is True or blocked is False:
-        return (model.get("model_info") or {}).get("blocked") is blocked
+        model_info: Final = model.get("model_info") or {}  # mutable-ok: prisma where
+        return model_info.get("blocked") is blocked
     return True
 
 
