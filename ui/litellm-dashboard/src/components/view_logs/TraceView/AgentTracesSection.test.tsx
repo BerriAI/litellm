@@ -116,7 +116,8 @@ describe("AgentTracesSection", () => {
 
     const card = await screen.findByTestId("tracing-setup-card");
     expect(card).toHaveTextContent("Tracing is not enabled");
-    expect(card).toHaveTextContent("store: clickhouse");
+    expect(card).toHaveTextContent("type: clickhouse");
+    expect(card).toHaveTextContent("url: os.environ/CLICKHOUSE_URL");
     expect(screen.getByRole("button", { name: "Check setup" })).toBeEnabled();
     expect(card).not.toHaveTextContent(/langsmith/i);
     expect(card).toHaveTextContent("ClickHouse and proxy setup");
@@ -225,7 +226,7 @@ describe("AgentTracesSection", () => {
 
     const card = await screen.findByTestId("tracing-setup-card");
     expect(card).toHaveTextContent("Tracing is not enabled");
-    expect(card).toHaveTextContent("CLICKHOUSE_READER_URL");
+    expect(card).toHaveTextContent("url: os.environ/CLICKHOUSE_URL");
   });
 
   it("lists every run with its input, counts and failed column", async () => {
