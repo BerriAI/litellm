@@ -122,7 +122,7 @@ async def evaluate(
                 for p in selected
             ),
             next_cursor=selected[-1].span_id if len(selected) == 40 else None,
-            partial=not execution.root_seen,
+            partial=not execution.root_seen or next(c.incomplete for c in cases if c.name == identity),
         )
 
     costs: Final = SimpleQueue[float | None]()
@@ -165,7 +165,7 @@ async def evaluate(
             case.name: frozenset(
                 f.check_id
                 for f in result.findings
-                if f.kind == "issue" and any(e.execution_id == case.name for e in f.evidence)
+                if f.kind == "issue" and any(e.execution_id == case.name and e.role == "support" for e in f.evidence)
             )
             for case in cases
         }

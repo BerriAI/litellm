@@ -25,6 +25,7 @@ class Storage(Protocol):
 
 
 class ExecutionRow(BaseModel):
+    selection_key: str = ""
     source: Literal["traces", "requests"]
     trace_id: str
     trace_ref: str = ""
@@ -98,6 +99,7 @@ class SourceReader:
         offset: int = 0,
         page_size: int = 100,
         preview: bool = False,
+        cursor: str = "",
     ) -> Sample:
         params: Final = MappingProxyType(
             {
@@ -108,6 +110,7 @@ class SourceReader:
                 "service": settings.service,
                 "limit": page_size,
                 "offset": offset,
+                "after": cursor,
                 "sample_percent": str(settings.sample_percent),
                 "sample_cap": settings.sample_size or 0,
                 "preview": int(preview),
@@ -119,6 +122,7 @@ class SourceReader:
         return Sample(
             eligible=rows[0].eligible if rows else 0,
             selected=rows[0].selected if rows else 0,
+            next_cursor=rows[-1].selection_key if len(rows) == page_size else None,
             next_offset=(
                 offset + len(rows)
                 if page_size and rows and offset + len(rows) < (rows[0].eligible if preview else rows[0].selected)

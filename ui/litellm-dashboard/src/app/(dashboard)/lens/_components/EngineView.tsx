@@ -557,7 +557,8 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                     </p>
                     <p className="mt-3 text-sm">
                       {j.coverage?.screened ?? 0} reviewed / {j.coverage?.eligible ?? 0} eligible ·{" "}
-                      {j.coverage?.investigated ?? 0} patterns investigated · {j.coverage?.inconclusive ?? 0} inconclusive
+                      {j.coverage?.investigated ?? 0} patterns investigated · {j.coverage?.inconclusive ?? 0}{" "}
+                      inconclusive
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {j.coverage?.partial ?? 0} partial executions · {j.coverage?.unassessable ?? 0} could not be
@@ -645,6 +646,9 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                         <div className="mt-3 space-y-3">
                           {group.quotes.map((e, i) => (
                             <div key={`${e.span_id}-${i}`} className="rounded-md bg-muted/40 p-3">
+                              {e.role === "counterexample" && (
+                                <p className="mb-1 text-xs font-medium text-muted-foreground">Counterexample</p>
+                              )}
                               <blockquote className="text-xs leading-5 whitespace-pre-wrap break-words">
                                 {e.quote}
                               </blockquote>
@@ -737,7 +741,10 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                 </Button>
               )}
               {requestEvidence.data?.parts.some((p) => p.truncated) && (
-                <Button variant="outline" onClick={() => setRequestOffset(requestOffset === 0 ? 1 : requestOffset + 8000)}>
+                <Button
+                  variant="outline"
+                  onClick={() => setRequestOffset(requestOffset === 0 ? 1 : requestOffset + 8000)}
+                >
                   Next section
                 </Button>
               )}

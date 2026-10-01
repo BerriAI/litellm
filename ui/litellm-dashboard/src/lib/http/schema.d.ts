@@ -30994,6 +30994,12 @@ export interface components {
             execution_id: string;
             /** Quote */
             quote: string;
+            /**
+             * Role
+             * @default support
+             * @enum {string}
+             */
+            role: "support" | "counterexample";
             /** Span Id */
             span_id: string;
         };
@@ -43540,6 +43546,8 @@ export interface components {
             eligible: number;
             /** Executions */
             executions: components["schemas"]["Execution"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
             /** Next Offset */
             next_offset?: number | null;
             /**

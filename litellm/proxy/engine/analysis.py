@@ -258,8 +258,8 @@ async def extract_stored(
                     "problem once and leave research quality unknown unless actual claims contradict evidence. "
                     "Check repeated work and whether conclusions match retrieved evidence. Include useful positive patterns. "
                     "Use kind=issue for supported problems and kind=pattern for successful behavior or recovery. "
-                    "Evaluate every enabled check against the evidence, including newly read content. Use the check whose "
-                    "instruction most directly describes the issue. Do not stop at the first related check. "
+                    "Evaluate every enabled check independently, including newly read content. The same supported event "
+                    "can violate more than one check; report each supported violation, not just the first related check. "
                     "Use an explicit check when it covers a deviation; reserve expected_behavior for additional deviations. "
                     "Respect prior feedback about accepted behavior, but do not suppress different problems. "
                     "Request reads with span_id and offset=0 for initial evidence. If an excerpt omits content, "
@@ -270,8 +270,9 @@ async def extract_stored(
                     "return reads; otherwise return reads=[] and your final observations. Carry forward still-valid earlier "
                     "observations and remove disproved ones. cannot_assess means insufficient evidence to assess this run, "
                     "not absence of an issue. Never manufacture an issue just to produce a result.",
-                    "navigation": "Feedback pages are available with feedback_page=N. Read relevant feedback before "
-                    "finalizing. When must_decide=true, return final observations without further reads or navigation.",
+                    "navigation": "The current feedback page is already included. Only request a different feedback_page "
+                    "when feedback_pages>1. Zero feedback_pages means there is no feedback to consult. "
+                    "When must_decide=true, return final observations without further reads or navigation.",
                     "must_decide": must_decide,
                     "context": claim.job.settings.context,
                     "checks": tuple(c.model_dump() for c in claim.job.settings.analysis_checks),
@@ -304,13 +305,13 @@ async def extract_stored(
             return await structured_response(request, TraceReview, model)
 
         response: TraceReview
-        requested: tuple[SpanRead, ...] = ()  # rebind-ok: each turn asks for new evidence
-        fetched: tuple[tuple[TracePart, ...], ...] = ()  # rebind-ok: each turn fetches requested evidence
+        requested: tuple[SpanRead, ...]
+        fetched: tuple[tuple[TracePart, ...], ...]
         while True:
             response = await review(previous, reads, additional, feedback_page, must_decide)
-            if must_decide or (not response.reads and response.feedback_page is None):
+            if must_decide or (not response.reads and response.feedback_page in (None, feedback_page)):
                 break
-            if response.feedback_page is not None:
+            if response.feedback_page is not None and response.feedback_page != feedback_page:
                 if response.feedback_page >= len(feedback) or response.feedback_page in feedback_seen:
                     must_decide = True
                 else:
@@ -460,9 +461,13 @@ async def investigate_stored(
                 "or offset by 8000 for longer content; offset=1 reads original beginning after an abbreviated excerpt. "
                 "Read any execution in the supplied catalog. Use action='catalog' or 'observations' with page to fetch "
                 "another page of runs or supporting observations. Use action=feedback to read prior findings and dismissal "
-                "reasons. Review relevant feedback before deciding. Pages start at zero and no evidence is discarded. "
+                "reasons only when feedback_pages>1. The current page is already supplied; feedback_pages=0 means "
+                "no prior findings or feedback exist, so do not request feedback. Request only page numbers below "
+                "the corresponding page count. Pages start at zero and no evidence is discarded. "
                 "Return action='submit' and finding={title,description,check_id,kind:issue|pattern,priority:high|medium|low,"
-                "suggestion,limitation,evidence:[{execution_id,span_id,quote}],existing_finding_id} only when evidence supports it. "
+                "suggestion,limitation,evidence:[{execution_id,span_id,quote,role:support|counterexample}],existing_finding_id} "
+                "only when evidence supports it. Mark quotes from runs that demonstrate the opposite behavior as "
+                "counterexample, so they are not mistaken for affected runs. Include at least one supporting quote. "
                 "Never put internal run aliases in prose; the evidence links identify the runs. "
                 "Write for a busy person, in plain English. Title: a short, concrete outcome in at most 12 words. "
                 "Description: one or two short sentences saying what happened and why it matters, at most 60 words. "
@@ -474,6 +479,9 @@ async def investigate_stored(
                 "when the intended target was not tested; state what was observed and put this limit in limitation. "
                 "Quotes must be exact; copy supported quotes directly rather than paraphrasing them. "
                 "An empty or absent root answer is an observability gap, not proof that no answer was delivered. "
+                "If a check concerns missing logging or incomplete evidence, the recording gap itself can be a supported "
+                "finding. Do not dismiss that gap because the underlying task outcome cannot be assessed; state the "
+                "gap and its consequence without claiming task failure. "
                 "Internal handoff notes do not establish the final delivered answer. Only report completion failures "
                 "with affirmative evidence of a failed required action or a recorded inadequate final answer. "
                 "Do not infer causation or population rates. Return action='inconclusive' otherwise. "
@@ -495,6 +503,8 @@ async def investigate_stored(
                     {  # mutable-ok: JSON encoder requires a dictionary
                         "execution_id": item.execution.id,
                         "recorded_span_count": item.execution.span_count,
+                        "partial": item.partial,
+                        "cannot_assess": item.cannot_assess,
                         "available_unique_spans": len(frozenset(p.span_id for p in item.parts)),
                         "span_names": tuple(sorted(frozenset(p.name for p in item.parts))),
                         "root_span_ids": tuple(p.span_id for p in item.parts if not p.parent_span_id),
@@ -529,6 +539,7 @@ async def investigate_stored(
                 finding.check_id in known
                 and finding.check_id == candidate.check_id
                 and finding.kind == candidate.kind
+                and any(e.role == "support" for e in finding.evidence)
                 and valid_existing
                 and all(
                     evidence_valid(e, tuple(unique.values())) or store.evidence(e) is not None for e in finding.evidence
@@ -735,12 +746,14 @@ async def cluster_batches(
         )
         candidates = await consolidate(batch, candidates)
     registry: tuple[Candidate, ...] = ()  # rebind-ok: compare every surviving candidate against all earlier patterns
-    for candidate in candidates:
-        matching = tuple(c for c in registry if (c.check_id, c.kind) == (candidate.check_id, candidate.kind))
-        unrelated = tuple(c for c in registry if (c.check_id, c.kind) != (candidate.check_id, candidate.kind))
-        carried = (candidate,)
+    ordered: Final = tuple(sorted(candidates, key=lambda c: (c.check_id, c.kind)))
+    for incoming in partition_items(ordered, candidate_size, 8000):
+        kinds = frozenset((c.check_id, c.kind) for c in incoming)
+        matching = tuple(c for c in registry if (c.check_id, c.kind) in kinds)
+        unrelated = tuple(c for c in registry if (c.check_id, c.kind) not in kinds)
+        carried = incoming
         retained: list[Candidate] = []  # mutable-ok: collect settled pages once
-        for prior in partition_items(matching, candidate_size, 16000):
+        for prior in partition_items(matching, candidate_size, 16000) or ((),):
             merged, settled = await merge_candidates((*prior, *carried), len(prior), model)
             carried = merged
             retained.extend(settled)

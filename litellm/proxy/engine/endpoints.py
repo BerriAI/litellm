@@ -344,13 +344,24 @@ async def sample(engine_id: str, job_id: str, worker: WorkerAuth) -> Sample:
     engine, job = await assigned(engine_id, job_id, worker)
     if job.sample is not None:
         return job.sample
-    selected: Final = await source_reader().sample(
-        engine.scope,
-        job.settings,
-        int(job.start.timestamp() * 1000),
-        int(job.end.timestamp() * 1000),
-        page_size=0,
-    )
+    pages: list[Sample] = []  # mutable-ok: freeze selection after stable cursor traversal
+    cursor = ""  # rebind-ok: advance by immutable identity, never by shifting row positions
+    while True:
+        page = await source_reader().sample(
+            engine.scope,
+            job.settings,
+            int(job.start.timestamp() * 1000),
+            int(job.end.timestamp() * 1000),
+            cursor=cursor,
+        )
+        pages.append(page)
+        if not page.next_cursor or sum(len(p.executions) for p in pages) >= pages[0].selected:
+            break
+        cursor = page.next_cursor
+    executions: Final = tuple(
+        execution for p in pages for execution in p.executions
+    )  # comprehension-ok: flatten query pages
+    selected: Final = Sample(executions=executions, eligible=pages[0].eligible, selected=len(executions))
 
     def freeze(e: Engine) -> Engine:
         active: Final = current_job(e)

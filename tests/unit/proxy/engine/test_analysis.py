@@ -728,6 +728,57 @@ async def test_completed_read_does_not_make_supported_review_unknown() -> None:
 
 
 @pytest.mark.asyncio
+async def test_echoed_feedback_page_does_not_skip_requested_evidence() -> None:
+    execution: Final = Execution(
+        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
+    )
+    requests: Final = SimpleQueue[int]()
+
+    async def read(_identity: str, _cursor: str, offset: int) -> ExecutionContent:
+        requests.put(offset)
+        return ExecutionContent(
+            execution=execution,
+            parts=(
+                TracePart(
+                    execution_id="run",
+                    span_id="s",
+                    name="task",
+                    kind="agent",
+                    content="timeout" if offset else "abbreviated",
+                    truncated=not offset,
+                ),
+            ),
+        )
+
+    async def model(request: ModelRequest) -> ModelResult:
+        payload: Final = json.loads(request.prompt)
+        if not payload["read_evidence"]:
+            return ModelResult(content='{"feedback_page":0,"reads":[{"span_id":"s","offset":1}]}', cost=0)
+        return ModelResult(
+            content=json.dumps(
+                {
+                    "feedback_page": 0,
+                    "observations": [
+                        {
+                            "check_id": "retries",
+                            "summary": "Timed out",
+                            "evidence": [{"execution_id": "run", "span_id": "s", "quote": "timeout"}],
+                        }
+                    ],
+                }
+            ),
+            cost=0,
+        )
+
+    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    result: Final = await extract(claim, execution, read, model)
+    assert tuple(requests.get_nowait() for _ in range(requests.qsize())) == (0, 1)
+    assert len(result.observations) == 1
+    assert result.observations[0].evidence[0].quote == "timeout"
+    assert not result.partial and not result.cannot_assess
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("action", ("catalog", "observations", "feedback", "read"))
 async def test_empty_navigation_requires_a_final_decision(action: str) -> None:
     execution: Final = Execution(

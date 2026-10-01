@@ -76,25 +76,6 @@ pub async fn execute_read(
     sql: &str,
     parameters: &BTreeMap<String, Parameter>,
 ) -> Result<String, Error> {
-    execute_read_with_limits(
-        client,
-        connection,
-        sql,
-        parameters,
-        "1000",
-        Some(MAX_RESPONSE_BYTES),
-    )
-    .await
-}
-
-async fn execute_read_with_limits(
-    client: &Client,
-    connection: &Connection,
-    sql: &str,
-    parameters: &BTreeMap<String, Parameter>,
-    row_limit: &str,
-    byte_limit: Option<usize>,
-) -> Result<String, Error> {
     if sql.trim().is_empty() {
         return Err(Error::EmptySql);
     }
@@ -122,7 +103,7 @@ async fn execute_read_with_limits(
         .clear()
         .extend_pairs(existing_pairs)
         .append_pair("readonly", "1")
-        .append_pair("max_result_rows", row_limit)
+        .append_pair("max_result_rows", "1000")
         .append_pair("result_overflow_mode", "throw")
         .append_pair("max_execution_time", "10")
         .append_pair("wait_end_of_query", "1")
@@ -145,7 +126,7 @@ async fn execute_read_with_limits(
 
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| Error::Transport)? {
-        if byte_limit.is_some_and(|limit| body.len() + chunk.len() > limit) {
+        if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
             return Err(Error::ResponseTooLarge);
         }
         body.extend_from_slice(&chunk);
@@ -192,19 +173,4 @@ pub async fn execute_named_read(
     parameters: &BTreeMap<String, Parameter>,
 ) -> Result<String, Error> {
     execute_read(client, connection, query.sql(), parameters).await
-}
-
-pub async fn execute_lens_read(
-    client: &Client,
-    connection: &Connection,
-    query: LensQuery,
-    parameters: &BTreeMap<String, Parameter>,
-) -> Result<String, Error> {
-    if matches!(query, LensQuery::Sample)
-        && matches!(parameters.get("limit"), Some(Parameter::Integer(0)))
-    {
-        execute_read_with_limits(client, connection, query.sql(), parameters, "0", None).await
-    } else {
-        execute_read(client, connection, query.sql(), parameters).await
-    }
 }

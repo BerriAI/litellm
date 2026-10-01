@@ -72,6 +72,7 @@ class Evidence(Record):
     execution_id: str
     span_id: str
     quote: str = Field(min_length=1, max_length=1000)
+    role: Literal["support", "counterexample"] = "support"
 
 
 class FindingDraft(Record):
@@ -145,6 +146,7 @@ class Sample(Record):
     eligible: int
     selected: int = 0
     next_offset: int | None = None
+    next_cursor: str | None = None
 
 
 class RunAssessment(Record):

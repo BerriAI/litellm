@@ -1,9 +1,11 @@
-SELECT * FROM (
+WITH concat(leftPad(toString(cityHash64(concat(source,team_id,trace_ref,trace_id))),20,'0'),
+    hex(concat(source,char(0),team_id,char(0),trace_ref,char(0),trace_id))) AS selection_key
+SELECT *, selection_key FROM (
     SELECT *, if({sample_cap:UInt64}=0, ceiling(eligible*{sample_percent:Float64}/100),
         least(toFloat64({sample_cap:UInt64}),ceiling(eligible*{sample_percent:Float64}/100))) AS selected
     FROM (
         SELECT *, count() OVER () AS eligible,
-            row_number() OVER (ORDER BY cityHash64(concat(source,team_id,trace_ref,trace_id)),source,team_id,trace_ref,trace_id) AS position
+            row_number() OVER (ORDER BY selection_key) AS position
         FROM (
     SELECT 'traces' AS source, TraceId AS trace_id, TeamId AS team_id, hex(SHA256(concat(TeamId, char(0), ApiKeyHash, char(0), TraceId))) AS trace_ref,
         coalesce(nullIf(argMin(ResourceAttributes['run.name'], Timestamp), ''),
@@ -59,5 +61,5 @@ WHERE ({selected_team:String}='' OR team_id={selected_team:String})
 )
 )
 WHERE ({preview:UInt8}=1 OR position <= selected)
-  AND ({limit:UInt32}=0 OR (position > {offset:UInt64} AND position <= {offset:UInt64}+{limit:UInt32}))
-ORDER BY position
+  AND selection_key > {after:String}
+ORDER BY selection_key LIMIT {limit:UInt32} OFFSET {offset:UInt64}

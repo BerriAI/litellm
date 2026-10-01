@@ -562,6 +562,7 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
         ),
         ("limit".into(), Parameter::Integer(10)),
         ("offset".into(), Parameter::Integer(0)),
+        ("after".into(), Parameter::Text(String::new())),
         ("sample_percent".into(), Parameter::Text("100".into())),
         ("sample_cap".into(), Parameter::Integer(0)),
         ("preview".into(), Parameter::Integer(0)),
@@ -656,6 +657,7 @@ async fn lens_request_sample_does_not_trust_caller_tags(
         ("filter_values".into(), Parameter::Strings(vec![])),
         ("limit".into(), Parameter::Integer(10)),
         ("offset".into(), Parameter::Integer(0)),
+        ("after".into(), Parameter::Text(String::new())),
         ("sample_percent".into(), Parameter::Text("100".into())),
         ("sample_cap".into(), Parameter::Integer(0)),
         ("preview".into(), Parameter::Integer(0)),
@@ -678,11 +680,11 @@ async fn lens_request_sample_does_not_trust_caller_tags(
 }
 
 #[rstest]
-#[case::snapshot("100", 0, 0, 1001, 0)]
-#[case::all("100", 0, 0, 1001, 100)]
-#[case::percentage("10", 0, 0, 101, 100)]
-#[case::capped("100", 25, 0, 25, 100)]
-#[case::preview("10", 25, 1, 1001, 100)]
+#[case::changing("100", 0, 0, 1001, 100, true)]
+#[case::all("100", 0, 0, 1001, 100, false)]
+#[case::percentage("10", 0, 0, 101, 100, false)]
+#[case::capped("100", 25, 0, 25, 100, false)]
+#[case::preview("10", 25, 1, 1001, 100, false)]
 #[tokio::test]
 async fn lens_selection_pages_without_losing_or_repeating_runs(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
@@ -691,6 +693,7 @@ async fn lens_selection_pages_without_losing_or_repeating_runs(
     #[case] preview: i64,
     #[case] expected: usize,
     #[case] page_size: usize,
+    #[case] changing: bool,
 ) -> TestResult {
     use litellm_traces::LensQuery;
     let database = database?;
@@ -706,6 +709,7 @@ async fn lens_selection_pages_without_losing_or_repeating_runs(
     let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
     let end = time::OffsetDateTime::now_utc().unix_timestamp() * 1000 + 60000;
     let mut seen = std::collections::BTreeSet::new();
+    let mut cursor = String::new();
     let step = if page_size == 0 { expected } else { page_size };
     for offset in (0..expected).step_by(step) {
         let parameters = BTreeMap::from([
@@ -719,17 +723,21 @@ async fn lens_selection_pages_without_losing_or_repeating_runs(
             ("filter_keys".into(), Parameter::Strings(vec![])),
             ("filter_values".into(), Parameter::Strings(vec![])),
             ("limit".into(), Parameter::Integer(page_size as i64)),
-            ("offset".into(), Parameter::Integer(offset as i64)),
+            (
+                "offset".into(),
+                Parameter::Integer(if changing { 0 } else { offset as i64 }),
+            ),
+            ("after".into(), Parameter::Text(cursor.clone())),
             ("sample_percent".into(), Parameter::Text(percent.into())),
             ("sample_cap".into(), Parameter::Integer(cap)),
             ("preview".into(), Parameter::Integer(preview)),
             ("selected_team".into(), Parameter::Text(String::new())),
             ("execution_ids".into(), Parameter::Strings(vec![])),
         ]);
-        let body = litellm_traces::execute_lens_read(
+        let body = execute_read(
             &database.client,
             &connection,
-            LensQuery::Sample,
+            LensQuery::Sample.sql(),
             &parameters,
         )
         .await?;
@@ -737,8 +745,21 @@ async fn lens_selection_pages_without_losing_or_repeating_runs(
         let rows = json["data"].as_array().expect("sample rows");
         assert_eq!(rows.len(), step.min(expected - offset));
         for row in rows {
-            assert_eq!(row["eligible"], 1001);
+            assert_eq!(
+                row["eligible"],
+                if changing && offset > 0 { 1000 } else { 1001 }
+            );
             assert!(seen.insert(row["trace_id"].as_str().expect("run id").to_owned()));
+        }
+        if changing {
+            cursor = rows.last().expect("last run")["selection_key"]
+                .as_str()
+                .expect("selection key")
+                .to_owned();
+            if offset == 0 {
+                let removed = rows[0]["trace_id"].as_str().expect("request id");
+                execute_write(&database, &format!("ALTER TABLE trace_test.spend_logs DELETE WHERE request_id='{removed}' SETTINGS mutations_sync=1")).await?;
+            }
         }
     }
     assert_eq!(seen.len(), expected);

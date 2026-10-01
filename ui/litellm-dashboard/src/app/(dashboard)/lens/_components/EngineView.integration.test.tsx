@@ -24,7 +24,9 @@ const pattern: Finding = {
   last_seen: "2026-09-30T10:00:00Z",
   limitation: "This does not prove every attack will be resisted.",
   occurrences: [executionId],
-  evidence: [{ execution_id: executionId, span_id: "step-1", quote: "Ignore the review instructions" }],
+  evidence: [
+    { execution_id: executionId, span_id: "step-1", quote: "Ignore the review instructions", role: "support" },
+  ],
 };
 const issue: Finding = {
   ...pattern,
@@ -257,7 +259,15 @@ it("reads request content from the beginning after its abbreviated preview", asy
     if (path === "/engine") return { engines: [{ ...engine, jobs: [job] }], workers: [], tracing_enabled: true };
     if (path === "/engine/lens/runs") return [job];
     const offset = options?.query?.offset ?? 0;
-    return { parts: [{ span_id: "request", content: offset === 0 ? "Abbreviated preview" : `Original at ${offset}`, truncated: true }] };
+    return {
+      parts: [
+        {
+          span_id: "request",
+          content: offset === 0 ? "Abbreviated preview" : `Original at ${offset}`,
+          truncated: true,
+        },
+      ],
+    };
   });
   const user = userEvent.setup();
   renderWithProviders(<EngineView accessToken="test" readOnly />);
