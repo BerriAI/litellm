@@ -4418,15 +4418,13 @@ async def test_ProxyConfig__update_general_settings_dispatches_every_side_effect
     for name, handler in handlers:
         monkeypatch.setattr(pc, name, handler)
 
-    await pc._apply_general_settings_side_effects({}, False, (), None)
+    await pc._apply_general_settings_side_effects({}, False, ())
 
     for name, handler in handlers:
         if name == "_apply_cache_size_setting":
             handler.assert_awaited_once_with({}, cache_size_was_db=False)
         elif name == "_apply_retention_settings":
             handler.assert_awaited_once_with({}, previous_cleanup_schedule=())
-        elif name == "_apply_pass_through_settings":
-            handler.assert_awaited_once_with({}, previous_endpoints=None)
         else:
             handler.assert_awaited_once_with({})
 
@@ -4492,7 +4490,7 @@ async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stor
         "max_file_size_mb": 7,
         "max_parallel_requests": 3,
         "alerting": ["config"],
-        "pass_through_endpoints": [{"path": "/config"}],
+        "pass_through_endpoints": [{"path": "/db"}, {"path": "/config"}],
         "maximum_spend_logs_cleanup_batch_size": 10,
     }
     assert resolved["router_settings"] == {"fallbacks": ["config"], "num_retries": 1}
@@ -4521,19 +4519,6 @@ async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omi
     assert resolved["general_settings"] == {"max_file_size_mb": 7, "max_parallel_requests": 11}
     assert resolved["router_settings"] == {"num_retries": 1, "fallbacks": ["db"]}
     assert pc.settings.source("max_parallel_requests") == "db"
-
-
-def test_ProxyConfig_load_yaml_settings_stores_keeps_db_endpoints_out_of_config_baseline():
-    from litellm.proxy import proxy_server
-
-    pc = ProxyConfig()
-    config_endpoint: Final = {"path": "/config", "target": "https://config.example"}
-    db_endpoint: Final = {"id": "db-endpoint", "path": "/db", "target": "https://db.example"}
-
-    pc._load_yaml_settings_stores({"general_settings": {"pass_through_endpoints": [config_endpoint]}})
-    pc.settings.apply_db_row("general_settings", {"pass_through_endpoints": [db_endpoint]})
-
-    assert proxy_server.config_passthrough_endpoints == [config_endpoint]
 
 
 @pytest.mark.asyncio
