@@ -119,7 +119,7 @@ def test_prepare_fallback_hidden_params_no_additional_headers():
 def test_apply_fallback_hidden_params_keeps_chunk_response_cost():
     chunk = litellm.ModelResponseStream(id="test", model="openai/fallback", choices=[])
     chunk._hidden_params = {"response_cost": None}
-    fallback_response = MagicMock()
+    fallback_response = litellm.ModelResponse()
     fallback_response._hidden_params = {"response_cost": 0.0, "api_base": "https://fallback.example"}
 
     Router._apply_fallback_hidden_params_to_item(
