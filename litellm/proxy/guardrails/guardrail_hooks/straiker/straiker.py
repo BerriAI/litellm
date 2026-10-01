@@ -909,7 +909,6 @@ class StraikerGuardrail(CustomGuardrail):
             max_size_in_memory=V3_BLOCKED_TURN_MEMORY, default_ttl=V3_BLOCKED_TURN_TTL_SECONDS
         )
         self.source = source
-        self.timeout = float(timeout)
         self.max_retries = max(0, int(max_retries))
         self.initial_backoff = max(0.0, float(initial_backoff))
         self.max_backoff = max(self.initial_backoff, float(max_backoff))
@@ -928,7 +927,8 @@ class StraikerGuardrail(CustomGuardrail):
         )
 
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
-        super().__init__(**kwargs)
+        super().__init__(**kwargs)  # pyright: ignore[reportArgumentType]  # kwargs splat carries object-typed values
+        self.timeout = float(timeout)
 
         self.configured_modes = _configured_modes(self.event_hook)
 

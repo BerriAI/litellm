@@ -75,6 +75,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
+from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
@@ -978,6 +979,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         min_configured_limit: int | None,
         call_type: str | None,
         configured_output_tokens: int | None = None,
+        endpoint_type: EndpointType = EndpointType.GENERIC,
     ) -> None:
         """Hard-cap generation length when the request has no explicit cap.
 
@@ -1006,6 +1008,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             capped_floor >= baseline_floor
             or _PROXY_MaxParallelRequestsHandler_v3._has_explicit_output_cap(data, call_type)
             or is_embedding
+            or endpoint_type == EndpointType.DECISIONS
         ):
             return
         effective_cap: Final = max(capped_floor, configured_output_tokens or 0)
@@ -3065,6 +3068,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         agent_id: str,
         data: dict,
+        policy: "AgentResponse | None" = None,
     ) -> list[RateLimitDescriptor]:
         """
         Create rate limit descriptors for agent-level and session-level limits.
@@ -3074,7 +3078,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         descriptors: Final[list[RateLimitDescriptor]] = []
 
-        agent: Final = self._get_agent_from_registry(agent_id)
+        agent: Final = policy if policy is not None else self._get_agent_from_registry(agent_id)
         if agent is None:
             return descriptors
 
@@ -3269,14 +3273,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             descriptors=descriptors,
         )
 
-        # Agent-level and session-level rate limits
         resolved_agent_id: Final = self._get_resolved_agent_id(user_api_key_dict, data)
-
-        if resolved_agent_id:
+        for agent_id in dict.fromkeys((resolved_agent_id, user_api_key_dict.invoked_agent_id)):
+            if agent_id is None:
+                continue
             descriptors.extend(
                 self._create_agent_rate_limit_descriptors(
-                    agent_id=resolved_agent_id,
+                    agent_id=agent_id,
                     data=data,
+                    policy=(
+                        user_api_key_dict.managed_agent_policy
+                        if agent_id == user_api_key_dict.agent_id
+                        else user_api_key_dict.invoked_agent_policy
+                    ),
                 )
             )
 
@@ -3751,6 +3760,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         tpm_reservation_scopes: Sequence[tuple[str, str]],
         tpm_reservation_amount: int,
         call_type: str | None = None,
+        endpoint_type: EndpointType = EndpointType.GENERIC,
     ) -> None:
         """
         Reserve project-scoped ITPM/OTPM tokens (Bedrock Mantle-style
@@ -3804,6 +3814,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             data=data,
             min_configured_limit=min_configured_otpm_limit,
             call_type=call_type,
+            endpoint_type=endpoint_type,
         )
 
         io_response, itpm_reserved, otpm_reserved = await self.reserve_io_tokens(
@@ -3978,6 +3989,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: str,
+        endpoint_type: EndpointType = EndpointType.GENERIC,
     ):
         """
         Pre-call hook to check rate limits before making the API call.
@@ -4109,6 +4121,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     min_configured_limit=min_configured_tpm_limit,
                     call_type=call_type,
                     configured_output_tokens=configured_output_tokens,
+                    endpoint_type=endpoint_type,
                 )
 
                 # Floor at 1 token so contentless requests (/responses,
@@ -4195,6 +4208,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 tpm_reservation_scopes=tpm_reservation_scopes,
                 tpm_reservation_amount=tpm_reservation_amount,
                 call_type=call_type,
+                endpoint_type=endpoint_type,
             )
 
     def _create_pipeline_operations(
@@ -4964,6 +4978,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             kwargs=kwargs,
             tpm_limited_tags=stash.tpm_limited_tags if stash is not None else frozenset(),
             model_group=reconcile_model.group if reconcile_model is not None else None,
+        )
+        targets.extend(
+            scope
+            for scope in sorted(reserved_scopes)
+            if scope[0] in ("agent", "agent_session") and scope not in targets
         )
         charged_targets: Final = (
             [target for target in targets if target[0] != "model_per_team"]
