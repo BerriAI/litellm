@@ -125,6 +125,49 @@ def test_incomplete_langsmith_completion_preserves_the_export(completion):
     assert rows[0]["Output"] == completion
 
 
+def test_llm_block_list_content_keeps_only_text():
+    reasoning = {"type": "reasoning", "summary": [], "encrypted_content": "gAAAAB-opaque"}
+    history = [reasoning, {"type": "text", "text": "Earlier answer", "annotations": []}]
+    answer = [reasoning, {"type": "text", "text": "Part one"}, {"type": "text", "text": "Part two"}]
+    prompt = {
+        "messages": [
+            [
+                {"kwargs": {"type": "human", "content": "refund please"}},
+                {"kwargs": {"type": "ai", "content": history}},
+                {"kwargs": {"type": "ai", "content": [reasoning]}},
+            ]
+        ]
+    }
+    completion = {"generations": [[{"message": {"kwargs": {"type": "ai", "content": answer}}}]]}
+    span = _span(
+        "ChatOpenAI",
+        b"\x03" * 8,
+        b"\x02" * 8,
+        langsmith__span__kind="llm",
+        gen_ai__prompt=json.dumps(prompt),
+        gen_ai__completion=json.dumps(completion),
+    )
+    rows = decode_otlp(_export(span, scope="langsmith"), "application/x-protobuf")
+    assert [m["content"] for m in json.loads(rows[0]["Input"])] == ["refund please", "Earlier answer", ""]
+    assert json.loads(rows[0]["Output"])["content"] == "Part one\n\nPart two"
+    assert "encrypted_content" not in rows[0]["Input"] + rows[0]["Output"]
+
+
+def test_llm_unrecognized_list_content_is_kept_as_json():
+    content = [{"type": "image_url", "image_url": {"url": "https://x.test/a.png"}}]
+    completion = {"generations": [[{"message": {"kwargs": {"type": "ai", "content": content}}}]]}
+    span = _span(
+        "ChatOpenAI",
+        b"\x03" * 8,
+        b"\x02" * 8,
+        langsmith__span__kind="llm",
+        gen_ai__prompt='{"messages": [[{"kwargs": {"type": "human", "content": "hi"}}]]}',
+        gen_ai__completion=json.dumps(completion),
+    )
+    rows = decode_otlp(_export(span, scope="langsmith"), "application/x-protobuf")
+    assert json.loads(json.loads(rows[0]["Output"])["content"]) == content
+
+
 def test_task_tool_output_is_subagent_final_message_text(rows_by_name):
     task = rows_by_name["task"]
     assert json.loads(task["Input"])["subagent_type"] == "researcher"
