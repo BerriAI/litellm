@@ -2282,6 +2282,10 @@ async def _complete_cli_sso_callback_session(
 ):
     from fastapi.responses import HTMLResponse
 
+    effective_user_id: Final = (
+        user_defined_values.get("user_id") if user_defined_values is not None else parsed_openid_result.get("user_id")
+    )
+    _require_sso_user_id(effective_user_id)
     user_id: Final = parsed_openid_result.get("user_id")
     user_email: Final = parsed_openid_result.get("user_email")
     user_info: Final = await get_user_info_from_db(
@@ -2295,10 +2299,9 @@ async def _complete_cli_sso_callback_session(
     )
     if user_info is None:
         raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO")
-    if not user_info.user_id:
-        raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO")
+    resolved_user_id: Final = _require_sso_user_id(user_info.user_id)
 
-    await retain_sso_identity_assertion_for_ema(user_id=user_info.user_id, assertion=sso_assertion)
+    await retain_sso_identity_assertion_for_ema(user_id=resolved_user_id, assertion=sso_assertion)
     await warn_if_id_jag_assertion_uncaptured(sso_assertion)
 
     teams: list[str] = []
@@ -2314,19 +2317,19 @@ async def _complete_cli_sso_callback_session(
     from litellm.proxy.management_endpoints.sso.agent_subject_enrollment import enroll_microsoft_subject
 
     await enroll_microsoft_subject(
-        request.scope.get("litellm_microsoft_interactive_subject"), user_info.user_id, prisma_client
+        request.scope.get("litellm_microsoft_interactive_subject"), resolved_user_id, prisma_client
     )
     resolved_teams: Final = _cli_sso_session_teams(team_details)
     attribution_metadata: Final = build_cli_sso_attribution_metadata(result=result)
     if attribution_metadata:
         await _persist_cli_sso_user_metadata(
             prisma_client=prisma_client,
-            user_id=cast(str, user_info.user_id),
+            user_id=resolved_user_id,
             attribution_metadata=attribution_metadata,
         )
 
     flow["session_data"] = {
-        "user_id": cast(str, user_info.user_id),
+        "user_id": resolved_user_id,
         "user_role": user_info.user_role,
         "models": user_info.models if hasattr(user_info, "models") else [],
         "user_email": user_email,
@@ -2341,7 +2344,7 @@ async def _complete_cli_sso_callback_session(
 
     verbose_proxy_logger.info(
         "Stored CLI SSO session for user: %s, teams: %s, num_teams: %s",
-        user_info.user_id,
+        resolved_user_id,
         resolved_teams,
         len(resolved_teams),
     )
@@ -2402,6 +2405,7 @@ async def cli_sso_callback(
             result=result_non_none,
             parsed_openid_result=parsed_openid_result,
         )
+        _require_sso_user_id(user_defined_values.get("user_id") if user_defined_values is not None else None)
 
         SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
             general_settings=general_settings,
@@ -2853,6 +2857,17 @@ def _persist_return_to_cookie(response: Response, return_to: str | None, request
             samesite="lax",
             secure=IPAddressUtils.is_request_https(request),
         )
+
+
+def _require_sso_user_id(user_id: str | None) -> str:
+    """Return a nonblank SSO user id or reject the login with a 401"""
+    if user_id is None or not user_id.strip():
+        verbose_proxy_logger.warning("SSO login rejected: the provider response resolved no user id or email")
+        raise HTTPException(
+            status_code=401,
+            detail="SSO login failed: the identity provider did not return a user id or email for this account",
+        )
+    return user_id
 
 
 class SSOAuthenticationHandler:
@@ -3481,7 +3496,7 @@ class SSOAuthenticationHandler:
             _last_name: Final = getattr(result, "last_name", "") or ""
             user_id = _first_name + _last_name
 
-        if user_email is not None and (user_id is None or len(user_id) == 0):
+        if user_email is not None and (user_id is None or not user_id.strip()):
             user_id = user_email
 
         return ParsedOpenIDResult(
@@ -3552,6 +3567,8 @@ class SSOAuthenticationHandler:
                 budget_duration=internal_user_budget_duration,
             )
 
+        _require_sso_user_id(user_defined_values.get("user_id") if user_defined_values is not None else None)
+
         # (IF SET) Verify user is in restricted SSO group
         SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
             general_settings=general_settings,
@@ -3604,7 +3621,7 @@ class SSOAuthenticationHandler:
             spend=0,
             team_id="litellm-dashboard",
             models=user_defined_values["models"],
-            user_id=user_defined_values["user_id"],
+            user_id=_require_sso_user_id(user_defined_values["user_id"]),
             user_email=user_defined_values["user_email"],
             user_role=user_defined_values["user_role"],
             max_budget=user_defined_values["max_budget"],
