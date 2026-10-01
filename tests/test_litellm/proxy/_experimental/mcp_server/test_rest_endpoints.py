@@ -28,7 +28,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.types.mcp import MCPAuth, MCPTransport
+from litellm.types.mcp import MCPAuth, MCPTransport, MCPUpstreamProtocol
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 _OK_TOOL_RESULT: Final = CallToolResult(content=[TextContent(type="text", text='{"result": "ok"}')], is_error=False)
@@ -810,6 +810,12 @@ class TestTestConnection:
         from litellm.proxy._types import LitellmUserRoles
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy.management_endpoints import mcp_management_endpoints
+
+        manager = MCPServerManager()
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(mcp_management_endpoints, "global_mcp_server_manager", manager)
         captured = self._capture_execute(monkeypatch)
         saved = MCPServer(
             server_id="saved-server-id",
@@ -1311,8 +1317,9 @@ class TestListToolsRestAPI:
         session_auth = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="grant-user", user_role="internal_user")
         admitted_auth = UserAPIKeyAuth(user_id="grant-user", org_id="admitted-org")
 
-        async def fake_reload(user_id):
+        async def fake_reload(user_id, *, requires_fresh_policy=False):
             assert user_id == "grant-user"
+            assert requires_fresh_policy is False
             return admitted_auth
 
         monkeypatch.setattr(
@@ -1476,12 +1483,15 @@ class TestListToolsRestAPI:
         monkeypatch,
     ):
         """The REST tools/list path should include tools beyond the upstream first page."""
-        from mcp.types import ListToolsResult, PaginatedRequestParams
+        from mcp.types import Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities
         from mcp.types import Tool as MCPTool
 
         import litellm.experimental_mcp_client.client as mcp_client_module
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
         from litellm.proxy._experimental.mcp_server.server import MCPServer
         from litellm.types.mcp import MCPTransport
+
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", MCPServerManager())
 
         async def fake_contexts(user_api_key_auth):
             return [user_api_key_auth]
@@ -1512,7 +1522,11 @@ class TestListToolsRestAPI:
 
         mock_session_ctx = AsyncMock()
         mock_session_instance = AsyncMock()
-        mock_session_instance.initialize = AsyncMock(return_value=None)
+        mock_session_instance.initialize = AsyncMock(return_value=InitializeResult(
+            protocol_version="2025-11-25",
+            capabilities=ServerCapabilities(),
+            server_info=Implementation(name="stub", version="1"),
+        ))
         mock_session_instance.list_tools.side_effect = [
             ListToolsResult(
                 tools=[
@@ -2410,6 +2424,7 @@ class TestCallToolRestAPI:
 
         mock_server = MagicMock()
         mock_server.server_id = "server-1"
+        mock_server.name = "Example server"
 
         def fake_get_mcp_server_by_id(server_id):
             return mock_server if server_id == "server-1" else None
@@ -2426,6 +2441,11 @@ class TestCallToolRestAPI:
             lambda *args, **kwargs: None,
             raising=False,
         )
+
+        failure_log = AsyncMock()
+        execute_tool = AsyncMock()
+        monkeypatch.setattr(rest_endpoints, "_safe_fire_mcp_tool_call_failure_logging", failure_log)
+        monkeypatch.setattr(rest_endpoints, "execute_mcp_tool", execute_tool)
 
         request_payload = {
             "server_id": "server-1",
@@ -2447,6 +2467,16 @@ class TestCallToolRestAPI:
         assert exc_info.value.status_code == 403
         assert exc_info.value.detail["error"] == "access_denied"
         assert "server server-1" in exc_info.value.detail["message"]
+
+        execute_tool.assert_not_awaited()
+        failure_log.assert_awaited_once()
+        logged_data = failure_log.await_args.args[4]
+        assert logged_data["model"] == "MCP: demo-tool"
+        assert logged_data["metadata"]["model_group"] == "MCP: demo-tool"
+        logging_obj = failure_log.await_args.args[0]
+        assert logging_obj.model_call_details["mcp_tool_call_metadata"] == {
+            "name": "demo-tool", "mcp_server_name": "Example server",
+        }
 
     async def test_executes_tool_when_allowed(self, monkeypatch):
         async def fake_contexts(user_api_key_auth):
@@ -4628,3 +4658,74 @@ class TestClientAllowlistOnRestRoutes:
         assert denied.value.detail["error"] == "Forbidden"
         assert "'claude-code'" in denied.value.detail["details"]
         acting.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision", ("auto", "2024-11-05", "2025-06-18"))
+async def test_preview_client_honors_protocol_metadata(revision: MCPUpstreamProtocol) -> None:
+    from litellm.experimental_mcp_client.client import MCPClient
+
+    payload: Final = NewMCPServerRequest(
+        server_name="preview", url="http://127.0.0.1:9/mcp", transport="http",
+        auth_type=MCPAuth.none, mcp_info={"protocol_version": revision},
+    )
+
+    async def inspect_client(client: MCPClient) -> dict[str, str]:
+        return {"protocol_version": client.protocol_version}
+
+    result: Final = await rest_endpoints._execute_with_mcp_client(payload, inspect_client)
+    assert result == {"protocol_version": revision}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type", (MCPAuth.none, MCPAuth.bearer_token, MCPAuth.oauth2))
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    (
+        (None, "2025-11-25"),
+        ({}, "2025-11-25"),
+        ({"description": "edited"}, "2025-11-25"),
+        ({"protocol_version": "auto"}, "auto"),
+        ({"protocol_version": "2024-11-05"}, "2024-11-05"),
+        ({"protocol_version": "2025-06-18"}, "2025-06-18"),
+    ),
+)
+async def test_saved_preview_protocol_omission_and_explicit_edits(
+    monkeypatch: pytest.MonkeyPatch, auth_type: MCPAuth,
+    metadata: dict[str, str] | None, expected: MCPUpstreamProtocol,
+) -> None:
+    from starlette.datastructures import Headers
+
+    from litellm.experimental_mcp_client.client import MCPClient
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.proxy.management_endpoints import mcp_management_endpoints
+
+    saved: Final = MCPServer(
+        server_id="saved-preview", name="preview", url="https://example.com/mcp",
+        transport="http", auth_type=auth_type, protocol_version="2025-11-25",
+        authentication_token="stored-token",
+        authorization_url="https://example.com/authorize", token_url="https://example.com/token",
+    )
+    manager: Final = MCPServerManager()
+    manager.registry = {saved.server_id: saved}
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(mcp_management_endpoints, "global_mcp_server_manager", manager)
+    payload: Final = NewMCPServerRequest(
+        server_id=saved.server_id, server_name=saved.name, url=saved.url, transport="http",
+        auth_type=auth_type, mcp_info=metadata,
+        authorization_url=saved.authorization_url, token_url=saved.token_url,
+    )
+    staged: Final = rest_endpoints._stage_server_test(
+        payload, Headers({"x-litellm-api-key": "sk-admin", "authorization": "Bearer preview-token"})
+    )
+
+    async def inspect_client(client: MCPClient) -> dict[str, str]:
+        return {"protocol_version": client.protocol_version}
+
+    result: Final = await rest_endpoints._execute_with_mcp_client(
+        staged.request, inspect_client,
+        mcp_auth_header=staged.mcp_auth_header, oauth2_headers=staged.oauth2_headers,
+    )
+    assert result == {"protocol_version": expected}
+    assert saved.protocol_version == "2025-11-25"
+    assert payload.mcp_info == metadata

@@ -61,7 +61,8 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
 const HEALTH_RANK: Record<string, number> = {
   unhealthy: 0,
   unknown: 1,
-  healthy: 2,
+  reachable: 2,
+  healthy: 3,
 };
 
 const compareByName = (a: MCPServer, b: MCPServer): number => {
@@ -191,7 +192,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
       const healthStatus = healthMap.get(server.server_id);
       return {
         ...server,
-        status: healthStatus ? (healthStatus as "healthy" | "unhealthy" | "unknown") : server.status,
+        status: healthStatus ? (healthStatus as MCPServer["status"]) : server.status,
       };
     });
   }, [mcpServers, healthStatuses]);

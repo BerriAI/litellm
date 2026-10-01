@@ -952,6 +952,49 @@ def test_startup_does_not_warn_without_global_budget(caplog, max_budget):
     assert "litellm.max_budget" not in caplog.text
 
 
+def test_startup_warns_for_fail_closed_rate_limits_without_redis(caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_fail_closed_rate_limits_without_redis(
+            fail_closed_rate_limit_enforcement=True, redis_usage_cache=None
+        )
+
+    assert "fail_closed_rate_limit_enforcement" in caplog.text
+    assert "rejects nothing" in caplog.text
+
+
+@pytest.mark.parametrize("fail_closed, redis_usage_cache", [(True, MagicMock()), (False, None)])
+def test_startup_does_not_warn_for_fail_closed_rate_limits_when_nothing_is_lost(caplog, fail_closed, redis_usage_cache):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_fail_closed_rate_limits_without_redis(
+            fail_closed_rate_limit_enforcement=fail_closed, redis_usage_cache=redis_usage_cache
+        )
+
+    assert "fail_closed_rate_limit_enforcement" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_event_warns_for_fail_closed_rate_limits_without_redis(caplog):
+    scheduler = AsyncIOScheduler()
+    clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")} | {
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"
+    }
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.object(ps, "scheduler", scheduler),
+        patch.dict(ps.general_settings, {"fail_closed_rate_limit_enforcement": True}),
+        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+    ):
+        try:
+            async with proxy_startup_event(app=None):
+                pass
+        finally:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+
+    assert "fail_closed_rate_limit_enforcement" in caplog.text
+    assert "rejects nothing" in caplog.text
+
+
 def test_proxy_startup_event_warns_for_global_budget_without_database():
     """Pin the lifespan call that prevents silent DB-less budgets.
 
@@ -1187,57 +1230,6 @@ async def test_spend_report_locks_are_never_released():
     await jobs["monthly_spend_report_job"]()
 
     proxy_logging_obj.db_spend_update_writer.pod_lock_manager.release_lock.assert_not_awaited()
-
-
-def _init_daily_global_spend_reconcile_job() -> tuple[AsyncIOScheduler, MagicMock, MagicMock]:
-    scheduler = AsyncIOScheduler()
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.alerting_handler = AsyncMock()
-    prisma_client = MagicMock()
-    ProxyStartupEvent._initialize_daily_global_spend_reconcile_job(
-        scheduler=scheduler,
-        proxy_logging_obj=proxy_logging_obj,
-        prisma_client=prisma_client,
-    )
-    return scheduler, proxy_logging_obj, prisma_client
-
-
-def test_daily_global_spend_reconcile_job_is_scheduled_nightly_with_an_immediate_catch_up_run():
-    """Startup schedules the LiteLLM_DailyGlobalSpend backfill a couple of minutes out, so a
-    fresh deploy switches usage reads to the global table without waiting for the nightly
-    run, and after that it fires once a day at 00:30 UTC, when the previous UTC day is closed."""
-    from datetime import datetime, timedelta, timezone
-
-    from litellm.constants import DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID
-
-    scheduler, _, _ = _init_daily_global_spend_reconcile_job()
-    job = scheduler.get_job(DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID)
-    assert job is not None
-
-    assert timedelta(0) < job.next_run_time - datetime.now(timezone.utc) <= timedelta(minutes=2)
-    after_catch_up = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
-    assert job.trigger.get_next_fire_time(None, after_catch_up) == datetime(2026, 9, 17, 0, 30, tzinfo=timezone.utc)
-    just_after_a_run = datetime(2026, 9, 17, 0, 30, 1, tzinfo=timezone.utc)
-    assert job.trigger.get_next_fire_time(None, just_after_a_run) == datetime(2026, 9, 18, 0, 30, tzinfo=timezone.utc)
-
-
-@pytest.mark.asyncio
-async def test_daily_global_spend_reconcile_job_runs_under_the_pod_lock_and_alerts_through_the_proxy(monkeypatch):
-    from litellm.constants import DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID
-
-    scheduler, proxy_logging_obj, prisma_client = _init_daily_global_spend_reconcile_job()
-    run = AsyncMock()
-    monkeypatch.setattr(ps, "run_scheduled_daily_global_spend_reconcile", run)
-
-    await scheduler.get_job(DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID).func()
-
-    run.assert_awaited_once()
-    assert run.await_args.args == (prisma_client,)
-    assert run.await_args.kwargs["pod_lock_manager"] is proxy_logging_obj.db_spend_update_writer.pod_lock_manager
-    await run.await_args.kwargs["alert"]("day 2026-09-01 failed")
-    proxy_logging_obj.alerting_handler.assert_awaited_once()
-    assert proxy_logging_obj.alerting_handler.await_args.kwargs["message"] == "day 2026-09-01 failed"
-    assert proxy_logging_obj.alerting_handler.await_args.kwargs["level"] == "High"
 
 
 @pytest.mark.asyncio

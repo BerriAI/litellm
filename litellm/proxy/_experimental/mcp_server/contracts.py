@@ -28,6 +28,7 @@ class OperationContext:
     client_ip: str | None = None
     mcp_proxy_mode: bool = False
     wire_compat: WireCompat = WireCompat.LEGACY
+    protocol_version: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_caller", copy_caller(self._caller))

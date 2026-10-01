@@ -243,15 +243,19 @@ class HiddenlayerGuardrail(CustomGuardrail):
             if not self.hiddenlayer_client_secret:
                 raise RuntimeError("`api_key` cannot be None when using the SaaS version of HiddenLayer.")
 
+            ctor_timeout: Final = kwargs.get("timeout")
+            auth_timeout: Final = ctor_timeout if isinstance(ctor_timeout, (int, float)) else _AUTH_TIMEOUT_SECONDS
             self.jwt_token = _get_jwt(
                 auth_url=auth_url,
                 api_id=self.hiddenlayer_client_id,
                 api_key=self.hiddenlayer_client_secret,
+                timeout=auth_timeout,
             )
             self.refresh_jwt_func = lambda: _get_jwt(
                 auth_url=auth_url,
                 api_id=self.hiddenlayer_client_id,
                 api_key=self.hiddenlayer_client_secret,
+                timeout=auth_timeout,
             )
 
         self._http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -382,6 +386,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                 f"{self.api_base}/detection/v1/interactions",
                 json=data,
                 headers=headers,
+                timeout=self.timeout,
             )
             response.raise_for_status()
             result: _HiddenlayerResponse = _interaction_body(response)
@@ -403,6 +408,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                     f"{self.api_base}/detection/v1/interactions",
                     json=data,
                     headers=headers,
+                    timeout=self.timeout,
                 )
             else:
                 raise e
@@ -447,15 +453,19 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             if not self.hiddenlayer_client_secret:
                 raise RuntimeError("`api_key` cannot be None when using the SaaS version of HiddenLayer.")
 
+            ctor_timeout: Final = kwargs.get("timeout")
+            auth_timeout: Final = ctor_timeout if isinstance(ctor_timeout, (int, float)) else _AUTH_TIMEOUT_SECONDS
             self.jwt_token = _get_jwt(
                 auth_url=auth_url,
                 api_id=self.hiddenlayer_client_id,
                 api_key=self.hiddenlayer_client_secret,
+                timeout=auth_timeout,
             )
             self.refresh_jwt_func = lambda: _get_jwt(
                 auth_url=auth_url,
                 api_id=self.hiddenlayer_client_id,
                 api_key=self.hiddenlayer_client_secret,
+                timeout=auth_timeout,
             )
 
         self._http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -584,6 +594,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                 f"{self.api_base}/{path}",
                 json=payload,
                 headers=headers,
+                timeout=self.timeout,
             )
             response.raise_for_status()
 
@@ -604,6 +615,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                     f"{self.api_base}/{path}",
                     json=payload,
                     headers=headers,
+                    timeout=self.timeout,
                 )
             else:
                 raise e

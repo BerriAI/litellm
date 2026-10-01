@@ -51,10 +51,18 @@ def _owned(nodeid: str) -> bool:
     return parts[:2] == ("tests", "integration") and len(parts) > 3 and parts[2] in OWNED_DIRECTORIES
 
 
+def _digest(seed: int, identity: str) -> bytes:
+    return hashlib.sha256(f"{seed}:{identity}".encode()).digest()
+
+
+def _order_key(seed: int, nodeid: str) -> tuple[bytes, bytes]:
+    return _digest(seed, nodeid.split("::", 1)[0]), _digest(seed, nodeid)
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     order_seed: Final = config.getoption("integration_order_seed")
     if order_seed:
-        items.sort(key=lambda item: hashlib.sha256(f"{order_seed}:{item.nodeid}".encode()).digest())
+        items.sort(key=lambda item: _order_key(order_seed, item.nodeid))
     root: Final = Path(__file__).parent
     owned: Final = tuple(
         item
