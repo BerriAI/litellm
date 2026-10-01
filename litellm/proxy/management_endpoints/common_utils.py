@@ -61,6 +61,7 @@ from litellm.proxy._types import (  # noqa: F401  re-exported
     user_api_key_has_admin_view as _user_has_admin_view,
 )
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.management.teams.access import is_team_admin
 from litellm.proxy.utils import _premium_user_check
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.utils import BudgetConfig
@@ -68,6 +69,9 @@ from litellm.types.utils import BudgetConfig
 if TYPE_CHECKING:
     from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+# TODO: drop once the litellm-enterprise pin moves past 0.1.71, which imports this name
+_is_user_team_admin: Final = is_team_admin
 
 
 def validate_team_model_max_budget(
@@ -173,47 +177,32 @@ def _check_passthrough_routes_caller_permission(
         )
 
 
-def _is_user_team_admin(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
-    for member in team_obj.members_with_roles:
-        if (member.user_id is not None and member.user_id == user_api_key_dict.user_id) and member.role == "admin":
-            return True
-
-    return False
-
-
-async def _is_user_org_admin_for_team(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
+def _check_disable_global_guardrails_caller_permission(
+    disable_global_guardrails: bool | None,
+    metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    entity: str = "key",
+    existing_metadata: Mapping[str, object] | None = None,
+) -> None:
     """
-    Check if user is an org admin for the team's organization.
-
-    Returns True if:
-    - The team belongs to an organization, AND
-    - The user has org_admin role in that organization
+    Only proxy admins may opt a key or team out of default-on guardrails, whether the
+    flag is top-level or under `metadata`. Re-sending a flag that is already stored is
+    not an opt-out, so non-admin edits of an already exempted object still go through.
     """
-    if not team_obj.organization_id or not user_api_key_dict.user_id:
-        return False
-
-    from litellm.proxy.auth.auth_checks import get_user_object
-    from litellm.proxy.proxy_server import (
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    requested: Final = bool(disable_global_guardrails) or (
+        metadata is not None and bool(metadata.get("disable_global_guardrails"))
     )
-
-    caller_user: Final = await get_user_object(
-        user_id=user_api_key_dict.user_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        user_id_upsert=False,
-        proxy_logging_obj=proxy_logging_obj,
+    if not requested:
+        return
+    if existing_metadata is not None and existing_metadata.get("disable_global_guardrails") is True:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": f"Only proxy admins can set `disable_global_guardrails` on a {entity}."},
     )
-    if caller_user is None:
-        return False
-
-    for m in caller_user.organization_memberships or []:
-        if m.organization_id == team_obj.organization_id and m.user_role == LitellmUserRoles.ORG_ADMIN.value:
-            return True
-
-    return False
 
 
 def _team_member_has_permission(
@@ -287,7 +276,7 @@ async def _user_has_admin_privileges(
 
             for team in teams:
                 team_obj = LiteLLM_TeamTable.model_validate(team.model_dump())
-                if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+                if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
                     return True
 
     except Exception as e:
@@ -356,7 +345,7 @@ async def _team_admin_can_invite_user(
     admin_team_ids: Final = [
         team.team_id
         for team in teams
-        if _is_user_team_admin(
+        if is_team_admin(
             user_api_key_dict=user_api_key_dict,
             team_obj=LiteLLM_TeamTable.model_validate(team.model_dump()),
         )
@@ -476,7 +465,11 @@ _TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
     "model_max_budget",
     "budget_duration",
     "allowed_models",
+    "temp_budget_increase",
+    "temp_budget_expiry",
 )
+
+_TEMP_BUDGET_FIELDS: Final = frozenset({"temp_budget_increase", "temp_budget_expiry"})
 
 
 MEMBER_BUDGET_PATCH_FIELDS: Final = MappingProxyType(
@@ -486,6 +479,8 @@ MEMBER_BUDGET_PATCH_FIELDS: Final = MappingProxyType(
         "rpm_limit": "rpm_limit",
         "budget_duration": "budget_duration",
         "allowed_models": "allowed_models",
+        "temp_budget_increase": "temp_budget_increase",
+        "temp_budget_expiry": "temp_budget_expiry",
     }
 )
 
@@ -494,7 +489,7 @@ def _prisma_value(value: object) -> object:
     return list(value) if isinstance(value, tuple) else value
 
 
-def member_budget_patch(source: BaseModel) -> dict[str, Any]:
+def member_budget_patch(source: BaseModel) -> Mapping[str, object]:
     """Map the per-member limit fields a request actually set to their budget-table
     columns (merge-patch: a sent value updates, an explicit null clears, an absent
     field is left untouched)."""
@@ -527,7 +522,7 @@ async def _upsert_budget_and_membership(
     user_id: str,
     existing_budget_id: str | None,
     user_api_key_dict: UserAPIKeyAuth,
-    budget_patch: dict[str, Any],
+    budget_patch: Mapping[str, object],
     team_default_budget_id: str | None = None,
     shared_budget_ids: frozenset[str] | None = None,
 ):
@@ -548,6 +543,8 @@ async def _upsert_budget_and_membership(
     ``shared_budget_ids`` extends that protection to any other row more than one
     membership points at, which a caller patching several members at once has
     already counted; a row listed there is cloned rather than written in place.
+    A patch that only touches the temporary budget pair never copies permanent
+    limits into a new row, so the member keeps inheriting the live team default.
     """
     if not budget_patch:
         return
@@ -562,6 +559,7 @@ async def _upsert_budget_and_membership(
     is_shared_default: Final = existing_budget_id is not None and (
         existing_budget_id == team_default_budget_id or existing_budget_id in (shared_budget_ids or frozenset())
     )
+    temp_only: Final = frozenset(write_data) <= _TEMP_BUDGET_FIELDS
 
     async def _disconnect():
         await tx.litellm_teammembership.update(
@@ -583,11 +581,13 @@ async def _upsert_budget_and_membership(
         return
 
     source_row: Final = (
-        await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id}) if is_shared_default else None
+        await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
+        if is_shared_default and not temp_only
+        else None
     )
-    source: Final[Mapping[str, Any]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
+    source: Final[Mapping[str, object]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
 
-    create_data: Final[dict[str, Any]] = {  # mutable-ok: Prisma create payloads are dict-shaped
+    create_data: Final[dict[str, object]] = {  # mutable-ok: Prisma create payloads are dict-shaped
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
         **MappingProxyType(
@@ -604,7 +604,7 @@ async def _upsert_budget_and_membership(
         create_data.pop("budget_reset_at", None)
 
     if not _has_meaningful_budget_limit(create_data):
-        if existing_budget_id is not None:
+        if existing_budget_id is not None and not temp_only:
             await _disconnect()
         return
 

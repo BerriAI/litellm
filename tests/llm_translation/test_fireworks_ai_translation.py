@@ -9,6 +9,12 @@ from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 
 fireworks = FireworksAIConfig()
 
+VISION_MODEL = next(
+    key.removeprefix("fireworks_ai/")
+    for key, info in litellm.model_cost.items()
+    if key.startswith("fireworks_ai/accounts/fireworks/models/") and info.get("supports_vision") is True
+)
+
 
 def test_map_openai_params_tool_choice():
     # Test case 1: tool_choice is "required"
@@ -97,7 +103,7 @@ def test_document_inlining_example(disable_add_transform_inline_image_block):
     with patch.object(client, "post") as mock_post:
         try:
             completion(
-                model="fireworks_ai/accounts/fireworks/models/minimax-m3",
+                model=f"fireworks_ai/{VISION_MODEL}",
                 messages=[
                     {
                         "role": "user",
@@ -157,7 +163,7 @@ def test_transform_inline_no_longer_added(content, expected_url):
 
     result = litellm.FireworksAIConfig()._transform_messages_helper(
         messages=messages,
-        model="accounts/fireworks/models/minimax-m3",
+        model=VISION_MODEL,
         litellm_params={},
     )
     result_image_block = result[0]["content"][0]
@@ -182,7 +188,7 @@ def test_global_disable_flag_no_longer_adds_transform_inline(is_disabled):
     ]
     result = litellm.FireworksAIConfig()._transform_messages_helper(
         messages=messages,
-        model="accounts/fireworks/models/minimax-m3",
+        model=VISION_MODEL,
         litellm_params={},
     )
     assert result[0]["content"][0]["image_url"] == url
@@ -204,7 +210,7 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
     ) as mock_post:
         try:
             completion(
-                model="fireworks_ai/accounts/fireworks/models/minimax-m3",
+                model=f"fireworks_ai/{VISION_MODEL}",
                 messages=[
                     {
                         "role": "user",

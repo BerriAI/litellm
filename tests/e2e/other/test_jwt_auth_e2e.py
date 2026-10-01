@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import time
+from dataclasses import dataclass
 from typing import Final
 
 import pytest
@@ -52,9 +53,60 @@ def identity(client: OtherClient, resources: ResourceManager) -> Identity:
     return provisioned
 
 
-def _ping() -> ChatBody:
+@dataclass(frozen=True, slots=True)
+class BoundTeam:
+    identity: Identity
+    team_id: str
+    team_alias: str
+
+
+def _team(client: OtherClient, resources: ResourceManager, *, marker: str, team_id: str) -> str:
+    """A litellm team whose alias differs from its id, so a header naming one
+    cannot accidentally match the other."""
+    team_alias: Final = f"e2e-jwt-alias-{marker}"
+    created: Final = client.proxy.create_team(TeamNewBody(team_alias=team_alias, team_id=team_id))
+    resources.defer(lambda: client.proxy.delete_team(created))
+    return team_alias
+
+
+@pytest.fixture
+def bound_team(client: OtherClient, resources: ResourceManager) -> BoundTeam:
+    """An identity whose single group is a real team, plus that team's alias."""
+    marker: Final = unique_marker()
+    provisioned: Final = _provision(client, resources, marker=marker)
+    team_alias: Final = _team(client, resources, marker=marker, team_id=provisioned.group)
+    return BoundTeam(identity=provisioned, team_id=provisioned.group, team_alias=team_alias)
+
+
+@dataclass(frozen=True, slots=True)
+class AliasedTeam:
+    identity: Identity
+    alias: str
+    target: str
+
+
+@pytest.fixture
+def aliased_team(client: OtherClient, resources: ResourceManager) -> AliasedTeam:
+    """An identity whose team carries a model_aliases entry, the name a managed
+    client such as Claude Code sends and the team rewrites to a real model group."""
+    marker: Final = unique_marker()
+    provisioned: Final = _provision(client, resources, marker=marker)
+    alias: Final = f"e2e-jwt-model-alias-{marker}"
+    team_id: Final = client.proxy.create_team(
+        TeamNewBody(
+            team_alias=f"e2e-jwt-aliased-{marker}",
+            team_id=provisioned.group,
+            models=[CHEAP_OPENAI_MODEL],
+            model_aliases={alias: CHEAP_OPENAI_MODEL},
+        )
+    )
+    resources.defer(lambda: client.proxy.delete_team(team_id))
+    return AliasedTeam(identity=provisioned, alias=alias, target=CHEAP_OPENAI_MODEL)
+
+
+def _ping(model: str = CHEAP_OPENAI_MODEL) -> ChatBody:
     return ChatBody(
-        model=CHEAP_OPENAI_MODEL,
+        model=model,
         messages=[ChatMessage(role="user", content=f"Reply with the single word pong. {unique_marker()}")],
         max_tokens=16,
     )
@@ -155,3 +207,75 @@ class TestJwtAuth:
     def test_plain_virtual_key_still_works_with_jwt_auth_enabled(self, client: OtherClient, scoped_key: str) -> None:
         response: Final = unwrap(client.proxy.chat(scoped_key, _ping()))
         assert response.choices, f"an sk- key must keep working on a proxy with enable_jwt_auth, got {response}"
+
+
+def _team_of_request(client: OtherClient, token: str, team: str) -> str | None:
+    response: Final = unwrap(client.chat_as_team(token, team, _ping()))
+    assert response.id is not None and response.choices, (
+        f"chat with x-litellm-team-id={team!r} returned no completion: {response}"
+    )
+    rows: Final = client.proxy.poll_logs_for_request_id(response.id)
+    assert rows, f"no spend log row for request {response.id} within the poll deadline"
+    return rows[0].team_id
+
+
+def _denial(client: OtherClient, token: str, team: str) -> str:
+    result: Final = client.chat_as_team(token, team, _ping())
+    assert isinstance(result, UnknownApiError) and result.status_code == 403, (
+        f"x-litellm-team-id={team!r} names no team the caller is in, so it must be rejected with 403, got {result}"
+    )
+    assert team in result.body, f"the 403 must name the header value it rejected ({team!r}), got {result.body[:300]}"
+    return result.body
+
+
+class TestJwtTeamHeader:
+    @pytest.mark.covers("other.auth.jwt.team_header_alias_binds_team")
+    def test_team_header_with_the_team_alias_binds_the_same_team_as_the_team_id(
+        self, client: OtherClient, bound_team: BoundTeam
+    ) -> None:
+        token: Final = client.idp.access_token(bound_team.identity)
+        assert bound_team.team_alias != bound_team.team_id
+
+        by_id: Final = _team_of_request(client, token, bound_team.team_id)
+        assert by_id == bound_team.team_id, (
+            f"precondition: x-litellm-team-id with the team id must bind {bound_team.team_id!r}, got {by_id!r}"
+        )
+
+        by_alias: Final = _team_of_request(client, token, bound_team.team_alias)
+        assert by_alias == bound_team.team_id, (
+            f"x-litellm-team-id={bound_team.team_alias!r} must bind the same team as its id "
+            f"{bound_team.team_id!r}, got {by_alias!r}"
+        )
+
+    @pytest.mark.covers("other.auth.jwt.team_model_alias_listed_and_routes")
+    @pytest.mark.parametrize("anthropic", [False, True], ids=["openai_shape", "anthropic_shape"])
+    def test_team_model_alias_is_listed_by_v1_models_under_the_same_token_that_routes_it(
+        self, client: OtherClient, aliased_team: AliasedTeam, anthropic: bool
+    ) -> None:
+        token: Final = client.idp.access_token(aliased_team.identity)
+
+        routed: Final = unwrap(client.proxy.chat(token, _ping(model=aliased_team.alias)))
+        assert routed.choices, f"precondition: /chat/completions must route the team alias, got {routed}"
+
+        listed: Final = tuple(entry.id for entry in unwrap(client.list_models_as(token, anthropic=anthropic)).data)
+        assert aliased_team.alias in listed, (
+            f"/v1/models must list team alias {aliased_team.alias!r} that the same token routes on "
+            f"/chat/completions, got {listed}"
+        )
+        assert aliased_team.target in listed, f"the alias target {aliased_team.target!r} must stay listed, got {listed}"
+
+    @pytest.mark.covers("other.auth.jwt.team_header_non_member_alias_denied")
+    def test_team_header_with_the_alias_of_a_team_the_caller_is_not_in_is_rejected_like_an_unknown_value(
+        self, client: OtherClient, resources: ResourceManager, bound_team: BoundTeam
+    ) -> None:
+        token: Final = client.idp.access_token(bound_team.identity)
+        other_marker: Final = unique_marker()
+        other_alias: Final = _team(client, resources, marker=other_marker, team_id=f"e2e-jwt-other-{other_marker}")
+        unknown: Final = f"e2e-jwt-unknown-{unique_marker()}"
+
+        for_other_alias: Final = _denial(client, token, other_alias)
+        for_unknown: Final = _denial(client, token, unknown)
+        assert for_other_alias.replace(other_alias, "<value>") == for_unknown.replace(unknown, "<value>"), (
+            "a non-member alias and an unknown value must get the same denial body, so the response does not "
+            f"reveal whether the team exists; got {for_other_alias[:300]!r} vs {for_unknown[:300]!r}"
+        )

@@ -2,14 +2,18 @@ import json
 import re
 from collections.abc import Collection, Mapping
 from types import MappingProxyType, UnionType
-from typing import Annotated, Any, Final, Union, get_args, get_origin
+from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
-from typing_extensions import NotRequired, ReadOnly, Required
+from typing_extensions import NotRequired, ReadOnly, Required, assert_never
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import CLIENT_REQUESTED_MODEL_SCOPE_KEY, MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB
+from litellm.constants import (
+    AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
+    CLIENT_REQUESTED_MODEL_SCOPE_KEY,
+    MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
+)
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
@@ -17,8 +21,45 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.types.router import Deployment
 
 _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
+# Binary bodies (e.g. OTLP trace exports on POST /v1/traces) are not JSON: arbitrary bytes used to
+# hit the JSON surrogate-repair path and fail auth with a 400. JSON under these types still parses.
+_BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobuf", "application/protobuf"})
 
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
+
+
+def resolve_inference_model(
+    body_model: object,
+    settings: Mapping[str, object],
+    cli_model: str | None,
+    endpoint_model: object = None,
+    *,
+    kind: Literal[
+        "completion", "image_generation", "image_edit", "moderation", "speech", "body", "path"
+    ] = "completion",
+) -> object:
+    match kind:
+        case "image_generation":
+            return cli_model or endpoint_model or settings.get("image_generation_model") or body_model
+        case "image_edit":
+            return (
+                settings.get("completion_model")
+                or cli_model
+                or endpoint_model
+                or settings.get("image_generation_model")
+                or body_model
+            )
+        case "moderation":
+            return cli_model or settings.get("moderation_model") or body_model
+        case "speech":
+            return cli_model or body_model
+        case "body":
+            return body_model
+        case "path":
+            return endpoint_model
+        case "completion":
+            return settings.get("completion_model") or cli_model or endpoint_model or body_model
+    return assert_never(kind)
 
 
 def _normalize_media_type(content_type: str) -> str:
@@ -52,14 +93,18 @@ def _unqualified(annotation: object) -> object:
     return _unqualified(qualified[0])
 
 
+def _union_members(annotation: object) -> tuple[object, ...]:
+    """The non-``None`` members of a union annotation, or the annotation itself when it is not a union."""
+    if get_origin(annotation) not in (Union, UnionType):
+        return (annotation,)
+    members: Final[tuple[object, ...]] = get_args(annotation)
+    return tuple(arg for arg in members if arg is not type(None))
+
+
 def _numeric_form_type(annotation: object) -> type[int] | type[float] | None:
     """The scalar to parse an ``int``/``float``-typed field as, else ``None``."""
     unwrapped: Final = _unqualified(annotation)
-    candidates: Final = (
-        tuple(arg for arg in get_args(unwrapped) if arg is not type(None))
-        if get_origin(unwrapped) in (Union, UnionType)
-        else (unwrapped,)
-    )
+    candidates: Final = _union_members(unwrapped)
     if len(candidates) != 1:
         return None
     if candidates[0] is int:
@@ -111,6 +156,17 @@ def coerce_numeric_form_fields(
     }
 
 
+def _parse_binary_body(body: bytes) -> dict:
+    """JSON sent under a binary content type still parses; real binary (protobuf) carries no params -> {}."""
+    try:
+        parsed: Final = orjson.loads(body)
+        if isinstance(parsed, dict):
+            return parsed
+    except orjson.JSONDecodeError:
+        pass
+    return {}  # mutable-ok: auth parser returns a fresh dict per request
+
+
 async def _read_request_body(request: Request | None) -> dict:
     """
     Safely read the request body and parse it as JSON.
@@ -133,7 +189,13 @@ async def _read_request_body(request: Request | None) -> dict:
         _request_headers: Final[dict] = _safe_get_request_headers(request=request)
         content_type: Final = _request_headers.get("content-type", "")
 
-        if _is_form_content_type(content_type):
+        if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES or (
+            request.scope.get("path") == "/v1/traces"
+            and request.scope.get("method") == "POST"
+            and _request_headers.get("content-encoding", "").lower() == "gzip"
+        ):
+            parsed_body = _parse_binary_body(await request.body())
+        elif _is_form_content_type(content_type):
             try:
                 form_data: Final = await request.form()
             except Exception as e:
@@ -212,6 +274,14 @@ async def _read_request_body(request: Request | None) -> dict:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception("Unexpected error reading request body - %s", e)
         return {}
+
+
+def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
+    """Azure Speech bodies (raw audio, multipart uploads) are forwarded byte for byte, so auth must not consume them."""
+    media_type: Final = _normalize_media_type(content_type)
+    return route.startswith(f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/") and (
+        media_type.startswith("audio/") or media_type == "multipart/form-data"
+    )
 
 
 async def read_raw_json_body(request: Request | None) -> bytes | None:

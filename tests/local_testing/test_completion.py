@@ -11,7 +11,9 @@ import io
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from openai import OpenAI
 
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
@@ -1361,16 +1363,14 @@ def test_ollama_image():
 
     from PIL import Image
 
+    sent_images = []
+
     def mock_post(url, **kwargs):
+        sent_images.append(json.loads(kwargs["data"])["images"])
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
-        data_json = json.loads(kwargs["data"])
-        mock_response.json.return_value = {
-            # return the image in the response so that it can be tested
-            # against the original
-            "response": data_json["images"]
-        }
+        mock_response.json.return_value = {"response": "a black pixel"}
         return mock_response
 
     def make_b64image(format):
@@ -1399,9 +1399,10 @@ def test_ollama_image():
 
     client = HTTPHandler()
     for test in tests:
+        sent_images.clear()
         try:
             with patch.object(client, "post", side_effect=mock_post):
-                response = completion(
+                completion(
                     model="ollama/llava",
                     messages=[
                         {
@@ -1417,14 +1418,14 @@ def test_ollama_image():
                     ],
                     client=client,
                 )
+                (image_data,) = sent_images[0]
                 if not test[1]:
                     # the conversion process may not always generate the same image,
                     # so just check for a JPEG image when a conversion was done.
-                    image_data = response["choices"][0]["message"]["content"][0]
                     image = Image.open(io.BytesIO(base64.b64decode(image_data)))
                     assert image.format == "JPEG"
                 else:
-                    assert response["choices"][0]["message"]["content"][0] == test[1]
+                    assert image_data == test[1]
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
@@ -1581,7 +1582,7 @@ def test_completion_openai_pydantic(model, api_version):
 def test_completion_text_openai():
     try:
         # litellm.set_verbose =True
-        response = completion(model="gpt-3.5-turbo-instruct", messages=messages)
+        response = completion(model="text-completion-openai/gpt-5.4-nano", messages=messages)
         print(response["choices"][0]["message"]["content"])
     except Exception as e:
         print(e)
@@ -1593,7 +1594,7 @@ async def test_completion_text_openai_async():
     try:
         # litellm.set_verbose =True
         response = await litellm.acompletion(
-            model="gpt-3.5-turbo-instruct", messages=messages
+            model="text-completion-openai/gpt-5.4-nano", messages=messages
         )
         print(response["choices"][0]["message"]["content"])
     except Exception as e:
@@ -1601,67 +1602,33 @@ async def test_completion_text_openai_async():
         pytest.fail(f"Error occurred: {e}")
 
 
-def custom_callback(
-    kwargs,  # kwargs to completion
-    completion_response,  # response from completion
-    start_time,
-    end_time,  # start/end time
-):
-    # Your custom code here
-    try:
-        print("LITELLM: in custom callback function")
-        print("\nkwargs\n", kwargs)
-        model = kwargs["model"]
-        messages = kwargs["messages"]
-        user = kwargs.get("user")
-
-        #################################################
-
-        print(
-            f"""
-                Model: {model},
-                Messages: {messages},
-                User: {user},
-                Seed: {kwargs["seed"]},
-                temperature: {kwargs["temperature"]},
-            """
-        )
-
-        assert kwargs["user"] == "ishaans app"
-        assert kwargs["model"] == "gpt-3.5-turbo-1106"
-        assert kwargs["seed"] == 12
-        assert kwargs["temperature"] == 0.5
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def test_completion_openai_with_optional_params():
     # [Proxy PROD TEST] WARNING: DO NOT DELETE THIS TEST
-    # assert that `user` gets passed to the completion call
-    # Note: This tests that we actually send the optional params to the completion call
-    # We use custom callbacks to test this
-    try:
-        litellm.set_verbose = True
-        litellm.success_callback = [custom_callback]
-        response = completion(
-            model="gpt-3.5-turbo-1106",
-            messages=[
-                {"role": "user", "content": "respond in valid, json - what is the day"}
-            ],
-            temperature=0.5,
-            top_p=0.1,
-            seed=12,
-            response_format={"type": "json_object"},
-            logit_bias=None,
-            user="ishaans app",
-        )
-        # Add any assertions here to check the response
+    on_request = MagicMock()
+    client = OpenAI(http_client=httpx.Client(event_hooks={"request": [on_request]}))
+    response = completion(
+        model="gpt-6-luna",
+        reasoning_effort="none",
+        messages=[{"role": "user", "content": "respond in valid, json - what is the day"}],
+        temperature=0.5,
+        top_p=0.1,
+        seed=12,
+        response_format={"type": "json_object"},
+        logit_bias=None,
+        user="ishaans app",
+        client=client,
+    )
 
-        print(response)
-        litellm.success_callback = []  # unset callbacks
-
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+    assert response.choices[0].message.content
+    on_request.assert_called_once()
+    sent = json.loads(on_request.call_args.args[0].content)
+    assert sent["model"] == "gpt-6-luna"
+    assert sent["user"] == "ishaans app"
+    assert sent["seed"] == 12
+    assert sent["temperature"] == 0.5
+    assert sent["top_p"] == 0.1
+    assert sent["response_format"] == {"type": "json_object"}
+    assert "logit_bias" not in sent
 
 
 # test_completion_openai_with_optional_params()
@@ -4009,7 +3976,7 @@ def test_deepseek_reasoning_content_completion():
 def test_qwen_text_completion():
     # litellm._turn_on_debug()
     resp = litellm.completion(
-        model="gpt-3.5-turbo-instruct",
+        model="text-completion-openai/gpt-5.4-nano",
         messages=[{"content": "hello", "role": "user"}],
         stream=False,
         logprobs=1,

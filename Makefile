@@ -4,7 +4,7 @@
 .PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc \
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
-	test-rust-extension \
+	test-rust-extension rust-sqlx-prepare \
 	info lint lint-inner lint-dev lint-checks format \
 	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
@@ -42,7 +42,7 @@ help:
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
-	@echo "  make test-unit          - Run unit tests (tests/test_litellm)"
+	@echo "  make test-unit          - Run unit tests (tests/unit and tests/test_litellm)"
 	@echo "  make test-unit-llms     - Run LLM provider tests (~225 files)"
 	@echo "  make test-unit-proxy-guardrails - Run proxy guardrails+mgmt tests (~51 files)"
 	@echo "  make test-unit-proxy-core - Run proxy auth+client+db+hooks tests (~52 files)"
@@ -51,11 +51,12 @@ help:
 	@echo "  make test-unit-core-utils - Run core utils tests (~32 files)"
 	@echo "  make test-unit-other    - Run other tests (caching, responses, etc., ~69 files)"
 	@echo "  make test-unit-root     - Run root-level tests (~34 files)"
-	@echo "  make test-proxy-unit-a  - Run proxy_unit_tests (a-o, ~20 files)"
-	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
+	@echo "  make test-proxy-unit-a  - Run tests/unit/proxy (a-o)"
+	@echo "  make test-proxy-unit-b  - Run tests/unit/proxy (p-z)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
 	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests"
+	@echo "  make rust-sqlx-prepare  - Refresh litellm-rust/crates/db/.sqlx against a migrated Postgres container"
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
@@ -164,6 +165,7 @@ lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 
 # Linting targets
 lint-ruff: $(LINT_DEP_INSTALL)
+	$(UV_RUN) python scripts/check_mcp_operation_boundary.py
 	cd litellm && $(UV_RUN) ruff check . && cd ..
 	$(UV_RUN) ruff check --config ruff-tests.toml tests
 
@@ -300,48 +302,132 @@ test-rust-extension:
 	UV_PROJECT_ENVIRONMENT="$$temporary/venv" $(UV) sync --python 3.12 --frozen --no-install-project --all-groups --all-extras && \
 	$(UV) pip install --python "$$temporary/venv/bin/python" --no-deps "$$1" && \
 	"$$temporary/venv/bin/python" -I -m mypy.stubtest \
-		--mypy-config-file tests/test_litellm/rust_bridge/stubtest.ini \
+		--mypy-config-file tests/unit/rust_bridge/stubtest.ini \
 		litellm.rust_bridge._native && \
 	LITELLM_RUST=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
 	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
+
+rust-sqlx-prepare:
+	cd litellm-rust && cargo run -p litellm-db-testing --bin sqlx-prepare
 
 test: install-test-deps
 	$(UV_RUN) pytest tests/
 
 test-unit: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm -x -vv -n 4
+	$(UV_RUN) pytest tests/unit tests/test_litellm -x -vv -n 4
 
 # Matrix test targets (matching CI workflow groups)
 test-unit-llms: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/llms --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/llms --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-guardrails: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/management_helpers --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/guardrails tests/unit/proxy/management_endpoints tests/unit/proxy/management_helpers --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-core: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/proxy/auth tests/test_litellm/proxy/client tests/test_litellm/proxy/db tests/test_litellm/proxy/hooks tests/test_litellm/proxy/policy_engine --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/auth tests/unit/proxy/client tests/unit/proxy/db tests/unit/proxy/hooks tests/unit/proxy/policy_engine --ignore=tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py --ignore=tests/unit/proxy/db/test_update_daily_tag_spend.py --tb=short -vv -n 4 --durations=20
+
+PROXY_INFRA_ROOT_TESTS := \
+	tests/unit/proxy/test__types.py \
+	tests/unit/proxy/test_aiohttp_cleanup_closed.py \
+	tests/unit/proxy/test_aiohttp_session_recovery.py \
+	tests/unit/proxy/test_api_key_masking_in_errors.py \
+	tests/unit/proxy/test_audio_speech_prometheus_hooks.py \
+	tests/unit/proxy/test_batch_expiry.py \
+	tests/unit/proxy/test_batch_metadata_none_fix.py \
+	tests/unit/proxy/test_batch_retrieve_bedrock.py \
+	tests/unit/proxy/test_batch_x_litellm_model_encoding.py \
+	tests/unit/proxy/test_blocked_response_usage.py \
+	tests/unit/proxy/test_body_snapshot_callback_params.py \
+	tests/unit/proxy/test_budget_reservation.py \
+	tests/unit/proxy/test_bug_report_config.py \
+	tests/unit/proxy/test_caching_routes.py \
+	tests/unit/proxy/test_chat_completion_metadata.py \
+	tests/unit/proxy/test_claude_code_marketplace.py \
+	tests/unit/proxy/test_collector.py \
+	tests/unit/proxy/test_common_request_processing.py \
+	tests/unit/proxy/test_component_allowlists.py \
+	tests/unit/proxy/test_conftest.py \
+	tests/unit/proxy/test_cors_config.py \
+	tests/unit/proxy/test_custom_proxy.py \
+	tests/unit/proxy/test_dynamic_mcp_route.py \
+	tests/unit/proxy/test_empty_model_list.py \
+	tests/unit/proxy/test_enforce_user_param.py \
+	tests/unit/proxy/test_fallback_management_endpoints.py \
+	tests/unit/proxy/test_fastapi_offline_routes.py \
+	tests/unit/proxy/test_filter_models_by_team_access_group.py \
+	tests/unit/proxy/test_health_check_functions.py \
+	tests/unit/proxy/test_health_check_max_tokens.py \
+	tests/unit/proxy/test_init_litellm_callbacks.py \
+	tests/unit/proxy/test_langfuse_passthrough_security.py \
+	tests/unit/proxy/test_lazy_openapi_snapshot.py \
+	tests/unit/proxy/test_litellm_pre_call_utils.py \
+	tests/unit/proxy/test_max_budget_env_var.py \
+	tests/unit/proxy/test_mcp_asgi_response.py \
+	tests/unit/proxy/test_model_based_routing_files_batches.py \
+	tests/unit/proxy/test_model_deprecations_endpoint.py \
+	tests/unit/proxy/test_model_dump_with_preserved_fields.py \
+	tests/unit/proxy/test_model_id_header_propagation.py \
+	tests/unit/proxy/test_model_info_default_limits.py \
+	tests/unit/proxy/test_model_level_guardrails.py \
+	tests/unit/proxy/test_model_list_aliases.py \
+	tests/unit/proxy/test_model_list_callback_filter.py \
+	tests/unit/proxy/test_model_list_discoverable.py \
+	tests/unit/proxy/test_model_list_healthy_only.py \
+	tests/unit/proxy/test_modify_response_streaming_passthrough.py \
+	tests/unit/proxy/test_native_compaction.py \
+	tests/unit/proxy/test_openai_ws_passthrough_routes.py \
+	tests/unit/proxy/test_openapi_schema_validation.py \
+	tests/unit/proxy/test_plugin_routes.py \
+	tests/unit/proxy/test_pointfive_dashboard_config.py \
+	tests/unit/proxy/test_pointfive_ui_callback.py \
+	tests/unit/proxy/test_pricing_field_strip.py \
+	tests/unit/proxy/test_prisma_engine_watchdog.py \
+	tests/unit/proxy/test_prisma_migration.py \
+	tests/unit/proxy/test_prometheus_cleanup.py \
+	tests/unit/proxy/test_prometheus_metrics_server.py \
+	tests/unit/proxy/test_provider_url_destination_guard.py \
+	tests/unit/proxy/test_proxy_cli.py \
+	tests/unit/proxy/test_proxy_logging_hook_detection.py \
+	tests/unit/proxy/test_proxy_types.py \
+	tests/unit/proxy/test_pyroscope.py \
+	tests/unit/proxy/test_read_model_list.py \
+	tests/unit/proxy/test_redis_auth_cache_flag.py \
+	tests/unit/proxy/test_response_model_sanitization.py \
+	tests/unit/proxy/test_route_a2a_models.py \
+	tests/unit/proxy/test_route_llm_request.py \
+	tests/unit/proxy/test_route_priority.py \
+	tests/unit/proxy/test_sensitive_route_auth.py \
+	tests/unit/proxy/test_shared_health_check.py \
+	tests/unit/proxy/test_spend_log_cleanup.py \
+	tests/unit/proxy/test_swagger_chat_completions.py \
+	tests/unit/proxy/test_team_member_update.py \
+	tests/unit/proxy/test_team_org_move.py \
+	tests/unit/proxy/test_tools_allowlist_enforcement.py \
+	tests/unit/proxy/test_tracing_endpoints.py \
+	tests/unit/proxy/test_update_llm_router_resilience.py \
+	tests/unit/proxy/test_zerobus_dashboard_config.py
 
 test-unit-proxy-misc: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/agent_endpoints tests/test_litellm/proxy/anthropic_endpoints tests/test_litellm/proxy/common_utils tests/test_litellm/proxy/discovery_endpoints tests/test_litellm/proxy/experimental tests/test_litellm/proxy/google_endpoints tests/test_litellm/proxy/health_endpoints tests/test_litellm/proxy/image_endpoints tests/test_litellm/proxy/middleware tests/test_litellm/proxy/openai_files_endpoint tests/test_litellm/proxy/pass_through_endpoints tests/test_litellm/proxy/prompts tests/test_litellm/proxy/public_endpoints tests/test_litellm/proxy/response_api_endpoints tests/test_litellm/proxy/shutdown tests/test_litellm/proxy/spend_tracking tests/test_litellm/proxy/ui_crud_endpoints tests/test_litellm/proxy/vector_store_endpoints tests/test_litellm/proxy/test_*.py --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/agent_endpoints tests/unit/proxy/anthropic_endpoints tests/unit/proxy/common_utils --ignore=tests/unit/proxy/common_utils/test_cache_aware_routing.py --ignore=tests/unit/proxy/common_utils/test_check_batch_cost.py --ignore=tests/unit/proxy/common_utils/test_check_responses_cost.py --ignore=tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py --ignore=tests/unit/proxy/common_utils/test_realtime_cache.py tests/unit/proxy/discovery_endpoints tests/unit/proxy/experimental tests/unit/proxy/google_endpoints tests/unit/proxy/health_endpoints tests/unit/proxy/image_endpoints tests/unit/proxy/middleware --ignore=tests/unit/proxy/middleware/test_request_size_limit_middleware.py tests/unit/proxy/openai_files_endpoint tests/unit/proxy/pass_through_endpoints tests/test_litellm/proxy/pass_through_endpoints tests/unit/proxy/prompts tests/unit/proxy/public_endpoints tests/unit/proxy/response_api_endpoints tests/unit/proxy/shutdown tests/unit/proxy/spend_tracking --ignore=tests/unit/proxy/spend_tracking/test_search_api_logging.py tests/unit/proxy/ui_crud_endpoints tests/unit/proxy/vector_store_endpoints $(PROXY_INFRA_ROOT_TESTS) tests/unit/proxy/test_proxy_server_endpoints_and_startup.py tests/unit/proxy/test_proxy_utils_model_creation_and_error_logging.py tests/unit/proxy/_experimental/mcp_server/test_mcp_server_tool_calls_and_headers.py --ignore=tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py --ignore=tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py --ignore=tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py --ignore=tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py --tb=short -vv -n 4 --durations=20
 
 test-unit-integrations: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/integrations --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/integrations --tb=short -vv -n 4 --durations=20
 
 test-unit-core-utils: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/litellm_core_utils --tb=short -vv -n 2 --durations=20
+	$(UV_RUN) pytest tests/unit/litellm_core_utils --tb=short -vv -n 2 --durations=20
 
 test-unit-other: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/caching tests/test_litellm/responses tests/test_litellm/secret_managers tests/test_litellm/vector_stores tests/test_litellm/a2a_protocol tests/test_litellm/anthropic_interface tests/test_litellm/completion_extras tests/test_litellm/containers tests/test_litellm/enterprise tests/test_litellm/experimental_mcp_client tests/test_litellm/google_genai tests/test_litellm/images tests/test_litellm/interactions tests/test_litellm/passthrough tests/test_litellm/router_strategy tests/test_litellm/router_utils tests/test_litellm/types --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/caching tests/unit/responses tests/unit/secret_managers tests/unit/vector_stores tests/unit/a2a_protocol tests/unit/completion_extras tests/unit/containers tests/unit/enterprise tests/unit/experimental_mcp_client tests/unit/google_genai tests/unit/images tests/unit/interactions tests/unit/router_strategy tests/unit/router_utils tests/unit/types --tb=short -vv -n 4 --durations=20
 
 test-unit-root: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/test_*.py --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/test_*.py tests/test_litellm/test_*.py --tb=short -vv -n 4 --durations=20
 
-# Proxy unit tests (tests/proxy_unit_tests split alphabetically)
+# Proxy unit tests (tests/unit/proxy split alphabetically)
 test-proxy-unit-a: install-test-deps
-	$(UV_RUN) pytest tests/proxy_unit_tests/test_[a-o]*.py --tb=short -vv -n 2 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy --ignore-glob='tests/unit/proxy/test_[p-z]*.py' --tb=short -vv -n 2 --durations=20
 
 test-proxy-unit-b: install-test-deps
-	$(UV_RUN) pytest tests/proxy_unit_tests/test_[p-z]*.py --tb=short -vv -n 2 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/test_[p-z]*.py tests/unit/skills --tb=short -vv -n 2 --durations=20
 
 test-integration: install-test-deps
 	$(UV_RUN) pytest tests/ -k "not test_litellm"

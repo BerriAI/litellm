@@ -6,7 +6,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-litellm-auth.workspace = true
+litellm-auth-types.workspace = true
+litellm-http.workspace = true
 
 moka = { workspace = true, features = ["sync"] }
 serde_json.workspace = true
@@ -21,5 +22,7 @@ aws-types = "1.4.0"
 aws-smithy-runtime-api = "1.13.0"
 
 [dev-dependencies]
+rstest.workspace = true
+litellm-http = { workspace = true, features = ["test-support"] }
 reqwest.workspace = true
 tokio.workspace = true

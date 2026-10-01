@@ -706,6 +706,30 @@ describe("testMCPToolsListRequest auth headers", () => {
   });
 });
 
+describe("fetchMCPServerHealth", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it.each([{ serverIds: undefined }, { serverIds: [] }, { serverIds: ["server one", "server&two"] }])(
+    "opts into reachability while preserving requested servers: $serverIds",
+    async ({ serverIds }) => {
+      const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(new Response("[]", { status: 200 }));
+      global.fetch = mockFetch;
+
+      await Networking.fetchMCPServerHealth("test-token", serverIds);
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const url = new URL(String(mockFetch.mock.calls[0][0]), "http://localhost");
+      expect(url.pathname).toMatch(/\/v1\/mcp\/server\/health$/);
+      expect(url.searchParams.get("include_reachability")).toBe("true");
+      expect(url.searchParams.getAll("server_ids")).toEqual(serverIds ?? []);
+    },
+  );
+});
+
 describe("getAutoRouterClassifierDefaultPromptCall", () => {
   const originalFetch = global.fetch;
 
@@ -911,5 +935,28 @@ describe("fetchMemoryList search serialization", () => {
     await Networking.fetchMemoryList("token", { key: "user:profile" });
     expect(lastParams(mockFetch).get("key")).toBe("user:profile");
     expect(lastParams(mockFetch).has("search")).toBe(false);
+  });
+});
+
+describe("userFilterUICall", () => {
+  let currentFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    currentFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = currentFetch;
+  });
+
+  it("forwards the search param to /user/filter/ui", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, text: async () => "[]" } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.userFilterUICall("sk-test", new URLSearchParams({ search: "svc" }));
+
+    const parsed = new URL(mockFetch.mock.calls[0][0] as string, "http://localhost");
+    expect(parsed.pathname).toContain("/user/filter/ui");
+    expect(parsed.searchParams.get("search")).toBe("svc");
   });
 });

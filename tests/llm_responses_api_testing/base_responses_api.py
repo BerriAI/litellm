@@ -742,7 +742,7 @@ class BaseResponsesAPITest(ABC):
         Passes tools=[{"type": "shell", "environment": {"type": "container_auto"}}];
         validates that the request is accepted and returns a valid response.
         Only runs for OpenAI; offline coverage for the Azure route lives in
-        tests/test_litellm/responses/test_responses_api_request_body.py.
+        tests/unit/responses/test_responses_api_request_body.py.
         """
         base_completion_call_args = self.get_base_completion_call_args()
         model = (

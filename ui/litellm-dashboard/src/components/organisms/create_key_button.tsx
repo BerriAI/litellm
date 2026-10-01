@@ -25,7 +25,7 @@ import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filt
 import { ChevronDown, Info } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { type Control, useForm, useWatch, type UseFormSetValue } from "react-hook-form";
-import { rolesWithWriteAccess } from "../../utils/roles";
+import { isProxyAdminRole, rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import SkillSelector from "../skills/SkillSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
@@ -52,6 +52,7 @@ import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
+import { END_USER_BUDGET_HINT, EndUserBudgetSelect } from "../key_team_helpers/EndUserBudgetSelect";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import { ModelMaxBudget, ModelMaxBudgetEditor } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { TagRateLimitEditor, TagRateLimitEntry } from "../key_team_helpers/TagRateLimitEditor";
@@ -160,7 +161,7 @@ interface CreateKeyProps {
 
 interface User {
   user_id: string;
-  user_email: string;
+  user_email: string | null;
   role?: string;
 }
 
@@ -569,7 +570,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setUserSearchLoading(true);
     try {
       const params = new URLSearchParams();
-      params.append("user_email", searchText); // Always search by email
+      params.append("search", searchText);
       if (accessToken == null) {
         return;
       }
@@ -578,7 +579,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
       const data: User[] = response;
       const options: SearchSelectOption[] = data.map((user) => ({
-        label: `${user.user_email} (${user.user_id})`,
+        label: user.user_email ? `${user.user_email} (${user.user_id})` : user.user_id,
         value: user.user_id,
       }));
 
@@ -728,7 +729,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             onValueChange={control.onChange}
                             onSearchChange={fetchUsers}
                             isLoading={userSearchLoading}
-                            placeholder="Type email to search for users"
+                            placeholder="Type email or user ID to search for users"
                             emptyText="No users found"
                             loadingText="Searching..."
                             inputId={control.id}
@@ -740,7 +741,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             Create User
                           </Button>
                         </div>
-                        <div className="text-xs text-muted-foreground">Search by email to find users</div>
+                        <div className="text-xs text-muted-foreground">Search by email or user ID to find users</div>
                       </div>
                     )}
                   </MountedFormField>
@@ -1068,6 +1069,30 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           availableModels={modelsToPick}
                         />
                       </Field>
+                      {keyOwner === "service_account" && isProxyAdminRole(userRole ?? "") && (
+                        <MountedFormField
+                          className="mt-4"
+                          label={
+                            <span>
+                              Default Customer Budget{" "}
+                              <SimpleTooltip content={END_USER_BUDGET_HINT}>
+                                <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                              </SimpleTooltip>
+                            </span>
+                          }
+                          name="end_user_budget_id"
+                        >
+                          {(control) => (
+                            <EndUserBudgetSelect
+                              id={control.id}
+                              accessToken={accessToken}
+                              value={typeof control.value === "string" ? control.value : null}
+                              onChange={control.onChange}
+                              canEdit
+                            />
+                          )}
+                        </MountedFormField>
+                      )}
                       <MountedFormField
                         className="mt-4"
                         label={
@@ -1268,40 +1293,42 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           />
                         )}
                       </MountedFormField>
-                      <MountedFormField
-                        label={
-                          <span>
-                            Disable Global Guardrails{" "}
-                            <SimpleTooltip content="When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)">
-                              <a
-                                href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
-                              >
-                                <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                              </a>
-                            </SimpleTooltip>
-                          </span>
-                        }
-                        name="disable_global_guardrails"
-                        className="mt-4"
-                        help={
-                          canEditGuardrails
-                            ? "Bypass global guardrails for this key"
-                            : "Premium feature - Upgrade to disable global guardrails by key"
-                        }
-                      >
-                        {(control) => (
-                          <Switch
-                            id={control.id}
-                            checked={control.value === true}
-                            onCheckedChange={control.onChange}
-                            disabled={!canEditGuardrails}
-                            aria-describedby={control["aria-describedby"]}
-                          />
-                        )}
-                      </MountedFormField>
+                      {userRole != null && isProxyAdminRole(userRole) && (
+                        <MountedFormField
+                          label={
+                            <span>
+                              Disable Global Guardrails{" "}
+                              <SimpleTooltip content="When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)">
+                                <a
+                                  href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                                >
+                                  <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                                </a>
+                              </SimpleTooltip>
+                            </span>
+                          }
+                          name="disable_global_guardrails"
+                          className="mt-4"
+                          help={
+                            canEditGuardrails
+                              ? "Bypass global guardrails for this key"
+                              : "Premium feature - Upgrade to disable global guardrails by key"
+                          }
+                        >
+                          {(control) => (
+                            <Switch
+                              id={control.id}
+                              checked={control.value === true}
+                              onCheckedChange={control.onChange}
+                              disabled={!canEditGuardrails}
+                              aria-describedby={control["aria-describedby"]}
+                            />
+                          )}
+                        </MountedFormField>
+                      )}
                       {canViewPolicies && (
                         <MountedFormField
                           label={

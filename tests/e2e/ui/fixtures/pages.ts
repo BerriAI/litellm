@@ -20,6 +20,7 @@ export enum Page {
   RouterSettings = "router-settings",
   UiTheme = "ui-theme",
   CostTracking = "cost-tracking",
+  CostOptimization = "cost-optimization",
   ModelHubTable = "model-hub-table",
   Caching = "caching",
   Logs = "logs",

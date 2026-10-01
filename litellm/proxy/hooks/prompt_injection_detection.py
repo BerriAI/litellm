@@ -235,6 +235,8 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             return None
 
         formatted_prompt: Final = get_formatted_prompt(data=data, call_type=call_type)
+        if not formatted_prompt:
+            return None
         is_prompt_attack = False
 
         prompt_injection_system_prompt: Final = getattr(
