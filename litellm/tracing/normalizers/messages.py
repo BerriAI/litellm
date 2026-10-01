@@ -50,10 +50,7 @@ def lc_message(message: Mapping[str, Any]) -> dict[str, Any]:
         "content": content_text(kwargs.get("content", "")),
     }
     if kwargs.get("tool_calls"):
-        out["tool_calls"] = tuple(
-            {"name": t.get("name"), "args": t.get("args")}  # mutable-ok: JSON tool calls need object payloads
-            for t in kwargs["tool_calls"]
-        )
+        out["tool_calls"] = tuple({"name": t.get("name"), "args": t.get("args")} for t in kwargs["tool_calls"])
     if role == "tool" and kwargs.get("name"):
         out["name"] = kwargs["name"]
     return out

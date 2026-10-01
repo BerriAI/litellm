@@ -403,7 +403,6 @@ def test_alerting_settings_happy(client, auth_as, monkeypatch):
         "first_field_type": "Boolean",
     }
 
-
 def test_alerting_settings_only_returns_explicitly_configured_values(client, auth_as, monkeypatch):
     pc = MagicMock()
     pc.db.litellm_config.find_first = AsyncMock(return_value=None)
@@ -461,3 +460,4 @@ def test_alerting_settings_returns_database_values(client, auth_as, monkeypatch)
     setting = next(item for item in response.json() if item["field_name"] == "budget_alert_ttl")
     assert setting["field_value"] == 60
     assert setting["stored_in_db"] is True
+

@@ -70,6 +70,7 @@ const totals = (overrides: Partial<Totals> = {}): Totals => ({
   spend: 359.86,
   savings_estimated_turns: overrides.turns ?? 3073,
   savings_estimated_actual_spend: overrides.spend ?? 359.86,
+  savings_estimated_classifier_cost: overrides.classifier_cost === undefined ? 6.146 : overrides.classifier_cost,
   classifier_cost: 6.146,
   saved_spend: 2174.59,
   baseline_spend: 2534.45,
@@ -104,6 +105,7 @@ const zeroTotals: Totals = {
   spend: 0,
   savings_estimated_turns: 0,
   savings_estimated_actual_spend: 0,
+  savings_estimated_classifier_cost: 0,
   classifier_cost: 0,
   saved_spend: 0,
   baseline_spend: 0,
@@ -159,11 +161,10 @@ describe("AutoRouterBenchmarksTab", () => {
 
   it.each([
     { estimatedTurns: 0, actual: 0, saved: null, pct: null },
-    { estimatedTurns: 0, actual: 0, saved: 30, pct: null },
     { estimatedTurns: 10, actual: 2, saved: -0.5, pct: -33.3 },
     { estimatedTurns: 10, actual: 2, saved: 0, pct: 0 },
-    { estimatedTurns: 40, actual: 10, saved: 30, pct: 75 },
-  ])("compares matching old and new requests with savings $saved", ({ estimatedTurns, actual, saved, pct }) => {
+    { estimatedTurns: 3073, actual: 10, saved: 30, pct: 75 },
+  ])("compares the requests on routers that recorded savings $saved", ({ estimatedTurns, actual, saved, pct }) => {
     const comparison = {
       spend: actual + 99,
       savings_estimated_turns: estimatedTurns,
@@ -189,18 +190,17 @@ describe("AutoRouterBenchmarksTab", () => {
           ]
         : ["Unavailable", "Unavailable", "Unavailable", "Unavailable"],
     );
-    expect(screen.queryByText("Actual spend on covered turns")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Matching cost details are unavailable/)).not.toBeInTheDocument();
     expect(screen.getByLabelText("question-circle")).toBeInTheDocument();
-    if (estimatedTurns) {
-      expect(screen.getByText(`Savings based on ${estimatedTurns} of 3,073 requests`)).toBeInTheDocument();
-      const sign = pct && pct > 0 ? "-" : "+";
-      const badge = pct === 0 ? "0%" : `${sign}${Math.abs(pct ?? 0).toFixed(0)}%`;
+    const partial = estimatedTurns > 0 && estimatedTurns < 3073;
+    expect(screen.queryByText(/adaptive and quality routers are excluded/) != null).toBe(partial);
+    if (partial) {
+      expect(screen.getByText(/Compared on 10 of 3,073 requests/)).toBeInTheDocument();
+    }
+    if (pct != null) {
+      const sign = pct > 0 ? "-" : "+";
+      const badge = pct === 0 ? "0%" : `${sign}${Math.abs(pct).toFixed(0)}%`;
       expect(screen.getByText(badge)).toBeInTheDocument();
-    } else if (saved != null) {
-      expect(screen.getByText("$30.00")).toBeInTheDocument();
-      expect(
-        screen.getByText("Historical savings are included. Matching cost details are unavailable."),
-      ).toBeInTheDocument();
     }
   });
 

@@ -52,13 +52,13 @@ async def complete(
         return message if message is not None else await incoming.receive()
 
     request: Final = Request(
-        {  # mutable-ok: Starlette mutates its ASGI scope
+        {
             "type": "http",
             "method": "POST",
             "path": "/v1/chat/completions",
             "raw_path": b"/v1/chat/completions",
             "query_string": b"",
-            "headers": [(b"content-type", b"application/json")],  # mutable-ok: ASGI header contract
+            "headers": [(b"content-type", b"application/json")],
             "scheme": incoming.url.scheme or "http",
             "client": (client_ip, incoming.client.port if incoming.client else 0) if client_ip else None,
             "server": ("litellm.internal", 80),
