@@ -6,13 +6,14 @@ from types import MappingProxyType
 from typing import Annotated, Final, TypeAlias
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AwareDatetime, BaseModel, Field, TypeAdapter
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
+from litellm.proxy.engine.billing import validate_key
 from litellm.proxy.engine.models import (
     Claim,
     Engine,
@@ -277,19 +278,43 @@ async def preview_sample(body: Preview, auth: Auth) -> Sample:
     )
 
 
-class WorkerName(BaseModel):
+class WorkerBilling(BaseModel):
+    analysis_key_id: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class WorkerName(WorkerBilling):
     name: str = Field(default="Lens worker", min_length=1, max_length=100)
 
 
 @router.post("/workers/register", response_model=WorkerCreated)
 async def register_worker(body: WorkerName, auth: Auth) -> WorkerCreated:
     scope: Final = user_scope(auth, write=True)
+    await validate_key(body.analysis_key_id)
     token: Final = "lens-" + secrets.token_urlsafe(40)
     worker: Final = Worker(
-        id=str(uuid4()), name=body.name, scope=scope, last_seen=datetime(1970, 1, 1, tzinfo=timezone.utc)
+        id=str(uuid4()),
+        name=body.name,
+        scope=scope,
+        analysis_key_id=body.analysis_key_id,
+        last_seen=datetime(1970, 1, 1, tzinfo=timezone.utc),
     )
     await repository().save_worker(worker, hashlib.sha256(token.encode()).hexdigest())
     return WorkerCreated(worker=worker, token=token)
+
+
+@router.put("/workers/{worker_id}/billing-key", response_model=Worker)
+async def set_worker_billing(worker_id: str, body: WorkerBilling, auth: Auth) -> Worker:
+    scope: Final = user_scope(auth, write=True)
+    worker: Final = next((w for w in await repository().workers() if w.id == worker_id), None)
+    if worker is None or not can_access(scope, worker.scope):
+        raise HTTPException(404, "Worker not found")
+    if worker.revoked:
+        raise HTTPException(409, "Register a new worker instead of updating revoked access")
+    await validate_key(body.analysis_key_id)
+    updated: Final = await repository().set_worker_billing(worker.id, body.analysis_key_id)
+    if updated is None:
+        raise HTTPException(409, "Worker access was revoked")
+    return updated
 
 
 @router.delete("/workers/{worker_id}")
@@ -298,7 +323,7 @@ async def revoke_worker(worker_id: str, auth: Auth) -> bool:
     worker: Final = next((w for w in await repository().workers() if w.id == worker_id), None)
     if worker is None or not can_access(scope, worker.scope):
         raise HTTPException(404, "Worker not found")
-    await repository().save_worker(worker.model_copy(update=MappingProxyType({"revoked": True})))
+    await repository().revoke_worker(worker.id)
     return True
 
 
@@ -306,6 +331,8 @@ async def revoke_worker(worker_id: str, auth: Auth) -> bool:
 async def claim(worker: WorkerAuth, protocol_version: int = 1) -> Claim | None:
     if protocol_version != 2:
         raise HTTPException(409, "Upgrade the Lens worker using the current Connect worker command")
+    if worker.analysis_key_id is None:
+        raise HTTPException(409, "Assign an analysis key to this worker in Lens setup")
     now: Final = datetime.now(timezone.utc)
     await repository().heartbeat(worker.id, now.isoformat())
     for candidate in await repository().engines():
@@ -398,11 +425,11 @@ async def content(
 
 
 @router.post("/worker/{engine_id}/{job_id}/model", response_model=ModelResult)
-async def model(engine_id: str, job_id: str, body: ModelRequest, worker: WorkerAuth) -> ModelResult:
+async def model(engine_id: str, job_id: str, body: ModelRequest, worker: WorkerAuth, request: Request) -> ModelResult:
     from litellm.proxy.engine.inference import analyze
 
     engine, job = await assigned(engine_id, job_id, worker)
-    return await analyze(repository(), engine, job, worker.id, body)
+    return await analyze(repository(), engine, job, worker, body, request)
 
 
 @router.post("/worker/{engine_id}/{job_id}/result", response_model=Engine)
@@ -487,7 +514,9 @@ async def claim_candidate(candidate: Engine, worker: Worker, now: datetime) -> C
         scheduled: Final = queue_job(e, now, job_id) if e.settings.enabled and e.next_run_at <= now else e
         return claim_job(scheduled, worker, now)
 
-    updated: Final = required(await repository().update(candidate.id, schedule))
+    updated: Final = await repository().update(candidate.id, schedule, changed_only=True)
+    if updated is None:
+        return None
     job: Final = current_job(updated)
     if job and job.worker_id == worker.id and job.status == "running" and job != current_job(candidate):
         return Claim(engine_id=updated.id, job=job, findings=updated.findings)
