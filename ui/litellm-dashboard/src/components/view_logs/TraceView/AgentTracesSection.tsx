@@ -1,6 +1,5 @@
 "use client";
 
-import { Plug } from "lucide-react";
 import moment from "moment";
 import { useMemo, useState } from "react";
 
@@ -13,6 +12,7 @@ import type { TraceSummary } from "./traceTypes";
 import { previewText } from "./traceUtils";
 import { TimeRangeControls } from "./TimeRangeControls";
 import { TracesTimeline, type TimeWindow } from "./TracesTimeline";
+import { ActiveDot } from "./ActiveDot";
 import { TracingSetupCard } from "./TracingSetupCard";
 import { type AgentTracesResult, traceWindowStartMs, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
 
@@ -59,6 +59,8 @@ interface AgentTracesSectionProps {
   timeControls?: TimeControls;
   /** Called when a run opens / closes, so the page can hide its own header while a run fills the view. */
   onRunOpenChange?: (open: boolean) => void;
+  readOnly?: boolean;
+  canMintTracingKey?: boolean;
 }
 
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
@@ -98,6 +100,8 @@ export function AgentTracesSection({
   isLiveTail,
   timeControls,
   onRunOpenChange,
+  readOnly = false,
+  canMintTracingKey = false,
 }: AgentTracesSectionProps) {
   const [openTrace, setOpenTrace] = useState<TraceSummary | null>(null);
   const [query, setQuery] = useState("");
@@ -141,11 +145,25 @@ export function AgentTracesSection({
     onRunOpenChange?.(trace !== null);
   };
 
-  if (setup.disabledDetail != null)
-    return <TracingSetupCard detail={setup.disabledDetail} onCheck={checkTraces} checking={traces.isFetching} />;
+  const openSentTrace = (trace: TraceSummary) => {
+    setShowSetup(false);
+    setRangeChanged(true);
+    checkTraces();
+    openRun(trace);
+  };
+  const setupProps = {
+    accessToken,
+    readOnly,
+    canMintTracingKey,
+    onOpenTrace: openSentTrace,
+    onCheck: checkTraces,
+    checking: traces.isFetching,
+  };
+
+  if (setup.disabledDetail != null) return <TracingSetupCard detail={setup.disabledDetail} {...setupProps} />;
   // Onboarding only on the first, default view; an empty range the user picked keeps its controls.
   if (checkHistory && !history.error && history.data === false)
-    return <TracingSetupCard detail={null} onCheck={checkTraces} checking={traces.isFetching} />;
+    return <TracingSetupCard detail={null} {...setupProps} />;
   if (showSetup) {
     return (
       <div>
@@ -156,7 +174,7 @@ export function AgentTracesSection({
         >
           ← Back to traces
         </button>
-        <TracingSetupCard detail={null} connected onCheck={checkTraces} checking={traces.isFetching} />
+        <TracingSetupCard detail={null} connected {...setupProps} />
       </div>
     );
   }
@@ -183,7 +201,7 @@ export function AgentTracesSection({
         onStatusChange={setStatus}
       >
         <Button variant="outline" size="sm" onClick={() => setShowSetup(true)} className="shrink-0 gap-1.5">
-          <Plug className="size-3.5" />
+          <ActiveDot />
           Set up tracing
         </Button>
         {timeControls && (

@@ -10,8 +10,9 @@ import { AgentTracesSection, filterRuns } from "./AgentTracesSection";
 import type { TracePage, TraceSummary } from "./traceTypes";
 
 vi.mock("../../networking", () => ({
-  apiClient: { get: vi.fn() },
+  apiClient: { get: vi.fn(), post: vi.fn() },
   agentTraceListCall: vi.fn(),
+  sendOtlpTraceCall: vi.fn(),
   agentTraceCall: vi.fn(),
   agentTraceSpanCall: vi.fn(),
   getProxyBaseUrl: () => "http://localhost:4000",

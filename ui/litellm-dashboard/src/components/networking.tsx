@@ -2122,6 +2122,9 @@ export const agentTraceListCall = async ({
   return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
 };
 
+export const sendOtlpTraceCall = async (accessToken: string, exportRequest: object): Promise<void> =>
+  apiClient.post(`/v1/traces`, { accessToken, body: exportRequest });
+
 export const agentTraceCall = async (accessToken: string, traceId: string, traceRef?: string): Promise<Trace> =>
   apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
     accessToken,
