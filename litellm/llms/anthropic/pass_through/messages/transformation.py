@@ -620,7 +620,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         - tool_search: adds provider-specific tool search header
         - output_format: adds 'structured-outputs-2025-11-13'
         - speed: adds 'fast-mode-2026-02-01'
-        - safeguards: adds 'dangerous-tool-use-2026-09-03'
         - a message carrying output_config: adds 'per-turn-control-2026-07-01'
 
         Args:

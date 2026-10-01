@@ -533,18 +533,19 @@ async def test_outgoing_azure_request_sends_safeguards_with_the_dangerous_tool_u
             request=request,
         )
 
-    upstream = AsyncHTTPHandler()
-    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(foundry_answers))
-
-    await litellm.anthropic.messages.acreate(
-        max_tokens=256,
-        messages=[{"role": "user", "content": "Use the Bash tool to run: echo hello from the gateway"}],
-        model="azure_ai/claude-sonnet-4-6",
-        api_key="test-api-key",
-        api_base="https://test-resource.services.ai.azure.com",
-        safeguards=safeguards,
-        client=upstream,
-    )
+    upstream = AsyncHTTPHandler(transport=httpx.MockTransport(foundry_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=256,
+            messages=[{"role": "user", "content": "Use the Bash tool to run: echo hello from the gateway"}],
+            model="azure_ai/claude-sonnet-4-6",
+            api_key="test-api-key",
+            api_base="https://test-resource.services.ai.azure.com",
+            safeguards=safeguards,
+            client=upstream,
+        )
+    finally:
+        await upstream.close()
 
     assert len(received) == 1, received
     sent = received[0]
