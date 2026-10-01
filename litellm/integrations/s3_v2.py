@@ -840,9 +840,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 partition_granularity=partition_granularity,
             )
 
+        metadata: Final = standard_logging_payload.get("metadata")
         cold_storage_object_key: Final = (
-            standard_logging_payload.get("metadata", {}).get("cold_storage_object_key")
-            if litellm.cold_storage_custom_logger == "s3_v2"
+            metadata.get("cold_storage_object_key")
+            if metadata is not None and litellm.cold_storage_custom_logger == "s3_v2"
             else None
         )
         s3_object_key: Final = (
