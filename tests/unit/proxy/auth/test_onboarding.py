@@ -630,21 +630,24 @@ async def test_claim_token_rejects_short_password_before_consuming_invite():
     prisma.db.litellm_usertable.update.assert_not_called()
 
 
+@pytest.fixture
+def hibp_httpx_transport(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
 @pytest.mark.asyncio
-async def test_claim_token_rejects_breached_password_before_consuming_invite():
+@respx.mock
+async def test_claim_token_rejects_breached_password_before_consuming_invite(hibp_httpx_transport):
     """A password found in the HIBP corpus must be rejected and never stored."""
-    from litellm.proxy.auth.password_policy import AsyncHTTPHandler
     from litellm.proxy.proxy_server import claim_onboarding_link
 
     password = "P@ssword123456"
-
-    class _BreachedHibpClient(AsyncHTTPHandler):
-        async def get(self, url: str, **kwargs: object) -> httpx.Response:
-            return httpx.Response(
-                200,
-                text=f"{_hibp_suffix_for(password)}:1387",
-                request=httpx.Request("GET", url),
-            )
+    respx.get(_hibp_url_for(password)).mock(
+        return_value=httpx.Response(200, text=f"{_hibp_suffix_for(password)}:1387")
+    )
 
     invite = _make_invite(is_accepted=False)
     prisma = _make_prisma(invite, _make_user())
@@ -659,10 +662,6 @@ async def test_claim_token_rejects_breached_password_before_consuming_invite():
         patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
         patch("litellm.proxy.proxy_server.master_key", "sk-test"),  # test-quality-ok: same as above
         patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: same as above
-        patch(  # test-quality-ok: the HIBP client is aiohttp-backed, so respx cannot stub it; inject it at the dependency entry point
-            "litellm.proxy.auth.password_policy.get_hibp_client",
-            return_value=_BreachedHibpClient(),
-        ),
     ):
         with pytest.raises(ProxyException) as exc_info:
             await claim_onboarding_link(data=data, request=request)
@@ -675,7 +674,7 @@ async def test_claim_token_rejects_breached_password_before_consuming_invite():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_claim_token_fails_open_when_hibp_unreachable():
+async def test_claim_token_fails_open_when_hibp_unreachable(hibp_httpx_transport):
     """An HIBP outage must never block onboarding: the claim proceeds."""
     from litellm.proxy.proxy_server import claim_onboarding_link
 

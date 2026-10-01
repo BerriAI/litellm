@@ -11,6 +11,7 @@ import pytest
 
 import litellm
 import litellm.proxy.proxy_server
+from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
 
 
 # Top-level assignments of these types are the ones importlib.reload(litellm)
@@ -186,6 +187,11 @@ def pytest_runtest_teardown(item, nextitem):
                 delattr(proxy_server, name)
         else:
             setattr(proxy_server, name, value)
+
+
+@pytest.fixture
+def secret_vault_factory() -> type[FakeSecretVault]:
+    return FakeSecretVault
 
 
 @pytest.fixture(autouse=True)
