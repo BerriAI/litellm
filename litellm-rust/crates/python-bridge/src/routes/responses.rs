@@ -20,7 +20,7 @@ fn run_public(
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     use super::inference::InferenceHost;
-    use litellm_types::Operation;
+    use litellm_callbacks_legacy_python::LoggingOperation;
     let host = InferenceHost::new(
         request.clone().unbind(),
         "litellm.rust_bridge.responses.route_host",
@@ -63,9 +63,15 @@ fn run_public(
             "native Python responses streaming",
         ));
     }
+    let cache_call_type = if asynchronous {
+        "aresponses"
+    } else {
+        "responses"
+    };
+    crate::cache::admit_native(py, &kwargs, cache_call_type)?;
     let (arguments, hooks) = crate::routes::call_hooks(
         py,
-        Operation::Responses,
+        LoggingOperation::Responses,
         &request,
         &args,
         &kwargs,
@@ -81,7 +87,16 @@ fn run_public(
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
             );
-            Ok(route.machine(request, None))
+            let (cache, cache_options) =
+                crate::cache::configured_native(py, arguments, cache_call_type)?;
+            let route = match cache {
+                Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
+                    cache,
+                    litellm_cache_response::CacheScope::Shared,
+                )),
+                None => route,
+            };
+            Ok(route.machine(request, cache_options.policy))
         },
         host::ResponsesPythonHost(host),
         hooks,
@@ -127,7 +142,7 @@ impl ResponsesWebSocketConnection {
     ) -> PyResult<Bound<'py, PyAny>> {
         let headers = marshal_headers(headers)?;
         let timeout = optional_timeout(timeout_seconds);
-        crate::logger::run_async_value(py, async move {
+        crate::execution::run_async_value(py, async move {
             let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
                 .await
                 .map_err(route_error_to_pyerr)?;
@@ -137,21 +152,21 @@ impl ResponsesWebSocketConnection {
 
     fn send_text<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        crate::logger::run_async_value(py, async move {
+        crate::execution::run_async_value(py, async move {
             inner.send_text(text).await.map_err(route_error_to_pyerr)
         })
     }
 
     fn recv_text<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        crate::logger::run_async_value(py, async move {
+        crate::execution::run_async_value(py, async move {
             inner.recv_text().await.map_err(route_error_to_pyerr)
         })
     }
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        crate::logger::run_async_value(py, async move {
+        crate::execution::run_async_value(py, async move {
             inner.close().await.map_err(route_error_to_pyerr)
         })
     }

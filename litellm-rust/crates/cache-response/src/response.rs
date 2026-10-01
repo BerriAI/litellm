@@ -7,7 +7,9 @@ use litellm_cache::{
 };
 use serde_json::Value;
 
-use crate::{CacheControls, CacheEntry, CacheKeyInput, PartialHits, cache_key};
+use crate::{
+    CacheControls, CacheEntry, CacheKeyInput, PartialHits, ResponseCacheConfig, cache_key,
+};
 
 #[derive(Clone)]
 pub struct ResponseCacheRequest<C: CacheContext = litellm_cache::ExactCacheContext> {
@@ -50,6 +52,7 @@ where
     B::Context: Default + PartialEq,
 {
     backend: Arc<B>,
+    config: ResponseCacheConfig,
 }
 
 impl<B> ResponseCache<B>
@@ -58,7 +61,18 @@ where
     B::Context: Default + PartialEq,
 {
     pub fn new(backend: Arc<B>) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            config: ResponseCacheConfig::default(),
+        }
+    }
+
+    pub fn with_config(self, config: ResponseCacheConfig) -> Self {
+        Self { config, ..self }
+    }
+
+    pub fn config(&self) -> &ResponseCacheConfig {
+        &self.config
     }
 
     pub fn backend(&self) -> &B {
@@ -221,7 +235,7 @@ where
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
-        if !request.controls.writes() {
+        if !request.controls.writes() || !self.fits(&response) {
             return Ok(());
         }
         self.backend.set_cache(
@@ -240,7 +254,7 @@ where
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
-        if !request.controls.writes() {
+        if !request.controls.writes() || !self.fits(&response) {
             return Ok(());
         }
         self.backend
@@ -277,7 +291,7 @@ where
     ) -> Result<(), Error> {
         let writable = entries
             .into_iter()
-            .filter(|(request, _, _)| request.controls.writes())
+            .filter(|(request, response, _)| request.controls.writes() && self.fits(response))
             .map(|(request, response, now)| {
                 (
                     cache_key(&request.key),
@@ -310,6 +324,11 @@ where
             self.backend.async_set_cache(&key, entry, context).await?;
         }
         Ok(())
+    }
+
+    fn fits(&self, response: &Value) -> bool {
+        self.config.max_entry_bytes == usize::MAX
+            || response.to_string().len() <= self.config.max_entry_bytes
     }
 
     fn partial_hits(

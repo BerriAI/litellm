@@ -2290,7 +2290,7 @@ def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
     return upstream_close
 
 
-_WEBSOCKET_FORWARDED_HEADERS: Final = frozenset(("authorization", "x-api-key", "x-goog-user-project"))
+_WEBSOCKET_FORWARDED_HEADERS: Final = frozenset(("x-goog-user-project",))
 
 
 def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict[str, str]:

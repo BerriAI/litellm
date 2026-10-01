@@ -1,4 +1,5 @@
 import json
+from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -7,7 +8,39 @@ import pytest
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeCompilationError
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
-from litellm.types.guardrails import SupportedGuardrailIntegrations
+from litellm.types.guardrails import Mode, SupportedGuardrailIntegrations
+
+
+def test_init_guardrails_v2_registers_panw_mcp_output_scanner(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.proxy.guardrails import guardrail_registry
+    from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import PanwPrismaAirsHandler
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    monkeypatch.setenv("LITELLM_STRICT_GUARDRAIL_MODES", "true")
+    monkeypatch.setattr(guardrail_registry, "IN_MEMORY_GUARDRAIL_HANDLER", InMemoryGuardrailHandler())
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "panw-mcp-output",
+                "litellm_params": {
+                    "guardrail": "panw_prisma_airs",
+                    "mode": "post_mcp_call",
+                    "default_on": True,
+                    "api_key": "test-panw-key",
+                    "profile_name": "test-profile",
+                },
+            }
+        ]
+    )
+    scanners: Final = tuple(
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, PanwPrismaAirsHandler) and callback.guardrail_name == "panw-mcp-output"
+    )
+    assert len(scanners) == 1, "PANW MCP output scanning must be registered at startup"
+    assert scanners[0].should_run_guardrail({}, GuardrailEventHooks.post_mcp_call) is True
+    assert scanners[0].should_run_guardrail({}, GuardrailEventHooks.post_call) is False
 
 
 def test_initialize_presidio_guardrail():
@@ -211,13 +244,15 @@ def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
         (["pre_mcp_call", "post_mcp_call"], None, False),
         ({"tags": {"team:mcp": "pre_mcp_call"}, "default": ["pre_mcp_call", "post_mcp_call"]}, None, False),
         ({"tags": {"team:mcp": ["pre_mcp_call"]}, "default": "pre_call"}, None, True),
-        ({"tags": {}}, None, True),
+        ({"tags": {}}, None, False),
         ("pre_mcp_call", "both", True),
         ("pre_mcp_call", "output", True),
         ("pre_call", None, True),
     ],
 )
-async def test_initialize_presidio_mcp_only_mode_skips_post_call_output_scan(mode, filter_scope, expect_output_scanned):
+async def test_initialize_presidio_mcp_only_mode_skips_post_call_output_scan(
+    mode, filter_scope, expect_output_scanned, monkeypatch
+):
     """Regression: an MCP-only Presidio guardrail used to also scan the LLM
     response on post_call, so a blocked MCP tool call that the model repeated in
     its answer turned the whole request into an HTTP 400 instead of a 200."""
@@ -225,6 +260,7 @@ async def test_initialize_presidio_mcp_only_mode_skips_post_call_output_scan(mod
     from litellm.types.guardrails import GuardrailEventHooks
     from litellm.types.utils import Choices, Message, ModelResponse
 
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     llm_answer = "Call me at 415-555-2671"
     litellm_params = {
         "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
@@ -431,3 +467,62 @@ def test_init_guardrails_v2_skips_guardrail_with_malformed_advisory_template():
     }
     assert "broken_lakera_template" not in guardrail_names
     assert "healthy_presidio" in guardrail_names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode,tags,restore,scope,tokens,expected,expected_calls",
+    [
+        ({"tags": {"team:mcp": "pre_mcp_call"}, "default": "pre_call"}, ["team:mcp"], False, None, {}, "raw", 0),
+        ({"tags": {"team:mcp": "pre_mcp_call"}, "default": "pre_call"}, ["other"], False, None, {}, "masked", 1),
+        ({"tags": {"team:mcp": "pre_mcp_call"}, "default": "pre_call"}, [], False, None, {}, "masked", 1),
+        ({"tags": {"team:mcp": "pre_mcp_call"}}, [], False, None, {}, "raw", 0),
+        ("pre_mcp_call", [], True, None, {}, "raw", 1),
+        ("pre_mcp_call", [], True, None, {"restored": "twice", "raw": "restored"}, "restored", 1),
+        ("pre_mcp_call", [], False, "output", {"raw": "restored"}, "masked", 1),
+        ({"tags": {"team:mcp": "pre_mcp_call"}}, ["team:mcp"], False, "output", {}, "masked", 1),
+        ({"tags": {"team:mcp": "pre_mcp_call"}}, [], False, "output", {}, "raw", 0),
+    ],
+)
+async def test_presidio_initialized_output_dispatch(
+    mode: str | list[str] | Mode,
+    tags: list[str],
+    restore: bool,
+    scope: Literal["input", "output", "both"] | None,
+    tokens: dict[str, str],
+    expected: str,
+    expected_calls: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from typing import Final
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    params: Final = LitellmParams(
+        guardrail="presidio",
+        mode=mode,
+        default_on=True,
+        output_parse_pii=restore,
+        presidio_filter_scope=scope,
+        presidio_analyzer_api_base="https://example.invalid/analyze",
+        presidio_anonymizer_api_base="https://example.invalid/anonymize",
+        mock_redacted_text={"text": "masked", "items": []},
+    )
+    callbacks: Final = initialize_presidio(params, {"guardrail_name": "output_dispatch"})
+    data: Final = {"metadata": {"tags": tags, "pii_tokens": tokens}}
+    response: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content="raw"), index=0)])
+    selected: Final = tuple(
+        callback for callback in callbacks if callback.should_run_guardrail(data, GuardrailEventHooks.post_call)
+    )
+    for callback in selected:
+        data["guardrail_to_apply"] = callback
+        await UnifiedLLMGuardrails().async_post_call_success_hook(
+            data, UserAPIKeyAuth(request_route="/v1/chat/completions"), response
+        )
+    assert response.choices[0].message.content == expected
+    assert len(selected) == expected_calls

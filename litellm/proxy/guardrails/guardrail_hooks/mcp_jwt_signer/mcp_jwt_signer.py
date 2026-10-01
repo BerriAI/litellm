@@ -802,6 +802,8 @@ class MCPJWTSigner(CustomGuardrail):
         """
         if call_type not in _MCP_JWT_CALL_TYPES:
             return data
+        if call_type == "list_mcp_tools" and "extra_headers" not in data:
+            return data
 
         hook_data: Final = dict(data)
         if call_type == "list_mcp_tools":

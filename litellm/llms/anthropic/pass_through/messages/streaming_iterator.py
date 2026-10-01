@@ -40,22 +40,31 @@ def _is_message_stop_chunk(chunk: object) -> bool:
 
 def is_anthropic_ping_chunk(chunk: object) -> bool:
     """
-    Whether a chunk is a pure ``ping`` keepalive frame. It carries no content
-    and can recur indefinitely on a slow-starting or idle connection, so a
-    mid-stream fallback wrapper drops it outright while still deciding
-    whether to commit to the primary stream, rather than buffering it.
+    Whether a chunk is made only of whole ``ping`` keepalive frames. A ping
+    carries no content or lifecycle, so a mid-stream fallback wrapper can
+    forward it live while still deciding whether to commit to the primary
+    stream, without risking two overlapping message lifecycles on the wire.
 
     A physical transport chunk that coalesces a ping with any other SSE
     event (``message_start``, ``content_block_delta``, ``event: error``, ...)
-    is NOT a pure ping - dropping it whole would discard those events - so
-    only a chunk whose every ``event:`` line is ``event: ping`` qualifies.
+    is NOT a pure ping, and neither is a fragment of a ping frame split
+    across two reads, or a chunk that opens with the tail of an earlier
+    frame: forwarding either live would interleave it with frames still
+    held back for a fallback. Only a chunk that begins with ``event: ping``,
+    ends on a frame boundary, and whose every ``event:`` line is
+    ``event: ping`` qualifies.
     """
     if isinstance(chunk, dict):
         return chunk.get("type") == "ping"
-    if isinstance(chunk, (bytes, bytearray)):
-        event_lines: Final = tuple(line for line in chunk.splitlines() if line.startswith(b"event:"))
-        return bool(event_lines) and all(line == b"event: ping" for line in event_lines)
-    return False
+    if not isinstance(chunk, (bytes, bytearray)):
+        return False
+    event_lines: Final = tuple(line for line in chunk.splitlines() if line.startswith(b"event:"))
+    return (
+        bool(event_lines)
+        and all(line == b"event: ping" for line in event_lines)
+        and chunk.startswith(b"event: ping")
+        and chunk.endswith((b"\n\n", b"\r\n\r\n"))
+    )
 
 
 def is_anthropic_content_delta_chunk(chunk: object) -> bool:
