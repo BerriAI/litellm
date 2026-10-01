@@ -418,9 +418,9 @@ async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_call
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ("failed", "cancelled", "completed"))
 @pytest.mark.parametrize("budget_owner", ("agent", "key", "team"))
-@pytest.mark.parametrize("route", ("/a2a/target", "/v1/chat/completions"))
+@pytest.mark.parametrize(("route", "pricing"), (("/a2a/target", "fixed"), ("/v1/chat/completions", "fixed"), ("/v1/chat/completions", "tokens")))
 async def test_budgeted_caller_reserves_unmanaged_agent_fees_before_concurrent_admission(
-    spend_counter_cache: DualCache, monkeypatch: pytest.MonkeyPatch, outcome: str, budget_owner: str, route: str
+    spend_counter_cache: DualCache, monkeypatch: pytest.MonkeyPatch, outcome: str, budget_owner: str, route: str, pricing: str
 ) -> None:
     import asyncio
 
@@ -435,14 +435,22 @@ async def test_budgeted_caller_reserves_unmanaged_agent_fees_before_concurrent_a
 
     caller: Final = AgentResponse(
         agent_id="caller", agent_name="Caller", agent_card_params={}, spend=0.0,
-        litellm_budget_table={"budget_id": "caller-budget", "max_budget": 0.5},
+        litellm_budget_table={"budget_id": "caller-budget", "max_budget": 0.5 if budget_owner == "agent" else None},
     )
     target: Final = AgentResponse(
-        agent_id="target", agent_name="Target", agent_card_params={}, litellm_params={"cost_per_query": 0.25},
+        agent_id="target", agent_name="Target", agent_card_params={},
+        litellm_params={"cost_per_query": 0.25} if pricing == "fixed" else {},
     )
     registry: Final = agent_registry.AgentRegistry()
     registry.register_agent(target)
     monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+
+    if pricing == "tokens":
+        monkeypatch.setattr(litellm, "model_cost", {
+            **litellm.model_cost,
+            "a2a/target": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.125,
+                           "litellm_provider": "a2a", "mode": "chat"},
+        })
 
     token: Final = "fee-key" if budget_owner == "key" else None
     team: Final = LiteLLM_TeamTable(team_id="fee-team", max_budget=0.5, spend=0.0) if budget_owner == "team" else None
@@ -457,11 +465,12 @@ async def test_budgeted_caller_reserves_unmanaged_agent_fees_before_concurrent_a
             token=token, max_budget=0.5 if budget_owner == "key" else None,
             team_id=team.team_id if team is not None else None,
         )
-        if budget_owner == "agent":
+        if budget_owner == "agent" or pricing == "tokens":
             auth.billing_agent_policy = caller
         await prepare_agent_invocation(auth, "target", None)
         return await reserve_budget_for_request(
-            request_body={"method": "message/send", "model": "a2a/target"}, route=route, llm_router=None,
+            request_body={"method": "message/send", "model": "a2a/target", "max_tokens": 2,
+                          "messages": [{"role": "user", "content": "Hello"}]}, route=route, llm_router=None,
             valid_token=auth, team_object=team, user_object=None, prisma_client=None,
             user_api_key_cache=UserApiKeyCache(), proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
             fail_closed_budget_enforcement=True,

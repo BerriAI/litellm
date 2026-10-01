@@ -333,7 +333,7 @@ async def prepare_agent_invocation(
                 message="Budgeted token-priced agent invocations require a fixed cost_per_query before execution",
             )
         )
-    auth.agent_invocation_cost = fee
+    auth.agent_invocation_cost = fee if fixed_fee is not None or not billable else None
 
 
 def agent_invocation_policy(auth: UserAPIKeyAuth | None, registered: AgentResponse) -> AgentResponse:
