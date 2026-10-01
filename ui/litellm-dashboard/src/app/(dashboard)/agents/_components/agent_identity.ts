@@ -5,7 +5,7 @@ import type { AgentFormValues, AgentRequestPayload } from "./AgentFormKit";
 export type EntraAgentIdentity = components["schemas"]["EntraIdentityConfig"];
 type AgentIdentityState = Pick<
   components["schemas"]["AgentResponse"],
-  "identity" | "enabled" | "execution_mode" | "agent_card_params"
+  "identity" | "enabled" | "execution_mode" | "agent_card_params" | "litellm_budget_table"
 >;
 
 export const IDENTITY_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -47,6 +47,8 @@ export const parseIdentityForForm = (agent?: Partial<AgentIdentityState> | null)
     ...identityFormFields(identity),
     execution_mode: agent?.execution_mode ?? "autonomous",
     enabled: agent?.enabled ?? true,
+    agent_max_budget: agent?.litellm_budget_table?.max_budget ?? "",
+    agent_budget_duration: agent?.litellm_budget_table?.budget_duration ?? "",
   };
 };
 
@@ -104,5 +106,20 @@ export const withAgentIdentity = (
     ...identityFields,
     ...(managed && values.execution_mode !== undefined ? { execution_mode: values.execution_mode } : {}),
     ...(managed && values.enabled !== undefined ? { enabled: values.enabled } : {}),
+    ...(values.agent_max_budget === undefined
+      ? {}
+      : {
+          budget:
+            values.agent_max_budget === "" || values.agent_max_budget === null
+              ? null
+              : { max_budget: Number(values.agent_max_budget), budget_duration: values.agent_budget_duration || null },
+        }),
   };
 };
+
+export const agentBudgetSpend = (
+  agent: Pick<import("@/components/agents/types").Agent, "spend" | "lifetime_budget_spend" | "litellm_budget_table">,
+): number =>
+  agent.litellm_budget_table && !agent.litellm_budget_table.budget_duration
+    ? agent.lifetime_budget_spend ?? 0
+    : agent.spend ?? 0;

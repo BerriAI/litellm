@@ -28,6 +28,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import read_batched_spend_
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
+    AgentsRepository,
     BudgetWindowSpendRepository,
     EndUserRepository,
     SpendLogsRepository,
@@ -38,9 +39,14 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+from litellm.types.agents import agent_budget_counter_key
 
 if TYPE_CHECKING:
-    from prisma.types import LiteLLM_EndUserTableWhereUniqueInput
+    from prisma.types import (
+        LiteLLM_AgentsTableInclude,
+        LiteLLM_AgentsTableWhereUniqueInput,
+        LiteLLM_EndUserTableWhereUniqueInput,
+    )
 
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.utils import PrismaClient
@@ -170,6 +176,37 @@ class SpendCounterReseed:
                 return await OrganizationRepository(prisma_client).table.find_unique(
                     where={"organization_id": counter_key[len("spend:org:") :]}
                 )
+            if counter_key.startswith("spend:agent_lifetime:"):
+                _, _, budget_id, agent_id = counter_key.split(":", 3)
+                lifetime_where: Final[LiteLLM_AgentsTableWhereUniqueInput] = {"agent_id": agent_id}
+                lifetime: Final = await AgentsRepository(prisma_client, use_writer=True).table.find_unique(
+                    where=lifetime_where
+                )
+                if lifetime is None:
+                    return None
+                return lifetime.model_copy(
+                    update=MappingProxyType(
+                        {"spend": lifetime.lifetime_budget_spend if lifetime.budget_id == budget_id else 0.0}
+                    )
+                )
+            if counter_key.startswith("spend:agent_window:"):
+                parts: Final = counter_key.split(":", 3)
+                if len(parts) != 4:
+                    return None
+                window_where: Final[LiteLLM_AgentsTableWhereUniqueInput] = {"agent_id": parts[3]}
+                window_include: Final[LiteLLM_AgentsTableInclude] = {"litellm_budget_table": True}
+                row: Final = await AgentsRepository(prisma_client, use_writer=True).table.find_unique(
+                    where=window_where, include=window_include
+                )
+                if row is None:
+                    return None
+                current_key: Final = agent_budget_counter_key(row.agent_id, row.spend_window)
+                return row if current_key == counter_key else row.model_copy(update=MappingProxyType({"spend": 0.0}))
+            if counter_key.startswith("spend:agent:"):
+                agent_where: Final[LiteLLM_AgentsTableWhereUniqueInput] = {
+                    "agent_id": counter_key[len("spend:agent:") :]
+                }
+                return await AgentsRepository(prisma_client).table.find_unique(where=agent_where)
             if counter_key.startswith("spend:project:"):
                 return await ProjectRepository(prisma_client).table.find_unique(
                     where={"project_id": counter_key[len("spend:project:") :]}

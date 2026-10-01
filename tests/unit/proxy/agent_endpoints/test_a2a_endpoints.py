@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.agents import AgentCaller
+from litellm.types.agents import AgentCaller, AgentResponse
 
 AddLiteLLMData = Callable[..., Awaitable[dict[str, object]]]
 
@@ -25,6 +25,9 @@ AddLiteLLMData = Callable[..., Awaitable[dict[str, object]]]
 class CapturedAgentCall:
     request_id: object
     agent_extra_headers: dict[str, str] | None
+    cost_per_query: object
+    api_base: object
+    pricing: Mapping[str, object]
 
 
 @pytest.mark.asyncio
@@ -58,7 +61,7 @@ async def test_invoke_agent_a2a_adds_litellm_data():
     }
 
     # Mock agent
-    mock_agent = MagicMock()
+    mock_agent = _make_agent_mock()
     mock_agent.agent_id = "test-agent"
     mock_agent.agent_card_params = {
         "url": "http://backend-agent:10001",
@@ -211,7 +214,7 @@ async def test_invoke_agent_a2a_handles_none_agent_card_params():
     """
     from litellm.proxy._types import UserAPIKeyAuth
 
-    mock_agent = MagicMock()
+    mock_agent = _make_agent_mock()
     mock_agent.agent_card_params = None
     mock_agent.litellm_params = None
 
@@ -295,7 +298,7 @@ async def test_invoke_agent_a2a_injects_authenticated_key_hash_for_bridge():
         resp.model_dump.return_value = {"jsonrpc": "2.0", "id": "test-id", "result": {}}
         return resp
 
-    mock_agent = MagicMock()
+    mock_agent = _make_agent_mock()
     mock_agent.agent_id = "lf-agent"
     mock_agent.agent_name = "lf-agent"
     # No URL: the bridge derives the endpoint from the LangFlow agent config.
@@ -376,6 +379,9 @@ def _make_agent_mock(url: str = "http://backend-agent:10001") -> MagicMock:
     agent.litellm_params = {}
     agent.static_headers = None
     agent.extra_headers = None
+    agent.identity_managed = False
+    agent.identity = None
+    agent.litellm_budget_table = None
     return agent
 
 
@@ -394,7 +400,7 @@ def _make_request_mock(method: str, params: Mapping[str, object], request_id: ob
 
 
 def _base_patches(
-    agent: MagicMock, add_litellm_data: AddLiteLLMData | None = None
+    agent: MagicMock | AgentResponse, add_litellm_data: AddLiteLLMData | None = None
 ) -> list[AbstractContextManager[object]]:
     return [
         patch(
@@ -437,7 +443,7 @@ async def _invoke_message_method(
     mock_request: MagicMock,
     user_api_key_dict: UserAPIKeyAuth,
     add_litellm_data: AddLiteLLMData | None = None,
-    agent: MagicMock | None = None,
+    agent: MagicMock | AgentResponse | None = None,
 ) -> CapturedAgentCall:
     from fastapi.responses import JSONResponse
 
@@ -490,7 +496,13 @@ async def _invoke_message_method(
 
     kwargs: Final = downstream.call_args.kwargs
     request_id: Final = kwargs["request"].__dict__["id"] if is_send else kwargs["request_id"]
-    return CapturedAgentCall(request_id=request_id, agent_extra_headers=kwargs.get("agent_extra_headers"))
+    return CapturedAgentCall(
+        request_id=request_id,
+        agent_extra_headers=kwargs.get("agent_extra_headers"),
+        cost_per_query=kwargs["litellm_params"].get("cost_per_query"),
+        api_base=kwargs["api_base"],
+        pricing=kwargs["litellm_params"],
+    )
 
 
 @pytest.mark.asyncio
@@ -2689,3 +2701,95 @@ def test_forwarding_headers_minted_bearer_replaces_a_forwarded_authorization_of_
     )
 
     assert merged == {"X-Custom": "kept", "Authorization": "Bearer minted-token"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ("message/send", "message/stream"))
+@pytest.mark.parametrize("fee", (None, 0.0, 0.25))
+async def test_native_dispatch_keeps_the_admitted_price_and_destination(
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    fee: float | None,
+) -> None:
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+
+    admitted: Final = AgentResponse(
+        agent_id="test-agent",
+        agent_name="test-agent",
+        agent_card_params={"url": "https://admitted.test/"},
+        litellm_params={"cost_per_query": fee} if fee is not None else {},
+    )
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(admitted)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    auth: Final = UserAPIKeyAuth(user_role="proxy_admin")
+    await prepare_agent_invocation(auth, admitted.agent_id, None)
+    changed: Final = admitted.model_copy(
+        update={
+            "litellm_params": {"cost_per_query": 0.75},
+            "agent_card_params": {"url": "https://changed.test/"},
+        }
+    )
+    captured: Final = await _invoke_message_method(
+        method,
+        _make_request_mock(method, _HELLO_MESSAGE_PARAMS),
+        auth,
+        agent=changed,
+    )
+    assert captured.cost_per_query == fee
+    assert captured.api_base == "https://admitted.test/"
+
+
+@pytest.mark.asyncio
+async def test_native_dispatch_returns_not_found_for_a_removed_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+    monkeypatch.setattr(agent_registry, "global_agent_registry", agent_registry.AgentRegistry())
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    response: Final = await invoke_agent_a2a(
+        agent_id="removed", request=_make_request_mock("message/send", _HELLO_MESSAGE_PARAMS),
+        fastapi_response=MagicMock(), user_api_key_dict=UserAPIKeyAuth(),
+    )
+    assert response.status_code == 404
+    assert json.loads(response.body)["error"]["message"] == "Agent 'removed' not found"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ("message/send", "message/stream"))
+@pytest.mark.parametrize("fixed_fee", (None, 0.0, 0.25))
+async def test_unbudgeted_managed_agent_keeps_token_pricing_without_a_fixed_fee(
+    monkeypatch: pytest.MonkeyPatch, method: str, fixed_fee: float | None,
+) -> None:
+    from litellm import Usage
+    from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+    from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
+
+    policy: Final = AgentResponse(
+        agent_id="test-agent", agent_name="test-agent", identity_managed=True,
+        agent_card_params={"url": "https://agent.test/"},
+        litellm_params={"input_cost_per_token": 0.02, "output_cost_per_token": 0.03,
+                        **({"cost_per_query": fixed_fee} if fixed_fee is not None else {})},
+    )
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(policy)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=policy)
+    auth: Final = UserAPIKeyAuth(user_role="proxy_admin")
+    with ExitStack() as stack:
+        for context in _base_patches(policy):
+            stack.enter_context(context)
+        await prepare_agent_invocation(auth, policy.agent_id, AgentIdentityStore.from_client(database))
+        captured: Final = await _invoke_message_method(
+            method, _make_request_mock(method, _HELLO_MESSAGE_PARAMS), auth, agent=policy,
+        )
+    logging: Final = MagicMock(model_call_details={
+        "litellm_params": captured.pricing,
+        "usage": Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+    })
+    assert A2ACostCalculator.calculate_a2a_cost(logging) == pytest.approx(0.26 if fixed_fee is None else fixed_fee)

@@ -3035,6 +3035,7 @@ async def _run_centralized_common_checks(
         request=request,
         llm_router=llm_router,
         team_id=user_api_key_auth_obj.team_id,
+        agent_invocation_cost=user_api_key_auth_obj.agent_invocation_cost,
     )
 
     # Pin the metadata variable name (litellm_metadata vs metadata) before
@@ -3208,7 +3209,10 @@ def _should_skip_budget_checks(
     request: Request | None,
     llm_router: Any | None,
     team_id: str | None = None,
+    agent_invocation_cost: float | None = None,
 ) -> bool:
+    if agent_invocation_cost is not None and agent_invocation_cost > 0:
+        return False
     model: Final = _get_model_from_request_context(
         request_data=request_data,
         route=route,
@@ -3278,7 +3282,14 @@ async def _authorize_authenticated_request(
             prepare_agent_invocation,
         )
         from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
-        from litellm.proxy.proxy_server import general_settings, prisma_client, user_model
+        from litellm.proxy.proxy_server import (
+            general_settings,
+            llm_router,
+            prisma_client,
+            proxy_config,
+            proxy_logging_obj,
+            user_model,
+        )
 
         store: Final = AgentIdentityStore.from_client(prisma_client) if prisma_client is not None else None
         if user_api_key_auth_obj.agent_id is not None:
@@ -3287,26 +3298,44 @@ async def _authorize_authenticated_request(
             route, request.method
         ):
             raise HTTPException(403, "Agent identities can only access inference and agent discovery routes")
-        authorized_data: Final = (
-            managed_inference_request(
-                route,
-                request_data,
-                general_settings,
-                user_model,
-                request.path_params.get("model") or request.path_params.get("model_name"),
-                request.query_params.get("model"),
+        router_settings: Final[dict[str, object] | None] = (
+            await proxy_config.get_hierarchical_router_settings(
+                user_api_key_dict=user_api_key_auth_obj,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
             )
-            if user_api_key_auth_obj.managed_agent_policy is not None
+            if llm_router is not None and RouteChecks.is_llm_api_route(route=route)
+            else None
+        )
+        query_params: Final[dict[str, object]] = _safe_get_request_query_params(request)
+        inference_data: Final = managed_inference_request(
+            route,
+            request_data,
+            general_settings,
+            user_model,
+            request.path_params.get("model") or request.path_params.get("model_name"),
+            query_params.get("model"),
+            model_group_alias=router_settings.get("model_group_alias") if router_settings is not None else None,
+            auth=user_api_key_auth_obj,
+            require_model=user_api_key_auth_obj.managed_agent_policy is not None,
+        )
+        target_name: Final = invocation_target(route, inference_data)
+        authorized_data: Final = (
+            inference_data
+            if target_name is not None or user_api_key_auth_obj.managed_agent_policy is not None
             else request_data
         )
-        target_name: Final = invocation_target(route, authorized_data)
         if target_name is not None:
             await prepare_agent_invocation(
                 user_api_key_auth_obj,
                 target_name,
                 store,
-                billable=request_data.get("method")
-                in (None, "message/send", "message/stream", "SendMessage", "SendStreamingMessage"),
+                billable=request.method == "POST"
+                and (
+                    not RouteChecks.check_route_access(route, ("/a2a/{agent_id}", "/v1/a2a/{agent_id}"))
+                    or request_data.get("method")
+                    in (None, "message/send", "message/stream", "SendMessage", "SendStreamingMessage")
+                ),
             )
         await _run_centralized_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,

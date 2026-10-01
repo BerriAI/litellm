@@ -5,20 +5,24 @@ A2A Streaming Iterator with token tracking and logging support.
 import asyncio
 from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Generic, TypeVar
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
 from litellm.a2a_protocol.utils import A2ARequestUtils
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 if TYPE_CHECKING:
     from a2a.compat.v0_3.types import SendStreamingMessageRequest, SendStreamingMessageResponse
 
 
-class A2AStreamingIterator:
+_StreamChunk = TypeVar("_StreamChunk", bound="SendStreamingMessageResponse | dict[str, object]")
+
+
+class A2AStreamingIterator(Generic[_StreamChunk]):
     """
     Async iterator for A2A streaming responses with token tracking.
 
@@ -27,7 +31,7 @@ class A2AStreamingIterator:
 
     def __init__(
         self,
-        stream: AsyncIterator["SendStreamingMessageResponse"],
+        stream: AsyncIterator[_StreamChunk],
         request: "SendStreamingMessageRequest",
         logging_obj: LiteLLMLoggingObj,
         agent_name: str = "unknown",
@@ -39,14 +43,14 @@ class A2AStreamingIterator:
         self.start_time = datetime.now()
 
         # Collect chunks for token counting
-        self.chunks: list[SendStreamingMessageResponse] = []
+        self.chunks: list[_StreamChunk] = []
         self.collected_text_parts: list[str] = []
-        self.final_chunk: SendStreamingMessageResponse | None = None
+        self.final_chunk: _StreamChunk | None = None
 
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> "SendStreamingMessageResponse":
+    async def __anext__(self) -> _StreamChunk:
         try:
             chunk: Final = await self.stream.__anext__()
 
@@ -69,20 +73,20 @@ class A2AStreamingIterator:
             await self._handle_stream_complete()
             raise
 
-    def _collect_text_from_chunk(self, chunk: "SendStreamingMessageResponse") -> None:
+    def _collect_text_from_chunk(self, chunk: _StreamChunk) -> None:
         """Extract text from a streaming chunk and add to collected parts."""
         try:
-            chunk_dict: Final = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
+            chunk_dict: Final = chunk if isinstance(chunk, dict) else chunk.model_dump(mode="json", exclude_none=True)
             text: Final = A2ARequestUtils.extract_text_from_response(chunk_dict)
             if text:
                 self.collected_text_parts.append(text)
         except Exception:
             verbose_logger.debug("Failed to extract text from A2A streaming chunk")
 
-    def _is_completed_chunk(self, chunk: "SendStreamingMessageResponse") -> bool:
+    def _is_completed_chunk(self, chunk: _StreamChunk) -> bool:
         """Check if chunk indicates stream completion."""
         try:
-            chunk_dict: Final = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
+            chunk_dict: Final = chunk if isinstance(chunk, dict) else chunk.model_dump(mode="json", exclude_none=True)
             result: Final = chunk_dict.get("result", {})
             if isinstance(result, dict):
                 status: Final = result.get("status", {})
@@ -127,6 +131,9 @@ class A2AStreamingIterator:
             # Build result for logging
             result: Final = self._build_logging_result(usage)
 
+            litellm_params: Final[dict[str, object]] = self.logging_obj.litellm_params
+            bind_budget_reservation_to_callbacks(litellm_params)
+
             # Call success handlers - they will build standard_logging_object
             asyncio.create_task(
                 self.logging_obj.dispatch_success_handlers(
@@ -160,7 +167,11 @@ class A2AStreamingIterator:
         # Add final chunk result if available
         if self.final_chunk:
             try:
-                chunk_dict: Final = self.final_chunk.model_dump(mode="json", exclude_none=True)
+                chunk_dict: Final = (
+                    self.final_chunk
+                    if isinstance(self.final_chunk, dict)
+                    else self.final_chunk.model_dump(mode="json", exclude_none=True)
+                )
                 result["result"] = chunk_dict.get("result", {})
             except Exception:
                 pass

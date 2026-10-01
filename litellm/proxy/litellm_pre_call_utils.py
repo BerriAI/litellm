@@ -363,7 +363,9 @@ _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY: Final = "allow_client_mess
 # not to user-supplied request bodies, so the proxy strips them before they
 # reach the call path. Built from the Pydantic model so newly-added pricing
 # fields are covered automatically.
-_CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+_CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields.keys()) | frozenset(
+    {"cost_per_query"}
+)
 # ``model_info`` carries the same pricing fields when read by
 # ``use_custom_pricing_for_model``; strip from metadata for the same reason.
 # ``standard_logging_guardrail_information`` is proxy-written telemetry summed
@@ -1676,6 +1678,11 @@ class LiteLLMProxyRequestSetup:
                     "actor_agent_id": user_api_key_dict.agent_id,
                     "target_agent_id": user_api_key_dict.invoked_agent_id,
                     "billing_agent_id": user_api_key_dict.agent_id or user_api_key_dict.invoked_agent_id,
+                    "billing_agent_counter_key": (
+                        user_api_key_dict.billing_agent_policy.budget_counter_key
+                        if user_api_key_dict.billing_agent_policy is not None
+                        else None
+                    ),
                     "agent_execution_mode": managed_context.mode if managed_context else None,
                     "verified_human_user_id": managed_context.user_id if managed_context else None,
                 }

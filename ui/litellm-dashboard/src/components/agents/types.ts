@@ -15,6 +15,7 @@ export interface Agent {
   identity_managed?: boolean;
   enabled?: boolean;
   execution_mode?: components["schemas"]["AgentResponse"]["execution_mode"];
+  litellm_budget_table?: components["schemas"]["AgentBudgetState"] | null;
   jwt_auth_configured?: boolean;
   agent_id: string;
   agent_name: string;
@@ -32,6 +33,7 @@ export interface Agent {
   kill_switch?: AgentKillSwitchConfig | null;
   keys?: AgentAttachedKey[] | null;
   spend?: number;
+  lifetime_budget_spend?: number;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
   session_tpm_limit?: number | null;

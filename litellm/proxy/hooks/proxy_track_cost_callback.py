@@ -2,6 +2,7 @@ import asyncio
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import litellm
@@ -323,7 +324,17 @@ class _ProxyDBLogger(CustomLogger):
                     resolve_missing_key_identity=str(kwargs.get("call_type")) not in _CAPTURED_IDENTITY_CALL_TYPES,
                 )
                 _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
-            budget_reservation: Final = _get_budget_reservation_from_metadata(metadata=metadata)
+            budget_reservation: Final[dict[str, object] | None] = _get_budget_reservation_from_metadata(
+                metadata=metadata
+            )
+            billing_agent_id: Final = (
+                agent_id_value if isinstance(agent_id_value := metadata.get("billing_agent_id"), str) else None
+            )
+            billing_agent_counter_key: Final = (
+                counter_key_value
+                if isinstance(counter_key_value := metadata.get("billing_agent_counter_key"), str)
+                else None
+            )
             if (
                 isinstance(completion_response, LiteLLMBatch)
                 and kwargs.get("call_type") == CallTypes.aretrieve_batch.value
@@ -403,6 +414,8 @@ class _ProxyDBLogger(CustomLogger):
                             tags=tags,
                             response_cost=response_cost,
                         ),
+                        billing_agent_id=billing_agent_id,
+                        billing_agent_counter_key=billing_agent_counter_key,
                     )
                     if not charged:
                         return
@@ -707,6 +720,9 @@ class _IncrementSpendCounters(Protocol):
         tags: list[str] | None = None,
         request_started_at: datetime | None = None,
         model_access_groups: Sequence[str] | None = None,
+        project_id: str | None = None,
+        billing_agent_id: str | None = None,
+        billing_agent_counter_key: str | None = None,
     ) -> None: ...
 
 
@@ -723,11 +739,13 @@ async def _update_database_and_spend_counters(
     start_time: datetime | None,
     end_time: datetime | None,
     response_cost: float,
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,
     request_tags: list[str] | None = None,
     model_access_groups: Sequence[str] | None = None,
     project_id: str | None = None,
     update_cache_read_keys: Sequence[str] = (),
+    billing_agent_id: str | None = None,
+    billing_agent_counter_key: str | None = None,
 ) -> bool:
     """The reservation is reconciled before the spend is persisted, from its own read. One spend counter batch then
     spans the database write and the counter update, so the post-call counters are read with a single MGET after the
@@ -750,6 +768,8 @@ async def _update_database_and_spend_counters(
         tags=request_tags,
         model_access_groups=model_access_groups,
         project_id=project_id,
+        billing_agent_id=billing_agent_id,
+        billing_agent_counter_key=billing_agent_counter_key,
     )
     with spend_counter_batch_scope(spend_counter_cache.redis_cache, counter_keys=counter_keys):
         return await _update_database_and_spend_counters_in_batch(
@@ -770,6 +790,8 @@ async def _update_database_and_spend_counters(
             model_access_groups=model_access_groups,
             project_id=project_id,
             update_cache_read_keys=update_cache_read_keys,
+            billing_agent_id=billing_agent_id,
+            billing_agent_counter_key=billing_agent_counter_key,
         )
 
 
@@ -786,11 +808,13 @@ async def _update_database_and_spend_counters_in_batch(
     start_time: datetime | None,
     end_time: datetime | None,
     response_cost: float,
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,
     request_tags: list[str] | None,
     model_access_groups: Sequence[str] | None,
     project_id: str | None,
     update_cache_read_keys: Sequence[str],
+    billing_agent_id: str | None,
+    billing_agent_counter_key: str | None,
 ) -> bool:
     from litellm.proxy.proxy_server import arm_update_cache_read
 
@@ -839,6 +863,16 @@ async def _update_database_and_spend_counters_in_batch(
             request_started_at=start_time,
             model_access_groups=model_access_groups,
             project_id=project_id,
+            **(
+                MappingProxyType({"billing_agent_id": billing_agent_id})
+                if billing_agent_id is not None
+                else MappingProxyType({})
+            ),
+            **(
+                MappingProxyType({"billing_agent_counter_key": billing_agent_counter_key})
+                if billing_agent_counter_key is not None
+                else MappingProxyType({})
+            ),
         )
     except Exception:
         if budget_reservation is not None:

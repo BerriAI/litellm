@@ -539,3 +539,34 @@ def test_streaming_logging_obj_keeps_agent_credentials_out_of_logging_params():
     assert logging_obj.litellm_params == expected
     assert logging_obj.optional_params == expected
     assert logging_obj.model_call_details["litellm_params"] == expected
+
+
+class _AgentFeeRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.logged = asyncio.Event()
+        self.fees = ()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if kwargs.get("call_type") in ("asend_message", "asend_message_streaming"):
+            self.fees = (*self.fees, (kwargs.get("agent_id"), kwargs["standard_logging_object"]["response_cost"]))
+            self.logged.set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_completion_bridge_records_one_agent_fee(streaming, monkeypatch):
+    from litellm.a2a_protocol.main import asend_message_streaming
+
+    recorder = _AgentFeeRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    params = {"custom_llm_provider": "openai", "model": "gpt-4o-mini", "mock_response": "hello back", "cost_per_query": 0.01}
+    if streaming:
+        request = SendStreamingMessageRequest(id="bridge-stream", params=_request().params)
+        chunks = [chunk async for chunk in asend_message_streaming(request=request, litellm_params=params, agent_id="budgeted-agent")]
+        assert chunks[-1]["result"]["final"] is True
+    else:
+        response = await asend_message(request=_request(), litellm_params=params, agent_id="budgeted-agent")
+        assert response.id == "r1"
+    await asyncio.wait_for(recorder.logged.wait(), timeout=2)
+    assert recorder.fees == (("budgeted-agent", pytest.approx(0.01)),)

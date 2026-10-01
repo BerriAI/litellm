@@ -60,7 +60,7 @@ class TestStripClientPricingOverrides:
         # set drifting apart if someone replaces the auto-derivation later.
         assert _CLIENT_PRICING_CONTROL_FIELDS == frozenset(
             CustomPricingLiteLLMParams.model_fields.keys()
-        )
+        ) | {"cost_per_query"}
         # Sanity: the obvious top-level pricing fields are in the set.
         for field in (
             "input_cost_per_token",
@@ -78,6 +78,7 @@ class TestStripClientPricingOverrides:
             "input_cost_per_token": 0.0,
             "output_cost_per_token": 0.0,
             "cache_creation_input_token_cost": 0.0,
+            "cost_per_query": -1000.0,
         }
         _strip_client_pricing_overrides(data)
         assert data == {
@@ -192,6 +193,7 @@ class TestStripClientPricingOverrides:
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_root_pricing_fields():
     data = {
+        "cost_per_query": -1000.0,
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "hi"}],
         "input_cost_per_token": 0.0,
@@ -207,6 +209,7 @@ async def test_add_litellm_data_to_request_strips_root_pricing_fields():
         version="test-version",
     )
 
+    assert "cost_per_query" not in updated
     assert "input_cost_per_token" not in updated
     assert "output_cost_per_token" not in updated
 

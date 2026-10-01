@@ -19,9 +19,12 @@ from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from litellm.repositories.prisma_protocols import BatchTable, PrismaBatch
+
+if TYPE_CHECKING:
+    from prisma.types import LiteLLM_AgentsTableUpdateManyMutationInput, LiteLLM_AgentsTableWhereInput
 
 
 def _spend_reset_data(budget_reset_at: datetime | None, spend_decrement: float) -> Mapping[str, object]:
@@ -79,6 +82,26 @@ class LinkedSpendResetWrites:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentSpendResetWrites:
+    table: BatchTable
+
+    def queue_window_reset(self, budget_id: str, window: datetime, rollover_cap: float | None) -> None:
+        zero: Final[LiteLLM_AgentsTableUpdateManyMutationInput] = {"spend": 0.0, "spend_window": window}
+        if rollover_cap is None:
+            all_agents: Final[LiteLLM_AgentsTableWhereInput] = {"budget_id": budget_id}
+            self.table.update_many(where=all_agents, data=zero)
+            return
+        below: Final[LiteLLM_AgentsTableWhereInput] = {"budget_id": budget_id, "spend": {"lte": rollover_cap}}
+        above: Final[LiteLLM_AgentsTableWhereInput] = {"budget_id": budget_id, "spend": {"gt": rollover_cap}}
+        remainder: Final[LiteLLM_AgentsTableUpdateManyMutationInput] = {
+            "spend": {"decrement": rollover_cap},
+            "spend_window": window,
+        }
+        self.table.update_many(where=below, data=zero)
+        self.table.update_many(where=above, data=remainder)
+
+
+@dataclass(frozen=True, slots=True)
 class BudgetWindowWrites:
     table: BatchTable
 
@@ -110,6 +133,7 @@ class BudgetCascadeUnitOfWork:
     tags: LinkedSpendResetWrites
     model_access_groups: LinkedSpendResetWrites
     projects: LinkedSpendResetWrites
+    agents: AgentSpendResetWrites
     endusers: LinkedSpendResetWrites
     budgets: BudgetWindowWrites
 
@@ -137,6 +161,7 @@ async def budget_cascade_unit_of_work(
         tags=LinkedSpendResetWrites(table=batch.litellm_tagtable),
         model_access_groups=LinkedSpendResetWrites(table=batch.litellm_modelaccessgroupbudgettable),
         projects=LinkedSpendResetWrites(table=batch.litellm_projecttable),
+        agents=AgentSpendResetWrites(table=batch.litellm_agentstable),
         endusers=LinkedSpendResetWrites(table=batch.litellm_endusertable),
         budgets=BudgetWindowWrites(table=batch.litellm_budgettable),
     )

@@ -28,8 +28,21 @@ from litellm.proxy.management_endpoints.common_utils import (
 )
 from litellm.proxy.utils import jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.table_repositories import AgentsRepository
 
 router: Final = APIRouter()
+
+
+async def _require_unlinked_agent_budget(budget_id: str, client: object) -> None:
+    from prisma.types import LiteLLM_AgentsTableWhereInput
+
+    where: Final[LiteLLM_AgentsTableWhereInput] = {"budget_id": budget_id}
+    agent: Final = await AgentsRepository(client, use_writer=True).table.find_first(where=where)
+    if agent is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Manage this agent's budget through PATCH /v1/agents/{agent.agent_id}",
+        )
 
 
 @router.post(
@@ -194,6 +207,7 @@ async def update_budget(
         }
     )
 
+    await _require_unlinked_agent_budget(budget_obj.budget_id, prisma_client)
     response: Final = await BudgetRepository(prisma_client).table.update(
         where={"budget_id": budget_obj.budget_id},
         data=budget_obj_jsonified,
@@ -357,6 +371,7 @@ async def delete_budget(
             detail={"error": f"{CommonProxyErrors.not_allowed_access.value}, your role={user_api_key_dict.user_role}"},
         )
 
+    await _require_unlinked_agent_budget(data.id, prisma_client)
     response: Final = await BudgetRepository(prisma_client).table.delete(where={"budget_id": data.id})
 
     return response

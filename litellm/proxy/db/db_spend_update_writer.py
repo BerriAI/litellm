@@ -82,9 +82,12 @@ from litellm.proxy.spend_tracking.savings import (
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.repositories.prisma_protocols import BatchTable
+from litellm.types.agents import agent_spend_filter
 from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
+    from prisma.types import LiteLLM_AgentsTableUpdateManyMutationInput, LiteLLM_AgentsTableWhereInput
+
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.baseline_accounting import DailyBaselineAttribution
     from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -160,6 +163,26 @@ _ENTITY_SPEND_TABLES: Final[Mapping[_EntitySpendTable, Callable[[_SpendBatch], B
 
 def _entity_spend_table(batcher: _SpendBatch, table_accessor: _EntitySpendTable) -> BatchTable:
     return _ENTITY_SPEND_TABLES[table_accessor](batcher)
+
+
+def _queue_lifetime_agent_spend(table: BatchTable, counter_key: str, response_cost: float) -> None:
+    lifetime_filter: Final = agent_spend_filter(counter_key)
+    lifetime_data: Final[LiteLLM_AgentsTableUpdateManyMutationInput] = {
+        "lifetime_budget_spend": {"increment": response_cost}
+    }
+    history_filter: Final[LiteLLM_AgentsTableWhereInput] = {
+        "agent_id": lifetime_filter.get("agent_id"),
+        "spend_window": None,
+    }
+    history_data: Final[LiteLLM_AgentsTableUpdateManyMutationInput] = {"spend": {"increment": response_cost}}
+    table.update_many(
+        where=lifetime_filter,
+        data=lifetime_data,
+    )
+    table.update_many(
+        where=history_filter,
+        data=history_data,
+    )
 
 
 class _SpendBatchManager(Protocol):
@@ -1064,12 +1087,15 @@ class DBSpendUpdateWriter:
             router=get_llm_router(),
         )
 
-        _agent_id_for_spend: Final = payload_copy.get("agent_id")
+        _agent_id_for_spend: Final = payload_copy.get("billing_agent_id", payload_copy.get("agent_id"))
         try:
+            spend_metadata: Final = _SPEND_METADATA_ADAPTER.validate_json(payload_copy.get("metadata") or "{}")
+            captured_counter: Final = spend_metadata.get("billing_agent_counter_key")
             await self._update_agent_db(
                 response_cost=response_cost,
                 agent_id=_agent_id_for_spend,
                 prisma_client=prisma_client,
+                counter_key=captured_counter if isinstance(captured_counter, str) else None,
             )
         except Exception:
             verbose_proxy_logger.debug(
@@ -1347,15 +1373,19 @@ class DBSpendUpdateWriter:
         response_cost: float | None,
         agent_id: str | None,
         prisma_client: PrismaClient | None,
+        *,
+        counter_key: str | None = None,
     ):
         try:
             if agent_id is None or prisma_client is None:
                 return
+            if counter_key is not None and agent_spend_filter(counter_key).get("agent_id") != agent_id:
+                raise ValueError("Agent spend counter does not match the billed agent")
 
             await self.spend_update_queue.add_update(
                 update=SpendUpdateQueueItem(
                     entity_type=Litellm_EntityType.AGENT,
-                    entity_id=agent_id,
+                    entity_id=counter_key or agent_id,
                     response_cost=response_cost,
                 )
             )
@@ -2334,8 +2364,19 @@ class DBSpendUpdateWriter:
                                     entity_id,
                                     response_cost,
                                 )
+                                if table_accessor == "litellm_agentstable" and entity_id.startswith(
+                                    "spend:agent_lifetime:"
+                                ):
+                                    _queue_lifetime_agent_spend(
+                                        _entity_spend_table(batcher, table_accessor), entity_id, response_cost
+                                    )
+                                    continue
                                 _entity_spend_table(batcher, table_accessor).update_many(
-                                    where={where_field: entity_id},
+                                    where=(
+                                        agent_spend_filter(entity_id)
+                                        if table_accessor == "litellm_agentstable"
+                                        else {where_field: entity_id}
+                                    ),
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
@@ -2908,13 +2949,14 @@ class DBSpendUpdateWriter:
         if prisma_client is None:
             verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
             return
-        if payload["agent_id"] is None:
+        charged_agent_id: Final = payload.get("billing_agent_id", payload["agent_id"])
+        if charged_agent_id is None:
             return
         payload_with_agent_id: Final = cast(
             SpendLogsPayload,
             {
                 **payload,
-                "agent_id": payload["agent_id"],
+                "agent_id": charged_agent_id,
             },
         )
         base_daily_transaction: Final = await self._common_add_spend_log_transaction_to_daily_transaction(
@@ -2923,8 +2965,8 @@ class DBSpendUpdateWriter:
         if base_daily_transaction is None:
             return
         endpoint_str: Final = base_daily_transaction.get("endpoint") or ""
-        daily_transaction_key = f"{payload['agent_id']}_{base_daily_transaction['date']}_{payload_with_agent_id['api_key']}_{payload_with_agent_id['model']}_{payload_with_agent_id['custom_llm_provider']}_{endpoint_str}"
-        daily_transaction: Final = DailyAgentSpendTransaction(agent_id=payload["agent_id"], **base_daily_transaction)
+        daily_transaction_key = f"{charged_agent_id}_{base_daily_transaction['date']}_{payload_with_agent_id['api_key']}_{payload_with_agent_id['model']}_{payload_with_agent_id['custom_llm_provider']}_{endpoint_str}"
+        daily_transaction: Final = DailyAgentSpendTransaction(agent_id=charged_agent_id, **base_daily_transaction)
         await self.daily_agent_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
 
     async def add_spend_log_transaction_to_daily_tag_transaction(

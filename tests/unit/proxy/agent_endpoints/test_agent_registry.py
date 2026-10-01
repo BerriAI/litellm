@@ -1231,6 +1231,7 @@ def _stored_agent_row(values: Mapping[str, object] | SimpleNamespace) -> LiteLLM
             "created_by": "admin",
             "updated_by": "admin",
             "spend": 0,
+            "lifetime_budget_spend": 0,
             "identity_managed": False,
             "enabled": True,
             "execution_mode": "autonomous",
@@ -1431,6 +1432,7 @@ async def test_agent_listing_preserves_stored_identity_bindings(bound: bool) -> 
         enabled=True,
         execution_mode="autonomous",
         spend=0.0,
+        lifetime_budget_spend=0.0,
         agent_access_groups=[],
         access_group_ids=[],
         extra_headers=[],
@@ -1451,7 +1453,7 @@ async def test_agent_listing_preserves_stored_identity_bindings(bound: bool) -> 
         assert response.identity is None
     client.db.litellm_agentstable.find_many.assert_awaited_once_with(
         order={"created_at": "desc"},
-        include={"object_permission": True, "identity": True},
+        include={"object_permission": True, "identity": True, "litellm_budget_table": True},
     )
 
 
