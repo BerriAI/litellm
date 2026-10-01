@@ -9,10 +9,12 @@ auth are never read. Verified against codex-cli 0.135.0.
 
 from __future__ import annotations
 
+import itertools
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -33,6 +35,7 @@ from litellm.llms.base_llm.harness.transformation import (
     HarnessTurnError,
     HarnessTurnRequest,
     HarnessTurnResponse,
+    event_list,
 )
 from litellm.llms.base_llm.harness.utils import stderr_tail_text, strict_json_schema
 
@@ -68,22 +71,23 @@ class CodexStreamState:
     final_text: str = ""
     error: str | None = None
     failed: bool = False
-    started: set[str] = field(default_factory=set)
+    started: set[str] = field(default_factory=set)  # mutable-ok: parser records announced tool items
 
 
-def _tool_input(item: Mapping[str, Any]) -> tuple[str, str, dict[str, Any], bool]:
+def _tool_input(item: Mapping[str, Any]) -> tuple[str, str, Mapping[str, Any], bool]:
     """(normalized name, native name, input, builtin) for a tool-like item."""
     item_type = item.get("type")
     if item_type == "command_execution":
-        return "bash", "command_execution", {"command": item.get("command", "")}, True
+        return "bash", "command_execution", MappingProxyType({"command": item.get("command", "")}), True
     if item_type == "file_change":
-        return "edit", "apply_patch", {"changes": list(item.get("changes") or [])}, True
+        changes: Final = list(item.get("changes") or ())  # mutable-ok: JSON array, as codex reports it
+        return "edit", "apply_patch", MappingProxyType({"changes": changes}), True
     if item_type == "web_search":
-        return "web_search", "web_search", {"query": item.get("query", "")}, True
+        return "web_search", "web_search", MappingProxyType({"query": item.get("query", "")}), True
     server = str(item.get("server") or "")
     tool = str(item.get("tool") or "")
     arguments = item.get("arguments")
-    tool_args = arguments if isinstance(arguments, dict) else {"arguments": arguments}
+    tool_args = arguments if isinstance(arguments, dict) else MappingProxyType({"arguments": arguments})
     name = f"{server}.{tool}" if server else tool
     return name, tool, tool_args, False
 
@@ -97,7 +101,7 @@ def _tool_output(item: Mapping[str, Any]) -> tuple[str, bool]:
         is_error = status == "failed" or (exit_code is not None and exit_code != 0)
         return str(item.get("aggregated_output") or ""), is_error
     if item_type == "file_change":
-        lines = [f"{c.get('kind', '')} {c.get('path', '')}".strip() for c in item.get("changes") or []]
+        lines = (f"{c.get('kind', '')} {c.get('path', '')}".strip() for c in item.get("changes") or ())
         return "\n".join(lines), status == "failed"
     if item_type == "web_search":
         return "", status == "failed"
@@ -113,30 +117,34 @@ def _tool_output(item: Mapping[str, Any]) -> tuple[str, bool]:
     return json.dumps(result), status == "failed"
 
 
-def _item_events(event_type: str, item: Mapping[str, Any], state: CodexStreamState) -> list[Event]:
+def _tool_item_events(
+    item_id: str, item: Mapping[str, Any], completed: bool, state: CodexStreamState
+) -> Iterator[Event]:
+    if item_id not in state.started:
+        state.started.add(item_id)
+        name, native_name, tool_input, builtin = _tool_input(item)
+        yield ToolCall(id=item_id, name=name, native_name=native_name, input=tool_input, builtin=builtin)
+    if completed:
+        output, is_error = _tool_output(item)
+        yield ToolResult(id=item_id, output=output, is_error=is_error)
+
+
+def _item_events(event_type: str, item: Mapping[str, Any], state: CodexStreamState) -> Sequence[Event]:
     item_type = item.get("type")
     item_id = str(item.get("id") or "")
     completed = event_type == "item.completed"
     if item_type == "agent_message":
         if not completed:
-            return []
+            return event_list()
         text = str(item.get("text") or "")
         state.final_text = text
-        return [Text(delta=text)] if text else []
+        return event_list(Text(delta=text)) if text else event_list()
     if item_type == "reasoning":
         text = str(item.get("text") or "")
-        return [Reasoning(delta=text)] if completed and text else []
+        return event_list(Reasoning(delta=text)) if completed and text else event_list()
     if item_type not in _TOOL_ITEM_TYPES:
-        return []
-    events: list[Event] = []
-    if item_id not in state.started:
-        state.started.add(item_id)
-        name, native_name, tool_input, builtin = _tool_input(item)
-        events.append(ToolCall(id=item_id, name=name, native_name=native_name, input=tool_input, builtin=builtin))
-    if completed:
-        output, is_error = _tool_output(item)
-        events.append(ToolResult(id=item_id, output=output, is_error=is_error))
-    return events
+        return event_list()
+    return event_list(*_tool_item_events(item_id, item, completed, state))
 
 
 def toml_value(value: object, depth: int = 0) -> str:
@@ -162,26 +170,25 @@ def toml_key(key: object) -> str:
     return text if _BARE_TOML_KEY.match(text) else json.dumps(text)
 
 
-def config_overrides(config: Mapping[str, Any]) -> list[str]:
+def _config_override(key: object, value: object) -> str:
+    dotted = str(key)
+    if not dotted or "=" in dotted:
+        raise OptionsMismatch(f"Invalid CodexOptions.config key: {dotted!r}")
+    if dotted.split(".", 1)[0] in MANAGED_CONFIG_KEYS:
+        raise OptionsMismatch(
+            f"CodexOptions.config[{dotted!r}] is managed by LiteLLM; use the matching agent() argument instead"
+        )
+    return f"{dotted}={toml_value(value)}"
+
+
+def config_overrides(config: Mapping[str, Any]) -> Sequence[str]:
     """`-c` override strings for CodexOptions.config, rejecting managed keys."""
-    overrides: list[str] = []
-    for key, value in config.items():
-        dotted = str(key)
-        if not dotted or "=" in dotted:
-            raise OptionsMismatch(f"Invalid CodexOptions.config key: {dotted!r}")
-        if dotted.split(".", 1)[0] in MANAGED_CONFIG_KEYS:
-            raise OptionsMismatch(
-                f"CodexOptions.config[{dotted!r}] is managed by LiteLLM; use the matching agent() argument instead"
-            )
-        overrides.append(f"{dotted}={toml_value(value)}")
-    return overrides
+    overrides: Final = (_config_override(key, value) for key, value in config.items())
+    return list(overrides)  # mutable-ok: public helper; tests compare to a list
 
 
-def _flag_pairs(flag: str, values: Sequence[str]) -> list[str]:
-    argv: list[str] = []
-    for value in values:
-        argv.extend([flag, value])
-    return argv
+def _flag_pairs(flag: str, values: Sequence[str]) -> tuple[str, ...]:
+    return tuple(itertools.chain.from_iterable((flag, value) for value in values))
 
 
 class CodexHarnessConfig(BaseCLIHarnessConfig):
@@ -212,15 +219,18 @@ class CodexHarnessConfig(BaseCLIHarnessConfig):
         if ctx.endpoint is None:
             raise HarnessError("Codex needs the session model endpoint")
         options: CodexOptions = self.get_options(ctx)
-        files: dict[str, bytes] = {}
-        if ctx.output is not None:
-            schema = strict_json_schema(ctx.output.model_json_schema())
-            files[CODEX_SCHEMA_FILENAME] = json.dumps(schema).encode("utf-8")
+        files: Final = (
+            MappingProxyType(
+                {CODEX_SCHEMA_FILENAME: json.dumps(strict_json_schema(ctx.output.model_json_schema())).encode("utf-8")}
+            )
+            if ctx.output is not None
+            else MappingProxyType({})
+        )
         return HarnessSessionSetup(
             files=files,
-            persisted_dirs=[("sessions", "codex/sessions")],
+            persisted_dirs=[("sessions", "codex/sessions")],  # mutable-ok: tests compare to a list
             skills_dir="skills",
-            env={**options.env, CODEX_TOKEN_ENV: ctx.endpoint.token, "CODEX_HOME": private_dir},
+            env=MappingProxyType({**options.env, CODEX_TOKEN_ENV: ctx.endpoint.token, "CODEX_HOME": private_dir}),
         )
 
     def transform_turn_request(
@@ -234,83 +244,91 @@ class CodexHarnessConfig(BaseCLIHarnessConfig):
         if ctx.endpoint is None:
             raise HarnessError("Codex needs the session model endpoint")
         options: CodexOptions = self.get_options(ctx)
-        head = [CODEX_BINARY, "exec", "resume", native_session_id] if native_session_id else [CODEX_BINARY, "exec"]
-        argv = [*head, "--json", "--skip-git-repo-check"]
-        if ctx.model:
-            argv += ["-m", ctx.model]
-        argv += _flag_pairs("-c", self._provider_overrides(ctx))
-        argv += self._permission_args(ctx, native_session_id)
-        argv += _flag_pairs("-c", self._feature_overrides(ctx, options))
-        argv += _flag_pairs("-c", config_overrides(options.config))
-        if CODEX_SCHEMA_FILENAME in setup.files:
-            argv += ["--output-schema", f"{private_dir}/{CODEX_SCHEMA_FILENAME}"]
-        if not native_session_id:
-            argv += ["-C", ctx.sandbox.workdir]
-        argv.append("-")
+        head: Final = (
+            (CODEX_BINARY, "exec", "resume", native_session_id) if native_session_id else (CODEX_BINARY, "exec")
+        )
+        argv: Final = (
+            *head,
+            "--json",
+            "--skip-git-repo-check",
+            *(("-m", ctx.model) if ctx.model else ()),
+            *_flag_pairs("-c", self._provider_overrides(ctx)),
+            *self._permission_args(ctx, native_session_id),
+            *_flag_pairs("-c", self._feature_overrides(ctx, options)),
+            *_flag_pairs("-c", config_overrides(options.config)),
+            *(
+                ("--output-schema", f"{private_dir}/{CODEX_SCHEMA_FILENAME}")
+                if CODEX_SCHEMA_FILENAME in setup.files
+                else ()
+            ),
+            *(() if native_session_id else ("-C", ctx.sandbox.workdir)),
+            "-",
+        )
         return HarnessTurnRequest(argv=argv, env=setup.env, stdin=prompt, cwd=ctx.sandbox.workdir)
 
-    def _provider_overrides(self, ctx: SessionContext) -> list[str]:
+    def _provider_overrides(self, ctx: SessionContext) -> tuple[str, ...]:
         assert ctx.endpoint is not None
         base_url = ctx.sandbox.host_url(ctx.endpoint.port).rstrip("/") + "/v1"
         prefix = f"model_providers.{CODEX_PROVIDER_ID}"
-        return [
+        return (
             f"model_provider={CODEX_PROVIDER_ID}",
             f"{prefix}.name={CODEX_PROVIDER_ID}",
             f"{prefix}.base_url={toml_value(base_url)}",
             f"{prefix}.env_key={CODEX_TOKEN_ENV}",
             f"{prefix}.wire_api=responses",
             "approval_policy=never",
-        ]
+        )
 
     @staticmethod
-    def _permission_args(ctx: SessionContext, native_session_id: str | None) -> list[str]:
+    def _permission_args(ctx: SessionContext, native_session_id: str | None) -> tuple[str, ...]:
         if ctx.permissions == "read-only":
             mode = "read-only"
         elif getattr(ctx.sandbox, "is_container", False):
             # The container is already the boundary; nested sandboxing fails in containers.
-            return ["--dangerously-bypass-approvals-and-sandbox"]
+            return ("--dangerously-bypass-approvals-and-sandbox",)
         else:
             mode = "workspace-write"
         # `codex exec resume` has no --sandbox flag; the config key works for both.
         if native_session_id:
-            return ["-c", f"sandbox_mode={toml_value(mode)}"]
-        return ["--sandbox", mode]
+            return ("-c", f"sandbox_mode={toml_value(mode)}")
+        return ("--sandbox", mode)
 
     @staticmethod
-    def _feature_overrides(ctx: SessionContext, options: CodexOptions) -> list[str]:
-        overrides = [f"web_search={'live' if options.web_search else 'disabled'}"]
-        if options.reasoning_effort:
-            overrides += [
+    def _feature_overrides(ctx: SessionContext, options: CodexOptions) -> tuple[str, ...]:
+        reasoning: Final = (
+            (
                 f"model_reasoning_effort={options.reasoning_effort}",
                 "model_reasoning_summary=auto",
                 "model_supports_reasoning_summaries=true",
-            ]
-        if ctx.instructions:
-            overrides.append(f"developer_instructions={toml_value(ctx.instructions)}")
-        return overrides
+            )
+            if options.reasoning_effort
+            else ()
+        )
+        instructions: Final = (f"developer_instructions={toml_value(ctx.instructions)}",) if ctx.instructions else ()
+        return (f"web_search={'live' if options.web_search else 'disabled'}", *reasoning, *instructions)
 
     def create_stream_state(self) -> CodexStreamState:
         return CodexStreamState()
 
-    def transform_stream_line(self, line: Mapping[str, Any], state: CodexStreamState) -> list[Event]:
+    def transform_stream_line(self, line: Mapping[str, Any], state: CodexStreamState) -> Sequence[Event]:
         """turn.completed usage is ignored on purpose: the session endpoint accounts it."""
         event_type = line.get("type")
         if event_type == "thread.started":
             if line.get("thread_id"):
                 state.thread_id = str(line["thread_id"])
-            return []
+            return event_list()
         if event_type in ("item.started", "item.updated", "item.completed"):
             item = line.get("item")
-            return _item_events(str(event_type), item, state) if isinstance(item, dict) else []
+            return _item_events(str(event_type), item, state) if isinstance(item, dict) else event_list()
         if event_type == "error":
             state.error = str(line.get("message") or "codex reported an error")
-            return []
+            return event_list()
         if event_type == "turn.failed":
             error = line.get("error")
             message = error.get("message") if isinstance(error, dict) else error
             state.error = str(message or state.error or "codex turn failed")
             state.failed = True
-        return []
+        return event_list()
 
     def get_native_session_id(self, state: CodexStreamState) -> str | None:
         return state.thread_id
