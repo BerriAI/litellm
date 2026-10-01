@@ -520,6 +520,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/rag/ingest",
         "/rag/query",
         "/v1/rag/query",
+        # agent tracing: OTLP ingest + reads (scoped to the caller's team in the handler)
         "/engine",
         "/engine/{engine_id}",
         "/engine/{engine_id}/runs",
