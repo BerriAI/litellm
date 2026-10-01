@@ -685,6 +685,7 @@ def body_diff(expected: Mapping[str, JsonValue], body: Mapping[str, JsonValue]) 
 
 @dataclass(frozen=True, slots=True)
 class Forwarded:
+    model: JsonValue
     reasoning: dict[str, JsonValue]
     assistant_history: tuple[JsonValue, ...]
     other_changes: dict[str, JsonValue]
@@ -722,6 +723,7 @@ def _unrelated_fields(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
 def forwarded(sent: Mapping[str, JsonValue], request: Request) -> Forwarded:
     body: Final = JSON_OBJECT.validate_json(request.body)
     return Forwarded(
+        model=body.get("model"),
         reasoning={field: body[field] for field in REASONING_FIELDS if field in body},
         assistant_history=_assistant_history(body),
         other_changes=body_diff(_unrelated_fields(sent), _unrelated_fields(body)),
@@ -774,8 +776,15 @@ def _client_events(stream: str) -> tuple[tuple[str, dict[str, JsonValue]], ...]:
     return tuple((event, JSON_OBJECT.validate_python(data)) for event, data in sse_events(stream))
 
 
+def _stopped_indices(events: tuple[tuple[str, dict[str, JsonValue]], ...]) -> frozenset[JsonValue]:
+    return frozenset(data.get("index") for event, data in events if event == "content_block_stop")
+
+
 def streamed_content(stream: str) -> list[dict[str, JsonValue]]:
-    return [_finished(block) for block in reduce(_with_event, _client_events(stream), ())]
+    events: Final = _client_events(stream)
+    stopped: Final = _stopped_indices(events)
+    blocks: Final = reduce(_with_event, events, ())
+    return [_finished(block) for index, block in enumerate(blocks) if index in stopped]
 
 
 def streamed_usage(stream: str) -> JsonValue:

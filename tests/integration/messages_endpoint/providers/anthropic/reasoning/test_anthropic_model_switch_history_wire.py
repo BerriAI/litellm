@@ -63,6 +63,7 @@ def test_mid_loop_model_switch_replays_thinking_history_and_reasoning_unchanged(
     assert len(received) == 2, received
     to_fable: Final = cc.forwarded(turn1, received[0])
     to_opus: Final = cc.forwarded(turn2, received[1])
+    assert (to_fable.model, to_opus.model) == (cc.FABLE, cc.OPUS), received
     assert to_opus.assistant_history == (
         [
             {"type": "thinking", "thinking": "need to read the file", "signature": "sig_anthropic_1"},
