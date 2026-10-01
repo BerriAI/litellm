@@ -3808,6 +3808,50 @@ class TestConfigBaseForHealthCheck:
         assert "litellm_credential_name" not in base
         assert "api_key" not in base
 
+    @pytest.mark.parametrize(
+        "pricing_field,value",
+        [
+            ("input_cost_per_token", 1e-9),
+            ("output_cost_per_token", 2e-9),
+            ("cache_read_input_token_cost", 5e-10),
+        ],
+    )
+    def test_pricing_field_is_not_a_connection_override(self, pricing_field, value):
+        """Pricing fields are banned from a request body because they poison the
+        shared model-cost registry, not because they describe a connection. A
+        connection test that carries one still gets the configured credentials —
+        otherwise a healthy deployment reports "Missing credentials"."""
+        base = self._base(self.CONFIG, {"model": "openai/gpt-4o", pricing_field: value})
+        assert base["api_key"] == "sk-configured"
+        assert base["api_base"] == "https://configured.example/v1"
+
+    def test_pricing_field_alongside_a_real_override_still_drops_credentials(self):
+        """The pricing field is neutral, so the api_base beside it still decides."""
+        base = self._base(
+            self.CONFIG,
+            {"api_base": "https://caller.example/v1", "input_cost_per_token": 1e-9},
+        )
+        assert "api_key" not in base
+        assert "sk-configured" not in str(base)
+
+    def test_every_custom_pricing_field_is_excluded_from_the_connection_list(self):
+        from litellm.proxy.health_endpoints._health_endpoints import _CONNECTION_OVERRIDE_REQUEST_PARAMS
+        from litellm.types.utils import CustomPricingLiteLLMParams
+
+        connection_params = set(_CONNECTION_OVERRIDE_REQUEST_PARAMS)
+        for field in CustomPricingLiteLLMParams.model_fields:
+            assert field not in connection_params, (
+                f"CustomPricingLiteLLMParams.{field} is treated as a connection override, "
+                "so a connection test that sets it loses the configured credentials."
+            )
+
+    def test_connection_list_keeps_the_real_credential_and_endpoint_fields(self):
+        from litellm.proxy.health_endpoints._health_endpoints import _CONNECTION_OVERRIDE_REQUEST_PARAMS
+
+        connection_params = set(_CONNECTION_OVERRIDE_REQUEST_PARAMS)
+        for field in ("api_base", "base_url", "azure_ad_token", "vertex_credentials", "user_config"):
+            assert field in connection_params
+
     def test_stored_credential_reference_kept_when_request_sets_no_connection(self):
         """The Admin UI tests a configured model by naming it plus its stored
         credential and nothing else; that keeps working."""
@@ -3984,6 +4028,78 @@ class TestTestConnectionUsesTheNamedCredential:
 
         assert probe.url.host == "configured.example"
         assert probe.headers["authorization"] == f"Bearer {self.CREDENTIAL_KEY}"
+
+
+class TestTestConnectionLeavesSharedPricingAlone:
+    """A connection test must not write prices into ``litellm.model_cost``: a probe
+    carries no router deployment id, so ``completion`` would register them under
+    the shared ``{provider}/{model}`` key that sibling deployments price from."""
+
+    MODEL = "openai/test-connection-pricing-probe"
+    SHARED_KEY = MODEL
+    CONFIG_KEY = "sk-configured"
+    COMPLETION = TestTestConnectionUsesTheNamedCredential.COMPLETION
+
+    def _probe(self, monkeypatch, config_litellm_params: dict, request_litellm_params: dict) -> httpx.Request:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        app = FastAPI()
+        app.include_router(_health_endpoints_module.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        router = MagicMock()
+        router.get_deployment.return_value = None
+        router.get_model_list.return_value = [
+            {"model_name": "pricing-probe", "litellm_params": config_litellm_params, "model_info": {}}
+        ]
+
+        with (
+            patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+                "litellm.proxy.proxy_server.prisma_client", MagicMock()
+            ),
+            patch(  # test-quality-ok: the deployment the probe is matched against is a proxy global; it has no injection seam
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            respx.mock(assert_all_called=True) as respx_mock,
+        ):
+            respx_mock.post(path__regex=r".*/chat/completions").respond(json=self.COMPLETION)
+            response = TestClient(app).post(
+                "/health/test_connection",
+                json={"mode": "chat", "litellm_params": request_litellm_params, "model_info": {"mode": "chat"}},
+            )
+            probe = respx_mock.calls.last.request
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "success", response.text
+        return probe
+
+    def test_request_pricing_is_not_registered_under_the_shared_key(self, monkeypatch):
+        probe = self._probe(
+            monkeypatch,
+            {"model": self.MODEL, "api_key": self.CONFIG_KEY, "api_base": "https://configured.example/v1"},
+            {"model": self.MODEL, "input_cost_per_token": 1.0, "output_cost_per_token": 2.0},
+        )
+
+        assert probe.headers["authorization"] == f"Bearer {self.CONFIG_KEY}"
+        assert self.SHARED_KEY not in litellm.model_cost
+
+    def test_configured_pricing_is_not_registered_under_the_shared_key(self, monkeypatch):
+        probe = self._probe(
+            monkeypatch,
+            {
+                "model": self.MODEL,
+                "api_key": self.CONFIG_KEY,
+                "api_base": "https://configured.example/v1",
+                "input_cost_per_token": 3.0,
+                "output_cost_per_token": 4.0,
+            },
+            {"model": self.MODEL},
+        )
+
+        assert probe.url.host == "configured.example"
+        assert self.SHARED_KEY not in litellm.model_cost
 
 
 class TestNoRedisWarning:
