@@ -80,7 +80,7 @@ def decode_otlp(
     return _native().trace_decode_otlp(body, content_type, content_encoding, max_decompressed_bytes)
 
 
-class TraceStorage:
+class ClickHouseStorage:
     def __init__(self, database: str, url: str, reader_url: str | None = None) -> None:
         self._native: Final = _native().NativeTraceStorage(database, url, reader_url)
 

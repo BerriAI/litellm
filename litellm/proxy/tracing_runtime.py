@@ -8,7 +8,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
-from litellm.rust_bridge.traces import TraceStorage
+from litellm.rust_bridge.traces import ClickHouseStorage
 from litellm.tracing import TraceReceiver
 
 _RECEIVER_ADAPTER: Final[TypeAdapter[TraceReceiver | None]] = TypeAdapter(
@@ -27,7 +27,7 @@ async def provide_receiver(request: Request) -> TraceReceiver | None:
     return _RECEIVER_ADAPTER.validate_python(getattr(request.state, "tracing_receiver", None))
 
 
-async def provide_storage(request: Request) -> TraceStorage | None:
+async def provide_storage(request: Request) -> ClickHouseStorage | None:
     tracing: Final = await provide_receiver(request)
     return tracing.store.storage if tracing is not None else None
 

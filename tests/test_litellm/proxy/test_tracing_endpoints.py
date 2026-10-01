@@ -15,9 +15,9 @@ from litellm.proxy import tracing_endpoints
 from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
-from litellm.rust_bridge.traces import TraceStorage
+from litellm.rust_bridge.traces import ClickHouseStorage
 from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
-from litellm.tracing.store import ClickHouseTraceStore
+from litellm.tracing.store import TraceStore
 from litellm.tracing.types import TraceScope
 
 TEAM_KEY = UserAPIKeyAuth(
@@ -236,9 +236,9 @@ def test_disabled_receiver_precedes_read_scope_rejection(client: TestClient) -> 
 
 @pytest.mark.requires_rust_extension
 def test_injected_receiver_persists_authenticated_tenant(client: TestClient) -> None:
-    storage: Final = MagicMock(spec=TraceStorage)
+    storage: Final = MagicMock(spec=ClickHouseStorage)
     storage.insert_rows = AsyncMock()
-    tracing: Final = TraceReceiver(ClickHouseTraceStore(storage))
+    tracing: Final = TraceReceiver(TraceStore(storage))
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
     response: Final = client.post(
         "/v1/traces",
@@ -285,7 +285,7 @@ def test_injected_receiver_persists_authenticated_tenant(client: TestClient) -> 
 
 
 def test_lifespan_receivers_are_app_local() -> None:
-    first_storage: Final = MagicMock(spec=TraceStorage)
+    first_storage: Final = MagicMock(spec=ClickHouseStorage)
     first_storage.query = AsyncMock(
         return_value=[
             {
@@ -296,7 +296,7 @@ def test_lifespan_receivers_are_app_local() -> None:
             }
         ]
     )
-    second_storage: Final = MagicMock(spec=TraceStorage)
+    second_storage: Final = MagicMock(spec=ClickHouseStorage)
     second_storage.query = AsyncMock(
         return_value=[
             {
@@ -307,8 +307,8 @@ def test_lifespan_receivers_are_app_local() -> None:
             }
         ]
     )
-    first_receiver: Final = TraceReceiver(ClickHouseTraceStore(first_storage))
-    second_receiver: Final = TraceReceiver(ClickHouseTraceStore(second_storage))
+    first_receiver: Final = TraceReceiver(TraceStore(first_storage))
+    second_receiver: Final = TraceReceiver(TraceStore(second_storage))
     first_storage.ensure_schema = AsyncMock()
     second_storage.ensure_schema = AsyncMock()
 
@@ -386,9 +386,9 @@ def test_query_validation_precedes_trace_access_checks(client: TestClient, auth:
 
 @pytest.mark.parametrize("enabled", [True, False])
 def test_unavailable_lifespan_receiver_returns_501(enabled: bool) -> None:
-    storage: Final = MagicMock(spec=TraceStorage)
+    storage: Final = MagicMock(spec=ClickHouseStorage)
     storage.ensure_schema = AsyncMock(side_effect=RuntimeError("storage unavailable"))
-    tracing: Final = TraceReceiver(ClickHouseTraceStore(storage))
+    tracing: Final = TraceReceiver(TraceStore(storage))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
@@ -409,10 +409,10 @@ def test_unavailable_lifespan_receiver_returns_501(enabled: bool) -> None:
 def test_lens_reads_from_the_lifespan_storage() -> None:
     from litellm.proxy.engine.endpoints import router as engine_router
 
-    storage: Final = MagicMock(spec=TraceStorage)
+    storage: Final = MagicMock(spec=ClickHouseStorage)
     storage.ensure_schema = AsyncMock()
     storage.lens_sample = AsyncMock(return_value=[])
-    tracing: Final = TraceReceiver(ClickHouseTraceStore(storage))
+    tracing: Final = TraceReceiver(TraceStore(storage))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:

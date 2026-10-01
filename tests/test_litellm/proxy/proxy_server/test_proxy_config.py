@@ -50,19 +50,20 @@ async def test_tracing_config_automatically_logs_spend_without_callback_setting(
     from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
     from litellm.proxy.tracing_runtime import manage_tracing
     from litellm.tracing import TraceReceiver
-    from litellm.tracing.store import ClickHouseTraceStore
+    from litellm.tracing.store import TraceStore
 
     storage: Final = MagicMock()
     storage.ensure_schema = AsyncMock()
     storage.insert_rows = AsyncMock()
-    receiver: Final = TraceReceiver(ClickHouseTraceStore(storage))
+    receiver: Final = TraceReceiver(TraceStore(storage))
 
     outcome: Final = pytest.raises(RuntimeError, match="shutdown failure") if shutdown_error else nullcontext()
     with outcome:
         async with manage_tracing(enabled=True, receiver_factory=lambda: receiver):
             storage.ensure_schema.assert_awaited_once()
             logger: Final = next(
-                callback for callback in litellm._async_success_callback
+                callback
+                for callback in litellm._async_success_callback
                 if isinstance(callback, ClickHouseSpendLogger) and callback.storage is storage
             )
             now: Final = datetime.now()
