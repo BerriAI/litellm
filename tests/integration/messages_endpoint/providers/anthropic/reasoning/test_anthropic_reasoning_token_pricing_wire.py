@@ -56,4 +56,9 @@ def test_reported_thinking_tokens_are_billed_at_the_reasoning_rate_and_the_rest_
             lambda values: len(values) == 1,
             seconds=70,
         )
-    assert float(rows[0]["spend"]) == pytest.approx(100 * _INPUT_RATE + 20 * _OUTPUT_RATE + 30 * _REASONING_RATE)
+    input_tokens, output_tokens, thinking_tokens = 100, 50, 30
+    assert float(rows[0]["spend"]) == pytest.approx(
+        input_tokens * _INPUT_RATE
+        + (output_tokens - thinking_tokens) * _OUTPUT_RATE
+        + thinking_tokens * _REASONING_RATE
+    ), rows

@@ -2,9 +2,12 @@
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
+from functools import reduce
 from itertools import chain
 from typing import Final
 
+from integration._support.wire import Request
 from pydantic import JsonValue, TypeAdapter
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -23,9 +26,12 @@ CACHE: Final = {"type": "ephemeral"}
 CONTEXT_MANAGEMENT: Final = {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}
 THINKING_BUDGET: Final = {"budget_tokens": 31999, "type": "enabled", "display": "omitted"}
 THINKING_ADAPTIVE: Final = {"type": "adaptive", "display": "omitted"}
-REASONING_BETAS: Final = frozenset(
-    {"effort-2025-11-24", "interleaved-thinking-2025-05-14", "thinking-token-count-2026-05-13"}
+CLAUDE_CODE_REASONING_BETAS: Final = (
+    "effort-2025-11-24",
+    "interleaved-thinking-2025-05-14",
+    "thinking-token-count-2026-05-13",
 )
+REASONING_FIELDS: Final = ("thinking", "output_config", "reasoning_effort", "temperature")
 _OUTPUT_USAGE_KEYS: Final = frozenset({"output_tokens", "output_tokens_details"})
 METADATA_USER_ID: Final = json.dumps(
     {
@@ -666,7 +672,7 @@ def sse_events(text: str) -> tuple[tuple[str, dict[str, object]], ...]:
 
 
 def reasoning_betas(anthropic_beta: str) -> tuple[str, ...]:
-    return tuple(sorted(beta for beta in anthropic_beta.split(",") if beta in REASONING_BETAS))
+    return tuple(sorted(beta for beta in anthropic_beta.split(",") if beta in CLAUDE_CODE_REASONING_BETAS))
 
 
 def body_diff(expected: Mapping[str, JsonValue], body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
@@ -675,6 +681,105 @@ def body_diff(expected: Mapping[str, JsonValue], body: Mapping[str, JsonValue]) 
         for key in expected.keys() | body.keys()
         if expected.get(key) != body.get(key)
     }
+
+
+@dataclass(frozen=True, slots=True)
+class Forwarded:
+    reasoning: dict[str, JsonValue]
+    assistant_history: tuple[JsonValue, ...]
+    other_changes: dict[str, JsonValue]
+    reasoning_betas: tuple[str, ...]
+
+
+def _is_assistant_turn(message: JsonValue) -> bool:
+    return isinstance(message, dict) and message.get("role") == "assistant"
+
+
+def _assistant_history(body: Mapping[str, JsonValue]) -> tuple[JsonValue, ...]:
+    messages: Final = body.get("messages")
+    if not isinstance(messages, list):
+        return ()
+    return tuple(
+        message["content"] for message in messages if isinstance(message, dict) and _is_assistant_turn(message)
+    )
+
+
+def _without_assistant_turns(messages: JsonValue) -> JsonValue:
+    if not isinstance(messages, list):
+        return messages
+    return [message for message in messages if not _is_assistant_turn(message)]
+
+
+def _unrelated_fields(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    excluded: Final = frozenset({*REASONING_FIELDS, "model"})
+    return {
+        key: _without_assistant_turns(value) if key == "messages" else value
+        for key, value in body.items()
+        if key not in excluded
+    }
+
+
+def forwarded(sent: Mapping[str, JsonValue], request: Request) -> Forwarded:
+    body: Final = JSON_OBJECT.validate_json(request.body)
+    return Forwarded(
+        reasoning={field: body[field] for field in REASONING_FIELDS if field in body},
+        assistant_history=_assistant_history(body),
+        other_changes=body_diff(_unrelated_fields(sent), _unrelated_fields(body)),
+        reasoning_betas=reasoning_betas(request.headers.get("anthropic-beta", "")),
+    )
+
+
+def _appended(block: Mapping[str, JsonValue], key: str, text: str) -> dict[str, JsonValue]:
+    return {**block, key: f"{block.get(key) or ''}{text}"}
+
+
+def _with_delta(block: dict[str, JsonValue], delta: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    match delta:
+        case {"type": "thinking_delta", "thinking": str(text)}:
+            return _appended(block, "thinking", text)
+        case {"type": "signature_delta", "signature": str(text)}:
+            return _appended(block, "signature", text)
+        case {"type": "text_delta", "text": str(text)}:
+            return _appended(block, "text", text)
+        case {"type": "input_json_delta", "partial_json": str(text)}:
+            return _appended(block, "partial_json", text)
+        case _:
+            return block
+
+
+def _with_event(
+    blocks: tuple[dict[str, JsonValue], ...], event: tuple[str, dict[str, JsonValue]]
+) -> tuple[dict[str, JsonValue], ...]:
+    match event:
+        case ("content_block_start", {"content_block": dict() as block}):
+            return (*blocks, JSON_OBJECT.validate_python(block))
+        case ("content_block_delta", {"index": int(index), "delta": dict() as delta}):
+            return (
+                *blocks[:index],
+                _with_delta(blocks[index], JSON_OBJECT.validate_python(delta)),
+                *blocks[index + 1 :],
+            )
+        case _:
+            return blocks
+
+
+def _finished(block: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    partial_json: Final = block.get("partial_json")
+    if not isinstance(partial_json, str):
+        return dict(block)
+    return {**{key: value for key, value in block.items() if key != "partial_json"}, "input": json.loads(partial_json)}
+
+
+def _client_events(stream: str) -> tuple[tuple[str, dict[str, JsonValue]], ...]:
+    return tuple((event, JSON_OBJECT.validate_python(data)) for event, data in sse_events(stream))
+
+
+def streamed_content(stream: str) -> list[dict[str, JsonValue]]:
+    return [_finished(block) for block in reduce(_with_event, _client_events(stream), ())]
+
+
+def streamed_usage(stream: str) -> JsonValue:
+    return next(data.get("usage") for event, data in reversed(_client_events(stream)) if event == "message_delta")
 
 
 def _start_usage(usage: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
