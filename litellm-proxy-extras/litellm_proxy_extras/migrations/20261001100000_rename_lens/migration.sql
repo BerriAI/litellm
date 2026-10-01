@@ -4,9 +4,9 @@ BEGIN
     ALTER TABLE IF EXISTS "LiteLLM_EngineRun" RENAME TO "LiteLLM_LensRun";
     ALTER TABLE IF EXISTS "LiteLLM_EngineWorker" RENAME TO "LiteLLM_LensWorker";
     IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = current_schema()
-          AND table_name = 'LiteLLM_LensRun' AND column_name = 'engine_id'
+        SELECT 1 FROM pg_attribute
+        WHERE attrelid = to_regclass('"LiteLLM_LensRun"')
+          AND attname = 'engine_id' AND NOT attisdropped
     ) THEN
         ALTER TABLE "LiteLLM_LensRun" RENAME COLUMN "engine_id" TO "lens_id";
     END IF;

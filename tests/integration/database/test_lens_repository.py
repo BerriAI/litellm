@@ -70,7 +70,8 @@ async def test_heartbeat_never_restores_revoked_access(lens_db: Prisma) -> None:
 
 
 @pytest.mark.parametrize("populated", (False, True))
-def test_lens_rename_preserves_saved_data_and_worker_credentials(populated: bool) -> None:
+@pytest.mark.parametrize("preceding_schema", (False, True))
+def test_lens_rename_preserves_saved_data_and_worker_credentials(populated: bool, preceding_schema: bool) -> None:
     migrations: Final = (
         Path(__file__).resolve().parents[3] / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
     )
@@ -86,6 +87,14 @@ def test_lens_rename_preserves_saved_data_and_worker_credentials(populated: bool
                     """INSERT INTO "LiteLLM_Engine" VALUES ('lens', 7, '{"findings":[{"id":"finding"}]}');
                     INSERT INTO "LiteLLM_EngineWorker" VALUES ('worker', 'token-hash', '{"analysis_key_id":"key"}');
                     INSERT INTO "LiteLLM_EngineRun" VALUES ('batch', 'lens', '2026-01-01', '{"cost":1.25}')"""
+                )
+            if preceding_schema:
+                first_schema: Final = f"lens_first_{uuid4().hex}"
+                connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(first_schema)))
+                connection.execute(
+                    sql.SQL("SET LOCAL search_path TO {}, {}").format(
+                        sql.Identifier(first_schema), sql.Identifier(schema)
+                    )
                 )
             connection.execute(sql.SQL((migrations / "20261001100000_rename_lens" / "migration.sql").read_text()))
             connection.execute(sql.SQL((migrations / "20261001100000_rename_lens" / "migration.sql").read_text()))
