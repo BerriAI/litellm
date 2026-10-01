@@ -6,7 +6,9 @@ from contextlib import ExitStack, asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from fastapi import HTTPException, Request
 
 import litellm
@@ -203,7 +205,24 @@ def test_microsoft_sso_handler_openid_from_response_with_custom_attributes():
     assert result.team_ids == expected_team_ids
 
 
-def test_get_microsoft_callback_response():
+@pytest.fixture
+def microsoft_httpx_transport(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.fixture
+def stubbed_graph_api(microsoft_httpx_transport):
+    with respx.mock:
+        respx.get(url__regex=r".*graph\.microsoft\.com.*").mock(
+            return_value=httpx.Response(200, json={"value": []})
+        )
+        yield
+
+
+def test_get_microsoft_callback_response(stubbed_graph_api):
     # Arrange
     mock_request = MagicMock(spec=Request)
     mock_request.scope = {}
@@ -243,7 +262,7 @@ def test_get_microsoft_callback_response():
     assert result.last_name == "User"
 
 
-def test_get_microsoft_callback_response_raw_sso_response():
+def test_get_microsoft_callback_response_raw_sso_response(stubbed_graph_api):
     # Arrange
     mock_request = MagicMock(spec=Request)
     mock_response = {

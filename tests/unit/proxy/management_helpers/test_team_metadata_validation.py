@@ -283,7 +283,7 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import AsyncMock, MagicMock, Mock
 
-import team_metadata_validator_impls as impls
+from tests.unit.proxy.management_helpers import team_metadata_validator_impls as impls
 
 from litellm.proxy._types import ProxyException
 from litellm.proxy.management_helpers.team_metadata_validation import (

@@ -38,7 +38,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
 )
 from litellm.proxy.proxy_server import app
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
-from tests.test_litellm.proxy.management_endpoints.jwt_key_mapping_doubles import (
+from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
 )
