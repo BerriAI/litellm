@@ -312,3 +312,19 @@ def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
         assert recovered.status_code == 200, recovered.text
         assert recovered.json() == envelope
     assert recording_server.requests[-2].raw_body == b"SELEC 42"
+
+
+@pytest.mark.asyncio
+async def test_trace_receiver_reads_with_only_one_clickhouse_url(
+    recording_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLICKHOUSE_URL", recording_server.base_url)
+    monkeypatch.setenv("CLICKHOUSE_DATABASE", "trace_test")
+    monkeypatch.delenv("CLICKHOUSE_READER_URL", raising=False)
+    recording_server.enqueue(ResponseSpec(body={"data": [{"trace_id": "trace-1"}]}))
+    receiver: Final = TraceReceiver.from_env()
+    rows: Final = await receiver.store.storage.query("trace_spans", {"trace_id": "trace-1"})
+    assert rows == [{"trace_id": "trace-1"}]
+    parameters: Final = parse_qs(urlsplit(recording_server.requests[0].path).query)
+    assert parameters["database"] == ["trace_test"]
+    assert parameters["readonly"] == ["1"]
