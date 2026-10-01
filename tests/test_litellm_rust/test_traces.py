@@ -1,10 +1,12 @@
 import base64
 import gzip
 import json
+from time import time_ns
 from typing import Final
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.rust_bridge._native import NativeTraceStorage
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
@@ -17,13 +19,19 @@ async def test_trace_reader_projects_connection_and_parameters(recording_server:
     recording_server.enqueue(ResponseSpec(body={"data": [{"trace_id": "trace-1"}]}))
     reader_url: Final = recording_server.base_url.replace("http://", "http://reader:p%40ss%2Fword%25@")
     storage: Final = NativeTraceStorage("trace_test", recording_server.base_url, reader_url + "?database=wrong")
-    rows: Final = json.loads(await storage.query("SELECT {trace_id:String} AS trace_id", {"trace_id": "trace-1"}))
+    rows: Final = json.loads(
+        await storage.query(
+            "trace_spans", {"trace_id": "trace-1", "team_ids": ["team-1"], "api_key_hash": "", "trace_ref": ""}
+        )
+    )
     request: Final = recording_server.requests[0]
     parameters: Final = parse_qs(urlsplit(request.path).query)
-    assert rows == [{"trace_id": "trace-1"}]
-    assert request.raw_body == b"SELECT {trace_id:String} AS trace_id"
+    assert rows == {"data": [{"trace_id": "trace-1"}]}
+    assert b"FROM otel_traces AS o" in request.raw_body
+    assert b"o.TraceId = {trace_id:String}" in request.raw_body
     assert parameters["database"] == ["trace_test"]
     assert parameters["param_trace_id"] == ["trace-1"]
+    assert parameters["param_team_ids"] == ["['team-1']"]
     assert parameters["readonly"] == ["1"]
     assert "user" not in parameters
     assert "password" not in parameters
@@ -35,7 +43,19 @@ async def test_trace_reader_rejects_success_status_with_embedded_error(recording
     recording_server.enqueue(ResponseSpec(body={"data": [], "exception": "query failed"}))
     storage: Final = NativeTraceStorage("trace_test", recording_server.base_url, recording_server.base_url)
     with pytest.raises(RuntimeError, match="invalid or failed JSON"):
-        await storage.query("SELECT 1", {})
+        await storage.query("trace_spans", {"trace_id": "trace-1", "team_ids": [], "api_key_hash": "", "trace_ref": ""})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ("SELECT 1", "DROP TABLE otel_traces", "unknown"))
+async def test_trace_reader_rejects_raw_sql_and_unknown_queries(recording_server: RecordingServer, query: str) -> None:
+    recording_server.expected_requests = 0
+    storage: Final = NativeTraceStorage("trace_test", recording_server.base_url, recording_server.base_url)
+
+    with pytest.raises(ValueError, match="unknown ClickHouse read query"):
+        await storage.query(query, {})
+
+    assert recording_server.requests == []
 
 
 @pytest.mark.asyncio
@@ -52,7 +72,9 @@ async def test_schema_binding_rejects_non_positive_retention() -> None:
 
 
 @pytest.mark.asyncio
-async def test_schema_setup_uses_writer_credentials_and_rejects_failed_statement(recording_server: RecordingServer) -> None:
+async def test_schema_setup_uses_writer_credentials_and_rejects_failed_statement(
+    recording_server: RecordingServer,
+) -> None:
     recording_server.expected_requests = 2
     recording_server.enqueue(ResponseSpec(body=""))
     recording_server.enqueue(ResponseSpec(status=403, body="denied"))
@@ -64,20 +86,30 @@ async def test_schema_setup_uses_writer_credentials_and_rejects_failed_statement
     assert recording_server.requests[0].raw_body.startswith(b"CREATE DATABASE IF NOT EXISTS")
     assert recording_server.requests[1].raw_body.startswith(b"CREATE TABLE IF NOT EXISTS")
     assert "readonly" not in parse_qs(urlsplit(recording_server.requests[0].path).query)
-    assert recording_server.requests[0].headers["authorization"] == "Basic " + base64.b64encode(
-        b"writer:p@ss/word%"
-    ).decode()
+    assert (
+        recording_server.requests[0].headers["authorization"]
+        == "Basic " + base64.b64encode(b"writer:p@ss/word%").decode()
+    )
 
 
 @pytest.mark.asyncio
 async def test_insert_encodes_and_sends_rows(recording_server: RecordingServer) -> None:
     recording_server.enqueue(ResponseSpec(body=""))
     storage: Final = NativeTraceStorage("trace_test", recording_server.base_url)
-    await storage.insert_rows("otel_traces", [{"Timestamp": 1_234_567_890, "Input": "hello"}])
+    before_ms: Final = time_ns() // 1_000_000
+    await storage.insert_rows("otel_traces", [{"Timestamp": 1_234_567_890, "Input": "hello", "EngineReceivedMs": 0}])
+    after_ms: Final = time_ns() // 1_000_000
     request: Final = recording_server.requests[0]
-    assert json.loads(gzip.decompress(request.raw_body)) == {
+    row: Final = TypeAdapter(dict[str, JsonValue]).validate_json(gzip.decompress(request.raw_body))
+    received_ms: Final = row["EngineReceivedMs"]
+    assert isinstance(received_ms, int)
+    assert before_ms <= received_ms <= after_ms
+    assert row == {
         "Input": "hello",
         "Timestamp": "1970-01-01T00:00:01.23456789Z",
+        "EngineReceivedMs": received_ms,
     }
-    assert parse_qs(urlsplit(request.path).query)["query"] == ["INSERT INTO `trace_test`.otel_traces FORMAT JSONEachRow"]
+    assert parse_qs(urlsplit(request.path).query)["query"] == [
+        "INSERT INTO `trace_test`.otel_traces FORMAT JSONEachRow"
+    ]
     assert request.headers["content-encoding"] == "gzip"
