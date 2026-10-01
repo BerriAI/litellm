@@ -16,6 +16,7 @@ from integration._support.mcp import (
     tool_calls,
     tool_names,
 )
+from integration._support.oauth_server import oauth_server
 
 ADD: Final = {"a": 2, "b": 3}
 STATIC_MODES: Final = (
@@ -194,6 +195,56 @@ def test_byok_server_uses_the_calling_users_stored_credential_and_fails_closed_w
         assert tool_calls(peer.drain()) == ()
 
 
+def _listings(peer: McpPeer) -> tuple[dict[str, object], ...]:
+    return tuple(
+        item
+        for item in peer.drain()
+        if isinstance(item.get("body"), dict) and item["body"].get("method") == "tools/list"
+    )
+
+
+def test_oauth2_byok_listing_sends_the_minted_token_not_the_users_stored_secret(gateway: Gateway) -> None:
+    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+        alias: Final = "cc" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(
+            scenario,
+            peer,
+            alias,
+            auth_type="oauth2",
+            oauth2_flow="client_credentials",
+            is_byok=True,
+            token_url=auth.issuer + "/token",
+            credentials={"client_id": "cc-client", "client_secret": "cc-secret-" + uuid.uuid4().hex},
+        )
+        owner: Final = scenario.user()
+        owner_key: Final = scenario.key(user_id=owner, object_permission={"mcp_servers": [identity]})
+        secret: Final = "byok-" + uuid.uuid4().hex
+        stored: Final = gateway.client.post(
+            f"/v1/mcp/server/{identity}/user-credential",
+            json={"credential": secret},
+            headers={"x-litellm-api-key": owner_key},
+        )
+        assert stored.status_code in (200, 201), stored.text
+        scenario.cleanups.callback(
+            gateway.client.delete,
+            f"/v1/mcp/server/{identity}/user-credential",
+            headers={"x-litellm-api-key": owner_key},
+        )
+        peer.drain()
+        auth.drain()
+        response: Final = gateway.client.get(
+            "/mcp-rest/tools/list", params={"server_id": identity}, headers={"x-litellm-api-key": owner_key}
+        )
+        assert response.status_code == 200, response.text
+        assert "add" in {tool["name"] for tool in response.json()["tools"]}, response.text
+        assert [request["grant_type"] for request in auth.token_requests()] == ["client_credentials"]
+        listings: Final = _listings(peer)
+        assert len(listings) == 1, listings
+        sent: Final = _header(listings[0], b"authorization")
+        assert sent is not None and auth.is_live(sent.decode().removeprefix("Bearer ")), sent
+        assert secret.encode() not in sent, "stored BYOK secret replaced the minted token on tools/list"
+
+
 def test_deprecated_string_x_mcp_auth_lists_a_byok_server_for_a_key_without_a_user(gateway: Gateway) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "byok" + uuid.uuid4().hex[:8]
@@ -208,10 +259,6 @@ def test_deprecated_string_x_mcp_auth_lists_a_byok_server_for_a_key_without_a_us
         assert response.status_code == 200, response.text
         names: Final = {tool["name"] for tool in response.json()["tools"]}
         assert "add" in names, names
-        listings: Final = tuple(
-            item
-            for item in peer.drain()
-            if isinstance(item.get("body"), dict) and item["body"].get("method") == "tools/list"
-        )
+        listings: Final = _listings(peer)
         assert len(listings) == 1, listings
         assert listings[0]["headers"].get(b"authorization") == b"Bearer hdr"
