@@ -3761,7 +3761,8 @@ export interface paths {
          *     verify models via `GET {base}/models` (the OpenAI SDK contract). Without this
          *     route those requests fall through to the Cursor Cloud Agents passthrough, which
          *     demands a Cursor API key and 401s, so key verification silently fails before any
-         *     chat request is ever sent. Delegates to the standard `/v1/models` handler.
+         *     chat request is ever sent. Delegates to the standard `/v1/models` handler with
+         *     wildcard routes left out, since Cursor offers every listed id as a callable model.
          */
         get: operations["cursor_model_list_cursor_models_get"];
         put?: never;
@@ -3787,7 +3788,8 @@ export interface paths {
          *     verify models via `GET {base}/models` (the OpenAI SDK contract). Without this
          *     route those requests fall through to the Cursor Cloud Agents passthrough, which
          *     demands a Cursor API key and 401s, so key verification silently fails before any
-         *     chat request is ever sent. Delegates to the standard `/v1/models` handler.
+         *     chat request is ever sent. Delegates to the standard `/v1/models` handler with
+         *     wildcard routes left out, since Cursor offers every listed id as a callable model.
          */
         get: operations["cursor_model_list_cursor_v1_models_get"];
         put?: never;
@@ -10105,6 +10107,10 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - return_wildcard_routes: When true, also list wildcard routes (e.g. `openai/*`)
+         *                     next to the models they expand to. Defaults to
+         *                     `general_settings.model_list_return_wildcard_routes`, which is
+         *                     false unless set; pass `false` to leave them out regardless.
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -20521,6 +20527,10 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - return_wildcard_routes: When true, also list wildcard routes (e.g. `openai/*`)
+         *                     next to the models they expand to. Defaults to
+         *                     `general_settings.model_list_return_wildcard_routes`, which is
+         *                     false unless set; pass `false` to leave them out regardless.
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -28992,6 +29002,11 @@ export interface components {
              * @description When true, `/models`, `/v1/models/{id}` and `/model/info` hide models whose backing deployments are all unhealthy, for every caller, without needing `healthy_only=true` per request. Requires `background_health_checks: true`, and keeps deployment health state cached without turning on `enable_health_check_routing`, so routing is unaffected. With no health state nothing is hidden. Hiding is presentation-only, a hidden model can still be called.
              */
             model_list_healthy_only?: boolean | null;
+            /**
+             * Model List Return Wildcard Routes
+             * @description When true, `/v1/models` lists wildcard routes such as `openai/*` next to the models they expand to, without the caller passing `return_wildcard_routes=true`. A request that passes `return_wildcard_routes=false` still leaves them out, as do the dashboard's model pickers and `/cursor/v1/models`.
+             */
+            model_list_return_wildcard_routes?: boolean | null;
             /**
              * Otel
              * @description [BETA] OpenTelemetry support - this might change, use with caution.
@@ -62380,6 +62395,7 @@ export interface operations {
             query?: {
                 team_id?: string | null;
                 healthy_only?: boolean | null;
+                return_wildcard_routes?: boolean | null;
             };
             header?: never;
             path: {
@@ -75976,6 +75992,7 @@ export interface operations {
             query?: {
                 team_id?: string | null;
                 healthy_only?: boolean | null;
+                return_wildcard_routes?: boolean | null;
             };
             header?: never;
             path: {

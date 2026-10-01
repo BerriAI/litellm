@@ -1916,7 +1916,7 @@ export const modelAvailableCall = async (
       accessToken,
       query: {
         include_model_access_groups: "True",
-        return_wildcard_routes: return_wildcard_routes === true ? "True" : undefined,
+        return_wildcard_routes: return_wildcard_routes === true ? "True" : "False",
         only_model_access_groups: only_model_access_groups === true ? "True" : undefined,
         team_id: teamID || undefined,
         scope: scope || undefined,

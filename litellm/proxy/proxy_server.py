@@ -11536,6 +11536,16 @@ async def _deployment_hidden_by_listing_callbacks(deployment: Deployment, user_a
     return listed_name in await _names_hidden_by_listing_callbacks(user_api_key_dict, (listed_name,))
 
 
+def _includes_wildcard_routes(return_wildcard_routes: bool | None, settings: Mapping[str, object]) -> bool:
+    """Whether a listing or lookup includes wildcard routes such as `openai/*`. A request's
+    own `return_wildcard_routes` wins; without one, `model_list_return_wildcard_routes`
+    counts as on exactly when the admin UI's switch shows it on (`true` or `"true"`)."""
+    if return_wildcard_routes is not None:
+        return return_wildcard_routes
+    configured: Final = settings.get("model_list_return_wildcard_routes")
+    return configured is True or configured == "true"
+
+
 @router.get("/v1/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"])
 @router.get(
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
@@ -11543,7 +11553,7 @@ async def _deployment_hidden_by_listing_callbacks(deployment: Deployment, user_a
 async def model_list(
     request: Request = None,  # pyright: ignore[reportArgumentType]  # FastAPI always injects the Request; the None default only serves direct in-process callers
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    return_wildcard_routes: bool | None = False,
+    return_wildcard_routes: bool | None = None,
     team_id: str | None = None,
     include_model_access_groups: bool | None = False,
     only_model_access_groups: bool | None = False,
@@ -11558,6 +11568,10 @@ async def model_list(
     This is just for compatibility with openai projects like aider.
 
     Query Parameters:
+    - return_wildcard_routes: When true, also list wildcard routes (e.g. `openai/*`)
+                    next to the models they expand to. Defaults to
+                    `general_settings.model_list_return_wildcard_routes`, which is
+                    false unless set; pass `false` to leave them out regardless.
     - include_metadata: Include additional metadata in the response with fallback information
     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
                     Defaults to "general" when include_metadata=true
@@ -11646,6 +11660,8 @@ async def model_list(
 
     hidden_names: Final = blocked_names | unhealthy_names
 
+    include_wildcard_routes: Final = _includes_wildcard_routes(return_wildcard_routes, settings)
+
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
         # Get all proxy models as if user is a proxy admin
@@ -11669,7 +11685,7 @@ async def model_list(
             proxy_model_list=proxy_model_list,
             user_model=None,
             infer_model_from_keys=False,
-            return_wildcard_routes=return_wildcard_routes or False,
+            return_wildcard_routes=include_wildcard_routes,
             llm_router=llm_router,
             model_access_groups=model_access_groups,
             include_model_access_groups=include_model_access_groups or False,
@@ -11729,7 +11745,7 @@ async def model_list(
         team_id=team_id,
         include_model_access_groups=include_model_access_groups or False,
         only_model_access_groups=only_model_access_groups or False,
-        return_wildcard_routes=return_wildcard_routes or False,
+        return_wildcard_routes=include_wildcard_routes,
         user_api_key_cache=user_api_key_cache,
     )
 
@@ -11793,6 +11809,7 @@ async def model_info(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     team_id: str | None = None,
     healthy_only: bool | None = False,
+    return_wildcard_routes: bool | None = None,
 ):
     """
     Retrieve information about a specific model accessible to your API key.
@@ -11827,7 +11844,7 @@ async def model_info(
         team_id=team_id,
         include_model_access_groups=False,
         only_model_access_groups=False,
-        return_wildcard_routes=False,
+        return_wildcard_routes=_includes_wildcard_routes(return_wildcard_routes, settings),
         user_api_key_cache=user_api_key_cache,
     )
 
@@ -18214,6 +18231,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "apply_user_budget_to_team_keys": "Boolean",
         "user_api_key_cache_max_size": "Integer",
         "transcribe_media_buckets": "List",
+        "model_list_return_wildcard_routes": "Boolean",
     }
 )
 
