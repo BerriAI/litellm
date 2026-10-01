@@ -1,7 +1,7 @@
 <h1 align="center">
         <picture>
-            <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/BerriAI/litellm/main/.github/litellm-logo-dark.svg">
-            <img src="https://raw.githubusercontent.com/BerriAI/litellm/main/.github/litellm-logo.svg" alt="LiteLLM" width="400">
+            <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/proxy/logo_dark.png">
+            <img src="https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/proxy/logo.png" alt="LiteLLM" width="400">
         </picture>
     </h1>
     <p align="center">
