@@ -10,10 +10,12 @@ rows instead of the internal routing key `model_name_{team_id}_{uuid}`.
 from __future__ import annotations
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.proxy._types import (
     LiteLLM_UserTable,
@@ -1893,3 +1895,235 @@ async def test_populate_team_access_grants_all_proxy_models_user_direct_access(
 
     assert [m["model_info"]["id"] for m in visible] == ["global-id-1"]
     assert visible[0]["model_info"]["direct_access"] is True
+
+
+# ---------------------------------------------------------------------------
+# Alias -> target metadata resolution (follow-up to #40553)
+#
+# A model alias (key `aliases`, team `model_aliases`, router `model_group_alias`)
+# is rewritten at request time and owns no deployment row, so a metadata lookup
+# keyed on the alias finds neither a deployment nor a cost-map entry and the
+# listing entry carries no `mode` or token limits. The listed name must resolve
+# to its target deployment for metadata while remaining the response id.
+# ---------------------------------------------------------------------------
+
+
+def _aliasing_router(deployment_names: tuple[str, ...], alias_map: dict) -> MagicMock:
+    """Router serving `deployment_names`, with `alias_map` as model_group_alias."""
+    router: Final = MagicMock()
+    router.model_name_to_deployment_indices = {name: [i] for i, name in enumerate(deployment_names)}
+    router.model_group_alias = alias_map
+    return router
+
+
+def test_resolve_alias_target_returns_alias_target():
+    """An alias resolves to the deployment it points at."""
+    router: Final = _aliasing_router(("claude-opus",), {})
+    assert (
+        TeamModelNameTranslator.resolve_alias_target("claude-default", router, ({"claude-default": "claude-opus"},))
+        == "claude-opus"
+    )
+
+
+def test_resolve_alias_target_follows_alias_shadowing_a_deployment():
+    """An alias wins over a same-named deployment, matching the request rewrite.
+
+    litellm_pre_call_utils rewrites the model name whenever the alias map has the
+    key, without checking whether that name is also a deployment, so the listing
+    has to report the target's metadata or it describes a model the caller never
+    reaches.
+    """
+    router: Final = _aliasing_router(("claude-default", "claude-opus"), {})
+    assert (
+        TeamModelNameTranslator.resolve_alias_target("claude-default", router, ({"claude-default": "claude-opus"},))
+        == "claude-opus"
+    )
+
+
+def test_resolve_alias_target_returns_none_for_unresolvable_target():
+    """An alias pointing at nothing the router serves falls back to the listed name."""
+    router: Final = _aliasing_router(("claude-opus",), {})
+    assert TeamModelNameTranslator.resolve_alias_target("ghost", router, ({"ghost": "not-deployed"},)) is None
+
+
+def test_resolve_alias_target_ignores_self_referential_alias():
+    """A self-referential alias must not be reported as its own target."""
+    router: Final = _aliasing_router(("gpt-4o-mini",), {})
+    assert TeamModelNameTranslator.resolve_alias_target("loop", router, ({"loop": "loop"},)) is None
+
+
+def test_resolve_alias_target_applies_alias_maps_sequentially():
+    """Each map rewrites the result of the last, as the request path does.
+
+    The team map turns `default` into `mid`, then the key map turns `mid` into
+    `claude-opus`, so the final deployment is what the caller reaches.
+    """
+    router: Final = _aliasing_router(("mid", "claude-opus"), {})
+    assert (
+        TeamModelNameTranslator.resolve_alias_target(
+            "default",
+            router,
+            ({"default": "mid"}, {"mid": "claude-opus"}),
+        )
+        == "claude-opus"
+    )
+
+
+def test_resolve_alias_target_stops_on_alias_cycle():
+    """A cycle across maps terminates instead of looping."""
+    router: Final = _aliasing_router(("claude-opus",), {})
+    assert (
+        TeamModelNameTranslator.resolve_alias_target(
+            "a",
+            router,
+            ({"a": "b"}, {"b": "a"}),
+        )
+        is None
+    )
+
+
+def test_resolve_alias_target_reads_router_model_group_alias():
+    """Config-level model_group_alias is consulted after the caller's own maps."""
+    router: Final = _aliasing_router(("claude-opus",), {"claude-default": "claude-opus"})
+    assert TeamModelNameTranslator.resolve_alias_target("claude-default", router, ()) == "claude-opus"
+
+
+def test_resolve_alias_target_unwraps_model_group_alias_dict():
+    """model_group_alias entries may be a routing dict rather than a bare name."""
+    router: Final = _aliasing_router(("claude-opus",), {"claude-default": {"model": "claude-opus", "hidden": True}})
+    assert TeamModelNameTranslator.resolve_alias_target("claude-default", router, ()) == "claude-opus"
+
+
+def test_resolve_alias_target_tolerates_non_mapping_alias_maps():
+    """A malformed alias map is skipped rather than failing the listing."""
+    router: Final = _aliasing_router(("claude-opus",), {})
+    assert TeamModelNameTranslator.resolve_alias_target(
+        "claude-default", router, (None, "nonsense", {"claude-default": "claude-opus"})
+    ) == ("claude-opus")
+
+
+def test_resolve_alias_target_without_router():
+    """No router means no deployments to resolve against."""
+    assert TeamModelNameTranslator.resolve_alias_target("claude-default", None, ({"claude-default": "x"},)) is None
+
+
+@pytest.mark.asyncio
+async def test_v1_models_chained_team_then_key_alias_uses_request_order(monkeypatch):
+    """A chain spanning both maps resolves the way the request path rewrites it.
+
+    The team map turns `chained` into `mid`, then the key map turns `mid` into
+    `claude-opus`. litellm_pre_call_utils applies the team map first, so the
+    caller reaches `claude-opus`; resolving key-first would stop at `mid` and
+    report a deployment the request never hits.
+    """
+    opus: Final = {
+        "model_name": "claude-opus",
+        "litellm_params": {"model": "anthropic/claude-opus-4-20250514"},
+        "model_info": {"id": "dep-opus"},
+    }
+    mid: Final = {
+        "model_name": "mid",
+        "litellm_params": {"model": "openai/gpt-4o-mini"},
+        "model_info": {"id": "dep-mid"},
+    }
+    router: Final = MagicMock()
+    router.get_fully_blocked_model_names.return_value = set()
+    router.model_list = [opus, mid]
+    router.get_model_list.return_value = [opus, mid]
+    router.get_model_names.return_value = ["claude-opus", "mid"]
+    router.get_model_access_groups.return_value = {}
+    router.model_name_to_deployment_indices = {"claude-opus": [0], "mid": [1]}
+    router.model_group_alias = {}
+    router.get_configured_mode.return_value = None
+    router.get_configured_token_limits.return_value = (None, None)
+    listing: Final = {
+        "claude-opus": DeploymentModelListingInfo(
+            cost_map_keys=("anthropic/claude-opus-4-20250514",),
+            max_input_tokens=None,
+            max_output_tokens=None,
+        ),
+        "mid": DeploymentModelListingInfo(
+            cost_map_keys=("openai/gpt-4o-mini",),
+            max_input_tokens=None,
+            max_output_tokens=None,
+        ),
+    }
+    router.get_model_listing_info.side_effect = listing.get
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "general_settings", {})
+
+    key: Final = UserAPIKeyAuth(
+        user_id="u",
+        api_key="sk-test",
+        models=[],
+        team_models=["chained", "claude-opus", "mid"],
+        team_model_aliases={"chained": "mid"},
+        aliases={"mid": "claude-opus"},
+    )
+    resp: Final = await ps.model_list(user_api_key_dict=key)
+
+    rows: Final = {d["id"]: d for d in resp["data"]}
+    opus_limits: Final = (rows["claude-opus"]["mode"], rows["claude-opus"]["max_input_tokens"])
+    mid_limits: Final = litellm.get_model_info("openai/gpt-4o-mini")
+    assert (rows["chained"]["mode"], rows["chained"]["max_input_tokens"]) == opus_limits
+    # Stopping at the intermediate deployment would report gpt-4o-mini's window.
+    assert rows["chained"]["max_input_tokens"] != mid_limits["max_input_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_v1_models_alias_reports_target_deployment_metadata(monkeypatch):
+    """Regression (#40553 follow-up): an alias listed in the team's models array
+    must carry the mode and token limits of the deployment it resolves to.
+
+    Before the fix the alias listed with no metadata while its target reported
+    full metadata on the same response.
+    """
+    deployment: Final = {
+        "model_name": "claude-opus",
+        "litellm_params": {"model": "anthropic/claude-opus-4-20250514"},
+        "model_info": {"id": "dep-1"},
+    }
+    router: Final = MagicMock()
+    router.get_fully_blocked_model_names.return_value = set()
+    router.model_list = [deployment]
+    router.get_model_list.return_value = [deployment]
+    router.get_model_names.return_value = ["claude-opus"]
+    router.get_model_access_groups.return_value = {}
+    router.model_name_to_deployment_indices = {"claude-opus": [0]}
+    router.model_group_alias = {}
+    router.get_configured_mode.return_value = None
+    router.get_configured_token_limits.return_value = (None, None)
+    # Only the real deployment has listing info; the alias is not a deployment.
+    router.get_model_listing_info.side_effect = lambda name: (
+        DeploymentModelListingInfo(
+            cost_map_keys=("anthropic/claude-opus-4-20250514",),
+            max_input_tokens=None,
+            max_output_tokens=None,
+        )
+        if name == "claude-opus"
+        else None
+    )
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "general_settings", {})
+
+    # The alias name is in the team's models array for discoverability, and in
+    # model_aliases for routing.
+    key: Final = UserAPIKeyAuth(
+        user_id="u",
+        api_key="sk-test",
+        models=[],
+        team_models=["claude-default", "claude-opus"],
+        team_model_aliases={"claude-default": "claude-opus"},
+    )
+    resp: Final = await ps.model_list(user_api_key_dict=key)
+
+    rows: Final = {d["id"]: d for d in resp["data"]}
+    assert "claude-default" in rows, "the alias must remain listed under its own name"
+    assert rows["claude-default"].get("mode") == "chat"
+    # The alias reports the same capability metadata as its target deployment.
+    assert rows["claude-default"].get("max_input_tokens") == rows["claude-opus"].get("max_input_tokens")
+    assert rows["claude-default"]["max_input_tokens"] is not None
