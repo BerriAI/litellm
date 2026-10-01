@@ -1,5 +1,6 @@
 import pytest
 
+import litellm
 from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_KWARG,
     MID_STREAM_CONTINUATION_MARKER,
@@ -7,8 +8,21 @@ from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     _deployment_supports_prefill,
 )
 
-PREFILL_MODEL = "anthropic/claude-3-opus-20240229"  # supports_assistant_prefill: True in the cost map
-NON_PREFILL_MODEL = "openai/gpt-4o"  # capability absent -> treated as unsupported
+PREFILL_MODEL = "anthropic/prefill-capable-test-model"
+NON_PREFILL_MODEL = "openai/prefill-unknown-test-model"
+UNMAPPED_MODEL = "openai/unmapped-test-model"
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_cost_map_entries() -> None:
+    litellm.register_model(
+        {
+            PREFILL_MODEL: {"litellm_provider": "anthropic", "mode": "chat", "supports_assistant_prefill": True},
+            NON_PREFILL_MODEL: {"litellm_provider": "openai", "mode": "chat"},
+        },
+        persist_across_reloads=False,
+    )
+    litellm.get_model_info.cache_clear()
 
 
 def _deployment(model: str, dep_id: str) -> dict:
@@ -96,7 +110,7 @@ async def test_filter_empties_group_when_no_prefill_capable_deployment():
     """No prefill-capable deployment -> empty result, so the router advances the
     fallback chain and ultimately surfaces the original error."""
     check = ContinuationPrefillDeploymentCheck()
-    deployments = [_deployment(NON_PREFILL_MODEL, "b"), _deployment("openai/gpt-4.1", "c")]
+    deployments = [_deployment(NON_PREFILL_MODEL, "b"), _deployment(UNMAPPED_MODEL, "c")]
 
     result = await check.async_filter_deployments(
         model="group",
