@@ -532,7 +532,7 @@ def _assert_forwarded_body(
         assert "service_tier" not in body, body
 
 
-def _assert_upstream(
+def _assert_upstream_request(
     gateway: Gateway,
     *,
     expected_count: int = 1,
@@ -541,9 +541,29 @@ def _assert_upstream(
 ) -> dict[str, JsonValue]:
     requests: Final = _observations(gateway)
     assert len(requests) == expected_count, requests
-    latest: Final = object_value(requests[-1]["body"])
-    _assert_forwarded_body(latest, expected_tier=expected_tier, tier_present=tier_present)
+    latest: Final = requests[-1]
+    _assert_forwarded_body(
+        object_value(latest["body"]),
+        expected_tier=expected_tier,
+        tier_present=tier_present,
+    )
     return latest
+
+
+def _assert_upstream(
+    gateway: Gateway,
+    *,
+    expected_count: int = 1,
+    expected_tier: JsonValue | None = None,
+    tier_present: bool = False,
+) -> dict[str, JsonValue]:
+    request: Final = _assert_upstream_request(
+        gateway,
+        expected_count=expected_count,
+        expected_tier=expected_tier,
+        tier_present=tier_present,
+    )
+    return object_value(request["body"])
 
 
 def _assert_azure_upstream(gateway: Gateway, *, scenario_id: str) -> None:
@@ -660,7 +680,7 @@ def _assert_cost_header(
     outcome: MatrixOutcome,
     *,
     expected_cost: float,
-    allow_missing_header: bool = True,
+    allow_missing_header: bool = False,
 ) -> None:
     assert outcome.status == 200, outcome.text
     assert outcome.request_id is not None, outcome
@@ -676,7 +696,7 @@ def _assert_billing(
     expected_cost: float,
     prompt_tokens: int,
     completion_tokens: int,
-    allow_missing_header: bool = True,
+    allow_missing_header: bool = False,
 ) -> dict[str, object]:
     _assert_cost_header(outcome, expected_cost=expected_cost, allow_missing_header=allow_missing_header)
     request_id: Final = outcome.request_id
@@ -889,6 +909,7 @@ def test_openai_sdk_streaming_priority_chat_consumes_usage_and_logs_spend(gatewa
             expected_cost=_expected_cost("priority", MATRIX_PROMPT_TOKENS, MATRIX_COMPLETION_TOKENS),
             prompt_tokens=MATRIX_PROMPT_TOKENS,
             completion_tokens=MATRIX_COMPLETION_TOKENS,
+            allow_missing_header=True,
         )
         _assert_upstream(gateway, expected_tier="priority", tier_present=True)
 
@@ -956,6 +977,7 @@ def test_openai_sdk_streaming_responses_priority_consumes_full_stream(gateway: G
         _assert_cost_header(
             outcome,
             expected_cost=expected_cost,
+            allow_missing_header=True,
         )
         rows: Final = eventually(
             lambda: _spend_rows_for_key(key),
@@ -971,7 +993,7 @@ def test_openai_sdk_streaming_responses_priority_consumes_full_stream(gateway: G
 
 
 @pytest.mark.parametrize("stream", (False, True), ids=("non-streaming", "streaming"))
-def test_messages_endpoint_preserves_path_and_custom_standard_billing(
+def test_messages_endpoint_routes_to_responses_upstream_and_bills_custom_standard(
     gateway: Gateway,
     stream: bool,
 ) -> None:
@@ -1007,8 +1029,12 @@ def test_messages_endpoint_preserves_path_and_custom_standard_billing(
             expected_cost=_expected_cost(None, MATRIX_PROMPT_TOKENS, MATRIX_COMPLETION_TOKENS),
             prompt_tokens=MATRIX_PROMPT_TOKENS,
             completion_tokens=MATRIX_COMPLETION_TOKENS,
+            allow_missing_header=stream,
         )
-        observed: Final = _assert_upstream(gateway)
+        observed_request: Final = _assert_upstream_request(gateway)
+        observed_path: Final = string_value(observed_request["path"])
+        assert observed_path == f"/{scenario_id}/responses", observed_request
+        observed: Final = object_value(observed_request["body"])
         assert "service_tier" not in observed
 
 
@@ -1389,6 +1415,7 @@ def test_ptu_deployment_keeps_zero_per_request_cost_with_attribution_enabled(
                     expected_cost=0.0,
                     prompt_tokens=MATRIX_PROMPT_TOKENS,
                     completion_tokens=MATRIX_COMPLETION_TOKENS,
+                    allow_missing_header=True,
                 )
                 _assert_upstream(gateway, expected_tier="priority", tier_present=True)
 
@@ -1761,14 +1788,8 @@ def test_three_repeated_priority_requests_create_three_identical_cost_rows(gatew
             )
         rows: Final = tuple(_spend_rows(cast(str, request_id))[0] for request_id in ids)
         assert len(rows) == 3, rows
-        assert all(
-            outcome.cost_header is None or float(str(row["spend"])) == pytest.approx(outcome.cost_header, rel=1e-6)
-            for outcome, row in zip(outcomes, rows, strict=True)
-        ), (outcomes, rows)
-        assert all(
-            outcome.cost_header is None or outcome.cost_header == pytest.approx(expected_cost, rel=1e-6)
-            for outcome in outcomes
-        ), outcomes
+        for outcome in outcomes:
+            _assert_cost_header(outcome, expected_cost=expected_cost)
         assert all(float(str(row["spend"])) == pytest.approx(expected_cost, rel=1e-6) for row in rows), rows
         assert all(int(str(row["prompt_tokens"])) == MATRIX_PROMPT_TOKENS for row in rows), rows
         assert all(int(str(row["completion_tokens"])) == MATRIX_COMPLETION_TOKENS for row in rows), rows
@@ -1827,10 +1848,8 @@ def test_priority_burst_uses_catalog_rates_during_standard_price_update(gateway:
             outcomes: Final = tuple(future.result(timeout=90) for future in futures)
         expected_cost: Final = _expected_cost("priority", MATRIX_PROMPT_TOKENS, MATRIX_COMPLETION_TOKENS)
         assert all(outcome.status == 200 for outcome in outcomes), outcomes
-        assert all(
-            outcome.cost_header is None or outcome.cost_header == pytest.approx(expected_cost, rel=1e-6)
-            for outcome in outcomes
-        ), outcomes
+        for outcome in outcomes:
+            _assert_cost_header(outcome, expected_cost=expected_cost, allow_missing_header=True)
         ids: Final = tuple(outcome.request_id for outcome in outcomes)
         assert None not in ids, outcomes
         rows: Final = tuple(_spend_rows(cast(str, request_id))[0] for request_id in ids)
@@ -1890,8 +1909,8 @@ def test_cache_hit_keeps_the_observed_second_request_billing(gateway: Gateway) -
         assert first.request_id is not None and second.request_id is not None, (first, second)
         assert first.request_id == second.request_id, (first, second)
         expected_first_cost: Final = control_cost
-        assert first.cost_header is None or first.cost_header == pytest.approx(expected_first_cost, rel=1e-6), first
-        assert second.cost_header == pytest.approx(expected_first_cost, rel=1e-6), second
+        _assert_cost_header(first, expected_cost=expected_first_cost)
+        _assert_cost_header(second, expected_cost=expected_first_cost)
         rows: Final = _spend_rows(first.request_id)
         assert float(str(rows[0]["spend"])) == pytest.approx(expected_first_cost, rel=1e-6), rows
         cache_hit_rows: Final = _cache_hit_spend_rows(second.request_id)
@@ -1955,12 +1974,6 @@ def test_response_priority_matches_catalog_priced_rule(gateway: Gateway) -> None
             MATRIX_COMPLETION_TOKENS,
             custom_standard=False,
         )
-        expected_custom_cost: Final = (
-            catalog_cost
-            if priority_outcome.cost_header == pytest.approx(catalog_cost, rel=1e-6)
-            else CUSTOM_STANDARD_INPUT_RATE * MATRIX_PROMPT_TOKENS
-            + CUSTOM_STANDARD_OUTPUT_RATE * MATRIX_COMPLETION_TOKENS
-        )
         assert custom_outcome.body.get("service_tier") == "priority", custom_outcome.body
         assert catalog_outcome.body.get("service_tier") == "priority", catalog_outcome.body
         assert priority_outcome.body.get("service_tier") == "priority", priority_outcome.body
@@ -1970,7 +1983,7 @@ def test_response_priority_matches_catalog_priced_rule(gateway: Gateway) -> None
         ), (custom_observed, catalog_observed, priority_observed)
         _assert_billing(
             custom_outcome,
-            expected_cost=expected_custom_cost,
+            expected_cost=catalog_cost,
             prompt_tokens=MATRIX_PROMPT_TOKENS,
             completion_tokens=MATRIX_COMPLETION_TOKENS,
         )
@@ -1982,7 +1995,7 @@ def test_response_priority_matches_catalog_priced_rule(gateway: Gateway) -> None
         )
         _assert_billing(
             priority_outcome,
-            expected_cost=expected_custom_cost,
+            expected_cost=catalog_cost,
             prompt_tokens=MATRIX_PROMPT_TOKENS,
             completion_tokens=MATRIX_COMPLETION_TOKENS,
         )

@@ -71,7 +71,11 @@ def _start_scripted_upstream(port: int) -> subprocess.Popen[bytes]:
         except httpx.TransportError:
             return 0
 
-    assert eventually(ready_status, lambda status: status == 200, seconds=30) == 200
+    try:
+        assert eventually(ready_status, lambda status: status == 200, seconds=30) == 200
+    except BaseException:
+        _stop_scripted_upstream(process, force=True)
+        raise
     return process
 
 
@@ -87,6 +91,14 @@ def _stop_scripted_upstream(process: subprocess.Popen[bytes], *, force: bool = F
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=5)
+
+
+def _accumulate_observations(
+    upstream_url: str,
+    observations: list[dict[str, JsonValue]],
+) -> tuple[dict[str, JsonValue], ...]:
+    observations.extend(matrix._observations_at(upstream_url))  # mutable-ok: retain destructive queue drains
+    return tuple(observations)
 
 
 def _register_owned_scenario(
@@ -217,21 +229,25 @@ def _completed_success(outcome: matrix.MatrixOutcome | None) -> bool:
 def _assert_cost_rows(
     key: str,
     outcomes: tuple[matrix.MatrixOutcome | None, ...],
+    requests: tuple[MatrixRequest, ...],
 ) -> None:
-    successful: Final = tuple(outcome for outcome in outcomes if _completed_success(outcome))
-    failed: Final = tuple(outcome for outcome in outcomes if not _completed_success(outcome))
+    paired_outcomes: Final = tuple(zip(outcomes, requests, strict=True))
+    successful: Final = tuple(outcome for outcome, _ in paired_outcomes if _completed_success(outcome))
+    successful_requests: Final = tuple(request for outcome, request in paired_outcomes if _completed_success(outcome))
+    failed: Final = tuple(outcome for outcome, _ in paired_outcomes if not _completed_success(outcome))
     expected_cost: Final = matrix._expected_cost(
         "priority",
         matrix.MATRIX_PROMPT_TOKENS,
         matrix.MATRIX_COMPLETION_TOKENS,
         custom_standard=False,
     )
-    for outcome in successful:
+    for outcome, request in zip(successful, successful_requests, strict=True):
         matrix._assert_billing(
             outcome,
             expected_cost=expected_cost,
             prompt_tokens=matrix.MATRIX_PROMPT_TOKENS,
             completion_tokens=matrix.MATRIX_COMPLETION_TOKENS,
+            allow_missing_header=request.stream and request.surface == "chat",
         )
     assert all(outcome.request_id is not None for outcome in successful), successful
     successful_ids: Final = tuple(cast(str, outcome.request_id) for outcome in successful)
@@ -247,6 +263,23 @@ def _assert_cost_rows(
         outcome.request_id for outcome in failed if outcome is not None and outcome.request_id is not None
     )
     assert all(row["status"] != "success" or str(row["request_id"]) not in failed_ids for row in rows), rows
+    failed_rows: Final = tuple(row for row in rows if row["status"] != "success")
+    expected_failure_costs: Final = tuple(
+        matrix._expected_cost(
+            "priority",
+            int(str(row["prompt_tokens"] or 0)),
+            int(str(row["completion_tokens"] or 0)),
+            custom_standard=False,
+        )
+        for row in failed_rows
+    )
+    assert all(
+        float(str(row["spend"])) == pytest.approx(expected_cost, rel=1e-6)
+        for row, expected_cost in zip(failed_rows, expected_failure_costs, strict=True)
+    ), tuple(zip(failed_rows, expected_failure_costs, strict=True))
+    total_spend: Final = sum(float(str(row["spend"])) for row in rows)
+    expected_total_spend: Final = len(successful) * expected_cost + sum(expected_failure_costs)
+    assert total_spend == pytest.approx(expected_total_spend, rel=1e-6), rows
 
 
 def _uvicorn_workers(process: subprocess.Popen[bytes]) -> tuple[psutil.Process, ...]:
@@ -293,12 +326,13 @@ def test_upstream_restart_mid_mixed_burst_preserves_exact_tier_billing(
                     )
                     first_response: Final = futures[0].result(timeout=30)
                     assert _completed_success(first_response), first_response
-                    observed_before_stop: Final = eventually(
-                        lambda: matrix._observations_at(upstream_url),
+                    observations: Final[list[dict[str, JsonValue]]] = []  # mutable-ok: keep earlier queue drains
+                    eventually(
+                        lambda: _accumulate_observations(upstream_url, observations),
                         lambda calls: any(object_value(call["body"]).get("stream") is True for call in calls),
                         seconds=30,
                     )
-                    observed_at_stop: Final = matrix._observations_at(upstream_url)
+                    _accumulate_observations(upstream_url, observations)
                     _stop_scripted_upstream(first_upstream, force=True)
                     burst_outcomes: Final = tuple(future.result(timeout=90) for future in futures)
                 assert any(not _completed_success(outcome) for outcome in burst_outcomes), burst_outcomes
@@ -313,19 +347,19 @@ def test_upstream_restart_mid_mixed_burst_preserves_exact_tier_billing(
                         _capture_http(candidate, key, request) for request in recovery_requests
                     )
                     assert all(_completed_success(outcome) for outcome in recovery_outcomes), recovery_outcomes
-                    recovery_observations: Final = matrix._observations_at(upstream_url)
-                    observed_requests: Final = (
-                        *observed_before_stop,
-                        *observed_at_stop,
-                        *recovery_observations,
-                    )
+                    _accumulate_observations(upstream_url, observations)
+                    observed_requests: Final = tuple(observations)
                     successful_count: Final = sum(_completed_success(outcome) for outcome in burst_outcomes)
                     assert len(observed_requests) >= successful_count + len(recovery_outcomes), (
                         len(observed_requests),
                         successful_count,
                     )
                     _assert_all_forwarded(observed_requests)
-                    _assert_cost_rows(key, (*burst_outcomes, *recovery_outcomes))
+                    _assert_cost_rows(
+                        key,
+                        (*burst_outcomes, *recovery_outcomes),
+                        (*requests, *recovery_requests),
+                    )
                 finally:
                     _stop_scripted_upstream(recovery_upstream)
     finally:
@@ -365,8 +399,9 @@ def test_two_worker_proxy_survives_worker_kill_and_keeps_tier_billing(
                     futures: Final = tuple(
                         executor.submit(_capture_http, candidate, key, request) for request in requests
                     )
-                    initial_observations: Final = eventually(
-                        lambda: matrix._observations_at(upstream_url),
+                    observations: Final[list[dict[str, JsonValue]]] = []  # mutable-ok: keep earlier queue drains
+                    eventually(
+                        lambda: _accumulate_observations(upstream_url, observations),
                         lambda calls: len(calls) >= 4,
                         seconds=30,
                     )
@@ -393,14 +428,18 @@ def test_two_worker_proxy_survives_worker_kill_and_keeps_tier_billing(
                     _capture_http(candidate, key, request) for request in recovery_requests
                 )
                 assert all(_completed_success(outcome) for outcome in recovery_outcomes), recovery_outcomes
-                recovery_observations: Final = matrix._observations_at(upstream_url)
-                observed_requests: Final = (*initial_observations, *recovery_observations)
+                _accumulate_observations(upstream_url, observations)
+                observed_requests: Final = tuple(observations)
                 successful_count: Final = sum(_completed_success(outcome) for outcome in burst_outcomes)
                 assert len(observed_requests) >= successful_count + len(recovery_outcomes), (
                     len(observed_requests),
                     successful_count,
                 )
                 _assert_all_forwarded(observed_requests)
-                _assert_cost_rows(key, (*burst_outcomes, *recovery_outcomes))
+                _assert_cost_rows(
+                    key,
+                    (*burst_outcomes, *recovery_outcomes),
+                    (*requests, *recovery_requests),
+                )
     finally:
         _stop_scripted_upstream(upstream_process)
