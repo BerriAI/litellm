@@ -169,6 +169,30 @@ describe("Lens findings and runs", () => {
   });
 });
 
+it("explains a failed analysis with its reason and a suggested fix", async () => {
+  testQueryClient.clear();
+  const failed = {
+    ...lens.jobs[0],
+    status: "failed" as const,
+    stage: "Failed",
+    error:
+      "POST model returned HTTP 401: Invalid API key. Fix: check that the analysis model is configured and reachable from the proxy.",
+  };
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [{ ...lens, jobs: [failed] }], workers: [], tracing_enabled: true };
+    if (path === "/lens/lens/runs") return [failed];
+    return { data: [] };
+  });
+  renderWithProviders(<LensView accessToken="test" readOnly />);
+  const alert = within(await screen.findByRole("alert"));
+  expect(alert.getByText("Analysis failed")).toBeVisible();
+  expect(alert.getByText("POST model returned HTTP 401: Invalid API key.")).toBeVisible();
+  expect(
+    alert.getByText("check that the analysis model is configured and reachable from the proxy.", { exact: false }),
+  ).toBeVisible();
+  expect(alert.getByText("Suggested fix:", { exact: false })).toBeVisible();
+});
+
 it("shows the actual next schedule and avoids a stale countdown during active scans", () => {
   const now = Date.parse("2026-09-30T10:00:00Z");
   const monitoring = {
