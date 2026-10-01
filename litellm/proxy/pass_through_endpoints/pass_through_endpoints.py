@@ -100,6 +100,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
+    get_chain_id_from_headers,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import normalize_route_for_root_path
@@ -643,17 +644,32 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         if isinstance(deployment_model_info, Mapping):
             _metadata["model_info"] = dict(deployment_model_info)
 
-        kwargs: Final = {
-            "litellm_params": {
-                **litellm_params_in_body,
-                "metadata": _metadata,
-                "proxy_server_request": {
-                    "url": str(request.url),
-                    "method": request.method,
-                    "body": copy.copy(_parsed_body),  # use copy instead of deepcopy
-                    "headers": request.headers,
-                },
+        # Match /v1/chat/completions: honor x-litellm-session-id / x-litellm-trace-id
+        # so spend logs group pass-through calls with the rest of the session (#43540).
+        # get_standard_logging_payload_trace_id reads litellm_params["litellm_session_id"].
+        _request_headers = getattr(request, "headers", None) or {}
+        chain_id = get_chain_id_from_headers(dict(_request_headers))
+        if chain_id:
+            # Header wins over any client-supplied body metadata (same as chat).
+            _metadata["session_id"] = chain_id
+            _metadata["trace_id"] = chain_id
+
+        litellm_params: dict = {
+            **litellm_params_in_body,
+            "metadata": _metadata,
+            "proxy_server_request": {
+                "url": str(request.url),
+                "method": request.method,
+                "body": copy.copy(_parsed_body),  # use copy instead of deepcopy
+                "headers": request.headers,
             },
+        }
+        if chain_id:
+            litellm_params["litellm_session_id"] = chain_id
+            litellm_params["litellm_trace_id"] = chain_id
+
+        kwargs: Final = {
+            "litellm_params": litellm_params,
             "call_type": "pass_through_endpoint",
             "litellm_call_id": litellm_call_id,
             "passthrough_logging_payload": passthrough_logging_payload,
