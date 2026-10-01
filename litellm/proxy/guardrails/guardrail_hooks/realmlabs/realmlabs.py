@@ -1,4 +1,12 @@
-"""RealmLabs MLS request guardrail with hazard screening and PII protection."""
+"""RealmLabs MLS guardrail.
+
+On ``pre_call`` MLS checks the request. A matching ``hazard_prompt`` verdict above ``hazard_threshold`` blocks
+the request. On ``post_call`` MLS checks the assistant reply with the request's conversation as context.
+Both hooks mask detected PII as ``[type]``, or block when ``pii_mask`` is False.
+
+Conversation context comes from Chat Completions-style ``request_data.messages``; nothing is kept between
+hooks. Streaming uses LiteLLM's existing delivery settings, which do not enable text rewrites by default.
+"""
 
 from __future__ import annotations
 
@@ -20,6 +28,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # helper is untyped in http_handler
     httpxSpecialProvider,
 )
+from litellm.proxy.guardrails.guardrail_hooks.content_text import content_to_text
 from litellm.proxy.guardrails.guardrail_hooks.realmlabs.pii_masking import mask_pii_in_text
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
@@ -46,6 +55,8 @@ _DEFAULT_HAZARD_THRESHOLD: Final = 0.703
 _DEFAULT_TIMEOUT: Final = 15.0
 
 _RESPONSE_ADAPTER: Final = TypeAdapter(RealmLabsGuardrailResponse)
+_MESSAGE_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_MESSAGES_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 
 
 class RealmLabsMissingCredentials(Exception):
@@ -110,8 +121,8 @@ class RealmLabsGuardrail(CustomGuardrail):
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: base class returns a list
-        """Inspect requests on ``pre_call``."""
-        return [GuardrailEventHooks.pre_call]
+        """Inspect requests on ``pre_call`` and replies on ``post_call``."""
+        return [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
 
     @staticmethod
     def _hazard_score(response: RealmLabsGuardrailResponse) -> float | None:
@@ -188,13 +199,13 @@ class RealmLabsGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
-        """Screen requests for hazardous content and PII through LiteLLM's unified guardrail layer."""
-        if input_type != "request":
-            return inputs
+        """Inspect request or response text through LiteLLM's unified guardrail layer.
+
+        Enforce hazard scores only on requests with a matching role, then mask or block PII on either side.
+        Only the current hook's texts are rewritten. MLS failures pass through unless ``block_on_error`` is set.
+        """
         texts: Final = tuple(inputs.get("texts") or ())
-        messages: Final = tuple(inputs.get("structured_messages") or ()) or tuple(
-            RealmLabsChatMessage(role="user", content=text) for text in texts
-        )
+        messages: Final = _messages_for_scan(inputs, request_data, input_type)
         if not messages:
             return inputs
 
@@ -207,7 +218,7 @@ class RealmLabsGuardrail(CustomGuardrail):
             return self._handle_mls_error(inputs, f"Invalid RealmLabs guardrail response: {result.reason}")
 
         # Hazard is checked before PII, so a hazardous prompt is rejected rather than masked and forwarded.
-        hazard_score: Final = self._hazard_score(result)
+        hazard_score: Final = self._hazard_score(result) if input_type == "request" else None
         if hazard_score is not None and hazard_score > self.hazard_threshold:
             verbose_proxy_logger.warning(
                 "RealmLabs MLS blocked request: %s=%s > %s",
@@ -240,3 +251,44 @@ class RealmLabsGuardrail(CustomGuardrail):
             return inputs
         verbose_proxy_logger.debug("RealmLabs MLS masked PII types in the %s: %s", input_type, self._span_types(spans))
         return {**inputs, "texts": list(masked_texts)}
+
+
+def _conversation_message(message: object) -> RealmLabsChatMessage | None:
+    """Extract a plain-text turn without carrying images or unrelated message fields to MLS."""
+
+    if not isinstance(message, dict):
+        return None
+    row: Final = _MESSAGE_ADAPTER.validate_python(message)
+    role: Final = row.get("role")
+    text: Final = content_to_text(row.get("content"))
+    if isinstance(role, str) and role and text:
+        return RealmLabsChatMessage(role=role, content=text)
+    return None
+
+
+def _conversation_messages(request_data: Mapping[str, object]) -> tuple[RealmLabsChatMessage, ...]:
+    """Preserve roles and text from request history, skipping empty or non-message entries."""
+
+    raw_messages: Final = request_data.get("messages")
+    if not isinstance(raw_messages, list):
+        return ()
+
+    messages: Final = _MESSAGES_ADAPTER.validate_python(raw_messages)
+    return tuple(message for item in messages if (message := _conversation_message(item)) is not None)
+
+
+def _messages_for_scan(
+    inputs: GenericGuardrailAPIInputs,
+    request_data: Mapping[str, object],
+    input_type: Literal["request", "response"],
+) -> Sequence[Mapping[str, object]]:
+    """Prefer scoped request messages; append response texts as assistant turns to the request history."""
+
+    if input_type == "request" and (structured_messages := inputs.get("structured_messages")):
+        return tuple(structured_messages)
+
+    conversation: Final = _conversation_messages(request_data)
+    texts: Final = inputs.get("texts") or ()
+    if input_type == "request":
+        return conversation or tuple(RealmLabsChatMessage(role="user", content=text) for text in texts)
+    return (*conversation, *(RealmLabsChatMessage(role="assistant", content=text) for text in texts))

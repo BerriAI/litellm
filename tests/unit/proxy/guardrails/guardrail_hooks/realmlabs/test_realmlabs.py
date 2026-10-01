@@ -10,6 +10,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.exceptions import GuardrailRaisedException
+from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
 from litellm.proxy.guardrails.guardrail_hooks.realmlabs import guardrail_initializer_registry
 from litellm.proxy.guardrails.guardrail_hooks.realmlabs.realmlabs import (
     RealmLabsGuardrail,
@@ -18,7 +19,7 @@ from litellm.proxy.guardrails.guardrail_hooks.realmlabs.realmlabs import (
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.realmlabs import RealmLabsGuardrailOptionalParams
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import Choices, GenericGuardrailAPIInputs, Message, ModelResponse
 
 _API_KEY = "mls_gr_test"
 _API_BASE = "https://mls.example.test"
@@ -232,6 +233,7 @@ async def test_span_from_another_turn_leaves_the_prompt_as_is(respx_mock: respx.
         pytest.param(
             "request", ["Alex alex@example.com"], [_NAME_SPAN, _EMAIL_SPAN], "name, email", id="request-types"
         ),
+        pytest.param("response", ["alex@example.com"], [_EMAIL_SPAN], "email", id="response-type"),
         pytest.param("request", ["Hello Alex."], [{"type": "name"}], "name", id="missing-pii-text"),
         pytest.param("request", ["Hello Alex."], [{"type": "name", "text": None}], "name", id="null-pii-text"),
         pytest.param("request", ["Hello Alex."], [{"type": "name", "text": ""}], "name", id="empty-pii-text"),
@@ -287,7 +289,7 @@ async def test_plain_texts_are_sent_as_user_turns(respx_mock: respx.MockRouter) 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("input_type", ["request"])
+@pytest.mark.parametrize("input_type", ["request", "response"])
 async def test_empty_inputs_are_returned_without_calling_mls(
     input_type: Literal["request", "response"], respx_mock: respx.MockRouter
 ) -> None:
@@ -299,7 +301,7 @@ async def test_empty_inputs_are_returned_without_calling_mls(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("input_type", ["request"])
+@pytest.mark.parametrize("input_type", ["request", "response"])
 @pytest.mark.parametrize("block_on_error", [None, True], ids=["default-fail-open", "fail-closed"])
 @pytest.mark.parametrize(
     ("mls_reply", "reason"),
@@ -344,7 +346,7 @@ async def test_mls_failures_follow_the_error_policy(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("input_type", ["request"])
+@pytest.mark.parametrize("input_type", ["request", "response"])
 @pytest.mark.parametrize("block_on_error", [False, True], ids=["fail-open", "fail-closed"])
 @pytest.mark.parametrize(
     "body",
@@ -413,7 +415,7 @@ async def test_invalid_probabilities_cannot_bypass_fail_closed(prob: object, res
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("input_type", ["request"])
+@pytest.mark.parametrize("input_type", ["request", "response"])
 async def test_empty_verdict_arrays_are_valid_in_fail_closed_mode(
     input_type: Literal["request", "response"], respx_mock: respx.MockRouter
 ) -> None:
@@ -688,6 +690,38 @@ async def test_configured_timeout_reaches_mls(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "use_structured_messages", [False, True], ids=["request-fallback", "structured-takes-priority"]
+)
+async def test_request_uses_structured_messages_before_conversation_fallback(
+    use_structured_messages: bool, respx_mock: respx.MockRouter
+) -> None:
+    conversation: Final[list[AllMessageValues]] = [
+        {"role": "system", "content": "Be brief."},
+        {"role": "user", "content": "Hello."},
+    ]
+    inputs: Final[GenericGuardrailAPIInputs] = (
+        {"texts": ["Hello."], "structured_messages": conversation} if use_structured_messages else {"texts": ["Hello."]}
+    )
+    request_data: Final = {
+        "messages": [{"role": "user", "content": "Outside the selected scope."}]
+        if use_structured_messages
+        else conversation
+    }
+    route: Final = _serve(respx_mock, _mls_body())
+
+    result: Final = await _apply(_guardrail(), inputs, request_data=request_data)
+
+    assert result is inputs
+    assert _sent_body(route) == {
+        "messages": conversation,
+        "probes": ["hazard_prompt"],
+        "pii": True,
+        "enable_thinking": False,
+    }
+
+
+@pytest.mark.asyncio
 async def test_role_mismatch_skips_request_hazard_but_still_masks_pii(respx_mock: respx.MockRouter) -> None:
     _serve(
         respx_mock,
@@ -717,9 +751,134 @@ async def test_missing_role_mismatch_still_enforces_request_hazard(
 
 
 @pytest.mark.asyncio
-async def test_response_text_is_returned_without_calling_mls(respx_mock: respx.MockRouter) -> None:
-    route: Final = _serve(respx_mock, _mls_body())
-    inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["hello"]}
+@pytest.mark.parametrize("name", ["Alex", "[name]"], ids=["unmasked-name", "existing-placeholder"])
+async def test_post_call_masks_the_reply_in_conversation_context(name: str, respx_mock: respx.MockRouter) -> None:
+    guardrail: Final = _guardrail(event_hook=GuardrailEventHooks.post_call)
+    conversation: Final[list[AllMessageValues]] = [
+        {"role": "system", "content": "Be brief."},
+        {"role": "user", "content": "My name is Alex."},
+        {"role": "assistant", "content": "Hello!"},
+        {"role": "user", "content": "What is my name?"},
+    ]
+    route: Final = _serve(respx_mock, _mls_body(pii_spans=[{"type": "name", "text": name.removesuffix("]")}]))
+    response: Final = ModelResponse(
+        choices=[
+            Choices(index=0, message=Message(content=f"Your name is {name}.", role="assistant"), finish_reason="stop")
+        ]
+    )
 
-    assert await _apply(_guardrail(), inputs, input_type="response") is inputs
-    assert route.call_count == 0
+    result: Final = await OpenAIChatCompletionsHandler().process_output_response(  # pyright: ignore[reportUnknownMemberType]  # upstream request_data parameter uses an unparameterized dict
+        response=response, guardrail_to_apply=guardrail, request_data={"messages": conversation}
+    )
+
+    assert result.choices == [
+        Choices(index=0, message=Message(content="Your name is [name].", role="assistant"), finish_reason="stop")
+    ], result.choices
+    assert conversation == [
+        {"role": "system", "content": "Be brief."},
+        {"role": "user", "content": "My name is Alex."},
+        {"role": "assistant", "content": "Hello!"},
+        {"role": "user", "content": "What is my name?"},
+    ], conversation
+    assert _sent_body(route) == {
+        "messages": [*conversation, {"role": "assistant", "content": f"Your name is {name}."}],
+        "probes": ["hazard_prompt"],
+        "pii": True,
+        "enable_thinking": False,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_type", ["request", "response"])
+async def test_conversation_text_parts_use_blank_lines_without_changing_internal_paragraphs(
+    input_type: Literal["request", "response"], respx_mock: respx.MockRouter
+) -> None:
+    conversation: Final = [
+        {"role": "system", "content": "Be brief."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this.\n\nKeep this paragraph."},
+                {"type": "image_url", "image_url": {"url": "https://example.test/image.png"}},
+                {"type": "text", "text": "In one sentence."},
+            ],
+        },
+        {"role": "assistant", "content": None},
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.test/other.png"}}]},
+        {"content": "No role."},
+        None,
+    ]
+    route: Final = _serve(respx_mock, _mls_body())
+    inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["A landscape."]}
+
+    result: Final = await _apply(_guardrail(), inputs, input_type=input_type, request_data={"messages": conversation})
+
+    expected_history: Final = [
+        {"role": "system", "content": "Be brief."},
+        {"role": "user", "content": "Describe this.\n\nKeep this paragraph.\n\nIn one sentence."},
+    ]
+    expected_messages: Final = (
+        [*expected_history, {"role": "assistant", "content": "A landscape."}]
+        if input_type == "response"
+        else expected_history
+    )
+
+    assert result is inputs
+    assert _sent_body(route) == {
+        "messages": expected_messages,
+        "probes": ["hazard_prompt"],
+        "pii": True,
+        "enable_thinking": False,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_data", [{}, {"messages": []}, {"messages": None}], ids=["missing", "empty", "null"])
+async def test_response_without_history_is_still_scanned_as_assistant_text(
+    request_data: dict[str, object], respx_mock: respx.MockRouter
+) -> None:
+    route: Final = _serve(respx_mock, _mls_body(pii_spans=[_NAME_SPAN]))
+
+    result: Final = await _apply(
+        _guardrail(), {"texts": ["Alex was here."]}, input_type="response", request_data=request_data
+    )
+
+    assert result == {"texts": ["[name] was here."]}, result
+    assert _sent_body(route) == {
+        "messages": [{"role": "assistant", "content": "Alex was here."}],
+        "probes": ["hazard_prompt"],
+        "pii": True,
+        "enable_thinking": False,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role_mismatch", [False, True, None], ids=["matching-role", "mismatched-role", "null-role"])
+async def test_response_ignores_hazard_scores_and_merges_overlapping_pii(
+    role_mismatch: bool | None, respx_mock: respx.MockRouter
+) -> None:
+    _serve(
+        respx_mock,
+        {
+            "results": [{"probe": "hazard_prompt", "prob": 0.99, "role_mismatch": role_mismatch}],
+            "pii_spans": [{"type": "name", "text": "Ann"}, {"type": "email", "text": "Ann.Smith@example.com"}],
+        },
+    )
+    inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["Contact Ann at Ann.Smith@example.com.", "No PII here."]}
+
+    result: Final = await _apply(_guardrail(), inputs, input_type="response")
+
+    assert result == {"texts": ["Contact [name] at [email].", "No PII here."]}, result
+    assert inputs == {"texts": ["Contact Ann at Ann.Smith@example.com.", "No PII here."]}, inputs
+
+
+@pytest.mark.asyncio
+async def test_pii_only_in_history_leaves_the_reply_unchanged(respx_mock: respx.MockRouter) -> None:
+    _serve(respx_mock, _mls_body(pii_spans=[_NAME_SPAN]))
+    inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["Hello there."]}
+    conversation: Final = [{"role": "user", "content": "My name is Alex."}]
+
+    result: Final = await _apply(_guardrail(), inputs, input_type="response", request_data={"messages": conversation})
+
+    assert result is inputs
+    assert conversation == [{"role": "user", "content": "My name is Alex."}], conversation
