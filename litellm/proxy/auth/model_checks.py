@@ -168,7 +168,7 @@ def get_team_models(
 
     all_models = _get_models_from_access_groups(
         model_access_groups=model_access_groups,
-        all_models=list(all_models_set),
+        all_models=list(all_models_set - {SpecialModelNames.all_proxy_models.value}),
         include_model_access_groups=include_model_access_groups,
         proxy_model_list=proxy_model_list,
     )
