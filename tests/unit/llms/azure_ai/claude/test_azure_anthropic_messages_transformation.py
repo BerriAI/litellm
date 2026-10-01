@@ -7,13 +7,16 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
+import litellm
 from litellm.llms.azure_ai.anthropic.messages_transformation import (
     AzureAnthropicMessagesConfig,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -501,3 +504,43 @@ def test_safeguards_request_carries_the_dangerous_tool_use_beta_without_the_clie
         litellm_params={"api_key": "test-api-key"},
     )
     assert headers.get("anthropic-beta") == expected_beta, headers
+
+
+@pytest.mark.asyncio
+async def test_outgoing_azure_request_sends_safeguards_with_the_dangerous_tool_use_beta(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    from litellm import anthropic_beta_headers_manager
+
+    anthropic_beta_headers_manager._BETA_HEADERS_CONFIG = None
+    safeguards = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+    mock_response = httpx.Response(
+        status_code=200,
+        headers={"content-type": "application/json"},
+        json={
+            "id": "msg_safeguards",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-6",
+            "content": [{"type": "text", "text": "hello from the gateway"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 12, "output_tokens": 6},
+        },
+        request=httpx.Request("POST", "https://test-resource.services.ai.azure.com/anthropic/v1/messages"),
+    )
+
+    with patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_response) as mock_post:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=256,
+            messages=[{"role": "user", "content": "Use the Bash tool to run: echo hello from the gateway"}],
+            model="azure_ai/claude-sonnet-4-6",
+            api_key="test-api-key",
+            api_base="https://test-resource.services.ai.azure.com",
+            safeguards=safeguards,
+        )
+
+    mock_post.assert_called_once()
+    post_kwargs = mock_post.call_args.kwargs
+    sent_betas = post_kwargs["headers"]["anthropic-beta"].split(",")
+    assert "dangerous-tool-use-2026-09-03" in sent_betas, post_kwargs["headers"]
+    assert json.loads(post_kwargs["data"])["safeguards"] == safeguards
