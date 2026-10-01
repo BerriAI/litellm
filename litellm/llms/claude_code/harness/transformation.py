@@ -9,9 +9,11 @@ URL or credentials. Verified against Claude Code 2.1.285.
 
 from __future__ import annotations
 
+import itertools
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm.harness.errors import HarnessError, OptionsMismatch
@@ -32,6 +34,7 @@ from litellm.llms.base_llm.harness.transformation import (
     HarnessTurnError,
     HarnessTurnRequest,
     HarnessTurnResponse,
+    event_list,
 )
 from litellm.llms.base_llm.harness.utils import (
     last_json_object,
@@ -48,35 +51,41 @@ SYNTHETIC_MODEL: Final = "<synthetic>"
 
 BASE_COMMAND: Final = ("-p", "--output-format", "stream-json", "--verbose", "--input-format", "text")
 
-PERMISSION_MODES: Final[Mapping[str, str]] = {
-    "read-only": "plan",
-    "ask": "default",
-    "edit": "acceptEdits",
-    "full": "bypassPermissions",
-}
+PERMISSION_MODES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "read-only": "plan",
+        "ask": "default",
+        "edit": "acceptEdits",
+        "full": "bypassPermissions",
+    }
+)
 
-NATIVE_TO_NORMALIZED: Final[Mapping[str, str]] = {
-    "Read": "read",
-    "Write": "write",
-    "Edit": "edit",
-    "MultiEdit": "edit",
-    "Bash": "bash",
-    "Glob": "glob",
-    "Grep": "grep",
-    "WebSearch": "web_search",
-    "LS": "ls",
-}
+NATIVE_TO_NORMALIZED: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "Read": "read",
+        "Write": "write",
+        "Edit": "edit",
+        "MultiEdit": "edit",
+        "Bash": "bash",
+        "Glob": "glob",
+        "Grep": "grep",
+        "WebSearch": "web_search",
+        "LS": "ls",
+    }
+)
 
-NORMALIZED_TO_NATIVE: Final[Mapping[str, tuple[str, ...]]] = {
-    "read": ("Read",),
-    "write": ("Write",),
-    "edit": ("Edit", "MultiEdit"),
-    "bash": ("Bash",),
-    "glob": ("Glob",),
-    "grep": ("Grep",),
-    "web_search": ("WebSearch",),
-    "ls": ("LS",),
-}
+NORMALIZED_TO_NATIVE: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "read": ("Read",),
+        "write": ("Write",),
+        "edit": ("Edit", "MultiEdit"),
+        "bash": ("Bash",),
+        "glob": ("Glob",),
+        "grep": ("Grep",),
+        "web_search": ("WebSearch",),
+        "ls": ("LS",),
+    }
+)
 
 # Env the config owns; ClaudeCodeOptions.env may not override these.
 MANAGED_ENV_KEYS: Final = frozenset(
@@ -95,12 +104,14 @@ MANAGED_CONFIG_KEYS: Final = frozenset(
     {"env", "apiKeyHelper", "model", "permissions", "awsAuthRefresh", "awsCredentialExport", "forceLoginMethod"}
 )
 
-STATIC_ENV: Final[Mapping[str, str]] = {
-    "DISABLE_TELEMETRY": "1",
-    "DISABLE_ERROR_REPORTING": "1",
-    "DISABLE_AUTOUPDATER": "1",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-}
+STATIC_ENV: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "DISABLE_TELEMETRY": "1",
+        "DISABLE_ERROR_REPORTING": "1",
+        "DISABLE_AUTOUPDATER": "1",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    }
+)
 
 STRUCTURED_OUTPUT_INSTRUCTION: Final = (
     "When you have finished the task, end your final reply with only a single JSON "
@@ -113,11 +124,11 @@ class ClaudeCodeStreamState:
     """What the parser has learned from one turn's stream-json output."""
 
     session_id: str | None = None
-    text_parts: list[str] = field(default_factory=list)
+    text_parts: list[str] = field(default_factory=list)  # mutable-ok: parser appends text deltas
     result_seen: bool = False
     result_text: str | None = None
     is_error: bool = False
-    errors: list[str] = field(default_factory=list)
+    errors: Sequence[str] = ()
     structured_output: Any | None = None
 
     @property
@@ -146,81 +157,88 @@ def _stringify_block(block: object) -> str:
     return json.dumps(block, ensure_ascii=False)
 
 
-def _message_blocks(event: Mapping[str, Any]) -> list[Any]:
-    content = (event.get("message") or {}).get("content")
+def _message_blocks(event: Mapping[str, Any]) -> Sequence[Any]:
+    message: Final = event.get("message")
+    content: Final = message.get("content") if isinstance(message, Mapping) else None
     if isinstance(content, str):
-        return [{"type": "text", "text": content}]
-    return content if isinstance(content, list) else []
+        return ({"type": "text", "text": content},)  # mutable-ok: JSON content block, like the stream's
+    return content if isinstance(content, list) else ()
 
 
-def _assistant_block_events(block: Mapping[str, Any], state: ClaudeCodeStreamState) -> list[Event]:
+def _assistant_block_events(block: Mapping[str, Any], state: ClaudeCodeStreamState) -> tuple[Event, ...]:
     kind = block.get("type")
     if kind == "text" and block.get("text"):
         state.text_parts.append(block["text"])
-        return [Text(delta=block["text"])]
+        return (Text(delta=block["text"]),)
     if kind == "thinking" and block.get("thinking"):
-        return [Reasoning(delta=block["thinking"])]
+        return (Reasoning(delta=block["thinking"]),)
     if kind == "tool_use":
         native = str(block.get("name", ""))
-        return [
+        return (
             ToolCall(
                 id=str(block.get("id", "")),
                 name=normalize_tool_name(native, NATIVE_TO_NORMALIZED),
                 native_name=native,
-                input=block.get("input") or {},
+                input=block.get("input")
+                or {},  # mutable-ok: ToolCall.input is a dict field; empty default for a missing input
                 builtin=not native.startswith("mcp__"),
-            )
-        ]
-    return []
-
-
-def _assistant_events(event: Mapping[str, Any], state: ClaudeCodeStreamState) -> list[Event]:
-    if event.get("parent_tool_use_id"):
-        return []  # subagent traffic
-    if (event.get("message") or {}).get("model") == SYNTHETIC_MODEL:
-        return []  # CLI-generated error text; surfaced via the result event
-    events: list[Event] = []
-    for block in _message_blocks(event):
-        if isinstance(block, dict):
-            events.extend(_assistant_block_events(block, state))
-    return events
-
-
-def _user_events(event: Mapping[str, Any]) -> list[Event]:
-    if event.get("parent_tool_use_id"):
-        return []
-    return [
-        ToolResult(
-            id=str(block.get("tool_use_id", "")),
-            output=stringify_tool_output(block.get("content")),
-            is_error=bool(block.get("is_error", False)),
+            ),
         )
-        for block in _message_blocks(event)
-        if isinstance(block, dict) and block.get("type") == "tool_result"
-    ]
+    return ()
 
 
-def _system_events(event: Mapping[str, Any], state: ClaudeCodeStreamState) -> list[Event]:
+def _assistant_events(event: Mapping[str, Any], state: ClaudeCodeStreamState) -> Sequence[Event]:
+    if event.get("parent_tool_use_id"):
+        return event_list()  # subagent traffic
+    message: Final = event.get("message")
+    if isinstance(message, Mapping) and message.get("model") == SYNTHETIC_MODEL:
+        return event_list()  # CLI-generated error text; surfaced via the result event
+    blocks: Final = (block for block in _message_blocks(event) if isinstance(block, dict))
+    return event_list(*itertools.chain.from_iterable(_assistant_block_events(block, state) for block in blocks))
+
+
+def _is_tool_result(block: object) -> bool:
+    return isinstance(block, dict) and block.get("type") == "tool_result"
+
+
+def _user_events(event: Mapping[str, Any]) -> Sequence[Event]:
+    if event.get("parent_tool_use_id"):
+        return event_list()
+    return event_list(
+        *(
+            ToolResult(
+                id=str(block.get("tool_use_id", "")),
+                output=stringify_tool_output(block.get("content")),
+                is_error=bool(block.get("is_error", False)),
+            )
+            for block in _message_blocks(event)
+            if _is_tool_result(block)
+        )
+    )
+
+
+def _system_events(event: Mapping[str, Any], state: ClaudeCodeStreamState) -> Sequence[Event]:
     subtype = event.get("subtype")
     if subtype == "init" and event.get("session_id"):
         state.session_id = str(event["session_id"])
-        return []
+        return event_list()
     if subtype == "compact_boundary":
-        meta = event.get("compact_metadata") or {}
-        return [Compaction(tokens_before=meta.get("pre_tokens"), tokens_after=None)]
-    return []
+        meta: Final = event.get("compact_metadata")
+        pre_tokens: Final = meta.get("pre_tokens") if isinstance(meta, Mapping) else None
+        return event_list(Compaction(tokens_before=pre_tokens, tokens_after=None))
+    return event_list()
 
 
-def _record_result(event: Mapping[str, Any], state: ClaudeCodeStreamState) -> list[Event]:
+def _record_result(event: Mapping[str, Any], state: ClaudeCodeStreamState) -> Sequence[Event]:
     state.result_seen = True
     state.is_error = bool(event.get("is_error", False))
     result = event.get("result")
     state.result_text = result if isinstance(result, str) else None
-    state.errors = [str(e) for e in event.get("errors") or []]
+    state.errors = [str(e) for e in event.get("errors") or ()]  # mutable-ok: mirrors the JSON errors array
     state.structured_output = event.get("structured_output")
     if event.get("session_id"):
         state.session_id = str(event["session_id"])
-    return []
+    return event_list()
 
 
 def turn_error_message(state: ClaudeCodeStreamState, exit_code: int, stderr_tail: Sequence[str]) -> str | None:
@@ -236,9 +254,10 @@ def turn_error_message(state: ClaudeCodeStreamState, exit_code: int, stderr_tail
 
 
 def build_system_prompt(instructions: str | None, output_schema: Mapping[str, Any] | None) -> str | None:
-    parts = [instructions] if instructions else []
-    if output_schema is not None:
-        parts.append(STRUCTURED_OUTPUT_INSTRUCTION.format(schema=json.dumps(output_schema)))
+    schema_part: Final = (
+        STRUCTURED_OUTPUT_INSTRUCTION.format(schema=json.dumps(output_schema)) if output_schema is not None else None
+    )
+    parts: Final = tuple(part for part in (instructions, schema_part) if part)
     return "\n\n".join(parts) if parts else None
 
 
@@ -279,20 +298,25 @@ class ClaudeCodeHarnessConfig(BaseCLIHarnessConfig):
             raise HarnessError("Claude Code needs the session model endpoint")
         options: ClaudeCodeOptions = self.get_options(ctx)
         model = ctx.model
-        env: dict[str, str] = {
-            **options.env,
-            **STATIC_ENV,
-            "ANTHROPIC_BASE_URL": ctx.sandbox.host_url(ctx.endpoint.port),
-            "ANTHROPIC_AUTH_TOKEN": ctx.endpoint.token,
-            "ANTHROPIC_API_KEY": "",
-            "CLAUDE_CONFIG_DIR": private_dir,
-        }
-        if model:
-            # Background calls (titles, summaries) use the same model group, like OpenCode.
-            env["ANTHROPIC_MODEL"] = model
-            env["ANTHROPIC_SMALL_FAST_MODEL"] = model
+        # Background calls (titles, summaries) use the same model group, like OpenCode.
+        model_env: Final = (
+            MappingProxyType({"ANTHROPIC_MODEL": model, "ANTHROPIC_SMALL_FAST_MODEL": model})
+            if model
+            else MappingProxyType({})
+        )
+        env: Final = MappingProxyType(
+            {
+                **options.env,
+                **STATIC_ENV,
+                "ANTHROPIC_BASE_URL": ctx.sandbox.host_url(ctx.endpoint.port),
+                "ANTHROPIC_AUTH_TOKEN": ctx.endpoint.token,
+                "ANTHROPIC_API_KEY": "",
+                "CLAUDE_CONFIG_DIR": private_dir,
+                **model_env,
+            }
+        )
         return HarnessSessionSetup(
-            persisted_dirs=[("projects", "claude_code/projects")],
+            persisted_dirs=[("projects", "claude_code/projects")],  # mutable-ok: tests compare to a list
             skills_dir="skills",
             env=env,
         )
@@ -307,29 +331,31 @@ class ClaudeCodeHarnessConfig(BaseCLIHarnessConfig):
     ) -> HarnessTurnRequest:
         options: ClaudeCodeOptions = self.get_options(ctx)
         schema = ctx.output.model_json_schema() if ctx.output is not None else None
-        argv = [CLAUDE_BINARY, *BASE_COMMAND, "--permission-mode", PERMISSION_MODES[ctx.permissions]]
-        if ctx.model:
-            argv += ["--model", ctx.model]
-        # Only read settings from the private CLAUDE_CONFIG_DIR, never the repo's .claude/.
-        argv += ["--setting-sources", "user"]
-        if options.config:
-            argv += ["--settings", json.dumps(dict(options.config))]
-        system_prompt = build_system_prompt(ctx.instructions, schema)
-        if system_prompt:
-            argv += ["--append-system-prompt", system_prompt]
-        if ctx.max_turns is not None:
-            argv += ["--max-turns", str(ctx.max_turns)]
-        disallowed = native_tool_names(ctx.disable_tools, NORMALIZED_TO_NATIVE)
-        if disallowed:
-            argv += ["--disallowedTools", ",".join(disallowed)]
-        if native_session_id:
-            argv += ["--resume", native_session_id]
+        system_prompt: Final = build_system_prompt(ctx.instructions, schema)
+        disallowed: Final = native_tool_names(ctx.disable_tools, NORMALIZED_TO_NATIVE)
+        config: Final = dict(options.config)  # mutable-ok: json.dumps needs a plain dict
+        settings: Final = json.dumps(config) if config else None
+        argv: Final = (
+            CLAUDE_BINARY,
+            *BASE_COMMAND,
+            "--permission-mode",
+            PERMISSION_MODES[ctx.permissions],
+            *(("--model", ctx.model) if ctx.model else ()),
+            # Only read settings from the private CLAUDE_CONFIG_DIR, never the repo's .claude/.
+            "--setting-sources",
+            "user",
+            *(("--settings", settings) if settings else ()),
+            *(("--append-system-prompt", system_prompt) if system_prompt else ()),
+            *(("--max-turns", str(ctx.max_turns)) if ctx.max_turns is not None else ()),
+            *(("--disallowedTools", ",".join(disallowed)) if disallowed else ()),
+            *(("--resume", native_session_id) if native_session_id else ()),
+        )
         return HarnessTurnRequest(argv=argv, env=setup.env, stdin=prompt)
 
     def create_stream_state(self) -> ClaudeCodeStreamState:
         return ClaudeCodeStreamState()
 
-    def transform_stream_line(self, line: Mapping[str, Any], state: ClaudeCodeStreamState) -> list[Event]:
+    def transform_stream_line(self, line: Mapping[str, Any], state: ClaudeCodeStreamState) -> Sequence[Event]:
         kind = line.get("type")
         if kind == "assistant":
             return _assistant_events(line, state)
@@ -339,7 +365,7 @@ class ClaudeCodeHarnessConfig(BaseCLIHarnessConfig):
             return _system_events(line, state)
         if kind == "result":
             return _record_result(line, state)
-        return []
+        return event_list()
 
     def get_native_session_id(self, state: ClaudeCodeStreamState) -> str | None:
         return state.session_id
