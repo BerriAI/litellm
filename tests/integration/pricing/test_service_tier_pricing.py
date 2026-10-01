@@ -513,3 +513,65 @@ def test_custom_rates_above_272k_bill_the_deployment_rates_over_catalog_long_con
         assert rows[0]["prompt_tokens"] == 300_000
         assert rows[0]["completion_tokens"] == 1_000
         assert float(rows[0]["spend"]) == pytest.approx(expected_cost, rel=1e-6), rows
+
+
+def test_custom_priority_rates_above_272k_bill_cached_tokens_at_the_catalog_priority_cache_read_rate(
+    gateway: Gateway,
+) -> None:
+    cached_tokens: Final = 100_000
+    cache_read_rate: Final = _bundled_rate("gpt-6-astra", "cache_read_input_token_cost_priority")
+    with gateway.scenario() as scenario:
+        scenario_id: Final = f"custom-priority-cached-long-context-{uuid.uuid4().hex}"
+        handle: Final = register_scenario(
+            scenario_id,
+            JsonResponse(
+                content_type="application/json",
+                body={
+                    "id": "chatcmpl-$UNIQUE_ID",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-6-astra",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {
+                        "prompt_tokens": 300_000,
+                        "completion_tokens": 1_000,
+                        "total_tokens": 301_000,
+                        "prompt_tokens_details": {"cached_tokens": cached_tokens},
+                    },
+                    "service_tier": "priority",
+                },
+            ),
+        )
+        scenario.cleanups.callback(delete_scenario, handle)
+        model: Final = scenario.model(
+            model="openai/gpt-6-astra",
+            api_key=scenario_id,
+            api_base=handle.api_base(),
+            input_cost_per_token=1e-06,
+            output_cost_per_token=2e-06,
+            input_cost_per_token_priority=2e-06,
+            output_cost_per_token_priority=4e-06,
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "cached long context custom priority pricing"}],
+                "service_tier": "priority",
+            },
+            key=scenario.key(),
+        )
+
+        assert response.status_code == 200, response.text
+        expected: Final = (300_000 - cached_tokens) * 2e-06 + cached_tokens * cache_read_rate + 1_000 * 4e-06
+        assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected, rel=1e-6), response.text
+        request_id: Final = string_value(object_value(response.json())["id"])
+        rows: Final = eventually(
+            lambda: read_rows('SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (request_id,)),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        assert float(rows[0]["spend"]) == pytest.approx(expected, rel=1e-6), rows
