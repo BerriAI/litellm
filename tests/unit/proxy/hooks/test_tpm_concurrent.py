@@ -30,6 +30,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    _as_str_object_dict,
     _call_id_from_callback_kwargs,
     _request_stash,
     get_or_create_request_stash,
@@ -3874,6 +3875,158 @@ async def test_summary_subrequest_honors_project_itpm_otpm(rate_limiter):
             proxy_server.proxy_logging_obj.proxy_hook_mapping[
                 "parallel_request_limiter"
             ] = previous_hook
+
+
+@pytest.mark.asyncio
+async def test_unreserved_project_io_covers_empty_and_fallback_usage(rate_limiter):
+    """Cover the unreserved ITPM/OTPM branches the happy-path summary test skips."""
+    from typing import Final
+
+    handler, _cache = rate_limiter
+    assert _as_str_object_dict("nope") is None
+    echoed: Final = _as_str_object_dict({"a": 1})
+    assert echoed is not None
+    assert echoed["a"] == 1
+
+    assert handler._build_unreserved_project_io_token_ops("nope", {}) == ()
+    assert handler._build_unreserved_project_io_token_ops({}, {}) == ()
+    assert (
+        handler._build_unreserved_project_io_token_ops(
+            {"standard_logging_object": "x"},
+            {},
+        )
+        == ()
+    )
+    assert (
+        handler._build_unreserved_project_io_token_ops(
+            {"standard_logging_object": {"metadata": "x"}},
+            {},
+        )
+        == ()
+    )
+    assert (
+        handler._build_unreserved_project_io_token_ops(
+            {
+                "standard_logging_object": {
+                    "metadata": {"user_api_key_project_id": "proj"},
+                    "model_group": 1,
+                }
+            },
+            {},
+        )
+        == ()
+    )
+
+    combined_ops: Final = handler._build_unreserved_project_io_token_ops(
+        {
+            "standard_logging_object": {
+                "metadata": {"user_api_key_project_id": "proj"},
+                "model_group": "gpt-4o-mini",
+            },
+            "combined_usage_object": {"prompt_tokens": 5, "completion_tokens": 0},
+        },
+        {},
+    )
+    assert len(combined_ops) == 1
+    assert combined_ops[0]["increment_value"] == 5
+
+    aggregate_ops: Final = handler._build_unreserved_project_io_token_ops(
+        {
+            "standard_logging_object": {
+                "metadata": {"user_api_key_project_id": "proj"},
+                "model_group": "gpt-4o-mini",
+            },
+        },
+        {"total_tokens": 9},
+    )
+    assert len(aggregate_ops) == 2
+    assert {op["increment_value"] for op in aggregate_ops} == {9}
+
+    await handler._seed_rate_limit_window_if_absent(window_key="already-open", ttl=None)
+    await handler._seed_rate_limit_window_if_absent(window_key="already-open", ttl=None)
+    await handler._apply_one_reservation_aware_token_increment(
+        operation={
+            "key": "plain-counter",
+            "increment_value": 3,
+            "ttl": 60,
+        },
+        parent_otel_span=None,
+    )
+    assert int(await handler.internal_usage_cache.async_get_cache(key="plain-counter", litellm_parent_otel_span=None) or 0) == 3
+
+
+@pytest.mark.asyncio
+async def test_summary_token_estimate_uses_counter_or_falls_back(monkeypatch):
+    from typing import Final
+
+    from litellm.llms.anthropic.pass_through.context_management.editors.compact import (
+        _check_summary_model_rate_limit,
+        _estimate_summary_input_tokens,
+    )
+    from litellm.proxy import proxy_server
+
+    messages: Final = ({"role": "user", "content": "hi"},)
+
+    def fail_counter(**_kwargs: object) -> int:
+        raise RuntimeError("counter down")
+
+    monkeypatch.setattr("litellm.token_counter", fail_counter)
+    assert (
+        await _estimate_summary_input_tokens(
+            summary_model="gpt-4o-mini",
+            summary_messages=messages,
+            fallback_tokens=42,
+        )
+        == 42
+    )
+
+    def fixed_counter(**_kwargs: object) -> int:
+        return 17
+
+    monkeypatch.setattr("litellm.token_counter", fixed_counter)
+    assert (
+        await _estimate_summary_input_tokens(
+            summary_model="gpt-4o-mini",
+            summary_messages=messages,
+            fallback_tokens=42,
+        )
+        == 17
+    )
+
+    handler: Final = RateLimitHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+
+    async def junk_statuses(self, descriptors, parent_otel_span=None, read_only=False, **_kwargs):
+        return {
+            "overall_code": "OK",
+            "statuses": [
+                "not-a-status",
+                {"descriptor_key": "model_per_project_itpm", "limit_remaining": "lots"},
+                {"descriptor_key": "model_per_project_itpm", "limit_remaining": 1000},
+            ],
+        }
+
+    monkeypatch.setattr(RateLimitHandler, "should_rate_limit", junk_statuses)
+    previous_hook: Final = proxy_server.proxy_logging_obj.proxy_hook_mapping.get("parallel_request_limiter")
+    proxy_server.proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = handler
+    try:
+        assert (
+            await _check_summary_model_rate_limit(
+                user_api_key_auth=UserAPIKeyAuth(
+                    api_key="sk-proj-key",
+                    project_id="proj-summary-io",
+                    project_metadata={"model_itpm_limit": {"gpt-4o-mini": 2000}},
+                ),
+                summary_model="gpt-4o-mini",
+                estimated_input_tokens=10,
+                estimated_output_tokens=1,
+            )
+            is True
+        )
+    finally:
+        if previous_hook is None:
+            proxy_server.proxy_logging_obj.proxy_hook_mapping.pop("parallel_request_limiter", None)
+        else:
+            proxy_server.proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = previous_hook
 
 
 if __name__ == "__main__":
