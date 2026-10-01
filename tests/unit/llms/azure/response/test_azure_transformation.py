@@ -651,16 +651,21 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     litellm.add_known_models(model_cost_map=litellm.model_cost)
 
 
-def test_azure_responses_gpt6_astra_reasoning_effort_none_unlocks_temperature(local_model_cost_map: None):
-    """Foundry's gpt-6-astra accepts reasoning.effort='none' with a non-default temperature
-    while OpenAI's gpt-6-astra does not, so the gate must read the azure/ cost-map entry
-    for the bare deployment name rather than OpenAI's."""
+def test_azure_responses_reasoning_effort_none_unlocks_temperature_off_the_azure_row(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+):
+    """The gate reads the azure/ cost-map entry for the bare deployment name rather than OpenAI's
+    twin: with OpenAI's gpt-6-sol row turned off for none, azure/gpt-6-sol's row still lets none
+    through and, only then, a non-default temperature."""
+    monkeypatch.setitem(
+        litellm.model_cost, "gpt-6-sol", {**litellm.model_cost["gpt-6-sol"], "supports_none_reasoning_effort": False}
+    )
     params = AzureOpenAIResponsesAPIConfig().map_openai_params(
         response_api_optional_params=ResponsesAPIOptionalRequestParams(
             temperature=0.2,
             reasoning={"effort": "none"},
         ),
-        model="gpt-6-astra",
+        model="gpt-6-sol",
         drop_params=False,
     )
     assert params["temperature"] == 0.2
@@ -681,9 +686,9 @@ def test_azure_responses_gpt6_astra_rejects_temperature_while_reasoning(local_mo
 
 @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
 def test_azure_responses_gpt6_astra_effort_levels_follow_the_azure_row(local_model_cost_map: None, level: str):
-    """A bare deployment name reads the azure/ row, opt-out for every level, so the max and
-    minimal Foundry refuses (commit e79f3ec5205, live on 2026-09-05) are dropped or refused here
-    while the none it accepts goes through."""
+    """A bare deployment name reads the azure/ row, opt-out for every level, so the none and
+    minimal Foundry refuses on this route (live 400s on 2026-10-01) are dropped or refused here
+    while the max it honors goes through."""
     forwarded = litellm.model_cost["azure/gpt-6-astra"].get(f"supports_{level}_reasoning_effort") is not False
     dropped = AzureOpenAIResponsesAPIConfig().map_openai_params(
         response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": level}),
@@ -705,6 +710,15 @@ def test_azure_responses_gpt6_astra_effort_levels_follow_the_azure_row(local_mod
                 model="gpt-6-astra",
                 drop_params=False,
             )
+
+
+def test_azure_gpt6_astra_row_keeps_max_on_because_this_route_honors_it(local_model_cost_map: None):
+    """Pinned on purpose: with max off the row-derived test above would accept dropping a level the
+    provider takes. A Foundry gpt-6-astra deployment answered reasoning.effort max through
+    /v1/responses with 200, the effort echoed back and reasoning tokens billed, on 2026-10-01;
+    chat refuses max on the same deployment, as OpenAI's chat does, so one row cannot say both
+    and follows the route that has the level."""
+    assert litellm.model_cost["azure/gpt-6-astra"]["supports_max_reasoning_effort"] is True
 
 
 def test_azure_responses_sends_the_deployment_name_when_azure_ai_prefix_survives_provider_remap():

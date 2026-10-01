@@ -350,10 +350,15 @@ def test_azure_gpt_6_astra_takes_the_reasoning_series_request_shape():
     assert params["reasoning_effort"] == "xhigh"
 
 
-@pytest.mark.parametrize("model", ["azure/gpt-6-astra", "azure/us/gpt-6-astra"])
-def test_azure_gpt6_astra_reasoning_effort_none_unlocks_temperature(config: AzureOpenAIGPT5Config, model: str):
-    """Foundry's gpt-6-astra accepts reasoning_effort='none' and, only then, a non-default
-    temperature (verified live against a Foundry deployment), unlike OpenAI's gpt-6-astra."""
+@pytest.mark.parametrize("model", ["azure/gpt-6-sol", "azure/us/gpt-6-sol"])
+def test_azure_reasoning_effort_none_unlocks_temperature_off_the_azure_row(
+    config: AzureOpenAIGPT5Config, monkeypatch: pytest.MonkeyPatch, model: str
+):
+    """A deployment whose azure/ row takes none accepts a non-default temperature with it, read off
+    that row even when OpenAI's twin row says the model refuses none."""
+    monkeypatch.setitem(
+        litellm.model_cost, "gpt-6-sol", {**litellm.model_cost["gpt-6-sol"], "supports_none_reasoning_effort": False}
+    )
     params = config.map_openai_params(
         non_default_params={"temperature": 0.2, "reasoning_effort": "none"},
         optional_params={},
@@ -376,9 +381,10 @@ def _azure_chat_row_forwards(row: dict, level: str) -> bool:
 def test_azure_gpt6_astra_forwards_exactly_the_effort_levels_its_map_row_allows(
     config: AzureOpenAIGPT5Config, model: str, level: str
 ):
-    """The azure/ row is the whole contract for a Foundry deployment, max included: a live
-    Foundry gpt-6-astra answered reasoning_effort max with a 400 naming none, low, medium, high
-    and xhigh on 2026-09-05 (commit e79f3ec5205), so its row turns max and minimal off."""
+    """The azure/ row is the whole contract for a Foundry deployment. A live Foundry gpt-6-astra
+    (model gpt-6-astra-2026-09-03) answered reasoning_effort none with a 400 naming low, medium,
+    high and xhigh on 2026-10-01, so its row turns none and minimal off; max stays on because the
+    Responses route honors it, and chat's 400 for max is the provider's own."""
     forwarded = _azure_chat_row_forwards(litellm.model_cost[model], level)
     dropped = config.map_openai_params(
         non_default_params={"reasoning_effort": level},
@@ -408,5 +414,11 @@ def test_azure_gpt6_astra_forwards_exactly_the_effort_levels_its_map_row_allows(
             )
 
 
-def test_azure_gpt6_astra_row_turns_max_off_so_the_gate_test_covers_max():
-    assert litellm.model_cost["azure/gpt-6-astra"].get("supports_max_reasoning_effort") is False
+def test_azure_gpt6_astra_row_turns_none_and_minimal_off():
+    """Pinned on purpose so the row-derived test above cannot go vacuous: a Foundry gpt-6-astra
+    deployment refused none on chat and on Responses on 2026-10-01 (400 unsupported_value naming
+    low, medium, high, xhigh), and minimal the same way. When Azure adds a level, flip the row and
+    this assertion together."""
+    row = litellm.model_cost["azure/gpt-6-astra"]
+    assert row["supports_none_reasoning_effort"] is False
+    assert row["supports_minimal_reasoning_effort"] is False
