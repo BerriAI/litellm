@@ -7,7 +7,7 @@ from typing import Final, Literal, TypeAlias
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-from litellm.tracing.messages import MESSAGE_ROLES, ChatRole, content_text
+from litellm.tracing.messages import MESSAGE_ROLES, ChatRole, content_text, content_tool_calls
 
 
 class UIToolCall(TypedDict):
@@ -64,6 +64,7 @@ class _RawMessage(BaseModel):
     role: str | None = None
     type: str | None = None
     content: JsonValue = None
+    parts: JsonValue = None
     name: str | None = None
     tool_calls: tuple[_RawToolCall, ...] | None = None
     kwargs: "_RawMessage | None" = None
@@ -80,7 +81,13 @@ def _unwrapped(message: _RawMessage) -> _RawMessage:
 
 def _is_message(message: _RawMessage) -> bool:
     has_role: Final = message.role is not None or message.type in MESSAGE_ROLES
-    return has_role and ("content" in message.model_fields_set or bool(message.tool_calls))
+    return has_role and (
+        "content" in message.model_fields_set or "parts" in message.model_fields_set or bool(message.tool_calls)
+    )
+
+
+def _message_content(message: _RawMessage) -> JsonValue:
+    return message.content if "content" in message.model_fields_set else message.parts
 
 
 def _arguments_text(arguments: JsonValue) -> str:
@@ -108,9 +115,17 @@ def _role(message: _RawMessage, has_tool_calls: bool) -> ChatRole:
 
 
 def _ui_message(message: _RawMessage) -> UIMessage:
-    calls: Final = tuple(_tool_call(call) for call in message.tool_calls or ())
+    raw_content: Final = _message_content(message)
+    calls: Final = (
+        tuple(_tool_call(call) for call in message.tool_calls)
+        if message.tool_calls
+        else tuple(
+            UIToolCall(name=call.name, arguments=_arguments_text(call.arguments))
+            for call in content_tool_calls(raw_content)
+        )
+    )
     role: Final = _role(message, bool(calls))
-    content: Final = content_text(message.content)
+    content: Final = content_text(raw_content)
     match (message.name or None, calls):
         case (None, ()):
             return UIMessage(role=role, content=content)

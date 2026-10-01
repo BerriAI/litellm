@@ -13,7 +13,7 @@ pub(super) struct LangSmithNormalizer;
 #[serde(untagged)]
 enum MessageContent {
     Text(String),
-    Blocks(Vec<ContentBlock>),
+    Blocks(Vec<Value>),
     Other(Value),
 }
 
@@ -21,47 +21,57 @@ impl MessageContent {
     fn display_text(&self) -> String {
         match self {
             Self::Text(text) => text.clone(),
-            Self::Blocks(blocks) => blocks
-                .iter()
-                .filter_map(|block| match block {
-                    ContentBlock::Text { text } => Some(text.as_str()),
-                    ContentBlock::Hidden(kind) => match kind {
-                        HiddenBlock::Reasoning
-                        | HiddenBlock::Thinking
-                        | HiddenBlock::RedactedThinking
-                        | HiddenBlock::FunctionCall
-                        | HiddenBlock::ToolUse
-                        | HiddenBlock::ToolCall => None,
-                    },
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n"),
+            Self::Blocks(blocks) => {
+                if blocks.iter().all(|block| block_text(block).is_some() || hidden_block(block)) {
+                    blocks.iter().filter_map(block_text).collect::<Vec<_>>().join("\n\n")
+                } else {
+                    encode(blocks)
+                }
+            }
             Self::Other(value) => encode(value),
         }
     }
 }
 
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum ContentBlock {
-    Text { text: String },
-    Hidden(HiddenBlock),
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum HiddenBlock {
-    Reasoning,
-    Thinking,
-    RedactedThinking,
-    FunctionCall,
-    ToolUse,
-    ToolCall,
-}
-
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(transparent)]
 struct RawToolCall(IndexMap<String, Value>);
+
+fn embedded_call(block: &Value) -> Option<RawToolCall> {
+    let name = block.get("name")?.as_str().filter(|name| !name.is_empty())?;
+    let args = match block.get("type")?.as_str()? {
+        "tool_use" => block.get("input")?,
+        "function_call" => block.get("arguments")?,
+        "tool_call" => block.get("args").filter(|value| !value.is_null())
+            .or_else(|| block.get("arguments")).or_else(|| block.get("args"))?,
+        _ => return None,
+    };
+    Some(RawToolCall(IndexMap::from([
+        ("name".to_owned(), Value::String(name.to_owned())),
+        ("args".to_owned(), args.clone()),
+    ])))
+}
+
+fn hidden_block(block: &Value) -> bool {
+    matches!(block.get("type").and_then(Value::as_str), Some("reasoning" | "thinking" | "redacted_thinking"))
+        || embedded_call(block).is_some()
+}
+
+fn block_text(block: &Value) -> Option<String> {
+    if hidden_block(block) {
+        return None;
+    }
+    if let Some(text) = block.get("text").and_then(Value::as_str) {
+        return Some(text.to_owned());
+    }
+    match block.get("type").and_then(Value::as_str) {
+        Some("text") => block.get("content").and_then(Value::as_str).map(str::to_owned),
+        Some("tool_call_response") => block.get("result").map(|value| {
+            value.as_str().map(str::to_owned).unwrap_or_else(|| encode(value))
+        }),
+        _ => None,
+    }
+}
 
 #[derive(Deserialize)]
 struct ResponseMetadata {
@@ -104,10 +114,11 @@ impl RawMessage {
                 .content
                 .as_ref()
                 .map_or_else(String::new, MessageContent::display_text),
-            tool_calls: fields
-                .tool_calls
-                .as_deref()
-                .filter(|calls| !calls.is_empty()),
+            tool_calls: fields.tool_calls.as_ref().filter(|calls| !calls.is_empty()).cloned().or_else(|| {
+                let Some(MessageContent::Blocks(blocks)) = fields.content.as_ref() else { return None; };
+                let calls: Vec<_> = blocks.iter().filter_map(embedded_call).collect();
+                (!calls.is_empty()).then_some(calls)
+            }),
             name: (role == "tool")
                 .then_some(fields.name.as_ref())
                 .flatten()
@@ -121,7 +132,7 @@ struct NormalizedMessage<'a> {
     role: &'a str,
     content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<&'a [RawToolCall]>,
+    tool_calls: Option<Vec<RawToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<&'a Value>,
 }

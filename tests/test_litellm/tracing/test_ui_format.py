@@ -117,3 +117,143 @@ def test_non_message_non_object_payloads_keep_the_raw_string(raw: str):
 
 def test_empty_is_empty_text():
     assert to_ui_content("") == {"kind": "text", "text": ""}
+
+
+def test_genai_parts_preserve_conversation_text_calls_and_results():
+    raw = json.dumps(
+        [
+            {"role": "user", "parts": [{"type": "text", "content": "Weather in Paris?"}]},
+            {
+                "role": "assistant",
+                "parts": [
+                    {"type": "text", "content": "Checking"},
+                    {"type": "tool_call", "name": "weather", "arguments": {"city": "Paris"}},
+                    {"type": "tool_call", "name": "time", "arguments": '{"city":"Paris"}'},
+                ],
+            },
+            {"role": "tool", "parts": [{"type": "tool_call_response", "result": {"temperature": 20}}]},
+            {"role": "assistant", "parts": [{"type": "text", "content": "It is warm"}]},
+        ]
+    )
+    assert to_ui_content(raw) == {
+        "kind": "messages",
+        "messages": (
+            {"role": "user", "content": "Weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": "Checking",
+                "tool_calls": (
+                    {"name": "weather", "arguments": '{"city": "Paris"}'},
+                    {"name": "time", "arguments": '{"city":"Paris"}'},
+                ),
+            },
+            {"role": "tool", "content": '{"temperature": 20}'},
+            {"role": "assistant", "content": "It is warm"},
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"type": "tool_use", "name": "lookup", "input": {"id": 7}},
+        {"type": "function_call", "name": "lookup", "arguments": '{"id": 7}'},
+        {"type": "tool_call", "name": "lookup", "args": {"id": 7}},
+    ],
+)
+def test_embedded_tool_calls_remain_visible(block: dict[str, object]):
+    raw = json.dumps({"role": "assistant", "content": [{"type": "text", "text": "Looking up"}, block]})
+    assert to_ui_content(raw) == {
+        "kind": "messages",
+        "messages": (
+            {
+                "role": "assistant",
+                "content": "Looking up",
+                "tool_calls": ({"name": "lookup", "arguments": '{"id": 7}'},),
+            },
+        ),
+    }
+
+
+def test_explicit_tool_calls_do_not_duplicate_content_blocks():
+    raw = json.dumps(
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_call", "name": "lookup", "args": {"id": 7}}],
+            "tool_calls": [{"name": "lookup", "args": {"id": 7}}],
+        }
+    )
+    assert to_ui_content(raw) == {
+        "kind": "messages",
+        "messages": (
+            {"role": "assistant", "content": "", "tool_calls": ({"name": "lookup", "arguments": '{"id": 7}'},)},
+        ),
+    }
+
+
+@pytest.mark.parametrize("result", ["warm", {"temperature": 20}, [1, 2], False, 0, None])
+def test_genai_tool_results_keep_json_values(result: object):
+    raw = json.dumps({"role": "tool", "parts": [{"type": "tool_call_response", "result": result}]})
+    expected = result if isinstance(result, str) else json.dumps(result)
+    assert to_ui_content(raw) == {"kind": "messages", "messages": ({"role": "tool", "content": expected},)}
+
+
+def test_content_takes_precedence_over_parts():
+    raw = json.dumps({"role": "user", "content": "chat content", "parts": [{"type": "text", "content": "parts"}]})
+    assert to_ui_content(raw) == {"kind": "messages", "messages": ({"role": "user", "content": "chat content"},)}
+
+
+@pytest.mark.parametrize(
+    "blocks",
+    [
+        [{"type": "image", "content": "image-data"}],
+        [{"type": "text", "content": "caption"}, {"type": "image", "content": "image-data"}],
+        [{"type": "tool_call", "name": 5, "arguments": {"id": 7}}],
+        [{"type": "tool_call", "arguments": {"id": 7}}],
+        [{"type": "tool_call", "name": "", "arguments": {"id": 7}}],
+        [{"type": "tool_call", "function": {"name": "lookup", "arguments": '{"id": 7}'}}],
+        [{"type": "tool_call", "name": "lookup"}],
+        [{"type": "tool_use", "name": "lookup"}],
+        [{"type": "function_call", "name": "lookup"}],
+    ],
+)
+def test_unknown_or_malformed_parts_remain_inspectable(blocks: list[dict[str, object]]):
+    raw = json.dumps({"role": "user", "parts": blocks})
+    assert to_ui_content(raw) == {
+        "kind": "messages",
+        "messages": ({"role": "user", "content": json.dumps(blocks)},),
+    }
+
+
+@pytest.mark.parametrize("arguments", ['{"unfinished":', "", False, 0, None])
+def test_embedded_call_arguments_are_displayed_without_repair(arguments: object):
+    raw = json.dumps({"role": "model", "parts": [{"type": "tool_call", "name": "lookup", "arguments": arguments}]})
+    expected = arguments if isinstance(arguments, str) else "{}" if arguments is None else json.dumps(arguments)
+    assert to_ui_content(raw) == {
+        "kind": "messages",
+        "messages": ({"role": "assistant", "content": "", "tool_calls": ({"name": "lookup", "arguments": expected},)},),
+    }
+
+
+def test_reasoning_text_does_not_become_visible_message_content():
+    raw = json.dumps(
+        {
+            "role": "assistant",
+            "parts": [
+                {"type": "reasoning", "text": "private reasoning"},
+                {"type": "text", "content": "answer"},
+            ],
+        }
+    )
+    assert to_ui_content(raw) == {"kind": "messages", "messages": ({"role": "assistant", "content": "answer"},)}
+
+
+@pytest.mark.parametrize("content", [None, ""])
+def test_explicit_empty_content_is_not_replaced_by_parts(content: object):
+    raw = json.dumps({"role": "assistant", "content": content, "parts": [{"type": "text", "content": "fallback"}]})
+    assert to_ui_content(raw) == {"kind": "messages", "messages": ({"role": "assistant", "content": ""},)}
+
+
+def test_named_text_blocks_do_not_create_tool_calls():
+    raw = json.dumps({"role": "assistant", "parts": [{"type": "text", "name": "answer", "content": "done"}]})
+    assert to_ui_content(raw) == {"kind": "messages", "messages": ({"role": "assistant", "content": "done"},)}
