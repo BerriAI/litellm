@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 import psycopg
@@ -87,6 +88,7 @@ def test_lens_rename_preserves_saved_data_and_worker_credentials(populated: bool
                     INSERT INTO "LiteLLM_EngineRun" VALUES ('batch', 'lens', '2026-01-01', '{"cost":1.25}')"""
                 )
             connection.execute(sql.SQL((migrations / "20261001100000_rename_lens" / "migration.sql").read_text()))
+            connection.execute(sql.SQL((migrations / "20261001100000_rename_lens" / "migration.sql").read_text()))
             assert connection.execute('SELECT id, version, data FROM "LiteLLM_Lens"').fetchall() == (
                 [("lens", 7, {"findings": [{"id": "finding"}]})] if populated else []
             )
@@ -98,3 +100,65 @@ def test_lens_rename_preserves_saved_data_and_worker_credentials(populated: bool
             )
         finally:
             connection.rollback()
+
+
+@pytest.mark.parametrize("entrypoint", ("proxy", "extras-v1", "extras-v2"))
+@pytest.mark.parametrize("legacy_table", ("LiteLLM_Engine", "LiteLLM_EngineRun", "LiteLLM_EngineWorker"))
+def test_db_push_refuses_legacy_lens_data(monkeypatch: pytest.MonkeyPatch, entrypoint: str, legacy_table: str) -> None:
+    from litellm_proxy_extras.utils import ProxyExtrasDBManager
+
+    from litellm.proxy.db.prisma_client import PrismaManager
+
+    database_url: Final = os.environ["DATABASE_URL"]
+    schema: Final = f"lens_push_{uuid4().hex}"
+    parsed: Final = urlsplit(database_url)
+    scoped: Final = urlunsplit(parsed._replace(query=urlencode({**dict(parse_qsl(parsed.query)), "schema": schema})))
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        try:
+            connection.execute(
+                sql.SQL("CREATE TABLE {} (id TEXT PRIMARY KEY, data JSONB)").format(
+                    sql.Identifier(schema, legacy_table)
+                )
+            )
+            connection.execute(
+                sql.SQL("INSERT INTO {} VALUES ('saved', '{{\"keep\":true}}')").format(
+                    sql.Identifier(schema, legacy_table)
+                )
+            )
+            monkeypatch.setenv("DATABASE_URL", scoped)
+            setup: Final = (
+                PrismaManager.setup_database if entrypoint == "proxy" else ProxyExtrasDBManager.setup_database
+            )
+            with pytest.raises(RuntimeError, match="Legacy Lens tables exist"):
+                setup(use_migrate=False, use_v2_resolver=entrypoint == "extras-v2")
+            assert connection.execute(
+                sql.SQL("SELECT id, data FROM {}").format(sql.Identifier(schema, legacy_table))
+            ).fetchall() == [("saved", {"keep": True})]
+        finally:
+            connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+
+def test_db_push_creates_fresh_lens_tables_and_preserves_them_on_restart(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.db.prisma_client import PrismaManager
+
+    database_url: Final = os.environ["DATABASE_URL"]
+    schema: Final = f"lens_fresh_push_{uuid4().hex}"
+    parsed: Final = urlsplit(database_url)
+    scoped: Final = urlunsplit(parsed._replace(query=urlencode({**dict(parse_qsl(parsed.query)), "schema": schema})))
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        try:
+            monkeypatch.setenv("DATABASE_URL", scoped)
+            assert PrismaManager.setup_database(use_migrate=False)
+            connection.execute(
+                sql.SQL("INSERT INTO {} (id, data) VALUES ('saved', '{{\"keep\":true}}')").format(
+                    sql.Identifier(schema, "LiteLLM_Lens")
+                )
+            )
+            assert PrismaManager.setup_database(use_migrate=False)
+            assert connection.execute(
+                sql.SQL("SELECT id, data FROM {}").format(sql.Identifier(schema, "LiteLLM_Lens"))
+            ).fetchall() == [("saved", {"keep": True})]
+        finally:
+            connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))

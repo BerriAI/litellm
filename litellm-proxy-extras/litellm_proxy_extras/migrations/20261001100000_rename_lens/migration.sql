@@ -1,9 +1,18 @@
-ALTER TABLE "LiteLLM_Engine" RENAME TO "LiteLLM_Lens";
-ALTER TABLE "LiteLLM_EngineRun" RENAME TO "LiteLLM_LensRun";
-ALTER TABLE "LiteLLM_LensRun" RENAME COLUMN "engine_id" TO "lens_id";
-ALTER TABLE "LiteLLM_EngineWorker" RENAME TO "LiteLLM_LensWorker";
-ALTER TABLE "LiteLLM_Lens" RENAME CONSTRAINT "LiteLLM_Engine_pkey" TO "LiteLLM_Lens_pkey";
-ALTER TABLE "LiteLLM_LensRun" RENAME CONSTRAINT "LiteLLM_EngineRun_pkey" TO "LiteLLM_LensRun_pkey";
-ALTER TABLE "LiteLLM_LensWorker" RENAME CONSTRAINT "LiteLLM_EngineWorker_pkey" TO "LiteLLM_LensWorker_pkey";
-ALTER TABLE "LiteLLM_LensWorker" RENAME CONSTRAINT "LiteLLM_EngineWorker_token_hash_key" TO "LiteLLM_LensWorker_token_hash_key";
-ALTER INDEX "LiteLLM_EngineRun_engine_id_created_at_idx" RENAME TO "LiteLLM_LensRun_lens_id_created_at_idx";
+DO $$
+BEGIN
+    ALTER TABLE IF EXISTS "LiteLLM_Engine" RENAME TO "LiteLLM_Lens";
+    ALTER TABLE IF EXISTS "LiteLLM_EngineRun" RENAME TO "LiteLLM_LensRun";
+    ALTER TABLE IF EXISTS "LiteLLM_EngineWorker" RENAME TO "LiteLLM_LensWorker";
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'LiteLLM_LensRun' AND column_name = 'engine_id'
+    ) THEN
+        ALTER TABLE "LiteLLM_LensRun" RENAME COLUMN "engine_id" TO "lens_id";
+    END IF;
+    ALTER INDEX IF EXISTS "LiteLLM_Engine_pkey" RENAME TO "LiteLLM_Lens_pkey";
+    ALTER INDEX IF EXISTS "LiteLLM_EngineRun_pkey" RENAME TO "LiteLLM_LensRun_pkey";
+    ALTER INDEX IF EXISTS "LiteLLM_EngineWorker_pkey" RENAME TO "LiteLLM_LensWorker_pkey";
+    ALTER INDEX IF EXISTS "LiteLLM_EngineWorker_token_hash_key" RENAME TO "LiteLLM_LensWorker_token_hash_key";
+    ALTER INDEX IF EXISTS "LiteLLM_EngineRun_engine_id_created_at_idx" RENAME TO "LiteLLM_LensRun_lens_id_created_at_idx";
+END $$;
