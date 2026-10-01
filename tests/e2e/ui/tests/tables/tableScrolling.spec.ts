@@ -184,6 +184,7 @@ test.describe("Admin tables scroll inside the page", () => {
     );
     try {
       await navigateToPage(page, Page.TagManagement);
+      await setRowsPerPage(page, "50");
       await expectRowsAtLeast(page, SEED_ROWS);
       expect(await rowsPaintingPastAnAncestor(page)).toEqual([]);
     } finally {
@@ -207,6 +208,7 @@ test.describe("Admin tables scroll inside the page", () => {
     );
     try {
       await navigateToPage(page, Page.ModelHubTable);
+      await setRowsPerPage(page, "50");
       await expectRowsAtLeast(page, SEED_ROWS);
       expect(await rowsPaintingPastAnAncestor(page)).toEqual([]);
     } finally {
