@@ -31,6 +31,11 @@ OptionsT = TypeVar("OptionsT")
 StreamStateT = TypeVar("StreamStateT")
 
 
+def event_list(*events: Event) -> Sequence[Event]:
+    """A transform_stream_line result. One place builds it so every parser returns the same shape."""
+    return list(events)  # mutable-ok: stream-line results are list-shaped; callers and tests compare with list literals
+
+
 class HarnessTurnError(HarnessError):
     """The runtime reported a failed turn. The runtime maps this to stop_reason='runtime_error'."""
 
@@ -128,7 +133,7 @@ class BaseCLIHarnessConfig(BaseHarnessConfig[OptionsT], Generic[OptionsT, Stream
         """Fresh per-turn parser state."""
 
     @abstractmethod
-    def transform_stream_line(self, line: Mapping[str, Any], state: StreamStateT) -> list[Event]:
+    def transform_stream_line(self, line: Mapping[str, Any], state: StreamStateT) -> Sequence[Event]:
         """One decoded JSON line from stdout to zero or more events. Pure."""
 
     @abstractmethod
