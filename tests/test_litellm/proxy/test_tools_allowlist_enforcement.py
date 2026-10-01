@@ -134,6 +134,14 @@ class TestExtractRequestToolNames:
 
         assert extract_request_tool_names("/v1/responses", data) == ["valid"]
 
+    def test_openai_responses_ignores_non_list_hoisted_tools(self):
+        data = {
+            "tools": [{"type": "unknown"}],
+            "input": [{"type": "tool_search_output", "tools": "not-a-list"}],
+        }
+
+        assert extract_request_tool_names("/v1/responses", data) == []
+
     def test_anthropic_tools(self):
         data = {"tools": [{"name": "get_weather"}, {"name": "run_sql"}]}
         assert extract_request_tool_names("/v1/messages", data) == [

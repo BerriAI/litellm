@@ -377,8 +377,10 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
             if isinstance(matched_redacted_input_text, str):
                 if isinstance(input_value, str):
                     _apply_redacted_string_input(data, matched_redacted_input_text)
-                elif isinstance(input_value, list):
+                else:
                     _structured_redactions_apply(input_value, ({"content": matched_redacted_input_text},))
+            else:
+                return False
         elif input_count:
             return False
         data["messages"] = redacted_messages
@@ -412,9 +414,9 @@ def _apply_redacted_input_without_messages(
         if not isinstance(input_text, str):
             return False
         _apply_redacted_string_input(data, input_text)
-    elif isinstance(input_value, list):
-        if not _structured_redactions_apply(input_value, redacted_messages):
-            return False
+        return True
+    if isinstance(input_value, list):
+        return _structured_redactions_apply(input_value, redacted_messages)
     return True
 
 
@@ -424,6 +426,8 @@ def _redacted_texts(messages: Sequence[object]) -> tuple[str, ...]:
 
 def _structured_redactions_apply(input_value: list[object], redactions: Sequence[object]) -> bool:
     input_texts: Final = _redacted_texts(redactions)
+    if len(input_texts) != len(redactions):
+        return False
     if len(input_texts) != _inspection_count("input", input_value):
         return False
     _apply_redacted_input_texts(input_value, input_texts)

@@ -641,6 +641,19 @@ def test_apply_redacted_messages_back_reuses_one_matching_structured_redaction_f
     assert data["input"] == [{"type": "message", "role": "user", "content": "[REDACTED]"}]
 
 
+def test_apply_redacted_messages_back_rejects_non_string_matching_redaction_for_both_fields():
+    data = {
+        "messages": [{"role": "user", "content": "old"}],
+        "input": [{"type": "message", "role": "user", "content": "old"}],
+    }
+
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": None}]) is False
+    assert data == {
+        "messages": [{"role": "user", "content": "old"}],
+        "input": [{"type": "message", "role": "user", "content": "old"}],
+    }
+
+
 def test_apply_redacted_messages_back_rejects_extra_string_input_redactions():
     data = {"input": "secret"}
     redacted = [
@@ -664,6 +677,13 @@ def test_apply_redacted_messages_back_rejects_non_mapping_redaction_for_structur
 
     assert apply_redacted_messages_back(data, ["not-a-message"]) is False
     assert data == {"input": [{"type": "message", "role": "assistant", "content": "input-secret"}]}
+
+
+def test_apply_redacted_messages_back_ignores_non_string_non_list_input():
+    data = {"input": {"content": "secret"}}
+
+    assert apply_redacted_messages_back(data, []) is True
+    assert data == {"input": {"content": "secret"}}
 
 
 def test_apply_redacted_messages_back_rejects_fewer_message_redactions():
