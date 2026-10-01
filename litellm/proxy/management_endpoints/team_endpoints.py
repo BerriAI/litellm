@@ -3466,6 +3466,12 @@ async def team_member_add(
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
+    await delete_cache_team_object(
+        team_id=data.team_id,
+        team_alias=complete_team_data.team_alias,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
     await evict_and_broadcast(
         cache_keys=tuple(sorted(user.user_id for user in updated_users)),
         user_api_key_cache=user_api_key_cache,
