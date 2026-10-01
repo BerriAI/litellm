@@ -1394,6 +1394,7 @@ def test_c3_surviving_proxy_worker_serves_after_one_worker_is_killed(gateway: Ga
             content_type="text/event-stream",
             chunks=_chat_chunks(_request_identity(request_body)),
             gate_after_first=backup_gate,
+            gate_timeout_seconds=60,
         )
 
     with (
