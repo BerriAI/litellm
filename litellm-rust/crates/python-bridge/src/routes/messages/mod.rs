@@ -26,14 +26,12 @@ fn run_messages(
         py,
         arguments,
         move |py, arguments, request| {
-            let builder = litellm_core::messages::MessagesRoute::builder()
-                .with_http(
-                    crate::http::provider_client(py, arguments, asynchronous)?
-                        .map_err(crate::http::client_error)?,
-                )
-                .with_auth(crate::http::resources().auth.clone())
-                .with_secrets(crate::secrets::source(py)?);
-            let route = builder.build();
+            let route = litellm_core::messages::MessagesRoute::new(
+                crate::http::provider_client(py, arguments, asynchronous)?
+                    .map_err(crate::http::client_error)?,
+                crate::http::resources().auth.clone(),
+                crate::secrets::source(py)?,
+            );
             Ok(litellm_host::call::hosted_call(
                 request,
                 None,
@@ -51,7 +49,7 @@ fn run_messages(
                             call,
                             &interceptors,
                             litellm_core::CallOptions {
-                                cache: Some(options),
+                                cache: Some(options.policy),
                                 observers,
                             },
                         )

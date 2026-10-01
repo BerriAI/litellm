@@ -54,7 +54,7 @@ async fn handle(
     };
 
     let call = project(deployment, body, headers)?;
-    let machine = route.machine(call, cache_options);
+    let machine = route.machine(call, cache_options.policy);
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
     let headers = crate::caching::CacheHeaders::default();

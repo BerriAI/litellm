@@ -12,6 +12,7 @@ repository = "https://github.com/BerriAI/litellm"
 litellm-config = { path = "crates/config" }
 litellm-router = { path = "crates/router" }
 litellm-tracing = { path = "crates/tracing" }
+litellm-traces = { path = "crates/traces" }
 litellm-core = { path = "crates/core" }
 litellm-gateway-mcp = { path = "crates/gateway-mcp" }
 litellm-gateway = { path = "crates/gateway" }

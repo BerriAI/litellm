@@ -30,7 +30,7 @@ from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
 from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
 from .disk_cache import DiskCache
-from .dual_cache import DualCache  # noqa: F401
+from .dual_cache import DualCache  # noqa: F401  # re-exported, callers import DualCache from litellm.caching.caching
 from .gcs_cache import GCSCache
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
