@@ -8841,12 +8841,25 @@ class Router:
         backend_entry: Final = litellm.model_cost.get(backend_info.get("key") or "")
         if not isinstance(backend_entry, dict):
             return
+        configured_fields: Final = frozenset(str(field) for field, value in model_info.items() if value is not None)
         for field, backend_value in backend_entry.items():
-            if not field.endswith(SERVICE_TIER_COST_KEY_SUFFIXES):
+            if not isinstance(field, str) or not field.endswith(SERVICE_TIER_COST_KEY_SUFFIXES):
                 continue
-            if model_info.get(field) is not None or backend_value is None:
+            if field in configured_fields or backend_value is None:
+                continue
+            if not configured_fields.isdisjoint(Router._deployment_rates_preferred_over_tier_threshold_rate(field)):
                 continue
             model_info[field] = copy.deepcopy(backend_value)
+
+    @staticmethod
+    def _deployment_rates_preferred_over_tier_threshold_rate(field: str) -> tuple[str, ...]:
+        """Rates that outrank ``<rate>_above_<n>_tokens_<tier>`` when the deployment sets them itself."""
+        tier_suffix: Final = next(suffix for suffix in SERVICE_TIER_COST_KEY_SUFFIXES if field.endswith(suffix))
+        untiered_field: Final = field.removesuffix(tier_suffix)
+        rate, separator, threshold = untiered_field.rpartition("_above_")
+        if not separator or not threshold.endswith("_tokens"):
+            return ()
+        return (f"{rate}{tier_suffix}", untiered_field)
 
     @staticmethod
     def _inherit_builtin_base_rates_for_off_peak(

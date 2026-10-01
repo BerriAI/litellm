@@ -946,9 +946,6 @@ def test_inherit_builtin_service_tier_pricing_fills_only_missing_fields() -> Non
             "input_cost_per_token_above_272k_tokens_ultrafast": _TIER_BACKEND_ENTRY[
                 "input_cost_per_token_above_272k_tokens_ultrafast"
             ],
-            "output_cost_per_token_above_272k_tokens_ultrafast": _TIER_BACKEND_ENTRY[
-                "output_cost_per_token_above_272k_tokens_ultrafast"
-            ],
         }
     finally:
         _restore_model_cost_entries(model_cost_entries)
@@ -1048,6 +1045,65 @@ def test_router_completion_uses_custom_standard_and_backend_ultrafast_pricing() 
         assert standard_response._hidden_params["response_cost"] == pytest.approx(
             1000 * _CUSTOM_STANDARD_INPUT_RATE + 100 * _CUSTOM_STANDARD_OUTPUT_RATE
         )
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("deployment_rates", "expected_cost"),
+    (
+        (
+            {"input_cost_per_token_ultrafast": 0.00003, "output_cost_per_token_ultrafast": 0.00004},
+            300_000 * 0.00003 + 1_000 * 0.00004,
+        ),
+        (
+            {"input_cost_per_token_above_272k_tokens": 0.00005, "output_cost_per_token_above_272k_tokens": 0.00006},
+            300_000 * 0.00005 + 1_000 * 0.00006,
+        ),
+    ),
+    ids=("custom_ultrafast_rates", "custom_untiered_long_context_rates"),
+)
+def test_router_completion_keeps_custom_rates_over_backend_ultrafast_long_context_rates(
+    deployment_rates: dict[str, float], expected_cost: float
+) -> None:
+    model_id: Final = "tier-priced-long-context-deployment"
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL, model_id)
+    }
+    try:
+        _register_tier_backend()
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "tier-priced-long-context-router",
+                    "litellm_params": {
+                        "model": _TIER_BACKEND_MODEL,
+                        "custom_llm_provider": "openai",
+                        "api_key": "sk-tier-pricing-not-used",
+                        "input_cost_per_token": _CUSTOM_STANDARD_INPUT_RATE,
+                        "output_cost_per_token": _CUSTOM_STANDARD_OUTPUT_RATE,
+                        **deployment_rates,
+                    },
+                    "model_info": {"id": model_id},
+                }
+            ]
+        )
+
+        response: Final = router.completion(
+            model="tier-priced-long-context-router",
+            messages=[{"role": "user", "content": "long context custom tier pricing"}],
+            service_tier="ultrafast",
+            mock_response=litellm.ModelResponse(
+                model=_TIER_BACKEND_MODEL,
+                service_tier="ultrafast",
+                usage=litellm.Usage(prompt_tokens=300_000, completion_tokens=1_000, total_tokens=301_000),
+            ),
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
     finally:
         _restore_model_cost_entries(model_cost_entries)
         litellm.get_model_info.cache_clear()

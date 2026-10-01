@@ -400,3 +400,116 @@ def test_custom_standard_rates_bill_catalog_ultrafast_long_context_rates(gateway
         assert rows[0]["prompt_tokens"] == LONG_PROMPT_TOKENS
         assert rows[0]["completion_tokens"] == 100
         assert float(rows[0]["spend"]) == pytest.approx(expected, rel=1e-6), rows
+
+
+@pytest.mark.parametrize(
+    ("service_tier", "deployment_rates", "expected_cost"),
+    (
+        (
+            "priority",
+            {"input_cost_per_token_priority": 2e-06, "output_cost_per_token_priority": 4e-06},
+            300_000 * 2e-06 + 1_000 * 4e-06,
+        ),
+        (
+            "priority",
+            {
+                "input_cost_per_token_priority": 2e-06,
+                "output_cost_per_token_priority": 4e-06,
+                "input_cost_per_token_above_272k_tokens": 3e-06,
+                "output_cost_per_token_above_272k_tokens": 6e-06,
+            },
+            300_000 * 3e-06 + 1_000 * 6e-06,
+        ),
+        (
+            "priority",
+            {
+                "input_cost_per_token_priority": 2e-06,
+                "output_cost_per_token_priority": 4e-06,
+                "input_cost_per_token_above_272k_tokens_priority": 5e-06,
+                "output_cost_per_token_above_272k_tokens_priority": 7e-06,
+            },
+            300_000 * 5e-06 + 1_000 * 7e-06,
+        ),
+        (
+            "priority",
+            {"input_cost_per_token_above_272k_tokens": 3e-06, "output_cost_per_token_above_272k_tokens": 6e-06},
+            300_000 * 3e-06 + 1_000 * 6e-06,
+        ),
+        (
+            "flex",
+            {"input_cost_per_token_flex": 5e-07, "output_cost_per_token_flex": 1e-06},
+            300_000 * 5e-07 + 1_000 * 1e-06,
+        ),
+        (
+            None,
+            {"input_cost_per_token_priority": 2e-06, "output_cost_per_token_priority": 4e-06},
+            300_000 * 1e-06 + 1_000 * 2e-06,
+        ),
+    ),
+    ids=(
+        "priority_rates",
+        "priority_rates_and_untiered_long_context_rates",
+        "priority_rates_and_priority_long_context_rates",
+        "untiered_long_context_rates",
+        "flex_rates",
+        "no_service_tier",
+    ),
+)
+def test_custom_rates_above_272k_bill_the_deployment_rates_over_catalog_long_context_tier_rates(
+    gateway: Gateway, service_tier: str | None, deployment_rates: dict[str, JsonValue], expected_cost: float
+) -> None:
+    with gateway.scenario() as scenario:
+        scenario_id: Final = f"custom-tier-long-context-{uuid.uuid4().hex}"
+        handle: Final = register_scenario(
+            scenario_id,
+            JsonResponse(
+                content_type="application/json",
+                body={
+                    "id": "chatcmpl-$UNIQUE_ID",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-6-astra",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 300_000, "completion_tokens": 1_000, "total_tokens": 301_000},
+                    **({} if service_tier is None else {"service_tier": service_tier}),
+                },
+            ),
+        )
+        scenario.cleanups.callback(delete_scenario, handle)
+        model: Final = scenario.model(
+            model="openai/gpt-6-astra",
+            api_key=scenario_id,
+            api_base=handle.api_base(),
+            input_cost_per_token=1e-06,
+            output_cost_per_token=2e-06,
+            **deployment_rates,
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "long context custom tier pricing"}],
+                **({} if service_tier is None else {"service_tier": service_tier}),
+            },
+            key=scenario.key(),
+        )
+
+        assert response.status_code == 200, response.text
+        assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost, rel=1e-6), (
+            response.text
+        )
+        request_id: Final = string_value(object_value(response.json())["id"])
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT spend, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
+                (request_id,),
+            ),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        assert rows[0]["prompt_tokens"] == 300_000
+        assert rows[0]["completion_tokens"] == 1_000
+        assert float(rows[0]["spend"]) == pytest.approx(expected_cost, rel=1e-6), rows
