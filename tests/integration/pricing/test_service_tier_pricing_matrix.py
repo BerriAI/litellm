@@ -53,14 +53,14 @@ MATRIX_CHAT_PATH: Final = "/v1/chat/completions"
 MATRIX_RESPONSES_PATH: Final = "/v1/responses"
 MATRIX_MESSAGES_PATH: Final = "/v1/messages"
 SERVICE_TIER_CASES: Final = (
-    ("H1", "priority", "priority", MATRIX_PROMPT_TOKENS, MATRIX_COMPLETION_TOKENS, 0),
-    ("H2", "flex", "flex", MATRIX_PROMPT_TOKENS, MATRIX_COMPLETION_TOKENS, 0),
-    ("H3", "ultrafast", "ultrafast", MATRIX_PROMPT_TOKENS, MATRIX_COMPLETION_TOKENS, 0),
-    ("H4", "fast", "priority", MATRIX_PROMPT_TOKENS, MATRIX_COMPLETION_TOKENS, 0),
+    ("priority", "priority", MATRIX_PROMPT_TOKENS, MATRIX_COMPLETION_TOKENS, 0),
+    ("flex", "flex", MATRIX_PROMPT_TOKENS, MATRIX_COMPLETION_TOKENS, 0),
+    ("ultrafast", "ultrafast", MATRIX_PROMPT_TOKENS, MATRIX_COMPLETION_TOKENS, 0),
+    ("fast", "priority", MATRIX_PROMPT_TOKENS, MATRIX_COMPLETION_TOKENS, 0),
 )
 LONG_CONTEXT_CASES: Final = (
-    ("H14", "ultrafast", "ultrafast"),
-    ("H15", "priority", "priority"),
+    ("ultrafast", "ultrafast"),
+    ("priority", "priority"),
 )
 INVALID_TIER_VALUES: Final = (
     ("integer", 5),
@@ -739,13 +739,12 @@ def _assert_success(
 
 
 @pytest.mark.parametrize(
-    ("row", "service_tier", "rate_tier", "prompt_tokens", "completion_tokens", "cached_tokens"),
+    ("service_tier", "rate_tier", "prompt_tokens", "completion_tokens", "cached_tokens"),
     SERVICE_TIER_CASES,
-    ids=tuple(case[0] for case in SERVICE_TIER_CASES),
+    ids=("priority", "flex", "ultrafast", "fast-alias-to-priority"),
 )
 def test_raw_chat_tier_rates_follow_the_catalog_for_custom_deployments(
     gateway: Gateway,
-    row: str,
     service_tier: str,
     rate_tier: str,
     prompt_tokens: int,
@@ -759,7 +758,7 @@ def test_raw_chat_tier_rates_follow_the_catalog_for_custom_deployments(
             response=_chat_json_response(
                 service_tier, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
             ),
-            identifier=f"tier-matrix-{row.lower()}-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-chat-{service_tier}-billed-as-{rate_tier}-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
@@ -781,21 +780,21 @@ def test_raw_chat_tier_rates_follow_the_catalog_for_custom_deployments(
 
 
 @pytest.mark.parametrize(
-    ("row", "service_tier"),
-    (("H5", "balanced"), ("H6", None)),
+    "service_tier",
+    ("balanced", None),
     ids=("balanced", "no-tier"),
 )
 def test_balanced_and_no_tier_keep_custom_standard_rates(
     gateway: Gateway,
-    row: str,
     service_tier: str | None,
 ) -> None:
+    scenario_name: Final = "balanced" if service_tier is not None else "no-tier"
     with gateway.scenario() as scenario:
         scenario_id, api_base = _register_upstream(
             gateway,
             scenario,
             response=_chat_json_response(service_tier),
-            identifier=f"tier-matrix-{row.lower()}-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-chat-{scenario_name}-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
@@ -816,7 +815,10 @@ def test_balanced_and_no_tier_keep_custom_standard_rates(
 def test_openai_sdk_sync_priority_chat_uses_inherited_catalog_rates(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         scenario_id, api_base = _register_upstream(
-            gateway, scenario, response=_chat_json_response("priority"), identifier=f"tier-matrix-h7-{uuid.uuid4().hex}"
+            gateway,
+            scenario,
+            response=_chat_json_response("priority"),
+            identifier=f"tier-matrix-sdk-sync-chat-priority-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
@@ -839,7 +841,10 @@ def test_openai_sdk_sync_priority_chat_uses_inherited_catalog_rates(gateway: Gat
 def test_openai_sdk_async_priority_chat_uses_inherited_catalog_rates(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         scenario_id, api_base = _register_upstream(
-            gateway, scenario, response=_chat_json_response("priority"), identifier=f"tier-matrix-h8-{uuid.uuid4().hex}"
+            gateway,
+            scenario,
+            response=_chat_json_response("priority"),
+            identifier=f"tier-matrix-sdk-async-chat-priority-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
@@ -865,7 +870,10 @@ def test_openai_sdk_async_priority_chat_uses_inherited_catalog_rates(gateway: Ga
 def test_openai_sdk_streaming_priority_chat_consumes_usage_and_logs_spend(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         scenario_id, api_base = _register_upstream(
-            gateway, scenario, response=_chat_sse_response(), identifier=f"tier-matrix-h9-{uuid.uuid4().hex}"
+            gateway,
+            scenario,
+            response=_chat_sse_response(),
+            identifier=f"tier-matrix-sdk-stream-chat-priority-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
@@ -891,7 +899,7 @@ def test_raw_responses_priority_uses_inherited_catalog_rates(gateway: Gateway) -
             gateway,
             scenario,
             response=_responses_json_response("priority"),
-            identifier=f"tier-matrix-h10-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-raw-responses-priority-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
@@ -922,7 +930,7 @@ def test_openai_sdk_streaming_responses_priority_consumes_full_stream(gateway: G
             gateway,
             scenario,
             response=_responses_sse_response(),
-            identifier=f"tier-matrix-h11-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-sdk-stream-responses-priority-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
@@ -962,16 +970,19 @@ def test_openai_sdk_streaming_responses_priority_consumes_full_stream(gateway: G
         _assert_upstream(gateway, expected_tier="priority", tier_present=True)
 
 
-@pytest.mark.parametrize(("row", "stream"), (("H12", False), ("H12_stream", True)), ids=("non-streaming", "streaming"))
+@pytest.mark.parametrize("stream", (False, True), ids=("non-streaming", "streaming"))
 def test_messages_endpoint_preserves_path_and_custom_standard_billing(
     gateway: Gateway,
-    row: str,
     stream: bool,
 ) -> None:
+    mode: Final = "streaming" if stream else "non-streaming"
     response: Final = _responses_sse_response(service_tier=None) if stream else _responses_json_response(None)
     with gateway.scenario() as scenario:
         scenario_id, api_base = _register_upstream(
-            gateway, scenario, response=response, identifier=f"tier-matrix-{row.lower()}-{uuid.uuid4().hex}"
+            gateway,
+            scenario,
+            response=response,
+            identifier=f"tier-matrix-messages-{mode}-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
@@ -1008,7 +1019,7 @@ def test_cached_prompt_tokens_use_priority_cache_rate(gateway: Gateway) -> None:
             gateway,
             scenario,
             response=_chat_json_response("priority", cached_tokens=cached_tokens),
-            identifier=f"tier-matrix-h13-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-chat-priority-cache-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
@@ -1033,13 +1044,12 @@ def test_cached_prompt_tokens_use_priority_cache_rate(gateway: Gateway) -> None:
 
 
 @pytest.mark.parametrize(
-    ("row", "service_tier", "rate_tier"),
+    ("service_tier", "rate_tier"),
     LONG_CONTEXT_CASES,
-    ids=tuple(case[0] for case in LONG_CONTEXT_CASES),
+    ids=("ultrafast", "priority"),
 )
 def test_long_context_tier_rate_is_inherited_for_custom_deployments(
     gateway: Gateway,
-    row: str,
     service_tier: str,
     rate_tier: str,
 ) -> None:
@@ -1054,7 +1064,7 @@ def test_long_context_tier_rate_is_inherited_for_custom_deployments(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             ),
-            identifier=f"tier-matrix-{row.lower()}-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-long-context-{service_tier}-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
@@ -1091,7 +1101,7 @@ def test_long_context_no_tier_keeps_custom_standard_rates(gateway: Gateway) -> N
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             ),
-            identifier=f"tier-matrix-h16-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-long-context-no-tier-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
@@ -1119,7 +1129,7 @@ def test_explicit_priority_input_and_output_prices_win(gateway: Gateway) -> None
             gateway,
             scenario,
             response=_chat_json_response("priority"),
-            identifier=f"tier-matrix-m1-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-explicit-priority-rates-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(
@@ -1150,7 +1160,7 @@ def test_explicit_priority_input_wins_while_missing_output_is_inherited(gateway:
             gateway,
             scenario,
             response=_chat_json_response("priority"),
-            identifier=f"tier-matrix-m2-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-explicit-priority-input-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(
@@ -1183,7 +1193,7 @@ def test_standard_input_only_deployment_inherits_catalog_priority_rates(gateway:
             gateway,
             scenario,
             response=_chat_json_response("priority"),
-            identifier=f"tier-matrix-m3-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-standard-input-only-priority-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(
@@ -1209,21 +1219,21 @@ def test_standard_input_only_deployment_inherits_catalog_priority_rates(gateway:
 
 
 @pytest.mark.parametrize(
-    ("row", "service_tier"),
-    (("M4_priority", "priority"), ("M4_no-tier", None)),
+    "service_tier",
+    ("priority", None),
     ids=("priority", "no-tier"),
 )
 def test_catalog_priced_deployment_keeps_its_catalog_rates(
     gateway: Gateway,
-    row: str,
     service_tier: str | None,
 ) -> None:
+    scenario_name: Final = "priority" if service_tier is not None else "no-tier"
     with gateway.scenario() as scenario:
         scenario_id, api_base = _register_upstream(
             gateway,
             scenario,
             response=_chat_json_response(service_tier),
-            identifier=f"tier-matrix-{row.lower()}-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-catalog-priced-{scenario_name}-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(
@@ -1264,7 +1274,7 @@ def test_unknown_custom_model_uses_custom_standard_rates_without_proxy_error_log
                 gateway,
                 scenario,
                 response=_chat_json_response(None),
-                identifier=f"tier-matrix-m5-{uuid.uuid4().hex}",
+                identifier=f"tier-matrix-unknown-model-standard-pricing-{uuid.uuid4().hex}",
             )
             key: Final = scenario.key()
             model: Final = _scenario_model(
@@ -1293,7 +1303,7 @@ def test_unknown_custom_model_uses_custom_standard_rates_without_proxy_error_log
 def test_azure_alias_inherits_priority_rates_from_model_info_base_model(gateway: Gateway) -> None:
     input_rate: Final = _bundled_rate(MATRIX_AZURE_CATALOG_MODEL, "input_cost_per_token_priority")
     output_rate: Final = _bundled_rate(MATRIX_AZURE_CATALOG_MODEL, "output_cost_per_token_priority")
-    identifier: Final = f"tier-matrix-m6-{uuid.uuid4().hex}"
+    identifier: Final = f"tier-matrix-azure-alias-{uuid.uuid4().hex}"
     with gateway.scenario() as scenario:
         scenario_id, api_base = _register_upstream(
             gateway,
@@ -1334,7 +1344,7 @@ def test_ptu_deployment_keeps_zero_per_request_cost_with_attribution_enabled(
             gateway,
             scenario,
             response=_chat_json_response("priority"),
-            identifier=f"tier-matrix-m7-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-ptu-zero-cost-{uuid.uuid4().hex}",
         )
         team_id: Final = scenario.team()
         model: Final = f"tier-priced-ptu-{uuid.uuid4().hex}"
@@ -1392,7 +1402,7 @@ def test_yaml_configured_deployment_inherits_priority_rates(
             gateway,
             scenario,
             response=_chat_json_response("priority"),
-            identifier=f"tier-matrix-m9-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-yaml-config-priority-{uuid.uuid4().hex}",
         )
         model_name: Final = f"custom-priced-tier-yaml-{uuid.uuid4().hex}"
         model: Final = {
@@ -1439,7 +1449,7 @@ def test_priority_behavior_survives_owned_proxy_restart_after_database_registrat
             gateway,
             scenario,
             response=_chat_json_response("priority"),
-            identifier=f"tier-matrix-m10-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-database-restart-priority-{uuid.uuid4().hex}",
         )
         with owned_proxy_process(gateway, tmp_path, {}, workers=2) as first:
             key_record: Final = first.gateway.post("/key/generate", {})
@@ -1486,13 +1496,13 @@ def test_model_update_changes_no_tier_standard_and_keeps_priority_inheritance(ga
             gateway,
             scenario,
             response=_chat_json_response("priority"),
-            identifier=f"tier-matrix-m8-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-model-update-priority-{uuid.uuid4().hex}",
         )
         no_tier_scenario_id, no_tier_api_base = _register_upstream(
             gateway,
             scenario,
             response=_chat_json_response(None),
-            identifier=f"tier-matrix-m8-no-tier-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-model-update-no-tier-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model, model_id = _register_db_model(
@@ -1569,7 +1579,7 @@ def test_malformed_or_unrecognized_tier_inputs_keep_the_observed_result(
             gateway,
             scenario,
             response=_chat_json_response(service_tier),
-            identifier=f"tier-matrix-s1-{label}-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-malformed-tier-{label}-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
@@ -1603,7 +1613,7 @@ def test_uppercase_priority_tier_uses_inherited_catalog_rates(gateway: Gateway) 
             gateway,
             scenario,
             response=_chat_json_response("PRIORITY"),
-            identifier=f"tier-matrix-s1b-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-uppercase-tier-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
@@ -1633,7 +1643,7 @@ def test_scripted_upstream_failure_records_one_failure_spend_row(gateway: Gatewa
                 body={"error": {"message": "scripted upstream failure", "type": "server_error"}},
                 status=500,
             ),
-            identifier=f"tier-matrix-s2-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-upstream-failure-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
@@ -1667,7 +1677,7 @@ def test_null_explicit_priority_input_is_treated_as_missing(gateway: Gateway) ->
             gateway,
             scenario,
             response=_chat_json_response("priority"),
-            identifier=f"tier-matrix-s3-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-null-tier-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(
@@ -1696,7 +1706,7 @@ def test_unauthenticated_priority_request_is_rejected_without_spend(gateway: Gat
             gateway,
             scenario,
             response=_chat_json_response("priority"),
-            identifier=f"tier-matrix-s4-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-unauthenticated-request-{uuid.uuid4().hex}",
         )
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
         invalid_key: Final = f"sk-invalid-tier-matrix-{uuid.uuid4().hex}"
@@ -1724,7 +1734,7 @@ def test_three_repeated_priority_requests_create_three_identical_cost_rows(gatew
             gateway,
             scenario,
             response=_chat_json_response("priority"),
-            identifier=f"tier-matrix-e1-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-repeated-priority-requests-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
@@ -1772,7 +1782,7 @@ def test_priority_burst_uses_catalog_rates_during_standard_price_update(gateway:
             gateway,
             scenario,
             response=_chat_sse_response(frame_delay_ms=80),
-            identifier=f"tier-matrix-e2-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-standard-update-priority-burst-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model, model_id = _register_db_model(
@@ -1845,7 +1855,7 @@ def test_cache_hit_keeps_the_observed_second_request_billing(gateway: Gateway) -
             gateway,
             scenario,
             response=_chat_json_response("priority"),
-            identifier=f"tier-matrix-e3-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-cache-hit-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         model: Final = _scenario_model(scenario, scenario_id=scenario_id, api_base=api_base)
@@ -1902,7 +1912,7 @@ def test_response_priority_matches_catalog_priced_rule(gateway: Gateway) -> None
             gateway,
             scenario,
             response=_chat_json_response(None, response_service_tier="priority"),
-            identifier=f"tier-matrix-e4-{uuid.uuid4().hex}",
+            identifier=f"tier-matrix-response-priority-{uuid.uuid4().hex}",
         )
         key: Final = scenario.key()
         custom_model: Final = _scenario_model(
