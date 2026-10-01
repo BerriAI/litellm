@@ -2375,7 +2375,7 @@ class DBSpendUpdateWriter:
                                     where=(
                                         agent_spend_filter(entity_id)
                                         if table_accessor == "litellm_agentstable"
-                                        else {where_field: entity_id}  # mutable-ok: Prisma filter
+                                        else {where_field: entity_id}
                                     ),
                                     data={"spend": {"increment": response_cost}},
                                 )

@@ -110,7 +110,7 @@ def managed_inference_request(
         model: Final = query_model or body.get("model")
         if not isinstance(model, str) or not model:
             if not require_model:
-                return dict(body)  # mutable-ok: centralized auth hooks add request tags and budget metadata
+                return dict(body)
             raise_identity_failure(
                 AgentIdentityFailure(message="Managed inference requires an explicit or configured model")
             )
@@ -129,7 +129,7 @@ def managed_inference_request(
         _update_model_if_team_alias_exists,
     )
 
-    aliased_body: Final = dict(body)  # mutable-ok: existing alias helpers rewrite their request copy
+    aliased_body: Final = dict(body)
     if auth is not None:
         _update_model_if_team_alias_exists(aliased_body, auth)
         _update_model_if_key_alias_exists(aliased_body, auth)
@@ -148,7 +148,7 @@ def managed_inference_request(
     )
     if not isinstance(effective, str) or not effective:
         if not require_model:
-            return dict(body)  # mutable-ok: centralized auth hooks add request tags and budget metadata
+            return dict(body)
         raise_identity_failure(
             AgentIdentityFailure(message="Managed inference requires an explicit or configured model")
         )
