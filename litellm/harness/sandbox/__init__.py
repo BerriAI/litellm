@@ -10,7 +10,7 @@ from litellm.harness.sandbox.snapshot import (
     snapshot_local,
 )
 
-__all__ = [
+__all__ = (
     "CompletedRun",
     "DockerSandbox",
     "LocalSandbox",
@@ -22,4 +22,4 @@ __all__ = [
     "docker",
     "local",
     "snapshot_local",
-]
+)
