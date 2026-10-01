@@ -1894,12 +1894,11 @@ def _build_sso_user_update_data(
         existing_user_alias: The user's current alias in the DB; only an empty alias is filled from SSO
 
     Returns:
-        dict: Update data containing user_email and user_alias when the IdP supplied them, and user_role if valid
+        dict: Update data containing user_email, user_alias when newly available, and user_role if valid
     """
-    sso_user_email: Final = normalize_email(user_email)
     sso_user_alias: Final = None if existing_user_alias else _get_sso_user_alias(result)
     update_data: Final[dict[str, object]] = {
-        **({"user_email": sso_user_email} if sso_user_email is not None else {}),
+        "user_email": normalize_email(user_email),
         **({"user_alias": sso_user_alias} if sso_user_alias is not None else {}),
     }
 
@@ -3285,10 +3284,9 @@ class SSOAuthenticationHandler:
                     existing_user_alias=user_info.user_alias if isinstance(user_info, LiteLLM_UserTable) else None,
                 )
 
-                if update_data:
-                    await _user_meta_db(UserRepository(prisma_client)).update_many(
-                        where={"user_id": user_id}, data=update_data
-                    )
+                await _user_meta_db(UserRepository(prisma_client)).update_many(
+                    where={"user_id": user_id}, data=update_data
+                )
             else:
                 verbose_proxy_logger.info("user not in DB, inserting user into LiteLLM DB")
                 # user not in DB, insert User into LiteLLM DB
