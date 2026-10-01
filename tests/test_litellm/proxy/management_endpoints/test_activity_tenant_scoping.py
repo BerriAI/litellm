@@ -27,7 +27,7 @@ from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
 def _make_team(team_id: str, admin_user_ids: list):
     """Build a Prisma-compatible team row. `admin_user_ids` are inserted as
     `members_with_roles[*].role == "admin"` because that's what
-    `_is_user_team_admin` checks."""
+    `is_team_admin` checks."""
     members_with_roles = [{"user_id": uid, "role": "admin"} for uid in admin_user_ids]
     row = MagicMock()
     row.team_id = team_id
