@@ -46,7 +46,7 @@ class ModelInsightsResponse(BaseModel):
     start_date: str
     end_date: str
     daily: list[ModelInsightDailyMetric]
-    daily_totals: list[ModelInsightDailyTotal]
+    daily_totals: tuple[ModelInsightDailyTotal, ...]
     top_models: list[ModelInsightMetric]
 
 
