@@ -21,6 +21,14 @@ class ModelInsightDailyMetric(ModelInsightMetric):
     date: str
 
 
+class ModelInsightDailyTotal(BaseModel):
+    date: str
+    spend: float
+    prompt_tokens: int
+    completion_tokens: int
+    requests: int
+
+
 class ModelInsightTask(BaseModel):
     task_type: str
     label: str
@@ -38,6 +46,7 @@ class ModelInsightsResponse(BaseModel):
     start_date: str
     end_date: str
     daily: list[ModelInsightDailyMetric]
+    daily_totals: tuple[ModelInsightDailyTotal, ...]
     top_models: list[ModelInsightMetric]
 
 
