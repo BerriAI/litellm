@@ -100,7 +100,10 @@ def test_prompt_tokens_details_maps_nested_cache_creation_input_tokens():
     assert explicit.cache_creation_tokens == 100
 
     non_int: Final = PromptTokensDetailsWrapper(cache_creation_input_tokens=None)
-    assert not hasattr(non_int, "cache_write_tokens")
+    # reads of payload-hygiene-deleted fields return the declared default (issue #43756),
+    # while the serialized payload keeps omitting them
+    assert non_int.cache_write_tokens is None
+    assert "cache_write_tokens" not in non_int.model_dump()
 
 
 def test_usage_server_tool_use_dict_is_coerced_and_round_trips():
