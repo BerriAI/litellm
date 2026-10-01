@@ -439,6 +439,21 @@ def test_a_fractional_count_reserves_nothing():
     assert ptu_terms({**_SHARED, "ptu_count": 100.5}) is None
 
 
+@pytest.mark.parametrize(
+    "shares_only",
+    [
+        {"ptu_shares": {"team-a": 60, "team-b": 40}},
+        {"ptu_shares": {"team-a": 60, "team-b": 40}, "ptu_effective_from": "2026-01-01T00:00:00Z"},
+    ],
+    ids=["shares alone", "shares with a window"],
+)
+def test_shares_without_the_count_and_rate_are_refused_instead_of_registering_unpriced(shares_only):
+    """Shares split a count, so a split with no count has nothing to add up to and would register a
+    deployment the share filter and ceiling honour while flat cost never rolls up."""
+    assert ptu_config_error(shares_only) == "ptu_count and cost_per_ptu_per_hour are required when ptu_shares is set"
+    assert ptu_terms(shares_only) is None
+
+
 def test_the_split_is_named_after_the_deployment_when_the_caller_supplies_one():
     error = ptu_config_error({**_SHARED, "ptu_shares": {"team-a": 1}}, model_name="gpt-4.1-ptu")
 

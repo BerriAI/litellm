@@ -229,8 +229,11 @@ def ptu_config_error(model_info: Mapping[str, object], *, model_name: str | None
 
     has_count: Final = model_info.get("ptu_count") is not None
     has_rate: Final = model_info.get("cost_per_ptu_per_hour") is not None
-    if not has_count and not has_rate:
+    has_shares: Final = model_info.get("ptu_shares") is not None
+    if not has_count and not has_rate and not has_shares:
         return None
+    if not has_count and not has_rate:
+        return _named("ptu_count and cost_per_ptu_per_hour are required when ptu_shares is set", model_name)
     if has_count != has_rate:
         return _named("ptu_count and cost_per_ptu_per_hour must be set together", model_name)
     if effective_from is None:

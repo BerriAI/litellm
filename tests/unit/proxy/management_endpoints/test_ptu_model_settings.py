@@ -1334,6 +1334,13 @@ def test_validate_helper_refuses_shares_that_do_not_add_up_to_the_count():
     assert "4 of 5 allocated" in exc.value.detail
 
 
+def test_validate_helper_refuses_shares_declared_without_a_count_and_rate():
+    with pytest.raises(HTTPException) as exc:
+        _validate_ptu_model_info({"ptu_shares": {"team-a": 3, "team-b": 2}, "ptu_effective_from": _SHARED_START})
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "ptu_count and cost_per_ptu_per_hour are required when ptu_shares is set"
+
+
 class _TeamLookup:
     def __init__(self, existing: frozenset[str]) -> None:
         self.existing: Final = existing
