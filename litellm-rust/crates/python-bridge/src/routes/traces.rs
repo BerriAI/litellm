@@ -146,18 +146,10 @@ pub fn trace_decode_otlp<'py>(
     py: Python<'py>,
     body: &[u8],
     content_type: Option<&str>,
-    content_encoding: Option<&str>,
-    max_decompressed_bytes: usize,
+    decode_budget_bytes: usize,
 ) -> PyResult<Bound<'py, PyAny>> {
     let spans = py
-        .detach(|| {
-            litellm_traces::decode_otlp(
-                body,
-                content_type,
-                content_encoding,
-                max_decompressed_bytes,
-            )
-        })
+        .detach(|| litellm_traces::decode_otlp(body, content_type, decode_budget_bytes))
         .map_err(|error| match error {
             litellm_traces::DecodeError::TooLarge => PyOverflowError::new_err(error.to_string()),
             _ => PyValueError::new_err(error.to_string()),

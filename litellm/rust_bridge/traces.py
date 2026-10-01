@@ -53,8 +53,7 @@ class NativeTraces(Protocol):
         self,
         body: bytes,
         content_type: str | None,
-        content_encoding: str | None,
-        max_decompressed_bytes: int,
+        decode_budget_bytes: int,
     ) -> list[DecodedSpan]: ...
 
 
@@ -74,10 +73,8 @@ def _native() -> NativeTraces:
     return cast(NativeTraces, native)  # cast-ok: the native extension is validated against this protocol at call sites
 
 
-def decode_otlp(
-    body: bytes, content_type: str | None, content_encoding: str | None, max_decompressed_bytes: int
-) -> list[DecodedSpan]:
-    return _native().trace_decode_otlp(body, content_type, content_encoding, max_decompressed_bytes)
+def decode_otlp(body: bytes, content_type: str | None, decode_budget_bytes: int) -> list[DecodedSpan]:
+    return _native().trace_decode_otlp(body, content_type, decode_budget_bytes)
 
 
 class TraceStorage:

@@ -1,7 +1,6 @@
-use std::{collections::BTreeMap, io::Read};
+use std::collections::BTreeMap;
 
 use base64::Engine;
-use flate2::read::GzDecoder;
 use opentelemetry_proto::tonic::{
     collector::trace::v1::ExportTraceServiceRequest,
     common::v1::{AnyValue, KeyValue, any_value::Value as AttributeValue},
@@ -41,32 +40,29 @@ pub struct DecodedSpan {
 pub fn decode_otlp(
     body: &[u8],
     content_type: Option<&str>,
-    content_encoding: Option<&str>,
-    max_decompressed_bytes: usize,
+    decode_budget_bytes: usize,
 ) -> Result<Vec<DecodedSpan>, DecodeError> {
-    let payload = if content_encoding == Some("gzip") || body.starts_with(&[0x1f, 0x8b]) {
-        let limit = u64::try_from(max_decompressed_bytes).map_err(|_| DecodeError::TooLarge)?;
-        let mut decoded = Vec::new();
-        GzDecoder::new(body)
-            .take(limit + 1)
-            .read_to_end(&mut decoded)
-            .map_err(|_| DecodeError::InvalidPayload)?;
-        decoded
-    } else {
-        body.to_vec()
-    };
-    if payload.len() > max_decompressed_bytes {
+    if body.len() > decode_budget_bytes {
         return Err(DecodeError::TooLarge);
     }
-    let request = if content_type.is_some_and(|value| value.contains("json")) {
-        let value: Value =
-            serde_json::from_slice(&payload).map_err(|_| DecodeError::InvalidPayload)?;
+    let media_type = content_type
+        .unwrap_or("application/x-protobuf")
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim();
+    let request = if media_type.eq_ignore_ascii_case("application/json") {
+        let value: Value = serde_json::from_slice(body).map_err(|_| DecodeError::InvalidPayload)?;
         serde_json::from_value(normalize_json_ids(value)?)
             .map_err(|_| DecodeError::InvalidPayload)?
+    } else if media_type.eq_ignore_ascii_case("application/x-protobuf")
+        || media_type.eq_ignore_ascii_case("application/protobuf")
+    {
+        ExportTraceServiceRequest::decode(body).map_err(|_| DecodeError::InvalidPayload)?
     } else {
-        ExportTraceServiceRequest::decode(payload.as_slice())
-            .map_err(|_| DecodeError::InvalidPayload)?
+        return Err(DecodeError::InvalidPayload);
     };
+    enforce_decode_budget(&request, decode_budget_bytes)?;
     Ok(request
         .resource_spans
         .into_iter()
@@ -89,6 +85,34 @@ pub fn decode_otlp(
                 })
         })
         .collect())
+}
+
+fn enforce_decode_budget(
+    request: &ExportTraceServiceRequest,
+    decode_budget_bytes: usize,
+) -> Result<(), DecodeError> {
+    request
+        .resource_spans
+        .iter()
+        .try_fold(0usize, |used, resource| {
+            let shared_bytes = resource.resource.as_ref().map_or(0, |value| {
+                value
+                    .attributes
+                    .iter()
+                    .map(Message::encoded_len)
+                    .sum::<usize>()
+            });
+            resource.scope_spans.iter().try_fold(used, |used, scope| {
+                scope.spans.iter().try_fold(used, |used, span| {
+                    used.checked_add(shared_bytes)
+                        .and_then(|size| size.checked_add(span.encoded_len()))
+                        .and_then(|size| size.checked_add(size_of::<DecodedSpan>()))
+                        .filter(|size| *size <= decode_budget_bytes)
+                        .ok_or(DecodeError::TooLarge)
+                })
+            })
+        })?;
+    Ok(())
 }
 
 fn normalize_json_ids(value: Value) -> Result<Value, DecodeError> {

@@ -8,8 +8,11 @@ Pure functions, no I/O. Two steps:
                      Deep Agents), OTEL GenAI semconv, OpenInference.
 """
 
+import gzip
 import json
+import zlib
 from collections.abc import Callable, Mapping
+from io import BytesIO
 from types import MappingProxyType
 from typing import Any, Final
 
@@ -64,13 +67,31 @@ def decode_otlp(
     body: bytes, content_type: str | None = None, content_encoding: str | None = None
 ) -> tuple[SpanRow, ...]:
     """Decode an OTLP trace export and normalize every span."""
+    payload: Final = _decode_content_encoding(body, content_encoding)
     try:
-        spans: Final = native_decode_otlp(body, content_type, content_encoding, OTLP_MAX_BODY_BYTES)
+        spans: Final = native_decode_otlp(payload, content_type, OTLP_MAX_BODY_BYTES)
     except OverflowError as error:
         raise OTLPPayloadTooLargeError(str(error)) from error
     except ValueError as error:
         raise InvalidOTLPPayloadError(str(error)) from error
     return tuple(_span_row(span) for span in spans)
+
+
+def _decode_content_encoding(body: bytes, content_encoding: str | None) -> bytes:
+    if len(body) > OTLP_MAX_BODY_BYTES:
+        raise OTLPPayloadTooLargeError(f"OTLP body exceeds {OTLP_MAX_BODY_BYTES} bytes")
+    if content_encoding is None or content_encoding.lower() == "identity":
+        return body
+    if content_encoding.lower() != "gzip":
+        raise InvalidOTLPPayloadError("Unsupported OTLP content encoding")
+    try:
+        with gzip.GzipFile(fileobj=BytesIO(body)) as stream:
+            payload: Final = stream.read(OTLP_MAX_BODY_BYTES + 1)
+    except (EOFError, OSError, zlib.error) as error:
+        raise InvalidOTLPPayloadError("Invalid OTLP gzip body") from error
+    if len(payload) > OTLP_MAX_BODY_BYTES:
+        raise OTLPPayloadTooLargeError(f"OTLP body exceeds {OTLP_MAX_BODY_BYTES} bytes")
+    return payload
 
 
 def _exception_message(span: DecodedSpan) -> str:
