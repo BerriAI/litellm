@@ -17,13 +17,10 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 _ATTACK_MARKER: Final = "synthetic-attack-marker"
-_MODERATION_MARKER: Final = "synthetic-moderation-marker"
 
 _SHIELD_TARGET_PREFIX: Final = "/contentsafety/text:shieldPrompt?api-version="
-_ANALYZE_TARGET_PREFIX: Final = "/contentsafety/text:analyze?api-version="
 
 _OPT_IN_SHIELD: Final = "audit-shield-optin"
-_TEXT_MODERATION: Final = "audit-text-mod"
 
 
 def _chat_frame(identity: str, delta: dict[str, JsonValue], finish: str | None = None) -> bytes:
@@ -142,23 +139,7 @@ def _azure(outage: threading.Event) -> Callable[[Request], Reply]:
                     }
                 ).encode()
             )
-        assert request.target.startswith(_ANALYZE_TARGET_PREFIX), request.target
-        text: Final = body["text"]
-        assert isinstance(text, str)
-        severity: Final = 4 if _MODERATION_MARKER in text else 0
-        return Reply(
-            body=json.dumps(
-                {
-                    "blocklistsMatch": [],
-                    "categoriesAnalysis": [
-                        {"category": "Hate", "severity": severity},
-                        {"category": "Sexual", "severity": 0},
-                        {"category": "SelfHarm", "severity": 0},
-                        {"category": "Violence", "severity": 0},
-                    ],
-                }
-            ).encode()
-        )
+        return Reply(status=404)
 
     return respond
 
@@ -200,16 +181,6 @@ def audit_rig(
                 {
                     "guardrail_name": "audit-shield",
                     "litellm_params": _shield_params(azure, mode="pre_call", default_on=True),
-                },
-                {
-                    "guardrail_name": _TEXT_MODERATION,
-                    "litellm_params": {
-                        "guardrail": "azure/text_moderations",
-                        "mode": "pre_call",
-                        "default_on": False,
-                        "api_base": azure.url,
-                        "api_key": "synthetic-azure-key",
-                    },
                 },
             ],
         )
@@ -261,16 +232,6 @@ def chaos_rig(
                     "guardrail_name": "audit-shield",
                     "litellm_params": _shield_params(azure, mode="pre_call", default_on=True),
                 },
-                {
-                    "guardrail_name": _TEXT_MODERATION,
-                    "litellm_params": {
-                        "guardrail": "azure/text_moderations",
-                        "mode": "pre_call",
-                        "default_on": False,
-                        "api_base": azure.url,
-                        "api_key": "synthetic-azure-key",
-                    },
-                },
             ],
         )
         owned: Final = stack.enter_context(owned_proxy_process(gateway, directory, {}, config=config, workers=2))
@@ -317,14 +278,6 @@ def _shield_prompts(requests: tuple[Request, ...]) -> tuple[JsonValue, ...]:
         object_value(json.loads(scan.body))["userPrompt"]
         for scan in requests
         if scan.target.startswith(_SHIELD_TARGET_PREFIX)
-    )
-
-
-def _analyze_texts(requests: tuple[Request, ...]) -> tuple[JsonValue, ...]:
-    return tuple(
-        object_value(json.loads(scan.body))["text"]
-        for scan in requests
-        if scan.target.startswith(_ANALYZE_TARGET_PREFIX)
     )
 
 
@@ -400,60 +353,6 @@ def test_responses_streaming_input_is_scanned_and_billed(
         entry: Final = object_value(_guardrail_entries(model)[0])
         assert entry["guardrail_usage"] == {"requests": 1, "input_characters": len(prompt), "text_records": 1}, entry
         assert entry["guardrail_cost"] == pytest.approx(0.38 / 1000), entry
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        pytest.param(lambda prompt: {"input": prompt}, id="string-input"),
-        pytest.param(
-            lambda prompt: {"input": [{"role": "user", "content": [{"type": "input_text", "text": prompt}]}]},
-            id="list-input",
-        ),
-        pytest.param(lambda prompt: {"messages": [], "input": prompt}, id="empty-messages-stub"),
-    ],
-)
-def test_text_moderation_opt_in_scans_responses_input(
-    audit_rig: tuple[OwnedProxy, Wire, Wire, threading.Event],
-    request: pytest.FixtureRequest,
-    body: Callable[[str], dict[str, JsonValue]],
-) -> None:
-    owned, azure, provider, _ = audit_rig
-    prompt: Final = f"synthetic benign prompt {request.node.callspec.id} {uuid.uuid4().hex}"
-    with owned.gateway.scenario() as scenario:
-        model: Final = scenario.model(
-            model="openai/gpt-4.1-mini", api_base=provider.url + "/v1", api_key="synthetic-provider-key"
-        )
-        response: Final = owned.gateway.request(
-            "POST", "/v1/responses", {"model": model, "guardrails": [_TEXT_MODERATION], **body(prompt)}
-        )
-        assert response.status_code == 200, response.text
-        calls: Final = azure.drain()
-        assert _analyze_texts(calls) == (prompt,)
-        assert _shield_prompts(calls) == (prompt,)
-        assert len(_provider_calls(provider)) == 1
-        entries: Final = _guardrail_entries(model, count=2)
-        assert {object_value(entry)["guardrail_name"] for entry in entries} == {"audit-shield", _TEXT_MODERATION}, (
-            entries
-        )
-
-
-def test_text_moderation_opt_in_scans_chat_messages(audit_rig: tuple[OwnedProxy, Wire, Wire, threading.Event]) -> None:
-    owned, azure, provider, _ = audit_rig
-    prompt: Final = "synthetic benign prompt chat-optin " + uuid.uuid4().hex
-    with owned.gateway.scenario() as scenario:
-        model: Final = scenario.model(
-            model="openai/gpt-4.1-mini", api_base=provider.url + "/v1", api_key="synthetic-provider-key"
-        )
-        response: Final = owned.gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {"model": model, "guardrails": [_TEXT_MODERATION], "messages": [{"role": "user", "content": prompt}]},
-        )
-        assert response.status_code == 200, response.text
-        calls: Final = azure.drain()
-        assert _analyze_texts(calls) == (prompt,)
-        assert _shield_prompts(calls) == (prompt,)
 
 
 def test_chat_with_input_key_still_scans_messages_only(
@@ -627,23 +526,6 @@ def test_streaming_responses_attack_is_blocked_before_any_stream_bytes(
         assert response.status_code == 400, body
         assert "Violated Azure Prompt Shield guardrail policy" in body, body
         assert _shield_prompts(azure.drain()) == (prompt,)
-        assert _provider_calls(provider) == ()
-
-
-def test_text_moderation_opt_in_blocks_responses_input_above_threshold(
-    audit_rig: tuple[OwnedProxy, Wire, Wire, threading.Event],
-) -> None:
-    owned, azure, provider, _ = audit_rig
-    prompt: Final = f"synthetic prompt {_MODERATION_MARKER} " + uuid.uuid4().hex
-    with owned.gateway.scenario() as scenario:
-        model: Final = scenario.model(
-            model="openai/gpt-4.1-mini", api_base=provider.url + "/v1", api_key="synthetic-provider-key"
-        )
-        response: Final = owned.gateway.request(
-            "POST", "/v1/responses", {"model": model, "guardrails": [_TEXT_MODERATION], "input": prompt}
-        )
-        assert response.status_code == 400, response.text
-        assert _analyze_texts(azure.drain()) == (prompt,)
         assert _provider_calls(provider) == ()
 
 

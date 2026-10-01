@@ -146,3 +146,17 @@ class AzureGuardrailBase:
         if not isinstance(messages, list):
             return None
         return get_last_user_message(cast(list[AllMessageValues], messages))  # cast-ok: narrowed to list
+
+    def get_user_prompt(self, messages: list[AllMessageValues]) -> str | None:
+        """
+        Get the last consecutive block of messages from the user.
+
+        Example:
+        messages = [
+            {"role": "user", "content": "Hello, how are you?"},
+            {"role": "assistant", "content": "I'm good, thank you!"},
+            {"role": "user", "content": "What is the weather in Tokyo?"},
+        ]
+        get_user_prompt(messages) -> "What is the weather in Tokyo?"
+        """
+        return get_last_user_message(messages)
