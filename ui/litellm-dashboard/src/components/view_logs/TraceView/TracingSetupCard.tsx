@@ -524,7 +524,7 @@ function Endpoints({ proxyUrl }: { proxyUrl: string }) {
       <p className="mt-1 text-sm text-muted-foreground">
         Point any OpenTelemetry exporter here. The framework guides below set these for you.
       </p>
-      <dl className="mt-3 space-y-3 rounded-md border border-l-2 border-border border-l-trace-brand bg-muted/30 px-4 py-3">
+      <dl className="mt-3 grid gap-x-8 gap-y-3 rounded-md border border-l-2 border-border border-l-trace-brand bg-muted/30 px-4 py-3 md:grid-cols-2">
         {otlpEndpoints(proxyUrl).map(([label, value, copyable]) => (
           <div key={label} className="min-w-0">
             <dt className="text-[12px] text-muted-foreground">{label}</dt>
@@ -580,7 +580,7 @@ export function TracingSetupCard({
   };
 
   return (
-    <div className="mx-auto w-full max-w-2xl py-6 pb-12" data-testid="tracing-setup-card">
+    <div className="w-full py-6 pb-12" data-testid="tracing-setup-card">
       <div className="flex items-start gap-4">
         <h2 className="text-xl font-semibold tracking-tight">{setupTitle(enabled, connected)}</h2>
         <a
