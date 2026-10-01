@@ -65,9 +65,9 @@ class MCPToolsetTable(Protocol):
     async def delete(self, where: Mapping[str, object]) -> MCPToolsetRow: ...
 
 
-def _toolset_table(prisma_client: PrismaClient) -> MCPToolsetTable:
+def _toolset_table(prisma_client: PrismaClient, *, use_writer: bool = False) -> MCPToolsetTable:
     """The toolset table actions of the prisma client."""
-    return MCPToolsetRepository(prisma_client).table
+    return MCPToolsetRepository(prisma_client, use_writer=use_writer).table
 
 
 def _toolset_from_row(row: MCPToolsetRow) -> MCPToolset:
@@ -107,12 +107,16 @@ async def get_mcp_toolset(
 async def list_mcp_toolsets(
     prisma_client: PrismaClient,
     toolset_ids: Sequence[str] | None = None,
+    *,
+    use_writer: bool = False,
 ) -> Sequence[MCPToolset]:
     try:
         where: Final[Mapping[str, object]] = {} if toolset_ids is None else {"toolset_id": {"in": toolset_ids}}
-        rows: Final = await _toolset_table(prisma_client).find_many(where=where)
+        rows: Final = await _toolset_table(prisma_client, use_writer=use_writer).find_many(where=where)
         return [_toolset_from_row(r) for r in rows]
     except Exception as e:
+        if use_writer:
+            raise
         verbose_proxy_logger.warning("litellm.proxy._experimental.mcp_server.toolset_db::list_mcp_toolsets - %s", e)
         return []
 

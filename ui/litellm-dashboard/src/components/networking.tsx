@@ -115,6 +115,7 @@ import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
 import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
+import type { SpanDetail, Trace, TracePage } from "./view_logs/TraceView/traceTypes";
 import {
   createApiClient,
   deriveErrorMessage,
@@ -1467,31 +1468,6 @@ export const teamDailyActivityAggregatedCall = async (
   }
 };
 
-export const teamDailyActivityKeySearchCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  ...options: [search: string, teamIds?: string[] | null]
-) => {
-  const [search, teamIds = null] = options;
-  try {
-    return await apiClient.get(`/team/daily/activity/aggregated/search`, {
-      accessToken,
-      query: {
-        start_date: formatDate(startTime),
-        end_date: formatDate(endTime),
-        timezone: new Date().getTimezoneOffset().toString(),
-        search,
-        team_ids: teamIds && teamIds.length > 0 ? teamIds.join(",") : undefined,
-        exclude_team_ids: "litellm-dashboard",
-      },
-    });
-  } catch (error) {
-    console.error("Failed to search team daily activity keys:", error);
-    throw error;
-  }
-};
-
 export type TeamUserSpendResponse = components["schemas"]["TeamUserSpendResponse"];
 
 export const teamSpendByUserCall = async (
@@ -2041,6 +2017,7 @@ interface UiSpendLogsParams {
   end_user?: string;
   status_filter?: string;
   cache_hit_filter?: string;
+  used_client_oauth_token?: string;
   span_type?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
@@ -2125,6 +2102,42 @@ export const uiSpendLogsCall = async ({
     throw error;
   }
 };
+
+/**
+ * Agent tracing. All three respond 501 `{detail}` when `general_settings.tracing` is not
+ * configured; callers can detect that through the thrown `ApiError`'s `status`.
+ */
+export const agentTraceListCall = async ({
+  accessToken,
+  startMs,
+  endMs,
+  cursor,
+}: {
+  accessToken: string;
+  startMs: number;
+  endMs: number;
+  cursor?: string | null;
+}): Promise<TracePage> => {
+  const query = { start_ms: startMs, end_ms: endMs, cursor: cursor ?? undefined };
+  return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
+};
+
+export const agentTraceCall = async (accessToken: string, traceId: string, traceRef?: string): Promise<Trace> =>
+  apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
+    accessToken,
+    query: { trace_ref: traceRef || undefined },
+  });
+
+export const agentTraceSpanCall = async (
+  accessToken: string,
+  traceId: string,
+  spanId: string,
+  traceRef?: string,
+): Promise<SpanDetail> =>
+  apiClient.get<SpanDetail>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}`, {
+    accessToken,
+    query: { trace_ref: traceRef || undefined },
+  });
 
 export const adminSpendLogsCall = async (accessToken: string) => {
   try {
@@ -2577,36 +2590,6 @@ export const userDailyActivityAggregatedCall = async (
     });
   } catch (error) {
     console.error("Failed to fetch aggregated user daily activity:", error);
-    throw error;
-  }
-};
-
-export const userDailyActivityKeySearchCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  ...options: [search: string, userId?: string | null]
-) => {
-  const [search, userId = null] = options;
-  try {
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, "0");
-      const day = String(date.getDate()).padStart(2, "0");
-      return `${year}-${month}-${day}`;
-    };
-    return await apiClient.get(`/user/daily/activity/aggregated/search`, {
-      accessToken,
-      query: {
-        start_date: formatDate(startTime),
-        end_date: formatDate(endTime),
-        timezone: new Date().getTimezoneOffset().toString(),
-        search,
-        user_id: userId || undefined,
-      },
-    });
-  } catch (error) {
-    console.error("Failed to search user daily activity keys:", error);
     throw error;
   }
 };

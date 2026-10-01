@@ -159,6 +159,7 @@ if MCP_AVAILABLE:
         merge_user_env_vars,
         purge_user_oauth_credentials_for_server,
         reject_mcp_server,
+        set_mcp_server_pinned_tools,
         store_user_credential,
         store_user_oauth_credential,
         update_mcp_server,
@@ -237,7 +238,7 @@ if MCP_AVAILABLE:
         MCPGatewaySessionsTerminateResponse,
         normalize_upstream_header_name,
     )
-    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
 
     @dataclass
     class _TemporaryMCPServerEntry:
@@ -766,6 +767,7 @@ if MCP_AVAILABLE:
         """
         sanitized: Final = _redact_mcp_credentials(mcp_server)
         sanitized.credentials = None
+        sanitized.pinned_tools = None
         # URL is the highest-impact vector: many MCP integrations embed
         # the upstream API key directly in the path. spec_path can carry
         # similar tokens in the OpenAPI spec URL.
@@ -810,6 +812,7 @@ if MCP_AVAILABLE:
 
         sanitized: Final = _redact_mcp_credentials(mcp_server)
         sanitized.credentials = None
+        sanitized.pinned_tools = None
 
         # Remove potentially sensitive config + identity fields.
         sanitized.url = None
@@ -1534,6 +1537,90 @@ if MCP_AVAILABLE:
         if not _user_is_full_admin(user_api_key_dict):
             submissions.items = _sanitize_mcp_server_list_for_non_admin(submissions.items)
         return submissions
+
+    @router.post(
+        "/server/{server_id}/pin",
+        description=(
+            "Pin the server's current upstream tool list, descriptions and input schemas (admin only). tools/list "
+            "serves the pinned catalog from now on and an upstream change raises an mcp_pinned_tools_changed alert."
+        ),
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=dict[str, PinnedMCPTool],
+    )
+    @management_endpoint_wrapper
+    async def pin_mcp_server_tools(
+        server_id: str,
+        request: Request,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
+    ) -> dict[str, PinnedMCPTool]:
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Admin access required to pin MCP server tools."},
+            )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        stored: Final = await get_mcp_server(prisma_client, server_id)
+        server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        if stored is None or server is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP server '{server_id}' not found in the database."},
+            )
+        from litellm.proxy._experimental.mcp_server.rest_endpoints import fetch_pinnable_tool_catalog
+
+        snapshot: Final = await fetch_pinnable_tool_catalog(server, request, user_api_key_dict)
+        if not snapshot:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": f"MCP server '{server_id}' exposes no tools that pass the guardrails; nothing to pin."
+                },
+            )
+        await _store_pinned_tools(server_id, snapshot, user_api_key_dict)
+        return snapshot
+
+    @router.delete(
+        "/server/{server_id}/pin",
+        description="Unpin the server's tool list (admin only); tools/list serves the live upstream catalog again.",
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    @management_endpoint_wrapper
+    async def unpin_mcp_server_tools(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
+    ) -> dict[str, str]:
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Admin access required to unpin MCP server tools."},
+            )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        stored: Final = await get_mcp_server(prisma_client, server_id)
+        if stored is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP server '{server_id}' not found in the database."},
+            )
+        await _store_pinned_tools(server_id, None, user_api_key_dict)
+        return {"server_id": server_id, "status": "unpinned"}
+
+    async def _store_pinned_tools(
+        server_id: str, pinned_tools: Mapping[str, PinnedMCPTool] | None, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        record: Final = await set_mcp_server_pinned_tools(
+            prisma_client,
+            server_id,
+            pinned_tools,
+            touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP server '{server_id}' not found in the database."},
+            )
+        await global_mcp_server_manager.update_server(record)
+        await global_mcp_server_manager.reload_servers_from_database()
 
     @router.put(
         "/server/{server_id}/approve",

@@ -20,6 +20,10 @@ pub enum HostRequest<P: Protocol> {
 }
 
 pub enum InterceptRequest {
+    ResultReady {
+        facts: crate::interceptors::ExecutionFacts,
+        reply: Reply<()>,
+    },
     BeforeProviderRequest {
         wire: Box<WireRequest>,
         context: Box<RequestContext>,
