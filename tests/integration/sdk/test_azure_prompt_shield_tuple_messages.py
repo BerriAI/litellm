@@ -88,6 +88,10 @@ def sdk_rig(
             default_on=False,
         )
         monkeypatch.setattr(litellm, "callbacks", [guardrail])
+        monkeypatch.setattr(litellm, "success_callback", list(litellm.success_callback))
+        monkeypatch.setattr(litellm, "_async_success_callback", list(litellm._async_success_callback))
+        monkeypatch.setattr(litellm, "failure_callback", list(litellm.failure_callback))
+        monkeypatch.setattr(litellm, "_async_failure_callback", list(litellm._async_failure_callback))
         try:
             yield guardrail, azure, provider
         finally:

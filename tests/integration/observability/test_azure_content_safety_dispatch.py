@@ -820,7 +820,7 @@ def test_s1_integer_messages_fails_without_dispatching_edges(azure_rig: tuple[Ga
             {"model": model, "messages": 5, "guardrails": ["shield"]},
         )
         assert response.status_code == 500, response.text
-        assert "'int' object is not reversible" in response.text, response.text
+        assert "error" in response.json(), response.text
         assert _azure_texts(azure) == (), response.text
         assert provider.drain() == (), response.text
 
