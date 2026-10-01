@@ -17,7 +17,6 @@ interface SampleSpan {
   attributes: ReturnType<typeof str>[];
 }
 
-/** One small agent run (agent -> LLM call -> tool call) as an OTLP/JSON export request. */
 export function sampleTraceExport(nowMs: number): { traceId: string; body: object } {
   const traceId = randomHexId(16);
   const agentId = randomHexId(8);
