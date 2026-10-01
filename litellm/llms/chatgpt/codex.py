@@ -3,7 +3,7 @@ from typing import Final
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.realtime import RealtimeQueryParams, RealtimeSessionConfig
@@ -69,7 +69,8 @@ def parse_call_response(response: httpx.Response, alias: str, owner: str, expire
     if not routing_data:
         raise ValueError("Direct call signaling requires a ChatGPT deployment")
     routing: Final = ChatGPTCallRouting.model_validate(routing_data)
-    call_id: Final = urlsplit(response.headers.get("location", "")).path.rstrip("/").rsplit("/", 1)[-1]
+    location: Final = TypeAdapter(str).validate_python(response.headers.get("location", ""))
+    call_id: Final[str] = urlsplit(location).path.rstrip("/").rsplit("/", 1)[-1]
     return CodexRealtimeCall(
         call_id=call_id,
         model=routing.model,

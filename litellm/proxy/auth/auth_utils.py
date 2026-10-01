@@ -1921,7 +1921,7 @@ def _extract_model_candidates_from_request(
     if uses_body_target_model_sources or not body_model:
         _append_model_candidates(candidates, request_data.get("target_model_names"))
     if uses_session_model:
-        _append_model_candidates(candidates, session_model)
+        _append_model_candidates(candidates, TypeAdapter[object](object).validate_python(session_model))
     if uses_completion_model_sources and isinstance(request_data.get("completion"), dict):
         _append_model_candidates(candidates, request_data["completion"].get("model"))
 

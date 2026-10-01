@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum, auto
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypedDict, cast
 
 from pydantic import TypeAdapter
@@ -284,27 +285,31 @@ class RealTimeStreaming:
             nested: Final = message_obj["event"]
             if nested.get("type") in ("response.completed", "response.incomplete", "response.failed"):
                 response: Final = nested.get("response")
-                # Retain billing evidence even when response content is excluded from logging.
-                stored: Final = (
-                    message_obj
-                    if self._should_store_message(message_obj)
-                    else {
-                        "type": "response.event",
-                        "event": {
-                            "type": nested["type"],
-                            "response": {
-                                **{
-                                    key: value
-                                    for key, value in response.items()
-                                    if key in ("id", "created_at", "model", "usage", "service_tier")
-                                },
-                                "output": [],
-                            }
-                            if isinstance(response, Mapping)
-                            else None,
-                        },
-                    }
+                response_mapping: Final = (
+                    TypeAdapter(Mapping[str, object]).validate_python(response)
+                    if isinstance(response, Mapping)
+                    else None
                 )
+                # Retain billing evidence even when response content is excluded from logging.
+                filtered: Final[OpenAILiveResponseEvent] = {
+                    "type": "response.event",
+                    "event": {
+                        "type": nested["type"],
+                        "response": {
+                            **MappingProxyType(
+                                {
+                                    key: value
+                                    for key, value in response_mapping.items()
+                                    if key in ("id", "created_at", "model", "usage", "service_tier")
+                                }
+                            ),
+                            "output": TypeAdapter(list[object]).validate_python(()),
+                        }
+                        if response_mapping is not None
+                        else None,
+                    },
+                }
+                stored: Final = message_obj if self._should_store_message(message_obj) else filtered
                 self.messages.append(TypeAdapter(OpenAILiveResponseEvent).validate_python(stored))
             return
         if not self._should_store_message(message_obj):

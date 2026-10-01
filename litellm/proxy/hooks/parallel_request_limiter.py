@@ -110,7 +110,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         local: Final = self.internal_usage_cache.dual_cache.in_memory_cache
         remote: Final = self.internal_usage_cache.dual_cache.redis_cache
         raw: Final[object] = local.get_cache(key)
-        current: Final = TypeAdapter(Mapping[str, int] | None).validate_python(raw)
+        current: Final = TypeAdapter[Mapping[str, int] | None](Mapping[str, int] | None).validate_python(raw)
         updated: Final = (
             {  # mutable-ok: shared cache counter dict
                 **current,

@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm.constants import (
     AZURE_OPENAI_AUDIO_PROVIDERS,
@@ -292,10 +294,13 @@ async def arealtime_calls(
     )
     if session is not None:
         session = _with_resolved_session_model(session, model_name)
+    supplied_headers: Final = TypeAdapter[dict[str, object] | None](dict[str, object] | None).validate_python(
+        kwargs.get("extra_headers")
+    )
     call_headers: Final = (
-        provider_config.get_realtime_calls_extra_headers(kwargs.get("extra_headers"))
+        provider_config.get_realtime_calls_extra_headers(supplied_headers)
         if provider_config is not None
-        else kwargs.get("extra_headers")
+        else supplied_headers
     )
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
@@ -379,8 +384,10 @@ async def _arealtime(
 
     For PROXY use only.
     """
-    headers = cast(dict | None, kwargs.get("headers"))
-    extra_headers: Final = cast(dict | None, kwargs.get("extra_headers"))
+    headers = TypeAdapter[dict[str, object] | None](dict[str, object] | None).validate_python(kwargs.get("headers"))
+    extra_headers: Final = TypeAdapter[dict[str, object] | None](dict[str, object] | None).validate_python(
+        kwargs.get("extra_headers")
+    )
     if headers is None:
         headers = {}
     if extra_headers is not None:
@@ -428,6 +435,7 @@ async def _arealtime(
         else None
     )
     if provider_handler is not None:
+        user_api_key_dict: Final = TypeAdapter[object](object).validate_python(kwargs.get("user_api_key_dict"))
         await provider_handler.async_realtime(
             model=model,
             websocket=websocket,
@@ -436,7 +444,7 @@ async def _arealtime(
             api_key=api_key,
             timeout=timeout,
             query_params=query_params,
-            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            user_api_key_dict=user_api_key_dict,
             litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif provider_config is not None:

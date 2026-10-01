@@ -112,7 +112,9 @@ async def _start_codex_supervisor(
             "extra_headers": MappingProxyType(
                 {
                     **configured_realtime_headers(
-                        TypeAdapter(Mapping[str, object] | None).validate_python(processed.get("extra_headers"))
+                        TypeAdapter[Mapping[str, object] | None](Mapping[str, object] | None).validate_python(
+                            processed.get("extra_headers")
+                        )
                     ),
                     **configured_realtime_headers(call.extra_headers),
                 }
@@ -290,11 +292,11 @@ async def process_codex_request(
         proxy_logging_obj=server.proxy_logging_obj,
         proxy_config=server.proxy_config,
         llm_router=server.llm_router,
-        user_model=server.user_model,
-        user_temperature=server.user_temperature,
+        user_model=TypeAdapter[str | None](str | None).validate_python(server.user_model),
+        user_temperature=TypeAdapter[float | None](float | None).validate_python(server.user_temperature),
         user_request_timeout=server.user_request_timeout,
         user_max_tokens=server.user_max_tokens,
-        user_api_base=server.user_api_base,
+        user_api_base=TypeAdapter[str | None](str | None).validate_python(server.user_api_base),
         model=model,
         route_type=route_type,
         **(
@@ -358,7 +360,9 @@ async def _create_codex_realtime_call(request: Request) -> Response:
     try:
         await can_key_call_resolved_model(
             model=model,
-            llm_model_list=server.llm_model_list,
+            llm_model_list=TypeAdapter[tuple[object, ...] | None](tuple[object, ...] | None).validate_python(
+                server.llm_model_list
+            ),
             valid_token=auth,
             llm_router=server.llm_router,
         )
@@ -388,7 +392,7 @@ async def _create_codex_realtime_call(request: Request) -> Response:
                 data=processed,
                 route_type="arealtime_calls",
                 llm_router=server.llm_router,
-                user_model=server.user_model,
+                user_model=TypeAdapter[str | None](str | None).validate_python(server.user_model),
             )
             try:
                 response: Final = await result
@@ -462,7 +466,9 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
             call: Final = decode_call(token, f"Bearer {api_key}")
             await can_key_call_resolved_model(
                 model=call.alias,
-                llm_model_list=server.llm_model_list,
+                llm_model_list=TypeAdapter[tuple[object, ...] | None](tuple[object, ...] | None).validate_python(
+                    server.llm_model_list
+                ),
                 valid_token=auth,
                 llm_router=server.llm_router,
             )
@@ -530,9 +536,9 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
                         "extra_headers": MappingProxyType(
                             {
                                 **configured_realtime_headers(
-                                    TypeAdapter(Mapping[str, object] | None).validate_python(
-                                        processed.get("extra_headers")
-                                    )
+                                    TypeAdapter[Mapping[str, object] | None](
+                                        Mapping[str, object] | None
+                                    ).validate_python(processed.get("extra_headers"))
                                 ),
                                 **configured_realtime_headers(call.extra_headers),
                             }

@@ -4253,7 +4253,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         effective_descriptors: Final = (
             tuple(_without_parallel_limit(descriptor) for descriptor in descriptors)
-            if call_type == "_arealtime" and is_realtime_call_attachment(data.get("websocket"))
+            if call_type == "_arealtime"
+            and is_realtime_call_attachment(TypeAdapter[object](object).validate_python(data.get("websocket")))
             else descriptors
         )
 
