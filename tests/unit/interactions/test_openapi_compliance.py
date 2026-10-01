@@ -114,7 +114,6 @@ class TestRequestCompliance:
         """Verify the model request schema declared by POST /interactions."""
         schema = _model_request_schema(spec_dict)
 
-        # Required fields per spec
         assert "model" in schema["required"]
         for field in ("model", "input"):
             assert field in schema["properties"]
