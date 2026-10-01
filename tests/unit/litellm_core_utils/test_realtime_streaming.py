@@ -3640,6 +3640,7 @@ def test_public_live_accounting_survives_filtered_logging(monkeypatch):
                 "response": {
                     "id": "resp_one",
                     "model": "gpt-backend",
+                    "output": [],
                     "usage": {"total_tokens": 12},
                 },
             },
@@ -3652,6 +3653,43 @@ def test_public_live_accounting_survives_filtered_logging(monkeypatch):
         {"type": "response.event", "event": {"type": "response.output_text.delta", "delta": "private"}}
     )
     assert stream.messages == events
+
+
+@pytest.mark.parametrize("terminal", ["response.completed", "response.incomplete", "response.failed"])
+@pytest.mark.parametrize("allowed", [[], ["response.event"], "*"])
+def test_live_terminal_logging_filters_content_and_preserves_accounting(
+    monkeypatch: pytest.MonkeyPatch, terminal: str, allowed: list[str] | str
+) -> None:
+    from litellm.cost_calculator import _live_backend_responses
+
+    monkeypatch.setattr(litellm, "logged_real_time_event_types", allowed)
+    stream = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    response = {
+        "id": "resp_private",
+        "created_at": 1,
+        "model": "gpt-backend",
+        "output": [{"type": "message", "content": [{"type": "output_text", "text": "private answer"}]}],
+        "instructions": "private instructions",
+        "metadata": {"private": "metadata"},
+        "usage": {"input_tokens": 20, "output_tokens": 10, "total_tokens": 30},
+    }
+    event = {"type": "response.event", "event": {"type": terminal, "response": response}}
+    stream.store_message(event)
+
+    stored = stream.messages[0]["event"]["response"]
+    if allowed:
+        assert stored == response
+    else:
+        assert stored == {
+            key: value for key, value in response.items() if key not in ("output", "instructions", "metadata")
+        } | {"output": []}
+    measured = _live_backend_responses(stream.messages)
+    assert len(measured) == 1
+    assert measured[0].id == "resp_private"
+    assert measured[0].model == "gpt-backend"
+    assert measured[0].usage.total_tokens == 30
+    assert response["instructions"] == "private instructions"
+    assert response["output"][0]["content"][0]["text"] == "private answer"
 
 
 @pytest.mark.parametrize("account_usage,expected", [(True, 1), (False, 0)])

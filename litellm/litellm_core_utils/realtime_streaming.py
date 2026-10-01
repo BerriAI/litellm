@@ -283,7 +283,29 @@ class RealTimeStreaming:
         if message_obj.get("type") == "response.event" and isinstance(message_obj.get("event"), dict):
             nested: Final = message_obj["event"]
             if nested.get("type") in ("response.completed", "response.incomplete", "response.failed"):
-                self.messages.append(TypeAdapter(OpenAILiveResponseEvent).validate_python(message_obj))
+                response: Final = nested.get("response")
+                # Retain billing evidence even when response content is excluded from logging.
+                stored: Final = (
+                    message_obj
+                    if self._should_store_message(message_obj)
+                    else {
+                        "type": "response.event",
+                        "event": {
+                            "type": nested["type"],
+                            "response": {
+                                **{
+                                    key: value
+                                    for key, value in response.items()
+                                    if key in ("id", "created_at", "model", "usage", "service_tier")
+                                },
+                                "output": [],
+                            }
+                            if isinstance(response, Mapping)
+                            else None,
+                        },
+                    }
+                )
+                self.messages.append(TypeAdapter(OpenAILiveResponseEvent).validate_python(stored))
             return
         if not self._should_store_message(message_obj):
             return
