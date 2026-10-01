@@ -143,7 +143,9 @@ def test_user_banner_read_open_to_non_admin_roles(role):
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
     ],
 )
-def test_latest_release_info_read_open_to_non_admin_roles(role):  # test-quality-ok: allowed path returns None, not raising is the observable
+def test_latest_release_info_read_open_to_non_admin_roles(
+    role,
+):  # test-quality-ok: allowed path returns None, not raising is the observable
     user_obj = LiteLLM_UserTable(
         user_id="test_user",
         user_email="test@example.com",
@@ -957,9 +959,7 @@ _CLAUDE_CODE_GATEWAY_ROUTES: Final = (
 
 
 @pytest.mark.parametrize("route", _CLAUDE_CODE_GATEWAY_ROUTES)
-@pytest.mark.parametrize(
-    "role", [LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value]
-)
+@pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value])
 def test_claude_code_gateway_routes_open_to_signed_in_cli_users(role: str, route: str):
     user_obj: Final = LiteLLM_UserTable(user_id="test_user", user_email="test@example.com", user_role=role)
     valid_token: Final = UserAPIKeyAuth(user_id="test_user", user_role=role)
@@ -1287,8 +1287,7 @@ def test_non_proxy_admin_allows_auth_pass_through_with_team_allowlist():
 )
 def test_jwt_team_routes_grant_pass_through_only_for_explicit_paths(route, team_allowed_routes, expected):
     assert (
-        RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=team_allowed_routes)
-        is expected
+        RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=team_allowed_routes) is expected
     )
 
 
@@ -2237,7 +2236,7 @@ def test_internal_user_can_access_logs_drawer_detail_route(user_role):
             request_data={},
         )
     except Exception as e:
-        pytest.fail(f"{user_role.value} should be able to access {route}. Got error: {str(e)}")
+        pytest.fail(f"{user_role.value} should be able to access {route}. Got error: {e!s}")
 
 
 @pytest.mark.parametrize(
@@ -2260,9 +2259,7 @@ def test_logs_drawer_detail_route_in_every_route_group(route_group_name):
     from litellm.proxy._types import LiteLLMRoutes
 
     allowed_routes = getattr(LiteLLMRoutes, route_group_name).value
-    assert RouteChecks.check_route_access(
-        route="/spend/logs/ui/req-34099", allowed_routes=allowed_routes
-    )
+    assert RouteChecks.check_route_access(route="/spend/logs/ui/req-34099", allowed_routes=allowed_routes)
 
 
 def test_logs_drawer_detail_route_allowed_for_scoped_virtual_key():
@@ -2274,9 +2271,7 @@ def test_logs_drawer_detail_route_allowed_for_scoped_virtual_key():
         user_id="scoped_key_user",
         allowed_routes=["spend_tracking_routes"],
     )
-    assert RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/spend/logs/ui/req-34099", valid_token=valid_token
-    )
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(route="/spend/logs/ui/req-34099", valid_token=valid_token)
 
 
 @pytest.mark.parametrize("route", ADMIN_VIEWER_LOGS_PAGE_ROUTES)
@@ -4167,7 +4162,9 @@ def test_claude_code_marketplace_routes_open_to_internal_users(route):
     assert _gate(route, LitellmUserRoles.INTERNAL_USER.value) == "allowed"
 
 
-@pytest.mark.parametrize("user_role", [None, LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value])
+@pytest.mark.parametrize(
+    "user_role", [None, LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value]
+)
 @pytest.mark.parametrize("allowed_routes", [None, ["llm_api_routes"]])
 def test_auto_router_session_is_reachable_by_any_key_but_benchmarks_stays_admin_only(
     user_role: str | None, allowed_routes: list[str] | None
