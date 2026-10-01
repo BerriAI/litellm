@@ -8,7 +8,13 @@ from uuid import uuid4
 
 from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
-from litellm_proxy_extras.migration_lock import MigrationCoordinator
+from litellm_proxy_extras.migration_lock import MigrationCoordinator, migration_lock
+from litellm_proxy_extras.partitioned_index import (
+    PARTITIONED_CONCURRENT_INDEX_MARKER,
+    PARTITIONED_INDEX_LOCK_KEY,
+    build_index_on_partitioned_table,
+    parse_concurrent_index_migration,
+)
 
 if TYPE_CHECKING:
     import psycopg
@@ -75,6 +81,80 @@ def recover_completed_migration(coordinator: MigrationCoordinator, schema: str, 
     if result.rowcount != 1:
         raise RuntimeError("Could not complete the confirmed migration history row; retry startup.")
     logger.info("Completed migration %s using its successful SQL step and matching checksum", migration.parent.name)
+    return True
+
+
+def recover_partitioned_index_migration(schema: str, migration: Path, database_url: str) -> bool:
+    """Finish a CONCURRENTLY index migration that Postgres refused on a
+    partitioned parent by building the same index partition by partition.
+
+    The index is built on an autocommit session holding a session-level
+    advisory lock, outside the coordinator transaction: CONCURRENTLY waits for
+    every open transaction in the database, so a build inside it would never
+    finish. Waiting for another runner's build is bounded by the migration lock
+    timeout and gives up with RuntimeError rather than False, so no resolver
+    rolls the builder's row back under it; the build itself is unbounded. The
+    ledger row is completed under the coordinator lock afterwards.
+    """
+    import psycopg
+    from psycopg import sql
+
+    script: Final = migration.read_bytes()
+    parsed: Final = parse_concurrent_index_migration(script.decode())
+    if parsed is None:
+        return False
+    try:
+        with psycopg.connect(database_url, connect_timeout=10, autocommit=True) as builder:
+            unfinished: Final = tuple(
+                record for record in _migration_records(builder, schema, migration) if not record.finished
+            )
+            if (
+                len(unfinished) != 1
+                or unfinished[0].checksum != hashlib.sha256(script).hexdigest()
+                or PARTITIONED_CONCURRENT_INDEX_MARKER not in unfinished[0].logs
+            ):
+                return False
+            logger.info(
+                "Migration %s cannot build %s concurrently on the partitioned table %s, building it per partition",
+                migration.parent.name,
+                parsed.index,
+                parsed.table,
+            )
+            builder.execute("SET statement_timeout = 0")
+            builder.execute(
+                sql.SQL("SET lock_timeout = {}").format(
+                    sql.Literal(int(prisma_toolchain.migration_lock_timeout() * 1000))
+                )
+            )
+            try:
+                builder.execute("SELECT pg_advisory_lock(%s)", (PARTITIONED_INDEX_LOCK_KEY,))
+            except psycopg.errors.LockNotAvailable as exc:
+                raise RuntimeError(
+                    f"Another migration runner is still building {parsed.index} per partition after "
+                    f"{prisma_toolchain.migration_lock_timeout():.0f}s. Leaving its migration row alone; retry "
+                    f"startup once it finishes or raise {prisma_toolchain.MIGRATION_LOCK_TIMEOUT_ENV_VAR}."
+                ) from exc
+            builder.execute("SET lock_timeout = 0")
+            built: Final = build_index_on_partitioned_table(builder, schema, parsed)
+    except psycopg.Error as exc:
+        logger.warning("Could not build %s per partition, leaving the migration failed. Error: %s", parsed.index, exc)
+        return False
+    if not built:
+        return False
+    with migration_lock(database_url) as coordinator:
+        coordinator.acquire_prisma_lock()
+        result: Final = coordinator.connection.execute(
+            sql.SQL(
+                "UPDATE {} SET finished_at = current_timestamp, applied_steps_count = 1 "
+                "WHERE id = %s AND finished_at IS NULL AND rolled_back_at IS NULL"
+            ).format(sql.Identifier(schema, "_prisma_migrations")),
+            (unfinished[0].id,),
+        )
+        if result.rowcount != 1 and not any(
+            record.finished for record in _migration_records(coordinator.connection, schema, migration)
+        ):
+            raise RuntimeError("Could not complete the partitioned index migration history row; retry startup.")
+    logger.info("Completed migration %s with %s built per partition", migration.parent.name, parsed.index)
     return True
 
 

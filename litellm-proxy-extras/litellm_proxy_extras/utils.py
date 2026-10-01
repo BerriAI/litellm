@@ -839,7 +839,11 @@ class ProxyExtrasDBManager:
         if not use_migrate:
             return ProxyExtrasDBManager._run_database_v2(False)
         from litellm_proxy_extras.migration_lock import migration_environment, migration_lock
-        from litellm_proxy_extras.migration_recovery import baseline_current_schema, recover_completed_migration
+        from litellm_proxy_extras.migration_recovery import (
+            baseline_current_schema,
+            recover_completed_migration,
+            recover_partitioned_index_migration,
+        )
 
         database_url: Final = os.environ.get("DATABASE_URL")
         if not database_url:
@@ -854,7 +858,9 @@ class ProxyExtrasDBManager:
             if not migration.is_file():
                 return False
             with migration_lock(lock_url) as coordinator:
-                return recover_completed_migration(coordinator, schema, migration)
+                if recover_completed_migration(coordinator, schema, migration):
+                    return True
+            return recover_partitioned_index_migration(schema, migration, lock_url)
 
         def baseline_existing(migrations_dir: str) -> None:
             with migration_lock(lock_url) as coordinator:
@@ -1090,6 +1096,30 @@ class ProxyExtrasDBManager:
         ) from error
 
     @staticmethod
+    def _recover_partitioned_index(migration_name: "str | None") -> bool:
+        """Build a CONCURRENTLY index migration per partition when Postgres
+        refused it on a partitioned parent, then complete its ledger row."""
+        database_url = os.getenv("DATABASE_URL")
+        if not migration_name or not database_url:
+            return False
+        try:
+            import psycopg
+        except ImportError:
+            return False
+        from litellm_proxy_extras.migration_recovery import recover_partitioned_index_migration
+
+        migration = Path(ProxyExtrasDBManager._get_prisma_dir()) / "migrations" / migration_name / "migration.sql"
+        if not migration.is_file():
+            return False
+        cleaned_url = ProxyExtrasDBManager._strip_prisma_query_params(os.getenv("DIRECT_URL") or database_url)
+        schema = ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"
+        try:
+            return recover_partitioned_index_migration(schema, migration, cleaned_url)
+        except psycopg.Error as e:
+            logger.warning("Could not recover the partitioned index migration %s. Error: %s", migration_name, e)
+            return False
+
+    @staticmethod
     def _mark_migration_applied(name: str) -> None:
         """Roll a failed ledger row back if it is still there, then mark it applied."""
         try:
@@ -1224,7 +1254,9 @@ class ProxyExtrasDBManager:
                             )
                             if migration_match:
                                 failed_migration = migration_match.group(1)
-                                if ProxyExtrasDBManager._is_idempotent_error(e.stderr):
+                                if ProxyExtrasDBManager._recover_partitioned_index(failed_migration):
+                                    logger.info("Partitioned index migration completed, retrying migrate deploy")
+                                elif ProxyExtrasDBManager._is_idempotent_error(e.stderr):
                                     logger.info(
                                         f"Migration {failed_migration} failed due to idempotent error (e.g., column already exists), resolving as applied"
                                     )
@@ -1334,6 +1366,10 @@ class ProxyExtrasDBManager:
                                     f"was NOT applied. Please grant necessary database permissions and retry."
                                 ) from e
 
+                            elif ProxyExtrasDBManager._recover_partitioned_index(
+                                ProxyExtrasDBManager._v2_failed_migration_name(e.stderr)
+                            ):
+                                logger.info("Partitioned index migration completed, retrying migrate deploy")
                             elif ProxyExtrasDBManager._is_idempotent_error(e.stderr):
                                 # Idempotent errors mean the migration has effectively been applied
                                 logger.info(
