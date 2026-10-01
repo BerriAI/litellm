@@ -78,7 +78,8 @@ def hoist_additional_tools(
             hoisted.append(tool)
     hoisted_tools: Final = tuple(hoisted)
     verbose_logger.debug(
-        "Responses API: hoisting %d tool(s) out of %d input item(s) into the top-level tools param.",
+        "Responses API: hoisting %d tool(s) out of %d 'additional_tools' or "
+        "'tool_search_output' input item(s) into the top-level tools param.",
         len(hoisted_tools),
         len(items),
     )
