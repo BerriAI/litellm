@@ -55,10 +55,10 @@ class _CallerContext:
 @asynccontextmanager
 async def admin_mcp_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     enabled: Final = os.environ.get("LITELLM_ENABLE_ADMIN_MCP", "false").strip().lower()
-    if enabled in ("false", "0", ""):
+    if enabled in ("false", "0", "off", "no", ""):
         yield
         return
-    if enabled not in ("true", "1"):
+    if enabled not in ("true", "1", "on", "yes"):
         raise ValueError("LITELLM_ENABLE_ADMIN_MCP must be true or false")
     _require_enterprise_license()
 

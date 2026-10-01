@@ -246,7 +246,7 @@ e2e-dev = [
     "mcp>=2.2.0,<3",
 ]
 admin-mcp = [
-    "litellm-admin-mcp @ https://github.com/BerriAI/liteadmin-mcp/archive/a083adc0f932084eccbebb6700f70a7d875280f7.tar.gz#sha256=2b9bceb5be02f3e469f1d6163db718e9b532346e7d7647a5a050544776f7296a ; python_version >= '3.12'",
+    "litellm-admin-mcp @ https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz#sha256=86b930f6706fb2da10d53d1798ee7fd14e44fb0afdef0da122cf0e6bb88fa2c3 ; python_version >= '3.12'",
 ]
 proxy-dev = [
     { include-group = "admin-mcp" },

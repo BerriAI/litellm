@@ -83,7 +83,7 @@ def management_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     return app
 
 
-@pytest.mark.parametrize("enabled", [None, "false", "0"])
+@pytest.mark.parametrize("enabled", [None, "false", "0", "off", "No"])
 def test_disabled_preserves_existing_admin_namespace(monkeypatch: pytest.MonkeyPatch, enabled: str | None) -> None:
     monkeypatch.setattr(proxy_server, "premium_user", False)
     monkeypatch.setitem(sys.modules, "litellm_admin_mcp.config", None)
@@ -112,10 +112,12 @@ def test_enabled_without_connector_explains_installation(monkeypatch: pytest.Mon
             pytest.fail("Enabling the connector without its dependency must fail startup")
 
 
+@pytest.mark.parametrize("enabled", ["true", "Yes", "on"])
 def test_unlicensed_opt_in_fails_before_loading_connector(
-    management_app: FastAPI, monkeypatch: pytest.MonkeyPatch
+    management_app: FastAPI, monkeypatch: pytest.MonkeyPatch, enabled: str
 ) -> None:
     monkeypatch.setattr(proxy_server, "premium_user", False)
+    monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", enabled)
     monkeypatch.setitem(sys.modules, "litellm_admin_mcp.config", None)
     with pytest.raises(HTTPException) as exc:
         with TestClient(management_app):
