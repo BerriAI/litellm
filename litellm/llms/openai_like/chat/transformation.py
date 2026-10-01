@@ -13,9 +13,8 @@ from litellm.types.utils import ModelResponse
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -77,7 +76,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
                     usage[key] = 0
 
             if "prompt_tokens_details" not in usage or not usage.get("prompt_tokens_details"):
-                prompt_tokens_details = {}
+                prompt_tokens_details: Final = {}
                 if "cache_read_input_tokens" in usage and isinstance(usage["cache_read_input_tokens"], int):
                     prompt_tokens_details["cached_tokens"] = usage["cache_read_input_tokens"]
                 elif "prompt_cache_hit_tokens" in usage and isinstance(usage["prompt_cache_hit_tokens"], int):
@@ -135,7 +134,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
             returned_response._hidden_params["model"] = base_model
 
         if hasattr(returned_response, "usage") and returned_response.usage is not None:
-            raw_usage = response_json.get("usage") or {}
+            raw_usage: Final = response_json.get("usage") or {}
             if "cache_read_input_tokens" in raw_usage and raw_usage["cache_read_input_tokens"] is not None:
                 returned_response.usage.cache_read_input_tokens = raw_usage["cache_read_input_tokens"]
             if "cache_creation_input_tokens" in raw_usage and raw_usage["cache_creation_input_tokens"] is not None:
@@ -144,10 +143,10 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         return returned_response
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: OpenAIGPTConfig contract
-        supported_params = super().get_supported_openai_params(model=model)
+        supported_params: Final = super().get_supported_openai_params(model=model)
         import litellm
 
-        model_info = (
+        model_info: Final = (
             litellm.model_cost.get(model)
             or litellm.model_cost.get(f"openai_like/{model}")
             or litellm.model_cost.get(f"openai/{model}")
@@ -170,7 +169,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
