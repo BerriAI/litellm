@@ -53,10 +53,20 @@ from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
+    CreatedTeam,
+    TeamMemberAddition,
+    TeamMemberRemoval,
+    add_team_members_in_transaction,
+    create_team,
+    delete_team_member_in_transaction,
+    finish_team_creation,
+    finish_team_member_addition,
+    finish_team_member_removal,
     new_team,
     team_member_add,
     team_member_delete,
 )
+from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
 from litellm.proxy.utils import (
     PrismaClient,
     _premium_user_check,
@@ -75,6 +85,7 @@ from litellm.repositories.verification_token_repository import (
 from litellm.types.proxy.management_endpoints.scim_v2 import *
 
 if TYPE_CHECKING:
+    from prisma import Prisma
     from prisma.models import LiteLLM_VerificationToken as PrismaVerificationToken
 
 
@@ -439,7 +450,9 @@ def _resolve_scim_user_role(
     return default_role
 
 
-async def _scim_groups_from_team_ids(prisma_client: PrismaClient, team_ids: list[str]) -> list[SCIMUserGroup]:
+async def _scim_groups_from_team_ids(
+    prisma_client: "PrismaClient | _GroupWriteDatabase", team_ids: list[str]
+) -> list[SCIMUserGroup]:
     """
     Build SCIMUserGroup objects from team ids, populating display from each
     team's alias so admin-group matching by display name works the same way it
@@ -468,6 +481,14 @@ async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: It
     if admin_group is None:
         return
 
+    await write_scim_member_roles(prisma_client, user_ids, admin_group)
+
+
+async def write_scim_member_roles(
+    prisma_client: "PrismaClient | _GroupWriteDatabase", user_ids: Iterable[str], admin_group: str | None
+) -> None:
+    if admin_group is None:
+        return
     default_role: Final = _default_scim_user_role()
     for user_id in user_ids:
         user = await _table(UserRepository(prisma_client)).find_unique(where={"user_id": user_id})
@@ -588,7 +609,9 @@ async def _users_named_by_member_value(
     return tuple(dict.fromkeys(row.user_id for row in rows))
 
 
-async def _accounts_named_by_member_value(value: str, prisma_client: PrismaClient) -> tuple[str, ...]:
+async def _accounts_named_by_member_value(
+    value: str, prisma_client: "PrismaClient | _GroupWriteDatabase"
+) -> tuple[str, ...]:
     """Every user id this member value names, by user id, SSO identity or email.
 
     Classification needs to know whether the value is one account's ``user_id`` and
@@ -1011,54 +1034,55 @@ async def _set_user_keys_blocked(user_id: str, blocked: bool) -> int:
 
     prisma_client: Final = await _get_prisma_client_or_raise_exception()
 
-    if blocked:
-        # `blocked` is a nullable column with no default, so existing rows
-        # typically hold NULL; treat NULL as "not blocked" since SQL equality
-        # on NULL would otherwise silently skip them.
-        candidates = await _table(VerificationTokenRepository(prisma_client)).find_many(
-            where={
-                "user_id": user_id,
-                "OR": [{"blocked": False}, {"blocked": None}],
-            },
-        )
-        affected_keys = candidates
-    else:
-        candidates = await _table(VerificationTokenRepository(prisma_client)).find_many(
-            where={"user_id": user_id, "blocked": True},
-        )
-        affected_keys = [k for k in candidates if _key_was_scim_blocked(k.metadata)]
-
-    if not affected_keys:
-        return 0
-
-    for key_row in affected_keys:
-        current_metadata: dict[str, object] = dict(key_row.metadata) if isinstance(key_row.metadata, dict) else {}
-        if blocked:
-            new_metadata = {**current_metadata, SCIM_BLOCKED_METADATA_KEY: True}
-        else:
-            new_metadata = {k: v for k, v in current_metadata.items() if k != SCIM_BLOCKED_METADATA_KEY}
-        await _table(VerificationTokenRepository(prisma_client)).update(
-            where={"token": key_row.token},
-            data={"blocked": blocked, "metadata": safe_dumps(new_metadata)},
-        )
-
-    for key_row in affected_keys:
+    tokens: Final = await write_user_keys_blocked(
+        _table(VerificationTokenRepository(prisma_client)), user_id=user_id, blocked=blocked
+    )
+    for token in tokens:
         await _delete_cache_key_object(
-            hashed_token=key_row.token,
+            hashed_token=token,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+    if tokens:
+        verbose_proxy_logger.info(
+            "SCIM: %s %d virtual key(s) for user_id=%s",
+            "blocked" if blocked else "unblocked",
+            len(tokens),
+            user_id,
+        )
+    return len(tokens)
 
-    verbose_proxy_logger.info(
-        "SCIM: %s %d virtual key(s) for user_id=%s",
-        "blocked" if blocked else "unblocked",
-        len(affected_keys),
-        user_id,
+
+async def write_user_keys_blocked(
+    table: _VerificationTokenTableClient, *, user_id: str, blocked: bool
+) -> tuple[str, ...]:
+    candidates: Final = await table.find_many(
+        where=(
+            {"user_id": user_id, "OR": [{"blocked": False}, {"blocked": None}]}
+            if blocked
+            else {"user_id": user_id, "blocked": True}
+        )
     )
-    return len(affected_keys)
+    affected_keys: Final = tuple(key for key in candidates if blocked or _key_was_scim_blocked(key.metadata))
+    for key_row, current_metadata in (
+        (key, TypeAdapter(dict[str, object]).validate_python(key.metadata) if isinstance(key.metadata, dict) else {})
+        for key in affected_keys
+    ):
+        await table.update(
+            where={"token": key_row.token},
+            data={
+                "blocked": blocked,
+                "metadata": safe_dumps(
+                    {**current_metadata, SCIM_BLOCKED_METADATA_KEY: True}
+                    if blocked
+                    else {key: value for key, value in current_metadata.items() if key != SCIM_BLOCKED_METADATA_KEY}
+                ),
+            },
+        )
+    return tuple(key.token for key in affected_keys)
 
 
-async def _delete_rows_referencing_user(prisma_client: PrismaClient, *, user_id: str) -> None:
+async def _delete_rows_referencing_user(prisma_client: "PrismaClient | _GroupWriteDatabase", *, user_id: str) -> None:
     """Drop rows whose foreign keys reference ``LiteLLM_UserTable.user_id``.
 
     Required before deleting the user row itself, otherwise Postgres rejects
@@ -1553,7 +1577,7 @@ async def get_service_provider_config(request: Request):
     return SCIMServiceProviderConfig(meta=meta)
 
 
-def _parse_scim_eq_filter(scim_filter: str) -> tuple[str, str] | None:
+def parse_scim_eq_filter(scim_filter: str) -> tuple[str, str] | None:
     """Parse the SCIM equality filters Okta uses before user lifecycle changes."""
     match: Final = re.match(
         r"""\s*([\w.]+)\s+eq\s+(['"]?)(.*?)\2\s*$""",
@@ -1595,7 +1619,7 @@ async def get_users(
             # Okta locates users by userName before deprovisioning. LiteLLM
             # exposes SCIM userName from user_email, while older SCIM-created
             # users may still have user_id == userName, so support both.
-            parsed_filter: Final = _parse_scim_eq_filter(filter)
+            parsed_filter: Final = parse_scim_eq_filter(filter)
             if parsed_filter:
                 filter_attribute, filter_value = parsed_filter
                 if filter_attribute == "username":
@@ -1733,6 +1757,70 @@ async def create_user(
         raise handle_exception_on_proxy(e)
 
 
+@dataclass(frozen=True, slots=True)
+class _UserReplacement:
+    data: Mapping[str, object]
+    metadata: Mapping[str, object]
+    teams: Sequence[str]
+
+
+def _prepare_user_replacement(existing_user: LiteLLM_UserTable, user: SCIMUser) -> _UserReplacement:
+    user_data: Final = _extract_scim_user_data(user)
+    metadata: Final = _build_scim_metadata(
+        user_data["given_name"],
+        user_data["family_name"],
+        user_data["active"] if "active" in user.model_fields_set else _user_scim_active(existing_user),
+        enterprise=user_data["enterprise"],
+        entitlements=user_data["entitlements"],
+        roles=user_data["roles"],
+    )
+    teams: Final = user_data["teams"] or existing_user.teams
+    return _UserReplacement(
+        data={
+            "user_email": user_data["user_email"],
+            "user_alias": user_data["user_alias"],
+            "sso_user_id": user_data["sso_user_id"],
+            "teams": teams,
+            "metadata": safe_dumps(metadata),
+        },
+        metadata=metadata,
+        teams=teams,
+    )
+
+
+def prepare_provisioned_user_update(
+    existing: LiteLLM_UserTable, change: SCIMUser | SCIMPatchOp
+) -> tuple[Mapping[str, object], bool | None, bool | None]:
+    previous_active: Final = _user_scim_active(existing)
+    if isinstance(change, SCIMUser):
+        replacement: Final = _prepare_user_replacement(existing, change)
+        return replacement.data, _scim_active_value(replacement.metadata), previous_active
+    updates, teams = _apply_patch_ops(existing, change)
+    metadata: Final = updates.get("metadata")
+    typed_metadata: Final = (
+        TypeAdapter(Mapping[str, object]).validate_python(metadata) if isinstance(metadata, Mapping) else None
+    )
+    return (
+        {
+            **updates,
+            "teams": list(teams),
+            "metadata": safe_dumps(metadata),
+        },
+        _scim_active_value(typed_metadata),
+        previous_active,
+    )
+
+
+async def finish_provisioned_user_update(user_id: str, tokens: tuple[str, ...]) -> None:
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    await evict_and_broadcast(cache_keys=(user_id,), user_api_key_cache=user_api_key_cache)
+    for token in tokens:
+        await _delete_cache_key_object(
+            hashed_token=token, user_api_key_cache=user_api_key_cache, proxy_logging_obj=proxy_logging_obj
+        )
+
+
 @scim_router.put(
     "/Users/{user_id}",
     response_model=SCIMUser,
@@ -1759,40 +1847,17 @@ async def update_user(
         prev_active: Final = _user_scim_active(existing_user)
 
         user_data: Final = _extract_scim_user_data(user)
-
-        # SCIM PUT may legally omit `active` (full-replace with the field absent).
-        # Pydantic fills the model default, so distinguish "client sent active"
-        # from "client omitted it" via model_fields_set, and preserve the prior
-        # SCIM active state when omitted — otherwise a vanilla PUT to a
-        # deactivated user would silently re-enable them and unblock their keys.
+        replacement: Final = _prepare_user_replacement(existing_user, user)
         client_set_active: Final = "active" in user.model_fields_set
-        scim_active_for_metadata: Final = user_data["active"] if client_set_active else prev_active
-
-        metadata: Final = _build_scim_metadata(
-            user_data["given_name"],
-            user_data["family_name"],
-            scim_active_for_metadata,
-            enterprise=user_data["enterprise"],
-            entitlements=user_data["entitlements"],
-            roles=user_data["roles"],
-        )
-
-        # SCIM User.groups is readOnly (RFC 7643 4.1.2): IdPs sync membership via /Groups and send
-        # no groups or `groups: []` on profile PUTs, so empty means unspecified, not "remove from every team"
-        target_teams: Final = user_data["teams"] or existing_user.teams
+        metadata: Final = replacement.metadata
+        target_teams: Final = replacement.teams
         await _handle_team_membership_changes(
             user_id=user_id,
             existing_teams=existing_user.teams,
             new_teams=target_teams,
         )
 
-        update_data: Final = {
-            "user_email": user_data["user_email"],
-            "user_alias": user_data["user_alias"],
-            "sso_user_id": user_data["sso_user_id"],
-            "teams": target_teams,
-            "metadata": safe_dumps(metadata),
-        }
+        update_data: Final = dict(replacement.data)
 
         admin_group: Final = await _get_scim_admin_group()
         if admin_group is not None and user_data["teams"]:
@@ -1822,6 +1887,76 @@ async def update_user(
         raise handle_exception_on_proxy(e)
 
 
+@dataclass(frozen=True, slots=True)
+class SCIMUserDeletion:
+    user_id: str
+    tokens: tuple[str, ...]
+    removals: tuple[TeamMemberRemoval, ...]
+
+
+async def write_scim_user_deletion(tx: "Prisma", client: PrismaClient, user_id: str) -> SCIMUserDeletion | None:
+    database: Final = _GroupWriteDatabase(tx)
+    user: Final = await UserRepository(database).find_by_id(user_id, id_field="user_id")
+    if user is None:
+        return None
+    teams: Final = tuple(
+        [await TeamRepository(database).find_by_id(team_id, id_field="team_id") for team_id in sorted(user.teams or ())]
+    )
+    for team in teams:
+        if team is not None and user_id in (team.members or ()):
+            await _table(TeamRepository(database)).update(
+                where={"team_id": team.team_id},
+                data={"members": [member for member in team.members if member != user_id]},
+            )
+    removals: Final = tuple(
+        [
+            await delete_team_member_in_transaction(
+                tx=tx,
+                data=TeamMemberDeleteRequest(team_id=team.team_id, user_id=user_id),
+                existing_team_row=team,
+                prisma_client=client,
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+            for team in teams
+            if team is not None and any(member.user_id == user_id for member in team.members_with_roles or ())
+        ]
+    )
+    tokens: Final = await write_user_keys_blocked(
+        _table(VerificationTokenRepository(database)), user_id=user_id, blocked=True
+    )
+    await _delete_rows_referencing_user(database, user_id=user_id)
+    await _table(UserRepository(database)).delete(where={"user_id": user_id})
+    return SCIMUserDeletion(user_id=user_id, tokens=tokens, removals=removals)
+
+
+async def finish_scim_user_deletion(result: SCIMUserDeletion | None) -> None:
+    if result is None:
+        return
+    for removal in result.removals:
+        await finish_team_member_removal(removal, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
+    await finish_provisioned_user_update(result.user_id, result.tokens)
+
+
+async def write_scim_group_deletion(tx: "Prisma", group_id: str, admin_group: str | None) -> tuple[str, ...]:
+    database: Final = _GroupWriteDatabase(tx)
+    await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, group_id)
+    team: Final = await TeamRepository(database).find_by_id(group_id, id_field="team_id")
+    if team is None:
+        return ()
+    member_ids: Final = tuple(await _get_team_member_user_ids_from_team(team))
+    users: Final = tuple(
+        [await UserRepository(database).find_by_id(member_id, id_field="user_id") for member_id in member_ids]
+    )
+    for user in users:
+        if user is not None and group_id in (user.teams or ()):
+            await _table(UserRepository(database)).update(
+                where={"user_id": user.user_id}, data={"teams": [value for value in user.teams if value != group_id]}
+            )
+    await _table(TeamRepository(database)).delete(where={"team_id": group_id})
+    await write_scim_member_roles(database, member_ids, admin_group)
+    return member_ids
+
+
 @scim_router.delete(
     "/Users/{user_id}",
     status_code=204,
@@ -1836,43 +1971,10 @@ async def delete_user(
     verbose_proxy_logger.debug("SCIM DELETE USER request for user_id=%s", user_id)
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
-        existing_user: Final = await _check_user_exists(user_id)
-
-        # Get teams user belongs to
-        found_teams: Final = tuple(
-            [
-                await _table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id})
-                for team_id in existing_user.teams or []
-            ]
-        )
-        teams: Final = tuple(team for team in found_teams if team)
-
-        # Remove user from all teams
-        for team in teams:
-            current_members: Sequence[str] = team.members or []
-            if user_id in current_members:
-                new_members = [m for m in current_members if m != user_id]
-                await _table(TeamRepository(prisma_client)).update(
-                    where={"team_id": team.team_id}, data={"members": new_members}
-                )
-
-            team_row = LiteLLM_TeamTable.model_validate(team.model_dump())
-            if any(member.user_id == user_id for member in team_row.members_with_roles or []):
-                await team_member_delete(
-                    data=TeamMemberDeleteRequest(team_id=team_row.team_id, user_id=user_id),
-                    user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
-                )
-
-        await _set_user_keys_blocked(user_id=user_id, blocked=True)
-
-        await _delete_rows_referencing_user(prisma_client, user_id=user_id)
-
-        # Delete user
-        await _table(UserRepository(prisma_client)).delete(where={"user_id": user_id})
-
-        from litellm.proxy.proxy_server import user_api_key_cache
-
-        await evict_and_broadcast(cache_keys=(user_id,), user_api_key_cache=user_api_key_cache)
+        await _check_user_exists(user_id)
+        async with prisma_client.tx() as tx:
+            result: Final = await write_scim_user_deletion(tx, prisma_client, user_id)
+        await finish_scim_user_deletion(result)
 
         return Response(status_code=204)
     except Exception as e:
@@ -2539,6 +2641,144 @@ def _new_team_request_with_defaults(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _GroupWriteDatabase:
+    db: "Prisma"
+
+    @property
+    def writer_db(self) -> "Prisma":
+        return self.db
+
+
+@dataclass(frozen=True, slots=True)
+class ProvisionedGroupWrite:
+    team_id: str
+    created: CreatedTeam | None
+    removals: tuple[TeamMemberRemoval, ...]
+    additions: tuple[TeamMemberAddition, ...]
+
+
+async def provisioning_group_admin_role() -> str | None:
+    return await _get_scim_admin_group()
+
+
+async def _validate_provisioned_group_member(tx: "Prisma", database: _GroupWriteDatabase, user_id: str) -> None:
+    local_rows: Final = await tx.query_raw(
+        'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = $1 FOR KEY SHARE', user_id
+    )
+    if not local_rows:
+        raise HTTPException(409, "The human local identity was removed; automatic recreation is not permitted")
+    named: Final = await _accounts_named_by_member_value(user_id, database)
+    if named != (user_id,):
+        raise HTTPException(400, "Group member identity is ambiguous")
+
+
+async def write_provisioned_group(
+    tx: "Prisma", client: PrismaClient, group: SCIMGroup, admin_group: str | None
+) -> ProvisionedGroupWrite:
+    if group.id is None:
+        raise HTTPException(409, "The provisioned group identity is incomplete")
+    database: Final = _GroupWriteDatabase(tx)
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, group.id)
+    member_ids: Final = tuple(sorted(frozenset(member.value for member in group.members or ())))
+    for user_id in member_ids:
+        await _validate_provisioned_group_member(tx, database, user_id)
+    existing: Final = await TeamRepository(database).find_by_id(group.id, id_field="team_id")
+    if existing is None:
+        created: Final = await create_team(
+            _new_team_request_with_defaults(
+                group.id, group.displayName, tuple(Member(user_id=value, role="user") for value in member_ids)
+            ),
+            auth,
+            transaction=tx,
+        )
+        await write_scim_member_roles(database, member_ids, admin_group)
+        return ProvisionedGroupWrite(team_id=group.id, created=created, removals=(), additions=())
+    current: Final = frozenset(await _get_team_member_user_ids_from_team(existing))
+    final: Final = frozenset(member_ids)
+    await _table(TeamRepository(database)).update(
+        where={"team_id": group.id}, data=_group_replacement_data(existing, group)
+    )
+    addition_result: Final = await _add_provisioned_group_members(tx, client, existing, final - current, auth)
+    removals: Final = tuple(
+        [
+            await delete_team_member_in_transaction(
+                tx=tx,
+                data=TeamMemberDeleteRequest(team_id=group.id, user_id=user_id),
+                existing_team_row=existing,
+                prisma_client=client,
+                user_api_key_dict=auth,
+            )
+            for user_id in sorted(current - final)
+        ]
+    )
+    await write_scim_member_roles(
+        database, current | final if existing.team_alias != group.displayName else current ^ final, admin_group
+    )
+    return ProvisionedGroupWrite(
+        team_id=group.id,
+        created=None,
+        removals=removals,
+        additions=(addition_result,) if addition_result is not None else (),
+    )
+
+
+async def _add_provisioned_group_members(
+    tx: "Prisma",
+    client: PrismaClient,
+    team: LiteLLM_TeamTable,
+    member_ids: frozenset[str],
+    auth: UserAPIKeyAuth,
+) -> TeamMemberAddition | None:
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    if not member_ids:
+        return None
+    before: Final = tuple(team.members_with_roles)
+    members: Final = [Member(user_id=user_id, role="user") for user_id in sorted(member_ids)]
+    _, users, memberships = await add_team_members_in_transaction(
+        tx=tx,
+        data=TeamMemberAddRequest(team_id=team.team_id, member=members),
+        complete_team_data=team,
+        prisma_client=client,
+        user_api_key_dict=auth,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
+    )
+    return TeamMemberAddition(
+        team=team.model_copy(deep=True),
+        before=before,
+        users=tuple(users),
+        memberships=tuple(memberships),
+        existing_user_ids=member_ids,
+    )
+
+
+async def finish_provisioned_group(result: ProvisionedGroupWrite | None) -> None:
+    if result is None:
+        return
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    if result.created is not None:
+        await finish_team_creation(result.created, auth)
+    for addition in result.additions:
+        await finish_team_member_addition(addition, auth)
+    for removal in result.removals:
+        await finish_team_member_removal(removal, auth)
+
+
+def _group_replacement_data(existing: LiteLLM_TeamTable, group: SCIMGroup) -> Mapping[str, object]:
+    return {
+        "team_alias": group.displayName,
+        "metadata": safe_dumps(
+            {
+                **(existing.metadata or {}),
+                SCIM_TEAM_DATA_METADATA_KEY: group.model_dump(),
+                SCIM_MANAGED_TEAM_METADATA_KEY: True,
+            }
+        ),
+    }
+
+
 @scim_router.post(
     "/Groups",
     response_model=SCIMGroup,
@@ -2620,18 +2860,7 @@ async def update_group(
         verbose_proxy_logger.debug("SCIM PUT GROUP all_member_ids: %s", member_result.all_member_ids)
         verbose_proxy_logger.debug("SCIM PUT GROUP created_users: %s", len(member_result.created_users))
 
-        # Prepare update data
-        existing_metadata: Final = existing_team.metadata if existing_team.metadata else {}
-        updated_metadata: Final = {
-            **existing_metadata,
-            SCIM_TEAM_DATA_METADATA_KEY: group.model_dump(),
-            SCIM_MANAGED_TEAM_METADATA_KEY: True,
-        }
-
-        update_data: Final = {
-            "team_alias": group.displayName,
-            "metadata": safe_dumps(updated_metadata),
-        }
+        update_data: Final = _group_replacement_data(existing_team, group)
 
         # Update team in database
         updated_team: Final = await _table(TeamRepository(prisma_client)).update(
@@ -2682,25 +2911,10 @@ async def delete_group(
     verbose_proxy_logger.debug("SCIM DELETE GROUP request for group_id=%s", group_id)
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
-        existing_team: Final = await _check_team_exists(group_id)
-
-        member_ids: Final = await _get_team_member_user_ids_from_team(existing_team)
-
-        # For each member, remove this team from their teams list
-        for member_id in member_ids:
-            user = await _table(UserRepository(prisma_client)).find_unique(where={"user_id": member_id})
-            if user:
-                current_teams = user.teams or []
-                if group_id in current_teams:
-                    new_teams = [t for t in current_teams if t != group_id]
-                    await _table(UserRepository(prisma_client)).update(
-                        where={"user_id": member_id}, data={"teams": new_teams}
-                    )
-
-        await _recompute_scim_member_roles(prisma_client, member_ids)
-
-        # Delete team
-        await _table(TeamRepository(prisma_client)).delete(where={"team_id": group_id})
+        await _check_team_exists(group_id)
+        admin_group: Final = await _get_scim_admin_group()
+        async with prisma_client.tx() as tx:
+            await write_scim_group_deletion(tx, group_id, admin_group)
 
         return Response(status_code=204)
 

@@ -3032,17 +3032,19 @@ async def test_delete_group_recomputes_roles_for_members(mocker):
     deleting the admin group demotes everyone who was only admin through it."""
     from litellm.proxy._types import Member
 
-    existing_team = mocker.MagicMock()
+    existing_team = LiteLLM_TeamTable(team_id="test-team-123")
     existing_team.members_with_roles = [
         Member(user_id="user1", role="user"),
         Member(user_id="user2", role="user"),
     ]
 
-    member = mocker.MagicMock()
+    member = LiteLLM_UserTable(user_id="user1")
     member.teams = ["test-team-123"]
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.tx.return_value.__aenter__.return_value = mock_prisma_client.db
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
     mock_prisma_client.db.litellm_teamtable.delete = AsyncMock()
@@ -3056,7 +3058,7 @@ async def test_delete_group_recomputes_roles_for_members(mocker):
         AsyncMock(return_value=mock_prisma_client),
     )
     recompute_mock = mocker.patch(
-        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        "litellm.proxy.management_endpoints.scim.scim_v2.write_scim_member_roles",
         AsyncMock(),
     )
 
@@ -3516,6 +3518,8 @@ async def test_apply_group_patch_updates_does_not_write_legacy_members(mocker):
 def _mock_prisma_for_delete_user(mocker, team):
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.tx.return_value.__aenter__.return_value = mock_prisma_client.db
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
@@ -3525,6 +3529,8 @@ def _mock_prisma_for_delete_user(mocker, team):
 
 
 def _patch_delete_user_dependencies(mocker, mock_prisma_client, existing_user):
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=existing_user)
+    mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.finish_scim_user_deletion", AsyncMock())
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
         AsyncMock(return_value=mock_prisma_client),
@@ -3551,7 +3557,7 @@ async def test_delete_user_prunes_members_with_roles(mocker):
     to the now-deleted user."""
     user_id = "scim-del-user"
 
-    existing_user = mocker.MagicMock()
+    existing_user = LiteLLM_UserTable(user_id=user_id)
     existing_user.teams = ["team-1"]
 
     team = LiteLLM_TeamTable(
@@ -3563,7 +3569,7 @@ async def test_delete_user_prunes_members_with_roles(mocker):
     mock_prisma_client = _mock_prisma_for_delete_user(mocker, team)
     _patch_delete_user_dependencies(mocker, mock_prisma_client, existing_user)
     team_member_delete_mock = mocker.patch(
-        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete",
+        "litellm.proxy.management_endpoints.scim.scim_v2.delete_team_member_in_transaction",
         AsyncMock(),
     )
 
@@ -3585,7 +3591,7 @@ async def test_delete_user_surfaces_prune_failure_and_keeps_user(mocker):
     so the IdP retries)."""
     user_id = "scim-del-user"
 
-    existing_user = mocker.MagicMock()
+    existing_user = LiteLLM_UserTable(user_id=user_id)
     existing_user.teams = ["team-1"]
 
     team = LiteLLM_TeamTable(
@@ -3597,7 +3603,7 @@ async def test_delete_user_surfaces_prune_failure_and_keeps_user(mocker):
     mock_prisma_client = _mock_prisma_for_delete_user(mocker, team)
     _patch_delete_user_dependencies(mocker, mock_prisma_client, existing_user)
     mocker.patch(
-        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete",
+        "litellm.proxy.management_endpoints.scim.scim_v2.delete_team_member_in_transaction",
         AsyncMock(side_effect=Exception("database connection lost")),
     )
 
@@ -3614,7 +3620,7 @@ async def test_delete_user_skips_teams_where_not_a_member(mocker):
     user, so a stale legacy membership can't block the delete."""
     user_id = "scim-del-user"
 
-    existing_user = mocker.MagicMock()
+    existing_user = LiteLLM_UserTable(user_id=user_id)
     existing_user.teams = ["team-1"]
 
     team = LiteLLM_TeamTable(
@@ -3626,7 +3632,7 @@ async def test_delete_user_skips_teams_where_not_a_member(mocker):
     mock_prisma_client = _mock_prisma_for_delete_user(mocker, team)
     _patch_delete_user_dependencies(mocker, mock_prisma_client, existing_user)
     team_member_delete_mock = mocker.patch(
-        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete",
+        "litellm.proxy.management_endpoints.scim.scim_v2.delete_team_member_in_transaction",
         AsyncMock(),
     )
 
@@ -6033,6 +6039,7 @@ def _shadow_tenant_prisma(
 
     prisma_client = mocker.MagicMock()
     prisma_client.db = mocker.MagicMock()
+    prisma_client.tx.return_value.__aenter__.return_value = prisma_client.db
     prisma_client.db.litellm_usertable = mocker.MagicMock()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=find_unique)
     prisma_client.db.litellm_usertable.find_many = AsyncMock(side_effect=identity_rows)
@@ -6076,9 +6083,11 @@ async def test_merge_placeholder_hands_the_group_to_the_shadowed_account(mocker,
     )
     team_member_delete_mock = (
         mocker.patch(  # test-quality-ok: roster helpers are module-level, not injectable into the endpoint
-            "litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete", AsyncMock()
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_team_member_in_transaction", AsyncMock()
         )
     )
+
+    mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.finish_scim_user_deletion", AsyncMock())
 
     with pytest.raises(HTTPException) as before:
         await _push_shadow_member(shadowed_tenant)

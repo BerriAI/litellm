@@ -15,7 +15,7 @@ All /budget management endpoints
 import math
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -28,7 +28,11 @@ from litellm.proxy.management_endpoints.common_utils import (
 )
 from litellm.proxy.utils import jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import AgentsRepository
+
+if TYPE_CHECKING:
+    from prisma.models import LiteLLM_BudgetTable as PrismaBudget
 
 router: Final = APIRouter()
 
@@ -69,8 +73,6 @@ async def new_budget(
     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
     """
-    from prisma.errors import UniqueViolationError
-
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     if prisma_client is None:
@@ -78,6 +80,18 @@ async def new_budget(
             status_code=500,
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
+
+    return await create_budget(
+        budget_obj=budget_obj,
+        table=BudgetRepository(prisma_client).table,
+        created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+    )
+
+
+async def create_budget(
+    *, budget_obj: BudgetNewRequest, table: TableActions["PrismaBudget"], created_by: str
+) -> "PrismaBudget":
+    from prisma.errors import UniqueViolationError
 
     # Validate budget values are not negative
     if budget_obj.max_budget is not None and (not math.isfinite(budget_obj.max_budget) or budget_obj.max_budget < 0):
@@ -111,11 +125,11 @@ async def new_budget(
     budget_obj_json: Final = budget_obj.model_dump(exclude_none=True)
     budget_obj_jsonified: Final[dict[str, object]] = jsonify_object(budget_obj_json)  # mutable-ok: prisma create input
     try:
-        response: Final = await BudgetRepository(prisma_client).table.create(
+        response: Final = await table.create(
             data={
                 **budget_obj_jsonified,
-                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                "created_by": created_by,
+                "updated_by": created_by,
             }
         )
     except Exception as e:

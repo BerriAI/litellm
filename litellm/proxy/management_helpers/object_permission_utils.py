@@ -21,6 +21,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.prisma_protocols import DatabaseClient, TableActions
 from litellm.repositories.table_repositories import MCPServerRepository
 
 if TYPE_CHECKING:
@@ -201,7 +202,9 @@ async def invalidate_cached_object_permissions(
 
 async def _set_object_permission(
     data_json: dict,
-    prisma_client: PrismaClient | None,
+    prisma_client: DatabaseClient | None,
+    *,
+    table: "TableActions[prisma_models.LiteLLM_ObjectPermissionTable] | None" = None,
 ):
     """
     Creates the LiteLLM_ObjectPermissionTable record for the key/team.
@@ -230,7 +233,8 @@ async def _set_object_permission(
     if "mcp_tool_permissions" in clean_data:
         clean_data["mcp_tool_permissions"] = safe_dumps(clean_data["mcp_tool_permissions"])
 
-    created_permission: Final = await ObjectPermissionRepository(prisma_client).table.create(data=clean_data)
+    permission_table: Final = ObjectPermissionRepository(prisma_client).table if table is None else table
+    created_permission: Final = await permission_table.create(data=clean_data)
 
     data_json["object_permission_id"] = created_permission.object_permission_id
     data_json.pop("object_permission")
@@ -259,7 +263,7 @@ def _mcp_server_identifier_matches(server: object, identifier: str) -> bool:
 
 async def _get_db_mcp_servers_by_identifiers(
     identifiers: AbstractSet[str],
-    prisma_client: PrismaClient | None,
+    prisma_client: DatabaseClient | None,
 ) -> "Sequence[prisma_models.LiteLLM_MCPServerTable]":
     if prisma_client is None or not identifiers:
         return []
@@ -278,7 +282,7 @@ async def _get_db_mcp_servers_by_identifiers(
 
 async def _resolve_mcp_server_identifiers_to_ids(
     identifiers: AbstractSet[str],
-    prisma_client: PrismaClient | None,
+    prisma_client: DatabaseClient | None,
 ) -> dict[str, set[str]]:
     """
     Resolve MCP permission entries written as server_id, alias, or server_name
@@ -335,7 +339,7 @@ def _mcp_tool_permission_entries(raw: object) -> Mapping[str, frozenset[str]]:
 async def reject_ambiguous_mcp_tool_permission_keys(
     new_mcp_tool_permissions: object,
     existing_mcp_tool_permissions: object,
-    prisma_client: PrismaClient | None,
+    prisma_client: DatabaseClient | None,
 ) -> None:
     """
     A name or alias shared by several MCP servers cannot key ``mcp_tool_permissions``:

@@ -5749,9 +5749,10 @@ class _InjectedMemberDeleteFailure(Exception):
     pass
 
 
+@pytest.mark.parametrize("failure_type", [_InjectedMemberDeleteFailure, asyncio.CancelledError])
 @pytest.mark.asyncio
 async def test_team_member_delete_is_atomic_across_its_four_writes(
-    mock_db_client, mock_admin_auth
+    mock_db_client, mock_admin_auth, failure_type, monkeypatch
 ):
     """
     /team/member_delete's four cleanups (team roster, user.teams, team
@@ -5766,6 +5767,11 @@ async def test_team_member_delete_is_atomic_across_its_four_writes(
     """
     from litellm.proxy._types import TeamMemberDeleteRequest
     from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    invalidate_team: Final = AsyncMock()
+    monkeypatch.setattr(team_endpoints, "delete_cache_team_object", invalidate_team)
 
     test_team_id = "team-del-atomic-123"
     test_user_id = "user-atomic@example.com"
@@ -5793,7 +5799,7 @@ async def test_team_member_delete_is_atomic_across_its_four_writes(
         return_value=[mock_user_row]
     )
     mock_db_client.db.litellm_usertable.update = AsyncMock(
-        side_effect=_InjectedMemberDeleteFailure("boom between writes 1 and 2")
+        side_effect=failure_type("boom between writes 1 and 2")
     )
 
     mock_db_client.db.litellm_teammembership = MagicMock()
@@ -5805,7 +5811,7 @@ async def test_team_member_delete_is_atomic_across_its_four_writes(
 
     _wire_member_delete_tx(mock_db_client)
 
-    with pytest.raises(_InjectedMemberDeleteFailure):
+    with pytest.raises(failure_type):
         await team_member_delete(
             data=TeamMemberDeleteRequest(team_id=test_team_id, user_id=test_user_id),
             user_api_key_dict=mock_admin_auth,
@@ -5815,7 +5821,8 @@ async def test_team_member_delete_is_atomic_across_its_four_writes(
     mock_db_client.db.litellm_teamtable.update.assert_awaited_once()
     mock_db_client.tx.assert_called_once()
     aexit_args = mock_db_client.tx.return_value.__aexit__.await_args.args
-    assert aexit_args[0] is _InjectedMemberDeleteFailure
+    assert aexit_args[0] is failure_type
+    invalidate_team.assert_not_awaited()
 
     # Writes queued behind the failure inside that same transaction never ran.
     mock_db_client.db.litellm_teammembership.delete_many.assert_not_awaited()
@@ -16884,3 +16891,115 @@ def test_list_team_v2_answers_503_no_db_connection_when_the_callers_user_read_hi
 
     assert response.status_code == 503, response.text
     assert response.json() == _DB_OUTAGE_503_BODY
+
+
+@pytest.mark.asyncio
+async def test_member_removal_writes_nothing_when_team_disappeared_under_lock() -> None:
+    from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.management_endpoints.team_endpoints import delete_team_member_in_transaction
+
+    tx: Final = MagicMock()
+    tx.query_raw = AsyncMock(return_value=[])
+    tx.litellm_teamtable.update = AsyncMock()
+    tx.litellm_usertable.update = AsyncMock()
+    tx.litellm_verificationtoken.delete_many = AsyncMock()
+    with pytest.raises(HTTPException) as error:
+        await delete_team_member_in_transaction(
+            tx=tx,
+            data=TeamMemberDeleteRequest(team_id="removed-team", user_id="member"),
+            existing_team_row=LiteLLM_TeamTable(team_id="removed-team", members_with_roles=[]),
+            prisma_client=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert error.value.status_code == 400
+    assert error.value.detail == {"error": "Team id=removed-team does not exist in db"}
+    tx.litellm_teamtable.update.assert_not_awaited()
+    tx.litellm_usertable.update.assert_not_awaited()
+    tx.litellm_verificationtoken.delete_many.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("member_duration", "explicit_fields", "expected_duration"),
+    [(None, frozenset(), "30d"), (None, frozenset({"team_member_budget_duration"}), None), ("7d", frozenset(), "7d")],
+)
+@pytest.mark.asyncio
+async def test_team_member_budget_uses_supplied_table_and_preserves_defaults(
+    member_duration: str | None, explicit_fields: frozenset[str], expected_duration: str | None
+) -> None:
+    from types import SimpleNamespace
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
+
+    table: Final = MagicMock()
+    table.create = AsyncMock(return_value=SimpleNamespace(budget_id="member-budget"))
+    result: Final = await TeamMemberBudgetHandler.create_team_member_budget_table(
+        data=NewTeamRequest(team_alias="Directory team", budget_duration="30d"),
+        new_team_data_json={"team_member_budget": 12.0},
+        user_api_key_dict=UserAPIKeyAuth(user_id="provisioner"),
+        team_member_budget=12.0,
+        team_member_budget_duration=member_duration,
+        explicitly_set_fields=explicit_fields,
+        table=table,
+    )
+    table.create.assert_awaited_once()
+    written: Final = table.create.await_args.kwargs["data"]
+    assert written["max_budget"] == 12.0
+    assert written.get("budget_duration") == expected_duration
+    assert written["created_by"] == written["updated_by"] == "provisioner"
+    assert result["metadata"]["team_member_budget_id"] == "member-budget"
+    assert "team_member_budget" not in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_membership", [False, True])
+async def test_team_creation_uses_supplied_transaction_for_inherited_records(
+    mock_db_client, mock_admin_auth, monkeypatch: pytest.MonkeyPatch, fail_membership: bool
+) -> None:
+    import litellm
+
+    from litellm.proxy._types import LiteLLM_ObjectPermissionBase, NewTeamRequest, ProxyException
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    tx = MagicMock()
+    row = LiteLLM_TeamTable(team_id="scim-team", team_alias="Directory team", members_with_roles=[])
+    tx.litellm_teamtable.count = AsyncMock(return_value=0)
+    tx.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    tx.litellm_teamtable.create = AsyncMock(return_value=row)
+    tx.litellm_teamtable.update = AsyncMock(
+        return_value=row, side_effect=RuntimeError("membership failed") if fail_membership else None
+    )
+    tx.litellm_modeltable.create = AsyncMock(return_value=SimpleNamespace(id=42))
+    tx.litellm_objectpermissiontable.create = AsyncMock(return_value=SimpleNamespace(object_permission_id="permissions"))
+    tx.litellm_budgettable.create = AsyncMock(return_value=SimpleNamespace(budget_id="member-budget"))
+
+    async def query(sql, *args):
+        return [{"members_with_roles": []}] if "SELECT members_with_roles" in sql else []
+
+    tx.query_raw = AsyncMock(side_effect=query)
+    invalidate = AsyncMock()
+    monkeypatch.setattr(team_endpoints, "invalidate_access_group_caches", invalidate)
+    monkeypatch.setattr(litellm, "default_team_params", None)
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    request = NewTeamRequest(
+        team_id="scim-team", team_alias="Directory team", model_aliases={"friendly": "model"},
+        object_permission=LiteLLM_ObjectPermissionBase(vector_stores=["store"]),
+        team_member_budget=5, team_member_budget_duration="30d", models=["model"],
+    )
+    if fail_membership:
+        with pytest.raises(ProxyException, match="membership failed"):
+            await team_endpoints.create_team(request, mock_admin_auth, transaction=tx)
+    else:
+        result = await team_endpoints.create_team(request, mock_admin_auth, transaction=tx)
+        assert result.team.team_id == "scim-team"
+        assert result.snapshot.models == ["model"]
+
+    assert tx.litellm_modeltable.create.await_args.args[0]["model_aliases"] == '{"friendly": "model"}'
+    assert tx.litellm_objectpermissiontable.create.await_args.kwargs["data"]["vector_stores"] == ["store"]
+    assert tx.litellm_budgettable.create.await_args.kwargs["data"]["max_budget"] == 5
+    payload = tx.litellm_teamtable.create.await_args.kwargs["data"]
+    assert payload["model_id"] == 42
+    assert payload["object_permission_id"] == "permissions"
+    metadata = json.loads(payload["metadata"]) if isinstance(payload["metadata"], str) else payload["metadata"]
+    assert metadata["team_member_budget_id"] == "member-budget"
+    invalidate.assert_not_awaited()
