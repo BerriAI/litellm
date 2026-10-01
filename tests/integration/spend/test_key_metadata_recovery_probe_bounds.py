@@ -49,7 +49,7 @@ def _create_spend_logs_table(database_url: str) -> None:
 
 def _spend_log_stats(database_url: str) -> dict[str, int]:
     with psycopg.connect(database_url) as connection:
-        row: Final = connection.execute(_STATS_SQL).fetchone()  # pyright: ignore[reportArgumentType]  # stats literal
+        row: Final = connection.execute(_STATS_SQL).fetchone()
     if row is None:
         return {"seq_scan": 0, "idx_scan": 0, "seq_tup_read": 0, "idx_tup_fetch": 0, "n_tup_ins": 0}
     return {
