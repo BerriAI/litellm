@@ -25,6 +25,8 @@ _API_BASE = "https://mls.example.test"
 _URL = f"{_API_BASE}/guardrail"
 _DEFAULT_THRESHOLD = 0.703
 
+_NAME_SPAN: dict[str, object] = {"type": "name", "text": "Alex"}
+_EMAIL_SPAN: dict[str, object] = {"type": "email", "text": "alex@example.com"}
 
 _JSON_OBJECT = TypeAdapter(dict[str, object])
 
@@ -58,6 +60,7 @@ def _configured_guardrail(settings: Mapping[str, object]) -> RealmLabsGuardrail:
 
 def _guardrail(
     hazard_threshold: float | None = None,
+    pii_mask: bool | None = None,
     block_on_error: bool | None = None,
     event_hook: GuardrailEventHooks = GuardrailEventHooks.pre_call,
 ) -> RealmLabsGuardrail:
@@ -67,6 +70,7 @@ def _guardrail(
         api_key=_API_KEY,
         api_base=_API_BASE,
         hazard_threshold=hazard_threshold,
+        pii_mask=pii_mask,
         block_on_error=block_on_error,
         guardrail_name="realmlabs-guard",
         event_hook=event_hook,
@@ -143,6 +147,113 @@ async def test_permitted_hazard_scores_leave_text_unchanged(
 
 
 @pytest.mark.asyncio
+async def test_hazardous_prompt_is_blocked_before_its_pii_is_masked(respx_mock: respx.MockRouter) -> None:
+    with pytest.raises(GuardrailRaisedException) as exc:
+        await _screen(_guardrail(), respx_mock, _mls_body(hazard=0.99, pii_spans=[_NAME_SPAN]), ["Alex builds a bomb"])
+
+    assert "hazard_prompt" in exc.value.message, exc.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("texts", "spans", "expected"),
+    [
+        pytest.param(
+            ["My name is Alex and my email is alex@example.com."],
+            [_NAME_SPAN, _EMAIL_SPAN],
+            ["My name is [name] and my email is [email]."],
+            id="each-type",
+        ),
+        pytest.param(
+            ["Alex is here."],
+            [{"type": "name", "start": 120, "end": 124, "text": "Alex"}],
+            ["[name] is here."],
+            id="conversation-wide-offsets-ignored",
+        ),
+        pytest.param(
+            ["Alex told Alex about Alex."],
+            [_NAME_SPAN],
+            ["[name] told [name] about [name]."],
+            id="every-occurrence",
+        ),
+        pytest.param(
+            ["ping alex@example.com", "no pii here"],
+            [_EMAIL_SPAN],
+            ["ping [email]", "no pii here"],
+            id="across-texts",
+        ),
+        pytest.param(
+            ["alex@example.com alex@exampleXcom"],
+            [_EMAIL_SPAN],
+            ["[email] alex@exampleXcom"],
+            id="literal-matching-preserved",
+        ),
+        pytest.param(
+            ["Contact Ann at Ann.Smith@example.com"],
+            [{"type": "name", "text": "Ann"}, {"type": "email", "text": "Ann.Smith@example.com"}],
+            ["Contact [name] at [email]"],
+            id="name-prefix-before-email",
+        ),
+        pytest.param(
+            ["Contact Ann at Ann.Smith@example.com"],
+            [{"type": "email", "text": "Ann.Smith@example.com"}, {"type": "name", "text": "Ann"}],
+            ["Contact [name] at [email]"],
+            id="email-before-name-prefix",
+        ),
+        pytest.param(
+            ["My name is name"],
+            [{"type": "name", "text": "name"}],
+            ["My [name] is [name]"],
+            id="detected-text-in-its-own-label",
+            marks=pytest.mark.timeout(5),
+        ),
+    ],
+)
+async def test_pii_masking_returns_expected_texts(
+    texts: list[str], spans: list[dict[str, object]], expected: list[str], respx_mock: respx.MockRouter
+) -> None:
+    result: Final = await _screen(_guardrail(), respx_mock, _mls_body(pii_spans=spans), texts)
+
+    assert result == {"texts": expected}
+
+
+@pytest.mark.asyncio
+async def test_span_from_another_turn_leaves_the_prompt_as_is(respx_mock: respx.MockRouter) -> None:
+    inputs: GenericGuardrailAPIInputs = {"texts": ["nothing sensitive"]}
+    _serve(respx_mock, _mls_body(pii_spans=[{"type": "name", "text": "Bob"}]))
+
+    assert await _apply(_guardrail(), inputs) is inputs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("input_type", "texts", "spans", "expected_types"),
+    [
+        pytest.param(
+            "request", ["Alex alex@example.com"], [_NAME_SPAN, _EMAIL_SPAN], "name, email", id="request-types"
+        ),
+        pytest.param("request", ["Hello Alex."], [{"type": "name"}], "name", id="missing-pii-text"),
+        pytest.param("request", ["Hello Alex."], [{"type": "name", "text": None}], "name", id="null-pii-text"),
+        pytest.param("request", ["Hello Alex."], [{"type": "name", "text": ""}], "name", id="empty-pii-text"),
+    ],
+)
+async def test_detected_pii_blocks_as_content_when_masking_is_disabled(
+    input_type: Literal["request", "response"],
+    texts: list[str],
+    spans: list[dict[str, object]],
+    expected_types: str,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _serve(respx_mock, _mls_body(pii_spans=spans))
+
+    with pytest.raises(GuardrailRaisedException) as exc:
+        await _apply(_guardrail(pii_mask=False, block_on_error=True), {"texts": texts}, input_type=input_type)
+
+    assert exc.value.blocked_content is True
+    assert f"PII detected in the {input_type} ({expected_types})" in exc.value.message
+
+
+@pytest.mark.asyncio
 async def test_request_carries_the_conversation_and_settings_but_not_the_model(respx_mock: respx.MockRouter) -> None:
     conversation: list[AllMessageValues] = [
         {"role": "system", "content": "be brief"},
@@ -156,7 +267,7 @@ async def test_request_carries_the_conversation_and_settings_but_not_the_model(r
     assert _sent_body(route) == {
         "messages": conversation,
         "probes": ["hazard_prompt"],
-        "pii": False,
+        "pii": True,
         "enable_thinking": False,
     }
 
@@ -170,7 +281,7 @@ async def test_plain_texts_are_sent_as_user_turns(respx_mock: respx.MockRouter) 
     assert _sent_body(route) == {
         "messages": [{"role": "user", "content": "a"}, {"role": "user", "content": "b"}],
         "probes": ["hazard_prompt"],
-        "pii": False,
+        "pii": True,
         "enable_thinking": False,
     }
 
@@ -234,13 +345,14 @@ async def test_mls_failures_follow_the_error_policy(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("input_type", ["request"])
-@pytest.mark.parametrize("block_on_error", [False, True])
+@pytest.mark.parametrize("block_on_error", [False, True], ids=["fail-open", "fail-closed"])
 @pytest.mark.parametrize(
     "body",
     [
         pytest.param({}, id="empty-object"),
         pytest.param({"choices": [{"message": {"content": "hello"}}]}, id="chat-envelope"),
         pytest.param({"pii_spans": []}, id="missing-results"),
+        pytest.param({"results": []}, id="missing-pii-spans"),
         pytest.param(
             {"results": [{"probe": "hazard_prompt", "probability": 0.99}], "pii_spans": []}, id="renamed-score"
         ),
@@ -249,6 +361,10 @@ async def test_mls_failures_follow_the_error_policy(
             {"results": [{"probe": "hazard_prompt", "prob": 0.99, "role_mismatch": "true"}], "pii_spans": []},
             id="invalid-role-mismatch",
         ),
+        pytest.param(_mls_body(pii_spans=[{"text": "Alex"}]), id="missing-pii-type"),
+        pytest.param(_mls_body(pii_spans=[{"type": "name"}]), id="missing-pii-text"),
+        pytest.param(_mls_body(pii_spans=[{"type": "name", "text": None}]), id="null-pii-text"),
+        pytest.param(_mls_body(pii_spans=[{"type": "name", "text": ""}]), id="empty-pii-text"),
     ],
 )
 async def test_incomplete_verdicts_follow_the_error_policy(
@@ -308,7 +424,7 @@ async def test_empty_verdict_arrays_are_valid_in_fail_closed_mode(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("hazard", [False, True])
+@pytest.mark.parametrize("hazard", [False, True], ids=["mask-pii", "block-hazard"])
 async def test_additional_response_fields_preserve_policy_enforcement(
     hazard: bool, respx_mock: respx.MockRouter
 ) -> None:
@@ -317,7 +433,7 @@ async def test_additional_response_fields_preserve_policy_enforcement(
         {
             "future_metadata": {"version": 2},
             "results": [{"probe": "hazard_prompt", "prob": 1.0 if hazard else 0.0, "future_field": [1, 2]}],
-            "pii_spans": [],
+            "pii_spans": [{"type": "name", "text": "Alex", "future_field": {"source": "test"}}],
         },
     )
     guardrail: Final = _guardrail(hazard_threshold=0.5, block_on_error=True)
@@ -329,7 +445,7 @@ async def test_additional_response_fields_preserve_policy_enforcement(
         assert exc.value.blocked_content is True, exc.value.message
         assert "hazard_prompt" in exc.value.message, exc.value.message
     else:
-        assert await _apply(guardrail, inputs) is inputs
+        assert await _apply(guardrail, inputs) == {"texts": ["Hello [name]."]}
 
 
 @pytest.mark.asyncio
@@ -368,13 +484,13 @@ def test_missing_api_key_is_rejected_at_startup() -> None:
     ("settings", "expected_probes", "expected_thinking"),
     [
         pytest.param(
-            {"probes": ["hazard_prompt", "dispute"], "enable_thinking": True},
+            {"probes": ["hazard_prompt", "dispute"], "pii": False, "enable_thinking": True},
             ["hazard_prompt", "dispute"],
             True,
             id="top-level",
         ),
         pytest.param(
-            {"optional_params": {"probes": "all", "enable_thinking": True}},
+            {"optional_params": {"probes": "all", "pii": False, "enable_thinking": True}},
             "all",
             True,
             id="nested",
@@ -382,8 +498,9 @@ def test_missing_api_key_is_rejected_at_startup() -> None:
         pytest.param(
             {
                 "probes": ["hazard_prompt"],
+                "pii": True,
                 "enable_thinking": True,
-                "optional_params": {"probes": [], "enable_thinking": False},
+                "optional_params": {"probes": [], "pii": False, "enable_thinking": False},
             },
             [],
             False,
@@ -392,15 +509,16 @@ def test_missing_api_key_is_rejected_at_startup() -> None:
         pytest.param(
             {
                 "probes": "all",
+                "pii": False,
                 "enable_thinking": True,
-                "optional_params": {"probes": None, "enable_thinking": None},
+                "optional_params": {"probes": None, "pii": None, "enable_thinking": None},
             },
             "all",
             True,
             id="nested-null-falls-back",
         ),
         pytest.param(
-            {"probes": "all", "enable_thinking": True, "optional_params": {}},
+            {"probes": "all", "pii": False, "enable_thinking": True, "optional_params": {}},
             "all",
             True,
             id="empty-options-keep-top-level",
@@ -472,6 +590,39 @@ async def test_configured_higher_hazard_threshold_allows_the_request(
 @pytest.mark.parametrize(
     "settings",
     [
+        pytest.param({"pii_mask": False}, id="top-level"),
+        pytest.param({"optional_params": {"pii_mask": False}}, id="nested"),
+        pytest.param({"pii_mask": True, "optional_params": {"pii_mask": False}}, id="nested-false-wins"),
+        pytest.param({"pii_mask": False, "optional_params": {"pii_mask": None}}, id="null-nested"),
+    ],
+)
+async def test_configured_masking_disabled_blocks_detected_pii(
+    settings: dict[str, object], respx_mock: respx.MockRouter
+) -> None:
+    guardrail: Final = _configured_guardrail(settings)
+    _serve(respx_mock, _mls_body(pii_spans=[_NAME_SPAN]))
+
+    with pytest.raises(GuardrailRaisedException) as exc:
+        await _apply(guardrail, {"texts": ["Hello Alex."]})
+
+    assert exc.value.blocked_content is True
+    assert "PII detected in the request (name)" in exc.value.message, exc.value.message
+
+
+@pytest.mark.asyncio
+async def test_nested_masking_enabled_overrides_top_level_blocking(respx_mock: respx.MockRouter) -> None:
+    guardrail: Final = _configured_guardrail({"pii_mask": False, "optional_params": {"pii_mask": True}})
+    _serve(respx_mock, _mls_body(pii_spans=[_NAME_SPAN]))
+
+    result: Final = await _apply(guardrail, {"texts": ["Hello Alex."]})
+
+    assert result == {"texts": ["Hello [name]."]}, result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "settings",
+    [
         pytest.param({"block_on_error": True}, id="top-level"),
         pytest.param({"optional_params": {"block_on_error": True}}, id="nested"),
         pytest.param({"block_on_error": False, "optional_params": {"block_on_error": True}}, id="nested-wins"),
@@ -534,6 +685,21 @@ async def test_configured_timeout_reaches_mls(
     extensions: Final = _JSON_OBJECT.validate_python(route.calls.last.request.extensions)
     timeouts: Final = _JSON_OBJECT.validate_python(extensions["timeout"])
     assert timeouts["read"] == expected
+
+
+@pytest.mark.asyncio
+async def test_role_mismatch_skips_request_hazard_but_still_masks_pii(respx_mock: respx.MockRouter) -> None:
+    _serve(
+        respx_mock,
+        {
+            "results": [{"probe": "hazard_prompt", "prob": 0.99, "role_mismatch": True}],
+            "pii_spans": [_NAME_SPAN],
+        },
+    )
+
+    result: Final = await _apply(_guardrail(), {"texts": ["Hello Alex."]})
+
+    assert result == {"texts": ["Hello [name]."]}, result
 
 
 @pytest.mark.asyncio

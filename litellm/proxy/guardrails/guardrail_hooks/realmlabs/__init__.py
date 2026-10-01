@@ -24,6 +24,8 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         api_base=litellm_params.api_base,
         probes=settings.probes,
         hazard_threshold=settings.hazard_threshold,
+        pii=settings.pii,
+        pii_mask=settings.pii_mask,
         block_on_error=settings.block_on_error,
         enable_thinking=settings.enable_thinking,
         timeout=settings.timeout,
