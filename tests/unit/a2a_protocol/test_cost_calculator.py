@@ -455,9 +455,12 @@ async def test_asend_message_streaming_triggers_callbacks():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", (False, True))
-@pytest.mark.parametrize("claimed_fee", (None, 0.0, 99.0))
+@pytest.mark.parametrize("claimed_fee", (None, -1000.0, 0.0, 99.0))
+@pytest.mark.parametrize("admitted", (False, True))
+@pytest.mark.parametrize("configured_fee", (None, 0.25))
 async def test_chat_adapter_settles_the_admitted_agent_fee_without_model_pricing(
-    monkeypatch: pytest.MonkeyPatch, stream: bool, claimed_fee: float | None
+    monkeypatch: pytest.MonkeyPatch, stream: bool, claimed_fee: float | None,
+    admitted: bool, configured_fee: float | None
 ) -> None:
     import json
     from typing import Final
@@ -476,15 +479,16 @@ async def test_chat_adapter_settles_the_admitted_agent_fee_without_model_pricing
     target: Final = AgentResponse(
         agent_id="fee-target", agent_name="fee-target",
         agent_card_params={"url": "https://agent.test/", "capabilities": {"streaming": True}},
-        litellm_params={"cost_per_query": 0.25},
+        litellm_params={"cost_per_query": configured_fee} if configured_fee is not None else {},
     )
     registry: Final = agent_registry.AgentRegistry()
-    registry.register_agent(target)
+    registry.register_agent(target.model_copy(update={"litellm_params": {"cost_per_query": 0.5}}) if admitted else target)
     monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
     auth: Final = UserAPIKeyAuth(user_role="proxy_admin")
-    auth.invoked_agent_policy = target
-    auth.invoked_agent_id = target.agent_id
-    auth.agent_invocation_cost = 0.25
+    if admitted:
+        auth.invoked_agent_policy = target
+        auth.invoked_agent_id = target.agent_id
+        auth.agent_invocation_cost = configured_fee or 0.0
 
     def reply(request: httpx.Request) -> httpx.Response:
         body: Final = json.loads(request.content)
@@ -514,6 +518,9 @@ async def test_chat_adapter_settles_the_admitted_agent_fee_without_model_pricing
             assert response.choices[0].message.content == "Paid reply"
         await asyncio.wait_for(logger.logged.wait(), timeout=10.0)
         await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
-        assert logger.response_cost == pytest.approx(0.25)
+        if configured_fee is None:
+            assert logger.response_cost in (None, 0.0)
+        else:
+            assert logger.response_cost == pytest.approx(configured_fee)
     finally:
         await client.close()

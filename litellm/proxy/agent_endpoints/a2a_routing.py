@@ -13,6 +13,7 @@ from fastapi import HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.agent_endpoints.auth.managed_authorization import AGENT_INVOCATION_COST
 
 
 async def route_a2a_agent_request(
@@ -79,13 +80,13 @@ async def route_a2a_agent_request(
     data["api_base"] = agent.agent_card_params["url"]
     verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, data["api_base"])
 
-    invocation_pricing: Final = (
-        MappingProxyType({"cost_per_query": user_api_key_dict.agent_invocation_cost})
-        if user_api_key_dict is not None
-        and user_api_key_dict.agent_invocation_cost is not None
-        and user_api_key_dict.invoked_agent_policy is not None
-        and (user_api_key_dict.invoked_agent_policy.litellm_params or MappingProxyType({})).get("cost_per_query")
-        is not None
-        else MappingProxyType({})
+    pricing_policy: Final = (
+        user_api_key_dict.invoked_agent_policy
+        if user_api_key_dict is not None and user_api_key_dict.invoked_agent_policy is not None
+        else agent
     )
-    return getattr(litellm, f"{route_type}")(**MappingProxyType({**data, **invocation_pricing}))
+    configured_fee: Final = (pricing_policy.litellm_params or MappingProxyType({})).get("cost_per_query")
+    invocation_fee: Final = (
+        AGENT_INVOCATION_COST.validate_python(configured_fee) if configured_fee is not None else None
+    )
+    return getattr(litellm, f"{route_type}")(**MappingProxyType({**data, "cost_per_query": invocation_fee}))
