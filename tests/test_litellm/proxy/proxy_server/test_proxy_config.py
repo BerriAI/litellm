@@ -2013,17 +2013,32 @@ async def test_ProxyConfig__init_search_tools_in_db_keeps_loaded_tools_whose_par
         "litellm_params": {"search_provider": "perplexity", "api_key": "pplx-loaded"},
     }
     fake_router = MagicMock()
-    fake_router.search_tools = [loaded_tool]
+    fake_router.search_tools = [
+        loaded_tool,
+        {
+            "search_tool_id": "typo-id",
+            "search_tool_name": "typo-search",
+            "litellm_params": {"search_provider": "tavily"},
+        },
+    ]
     db_tools = [
         {
             "search_tool_id": "rotated-id",
             "search_tool_name": "rotated-search",
-            "litellm_params": {"search_provider": "Qk9XcGxleGl0eS1zZWFsZWQ", "api_key": "c2VhbGVkLWtleQ"},
+            "litellm_params": {
+                "search_provider": "zM9FVihBfZj0LRkl6_J4TeIEO8ijpxKov0QnfZa1uM9J1lO7Txy9IQ==",
+                "api_key": "c2VhbGVkLWtleQ",
+            },
         },
         {
             "search_tool_id": "fresh-id",
             "search_tool_name": "fresh-search",
             "litellm_params": {"search_provider": "tavily", "api_key": "tvly-fresh"},
+        },
+        {
+            "search_tool_id": "typo-id",
+            "search_tool_name": "typo-search",
+            "litellm_params": {"search_provider": "Tavily", "api_key": "tvly-edited"},
         },
     ]
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
@@ -2037,6 +2052,7 @@ async def test_ProxyConfig__init_search_tools_in_db_keeps_loaded_tools_whose_par
     assert [tool["litellm_params"] for tool in fake_router.search_tools] == [
         {"search_provider": "perplexity", "api_key": "pplx-loaded"},
         {"search_provider": "tavily", "api_key": "tvly-fresh"},
+        {"search_provider": "Tavily", "api_key": "tvly-edited"},
     ]
 
 

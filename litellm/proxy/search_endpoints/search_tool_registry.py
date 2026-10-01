@@ -161,11 +161,18 @@ async def rotate_search_tools_master_key(prisma_client: PrismaClient, new_master
 
 
 _KNOWN_SEARCH_PROVIDERS: Final = frozenset(provider.value for provider in SearchProviders)
+# An empty string encrypted with aes-256-gcm, the shortest ciphertext either algorithm produces
+_SHORTEST_CIPHERTEXT_LENGTH: Final = 47
 
 
-def _has_known_search_provider(search_tool: Mapping[str, object]) -> bool:
+def _did_not_decrypt(search_tool: Mapping[str, object]) -> bool:
     litellm_params: Final = search_tool.get("litellm_params")
-    return isinstance(litellm_params, Mapping) and litellm_params.get("search_provider") in _KNOWN_SEARCH_PROVIDERS
+    search_provider: Final = litellm_params.get("search_provider") if isinstance(litellm_params, Mapping) else None
+    return (
+        isinstance(search_provider, str)
+        and search_provider not in _KNOWN_SEARCH_PROVIDERS
+        and len(search_provider) >= _SHORTEST_CIPHERTEXT_LENGTH
+    )
 
 
 def keep_loaded_search_tools_that_do_not_decrypt(
@@ -174,7 +181,7 @@ def keep_loaded_search_tools_that_do_not_decrypt(
     """Replace each DB search tool whose params do not decrypt with the current key by its loaded version."""
     loaded_by_id: Final = {tool.get("search_tool_id"): tool for tool in loaded_search_tools}
     kept: Final = tuple(
-        loaded_by_id.get(tool.get("search_tool_id"), tool) if not _has_known_search_provider(tool) else tool
+        loaded_by_id.get(tool.get("search_tool_id"), tool) if _did_not_decrypt(tool) else tool
         for tool in db_search_tools
     )
     for db_tool, kept_tool in zip(db_search_tools, kept):
