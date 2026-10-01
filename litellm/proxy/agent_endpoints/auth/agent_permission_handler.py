@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import Final, TypeAlias
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.ui_session_utils import build_effective_auth_contexts
@@ -46,11 +47,18 @@ class RestrictedAgentAccess:
 
 AgentAccess: TypeAlias = UnrestrictedAgentAccess | RestrictedAgentAccess
 
+_REQUIRE_ACCESS_FLAG: Final = TypeAdapter(bool)
+
 
 def require_key_agent_access_defined() -> bool:
     from litellm.proxy.proxy_server import general_settings_view
 
-    return general_settings_view().get("require_key_agent_access_defined") is True
+    try:
+        return _REQUIRE_ACCESS_FLAG.validate_python(
+            general_settings_view().get("require_key_agent_access_defined", False)
+        )
+    except ValidationError:
+        return True
 
 
 def _is_proxy_admin(user_api_key_auth: UserAPIKeyAuth | None) -> bool:
