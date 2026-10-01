@@ -18576,7 +18576,8 @@ async def test_rotate_master_key_rotates_search_tools(monkeypatch):
         _rotate_master_key,
     )
 
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-master-key")
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master-key")
 
     class _Row(SimpleNamespace):
         def __iter__(self):

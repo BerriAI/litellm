@@ -1246,6 +1246,14 @@ def salt_key(monkeypatch):
     return SALT_KEY
 
 
+@pytest.fixture
+def master_key_only(monkeypatch):
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr(ps, "master_key", "sk-old-master-key")
+    monkeypatch.setattr(ps, "general_settings", {})
+    return "sk-old-master-key"
+
+
 @pytest.mark.asyncio
 async def test_search_tool_litellm_params_are_encrypted_at_rest_and_decrypted_on_read(salt_key):
     from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
@@ -1324,7 +1332,7 @@ async def test_plaintext_search_tool_rows_written_before_encryption_still_load(s
 
 
 @pytest.mark.asyncio
-async def test_master_key_rotation_reencrypts_only_values_the_current_key_decrypts(salt_key):
+async def test_master_key_rotation_reencrypts_only_values_the_current_key_decrypts(master_key_only):
     from litellm.proxy.common_utils.encrypt_decrypt_utils import (
         decrypt_if_encrypted_with,
         encrypt_value_helper,
@@ -1355,7 +1363,7 @@ async def test_master_key_rotation_reencrypts_only_values_the_current_key_decryp
 
 
 @pytest.mark.asyncio
-async def test_master_key_rotation_keeps_an_edit_made_while_it_runs(salt_key):
+async def test_master_key_rotation_keeps_an_edit_made_while_it_runs(master_key_only):
     from litellm.proxy.common_utils.encrypt_decrypt_utils import (
         decrypt_if_encrypted_with,
         encrypt_value_helper,
@@ -1392,3 +1400,49 @@ async def test_master_key_rotation_leaves_a_row_that_never_matches_and_finishes(
     await rotate_search_tools_master_key(prisma_client=_prisma_client_over(table), new_master_key="sk-new-master-key")
 
     assert table.rows["unmatched-id"].litellm_params == stored
+
+
+@pytest.mark.asyncio
+async def test_master_key_rotation_with_a_salt_key_keeps_search_tools_readable(salt_key, monkeypatch):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.search_endpoints.search_tool_registry import (
+        SearchToolRegistry,
+        rotate_search_tools_master_key,
+    )
+
+    monkeypatch.setattr(ps, "master_key", "sk-old-master-key")
+    table = _InMemorySearchToolsTable(
+        [
+            _stored_row(
+                "salted-id",
+                "salted",
+                {"search_provider": encrypt_value_helper("tavily"), "api_key": encrypt_value_helper("tvly-salted")},
+            )
+        ]
+    )
+    prisma_client = _prisma_client_over(table)
+
+    await rotate_search_tools_master_key(prisma_client=prisma_client, new_master_key="sk-new-master-key")
+    monkeypatch.setattr(ps, "master_key", "sk-new-master-key")
+
+    loaded = await SearchToolRegistry().get_search_tool_by_id_from_db("salted-id", prisma_client=prisma_client)
+    assert loaded["litellm_params"] == {"search_provider": "tavily", "api_key": "tvly-salted"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_value", ["****", ".", "--", "*"])
+async def test_plaintext_values_that_are_not_base64_load_and_rotate_unchanged(salt_key, legacy_value):
+    from litellm.proxy.search_endpoints.search_tool_registry import (
+        SearchToolRegistry,
+        rotate_search_tools_master_key,
+    )
+
+    legacy_params = {"search_provider": "perplexity", "api_key": legacy_value, "api_base": "https://api.perplexity.ai"}
+    table = _InMemorySearchToolsTable([_stored_row("legacy-id", "legacy", dict(legacy_params))])
+    prisma_client = _prisma_client_over(table)
+
+    loaded = await SearchToolRegistry().get_search_tool_by_id_from_db("legacy-id", prisma_client=prisma_client)
+    await rotate_search_tools_master_key(prisma_client=prisma_client, new_master_key="sk-new-master-key")
+
+    assert loaded["litellm_params"] == legacy_params
+    assert table.rows["legacy-id"].litellm_params == legacy_params
