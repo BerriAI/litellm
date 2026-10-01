@@ -123,13 +123,13 @@ def _reasoning_input_items(msg: "AllMessageValues") -> list[dict[str, object]]: 
     blocks are the fallback for turns that arrived over another API surface.
     """
     items: Final = _get_reasoning_items(msg)
-    stored: Final = [_reasoning_item_to_response_input(item) for item in items]  # mutable-ok: API message payload
+    stored: Final = [_reasoning_item_to_response_input(item) for item in items]
     if stored:
         return stored
     raw_blocks: Final = msg.get("thinking_blocks") or ()
     blocks: Final = cast("Iterable[ChatCompletionThinkingBlock]", raw_blocks)  # cast-ok: untyped client json
     replayed: Final = responses_reasoning_items_from_thinking_blocks(blocks)
-    return [dict(item) for item in replayed]  # mutable-ok: API message payload
+    return [dict(item) for item in replayed]
 
 
 def _build_reasoning_item(
@@ -441,7 +441,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 input_items.extend(_reasoning_input_items(msg))
                 if content:
                     input_items.append(
-                        {  # mutable-ok: API message payload
+                        {
                             "type": "message",
                             "role": "assistant",
                             "content": self._convert_content_to_responses_format(content, "assistant"),
@@ -475,7 +475,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 if role == "assistant":
                     input_items.extend(_reasoning_input_items(msg))
                 input_items.append(
-                    {  # mutable-ok: API message payload
+                    {
                         "type": "message",
                         "role": role,
                         "content": self._convert_content_to_responses_format(content, cast(str, role)),
@@ -531,11 +531,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     ) -> "ResponseText":
         existing: Final = cast(  # cast-ok: text field is a ResponseText | dict[str, Any] | None union
             "dict[str, object]",
-            dict(responses_api_request).get("text") or {},  # mutable-ok: one-shot merge seed
+            dict(responses_api_request).get("text") or {},
         )
         return cast(  # cast-ok: merged mapping is a valid ResponseText shape
             "ResponseText",
-            {**existing, **update},  # mutable-ok: one-shot merged payload
+            {**existing, **update},
         )
 
     def _build_sanitized_litellm_params(self, litellm_params: dict) -> dict[str, object]:
@@ -1334,6 +1334,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     ):
         super().__init__(streaming_response, sync_stream, json_mode)
         self._chat_completion_id: str | None = None
+        self._served_service_tier: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
 
     def _handle_string_chunk(
@@ -1505,7 +1506,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     # tool call; per-stream callers already received it via
                     # output_item.added and the argument delta events
                     return ModelResponseStream(
-                        choices=[  # mutable-ok: ModelResponseStream coerces only list choices
+                        choices=[
                             StreamingChoices(
                                 index=0,
                                 delta=Delta(
@@ -1598,6 +1599,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
                 usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(response_data.get("usage"))
             provider_metadata: Final = _provider_metadata(response_data)
+            served_service_tier: Final = response_data.get("service_tier")
             return ModelResponseStream(
                 choices=[
                     StreamingChoices(
@@ -1610,7 +1612,12 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     )
                 ],
                 usage=usage,
-                provider_specific_fields=dict(provider_metadata) or None,  # mutable-ok: field is typed dict
+                provider_specific_fields=dict(provider_metadata) or None,
+                **(
+                    MappingProxyType({"service_tier": served_service_tier})
+                    if isinstance(served_service_tier, str)
+                    else MappingProxyType({})
+                ),
             )
         else:
             pass
@@ -1639,11 +1646,27 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             ModelResponseStream: OpenAI-formatted streaming chunk
         """
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
-        return self._with_stream_scoped_id(
-            OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
-                chunk, tool_call_index_map=self._tool_call_index_map
+        self._remember_served_service_tier(chunk)
+        return self._with_served_service_tier(
+            self._with_stream_scoped_id(
+                OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+                    chunk, tool_call_index_map=self._tool_call_index_map
+                )
             )
         )
+
+    def _remember_served_service_tier(self, chunk: dict[str, object]) -> None:
+        response_payload: Final = chunk.get("response")
+        if not isinstance(response_payload, dict):
+            return
+        served_tier: Final = response_payload.get("service_tier")
+        if isinstance(served_tier, str) and served_tier:
+            self._served_service_tier = served_tier
+
+    def _with_served_service_tier(self, chunk: "ModelResponseStream") -> "ModelResponseStream":
+        if self._served_service_tier is not None and chunk.model_dump().get("service_tier") is None:
+            setattr(chunk, "service_tier", self._served_service_tier)  # noqa: B010  # pydantic extra, not a declared field
+        return chunk
 
     def _with_stream_scoped_id(self, chunk: "ModelResponseStream") -> "ModelResponseStream":
         if self._chat_completion_id is None:

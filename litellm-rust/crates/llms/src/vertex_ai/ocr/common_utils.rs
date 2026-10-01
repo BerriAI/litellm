@@ -20,7 +20,10 @@ pub(super) fn vertex_config(request: &PreparedOcrRequest) -> Result<VertexConfig
 
 pub(super) fn validate_destination(connection: &OcrConnection) -> Result<(), Error> {
     if connection.api_base.is_some() && connection.api_base_source == InputSource::Request {
-        return Err(litellm_auth::Error::RequestVertexCredentialDestination.into());
+        return Err(litellm_auth::Error::InvalidConfiguration(
+            "credentials cannot be sent to a request-controlled Vertex AI endpoint".into(),
+        )
+        .into());
     }
     Ok(())
 }

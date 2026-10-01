@@ -1,4 +1,6 @@
 import React, { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { mcpServersKeys } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { ArrowLeft, Eye, EyeOff } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,7 +15,7 @@ import { MCPServerUserCredentialsPanel } from "./MCPServerUserCredentialsPanel";
 import { getSecureItem } from "@/utils/secureStorage";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import MCPServerCostDisplay from "./mcp_server_cost_display";
-import { getMaskedAndFullUrl } from "./utils";
+import { getMaskedAndFullUrl, getMCPNetworkAccess } from "./utils";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
 
@@ -64,16 +66,20 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
 }) => {
   // Open the editing Settings tab on first render when returning from the edit OAuth
   // redirect, so the "token fetched" feedback shows where the user left off (Settings=2).
+  const queryClient = useQueryClient();
   const canEdit = isProxyAdmin && !isViewOnly && !mcpServer.is_config;
   const returningFromEditOAuth = isReturningFromEditOAuth(canEdit, mcpServer.server_id);
   const [editing, setEditing] = useState(isEditing || returningFromEditOAuth);
   const [showFullUrl, setShowFullUrl] = useState(false);
+  const networkAccess = getMCPNetworkAccess(mcpServer);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialTabIndex);
   const canViewUserCredentials = userRole !== null && isProxyAdminTierRole(userRole);
   const canRevokeUserCredentials = userRole !== null && isProxyAdminRole(userRole) && !isViewOnly;
 
   const handleSuccess = (updated: MCPServer) => {
+    void queryClient.invalidateQueries({ queryKey: mcpServersKeys.all });
+    void queryClient.invalidateQueries({ queryKey: ["mcpTools", updated.server_id] });
     setEditing(false);
     onBack();
   };
@@ -318,19 +324,13 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-4 py-3">
-                  <p className="text-sm font-medium text-muted-foreground">Network Access</p>
+                  <p className="text-sm font-medium text-muted-foreground">Network access</p>
                   <div className="col-span-2">
-                    {mcpServer.available_on_public_internet ? (
-                      <Badge variant="outline">
-                        <span className="h-1.5 w-1.5 rounded-full bg-success" />
-                        Public
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline">
-                        <span className="h-1.5 w-1.5 rounded-full bg-warning" />
-                        Internal only
-                      </Badge>
-                    )}
+                    <Badge variant="outline">
+                      <span className={`h-1.5 w-1.5 rounded-full ${networkAccess.dotClassName}`} />
+                      {networkAccess.label}
+                    </Badge>
+                    <p className="mt-2 text-xs text-muted-foreground">{networkAccess.description}</p>
                   </div>
                 </div>
                 {handleAuth(mcpServer.auth_type) === "oauth2" && (

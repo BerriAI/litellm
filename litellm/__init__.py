@@ -157,6 +157,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "smtp_email",
     "deepeval",
     "s3_v2",
+    "clickhouse",
     "pointfive",
     "zerobus",
     "aws_sqs",
@@ -172,6 +173,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "levo",
     "compression_interception",
     "newrelic",
+    "signoz",
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -209,6 +211,7 @@ standard_logging_payload_excluded_fields: Optional[List[str]] = (
 )
 log_raw_request_response: bool = False
 log_client_error_tracebacks: bool = False
+log_auth_failure_key_identity: bool = False
 request_correlation_in_logs: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
@@ -660,7 +663,7 @@ azure_anthropic_models: Set = set()
 azure_text_models: Set = set()
 anyscale_models: Set = set()
 cerebras_models: Set = set()
-nadir_models: Set = set()  # mutable-ok: provider registry, filled from model_cost at import like every sibling provider
+nadir_models: Set = set()
 galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
@@ -694,7 +697,7 @@ recraft_models: Set = set()
 cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
-edenai_models: Set = set()  # mutable-ok: filled from the price map at import, like the sibling provider sets
+edenai_models: Set = set()
 volcengine_models: Set = set()
 wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
@@ -1691,7 +1694,7 @@ if TYPE_CHECKING:
         SagemakerNovaConfig as SagemakerNovaConfig,
     )
     from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
-    from .llms.anthropic.experimental_pass_through.messages.transformation import (
+    from .llms.anthropic.pass_through.messages.transformation import (
         AnthropicMessagesConfig as AnthropicMessagesConfig,
     )
     from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (

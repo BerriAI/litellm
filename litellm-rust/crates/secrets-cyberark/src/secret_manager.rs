@@ -48,6 +48,7 @@ pub struct CyberArkSecretManager {
     token: Cache<(), SecretValue>,
     secrets: SecretCache<String, SecretValue>,
     authentication_lock: Arc<tokio::sync::Mutex<()>>,
+    policy_load_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
