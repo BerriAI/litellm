@@ -4503,7 +4503,7 @@ class TestPriceDataReloadAPI:
     """Test cases for price data reload API endpoints"""
 
     @pytest.fixture
-    def client_with_auth(self):
+    def client_with_auth(self, monkeypatch):
         """Create a test client with authentication"""
         from litellm.proxy._types import LitellmUserRoles
         from litellm.proxy.proxy_server import cleanup_router_config_variables
@@ -4516,7 +4516,7 @@ class TestPriceDataReloadAPI:
         # Mock admin user authentication
         mock_auth = MagicMock()
         mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
 
         return TestClient(app)
 
@@ -4557,12 +4557,12 @@ class TestPriceDataReloadAPI:
             litellm.model_cost = original_model_cost
             _invalidate_model_cost_lowercase_map()
 
-    def test_reload_model_cost_map_non_admin_access(self, client_with_auth):
+    def test_reload_model_cost_map_non_admin_access(self, client_with_auth, monkeypatch):
         """Test that non-admin users cannot access the reload endpoint"""
         # Mock non-admin user
         mock_auth = MagicMock()
         mock_auth.user_role = "user"  # Non-admin role
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
 
         response = client_with_auth.post("/reload/model_cost_map")
 
@@ -4623,12 +4623,12 @@ class TestPriceDataReloadAPI:
             assert set(create_payload.keys()) == {"param_name", "param_value"}
             assert json.loads(create_payload["param_value"]) == {"interval_hours": 6}
 
-    def test_schedule_model_cost_map_reload_non_admin_access(self, client_with_auth):
+    def test_schedule_model_cost_map_reload_non_admin_access(self, client_with_auth, monkeypatch):
         """Test that non-admin users cannot schedule periodic reload"""
         # Mock non-admin user
         mock_auth = MagicMock()
         mock_auth.user_role = "user"  # Non-admin role
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
 
         response = client_with_auth.post("/schedule/model_cost_map_reload?hours=6")
 
@@ -4663,12 +4663,12 @@ class TestPriceDataReloadAPI:
             }
             mock_prisma.db.litellm_config.delete.assert_not_called()
 
-    def test_cancel_model_cost_map_reload_non_admin_access(self, client_with_auth):
+    def test_cancel_model_cost_map_reload_non_admin_access(self, client_with_auth, monkeypatch):
         """Test that non-admin users cannot cancel periodic reload"""
         # Mock non-admin user
         mock_auth = MagicMock()
         mock_auth.user_role = "user"  # Non-admin role
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
 
         response = client_with_auth.delete("/schedule/model_cost_map_reload")
 
@@ -4701,12 +4701,12 @@ class TestPriceDataReloadAPI:
             assert data["last_run"] == "2024-01-01T06:00:00+00:00"
             assert data["next_run"] == "2024-01-01T12:00:00+00:00"
 
-    def test_get_model_cost_map_reload_status_non_admin_access(self, client_with_auth):
+    def test_get_model_cost_map_reload_status_non_admin_access(self, client_with_auth, monkeypatch):
         """Test that non-admin users cannot get reload status"""
         # Mock non-admin user
         mock_auth = MagicMock()
         mock_auth.user_role = "user"  # Non-admin role
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
 
         response = client_with_auth.get("/schedule/model_cost_map_reload/status")
 
@@ -4769,7 +4769,7 @@ class TestPriceDataReloadIntegration:
     """Integration tests for the complete price data reload feature"""
 
     @pytest.fixture
-    def client_with_auth(self):
+    def client_with_auth(self, monkeypatch):
         """Create a test client with authentication"""
         from litellm.proxy._types import LitellmUserRoles
         from litellm.proxy.proxy_server import cleanup_router_config_variables
@@ -4782,7 +4782,7 @@ class TestPriceDataReloadIntegration:
         # Mock admin user authentication
         mock_auth = MagicMock()
         mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
 
         return TestClient(app)
 
@@ -5262,7 +5262,7 @@ class TestPriceDataReloadIntegration:
             litellm_utils._runtime_registered_model_cost.update(original_registry)
             _invalidate_model_cost_lowercase_map()
 
-    def test_manual_reload_preserves_interval_hours(self):
+    def test_manual_reload_preserves_interval_hours(self, monkeypatch):
         """
         Regression: manual reload owns only the run columns, so it never reads or rewrites
         param_value and cannot destroy an existing schedule
@@ -5277,7 +5277,7 @@ class TestPriceDataReloadIntegration:
 
         mock_auth = MagicMock()
         mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
         client = TestClient(app)
         frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
 
@@ -5358,7 +5358,7 @@ class TestPriceDataReloadIntegration:
                 "dropping it causes the schedule to self-destruct"
             )
 
-    def test_anthropic_beta_headers_manual_reload_preserves_interval_hours(self):
+    def test_anthropic_beta_headers_manual_reload_preserves_interval_hours(self, monkeypatch):
         """Test that manual reload via /reload/anthropic_beta_headers preserves existing interval_hours.
 
         Regression test: the manual reload endpoint was overwriting param_value with
@@ -5374,7 +5374,7 @@ class TestPriceDataReloadIntegration:
 
         mock_auth = MagicMock()
         mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
         client = TestClient(app)
 
         with patch("litellm.anthropic_beta_headers_manager.reload_beta_headers_config") as mock_reload:
@@ -7155,7 +7155,7 @@ class TestInvitationEndpoints:
     """Tests for /invitation/new and /invitation/delete endpoints."""
 
     @pytest.fixture
-    def client_with_auth(self):
+    def client_with_auth(self, monkeypatch):
         """Create a test client with admin authentication."""
         from litellm.proxy._types import LitellmUserRoles
         from litellm.proxy.proxy_server import cleanup_router_config_variables
@@ -7169,7 +7169,7 @@ class TestInvitationEndpoints:
         mock_auth.user_id = "admin-user-id"
         mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
         mock_auth.api_key = "sk-test"
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
 
         return TestClient(app)
 
@@ -7238,7 +7238,7 @@ class TestInvitationEndpoints:
             ("/invitation/delete", {"invitation_id": "inv-456"}),
         ],
     )
-    def test_invitation_endpoints_non_admin_denied(self, client_with_auth, endpoint, payload):
+    def test_invitation_endpoints_non_admin_denied(self, client_with_auth, endpoint, payload, monkeypatch):
         """Non-admin users cannot access invitation endpoints."""
         from litellm.proxy._types import LitellmUserRoles
 
@@ -7246,7 +7246,7 @@ class TestInvitationEndpoints:
         mock_auth.user_id = "regular-user"
         mock_auth.user_role = LitellmUserRoles.INTERNAL_USER
         mock_auth.api_key = "sk-regular"
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
 
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
             mock_prisma.db.litellm_invitationlink = MagicMock()
