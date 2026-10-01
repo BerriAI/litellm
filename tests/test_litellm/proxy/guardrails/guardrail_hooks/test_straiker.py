@@ -1221,13 +1221,11 @@ def test_v3_initializer_reads_api_version_from_config():
 def test_unknown_api_version_follows_key_prefix(api_version, api_key, expected, monkeypatch):
     import litellm
     from litellm._logging import verbose_proxy_logger
-    from litellm.proxy.guardrails.guardrail_hooks import straiker as straiker_initializer
     from litellm.types.guardrails import Guardrail, LitellmParams
 
     monkeypatch.setattr(litellm, "callbacks", litellm.callbacks.copy())
-    monkeypatch.setattr(straiker_initializer, "verbose_proxy_logger", verbose_proxy_logger, raising=False)
 
-    with patch.object(straiker_initializer.verbose_proxy_logger, "warning") as warning:
+    with patch.object(verbose_proxy_logger, "warning") as warning:
         g = initialize_guardrail(
             LitellmParams(guardrail="straiker", mode="pre_call", api_key=api_key, api_version=api_version),
             Guardrail(guardrail_name="straiker", litellm_params={"guardrail": "straiker", "mode": "pre_call"}),
