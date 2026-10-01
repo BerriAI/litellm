@@ -913,7 +913,7 @@ class ProxyClient:
         if not is_ok(result):
             warnings.warn(f"delete_search_tool({search_tool_id!r}) failed: {result}", stacklevel=2 + STEP_FRAMES)
 
-    @step("Save a provider credential for {body.credential_info}")
+    @step("Save the provider credential {body.credential_name}")
     def create_credential(self, body: CredentialCreateBody) -> None:
         unwrap(
             self.transport.post(

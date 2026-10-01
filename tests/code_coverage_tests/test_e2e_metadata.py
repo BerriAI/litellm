@@ -26,6 +26,7 @@ import pytest
 from e2e_metadata import MASK, MAX_STEPS, STEP_FRAMES, STEPS, StepRecorder, environment_secrets, step
 from proxy_client import ProxyClient
 from pydantic import BaseModel, Field
+from pydantic.fields import FieldInfo
 
 
 @pytest.fixture(autouse=True)
@@ -156,16 +157,19 @@ def _dotted_placeholders(owner: type) -> Iterator[tuple[str, str]]:
     return ((method, field) for method, field in _placeholders(owner) if "." in field)
 
 
-def _resolves(owner: type, method: str, field: str) -> bool:
+def _fields_read(owner: type, method: str, field: str) -> tuple[FieldInfo, ...] | None:
+    """The model fields a dotted placeholder reads, outermost first, or None if one doesn't exist."""
     root, *attributes = field.split(".")
     wrapped: Final = cast("Callable[..., object]", getattr(owner, method))
     hints: Final[Mapping[str, object]] = get_type_hints(inspect.unwrap(wrapped))
     current: object = _field_type(hints[root])  # rebind-ok: walks one type per attribute
+    read: tuple[FieldInfo, ...] = ()  # rebind-ok: grows one field per attribute
     for attribute in attributes:
         if not (isinstance(current, type) and issubclass(current, BaseModel) and attribute in current.model_fields):
-            return False
-        current = _field_type(current.model_fields[attribute].annotation)  # rebind-ok: walks one type per attribute
-    return True
+            return None
+        read = (*read, current.model_fields[attribute])  # rebind-ok: grows one field per attribute
+        current = _field_type(read[-1].annotation)  # rebind-ok: walks one type per attribute
+    return read
 
 
 SECRET_NAME: Final = re.compile(
@@ -259,7 +263,20 @@ class TestLabelTemplates:
         request model doesn't have would fail the test calling it, not the label."""
         placeholders: Final = tuple(_dotted_placeholders(owner))
         assert placeholders
-        assert [f"{method}: {field}" for method, field in placeholders if not _resolves(owner, method, field)] == []
+        assert [
+            f"{method}: {field}" for method, field in placeholders if _fields_read(owner, method, field) is None
+        ] == []
+
+    @pytest.mark.parametrize("owner", [ProxyClient], ids=["ProxyClient"])
+    def test_every_dotted_placeholder_in_the_harness_reads_a_field_the_caller_must_set(self, owner: type) -> None:
+        """A field with a default is usually left unset, and an unset field prints
+        nothing, so the step would read "Save a provider credential for "."""
+        unset: Final = tuple(
+            f"{method}: {field}"
+            for method, field in _dotted_placeholders(owner)
+            if not all(info.is_required() for info in _fields_read(owner, method, field) or ())
+        )
+        assert unset == ()
 
     @pytest.mark.parametrize("owner", [ProxyClient], ids=["ProxyClient"])
     def test_every_secret_field_a_label_can_print_is_hidden(self, owner: type) -> None:
