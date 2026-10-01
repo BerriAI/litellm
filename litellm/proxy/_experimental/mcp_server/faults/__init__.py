@@ -17,6 +17,7 @@ from litellm.proxy._experimental.mcp_server.faults.render_oauth import (
 )
 from litellm.proxy._experimental.mcp_server.faults.traversal import iter_exception_tree
 from litellm.proxy._experimental.mcp_server.faults.types import (
+    MAX_WIRE_FIELD_CHARS,
     CallerRejected,
     CredentialSource,
     GatewayRejected,
@@ -27,6 +28,7 @@ from litellm.proxy._experimental.mcp_server.faults.types import (
 )
 
 __all__ = [
+    "MAX_WIRE_FIELD_CHARS",
     "CallerRejected",
     "CredentialSource",
     "GatewayRejected",
