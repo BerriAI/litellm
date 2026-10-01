@@ -7,7 +7,7 @@ import { apiClient } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TracePanel } from "./TracePanel";
-import { type Sample, type Settings, runTime, durationLabel } from "./engineData";
+import { type Sample, type Settings, runTime, durationLabel } from "./lensData";
 
 import { DurationInput } from "./DurationInput";
 
@@ -72,7 +72,7 @@ export function ActivityScope({
   const valid = validWindow && validSampling && validFilters;
   const load = (selection: ActivitySelection, pageOffset = 0) => {
     const { lookback_hours, ...selectionSettings } = selection;
-    return apiClient.post<Sample>("/engine/preview/sample", {
+    return apiClient.post<Sample>("/lens/preview/sample", {
       accessToken,
       body: {
         offset: pageOffset,
