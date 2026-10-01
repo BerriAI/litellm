@@ -3355,9 +3355,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 # empty response object instead, mirroring the failure-path
                 # fallback. See #32019.
                 verbose_logger.error(
-                    "standard_logging_object build failed for streaming call_id=%s; "
-                    "retrying with an empty response object",
-                    self.litellm_call_id,
+                    "standard_logging_object build failed for a streaming response; "
+                    "retrying with an empty response object"
                 )
                 try:
                     self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
@@ -3367,9 +3366,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
                     if self.model_call_details["standard_logging_object"] is None:
                         verbose_logger.error(
-                            "standard_logging_object rebuild failed for streaming call_id=%s; "
-                            "loggers gated on standard_logging_object will skip this request",
-                            self.litellm_call_id,
+                            "standard_logging_object rebuild failed for a streaming response; "
+                            "loggers gated on standard_logging_object will skip this request"
                         )
                 except Exception:  # noqa: BLE001  # same rule as above: never block later callbacks
                     verbose_logger.exception(
