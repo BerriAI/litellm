@@ -10,6 +10,8 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 
+from litellm.proxy.guardrails.content_filter_data import POLICY_TEMPLATES_DIR
+
 
 class TestRouteLoader:
     """Tests for SemanticGuardRouteLoader — YAML loading and route building."""
@@ -244,13 +246,7 @@ class TestContentFilterSqlInjectionTemplate:
             ContentFilterCategoryConfig,
         )
 
-        content_filter_dir = os.path.join(
-            os.path.dirname(__file__),
-            "../../litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter",
-        )
-        policy_template_path = os.path.abspath(
-            os.path.join(content_filter_dir, "policy_templates/sql_injection.yaml")
-        )
+        policy_template_path = os.path.join(POLICY_TEMPLATES_DIR, "sql_injection.yaml")
 
         categories = [
             ContentFilterCategoryConfig(
@@ -496,13 +492,7 @@ class TestContentFilterPromptInjectionTemplate:
             ContentFilterCategoryConfig,
         )
 
-        content_filter_dir = os.path.join(
-            os.path.dirname(__file__),
-            "../../litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter",
-        )
-        policy_template_path = os.path.abspath(
-            os.path.join(content_filter_dir, "policy_templates/prompt_injection.yaml")
-        )
+        policy_template_path = os.path.join(POLICY_TEMPLATES_DIR, "prompt_injection.yaml")
 
         categories = [
             ContentFilterCategoryConfig(

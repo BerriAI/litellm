@@ -157,6 +157,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "smtp_email",
     "deepeval",
     "s3_v2",
+    "clickhouse",
     "pointfive",
     "zerobus",
     "aws_sqs",
@@ -662,7 +663,7 @@ azure_anthropic_models: Set = set()
 azure_text_models: Set = set()
 anyscale_models: Set = set()
 cerebras_models: Set = set()
-nadir_models: Set = set()  # mutable-ok: provider registry, filled from model_cost at import like every sibling provider
+nadir_models: Set = set()
 galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
@@ -696,7 +697,7 @@ recraft_models: Set = set()
 cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
-edenai_models: Set = set()  # mutable-ok: filled from the price map at import, like the sibling provider sets
+edenai_models: Set = set()
 volcengine_models: Set = set()
 wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
