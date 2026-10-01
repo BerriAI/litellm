@@ -181,7 +181,10 @@ def _team_membership_table(
 
 
 async def _hash_password_in_dict(
-    data: dict, general_settings: Mapping[str, object], password_prevalidated: bool = False
+    data: dict,
+    general_settings: Mapping[str, object],
+    password_prevalidated: bool = False,
+    hibp_client: AsyncHTTPHandler | None = None,
 ) -> None:
     """Validate and hash password field in-place if present.
 
@@ -193,7 +196,7 @@ async def _hash_password_in_dict(
     if "password" in data and data["password"] is not None:
         if not password_prevalidated:
             validate_password_policy(data["password"], general_settings)
-            await validate_password_not_breached(data["password"], general_settings)
+            await validate_password_not_breached(data["password"], general_settings, hibp_client)
         data["password"] = hash_password(data["password"])
         data["password_reset_required"] = True
         data["last_breach_check_at"] = None
@@ -1459,6 +1462,7 @@ async def _update_single_user_helper(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
     password_prevalidated: bool = False,
+    hibp_client: AsyncHTTPHandler | None = None,
 ) -> dict[str, Any]:
     """
     Helper function to update a single user.
@@ -1481,7 +1485,12 @@ async def _update_single_user_helper(
 
     data_json: Final[dict] = user_request.model_dump(exclude_unset=True)
     non_default_values = _update_internal_user_params(data_json=data_json, data=user_request)
-    await _hash_password_in_dict(non_default_values, general_settings, password_prevalidated=password_prevalidated)
+    await _hash_password_in_dict(
+        non_default_values,
+        general_settings,
+        password_prevalidated=password_prevalidated,
+        hibp_client=hibp_client,
+    )
 
     existing_user_row: BaseModel | None = None
     if user_request.user_id:
