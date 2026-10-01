@@ -6169,6 +6169,20 @@ async def test_merge_placeholder_refuses_rows_that_are_not_a_lone_placeholder(
     prisma_client.db.litellm_usertable.delete.assert_not_awaited()
 
 
+class _PatchedTeamRow:
+    def __init__(self, team: LiteLLM_TeamTable) -> None:
+        self.team = team
+        self.written: dict[str, object] = {}
+
+    async def find_unique(self, *, where: dict[str, object]) -> LiteLLM_TeamTable:
+        return self.team
+
+    async def update(self, *, where: dict[str, object], data: dict[str, object]) -> LiteLLM_TeamTable:
+        self.written = data
+        self.team = LiteLLM_TeamTable(**{**self.team.model_dump(), **data, "metadata": json.loads(str(data["metadata"]))})
+        return self.team
+
+
 @pytest.mark.asyncio
 async def test_patch_group_pathless_replace_applies_attributes_and_drops_empty_key(mocker, monkeypatch):
     """Okta Push Groups renames a group with a path-less ``replace`` whose value is a
@@ -6200,11 +6214,10 @@ async def test_patch_group_pathless_replace_applies_attributes_and_drops_empty_k
         ],
     )
 
+    team_rows = _PatchedTeamRow(existing_team)
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
-    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
-    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
-    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=existing_team)
+    mock_prisma_client.db.litellm_teamtable = team_rows
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock())
     mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
@@ -6216,7 +6229,8 @@ async def test_patch_group_pathless_replace_applies_attributes_and_drops_empty_k
     response = await patch_group(group_id=group_id, patch_ops=patch_ops)
 
     assert response.id == group_id
-    written = mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs["data"]
+    assert response.displayName == "okta-push-group-renamed"
+    written = team_rows.written
     assert written["team_alias"] == "okta-push-group-renamed"
     written_metadata = json.loads(written["metadata"])
     assert "" not in written_metadata
