@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  buildBucketTotals,
   buildSeries,
   formatMetric,
   Granularity,
@@ -166,6 +167,10 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
     () => (data ? buildSeries(data.daily, models, shown, { ...range, granularity }) : []),
     [data, models, shown, range, granularity],
   );
+  const bucketTotals = React.useMemo(
+    () => (data ? buildBucketTotals(data.daily_totals, shown, { ...range, granularity }) : new Map<string, number>()),
+    [data, shown, range, granularity],
+  );
   const ranking = React.useMemo(
     () => (data ? rankModels(data.top_models, data.daily, shown, range) : []),
     [data, shown, range],
@@ -266,11 +271,8 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
               <ChartTooltip
                 content={
                   <ChartTooltipContent
-                    labelFormatter={(label, payload) =>
-                      `${label} · Total ${formatMetric(
-                        payload.reduce((sum, item) => sum + Number(item.value ?? 0), 0),
-                        shown,
-                      )}`
+                    labelFormatter={(label) =>
+                      `${label} · Gateway total ${formatMetric(bucketTotals.get(String(label)) ?? 0, shown)}`
                     }
                   />
                 }
