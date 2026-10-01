@@ -10,6 +10,7 @@ from pydantic import BaseModel, ValidationError
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     generic_cost_per_token,
     get_provider_specific_geo_multiplier,
+    get_provider_specific_speed_multiplier,
     get_web_search_requests_from_usage,
 )
 
@@ -49,14 +50,8 @@ def cost_per_token(
             if model_info is not None
             else litellm.get_model_info(model=model, custom_llm_provider="anthropic")
         )
-        provider_specific_entry: Final = effective_info.get("provider_specific_entry")
-
         geo_multiplier: Final = get_provider_specific_geo_multiplier(model_info=effective_info, usage=usage)
-        speed_multiplier: Final = (
-            provider_specific_entry.get("fast", 1.0)
-            if provider_specific_entry and getattr(usage, "speed", None) == "fast"
-            else 1.0
-        )
+        speed_multiplier: Final = get_provider_specific_speed_multiplier(model_info=effective_info, usage=usage)
 
         if speed_multiplier != 1.0:
             prompt_cost *= speed_multiplier

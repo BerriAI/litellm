@@ -3041,6 +3041,61 @@ def test_token_type_cost_breakdown_applies_anthropic_geo_multiplier(_local_model
     assert text_output_cost + geo.reasoning_cost == pytest.approx(completion_cost)
 
 
+@pytest.mark.parametrize(
+    ("speed", "expected_multiplier"),
+    [("fast", 6.0), ("standard", 1.0), (None, 1.0)],
+    ids=["fast", "standard", "unset"],
+)
+def test_token_type_cost_breakdown_applies_anthropic_fast_multiplier(
+    _local_model_cost_map, monkeypatch, speed: str | None, expected_multiplier: float
+) -> None:
+    from litellm.llms.anthropic.cost_calculation import (
+        cost_per_token as anthropic_cost_per_token,
+    )
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    model: Final = "claude-test-fast-breakdown-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 5e-6,
+                "output_cost_per_token": 25e-6,
+                "cache_creation_input_token_cost": 6.25e-6,
+                "cache_read_input_token_cost": 0.5e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+                "provider_specific_entry": {"fast": 6.0},
+            }
+        }
+    )
+
+    usage: Final = Usage(
+        prompt_tokens=10_000,
+        completion_tokens=500,
+        total_tokens=10_500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=2_000,
+            cache_creation_tokens=6_000,
+        ),
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=200, text_tokens=300),
+    )
+    if speed is not None:
+        usage.speed = speed
+
+    breakdown: Final = get_token_type_cost_breakdown(model=model, custom_llm_provider="anthropic", usage=usage)
+
+    assert breakdown.cache_read_cost == pytest.approx(2_000 * 0.5e-6 * expected_multiplier)
+    assert breakdown.cache_creation_cost == pytest.approx(6_000 * 6.25e-6 * expected_multiplier)
+    assert breakdown.reasoning_cost == pytest.approx(200 * 25e-6 * expected_multiplier)
+
+    prompt_cost, completion_cost = anthropic_cost_per_token(model=model, usage=usage)
+    text_input_cost: Final = 2_000 * 5e-6 * expected_multiplier
+    text_output_cost: Final = 300 * 25e-6 * expected_multiplier
+    assert text_input_cost + breakdown.cache_read_cost + breakdown.cache_creation_cost == pytest.approx(prompt_cost)
+    assert text_output_cost + breakdown.reasoning_cost == pytest.approx(completion_cost)
+
+
 @pytest.mark.parametrize("details_as_dict", [True, False])
 def test_image_response_input_image_tokens_priced_at_image_rate(details_as_dict):
     """
