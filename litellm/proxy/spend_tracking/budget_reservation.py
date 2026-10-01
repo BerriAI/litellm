@@ -57,11 +57,6 @@ class _BudgetCounter:
     window_start: datetime | None = None
 
 
-_RELEASE_ON_CANCEL_RECONCILE_MAX_ATTEMPTS: Final = 2
-"""Retries of the per-reservation reconcile before falling back to the
-counter-deleting invalidation, which a concurrent reservation also shares."""
-
-
 _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
     "Key": Litellm_EntityType.KEY.value,
     "Team": Litellm_EntityType.TEAM.value,
@@ -407,11 +402,11 @@ async def release_budget_reservation_on_cancel(
     the provider. asyncio.shield keeps this running through the surrounding
     cancellation.
 
-    A reconcile failure is retried before falling back to
-    invalidate_budget_reservation_counters, since unlike that fallback, reconcile
-    only ever adjusts this reservation's own contribution to each counter and can't
-    clobber a concurrent reservation sharing it. Mirrors
-    release_or_invalidate_budget_reservation's fallback on the non-cancel path.
+    A failed reconcile is not retried: the reconcile is an additive INCRBYFLOAT, and
+    a failure (e.g. a timeout after Redis applied it) leaves it unknown whether the
+    refund landed, so re-applying it could refund twice. Instead the reserved
+    counters are dropped so the next read reseeds from the DB, the same fallback
+    release_or_invalidate_budget_reservation uses on the non-cancel path.
     """
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return
@@ -422,14 +417,8 @@ async def release_budget_reservation_on_cancel(
         )
     except asyncio.CancelledError:
         pass  # a second cancellation while shielded; the reconcile keeps running detached regardless
-    except Exception:  # noqa: BLE001  # a reconcile failure must not pin the counter; retry, then drop it directly
-        verbose_proxy_logger.exception(
-            "Failed to reconcile budget reservation on cancel; retrying before invalidating reserved counters"
-        )
-        if await asyncio.shield(
-            _retry_reconcile_reservation_on_cancel(budget_reservation=budget_reservation, incurred_cost=incurred_cost)
-        ):
-            return
+    except Exception:  # noqa: BLE001  # a reconcile failure must not pin the counter; drop it directly instead
+        verbose_proxy_logger.exception("Failed to reconcile budget reservation on cancel; invalidating counters")
         try:
             await invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
         except Exception:  # noqa: BLE001  # nothing left to try; the finalized stamp below keeps it from being reprocessed
@@ -438,28 +427,6 @@ async def release_budget_reservation_on_cancel(
             )
         finally:
             budget_reservation["finalized"] = True
-
-
-async def _retry_reconcile_reservation_on_cancel(
-    budget_reservation: dict,  # mutable-ok: reconcile_budget_reservation stamps finalized on success
-    incurred_cost: float,
-) -> bool:
-    """Retry the reconcile that just failed once. Safe to retry since it only
-    ever adjusts this reservation's own contribution, unlike the destructive
-    invalidation the caller falls back to once every retry fails."""
-    for attempt in range(_RELEASE_ON_CANCEL_RECONCILE_MAX_ATTEMPTS):
-        try:
-            await reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)
-            return True
-        except Exception:  # noqa: BLE001  # any reconcile failure is worth a retry here, not just specific ones
-            is_last_attempt = attempt == _RELEASE_ON_CANCEL_RECONCILE_MAX_ATTEMPTS - 1
-            verbose_proxy_logger.warning(
-                "Retry %d/%d to reconcile budget reservation on cancel failed",
-                attempt + 1,
-                _RELEASE_ON_CANCEL_RECONCILE_MAX_ATTEMPTS,
-                exc_info=not is_last_attempt,
-            )
-    return False
 
 
 async def invalidate_budget_reservation_counters(
