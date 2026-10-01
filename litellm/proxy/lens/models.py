@@ -25,7 +25,7 @@ class Check(Record):
     enabled: bool = True
 
 
-class EngineSettings(Record):
+class LensSettings(Record):
     name: str = Field(min_length=1, max_length=100)
     context: str = Field(default="", max_length=6000)
     source: Literal["traces", "requests", "both"] = "traces"
@@ -44,7 +44,7 @@ class EngineSettings(Record):
     monthly_budget: float = Field(default=20, gt=0, le=100000, allow_inf_nan=False)
 
     @model_validator(mode="after")
-    def unique_checks(self) -> "EngineSettings":
+    def unique_checks(self) -> "LensSettings":
         if len(frozenset(c.id for c in self.checks)) != len(self.checks):
             raise ValueError("Each check must have a unique ID")
         if not self.context.strip() and not any(c.enabled for c in self.checks):
@@ -163,7 +163,7 @@ class Job(Record):
     created_at: datetime
     start: datetime
     end: datetime
-    settings: EngineSettings
+    settings: LensSettings
     revision: int
     worker_id: str | None = None
     lease_until: datetime | None = None
@@ -177,10 +177,10 @@ class Job(Record):
     assessments: tuple[RunAssessment, ...] = ()
 
 
-class Engine(Record):
+class Lens(Record):
     id: str
     scope: Scope
-    settings: EngineSettings
+    settings: LensSettings
     revision: int = 1
     version: int = 0
     created_at: datetime
@@ -206,14 +206,14 @@ class WorkerCreated(Record):
     token: str
 
 
-class EngineList(Record):
-    engines: tuple[Engine, ...]
+class LensList(Record):
+    lenses: tuple[Lens, ...]
     workers: tuple[Worker, ...]
     tracing_enabled: bool
 
 
 class RunRequest(Record):
-    settings: EngineSettings | None = None
+    settings: LensSettings | None = None
     lookback_hours: int | None = Field(default=None, ge=1, le=720)
 
 
@@ -223,7 +223,7 @@ class FindingUpdate(Record):
 
 
 class Claim(Record):
-    engine_id: str
+    lens_id: str
     job: Job
     findings: tuple[Finding, ...]
 

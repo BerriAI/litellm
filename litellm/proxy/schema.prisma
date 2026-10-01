@@ -1895,22 +1895,22 @@ model LiteLLM_WorkflowMessage {
   @@index([run_id])
 }
 
-model LiteLLM_Engine {
+model LiteLLM_Lens {
   id      String @id
   version Int @default(0)
   data    Json
 }
 
-model LiteLLM_EngineRun {
+model LiteLLM_LensRun {
   id         String @id
-  engine_id  String
+  lens_id  String
   created_at DateTime
   data       Json
 
-  @@index([engine_id, created_at])
+  @@index([lens_id, created_at])
 }
 
-model LiteLLM_EngineWorker {
+model LiteLLM_LensWorker {
   id         String @id
   token_hash String @unique
   data       Json

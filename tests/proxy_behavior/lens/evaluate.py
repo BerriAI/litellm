@@ -13,13 +13,13 @@ from typing import Final
 import httpx
 from pydantic import BaseModel
 
-from litellm.proxy.engine.analysis import analyze_sample
-from litellm.proxy.engine.inference import _SYSTEM
-from litellm.proxy.engine.models import (
+from litellm.proxy.lens.analysis import analyze_sample
+from litellm.proxy.lens.inference import _SYSTEM
+from litellm.proxy.lens.models import (
     Check,
     Claim,
     Coverage,
-    EngineSettings,
+    LensSettings,
     Execution,
     ExecutionContent,
     Finding,
@@ -90,7 +90,7 @@ async def evaluate(
     feedback: tuple[Finding, ...] = (),
 ) -> dict[str, object]:
     records: Final = MappingProxyType({case.name: fixtures(case) for case in cases})
-    settings: Final = EngineSettings(
+    settings: Final = LensSettings(
         name="Quality evaluation",
         model=model_name,
         checks=checks,
@@ -100,7 +100,7 @@ async def evaluate(
     )
     now: Final = datetime.now(timezone.utc)
     claim: Final = Claim(
-        engine_id="evaluation",
+        lens_id="evaluation",
         findings=feedback,
         job=Job(id="evaluation", created_at=now, start=now, end=now, settings=settings, revision=1),
     )

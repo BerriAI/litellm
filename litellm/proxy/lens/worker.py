@@ -12,10 +12,10 @@ import httpx
 from .analysis import analyze_sample
 from .models import Claim, Coverage, ExecutionContent, ModelRequest, ModelResult, Progress, Result, Sample
 
-logger: Final = logging.getLogger("litellm.engine.worker")
+logger: Final = logging.getLogger("litellm.lens.worker")
 
 
-class EngineWorker:
+class LensWorker:
     def __init__(self, client: httpx.AsyncClient, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
         self.client: Final = client
         self.sleep: Final = sleep
@@ -38,14 +38,12 @@ class EngineWorker:
             return await self.model_request(path, body, attempt + 1)
 
     async def run_once(self) -> bool:
-        response: Final = await self.client.post(
-            "/engine/worker/claim", params=MappingProxyType({"protocol_version": 2})
-        )
+        response: Final = await self.client.post("/lens/worker/claim", params=MappingProxyType({"protocol_version": 2}))
         response.raise_for_status()
         if response.json() is None:
             return False
         claim: Final = Claim.model_validate(response.json())
-        prefix: Final = f"/engine/worker/{claim.engine_id}/{claim.job.id}"
+        prefix: Final = f"/lens/worker/{claim.lens_id}/{claim.job.id}"
 
         async def model(body: ModelRequest) -> ModelResult:
             return await self.model_request(prefix + "/model", body)
@@ -111,7 +109,7 @@ async def main() -> None:
     async with httpx.AsyncClient(
         base_url=url, headers=MappingProxyType({"Authorization": f"Bearer {token}"}), timeout=180
     ) as client:
-        worker: Final = EngineWorker(client)
+        worker: Final = LensWorker(client)
         while True:
             try:
                 await worker.run_once()

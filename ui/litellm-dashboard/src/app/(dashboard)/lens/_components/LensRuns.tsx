@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RunList } from "./ActivityScope";
-import type { Job } from "./engineData";
+import type { Job } from "./lensData";
 
 function assessmentLabel(assessment: Job["assessments"][number] | undefined): string {
   if (!assessment) return "Not reviewed";

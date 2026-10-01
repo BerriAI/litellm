@@ -1,8 +1,8 @@
 import type { components } from "@/lib/http/schema";
 
-export type Engine = components["schemas"]["Engine"];
-export type Settings = components["schemas"]["EngineSettings"];
-export type EngineList = components["schemas"]["EngineList"];
+export type Lens = components["schemas"]["Lens"];
+export type Settings = components["schemas"]["LensSettings"];
+export type LensList = components["schemas"]["LensList"];
 export type Finding = components["schemas"]["Finding"];
 export type Sample = components["schemas"]["Sample"];
 export type WorkerCreated = components["schemas"]["WorkerCreated"];
@@ -33,12 +33,12 @@ export function sortedFindings(findings: Finding[]): Finding[] {
   );
 }
 
-export function engineStatus(engine: Engine, connected: boolean): string {
-  const active = engine.jobs?.find((job) => ["queued", "running"].includes(job.status ?? ""));
+export function lensStatus(lens: Lens, connected: boolean): string {
+  const active = lens.jobs?.find((job) => ["queued", "running"].includes(job.status ?? ""));
   if (active) return connected ? active.stage ?? "Queued" : "Waiting for analyzer";
-  const spent = engine.budget_month === new Date().toISOString().slice(0, 7) ? engine.spent ?? 0 : 0;
-  if (spent >= (engine.settings.monthly_budget ?? 20)) return "Budget reached";
-  if (!engine.settings.enabled) return "Paused";
+  const spent = lens.budget_month === new Date().toISOString().slice(0, 7) ? lens.spent ?? 0 : 0;
+  if (spent >= (lens.settings.monthly_budget ?? 20)) return "Budget reached";
+  if (!lens.settings.enabled) return "Paused";
   return connected ? "Monitoring" : "Analyzer disconnected";
 }
 
@@ -152,12 +152,12 @@ const nextCheckTimeFormat: Intl.DateTimeFormatOptions = {
   minute: "2-digit",
 };
 
-export function nextCheckStatus(engine: Engine, now: number): string | null {
-  if (!engine.settings.enabled) return null;
-  const active = engine.jobs.find((job) => job.status === "queued" || job.status === "running");
+export function nextCheckStatus(lens: Lens, now: number): string | null {
+  if (!lens.settings.enabled) return null;
+  const active = lens.jobs.find((job) => job.status === "queued" || job.status === "running");
   if (active?.status === "running") return "Next check scheduled after this scan finishes";
   if (active?.status === "queued") return "Waiting for an analyzer";
-  const next = new Date(engine.next_run_at);
+  const next = new Date(lens.next_run_at);
   const remaining = next.getTime() - now;
   if (remaining <= 0) return "Due now · waiting for an analyzer";
   const minutes = Math.ceil(remaining / 60000);

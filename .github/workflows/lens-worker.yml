@@ -5,13 +5,13 @@ on:
     branches: [main, litellm_oss_branch, "litellm_**"]
     paths:
       - deploy/lens/**
-      - litellm/proxy/engine/**
+      - litellm/proxy/lens/**
       - .github/workflows/lens-worker.yml
   push:
-    branches: [main, litellm_agent_engine]
+    branches: [main]
     paths:
       - deploy/lens/**
-      - litellm/proxy/engine/**
+      - litellm/proxy/lens/**
       - .github/workflows/lens-worker.yml
   workflow_dispatch:
 
@@ -41,8 +41,8 @@ jobs:
             --security-opt no-new-privileges --entrypoint python \
             lens-worker:${{ github.sha }} -c '
           import os
-          import engine.worker
-          from engine.trace_store import trace_store
+          import lens.worker
+          from lens.trace_store import trace_store
           assert os.getuid() == 65532
           with trace_store() as store:
               assert store.count() == 0

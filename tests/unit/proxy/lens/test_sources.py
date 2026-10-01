@@ -4,11 +4,11 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy.engine.models import Scope, MetadataFilter
-from litellm.proxy.engine.sources import SourceReader
-from tests.unit.proxy.engine.test_state import engine
+from litellm.proxy.lens.models import Scope, MetadataFilter
+from litellm.proxy.lens.sources import SourceReader
+from tests.unit.proxy.lens.test_state import lens
 
-from litellm.proxy.engine.sources import execution_id, parse_execution
+from litellm.proxy.lens.sources import execution_id, parse_execution
 
 
 def test_same_trace_id_from_different_keys_is_a_distinct_execution() -> None:
@@ -57,7 +57,7 @@ async def test_sample_never_returns_authentication_attributes() -> None:
             ]
 
     reader: Final = SourceReader(StorageResponse())
-    sample: Final = await reader.sample(Scope(team_id="alpha"), engine().settings, 1, 2)
+    sample: Final = await reader.sample(Scope(team_id="alpha"), lens().settings, 1, 2)
     assert sample.executions[0].metadata == (MetadataFilter(key="environment", value="production"),)
     assert "opaque-oauth-bearer" not in sample.model_dump_json()
     assert sample.eligible == 1

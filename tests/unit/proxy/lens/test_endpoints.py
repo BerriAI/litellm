@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.engine.endpoints import user_scope
+from litellm.proxy.lens.endpoints import user_scope
 
 
 @pytest.mark.parametrize(
@@ -27,10 +27,10 @@ def test_admin_can_configure_lens_and_viewer_can_only_read() -> None:
 
 @pytest.mark.parametrize("identity", ("not-an-execution", "W10=", "WyJvdGhlciIsICIiLCAiaWQiXQ=="))
 def test_invalid_explicit_execution_ids_are_rejected(identity: str) -> None:
-    from litellm.proxy.engine.endpoints import validate_selection
-    from tests.unit.proxy.engine.test_state import engine
+    from litellm.proxy.lens.endpoints import validate_selection
+    from tests.unit.proxy.lens.test_state import lens
 
-    settings: Final = engine().settings.model_copy(update={"execution_ids": (identity,)})
+    settings: Final = lens().settings.model_copy(update={"execution_ids": (identity,)})
     with pytest.raises(HTTPException) as error:
         validate_selection(settings)
     assert error.value.status_code == 422
@@ -38,8 +38,8 @@ def test_invalid_explicit_execution_ids_are_rejected(identity: str) -> None:
 
 @pytest.mark.asyncio
 async def test_incompatible_worker_is_rejected_before_claiming_work() -> None:
-    from litellm.proxy.engine.endpoints import claim
-    from tests.unit.proxy.engine.test_state import worker
+    from litellm.proxy.lens.endpoints import claim
+    from tests.unit.proxy.lens.test_state import worker
 
     with pytest.raises(HTTPException) as error:
         await claim(worker(), protocol_version=1)

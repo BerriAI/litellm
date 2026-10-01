@@ -22,22 +22,22 @@ import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/compone
 import { Textarea } from "@/components/ui/textarea";
 import { apiClient } from "@/components/networking";
 import { TracePanel } from "./TracePanel";
-import { EngineSetup } from "./EngineSetup";
+import { LensSetup } from "./LensSetup";
 import { LensRuns } from "./LensRuns";
-import { EngineProgress, NextCheck, ScanDuration } from "./EngineProgress";
+import { LensProgress, NextCheck, ScanDuration } from "./LensProgress";
 import { WorkerSetup } from "./WorkerSetup";
 import { LensWelcome } from "./LensWelcome";
 import {
-  engineStatus,
+  lensStatus,
   evidenceTarget,
   sortedFindings,
   runTime,
-  type Engine,
-  type EngineList,
+  type Lens,
+  type LensList,
   type Finding,
   type Settings,
   type Job,
-} from "./engineData";
+} from "./lensData";
 
 const money = (n: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 3 }).format(n);
@@ -50,22 +50,22 @@ function emptyFindingTitle(active: boolean, scanned: boolean) {
   return scanned ? "No matching findings" : "Ready for the first analysis";
 }
 
-export function EngineView({ accessToken, readOnly = false }: { accessToken: string; readOnly?: boolean }) {
+export function LensView({ accessToken, readOnly = false }: { accessToken: string; readOnly?: boolean }) {
   const client = useQueryClient();
-  const key = ["engines", accessToken];
+  const key = ["lenses", accessToken];
   const query = useQuery({
     queryKey: key,
-    queryFn: () => apiClient.get<EngineList>("/engine", { accessToken }),
+    queryFn: () => apiClient.get<LensList>("/lens", { accessToken }),
     refetchInterval: 10000,
   });
   const models = useQuery({
-    queryKey: ["engine-models", accessToken],
+    queryKey: ["lens-models", accessToken],
     queryFn: () => apiClient.get<{ data: { id: string }[] }>("/models", { accessToken }),
   });
   const modelDetails = useQuery({
     queryKey: ["lens-model-details", accessToken],
     queryFn: () =>
-      apiClient.get<{ data: import("./engineData").AnalysisModelInfo[] }>("/model_group/info", { accessToken }),
+      apiClient.get<{ data: import("./lensData").AnalysisModelInfo[] }>("/model_group/info", { accessToken }),
   });
   const [selected, setSelected] = useState<string | null>(() =>
     typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("lens"),
@@ -91,32 +91,31 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [evidence, setEvidence] = useState<{ id: string; span: string } | null>(null);
-  const engines = [...(query.data?.engines ?? [])].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
-  const showEmpty = !query.isLoading && !query.error && engines.length === 0;
-  const engine = engines.find((e) => e.id === selected) ?? engines[0];
+  const lenses = [...(query.data?.lenses ?? [])].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  const showEmpty = !query.isLoading && !query.error && lenses.length === 0;
+  const lens = lenses.find((e) => e.id === selected) ?? lenses[0];
   const connected =
     query.data?.workers?.some(
       (w) => !w.revoked && w.analysis_key_id && query.dataUpdatedAt - Date.parse(w.last_seen) < 120000,
     ) ?? false;
   const historyQuery = {
-    queryKey: ["lens-history", engine?.id, historyOffset, accessToken],
-    enabled: !!engine,
-    queryFn: () =>
-      apiClient.get<Job[]>(`/engine/${engine?.id}/runs`, { accessToken, query: { offset: historyOffset } }),
+    queryKey: ["lens-history", lens?.id, historyOffset, accessToken],
+    enabled: !!lens,
+    queryFn: () => apiClient.get<Job[]>(`/lens/${lens?.id}/runs`, { accessToken, query: { offset: historyOffset } }),
     refetchInterval: 10000,
   };
   const history = useQuery(historyQuery);
   const historical = useQuery({
-    queryKey: ["lens-batch", engine?.id, batchId, accessToken],
-    enabled: !!engine && !["latest", "all"].includes(batchId),
-    queryFn: () => apiClient.get<Job>(`/engine/${engine?.id}/runs/${batchId}`, { accessToken }),
+    queryKey: ["lens-batch", lens?.id, batchId, accessToken],
+    enabled: !!lens && !["latest", "all"].includes(batchId),
+    queryFn: () => apiClient.get<Job>(`/lens/${lens?.id}/runs/${batchId}`, { accessToken }),
   });
-  const job = ["latest", "all"].includes(batchId) ? engine?.jobs?.[0] : historical.data;
+  const job = ["latest", "all"].includes(batchId) ? lens?.jobs?.[0] : historical.data;
   const missingSnapshot = job?.status === "completed" && job.findings == null && batchId !== "all";
   const selectedOutsideHistory = !["latest", "all"].includes(batchId) && !history.data?.some((j) => j.id === batchId);
-  const batchSettings = job?.settings ?? engine?.settings;
-  const batchFindings = (batchId === "all" ? engine?.findings ?? [] : job?.findings ?? []).map((f) => {
-    const feedback = engine?.findings?.find((current) => current.id === f.id);
+  const batchSettings = job?.settings ?? lens?.settings;
+  const batchFindings = (batchId === "all" ? lens?.findings ?? [] : job?.findings ?? []).map((f) => {
+    const feedback = lens?.findings?.find((current) => current.id === f.id);
     return feedback ? { ...f, status: feedback.status, reason: feedback.reason } : f;
   });
   const finding = batchFindings.find((f) => f.id === findingId);
@@ -127,12 +126,12 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
   };
   const setupSettings = () => {
     if (editing === "new") return undefined;
-    if (editing === "duplicate" && engine)
-      return { ...engine.settings, name: `${engine.settings.name} copy`, enabled: false };
-    return engine?.settings;
+    if (editing === "duplicate" && lens)
+      return { ...lens.settings, name: `${lens.settings.name} copy`, enabled: false };
+    return lens?.settings;
   };
-  const lastCompleted = engine?.jobs?.find((j) => j.status === "completed");
-  const active = engine?.jobs?.find((j) => j.status === "queued" || j.status === "running");
+  const lastCompleted = lens?.jobs?.find((j) => j.status === "completed");
+  const active = lens?.jobs?.find((j) => j.status === "queued" || j.status === "running");
   const visibleFindings = sortedFindings(
     batchFindings.filter((f) => (filter === "all" || f.status === filter) && f.kind === kind),
   );
@@ -147,11 +146,11 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
   const target = evidence ? evidenceTarget(evidence.id) : null;
   const [requestOffset, setRequestOffset] = useState(0);
   const requestEvidence = useQuery({
-    queryKey: ["engine-evidence", engine?.id, evidence?.id, requestOffset, accessToken],
-    enabled: !!engine && target?.source === "requests",
+    queryKey: ["lens-evidence", lens?.id, evidence?.id, requestOffset, accessToken],
+    enabled: !!lens && target?.source === "requests",
     queryFn: () =>
       apiClient.get<components["schemas"]["ExecutionContent"]>(
-        `/engine/${engine?.id}/executions/${encodeURIComponent(evidence?.id ?? "")}`,
+        `/lens/${lens?.id}/executions/${encodeURIComponent(evidence?.id ?? "")}`,
         { accessToken, query: { offset: requestOffset } },
       ),
   });
@@ -172,9 +171,9 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
     }
   };
   const save = async (settings: Settings) => {
-    const saved = await apiClient.request<Engine>(
+    const saved = await apiClient.request<Lens>(
       editing === "edit" ? "PUT" : "POST",
-      editing === "edit" ? `/engine/${engine.id}` : "/engine",
+      editing === "edit" ? `/lens/${lens.id}` : "/lens",
       { accessToken, body: settings },
     );
     selectLens(saved.id);
@@ -182,8 +181,8 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
     refresh();
   };
   const changeFinding = async (status: Finding["status"]) => {
-    if (!engine || !finding) return;
-    await update(`/engine/${engine.id}/findings/${finding.id}`, { status, reason }, "patch");
+    if (!lens || !finding) return;
+    await update(`/lens/${lens.id}/findings/${finding.id}`, { status, reason }, "patch");
   };
 
   return (
@@ -206,7 +205,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
               />
               {connected ? "Analyzer connected" : "Set up analysis"}
             </Button>
-            {engines.length > 0 && (
+            {lenses.length > 0 && (
               <Button onClick={() => setEditing("new")}>
                 <Plus className="size-4" />
                 New lens
@@ -236,29 +235,29 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
           onCreate={() => setEditing("new")}
         />
       )}
-      {engine && (
+      {lens && (
         <div className="grid gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
           <nav aria-label="Lenses" className="flex gap-2 overflow-x-auto lg:flex-col lg:overflow-visible">
-            {engines.map((e) => (
+            {lenses.map((e) => (
               <button
                 key={e.id}
                 onClick={() => selectLens(e.id)}
-                aria-current={engine.id === e.id ? "page" : undefined}
-                className={`min-w-44 rounded-lg px-3 py-3 text-left transition-colors ${engine.id === e.id ? "bg-muted" : "hover:bg-muted/50"}`}
+                aria-current={lens.id === e.id ? "page" : undefined}
+                className={`min-w-44 rounded-lg px-3 py-3 text-left transition-colors ${lens.id === e.id ? "bg-muted" : "hover:bg-muted/50"}`}
               >
                 <span className="block truncate text-sm font-medium">{e.settings.name}</span>
-                <span className="mt-1 block text-xs text-muted-foreground">{engineStatus(e, connected)}</span>
+                <span className="mt-1 block text-xs text-muted-foreground">{lensStatus(e, connected)}</span>
               </button>
             ))}
           </nav>
           <section className="min-w-0 space-y-5">
             <div className="flex flex-wrap justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold">{engine.settings.name}</h2>
+                <h2 className="text-lg font-semibold">{lens.settings.name}</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {sourceLabels[engine.settings.source ?? "traces"]} ·{" "}
-                  {engine.settings.service || "All accessible activity"}
-                  {engine.settings.filters?.length ? ` · ${engine.settings.filters.length} filters` : ""}
+                  {sourceLabels[lens.settings.source ?? "traces"]} ·{" "}
+                  {lens.settings.service || "All accessible activity"}
+                  {lens.settings.filters?.length ? ` · ${lens.settings.filters.length} filters` : ""}
                 </p>
               </div>
               {!readOnly && (
@@ -273,16 +272,13 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                     variant="outline"
                     disabled={busy}
                     onClick={() =>
-                      update(`/engine/${engine.id}`, { ...engine.settings, enabled: !engine.settings.enabled }, "put")
+                      update(`/lens/${lens.id}`, { ...lens.settings, enabled: !lens.settings.enabled }, "put")
                     }
                   >
-                    {engine.settings.enabled ? <Pause className="size-3" /> : <Play className="size-3" />}
-                    {engine.settings.enabled ? "Pause" : "Resume"}
+                    {lens.settings.enabled ? <Pause className="size-3" /> : <Play className="size-3" />}
+                    {lens.settings.enabled ? "Pause" : "Resume"}
                   </Button>
-                  <Button
-                    disabled={busy || !!active || !connected}
-                    onClick={() => update(`/engine/${engine.id}/runs`, {})}
-                  >
+                  <Button disabled={busy || !!active || !connected} onClick={() => update(`/lens/${lens.id}/runs`, {})}>
                     <Play className="size-3" />
                     Run now
                   </Button>
@@ -298,18 +294,18 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
               <div>
                 <p className="text-xs text-muted-foreground">Status</p>
                 <p className="mt-1 text-sm font-medium" role="status">
-                  {engineStatus(engine, connected)}
+                  {lensStatus(lens, connected)}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {engine.settings.enabled
-                    ? `Checks every ${engine.settings.interval_minutes} minutes`
+                  {lens.settings.enabled
+                    ? `Checks every ${lens.settings.interval_minutes} minutes`
                     : "Manual analysis available"}
                 </p>
-                <NextCheck engine={engine} />
+                <NextCheck lens={lens} />
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Last successful scan</p>
-                <p className="mt-1 text-sm">{when(lastCompleted?.finished_at ?? engine.last_scan_at)}</p>
+                <p className="mt-1 text-sm">{when(lastCompleted?.finished_at ?? lens.last_scan_at)}</p>
                 {lastCompleted && (
                   <p className="mt-1 text-xs text-muted-foreground">
                     {lastCompleted.coverage?.screened ?? 0} of {lastCompleted.coverage?.eligible ?? 0} eligible runs
@@ -320,21 +316,21 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
               <div>
                 <p className="text-xs text-muted-foreground">Analysis spend this month</p>
                 <p className="mt-1 text-sm">
-                  {money(engine.budget_month === new Date().toISOString().slice(0, 7) ? engine.spent ?? 0 : 0)}{" "}
-                  <span className="text-muted-foreground">/ {money(engine.settings.monthly_budget ?? 20)}</span>
+                  {money(lens.budget_month === new Date().toISOString().slice(0, 7) ? lens.spent ?? 0 : 0)}{" "}
+                  <span className="text-muted-foreground">/ {money(lens.settings.monthly_budget ?? 20)}</span>
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">Includes reservations for pending calls</p>
               </div>
             </div>
             {active && (
-              <EngineProgress
+              <LensProgress
                 key={active.id}
                 job={active}
                 onCancel={
                   readOnly
                     ? undefined
                     : () => {
-                        void update(`/engine/${engine.id}/cancel`, {});
+                        void update(`/lens/${lens.id}/cancel`, {});
                       }
                 }
               />
@@ -344,7 +340,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                 {job.error}
               </p>
             )}
-            <Tabs value={tab} onValueChange={setTab} key={engine.id}>
+            <Tabs value={tab} onValueChange={setTab} key={lens.id}>
               <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b">
                 <TabsList variant="line">
                   <TabsTrigger value="findings">Findings</TabsTrigger>
@@ -369,7 +365,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                           {when(job.created_at)} · {job.status}
                         </option>
                       )}
-                      {(history.data ?? engine.jobs)?.map((j) => (
+                      {(history.data ?? lens.jobs)?.map((j) => (
                         <option key={j.id} value={j.id}>
                           {when(j.created_at)} · {j.status}
                         </option>
@@ -482,7 +478,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                   {visibleFindings.length === 0 && (
                     <div className="px-6 py-14 text-center">
                       <CheckCircle2 className="mx-auto mb-3 size-5 text-muted-foreground" />
-                      <p className="text-sm font-medium">{emptyFindingTitle(!!active, !!engine.last_scan_at)}</p>
+                      <p className="text-sm font-medium">{emptyFindingTitle(!!active, !!lens.last_scan_at)}</p>
                       <p className="mt-2 text-xs text-muted-foreground">
                         {active
                           ? "Lens is reviewing the selected activity."
@@ -517,10 +513,10 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                         variant="ghost"
                         onClick={() =>
                           update(
-                            `/engine/${engine.id}`,
+                            `/lens/${lens.id}`,
                             {
-                              ...engine.settings,
-                              checks: engine.settings.checks.map((q) =>
+                              ...lens.settings,
+                              checks: lens.settings.checks.map((q) =>
                                 q.id === c.id ? { ...q, enabled: !q.enabled } : q,
                               ),
                             },
@@ -537,7 +533,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                   <Button
                     variant="outline"
                     disabled={!!active || !connected}
-                    onClick={() => update(`/engine/${engine.id}/runs`, {})}
+                    onClick={() => update(`/lens/${lens.id}/runs`, {})}
                   >
                     Run saved settings now
                   </Button>
@@ -590,7 +586,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                   </Button>
                 </div>
                 {history.error && <p role="alert">{history.error.message}</p>}
-                {(history.data ?? engine.jobs)?.map((j) => (
+                {(history.data ?? lens.jobs)?.map((j) => (
                   <div key={j.id} className="rounded-lg border p-4">
                     <div className="flex justify-between gap-3 text-sm">
                       <span className="font-medium">{j.stage}</span>
@@ -621,7 +617,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
         </div>
       )}
       {editing && (
-        <EngineSetup
+        <LensSetup
           mode={editing}
           initial={setupSettings()}
           models={models.data?.data.map((m) => m.id) ?? []}
@@ -750,7 +746,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
           )}
         </SheetContent>
       </Sheet>
-      {engine && target?.source === "traces" && (
+      {lens && target?.source === "traces" && (
         <TracePanel
           open={!!evidence}
           traceId={target.id}

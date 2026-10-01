@@ -20,12 +20,12 @@ import {
   starterQuestions,
   type AnalysisModelInfo,
   type Settings,
-} from "./engineData";
+} from "./lensData";
 
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { DurationInput } from "./DurationInput";
 
-export function EngineSetup({
+export function LensSetup({
   initial,
   mode = initial ? "edit" : "new",
   models,
