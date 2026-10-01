@@ -21,9 +21,6 @@ class StubClientNotConnectedError(ClientNotConnectedError):
 
 
 class DisconnectedPrisma:
-    """Mimics prisma-client-py after disconnect(): ``is_connected()`` is False
-    and the ``_engine`` property raises ``ClientNotConnectedError``."""
-
     def is_connected(self) -> bool:
         return False
 
@@ -34,7 +31,6 @@ class DisconnectedPrisma:
 
 @pytest.fixture
 def disconnected_prisma() -> DisconnectedPrisma:
-    """A stand-in for a Prisma client wedged in the disconnected state."""
     return DisconnectedPrisma()
 
 
