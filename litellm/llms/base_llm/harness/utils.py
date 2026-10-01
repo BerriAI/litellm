@@ -7,6 +7,8 @@ import os
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, TypeAlias
 
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
 # A decoded JSON document: what json.loads / model_json_schema() produce.
 JSONValue: TypeAlias = "dict[str, JSONValue] | list[JSONValue] | str | int | float | bool | None"
 
@@ -53,17 +55,20 @@ def structured_output_instruction(schema: Mapping[str, Any]) -> str:
     )
 
 
-def strict_json_schema(schema: JSONValue) -> JSONValue:
+def strict_json_schema(schema: JSONValue, depth: int = 0) -> JSONValue:
     """Make a JSON schema acceptable to OpenAI strict structured outputs.
 
     Every object gets `additionalProperties: false` and all of its properties required,
-    recursively. Keywords strict mode rejects next to $ref are dropped.
+    recursively. Keywords strict mode rejects next to $ref are dropped. Nesting deeper than
+    DEFAULT_MAX_RECURSE_DEPTH raises instead of recursing further.
     """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(f"output schema is nested deeper than {DEFAULT_MAX_RECURSE_DEPTH} levels")
     if isinstance(schema, list):
-        return [strict_json_schema(entry) for entry in schema]
+        return [strict_json_schema(entry, depth + 1) for entry in schema]
     if not isinstance(schema, dict):
         return schema
-    result = {key: strict_json_schema(value) for key, value in schema.items()}
+    result = {key: strict_json_schema(value, depth + 1) for key, value in schema.items()}
     if "$ref" in result:
         return {"$ref": result["$ref"]}
     result.pop("default", None)
