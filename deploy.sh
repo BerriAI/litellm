@@ -4,7 +4,7 @@ set -e
 
 LITELLM_IMAGE="199658938451.dkr.ecr.us-east-2.amazonaws.com/litellm"
 BASE_IMAGE="$LITELLM_IMAGE:base"
-FINAL_IMAGE="$LITELLM_IMAGE:basewmcp"
+FINAL_IMAGE="$LITELLM_IMAGE:latest"
 
 ./buildmcp.sh
 

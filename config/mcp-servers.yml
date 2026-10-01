@@ -5,8 +5,10 @@ mcp_servers:
     args:
       - /app/mcp/google-drive-mcp/dist/index.js
     env:
-      GOOGLE_DRIVE_OAUTH_CREDENTIALS: /config/gcp-oauth.keys.json
-      GOOGLE_DRIVE_MCP_TOKEN_PATH: /config/tokens.json
+      GOOGLE_DRIVE_MCP_CLIENT_ID: os.environ/GOOGLE_DRIVE_MCP_CLIENT_ID
+      GOOGLE_DRIVE_MCP_CLIENT_SECRET: os.environ/GOOGLE_DRIVE_MCP_CLIENT_SECRET
+      GOOGLE_DRIVE_MCP_ACCESS_TOKEN: os.environ/GOOGLE_DRIVE_MCP_ACCESS_TOKEN
+      GOOGLE_DRIVE_MCP_REFRESH_TOKEN: os.environ/GOOGLE_DRIVE_MCP_REFRESH_TOKEN
     allowed_tools:
       - search
       - listFolder
