@@ -1010,7 +1010,8 @@ class InMemoryGuardrailHandler:
             raise ValueError(f"Guardrail initialization failed: {init_error}") from init_error
 
     def _with_loaded_values_where_undecryptable(self, guardrail_id: str, guardrail: Guardrail) -> Guardrail:
-        """Swap each DB litellm_params value that did not decrypt with the current key for the loaded guardrail's value."""
+        """Swap each DB litellm_params value that did not decrypt with the current key for the loaded guardrail's value,
+        or keep the loaded guardrail whole when it has no value for one of them."""
         existing: Final = self.IN_MEMORY_GUARDRAILS.get(guardrail_id)
         stored_params: Final = guardrail.get("litellm_params")
         db_params: Final = _as_json_object(
@@ -1019,13 +1020,15 @@ class InMemoryGuardrailHandler:
         if existing is None or db_params is None or not contains_encrypted_marker(db_params):
             return guardrail
         loaded_params: Final = self._normalize_litellm_params_for_comparison(existing.get("litellm_params"))
-        if loaded_params is None:
-            return guardrail
         verbose_proxy_logger.warning(
             "Guardrail %s has litellm_params that do not decrypt with the current key; keeping the loaded values for "
             "them. Restart the proxy if the master key was rotated.",
             guardrail_id,
         )
+        if loaded_params is None or any(
+            contains_encrypted_marker(value) and loaded_params.get(key) is None for key, value in db_params.items()
+        ):
+            return existing
         return Guardrail(
             **{  # mutable-ok: TypedDict construction
                 **guardrail,
