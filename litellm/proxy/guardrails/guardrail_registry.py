@@ -509,7 +509,7 @@ def parse_tolerant_litellm_params(
     params_model: type[_ParamsT] = LitellmParams,
 ) -> _ParamsT:
     try:
-        return params_model.model_validate(litellm_params_data)
+        return params_model(**litellm_params_data)
     except ValidationError as validation_error:
         if any(tuple(error["loc"]) != ("logging_only_scope",) for error in validation_error.errors()):
             raise
@@ -519,7 +519,7 @@ def parse_tolerant_litellm_params(
             guardrail_name.replace("\r", "").replace("\n", ""),
             str(litellm_params_data.get("logging_only_scope")).replace("\r", "").replace("\n", "")[:100],
         )
-        return params_model.model_validate(MappingProxyType({**litellm_params_data, "logging_only_scope": None}))
+        return params_model(**MappingProxyType({**litellm_params_data, "logging_only_scope": None}))
 
 
 class InMemoryGuardrailHandler:

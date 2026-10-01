@@ -439,6 +439,49 @@ def test_unchanged_db_params_do_not_register_as_changed():
     assert handler._has_guardrail_params_changed(gid, new) is False
 
 
+def test_db_poll_does_not_reinitialize_config_guardrail_without_default_on():
+    handler = InMemoryGuardrailHandler()
+    guardrail_id: Final = "config-default-on-guardrail"
+    guardrail_name: Final = "config-default-on-guardrail"
+    params: Final = {
+        "guardrail": "litellm_content_filter",
+        "mode": "pre_call",
+        "logging_only_scope": "Input",
+        "blocked_words": [{"keyword": "synthetic blocked phrase", "action": "BLOCK"}],
+    }
+    callback_lists: Final = _all_callback_lists()
+    callback_snapshots: Final = [list(callback_list) for callback_list in callback_lists]
+
+    try:
+        existing: Final = handler.initialize_guardrail(
+            guardrail=Guardrail(
+                guardrail_id=guardrail_id,
+                guardrail_name=guardrail_name,
+                litellm_params=params,
+            ),
+            source="config",
+        )
+        assert existing is not None
+        assert existing["litellm_params"].default_on is False
+        assert existing["litellm_params"].logging_only_scope is None
+
+        synced: Final = handler.sync_guardrail_from_db(
+            Guardrail(
+                guardrail_id=guardrail_id,
+                guardrail_name=guardrail_name,
+                litellm_params=params,
+            )
+        )
+
+        assert synced is existing
+        assert handler.IN_MEMORY_GUARDRAILS[guardrail_id] is existing
+        assert handler._sources[guardrail_id] == "db"
+    finally:
+        handler.delete_in_memory_guardrail(guardrail_id)
+        for callback_list, snapshot in zip(callback_lists, callback_snapshots):
+            callback_list[:] = snapshot
+
+
 def test_changed_db_params_register_as_changed():
     """Normalizing both sides must still surface a genuine config change."""
     handler = InMemoryGuardrailHandler()
@@ -993,6 +1036,26 @@ def _invalid_scope_content_filter_guardrail() -> Guardrail:
 
 
 class TestLoggingOnlyScopeValidation:
+    @pytest.mark.parametrize(
+        ("scope", "expected_scope"),
+        (("input", "input"), ("Input", None)),
+    )
+    def test_tolerant_parser_preserves_default_on_constructor_coercion(
+        self, scope: str, expected_scope: str | None
+    ) -> None:
+        params: Final = {
+            "guardrail": "litellm_content_filter",
+            "mode": "pre_call",
+            "logging_only_scope": scope,
+            "blocked_words": [{"keyword": "synthetic blocked phrase", "action": "BLOCK"}],
+        }
+
+        parsed: Final = parse_tolerant_litellm_params(params, "test-content-filter")
+        expected: Final = LitellmParams(**{**params, "logging_only_scope": expected_scope}).model_dump()
+
+        assert parsed.default_on is False
+        assert parsed.model_dump() == expected
+
     def _initialize(
         self,
         mode: str | list[str] | Mode,
