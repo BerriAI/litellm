@@ -5,7 +5,7 @@ from typing import Final, Protocol
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from litellm.proxy.db.prisma_client import PrismaWrapper
-from litellm.proxy.engine.models import Engine, Job, Worker
+from litellm.proxy.lens.models import Job, Lens, Worker
 
 
 class Database(Protocol):
@@ -20,44 +20,44 @@ class Row(BaseModel):
 _ROWS: Final = TypeAdapter(tuple[Row, ...])
 
 
-class EngineRepository:
+class LensRepository:
     def __init__(self, db: Database) -> None:
         self.db: Final = db
 
-    async def engines(self) -> tuple[Engine, ...]:
-        rows: Final = _ROWS.validate_python(await self.db.query_raw('SELECT data FROM "LiteLLM_Engine" ORDER BY id'))
-        return tuple(Engine.model_validate(row.data) for row in rows)
+    async def lenses(self) -> tuple[Lens, ...]:
+        rows: Final = _ROWS.validate_python(await self.db.query_raw('SELECT data FROM "LiteLLM_Lens" ORDER BY id'))
+        return tuple(Lens.model_validate(row.data) for row in rows)
 
-    async def get(self, engine_id: str) -> Engine | None:
+    async def get(self, lens_id: str) -> Lens | None:
         rows: Final = _ROWS.validate_python(
             await self.db.query_raw(
-                'SELECT data FROM "LiteLLM_Engine" WHERE id=$1',
-                engine_id,
+                'SELECT data FROM "LiteLLM_Lens" WHERE id=$1',
+                lens_id,
             )
         )
-        return Engine.model_validate(rows[0].data) if rows else None
+        return Lens.model_validate(rows[0].data) if rows else None
 
-    async def create(self, engine: Engine) -> Engine:
+    async def create(self, lens: Lens) -> Lens:
         await self.db.execute_raw(
-            'INSERT INTO "LiteLLM_Engine" (id, version, data) VALUES ($1,0,$2::jsonb)',
-            engine.id,
-            engine.model_dump_json(),
+            'INSERT INTO "LiteLLM_Lens" (id, version, data) VALUES ($1,0,$2::jsonb)',
+            lens.id,
+            lens.model_dump_json(),
         )
-        return engine
+        return lens
 
     async def update(
-        self, engine_id: str, transform: Callable[[Engine], Engine], attempts: int = 8, *, changed_only: bool = False
-    ) -> Engine | None:
+        self, lens_id: str, transform: Callable[[Lens], Lens], attempts: int = 8, *, changed_only: bool = False
+    ) -> Lens | None:
         for _ in range(attempts):
-            completed, updated = await self._try_update(engine_id, transform, changed_only)
+            completed, updated = await self._try_update(lens_id, transform, changed_only)
             if completed:
                 return updated
         return None
 
     async def _try_update(
-        self, engine_id: str, transform: Callable[[Engine], Engine], changed_only: bool
-    ) -> tuple[bool, Engine | None]:
-        previous: Final = await self.get(engine_id)
+        self, lens_id: str, transform: Callable[[Lens], Lens], changed_only: bool
+    ) -> tuple[bool, Lens | None]:
+        previous: Final = await self.get(lens_id)
         if previous is None:
             return True, None
         candidate: Final = transform(previous)
@@ -67,12 +67,12 @@ class EngineRepository:
         rows: Final = _ROWS.validate_python(
             await self.db.query_raw(
                 """WITH previous AS MATERIALIZED (
-                SELECT data FROM "LiteLLM_Engine" WHERE id=$2 AND version=$3 FOR UPDATE
+                SELECT data FROM "LiteLLM_Lens" WHERE id=$2 AND version=$3 FOR UPDATE
             ), updated AS (
-                UPDATE "LiteLLM_Engine" SET data=$1::jsonb, version=version+1
+                UPDATE "LiteLLM_Lens" SET data=$1::jsonb, version=version+1
                 WHERE id=$2 AND version=$3 AND EXISTS (SELECT 1 FROM previous) RETURNING id
             )
-            , archived AS (INSERT INTO "LiteLLM_EngineRun" (id, engine_id, created_at, data)
+            , archived AS (INSERT INTO "LiteLLM_LensRun" (id, lens_id, created_at, data)
             SELECT job->>'id', $2, (job->>'created_at')::timestamp, job
             FROM previous, jsonb_array_elements(previous.data->'jobs') AS job
             WHERE EXISTS (SELECT 1 FROM updated)
@@ -81,46 +81,46 @@ class EngineRepository:
             ON CONFLICT (id) DO NOTHING)
             SELECT to_jsonb(count(*)) AS data FROM updated""",
                 updated.model_dump_json(),
-                engine_id,
+                lens_id,
                 previous.version,
             )
         )
         return bool(rows and rows[0].data == 1), updated
 
-    async def jobs(self, engine_id: str, offset: int = 0) -> tuple[Job, ...]:
+    async def jobs(self, lens_id: str, offset: int = 0) -> tuple[Job, ...]:
         rows: Final = _ROWS.validate_python(
             await self.db.query_raw(
                 """SELECT data FROM (
-                SELECT data FROM "LiteLLM_EngineRun" WHERE engine_id=$1
+                SELECT data FROM "LiteLLM_LensRun" WHERE lens_id=$1
                 UNION ALL
-                SELECT jsonb_array_elements(data->'jobs') AS data FROM "LiteLLM_Engine" WHERE id=$1
+                SELECT jsonb_array_elements(data->'jobs') AS data FROM "LiteLLM_Lens" WHERE id=$1
             ) AS jobs ORDER BY data->>'created_at' DESC, data->>'id' DESC LIMIT 50 OFFSET $2""",
-                engine_id,
+                lens_id,
                 offset,
             )
         )
         return tuple(Job.model_validate(row.data) for row in rows)
 
-    async def job(self, engine_id: str, job_id: str) -> Job | None:
+    async def job(self, lens_id: str, job_id: str) -> Job | None:
         rows: Final = _ROWS.validate_python(
             await self.db.query_raw(
-                """SELECT data FROM "LiteLLM_EngineRun" WHERE engine_id=$1 AND id=$2
-            UNION ALL SELECT job AS data FROM "LiteLLM_Engine", jsonb_array_elements(data->'jobs') AS job
+                """SELECT data FROM "LiteLLM_LensRun" WHERE lens_id=$1 AND id=$2
+            UNION ALL SELECT job AS data FROM "LiteLLM_Lens", jsonb_array_elements(data->'jobs') AS job
             WHERE id=$1 AND job->>'id'=$2 LIMIT 1""",
-                engine_id,
+                lens_id,
                 job_id,
             )
         )
         return Job.model_validate(rows[0].data) if rows else None
 
     async def workers(self) -> tuple[Worker, ...]:
-        rows: Final = _ROWS.validate_python(await self.db.query_raw('SELECT data FROM "LiteLLM_EngineWorker"'))
+        rows: Final = _ROWS.validate_python(await self.db.query_raw('SELECT data FROM "LiteLLM_LensWorker"'))
         return tuple(Worker.model_validate(row.data) for row in rows)
 
     async def worker(self, token_hash: str) -> Worker | None:
         rows: Final = _ROWS.validate_python(
             await self.db.query_raw(
-                'SELECT data FROM "LiteLLM_EngineWorker" WHERE token_hash=$1',
+                'SELECT data FROM "LiteLLM_LensWorker" WHERE token_hash=$1',
                 token_hash,
             )
         )
@@ -129,20 +129,20 @@ class EngineRepository:
     async def save_worker(self, worker: Worker, token_hash: str | None = None) -> None:
         if token_hash is not None:
             await self.db.execute_raw(
-                'INSERT INTO "LiteLLM_EngineWorker" (id,token_hash,data) VALUES ($1,$2,$3::jsonb)',
+                'INSERT INTO "LiteLLM_LensWorker" (id,token_hash,data) VALUES ($1,$2,$3::jsonb)',
                 worker.id,
                 token_hash,
                 worker.model_dump_json(),
             )
             return
         await self.db.execute_raw(
-            'UPDATE "LiteLLM_EngineWorker" SET data=$1::jsonb WHERE id=$2', worker.model_dump_json(), worker.id
+            'UPDATE "LiteLLM_LensWorker" SET data=$1::jsonb WHERE id=$2', worker.model_dump_json(), worker.id
         )
 
     async def set_worker_billing(self, worker_id: str, key_id: str) -> Worker | None:
         rows: Final = _ROWS.validate_python(
             await self.db.query_raw(
-                """UPDATE "LiteLLM_EngineWorker"
+                """UPDATE "LiteLLM_LensWorker"
                 SET data=jsonb_set(data, '{analysis_key_id}', to_jsonb($1::text))
                 WHERE id=$2 AND COALESCE((data->>'revoked')::boolean, false)=false RETURNING data""",
                 key_id,
@@ -153,13 +153,13 @@ class EngineRepository:
 
     async def revoke_worker(self, worker_id: str) -> None:
         await self.db.execute_raw(
-            """UPDATE "LiteLLM_EngineWorker" SET data=jsonb_set(data, '{revoked}', 'true') WHERE id=$1""",
+            """UPDATE "LiteLLM_LensWorker" SET data=jsonb_set(data, '{revoked}', 'true') WHERE id=$1""",
             worker_id,
         )
 
     async def heartbeat(self, worker_id: str, now: str) -> None:
         await self.db.execute_raw(
-            """UPDATE "LiteLLM_EngineWorker" SET data=jsonb_set(data, '{last_seen}', to_jsonb($1::text)) WHERE id=$2""",
+            """UPDATE "LiteLLM_LensWorker" SET data=jsonb_set(data, '{last_seen}', to_jsonb($1::text)) WHERE id=$2""",
             now,
             worker_id,
         )

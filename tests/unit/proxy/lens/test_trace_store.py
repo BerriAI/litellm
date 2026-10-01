@@ -1,8 +1,8 @@
 import json
 from typing import Final
 
-from litellm.proxy.engine.models import Evidence, TracePart
-from litellm.proxy.engine.trace_store import trace_store
+from litellm.proxy.lens.models import Evidence, TracePart
+from litellm.proxy.lens.trace_store import trace_store
 
 
 def test_trace_store_pages_large_payloads_and_recovers_exact_evidence() -> None:

@@ -6,8 +6,8 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy.engine.analysis import Candidate, Examined, evidence_valid, extract, investigate, partition_content
-from litellm.proxy.engine.models import (
+from litellm.proxy.lens.analysis import Candidate, Examined, evidence_valid, extract, investigate, partition_content
+from litellm.proxy.lens.models import (
     Claim,
     Coverage,
     Evidence,
@@ -18,14 +18,14 @@ from litellm.proxy.engine.models import (
     Sample,
     TracePart,
 )
-from litellm.proxy.engine.state import queue_job
-from tests.unit.proxy.engine.test_state import NOW, engine, finding
+from litellm.proxy.lens.state import queue_job
+from tests.unit.proxy.lens.test_state import NOW, lens, finding
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ("complete", "cancel", "failure"))
 async def test_parallel_review_shares_one_model_limit_and_cleans_up(outcome: str) -> None:
-    from litellm.proxy.engine.analysis import ANALYSIS_CONCURRENCY, analyze_sample
+    from litellm.proxy.lens.analysis import ANALYSIS_CONCURRENCY, analyze_sample
 
     executions: Final = tuple(
         Execution(id=str(i), source="traces", trace_id=str(i), team_id="alpha", name="run", start_time="", span_count=6)
@@ -70,7 +70,7 @@ async def test_parallel_review_shares_one_model_limit_and_cleans_up(outcome: str
         if stage == "Reading executions":
             counts.put(coverage.screened)
 
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     task: Final = asyncio.create_task(
         analyze_sample(claim, Sample(executions=executions, eligible=len(executions)), read, model, progress)
     )
@@ -101,7 +101,7 @@ async def test_parallel_review_shares_one_model_limit_and_cleans_up(outcome: str
 
 @pytest.mark.asyncio
 async def test_independent_investigations_overlap_and_report_completions() -> None:
-    from litellm.proxy.engine.analysis import investigate_candidates
+    from litellm.proxy.lens.analysis import investigate_candidates
 
     arrived: Final = SimpleQueue[str]()
     progress_counts: Final = SimpleQueue[int]()
@@ -124,7 +124,7 @@ async def test_independent_investigations_overlap_and_report_completions() -> No
     candidates: Final = tuple(
         Candidate(check_id="retries", title=str(i), hypothesis="Investigate", execution_ids=()) for i in range(2)
     )
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     results: Final = tuple(
         [
             result
@@ -185,7 +185,7 @@ async def test_reviewer_sees_final_outcome_and_catalog_across_pages() -> None:
         assert pages.qsize() == 2
         return ModelResult(content='{"observations":[],"cannot_assess":false}', cost=0)
 
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     result: Final = await extract(claim, execution, read, model)
     assert root in result.parts
     assert not result.cannot_assess
@@ -193,7 +193,7 @@ async def test_reviewer_sees_final_outcome_and_catalog_across_pages() -> None:
 
 @pytest.mark.asyncio
 async def test_reviewer_fetches_targeted_evidence_and_rejects_outside_catalog_reads() -> None:
-    from litellm.proxy.engine.analysis import Observation, SpanRead, TraceReview
+    from litellm.proxy.lens.analysis import Observation, SpanRead, TraceReview
 
     execution: Final = Execution(
         id="run", source="traces", trace_id="t", team_id="", name="run", start_time="", span_count=2
@@ -246,7 +246,7 @@ async def test_reviewer_fetches_targeted_evidence_and_rejects_outside_catalog_re
             cost=0,
         )
 
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     result: Final = await extract(claim, execution, read, model)
     assert len(result.observations) == 1
     assert result.observations[0].evidence[0].quote == "Verified result: failed"
@@ -255,7 +255,7 @@ async def test_reviewer_fetches_targeted_evidence_and_rejects_outside_catalog_re
 
 @pytest.mark.asyncio
 async def test_reviewer_stops_repeated_read_requests() -> None:
-    from litellm.proxy.engine.analysis import SpanRead, TraceReview
+    from litellm.proxy.lens.analysis import SpanRead, TraceReview
 
     execution: Final = Execution(
         id="run", source="traces", trace_id="t", team_id="", name="run", start_time="", span_count=1
@@ -276,7 +276,7 @@ async def test_reviewer_stops_repeated_read_requests() -> None:
             content=TraceReview(reads=(SpanRead(span_id="01"),), cannot_assess=True).model_dump_json(), cost=0
         )
 
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     result: Final = await extract(claim, execution, read, model)
     assert result.cannot_assess
     assert reads.qsize() == 2
@@ -311,7 +311,7 @@ async def test_investigator_rejects_a_fabricated_quote() -> None:
     async def read(_execution_id: str, _cursor: str, _offset: int) -> ExecutionContent:
         return ExecutionContent(execution=execution, parts=examined.parts)
 
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     result: Final = await investigate(
         claim,
         Candidate(check_id="retries", title="Retries", hypothesis="Unrecovered", execution_ids=("run1",)),
@@ -353,7 +353,7 @@ async def test_assessable_content_is_not_overridden_by_unknown_chunks(paginated:
         unavailable: Final = "false" if "verified result" in request.prompt else "true"
         return ModelResult(content='{"observations":[],"cannot_assess":' + unavailable + "}", cost=0)
 
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     result: Final = await extract(claim, execution, read, model)
     assert result.cannot_assess is not assessable
 
@@ -382,7 +382,7 @@ async def test_investigator_keeps_final_outcome_ahead_of_repeated_model_history(
     async def read(_execution_id: str, _cursor: str, _offset: int) -> ExecutionContent:
         return ExecutionContent(execution=execution, parts=examined.parts)
 
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     result: Final = await investigate(
         claim,
         Candidate(check_id="retries", title="Retries", hypothesis="Unrecovered", execution_ids=("run1",)),
@@ -425,7 +425,7 @@ async def test_oversized_model_evidence_is_retried_and_quotes_still_verified(
             cost=0,
         )
 
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     result: Final = await extract(claim, execution, read, model)
     assert len(result.observations) == int(accepted)
     assert result.cannot_assess is not accepted
@@ -436,7 +436,7 @@ async def test_oversized_model_evidence_is_retried_and_quotes_still_verified(
 async def test_invalid_model_output_has_only_one_repair_attempt() -> None:
     from pydantic import ValidationError
 
-    from litellm.proxy.engine.analysis import Extraction, structured_response
+    from litellm.proxy.lens.analysis import Extraction, structured_response
 
     attempts: Final = iter((1, 2))
 
@@ -451,8 +451,8 @@ async def test_invalid_model_output_has_only_one_repair_attempt() -> None:
 
 @pytest.mark.asyncio
 async def test_grouping_consolidates_prior_batches_and_reports_real_progress() -> None:
-    from litellm.proxy.engine.analysis import Clusters, Observation, cluster_batches
-    from litellm.proxy.engine.models import Coverage
+    from litellm.proxy.lens.analysis import Clusters, Observation, cluster_batches
+    from litellm.proxy.lens.models import Coverage
 
     candidate: Final = Candidate(
         check_id="retries", title="Outage", hypothesis="Tool unavailable", execution_ids=("run1",)
@@ -517,7 +517,7 @@ async def test_investigator_can_cite_a_later_page_or_offset(later_span: str) -> 
         assert execution_id == "run1" and offset == 8000
         return ExecutionContent(execution=execution, parts=(later,))
 
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     result: Final = await investigate(
         claim,
         Candidate(check_id="retries", title="Retries", hypothesis="Unrecovered", execution_ids=("run1",)),
@@ -530,7 +530,7 @@ async def test_investigator_can_cite_a_later_page_or_offset(later_span: str) -> 
 
 @pytest.mark.asyncio
 async def test_thousands_of_matching_runs_keep_all_members_without_a_growing_model_prompt() -> None:
-    from litellm.proxy.engine.analysis import Clusters, Observation, cluster_batches, observation_batches
+    from litellm.proxy.lens.analysis import Clusters, Observation, cluster_batches, observation_batches
 
     observations: Final = tuple(
         Observation(
@@ -571,7 +571,7 @@ async def test_thousands_of_matching_runs_keep_all_members_without_a_growing_mod
 
 @pytest.mark.asyncio
 async def test_grouping_preserves_observations_omitted_by_model() -> None:
-    from litellm.proxy.engine.analysis import merge_candidates
+    from litellm.proxy.lens.analysis import merge_candidates
 
     original: Final = Candidate(
         check_id="retries", title="Unrecovered failure", hypothesis="Timeout", execution_ids=("run",)
@@ -587,7 +587,7 @@ async def test_grouping_preserves_observations_omitted_by_model() -> None:
 
 @pytest.mark.asyncio
 async def test_grouping_repairs_duplicate_members_before_creating_findings() -> None:
-    from litellm.proxy.engine.analysis import Clusters, merge_candidates
+    from litellm.proxy.lens.analysis import Clusters, merge_candidates
 
     original: Final = Candidate(
         check_id="retries", title="Unrecovered failure", hypothesis="Timeout", execution_ids=("run",)
@@ -609,7 +609,7 @@ async def test_grouping_repairs_duplicate_members_before_creating_findings() -> 
 
 @pytest.mark.asyncio
 async def test_review_keeps_original_ids_in_per_run_assessments() -> None:
-    from litellm.proxy.engine.analysis import analyze_sample
+    from litellm.proxy.lens.analysis import analyze_sample
 
     execution: Final = Execution(
         id="opaque-original-id",
@@ -636,7 +636,7 @@ async def test_review_keeps_original_ids_in_per_run_assessments() -> None:
     async def progress(_stage: str, _coverage: Coverage) -> None:
         pass
 
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     result: Final = await analyze_sample(claim, Sample(executions=(execution,), eligible=1), read, model, progress)
     assert result.assessments[0].execution_id == execution.id
     assert not result.assessments[0].cannot_assess
@@ -678,7 +678,7 @@ async def test_investigation_context_accounts_for_metadata_on_thousands_of_short
     async def read(_identity: str, _cursor: str, _offset: int) -> ExecutionContent:
         pytest.fail("No read was requested")
 
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     result: Final = await investigate(
         claim,
         Candidate(
@@ -696,7 +696,7 @@ async def test_investigation_context_accounts_for_metadata_on_thousands_of_short
 
 @pytest.mark.asyncio
 async def test_completed_read_does_not_make_supported_review_unknown() -> None:
-    from litellm.proxy.engine.analysis import Observation, SpanRead, TraceReview
+    from litellm.proxy.lens.analysis import Observation, SpanRead, TraceReview
 
     execution: Final = Execution(
         id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
@@ -720,7 +720,7 @@ async def test_completed_read_does_not_make_supported_review_unknown() -> None:
             content=TraceReview(reads=(SpanRead(span_id="s"),), observations=(observation,)).model_dump_json(), cost=0
         )
 
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     result: Final = await extract(claim, execution, read, model)
     assert result.observations == (observation,)
     assert not result.cannot_assess and not result.partial
@@ -770,7 +770,7 @@ async def test_echoed_feedback_page_does_not_skip_requested_evidence() -> None:
             cost=0,
         )
 
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     result: Final = await extract(claim, execution, read, model)
     assert tuple(requests.get_nowait() for _ in range(requests.qsize())) == (0, 1)
     assert len(result.observations) == 1
@@ -797,7 +797,7 @@ async def test_empty_navigation_requires_a_final_decision(action: str) -> None:
             return ModelResult(content='{"action":"inconclusive"}', cost=0)
         return ModelResult(content=json.dumps({"action": action, "page": 999, "execution_id": "run"}), cost=0)
 
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     result: Final = await investigate(
         claim,
         Candidate(check_id="retries", title="Timeout", hypothesis="Failed", execution_ids=("run",)),
@@ -812,20 +812,20 @@ async def test_empty_navigation_requires_a_final_decision(action: str) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ("extract", "investigate"))
 async def test_large_feedback_history_is_accessible_without_overflowing_context(phase: str) -> None:
-    from litellm.proxy.engine.state import merge_finding
+    from litellm.proxy.lens.state import merge_finding
 
     execution: Final = Execution(
         id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
     )
     part: Final = TracePart(execution_id="run", span_id="span", name="task", kind="agent", content="timeout")
-    accepted: Final = merge_finding(engine(), finding("run"), 1, NOW)
+    accepted: Final = merge_finding(lens(), finding("run"), 1, NOW)
     prior: Final = tuple(
         accepted.model_copy(
             update=MappingProxyType({"id": str(i), "status": "dismissed", "reason": f"Accepted-{i}: " + "x" * 1900})
         )
         for i in range(60)
     )
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=prior)
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=prior)
     pages: Final = SimpleQueue[int]()
 
     async def read(_identity: str, _cursor: str, _offset: int) -> ExecutionContent:
@@ -865,7 +865,7 @@ async def test_large_feedback_history_is_accessible_without_overflowing_context(
 
 @pytest.mark.asyncio
 async def test_final_registry_reconciles_patterns_split_across_pages() -> None:
-    from litellm.proxy.engine.analysis import Clusters, Observation, cluster_batches
+    from litellm.proxy.lens.analysis import Clusters, Observation, cluster_batches
 
     observations: Final = tuple(
         Observation(
@@ -902,7 +902,7 @@ async def test_final_registry_reconciles_patterns_split_across_pages() -> None:
 
 @pytest.mark.asyncio
 async def test_distinct_patterns_are_consolidated_in_batches_without_losing_runs() -> None:
-    from litellm.proxy.engine.analysis import Observation, cluster_batches, observation_batches
+    from litellm.proxy.lens.analysis import Observation, cluster_batches, observation_batches
 
     observations: Final = tuple(
         Observation(
@@ -930,7 +930,7 @@ async def test_distinct_patterns_are_consolidated_in_batches_without_losing_runs
 
 @pytest.mark.asyncio
 async def test_invalid_candidate_response_preserves_other_findings_and_reports_inconclusive() -> None:
-    from litellm.proxy.engine.analysis import investigate_candidates
+    from litellm.proxy.lens.analysis import investigate_candidates
 
     execution: Final = Execution(
         id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
@@ -954,7 +954,7 @@ async def test_invalid_candidate_response_preserves_other_findings_and_reports_i
     async def progress(_stage: str, coverage: Coverage) -> None:
         counts.put(coverage.inconclusive)
 
-    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     results: Final = tuple(
         [
             result
