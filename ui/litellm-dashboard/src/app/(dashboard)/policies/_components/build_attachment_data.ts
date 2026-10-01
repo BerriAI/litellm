@@ -1,13 +1,17 @@
 import { PolicyAttachmentCreateRequest } from "@/components/policies/types";
 
-/**
- * Builds a PolicyAttachmentCreateRequest from form values.
- *
- * @param formValues - The raw form field values (from form.getFieldsValue)
- * @param scopeType - Whether the attachment is "global" or "specific"
- */
+export interface AttachmentFormInput {
+  policy_name: string;
+  teams?: string[];
+  keys?: string[];
+  models?: string[];
+  tags?: string[];
+  priority?: number | null;
+  default?: boolean;
+}
+
 export function buildAttachmentData(
-  formValues: Record<string, any>,
+  formValues: AttachmentFormInput,
   scopeType: "global" | "specific",
 ): PolicyAttachmentCreateRequest {
   const data: PolicyAttachmentCreateRequest = {
@@ -21,5 +25,7 @@ export function buildAttachmentData(
     if (formValues.models && formValues.models.length > 0) data.models = formValues.models;
     if (formValues.tags && formValues.tags.length > 0) data.tags = formValues.tags;
   }
+  if (typeof formValues.priority === "number") data.priority = formValues.priority;
+  if (formValues.default === true) data.default = true;
   return data;
 }

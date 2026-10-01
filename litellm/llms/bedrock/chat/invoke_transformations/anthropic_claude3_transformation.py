@@ -18,20 +18,24 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.llms.bedrock.common_utils import (
     apply_bedrock_invoke_structured_output,
+    bedrock_supports_tool_search,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     strip_unsupported_bedrock_invoke_output_config_keys,
+    tools_without_eager_input_streaming,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
+    ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -221,7 +225,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
-        anthropic_request.pop("stream_chunk_size", None)
         apply_bedrock_invoke_structured_output(
             model=model,
             request_body=anthropic_request,
@@ -236,6 +239,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         # Hoist `custom.defer_loading` then drop `custom` (Bedrock doesn't support it)
         normalize_custom_field_on_tools(anthropic_request)
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_request)
+        outbound_tools: Final = tools_without_eager_input_streaming(anthropic_request)
+        if outbound_tools is not None:
+            anthropic_request["tools"] = outbound_tools
         return anthropic_request
 
     def _compute_bedrock_invoke_beta_headers(
@@ -249,6 +255,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         tool_search_used: Final = self.is_tool_search_used(tools)
         programmatic_tool_calling_used: Final = self.is_programmatic_tool_calling_used(tools)
         input_examples_used: Final = self.is_input_examples_used(tools)
+        is_mid_conversation_output_config_used: Final = self.is_mid_conversation_output_config_used(messages)
 
         user_beta_set: Final = set(get_anthropic_beta_from_headers(headers))
         beta_set: Final = set(user_beta_set)
@@ -260,13 +267,17 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             file_id_used=self.is_file_id_used(messages),
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
             custom_llm_provider="bedrock",
+            is_mid_conversation_output_config_used=is_mid_conversation_output_config_used,
         )
         beta_set.update(auto_betas)
 
         if tool_search_used and not (programmatic_tool_calling_used or input_examples_used):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
-            if "opus-4" in model.lower() or "opus_4" in model.lower():
+            if bedrock_supports_tool_search(model):
                 beta_set.add("tool-search-tool-2025-10-19")
+
+        if self.is_eager_input_streaming_used(tools):
+            beta_set.add(ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER)
 
         auto_beta_list: Final = filter_and_transform_beta_headers(
             beta_headers=list(beta_set - user_beta_set),
@@ -348,7 +359,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

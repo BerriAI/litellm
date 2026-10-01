@@ -122,6 +122,13 @@ class TestPlanPgBouncer:
             "pgbouncer": "true",
         }
 
+    def test_an_upstream_that_already_disables_prepared_statements_gets_a_single_pgbouncer_flag(self):
+        pooled: Final = _plan("postgresql://app:pw@db/litellm?connection_limit=5&pgbouncer=true").pooled_url
+        assert urllib.parse.parse_qsl(urllib.parse.urlsplit(pooled).query) == [
+            ("connection_limit", "5"),
+            ("pgbouncer", "true"),
+        ]
+
     @pytest.mark.parametrize("hop_param", ["channel_binding=require", "gssencmode=require"])
     def test_transport_params_for_the_postgres_hop_stay_off_the_plain_tcp_loopback_url(self, hop_param: str):
         pooled: Final = _plan(f"postgresql://app:pw@db/litellm?connection_limit=5&{hop_param}").pooled_url

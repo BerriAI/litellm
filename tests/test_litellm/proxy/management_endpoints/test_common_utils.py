@@ -8,6 +8,10 @@ users can intentionally clear previously-set fields.
 """
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
+
+from fastapi import HTTPException
+from litellm import Router
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,7 +25,6 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_team_admin,
     _org_admin_can_invite_user,
     _set_object_metadata_field,
     _team_admin_can_invite_user,
@@ -31,6 +34,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     admin_can_invite_user,
 )
 from litellm.proxy.management_endpoints.common_utils import _has_non_empty_value
+from litellm.types.utils import BudgetConfig
 
 
 class TestUpdateMetadataFieldsEmptyCollections:
@@ -241,53 +245,12 @@ class TestUserHasAdminView:
         assert _user_has_admin_view(auth_user) is False
 
 
-class TestIsUserTeamAdmin:
-    """Tests for _is_user_team_admin function."""
+def test_published_enterprise_import_of_team_admin_check_still_answers():
+    from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 
-    @pytest.mark.parametrize(
-        "members_with_roles,user_id,expected",
-        [
-            (
-                [Member(user_id="u1", role="admin")],
-                "u1",
-                True,
-            ),
-            (
-                [Member(user_id="u1", role="user")],
-                "u1",
-                False,
-            ),
-            (
-                [
-                    Member(user_id="u2", role="admin"),
-                    Member(user_id="u1", role="admin"),
-                ],
-                "u1",
-                True,
-            ),
-            ([], "u1", False),
-        ],
-    )
-    def test_is_user_team_admin_parametrized(
-        self, members_with_roles, user_id, expected
-    ):
-        """Parametrized test: user is team admin only when in members_with_roles with admin role."""
-        mock_auth = MagicMock()
-        mock_auth.user_id = user_id
-        team = LiteLLM_TeamTable(
-            team_id="team-1",
-            members_with_roles=members_with_roles,
-        )
-        assert _is_user_team_admin(mock_auth, team) == expected
-
-    def test_is_user_team_admin_user_not_in_team(self):
-        """Test returns False when user is not in team members."""
-        auth = UserAPIKeyAuth(user_id="u99", api_key="sk-x", user_role=None)
-        team = LiteLLM_TeamTable(
-            team_id="team-1",
-            members_with_roles=[Member(user_id="u1", role="admin")],
-        )
-        assert _is_user_team_admin(auth, team) is False
+    team = LiteLLM_TeamTable(team_id="t1", members_with_roles=[Member(user_id="admin", role="admin")])
+    assert _is_user_team_admin(UserAPIKeyAuth(user_id="admin"), team) is True
+    assert _is_user_team_admin(UserAPIKeyAuth(user_id="outsider"), team) is False
 
 
 class TestOrgAdminCanInviteUser:
@@ -769,43 +732,132 @@ class TestCheckPassthroughRoutesCallerPermission:
         )
 
 
-class TestIsUserOrgAdminForTeam:
-    """The caller must be looked up with its exact identity; a nulled or omitted
-    lookup argument would silently mis-resolve org-admin status."""
+class TestCheckDisableGlobalGuardrailsCallerPermission:
+    """Only proxy admins may set disable_global_guardrails (top-level or under
+    metadata); non-admins get a 403 naming the entity."""
 
-    @pytest.mark.asyncio
-    async def test_get_user_object_called_with_caller_identity(self):
-        from litellm.proxy.management_endpoints.common_utils import (
-            _is_user_org_admin_for_team,
-        )
-
-        team = LiteLLM_TeamTable(
-            team_id="t1", organization_id="org1", members_with_roles=[]
-        )
-        key = UserAPIKeyAuth(
+    def _non_admin(self):
+        return UserAPIKeyAuth(
             user_id="u1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
         )
-        fake_prisma, fake_cache, fake_logging = MagicMock(), MagicMock(), MagicMock()
-        mock_get_user = AsyncMock(return_value=None)
 
-        with patch(
-            "litellm.proxy.proxy_server.prisma_client", fake_prisma
-        ), patch(
-            "litellm.proxy.proxy_server.user_api_key_cache", fake_cache
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj", fake_logging
-        ), patch(
-            "litellm.proxy.auth.auth_checks.get_user_object", mock_get_user
-        ):
-            result = await _is_user_org_admin_for_team(key, team)
+    def _admin(self):
+        return UserAPIKeyAuth(
+            user_id="u2", api_key="sk-y", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
 
-        assert result is False
-        mock_get_user.assert_awaited_once_with(
-            user_id="u1",
-            prisma_client=fake_prisma,
-            user_api_key_cache=fake_cache,
-            user_id_upsert=False,
-            proxy_logging_obj=fake_logging,
+    def test_top_level_flag_rejected_with_default_entity(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_disable_global_guardrails_caller_permission(True, None, self._non_admin())
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == {"error": "Only proxy admins can set `disable_global_guardrails` on a key."}
+
+    def test_metadata_flag_rejected_with_default_entity(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_disable_global_guardrails_caller_permission(
+                None, {"disable_global_guardrails": True}, self._non_admin()
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == {"error": "Only proxy admins can set `disable_global_guardrails` on a key."}
+
+    def test_explicit_false_with_metadata_true_is_rejected(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_disable_global_guardrails_caller_permission(
+                False, {"disable_global_guardrails": True}, self._non_admin()
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == {"error": "Only proxy admins can set `disable_global_guardrails` on a key."}
+
+    def test_rejection_names_the_team_entity(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_disable_global_guardrails_caller_permission(True, None, self._non_admin(), entity="team")
+
+        assert exc_info.value.detail == {"error": "Only proxy admins can set `disable_global_guardrails` on a team."}
+
+    def test_false_and_absent_flag_do_not_raise(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        non_admin = self._non_admin()
+        assert _check_disable_global_guardrails_caller_permission(False, None, non_admin) is None
+        assert _check_disable_global_guardrails_caller_permission(None, None, non_admin) is None
+        assert _check_disable_global_guardrails_caller_permission(None, {}, non_admin) is None
+        assert (
+            _check_disable_global_guardrails_caller_permission(None, {"disable_global_guardrails": False}, non_admin)
+            is None
+        )
+
+    def test_unchanged_stored_flag_does_not_raise(self):
+        """Re-sending a flag that is already stored is not an opt-out."""
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        non_admin = self._non_admin()
+        assert (
+            _check_disable_global_guardrails_caller_permission(
+                True,
+                {"disable_global_guardrails": True},
+                non_admin,
+                existing_metadata={"disable_global_guardrails": True},
+            )
+            is None
+        )
+
+    def test_stored_false_does_not_exempt(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_disable_global_guardrails_caller_permission(
+                True,
+                None,
+                self._non_admin(),
+                existing_metadata={"disable_global_guardrails": False},
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == {"error": "Only proxy admins can set `disable_global_guardrails` on a key."}
+
+    def test_proxy_admin_may_set_the_flag(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        assert (
+            _check_disable_global_guardrails_caller_permission(True, {"disable_global_guardrails": True}, self._admin())
+            is None
         )
 
 
@@ -1120,3 +1172,92 @@ class TestUpdateMetadataFieldsPremiumCheck:
         }
         _update_metadata_fields(updated_kv)
         mock_check.assert_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("db_model,stored_name,owner,public_name,error", [
+    (False, None, None, None, None),
+    (True, "group", None, None, None),
+    (True, None, None, None, "Unknown deployment ID in router weights: id"),
+    (False, "renamed", None, None, "Deployment id does not belong to model group group"),
+    (False, None, "other-team", None, "Unknown deployment ID in router weights: id"),
+    (True, "internal", "team", "group", None),
+    (True, "group", "team", "public", "Deployment id does not belong to model group group"),
+    (True, "group", None, "unrelated-public-name", None),
+])
+async def test_router_weights_validate_current_deployment_scope(
+    db_model: bool, stored_name: str | None, owner: str | None,
+    public_name: str | None, error: str | None,
+) -> None:
+    from litellm.proxy.management_endpoints.router_weights import validate_router_settings_weights
+
+    info = {"team_id": owner, "team_public_model_name": public_name}
+    router = Router(model_list=[{
+        "model_name": "group",
+        "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "test"},
+        "model_info": {"id": "id", "db_model": db_model, **info},
+    }])
+    rows = [SimpleNamespace(model_id="id", model_name=stored_name, model_info=info)] if stored_name else []
+    table = SimpleNamespace(find_many=AsyncMock(return_value=rows))
+    db = SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=table))
+    validation = validate_router_settings_weights(
+        {"weights": {"group": {"id": 1}}}, team_id="team", prisma_client=db, llm_router=router,
+    )
+    if error:
+        with pytest.raises(HTTPException, match=error) as exc:
+            await validation
+        assert exc.value.status_code == 400
+        assert exc.value.detail == error
+    else:
+        await validation
+
+
+@pytest.mark.parametrize(
+    "model_max_budget, error",
+    [
+        ({"gpt-4o": BudgetConfig(max_budget=-1.0, budget_duration="1d")}, "non-negative finite"),
+        ({"gpt-4o": BudgetConfig(max_budget=float("inf"), budget_duration="1d")}, "non-negative finite"),
+        ({"gpt-4o": BudgetConfig(max_budget=float("nan"), budget_duration="1d")}, "non-negative finite"),
+        ({"gpt-4o": BudgetConfig(budget_duration="1d")}, "non-negative finite"),
+        ({"gpt-4o": BudgetConfig(max_budget=5.0)}, "requires a budget_duration"),
+        ({"gpt-4o": BudgetConfig(max_budget=5.0, budget_duration="fortnight")}, "budget_duration"),
+        ({"  ": BudgetConfig(max_budget=5.0, budget_duration="1d")}, "non-empty model names"),
+        ({"gpt-4o": BudgetConfig(max_budget=5.0, budget_duration="1d", tpm_limit=1000)}, "not enforced on a team"),
+        ({"gpt-4o": BudgetConfig(max_budget=5.0, budget_duration="1d", rpm_limit=10)}, "not enforced on a team"),
+    ],
+    ids=["negative", "inf", "nan", "no_cap", "no_duration", "bad_duration", "blank_model", "tpm_limit", "rpm_limit"],
+)
+def test_validate_team_model_max_budget_rejects_unenforceable_entries(model_max_budget, error) -> None:
+    from litellm.proxy.management_endpoints.common_utils import validate_team_model_max_budget
+
+    with pytest.raises(HTTPException) as exc:
+        validate_team_model_max_budget(model_max_budget=model_max_budget, premium_user=True)
+    assert exc.value.status_code == 400
+    assert error in exc.value.detail["error"]
+
+
+def test_validate_team_model_max_budget_accepts_a_zero_cap_and_prefixed_models() -> None:
+    from litellm.proxy.management_endpoints.common_utils import validate_team_model_max_budget
+
+    assert (
+        validate_team_model_max_budget(
+            model_max_budget={
+                "gpt-4o": BudgetConfig(max_budget=0.0, budget_duration="1d"),
+                "openai/gpt-4o-mini": BudgetConfig(max_budget=2.5, budget_duration="30d"),
+            },
+            premium_user=True,
+        )
+        is None
+    )
+
+
+def test_validate_team_model_max_budget_is_license_gated_only_when_set() -> None:
+    from litellm.proxy.management_endpoints.common_utils import validate_team_model_max_budget
+
+    validate_team_model_max_budget(model_max_budget=None, premium_user=False)
+    validate_team_model_max_budget(model_max_budget={}, premium_user=False)
+    with pytest.raises(HTTPException) as exc:
+        validate_team_model_max_budget(
+            model_max_budget={"gpt-4o": BudgetConfig(max_budget=1.0, budget_duration="1d")}, premium_user=False
+        )
+    assert exc.value.status_code == 403

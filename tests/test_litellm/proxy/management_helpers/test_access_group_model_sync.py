@@ -13,7 +13,7 @@ from litellm.proxy.management_helpers.access_group_model_sync import (
 _INVALIDATE = "litellm.proxy.management_helpers.access_group_model_sync.invalidate_access_group_caches"
 
 
-def _routed_prisma_client(deployment_count: int):
+def _routed_prisma_client(deployment_count: int, writer_unavailable: bool = False):
     async def query_raw(sql, *params):
         if sql.startswith("SELECT COUNT(*)"):
             return [{"deployment_count": deployment_count}]
@@ -26,6 +26,7 @@ def _routed_prisma_client(deployment_count: int):
     writer = PrismaWrapper(original_prisma=writer_inner, iam_token_db_auth=False)
     reader = PrismaWrapper(original_prisma=reader_inner, iam_token_db_auth=False)
     routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+    routing._writer_unavailable = writer_unavailable
     return SimpleNamespace(db=routing), writer_inner, reader_inner
 
 
@@ -50,6 +51,20 @@ async def test_rename_replaces_the_old_name_when_no_other_deployment_carries_it(
     assert "array_replace" in update_call.args[0]
     assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
     invalidate.assert_awaited_once_with(("ag-1", "ag-2"))
+    reader_inner.query_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rename_update_stays_on_the_writer_while_writer_flagged_unavailable():
+    prisma_client, writer_inner, reader_inner = _routed_prisma_client(deployment_count=0, writer_unavailable=True)
+
+    with patch(_INVALIDATE, new=AsyncMock()):
+        await sync_access_groups_for_renamed_model(
+            prisma_client, model_id="m-1", old_name="gpt-5.6", new_name="gpt-5.6-eu", llm_router=None
+        )
+
+    (update_call,) = _access_group_updates(writer_inner)
+    assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
     reader_inner.query_raw.assert_not_awaited()
 
 
@@ -168,3 +183,17 @@ async def test_delete_keeps_the_name_while_a_sibling_row_still_backs_it():
 
     assert _access_group_updates(writer_inner) == []
     invalidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_counts_backing_rows_on_the_writer_not_a_lagging_replica_while_writer_flagged_unavailable():
+    prisma_client, writer_inner, reader_inner = _routed_prisma_client(deployment_count=0, writer_unavailable=True)
+    reader_inner.query_raw = AsyncMock(return_value=[{"deployment_count": 1}])
+
+    with patch(_INVALIDATE, new=AsyncMock()) as invalidate:
+        await sync_access_groups_for_deleted_model(prisma_client, model_id="m-1", model_name="gpt-5.6", llm_router=None)
+
+    (update_call,) = _access_group_updates(writer_inner)
+    assert "array_remove" in update_call.args[0]
+    invalidate.assert_awaited_once_with(("ag-1", "ag-2"))
+    reader_inner.query_raw.assert_not_awaited()

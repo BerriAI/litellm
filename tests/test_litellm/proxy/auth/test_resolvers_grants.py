@@ -1,4 +1,5 @@
 from fastapi import HTTPException
+import httpx
 import pytest
 
 from litellm.proxy._types import (
@@ -8,6 +9,7 @@ from litellm.proxy._types import (
     ProxyException,
 )
 from litellm.proxy.auth.auth_checks import TeamNotFoundError, UserNotFoundError
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.auth.resolvers.grants import (
     GrantResolver,
     LookupDegraded,
@@ -170,6 +172,29 @@ async def test_resolve_identity_lets_loader_errors_surface():
 
     with pytest.raises(UserNotFoundError):
         await loaders.resolver().resolve_identity(UserLookup(user_id=USER_ID), team_id=None)
+
+
+class _UnreachableMembershipPrisma:
+    class db:
+        class litellm_teammembership:
+            @staticmethod
+            async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
+                raise httpx.ConnectError("All connection attempts failed")
+
+
+async def test_resolve_marks_a_membership_read_that_hits_a_db_outage_as_degraded():
+    loaders = _Loaders(user=_user(), team=_team())
+    resolver = GrantResolver(
+        _UnreachableMembershipPrisma(),
+        UserApiKeyCache(),
+        load_user=loaders.load_user,
+        load_team=loaders.load_team,
+    )
+
+    outcome = await resolver.resolve(UserLookup(user_id=USER_ID), team_id=TEAM_ID)
+
+    assert isinstance(outcome, LookupDegraded)
+    assert isinstance(outcome.error, httpx.ConnectError)
 
 
 def test_raise_public_maps_a_deleted_user_to_401():

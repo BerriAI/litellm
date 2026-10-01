@@ -350,6 +350,95 @@ async def test_zero_and_non_int_usage_counters_are_skipped():
 
 
 @pytest.mark.asyncio
+async def test_not_run_entries_are_indexed_but_not_counted_as_evaluations():
+    """
+    LIT-6314 records a not_run entry when message scoping leaves a guardrail
+    nothing to scan. The guardrail never evaluated the request, so counting it
+    as a passed evaluation would inflate daily pass rates; it still gets an
+    index row so per-request drill-down finds the spend log.
+    """
+    prisma = _prisma()
+    logs = [_payload("r1", guardrail_status="not_run"), _payload("r2")]
+
+    await process_spend_logs_guardrail_usage(prisma, logs)
+
+    metrics_create = prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]
+    assert metrics_create["requests_evaluated"] == 1
+    assert metrics_create["passed_count"] == 1
+    index_rows = prisma.db.litellm_spendlogguardrailindex.create_many.call_args.kwargs["data"]
+    assert sorted(row["request_id"] for row in index_rows) == ["r1", "r2"]
+
+
+@pytest.mark.asyncio
+async def test_not_run_entry_shares_index_key_with_evaluated_sibling_of_same_name():
+    """
+    The not_run entry from the shared base guardrail carries only guardrail_name,
+    while the evaluated entry from the same guardrail (e.g. content filter on the
+    output of a logging_only run) carries its guardrail_id. Keying them differently
+    lists one request twice in the monitor, once as not_run and once as passed.
+    """
+    prisma = _prisma()
+    payload = _payload("r1")
+    payload["metadata"] = json.dumps(
+        {
+            "guardrail_information": [
+                {"guardrail_name": "cf", "guardrail_status": "not_run"},
+                {
+                    "guardrail_name": "cf",
+                    "guardrail_id": "cf-uuid",
+                    "policy_id": "pol-1",
+                    "guardrail_status": "success",
+                },
+                {"guardrail_name": "other", "guardrail_status": "not_run"},
+            ]
+        }
+    )
+
+    await process_spend_logs_guardrail_usage(prisma, [payload])
+
+    index_rows = prisma.db.litellm_spendlogguardrailindex.create_many.call_args.kwargs["data"]
+    assert sorted((row["guardrail_id"], row["policy_id"]) for row in index_rows) == [
+        ("cf-uuid", "pol-1"),
+        ("other", None),
+    ]
+    metrics_create = prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]
+    assert (metrics_create["guardrail_id"], metrics_create["requests_evaluated"]) == ("cf-uuid", 1)
+
+
+@pytest.mark.asyncio
+async def test_malformed_not_run_entry_does_not_drop_the_batch():
+    prisma = _prisma()
+    payload = _payload("r1")
+    payload["metadata"] = json.dumps(
+        {
+            "guardrail_information": [
+                {"guardrail_name": ["not", "a", "string"], "guardrail_status": "success"},
+                {"guardrail_name": "", "guardrail_id": "cf-uuid", "guardrail_status": "success"},
+                {"guardrail_status": "success"},
+            ]
+        }
+    )
+
+    await process_spend_logs_guardrail_usage(prisma, [payload])
+
+    index_rows = prisma.db.litellm_spendlogguardrailindex.create_many.call_args.kwargs["data"]
+    assert [row["guardrail_id"] for row in index_rows] == ["cf-uuid"]
+    metrics_create = prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]
+    assert (metrics_create["guardrail_id"], metrics_create["requests_evaluated"]) == ("cf-uuid", 1)
+
+
+@pytest.mark.asyncio
+async def test_batch_of_only_not_run_entries_writes_no_metrics_row():
+    prisma = _prisma()
+
+    await process_spend_logs_guardrail_usage(prisma, [_payload("r1", guardrail_status="not_run")])
+
+    assert prisma.db.litellm_dailyguardrailmetrics.upsert.call_count == 0
+    index_rows = prisma.db.litellm_spendlogguardrailindex.create_many.call_args.kwargs["data"]
+    assert [row["request_id"] for row in index_rows] == ["r1"]
+
+
+@pytest.mark.asyncio
 async def test_payload_without_request_id_is_skipped_like_the_metrics_path():
     prisma = _prisma()
     logs = [

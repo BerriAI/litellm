@@ -1,6 +1,8 @@
+import gzip
 import io
 import json
-from typing import get_type_hints
+from collections.abc import Mapping
+from typing import Literal, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
@@ -30,12 +32,14 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 
 
-def _starlette_request(body: bytes, content_type: str) -> Request:
+def _starlette_request(
+    body: bytes, content_type: str, path: str = "/v1/messages", content_encoding: str = ""
+) -> Request:
     scope = {
         "type": "http",
         "method": "POST",
-        "path": "/v1/messages",
-        "headers": [(b"content-type", content_type.encode())],
+        "path": path,
+        "headers": [(b"content-type", content_type.encode()), (b"content-encoding", content_encoding.encode())],
         "query_string": b"",
     }
     chunks = iter((body,))
@@ -69,6 +73,26 @@ async def test_read_raw_json_body_is_none_for_form_bodies():
 
     assert await _read_request_body(request) == {"model": "claude-sonnet-4-5"}
     assert await read_raw_json_body(request) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_type", ["application/x-protobuf", "application/protobuf; charset=binary"])
+async def test_protobuf_body_is_not_parsed_as_json(content_type):
+    # OTLP trace exports (POST /v1/traces) are binary protobuf; arbitrary bytes like these
+    # used to hit the JSON surrogate-repair path and fail auth with a 400.
+    body = b"\n\xa2\x01\n\x1c\n\x0cservice.name\x12\x0c\n\nswarm\xed\xa0\x80\xff"
+    request = _starlette_request(body, content_type)
+
+    assert await _read_request_body(request) == {}
+    assert await request.body() == body  # body is still readable by the endpoint
+
+
+@pytest.mark.asyncio
+async def test_gzipped_json_trace_body_survives_auth_pre_read():
+    body = gzip.compress(b'{"resourceSpans": []}')
+    request = _starlette_request(body, "application/json", "/v1/traces", "gzip")
+    assert await _read_request_body(request) == {}
+    assert await request.body() == body
 
 
 @pytest.mark.asyncio
@@ -512,8 +536,8 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
     the repair must be skipped and the existing 400 raised immediately, while bodies
     at or below the limit still get repaired.
 
-    `\\ud83d` is a lone high-surrogate escape: orjson rejects it, the json fallback
-    accepts it, so a body containing it is only salvaged when the repair path runs.
+    `NaN` is rejected by orjson and accepted by the json fallback, so a body containing
+    it is only salvaged when the repair path runs.
     """
     import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
 
@@ -522,14 +546,14 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
         http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 100 / (1024 * 1024)
     )
 
-    small_body = b'{"model":"gpt-4o","x":"\\ud83d"}'
+    small_body = b'{"model":"gpt-4o","x":NaN}'
     assert len(small_body) <= 100
     repaired = await _read_request_body(_make_json_request(small_body))
     assert repaired["model"] == "gpt-4o"
 
     padding = "a" * 200
     large_body = (
-        b'{"model":"gpt-4o","pad":"' + padding.encode() + b'","x":"\\ud83d"}'
+        b'{"model":"gpt-4o","pad":"' + padding.encode() + b'","x":NaN}'
     )
     assert len(large_body) > 100
     with pytest.raises(ProxyException) as exc_info:
@@ -544,6 +568,40 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
     )
     repaired_large = await _read_request_body(_make_json_request(large_body))
     assert repaired_large["model"] == "gpt-4o"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(b"say ok \\ud83d", id="lone-high-surrogate"),
+        pytest.param(b"say ok \\ude00", id="lone-low-surrogate"),
+        pytest.param(b"\\ud83d\\ud83d\\ude00", id="lone-high-before-valid-pair"),
+    ],
+)
+async def test_lone_surrogate_escape_is_rejected_with_400(content: bytes):
+    """
+    orjson rejects a lone surrogate escape, and the json fallback accepts it, so the
+    parsed body used to carry a code point no provider request can UTF-8 encode. That
+    surfaced as a 500 from the provider handler instead of a 400 for the bad input.
+    """
+    body = b'{"model":"gpt-4o","messages":[{"role":"user","content":"' + content + b'"}]}'
+    with pytest.raises(ProxyException) as exc_info:
+        await _read_request_body(_make_json_request(body))
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert "Invalid JSON payload" in exc_info.value.message
+
+    paired = body.replace(content, b"say ok \\ud83d\\ude00")
+    parsed = await _read_request_body(_make_json_request(paired))
+    assert parsed["messages"][0]["content"] == "say ok \U0001F600"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("media_type", ["application/x-protobuf", "application/protobuf", "application/octet-stream"])
+async def test_json_body_under_a_binary_content_type_is_still_parsed(media_type: str):
+    request = _starlette_request(b'{"model": "claude-sonnet-5"}', media_type)
+    assert await _read_request_body(request) == {"model": "claude-sonnet-5"}
 
 
 @pytest.mark.asyncio
@@ -1176,3 +1234,42 @@ class TestCoerceNumericFormFields:
             numeric_fields=self.numeric_fields,
         )
         assert result == {"n": 3, "temperature": None, "image": buffer}
+
+
+@pytest.mark.parametrize(
+    "kind,settings,cli,path,body,expected",
+    [
+        ("completion", {"completion_model": "default"}, "cli", "path", "body", "default"),
+        ("completion", {}, "cli", "path", "body", "cli"),
+        ("completion", {}, None, "path", "body", "path"),
+        ("completion", {}, None, None, "body", "body"),
+        (
+            "image_generation",
+            {"completion_model": "text", "image_generation_model": "image"},
+            None,
+            None,
+            "body",
+            "image",
+        ),
+        ("image_generation", {"image_generation_model": "image"}, "cli", "path", "body", "cli"),
+        ("image_generation", {"image_generation_model": "image"}, None, "path", "body", "path"),
+        ("image_edit", {"completion_model": "text", "image_generation_model": "image"}, None, None, "body", "text"),
+        ("image_edit", {"image_generation_model": "image"}, None, "path", "body", "path"),
+        ("image_edit", {"image_generation_model": "image"}, None, None, "body", "image"),
+        ("moderation", {"moderation_model": "mod"}, "cli", None, "body", "cli"),
+        ("speech", {"completion_model": "text"}, None, None, "body", "body"),
+        ("body", {"completion_model": "text"}, "cli", None, "body", "body"),
+        ("path", {"completion_model": "text"}, "cli", "path", "body", "path"),
+    ],
+)
+def test_shared_inference_model_selection_preserves_handler_precedence(
+    kind: Literal["completion", "image_generation", "image_edit", "moderation", "speech", "body", "path"],
+    settings: Mapping[str, object],
+    cli: str | None,
+    path: str | None,
+    body: str,
+    expected: str,
+) -> None:
+    from litellm.proxy.common_utils.http_parsing_utils import resolve_inference_model
+
+    assert resolve_inference_model(body, settings, cli, path, kind=kind) == expected

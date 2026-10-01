@@ -7,12 +7,18 @@ Unit tests for the VERIA-55 fixes:
   member of.
 """
 
+from types import MappingProxyType
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.models.team import LiteLLM_TeamTable
+from litellm.proxy._types import LitellmUserRoles, Member, UserAPIKeyAuth
+
+_PROJECTS_ENABLED: Final = MappingProxyType({"team_admin_editable_team_fields": ["projects"]})
+_PROJECTS_DISABLED: Final = MappingProxyType({"team_admin_editable_team_fields": ["max_budget"]})
 
 
 # ---------------------------------------------------------------------------
@@ -20,11 +26,9 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 # ---------------------------------------------------------------------------
 
 
-def _make_prisma_with_team(team_id: str, admins: list):
+def _make_prisma_with_team(team_id: str, admins: list, members_with_roles: tuple[Member, ...] = ()):
     prisma = MagicMock()
-    team_row = MagicMock()
-    team_row.team_id = team_id
-    team_row.admins = admins
+    team_row = LiteLLM_TeamTable(team_id=team_id, admins=admins, members_with_roles=list(members_with_roles))
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     return prisma
 
@@ -49,6 +53,7 @@ async def test_project_perm_check_uses_current_team_not_caller_supplied():
         user_api_key_dict=caller,
         team_id="team-A",
         prisma_client=prisma,
+        general_settings=_PROJECTS_ENABLED,
     )
     assert has_perm is False
     prisma.db.litellm_teamtable.find_unique.assert_awaited_once()
@@ -70,8 +75,103 @@ async def test_project_perm_check_allows_team_admin_of_existing_team():
         user_api_key_dict=alice,
         team_id="team-A",
         prisma_client=prisma,
+        general_settings=_PROJECTS_ENABLED,
     )
     assert has_perm is True
+
+
+@pytest.mark.asyncio
+async def test_project_perm_check_allows_members_with_roles_admin():
+    """Team admins added through /team/member_add live in members_with_roles, not the legacy admins list."""
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _check_user_permission_for_project,
+    )
+
+    prisma = _make_prisma_with_team(
+        team_id="team-A",
+        admins=[],
+        members_with_roles=(Member(user_id="carol", role="admin"), Member(user_id="dave", role="user")),
+    )
+    carol = UserAPIKeyAuth(user_id="carol", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    dave = UserAPIKeyAuth(user_id="dave", user_role=LitellmUserRoles.INTERNAL_USER.value)
+
+    assert (
+        await _check_user_permission_for_project(
+            user_api_key_dict=carol, team_id="team-A", prisma_client=prisma, general_settings=_PROJECTS_ENABLED
+        )
+        is True
+    )
+    assert (
+        await _check_user_permission_for_project(
+            user_api_key_dict=dave, team_id="team-A", prisma_client=prisma, general_settings=_PROJECTS_ENABLED
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("general_settings", [MappingProxyType({}), _PROJECTS_DISABLED])
+async def test_project_perm_check_denies_team_admin_unless_projects_permission_configured(general_settings):
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _check_user_permission_for_project,
+    )
+
+    prisma = _make_prisma_with_team(
+        team_id="team-A", admins=["alice"], members_with_roles=(Member(user_id="carol", role="admin"),)
+    )
+
+    for user_id in ("alice", "carol"):
+        caller = UserAPIKeyAuth(user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER.value)
+        has_perm = await _check_user_permission_for_project(
+            user_api_key_dict=caller,
+            team_id="team-A",
+            prisma_client=prisma,
+            general_settings=general_settings,
+        )
+        assert has_perm is False
+    prisma.db.litellm_teamtable.find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_project_perm_check_require_admin_denies_team_admin_even_when_configured():
+    """/project/delete passes require_admin=True, so the projects permission must not open it up."""
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _check_user_permission_for_project,
+    )
+
+    prisma = _make_prisma_with_team(team_id="team-A", admins=["alice"])
+    alice = UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER.value)
+
+    has_perm = await _check_user_permission_for_project(
+        user_api_key_dict=alice,
+        team_id=None,
+        prisma_client=prisma,
+        general_settings=_PROJECTS_ENABLED,
+        require_admin=True,
+    )
+    assert has_perm is False
+    prisma.db.litellm_teamtable.find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_project_perm_check_uses_injected_team_object_for_reassignment_target():
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _check_user_permission_for_project,
+    )
+
+    prisma = _make_prisma_with_team(team_id="team-A", admins=["alice"])
+    alice = UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    target_team = LiteLLM_TeamTable(team_id="team-B", members_with_roles=[Member(user_id="erin", role="admin")])
+
+    has_perm = await _check_user_permission_for_project(
+        user_api_key_dict=alice,
+        team_id="team-B",
+        prisma_client=prisma,
+        general_settings=_PROJECTS_ENABLED,
+        team_object=target_team,
+    )
+    assert has_perm is False
+    prisma.db.litellm_teamtable.find_unique.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -90,6 +190,7 @@ async def test_project_perm_check_proxy_admin_always_allowed():
         user_api_key_dict=admin,
         team_id="team-A",
         prisma_client=prisma,
+        general_settings=MappingProxyType({}),
     )
     assert has_perm is True
     # Admin shortcut should not even hit the DB.

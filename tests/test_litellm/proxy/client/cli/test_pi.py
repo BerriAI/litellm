@@ -20,6 +20,13 @@ from litellm.proxy.client.cli.commands.pi import (
 )
 
 
+def test_listing_failure_is_str_enum():
+    assert issubclass(ListingFailure, str)
+    assert ListingFailure.REJECTED.value == "rejected"
+    assert ListingFailure("rejected") is ListingFailure.REJECTED
+    assert str(ListingFailure.REJECTED.value) == "rejected"
+
+
 class _FakeResponse:
     def __init__(self, status_code, payload=None):
         self.status_code = status_code

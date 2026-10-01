@@ -15,11 +15,12 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
+import httpx2
 import pytest
 import uvicorn
 import yaml
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult
 from starlette.requests import Request
 
@@ -36,6 +37,7 @@ from litellm.proxy.proxy_server import (
 
 CONFIG_TEMPLATE_PATH = Path("tests/mcp_tests/test_configs/test_config_mcp_e2e.yaml")
 MCP_SERVER_SCRIPT = Path("tests/mcp_tests/mcp_server.py")
+MCP_PEER_PYTHON = os.environ.get("MCP_TEST_PEER_PYTHON", sys.executable)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROXY_START_TIMEOUT = 30
 
@@ -52,6 +54,7 @@ def _clear_proxy_database_env() -> typing.Iterator[None]:
     # the LITELLM_MASTER_KEY env var, overriding whatever initialize() set from
     # the config file. We must set it here so the lifespan doesn't reset it to None.
     mp.setenv("LITELLM_MASTER_KEY", "sk-1234")
+    mp.setenv("LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY", "true")
     try:
         yield
     finally:
@@ -125,7 +128,7 @@ def _math_http_server(offset: int) -> typing.Iterator[str]:
 
     with tempfile.TemporaryFile() as server_log:
         process = subprocess.Popen(
-            [sys.executable, str(MCP_SERVER_SCRIPT), "--transport", "http", "--host", host, "--port", str(port)],
+            [MCP_PEER_PYTHON, str(MCP_SERVER_SCRIPT), "--transport", "http", "--host", host, "--port", str(port)],
             cwd=str(PROJECT_ROOT),
             stdout=server_log,
             stderr=subprocess.STDOUT,
@@ -175,7 +178,7 @@ def _proxy_server(
     config_dir = tmp_path_factory.mktemp("mcp_e2e")
     config_path = config_dir / "config.yaml"
     config = yaml.safe_load(CONFIG_TEMPLATE_PATH.read_text())
-    config["mcp_servers"]["math_stdio"]["command"] = sys.executable
+    config["mcp_servers"]["math_stdio"]["command"] = MCP_PEER_PYTHON
     config["mcp_servers"]["math_streamable_http"]["url"] = f"{math_streamable_http_server}/mcp"
     config["mcp_servers"]["math_restricted"]["url"] = f"{math_restricted_server}/mcp"
     config["general_settings"]["custom_auth"] = f"{__name__}.authorize_proxy_key"
@@ -202,17 +205,90 @@ def proxy_server_url(_proxy_server: ProxyRig, setup_and_teardown: None) -> str:
     return _proxy_server.url
 
 
+@asynccontextmanager
+async def _http_streams(url: str, headers: dict[str, str]):
+    async with httpx2.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as streams:
+            yield streams
+
+
+@pytest.mark.asyncio
+async def test_unchanged_sdk1_langchain_peer_can_list_and_call(proxy_server_url: str) -> None:
+    script = """
+import asyncio, json, sys
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+from langchain_mcp_adapters.tools import load_mcp_tools
+
+async def main():
+    async with streamablehttp_client(sys.argv[1] + '/mcp', headers={'Authorization': 'Bearer sk-1234'}) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            tools = await load_mcp_tools(session)
+            results = {}
+            for name in ('math_stdio-add', 'math_streamable_http-add'):
+                tool = next(tool for tool in tools if tool.name == name)
+                results[name] = await tool.ainvoke({'a': 3, 'b': 4})
+            print(json.dumps(results))
+asyncio.run(main())
+"""
+    completed = await asyncio.to_thread(
+        subprocess.run, [MCP_PEER_PYTHON, "-c", script, proxy_server_url],
+        capture_output=True, text=True, timeout=30, check=True,
+    )
+    results = json.loads(completed.stdout)
+    assert [(item["type"], item["text"]) for item in results["math_stdio-add"]] == [("text", "7")]
+    assert [(item["type"], item["text"]) for item in results["math_streamable_http-add"]] == [("text", "107")]
+
+
+@pytest.mark.parametrize("requested", ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25", "2026-07-28"])
+def test_initialize_keeps_legacy_negotiation(proxy_server_url: str, requested: str) -> None:
+    response = httpx.post(
+        proxy_server_url + "/mcp",
+        headers={"Authorization": PROXY_AUTHORIZATION_HEADER, "Accept": "application/json, text/event-stream"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": requested, "capabilities": {}, "clientInfo": {"name": "legacy-test", "version": "1"},
+        }},
+        timeout=10,
+    )
+    assert response.status_code == 200
+    result = _rpc_result(response)
+    assert result["protocolVersion"] == ("2025-11-25" if requested == "2026-07-28" else requested)
+
+
+@pytest.mark.asyncio
+async def test_legacy_prompts_and_resources_round_trip(proxy_server_url: str) -> None:
+    async with _http_streams(
+        proxy_server_url + "/mcp",
+        {"Authorization": PROXY_AUTHORIZATION_HEADER, "x-mcp-servers": "math_streamable_http"},
+    ) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            prompts = await session.list_prompts()
+            greeting = next(prompt for prompt in prompts.prompts if prompt.name.endswith("greeting"))
+            prompt = await session.get_prompt(greeting.name, {"name": "Ada"})
+            assert prompt.messages[0].content.text == "Hello, Ada"
+            resources = await session.list_resources()
+            status = next(resource for resource in resources.resources if resource.name.endswith("status"))
+            contents = await session.read_resource(status.uri)
+            assert contents.contents[0].text == "ready"
+            templates = await session.list_resource_templates()
+            greeting_template = next(template for template in templates.resource_templates if "greeting" in template.name)
+            contents = await session.read_resource(greeting_template.uri_template.replace("{name}", "Ada"))
+            assert contents.contents[0].text == "Hello, Ada"
+
+
 class TestProxyMcpSimpleConnections:
     @pytest.mark.asyncio
     async def test_proxy_mcp_stdio_roundtrip(self, proxy_server_url: str) -> None:
         async with asyncio.timeout(20):
-            async with streamablehttp_client(
+            async with _http_streams(
                 url=f"{proxy_server_url}/mcp",
                 headers={
                     "Authorization": PROXY_AUTHORIZATION_HEADER,
                     "x-mcp-servers": "math_stdio",
                 },
-            ) as (read, write, _get_session_id):
+            ) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     tools_result = await session.list_tools()
@@ -227,13 +303,13 @@ class TestProxyMcpSimpleConnections:
     @pytest.mark.asyncio
     async def test_proxy_mcp_streamable_http_roundtrip(self, proxy_server_url: str) -> None:
         async with asyncio.timeout(20):
-            async with streamablehttp_client(
+            async with _http_streams(
                 url=f"{proxy_server_url}/mcp",
                 headers={
                     "Authorization": PROXY_AUTHORIZATION_HEADER,
                     "x-mcp-servers": "math_streamable_http",
                 },
-            ) as (read, write, _get_session_id):
+            ) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     tools_result = await session.list_tools()
@@ -248,10 +324,10 @@ class TestProxyMcpSimpleConnections:
     @pytest.mark.asyncio
     async def test_proxy_mcp_lists_all_servers_without_header(self, proxy_server_url: str) -> None:
         async with asyncio.timeout(20):
-            async with streamablehttp_client(
+            async with _http_streams(
                 url=f"{proxy_server_url}/mcp",
                 headers={"Authorization": PROXY_AUTHORIZATION_HEADER},
-            ) as (read, write, _get_session_id):
+            ) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     tools_result = await session.list_tools()
@@ -296,16 +372,16 @@ class TestProxyMcpStatelessBehavior:
         """Two independent clients connect and operate without sharing session state."""
         async with asyncio.timeout(30):
             # --- Client A: connect, initialize, call tool ---
-            async with streamablehttp_client(
+            async with _http_streams(
                 url=f"{proxy_server_url}/mcp",
                 headers={
                     "Authorization": PROXY_AUTHORIZATION_HEADER,
                     "x-mcp-servers": "math_stdio",
                 },
-            ) as (read_a, write_a, _get_sid_a):
+            ) as (read_a, write_a):
                 async with ClientSession(read_a, write_a) as session_a:
                     await session_a.initialize()
-                    result_a = await session_a.call_tool("add", arguments={"a": 10, "b": 20})
+                    result_a = await session_a.call_tool("math_stdio-add", arguments={"a": 10, "b": 20})
                     assert result_a.content
                     text_a = getattr(result_a.content[0], "text", None)
                     assert text_a == "30"
@@ -316,18 +392,18 @@ class TestProxyMcpStatelessBehavior:
             await asyncio.sleep(0.5)
 
             # --- Client B: completely independent connection ---
-            async with streamablehttp_client(
+            async with _http_streams(
                 url=f"{proxy_server_url}/mcp",
                 headers={
                     "Authorization": PROXY_AUTHORIZATION_HEADER,
                     "x-mcp-servers": "math_stdio",
                 },
-            ) as (read_b, write_b, _get_sid_b):
+            ) as (read_b, write_b):
                 async with ClientSession(read_b, write_b) as session_b:
                     await session_b.initialize()
                     tools = await session_b.list_tools()
                     assert any(t.name.endswith("add") for t in tools.tools)
-                    result_b = await session_b.call_tool("add", arguments={"a": 100, "b": 200})
+                    result_b = await session_b.call_tool("math_stdio-add", arguments={"a": 100, "b": 200})
                     assert result_b.content
                     text_b = getattr(result_b.content[0], "text", None)
                     assert text_b == "300"
@@ -342,7 +418,7 @@ def _payload(result: typing.Any) -> typing.Any:
 
 
 def _proxy_session(proxy_server_url: str, **extra_headers: str):
-    return streamablehttp_client(
+    return _http_streams(
         url=f"{proxy_server_url}/mcp/proxy",
         headers={"Authorization": PROXY_AUTHORIZATION_HEADER, **extra_headers},
     )
@@ -356,7 +432,7 @@ class TestProxyMcpSchemaDiscoveryMode:
     @pytest.mark.asyncio
     async def test_initialize_and_list_expose_only_discovery_tools(self, proxy_server_url: str) -> None:
         async with asyncio.timeout(20):
-            async with _proxy_session(proxy_server_url) as (read, write, _sid):
+            async with _proxy_session(proxy_server_url) as (read, write):
                 async with ClientSession(read, write) as session:
                     init = await session.initialize()
                     assert init.capabilities.tools is not None
@@ -369,7 +445,7 @@ class TestProxyMcpSchemaDiscoveryMode:
     @pytest.mark.asyncio
     async def test_search_schema_and_call_round_trip_keeps_server_identity(self, proxy_server_url: str) -> None:
         async with asyncio.timeout(30):
-            async with _proxy_session(proxy_server_url) as (read, write, _sid):
+            async with _proxy_session(proxy_server_url) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
 
@@ -399,8 +475,8 @@ class TestProxyMcpSchemaDiscoveryMode:
                             "arguments": {"a": 5, "b": 6},
                         },
                     )
-                    assert stdio.isError is False and stdio.content[0].text == "7"
-                    assert http.isError is False and http.content[0].text == "111"
+                    assert stdio.is_error is False and stdio.content[0].text == "7"
+                    assert http.is_error is False and http.content[0].text == "111"
 
     @pytest.mark.asyncio
     async def test_server_scope_header_narrows_discovery(self, proxy_server_url: str) -> None:
@@ -408,7 +484,6 @@ class TestProxyMcpSchemaDiscoveryMode:
             async with _proxy_session(proxy_server_url, **{"x-mcp-servers": "math_streamable_http"}) as (
                 read,
                 write,
-                _sid,
             ):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
@@ -417,11 +492,11 @@ class TestProxyMcpSchemaDiscoveryMode:
 
     @pytest.mark.asyncio
     async def test_rejections_never_reach_upstream(self, proxy_server_url: str) -> None:
-        from mcp.shared.exceptions import McpError
+        from mcp.shared.exceptions import MCPError
         from mcp.types import METHOD_NOT_FOUND
 
         async with asyncio.timeout(30):
-            async with _proxy_session(proxy_server_url) as (read, write, _sid):
+            async with _proxy_session(proxy_server_url) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     hits = _payload(await session.call_tool("search_tools", arguments={"query": "add"}))
@@ -430,22 +505,22 @@ class TestProxyMcpSchemaDiscoveryMode:
                     bad_args = await session.call_tool(
                         "call_tool", arguments={"tool_id": tool_id, "arguments": {"a": "three", "b": 4}}
                     )
-                    assert bad_args.isError is True and "Invalid arguments" in bad_args.content[0].text
+                    assert bad_args.is_error is True and "Invalid arguments" in bad_args.content[0].text
 
                     stale = await session.call_tool("get_tool_schema", arguments={"tool_id": "0" * 32})
-                    assert stale.isError is True and "unauthorized tool_id" in stale.content[0].text
+                    assert stale.is_error is True and "unauthorized tool_id" in stale.content[0].text
 
                     for not_an_object in ("wrong", False):
                         refused_args = await session.call_tool(
                             "call_tool", arguments={"tool_id": tool_id, "arguments": not_an_object}
                         )
-                        assert refused_args.isError is True and "object" in refused_args.content[0].text
+                        assert refused_args.is_error is True and "object" in refused_args.content[0].text
 
                     direct = await session.call_tool("math_stdio-add", arguments={"a": 1, "b": 2})
-                    assert direct.isError is True and "unavailable on /mcp/proxy" in direct.content[0].text
+                    assert direct.is_error is True and "unavailable on /mcp/proxy" in direct.content[0].text
 
                     for operation in (session.list_prompts, session.list_resources):
-                        with pytest.raises(McpError) as refused:
+                        with pytest.raises(MCPError) as refused:
                             await operation()
                         assert refused.value.error.code == METHOD_NOT_FOUND
 
@@ -494,7 +569,7 @@ proxy_call_recorder = ProxyCallRecorder()
 @asynccontextmanager
 async def _scoped_session(url: str, key: str = "sk-1234", **headers: str) -> typing.AsyncIterator[ClientSession]:
     async with asyncio.timeout(30):
-        async with _proxy_session(url, Authorization=f"Bearer {key}", **headers) as (read, write, _sid):
+        async with _proxy_session(url, Authorization=f"Bearer {key}", **headers) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 yield session
@@ -502,7 +577,7 @@ async def _scoped_session(url: str, key: str = "sk-1234", **headers: str) -> typ
 
 async def _search(session: ClientSession, query: str) -> dict[str, str]:
     result = await session.call_tool("search_tools", arguments={"query": query})
-    assert result.isError is False, result
+    assert result.is_error is False, result
     return {hit["name"]: hit["tool_id"] for hit in _payload(result)}
 
 
@@ -542,7 +617,7 @@ def _rpc_result(response: httpx.Response) -> dict[str, typing.Any]:
 
 
 def _assert_unauthorized(result: CallToolResult) -> None:
-    assert result.isError is True
+    assert result.is_error is True
     assert result.content[0].text == "Unknown or unauthorized tool_id"
 
 
@@ -611,7 +686,7 @@ class TestProxyMcpAuthorizationScope:
                 assert schema["name"] == name
                 assert schema["tool_id"] == ids[name]
                 result = await _call(session, ids[name])
-                assert result.isError is False
+                assert result.is_error is False
                 assert result.content[0].text == expected
 
     @pytest.mark.asyncio
@@ -652,7 +727,7 @@ class TestProxyMcpAuthorizationScope:
                     result = await session.call_tool(
                         "call_tool", {"tool_id": ids[f"{name}-request_headers"], "arguments": {}}
                     )
-                    assert result.isError is False
+                    assert result.is_error is False
                     assert _payload(result) == expected
 
     @pytest.mark.asyncio
@@ -660,7 +735,7 @@ class TestProxyMcpAuthorizationScope:
         async with _scoped_session(proxy_server_url, "sk-restricted") as session:
             tool_id = (await _search(session, "add"))["math_restricted-add"]
             result = await _call(session, tool_id, 123, 456)
-            assert result.isError is False and result.content[0].text == "779"
+            assert result.is_error is False and result.content[0].text == "779"
             async with asyncio.timeout(10):
                 while True:
                     payload = json.loads(await asyncio.to_thread(proxy_call_recorder.events.get, True, 5))
@@ -714,7 +789,7 @@ class TestProxyMcpAuthorizationScope:
             hits = _payload(await handle_mcp_proxy_tool("search_tools", {"query": "add"}, auth))
             tool_id = next(hit["tool_id"] for hit in hits if hit["name"] == "math_stdio-add")
             result = await handle_mcp_proxy_tool("call_tool", {"tool_id": tool_id, "arguments": arguments}, auth)
-            assert result.isError is True
+            assert result.is_error is True
             assert result.content[0].text == "arguments must be an object"
 
         asyncio.run_coroutine_threadsafe(check(), _proxy_server.loop).result(timeout=30)

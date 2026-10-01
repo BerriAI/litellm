@@ -1,12 +1,16 @@
 import json
+from collections.abc import Iterator
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import (
+    LiteLLM_AccessGroupTable,
     LiteLLM_ObjectPermissionBase,
     LiteLLM_ObjectPermissionTable,
+    LiteLLM_TeamTableCachedObj,
     ObjectPermissionDict,
     SpecialMCPServerName,
 )
@@ -217,10 +221,12 @@ def _make_team_obj(
     mcp_servers=None,
     mcp_access_groups=None,
     mcp_tool_permissions=None,
+    access_group_ids=None,
 ):
     """Create a mock team object with the given MCP permissions."""
     mock_team = MagicMock()
     mock_team.team_id = team_id
+    mock_team.access_group_ids = access_group_ids or []
 
     if (
         mcp_servers is not None
@@ -539,6 +545,132 @@ async def test_validate_team_no_mcp_config_blocks_all(
             team_obj=team_obj,
         )
     assert exc_info.value.status_code == 403
+
+
+@pytest.fixture
+def unified_mcp_prisma() -> Iterator[MagicMock]:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_accessgrouptable.find_unique = AsyncMock(
+        return_value=LiteLLM_AccessGroupTable(
+            access_group_id="ag-1",
+            access_group_name="group one",
+            access_mcp_server_ids=["server-1"],
+        )
+    )
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    manager: Final = _make_mock_mcp_manager(
+        "server-1",
+        "server-2",
+        servers=[_make_mock_mcp_server("server-1", alias="server-alias")],
+    )
+    manager.config_mcp_servers = {}
+    manager.get_allow_all_keys_server_ids.return_value = []
+    with (
+        patch(  # test-quality-ok: management helpers read this module singleton without a registry injection seam
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            new=manager,
+        ),
+        patch(  # test-quality-ok: unified group resolver obtains its cache from the proxy singleton
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            new=UserApiKeyCache(),
+        ),
+    ):
+        yield prisma
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("group_identifier", "requested_identifier"),
+    [("server-1", "server-1"), ("server-alias", "server-1"), ("server-1", "server-alias")],
+)
+async def test_validate_key_servers_granted_via_team_unified_access_group_pass(
+    unified_mcp_prisma: MagicMock,
+    group_identifier: str,
+    requested_identifier: str,
+) -> None:
+    unified_mcp_prisma.db.litellm_accessgrouptable.find_unique.return_value = LiteLLM_AccessGroupTable(
+        access_group_id="ag-1",
+        access_group_name="group one",
+        access_mcp_server_ids=[group_identifier],
+    )
+    team: Final = LiteLLM_TeamTableCachedObj(team_id="team-1", access_group_ids=["ag-1"])
+    result: Final = await validate_key_mcp_servers_against_team(
+        object_permission={"mcp_servers": [requested_identifier]},
+        team_obj=team,
+        prisma_client=unified_mcp_prisma,
+    )
+    assert result == {"mcp_servers": [requested_identifier]}
+
+
+@pytest.mark.asyncio
+async def test_validate_key_servers_outside_team_unified_access_group_rejected(
+    unified_mcp_prisma: MagicMock,
+) -> None:
+    team: Final = LiteLLM_TeamTableCachedObj(team_id="team-1", access_group_ids=["ag-1"])
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_servers": ["server-2"]},
+            team_obj=team,
+            prisma_client=unified_mcp_prisma,
+        )
+    assert exc_info.value.status_code == 403
+    assert "server-2" in str(exc_info.value.detail)
+    assert "Team allows: ['server-1']" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_team_allowed_servers_union_object_permission_and_unified_access_group(
+    unified_mcp_prisma: MagicMock,
+) -> None:
+    team: Final = LiteLLM_TeamTableCachedObj(
+        team_id="team-1",
+        access_group_ids=["ag-1"],
+        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-1", mcp_servers=["server-2"]),
+    )
+    result: Final = await validate_key_mcp_servers_against_team(
+        object_permission={"mcp_servers": ["server-1", "server-2"]},
+        team_obj=team,
+        prisma_client=unified_mcp_prisma,
+    )
+    assert result == {"mcp_servers": ["server-1", "server-2"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("group_state", ["empty", "missing", "unresolved"])
+async def test_team_unified_access_group_without_servers_preserves_direct_grants(
+    unified_mcp_prisma: MagicMock,
+    group_state: Literal["empty", "missing", "unresolved"],
+) -> None:
+    unified_mcp_prisma.db.litellm_accessgrouptable.find_unique.return_value = (
+        LiteLLM_AccessGroupTable(
+            access_group_id="ag-1",
+            access_group_name="empty or stale group",
+            access_mcp_server_ids=["deleted-server"] if group_state == "unresolved" else [],
+        )
+        if group_state != "missing"
+        else None
+    )
+    team: Final = LiteLLM_TeamTableCachedObj(
+        team_id="team-1",
+        access_group_ids=["ag-1"],
+        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-1", mcp_servers=["server-2"]),
+    )
+    allowed: Final = await validate_key_mcp_servers_against_team(
+        object_permission={"mcp_servers": ["server-2"]},
+        team_obj=team,
+        prisma_client=unified_mcp_prisma,
+    )
+    assert allowed == {"mcp_servers": ["server-2"]}
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_servers": ["server-1"]},
+            team_obj=team,
+            prisma_client=unified_mcp_prisma,
+        )
+    assert exc_info.value.status_code == 403
+    assert "['server-1']. Team allows:" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio

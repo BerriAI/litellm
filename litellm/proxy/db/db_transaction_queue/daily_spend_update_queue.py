@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Coroutine
 from copy import deepcopy
 from typing import Final
 
@@ -57,6 +58,18 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
         self.update_queue: asyncio.Queue[dict[str, BaseDailySpendTransaction]] = asyncio.Queue(
             maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE
         )
+        self.interrupted_commits: set[asyncio.Task[None]] = (
+            set()
+        )  # mutable-ok: registry of in-flight commit outcomes, entries leave via their done callback
+
+    def track_interrupted_commit(self, settle: Coroutine[object, object, None]) -> None:
+        task: Final = asyncio.ensure_future(settle)
+        self.interrupted_commits.add(task)
+        task.add_done_callback(self.interrupted_commits.discard)
+
+    async def settle_interrupted_commits(self) -> None:
+        while self.interrupted_commits:
+            await asyncio.wait(tuple(self.interrupted_commits))
 
     async def add_update(self, update: dict[str, BaseDailySpendTransaction]):
         """Enqueue an update."""
@@ -81,6 +94,7 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
         self,
     ) -> dict[str, BaseDailySpendTransaction]:
         """Get all updates from the queue and return all updates aggregated by daily_transaction_key. Works for both user and team spend updates."""
+        await self.settle_interrupted_commits()
         updates: Final = await self.flush_all_updates_from_in_memory_queue()
         if len(updates) > 0:
             verbose_proxy_logger.info(
@@ -141,6 +155,14 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                     daily_transaction["autorouter_savings_spend"] = (
                         payload.get("autorouter_savings_spend", 0) or 0
                     ) + daily_transaction.get("autorouter_savings_spend", 0)
+
+                    daily_transaction["total_response_time_ms"] = (
+                        payload.get("total_response_time_ms", 0) or 0
+                    ) + daily_transaction.get("total_response_time_ms", 0)
+
+                    daily_transaction["timed_requests"] = (
+                        payload.get("timed_requests", 0) or 0
+                    ) + daily_transaction.get("timed_requests", 0)
 
                 else:
                     aggregated_daily_spend_update_transactions[_key] = deepcopy(payload)
