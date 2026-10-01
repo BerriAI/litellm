@@ -1,5 +1,3 @@
-"""Tests for Wingback guardrail integration."""
-
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,6 +10,7 @@ from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guar
 from litellm.proxy.guardrails.guardrail_hooks.wingback import (
     guardrail_class_registry,
     guardrail_initializer_registry,
+    initialize_guardrail,
 )
 from litellm.proxy.guardrails.guardrail_hooks.wingback.wingback import (
     DEFAULT_WINGBACK_API_BASE,
@@ -33,6 +32,27 @@ def test_wingback_guard_registry():
 def test_wingback_config_model_defaults():
     assert WingbackGuardrailConfigModel.ui_friendly_name() == "Wingback"
     assert WingbackGuardrailConfigModel.model_fields["unreachable_fallback"].default == "fail_closed"
+
+
+def test_initialize_guardrail_passes_extra_headers():
+    litellm_params = MagicMock()
+    litellm_params.api_base = "http://localhost:8101"
+    litellm_params.api_key = "wbk_eg_test"
+    litellm_params.wingback_app_id = None
+    litellm_params.additional_provider_specific_params = None
+    litellm_params.unreachable_fallback = "fail_closed"
+    litellm_params.fail_on_error = True
+    litellm_params.mode = "pre_call"
+    litellm_params.default_on = True
+    litellm_params.extra_headers = ["x-request-id"]
+
+    with patch("litellm.logging_callback_manager.add_litellm_callback"):
+        instance = initialize_guardrail(
+            litellm_params,
+            {"guardrail_name": "wingback-runtime-security"},
+        )
+
+    assert instance.extra_headers == ["x-request-id"]
 
 
 class TestWingbackGuardrail:
