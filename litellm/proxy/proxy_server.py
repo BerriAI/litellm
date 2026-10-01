@@ -5249,19 +5249,17 @@ def _pass_through_endpoints_beside_db(db_endpoints: object, config_endpoints: ob
 
 
 def _with_config_file_pass_through_endpoints(
-    section_config: object, resolved: Mapping[str, SettingsJsonValue]
+    section_config: object, resolved: Mapping[str, SettingsJsonValue], db_endpoints: SettingValue
 ) -> Mapping[str, object]:
     config_endpoints: Final = (
         section_config.get("pass_through_endpoints") if isinstance(section_config, Mapping) else None
     )
-    if config_endpoints is None:
+    if config_endpoints is None and not isinstance(db_endpoints, list) and "pass_through_endpoints" not in resolved:
         return resolved
     return MappingProxyType(
         {
             **resolved,
-            "pass_through_endpoints": _pass_through_endpoints_beside_db(
-                resolved.get("pass_through_endpoints"), config_endpoints
-            ),
+            "pass_through_endpoints": _pass_through_endpoints_beside_db(db_endpoints, config_endpoints),
         }
     )
 
@@ -5406,7 +5404,11 @@ class ProxyConfig:
         return {  # mutable-ok: get_config preserves the mutable mapping contract used by existing loaders
             **config,
             **{
-                section: dict(_with_config_file_pass_through_endpoints(config.get(section), store.resolved()))
+                section: dict(
+                    _with_config_file_pass_through_endpoints(
+                        config.get(section), store.resolved(), store.db_value("pass_through_endpoints")
+                    )
+                )
                 for section, store in self._settings_stores.items()
                 if isinstance(config.get(section), Mapping) or len(store) > 0
             },
@@ -7846,7 +7848,8 @@ class ProxyConfig:
         if isinstance(db_endpoints, list):
             await self._serve_pass_through_endpoints(db_endpoints)
             return
-        self._publish_pass_through_endpoints(())
+        if "pass_through_endpoints" not in self.settings:
+            self._publish_pass_through_endpoints(())
 
     def _publish_pass_through_endpoints(self, db_endpoints: Sequence[SettingsJsonValue]) -> None:
         self.settings["pass_through_endpoints"] = _pass_through_endpoints_beside_db(

@@ -12325,6 +12325,7 @@ def _config_field_info_client(monkeypatch, user_role):
     mock_config_table.find_first = AsyncMock(return_value=db_record)
     mock_prisma = MagicMock()
     mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    mock_prisma.writer_db = mock_prisma.db
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     settings = SettingsStore("general_settings")

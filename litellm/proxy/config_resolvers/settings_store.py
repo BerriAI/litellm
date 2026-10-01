@@ -162,6 +162,9 @@ class SettingsStore(MutableMapping[str, JsonValue]):
             )
         )
 
+    def db_value(self, key: str) -> SettingValue:
+        return self._db_value(key) if is_resource_list(self._section, key) else ABSENT
+
     def _db_value(self, key: str) -> SettingValue:
         rule: Final = rule_for(self._section, key)
         return self._database_rows.get(rule.db_row, _EMPTY_VALUES).get(key, ABSENT)

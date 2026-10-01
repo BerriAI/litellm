@@ -8150,3 +8150,29 @@ async def test_ui_create_keeps_stored_pass_throughs_a_lagging_read_replica_has_n
         "/db-stored",
         "/ui-made",
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_config_reload_applies_auth_turned_on_for_a_config_pass_through(tmp_path, monkeypatch):
+    import yaml
+
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-locked", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[],
+        master_key="sk-pass-through-master",
+    )
+    await _run_db_sync_cycle(proxy)
+    open_before, _ = await _send_through_proxy("/cfg-locked", {})
+
+    reloaded_config: Final = yaml.safe_load(open(proxy.config_path))
+    reloaded_config["general_settings"]["pass_through_endpoints"][0]["auth"] = True
+    open(proxy.config_path, "w").write(yaml.safe_dump(reloaded_config))
+    await _run_db_sync_cycle(proxy)
+    locked_after, upstream_requests = await _send_through_proxy("/cfg-locked", {})
+
+    assert (open_before.status_code, locked_after.status_code) == (200, 401)
+    assert upstream_requests == []
