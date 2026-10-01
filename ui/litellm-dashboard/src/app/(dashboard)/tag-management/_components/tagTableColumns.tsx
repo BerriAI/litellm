@@ -119,6 +119,7 @@ export const getTagTableColumns = ({ onSelectTag, onEdit, onDelete }: TagTableCo
     header: ({ column }) => <DataTableSortHeader column={column} title="Tag Name" />,
     size: 260,
     enableSorting: true,
+    filterFn: "includesString",
     cell: ({ row }) => <TagNameCell tag={row.original} onSelectTag={onSelectTag} />,
   },
   {
@@ -128,6 +129,7 @@ export const getTagTableColumns = ({ onSelectTag, onEdit, onDelete }: TagTableCo
     header: "Description",
     size: 300,
     enableSorting: false,
+    filterFn: "includesString",
     cell: ({ row }) => {
       const description = row.original.description;
       return (
