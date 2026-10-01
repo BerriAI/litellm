@@ -1,13 +1,3 @@
-"""
-OTLP/HTTP trace export -> `SpanRow`s.
-
-Pure functions, no I/O. Two steps:
-1. `decode_otlp()`   protobuf / JSON / gzip `ExportTraceServiceRequest` -> flat spans
-2. `normalize()`     framework conventions -> LiteLLM columns (type, agent, input/output,
-                     LiteLLM request id). Supported: LangSmith (LangChain, LangGraph,
-                     Deep Agents), OTEL GenAI semconv, OpenInference.
-"""
-
 import json
 from collections.abc import Mapping
 from itertools import accumulate
@@ -20,8 +10,6 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm.constants import OTLP_MAX_ATTRIBUTE_VALUE_BYTES, OTLP_MAX_BODY_BYTES
 from litellm.rust_bridge.traces import DecodedSpan
 from litellm.rust_bridge.traces import decode_otlp as native_decode_otlp
-from litellm.tracing.normalizers import select_normalizer
-from litellm.tracing.normalizers.base import to_int
 from litellm.tracing.types import SpanRow
 
 _MESSAGE_LIST: Final = TypeAdapter(tuple[dict[str, JsonValue], ...])
@@ -72,7 +60,7 @@ def _elided(count: int) -> str:
 
 
 def _with_content(message: Mapping[str, JsonValue], content: str) -> str:
-    return json.dumps(MappingProxyType({**message, "content": content}), default=lambda proxy: proxy.copy())
+    return json.dumps({**message, "content": content})
 
 
 def _shrunk_message(message: Mapping[str, JsonValue], budget: int) -> str:
@@ -159,6 +147,7 @@ def _exception_message(span: DecodedSpan) -> str:
 def _span_row(span: DecodedSpan) -> SpanRow:
     attributes = span["attributes"]
     resource = span["resource_attributes"]
+    normalized = span["normalized"]
     row = SpanRow(
         Timestamp=span["start_ns"],
         TraceId=span["trace_id"],
@@ -177,30 +166,18 @@ def _span_row(span: DecodedSpan) -> SpanRow:
         StatusMessage=span["status_message"] or _exception_message(span),
         TeamId="",
         ApiKeyHash="",
-        ObservationType="chain",
-        AgentName="",
-        LiteLLMRequestId="",
-        Model="",
-        InputTokens=0,
-        OutputTokens=0,
-        Input="",
-        Output="",
+        ObservationType=normalized.observation_type,
+        AgentName=normalized.agent_name,
+        LiteLLMRequestId=normalized.litellm_request_id,
+        Model=normalized.model,
+        InputTokens=normalized.input_tokens,
+        OutputTokens=normalized.output_tokens,
+        Input=normalized.input,
+        Output=normalized.output,
     )
-    normalize(row, attributes)
     row["SpanAttributes"] = {k: _truncate(v) for k, v in attributes.items() if k not in _HEAVY_ATTRIBUTES}
     row["Input"], row["Output"] = _truncate_payload(row["Input"]), _truncate(row["Output"])
     return row
-
-
-def _set_tokens(row: SpanRow, attributes: Mapping[str, str]) -> None:
-    row["InputTokens"] = to_int(attributes.get("gen_ai.usage.input_tokens"))
-    row["OutputTokens"] = to_int(attributes.get("gen_ai.usage.output_tokens"))
-
-
-def normalize(row: SpanRow, attributes: Mapping[str, str]) -> None:
-    select_normalizer(row["ScopeName"], attributes).normalize(row, attributes)
-    if not row["InputTokens"] and not row["OutputTokens"]:
-        _set_tokens(row, attributes)
 
 
 def encode_otlp_response(content_type: str | None) -> tuple[bytes, str]:

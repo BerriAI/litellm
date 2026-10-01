@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, TypedDict, cast
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 from typing_extensions import ReadOnly
 
 from litellm.rust_bridge.loader import get_native_bridge
@@ -11,6 +11,28 @@ from litellm.rust_bridge.loader import get_native_bridge
 class DecodedEvent(TypedDict):
     name: ReadOnly[str]
     attributes: ReadOnly[dict[str, str]]
+
+
+class NormalizedSpan(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    observation_type: Literal["agent", "llm", "tool", "chain", "framework"]
+    agent_name: str
+    litellm_request_id: str
+    model: str
+    input_tokens: int = Field(ge=0, le=2**32 - 1)
+    output_tokens: int = Field(ge=0, le=2**32 - 1)
+    input: str
+    output: str
+
+
+class NormalizedFieldDefinition(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    name: str
+    clickhouse_column: str
+    clickhouse_type: str
+    meaning: str
 
 
 class DecodedSpan(TypedDict):
@@ -29,6 +51,7 @@ class DecodedSpan(TypedDict):
     status_code: ReadOnly[str]
     status_message: ReadOnly[str]
     events: ReadOnly[list[DecodedEvent]]
+    normalized: ReadOnly[NormalizedSpan]
 
 
 ReadQueryName = Literal["list_traces", "trace_spans", "span_detail", "spend_by_response_ids"]
@@ -57,6 +80,8 @@ class NativeTraces(Protocol):
         max_decompressed_bytes: int,
     ) -> list[DecodedSpan]: ...
 
+    def trace_normalized_field_definitions(self) -> list[dict[str, str]]: ...
+
 
 class QueryResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -65,6 +90,8 @@ class QueryResponse(BaseModel):
 
 INSERT_ROWS: Final = TypeAdapter(list[dict[str, JsonValue]])
 QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | list[str]])
+DECODED_SPANS: Final = TypeAdapter(list[DecodedSpan])
+_FIELD_DEFINITIONS_ADAPTER: Final = TypeAdapter(tuple[NormalizedFieldDefinition, ...])
 
 
 def _native() -> NativeTraces:
@@ -77,7 +104,16 @@ def _native() -> NativeTraces:
 def decode_otlp(
     body: bytes, content_type: str | None, content_encoding: str | None, max_decompressed_bytes: int
 ) -> list[DecodedSpan]:
-    return _native().trace_decode_otlp(body, content_type, content_encoding, max_decompressed_bytes)
+    return DECODED_SPANS.validate_python(
+        _native().trace_decode_otlp(body, content_type, content_encoding, max_decompressed_bytes)
+    )
+
+
+def normalized_field_definitions() -> tuple[NormalizedFieldDefinition, ...]:
+    fields: Final = _FIELD_DEFINITIONS_ADAPTER.validate_python(_native().trace_normalized_field_definitions())
+    if frozenset(field.name for field in fields) != frozenset(NormalizedSpan.model_fields):
+        raise ValueError("Rust and Python normalized trace fields disagree")
+    return fields
 
 
 class TraceStorage:

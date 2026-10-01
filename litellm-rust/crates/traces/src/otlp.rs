@@ -11,7 +11,7 @@ use prost::Message;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::DecodeError;
+use crate::{DecodeError, NormalizedSpan, normalize::normalize};
 
 #[derive(Serialize)]
 pub struct DecodedEvent {
@@ -36,6 +36,7 @@ pub struct DecodedSpan {
     pub status_code: String,
     pub status_message: String,
     pub events: Vec<DecodedEvent>,
+    pub normalized: NormalizedSpan,
 }
 
 pub fn decode_otlp(
@@ -137,10 +138,13 @@ fn decoded_span(
     scope_version: &str,
 ) -> DecodedSpan {
     let status = span.status.unwrap_or_default();
+    let span_attributes = attributes(span.attributes);
+    let parent_span_id = hex_bytes(&span.parent_span_id);
+    let normalized = normalize(scope_name, &span.name, &parent_span_id, &span_attributes);
     DecodedSpan {
         trace_id: hex_bytes(&span.trace_id),
         span_id: hex_bytes(&span.span_id),
-        parent_span_id: hex_bytes(&span.parent_span_id),
+        parent_span_id,
         trace_state: span.trace_state,
         name: span.name,
         kind: SpanKind::try_from(span.kind)
@@ -150,7 +154,7 @@ fn decoded_span(
         resource_attributes: resource_attributes.clone(),
         scope_name: scope_name.to_owned(),
         scope_version: scope_version.to_owned(),
-        attributes: attributes(span.attributes),
+        attributes: span_attributes,
         start_ns: span.start_time_unix_nano,
         end_ns: span.end_time_unix_nano,
         status_code: StatusCode::try_from(status.code)
@@ -166,6 +170,7 @@ fn decoded_span(
                 attributes: attributes(event.attributes),
             })
             .collect(),
+        normalized,
     }
 }
 

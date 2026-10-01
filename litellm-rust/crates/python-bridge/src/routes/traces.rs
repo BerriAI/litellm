@@ -164,3 +164,8 @@ pub fn trace_decode_otlp<'py>(
         })?;
     litellm_host_python::Pythonized(spans).into_pyobject(py)
 }
+
+#[pyfunction]
+pub fn trace_normalized_field_definitions<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    litellm_host_python::Pythonized(litellm_traces::NORMALIZED_FIELD_DEFINITIONS).into_pyobject(py)
+}

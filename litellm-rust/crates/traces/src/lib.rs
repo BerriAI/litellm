@@ -1,11 +1,15 @@
 mod error;
 mod insert;
+mod normalize;
 mod otlp;
 mod schema;
 mod sql;
 
 pub use error::{DecodeError, Error};
 pub use insert::{InsertTable, encode_rows, insert_rows};
+pub use normalize::{
+    NORMALIZED_FIELD_DEFINITIONS, NormalizedFieldDefinition, NormalizedSpan, ObservationType,
+};
 pub use otlp::{DecodedSpan, decode_otlp};
 pub use schema::{ensure_schema, schema_statements};
 pub use sql::{LensQuery, Parameter, ReadQuery, execute_named_read, execute_read};

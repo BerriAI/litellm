@@ -1,5 +1,5 @@
 use flate2::{Compression, write::GzEncoder};
-use litellm_traces::decode_otlp;
+use litellm_traces::{ObservationType, decode_otlp};
 use rstest::rstest;
 use std::io::Write;
 
@@ -44,4 +44,48 @@ fn rejects_invalid_or_oversized_payload(
     #[case] limit: usize,
 ) {
     assert!(decode_otlp(body, content_type, None, limit).is_err());
+}
+
+#[rstest]
+fn normalizes_langsmith_fixture() {
+    let spans = decode_otlp(FIXTURE, Some("application/json"), None, 8 * 1024 * 1024)
+        .expect("valid OTLP export");
+    let llm = spans
+        .iter()
+        .find(|span| span.name == "ChatOpenAI")
+        .expect("LLM span");
+    assert_eq!(llm.normalized.observation_type, ObservationType::Llm);
+    assert_eq!(llm.normalized.agent_name, "deep_research_agent");
+    assert_eq!(llm.normalized.model, "claude-sonnet-4-5");
+    assert_eq!(
+        (llm.normalized.input_tokens, llm.normalized.output_tokens),
+        (3332, 467)
+    );
+    assert_eq!(
+        llm.normalized.litellm_request_id,
+        "chatcmpl-4077bb36-9380-4a3b-9481-245700cef09a"
+    );
+    let input: serde_json::Value =
+        serde_json::from_str(&llm.normalized.input).expect("message input");
+    assert_eq!(input[0]["role"], "system");
+    assert_eq!(input[1]["role"], "user");
+    let output: serde_json::Value =
+        serde_json::from_str(&llm.normalized.output).expect("message output");
+    assert_eq!(output["role"], "assistant");
+    assert!(output["tool_calls"][0]["name"].is_string());
+    let root = spans
+        .iter()
+        .find(|span| span.name == "deep_research_agent")
+        .expect("root span");
+    assert_eq!(root.normalized.observation_type, ObservationType::Agent);
+    assert_eq!(
+        root.normalized.input,
+        "[{\"role\": \"user\", \"content\": \"Should we store OTEL agent spans in ClickHouse or Postgres at 50k spans/sec?\"}]"
+    );
+    let tool = spans
+        .iter()
+        .find(|span| span.name == "task")
+        .expect("tool span");
+    assert_eq!(tool.normalized.observation_type, ObservationType::Tool);
+    assert!(tool.normalized.output.starts_with("Based on my research"));
 }
