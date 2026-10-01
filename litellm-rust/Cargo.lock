@@ -4384,6 +4384,7 @@ name = "litellm-traces"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "criterion",
  "flate2",
  "litellm-http",
  "opentelemetry-proto",
