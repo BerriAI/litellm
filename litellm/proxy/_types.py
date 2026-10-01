@@ -558,6 +558,7 @@ class LiteLLMRoutes(enum.Enum):
         "/engine",
         "/engine/{engine_id}",
         "/engine/{engine_id}/runs",
+        "/engine/{engine_id}/runs/{job_id}",
         "/engine/{engine_id}/executions/{execution_id}",
         "/engine/{engine_id}/cancel",
         "/engine/{engine_id}/findings/{finding_id}",

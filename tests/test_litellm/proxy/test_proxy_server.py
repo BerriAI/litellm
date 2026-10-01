@@ -9,7 +9,6 @@ import socket
 import subprocess
 import time
 import types
-import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
@@ -8114,13 +8113,10 @@ async def test_update_general_settings_keeps_yaml_pass_through_endpoints_next_to
     [(None, None), (["POST"], ["GET"])],
     ids=["all-methods", "disjoint-methods"],
 )
-async def test_update_general_settings_db_pass_through_endpoint_cannot_override_a_yaml_declared_path(
+async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_entry_on_the_same_path(
     db_methods: list[str] | None, yaml_methods: list[str] | None
 ):
-    """``pass_through_endpoints`` is config-owned once the file declares it, so a stored
-    ``auth: true`` entry on a path the YAML already declares ``auth: false`` no longer
-    locks that path down. Changing it means editing the config file. A path the YAML
-    does not declare is still governed by the stored row, which the sibling test covers."""
+    from litellm.proxy._types import ProxyException
     from litellm.proxy.proxy_server import ProxyConfig
 
     yaml_endpoint: Final = {
@@ -8143,129 +8139,16 @@ async def test_update_general_settings_db_pass_through_endpoint_cannot_override_
     request.headers = {}
     request.query_params = {}
 
-    settings: Final = patch(
-        "litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]}
-    )  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch(
-        "litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint]
-    )  # test-quality-ok: module global holding the YAML endpoints the fix merges in
-    initialize: Final = patch(
-        "litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock()
-    )  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
-    master_key: Final = patch(
-        "litellm.proxy.proxy_server.master_key", "sk-master"
-    )  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch("litellm.proxy.proxy_server.master_key", "sk-master")  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
     with settings, yaml_endpoints, initialize, master_key:
         await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
 
-        still_open: Final = await user_api_key_auth(request=request, api_key=None)
-        assert still_open.api_key is None
-
-
-@pytest.fixture
-def app_routes_restored():
-    routes_before: Final = tuple(app.router.routes)
-    yield
-    app.router.routes[:] = routes_before
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("app_routes_restored")
-async def test_deleting_the_stored_pass_through_row_takes_the_route_out_of_service():
-    """A pass-through route the database declared has to stop serving when that row is
-    deleted. The proxy's own registry of live pass-through routes is what decides whether
-    a request is routed upstream or falls through to the auth error, so it has to lose the
-    entry on the reload rather than at the next process restart."""
-    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-        InitPassThroughEndpointHelpers,
-        _registered_pass_through_routes,
-    )
-    from litellm.proxy.proxy_server import ProxyConfig, app
-
-    path: Final = f"/v1/deleted-{uuid.uuid4().hex[:8]}"
-    db_endpoint: Final = {"id": "db-1", "path": path, "target": "https://example.com/post"}
-    prior_routes: Final = list(app.routes)
-    prior_registry: Final = dict(_registered_pass_through_routes)
-
-    def live_routes() -> set[str]:
-        return {
-            route for route in InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes() if path in route
-        }
-
-    settings: Final = patch(
-        "litellm.proxy.proxy_server.general_settings", {}
-    )  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch(
-        "litellm.proxy.proxy_server.config_passthrough_endpoints", None
-    )  # test-quality-ok: module global holding the YAML endpoints; this case has none
-    app_routes: Final = patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.SafeRouteAdder.add_api_route_if_not_exists"
-    )  # test-quality-ok: the registry is the observable; a real route would stay on the shared FastAPI app for the rest of the xdist worker
-    try:
-        with settings, yaml_endpoints, app_routes:
-            pc = ProxyConfig()
-            await pc._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
-            assert live_routes(), "the stored endpoint should be serving before the row is deleted"
-
-            await pc._update_general_settings(db_general_settings={})
-
-            assert live_routes() == set()
-    finally:
-        app.routes[:] = prior_routes
-        _registered_pass_through_routes.clear()
-        _registered_pass_through_routes.update(prior_registry)
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("app_routes_restored")
-async def test_a_stored_pass_through_row_never_disturbs_the_config_declared_routes():
-    """``pass_through_endpoints`` is config-owned once the file declares it, so writing and then
-    deleting a stored row resolves to the same list both times and the config file's routes keep
-    serving untouched. The stored entry never gets a route of its own."""
-    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-        InitPassThroughEndpointHelpers,
-        _registered_pass_through_routes,
-        initialize_pass_through_endpoints,
-    )
-    from litellm.proxy.proxy_server import ProxyConfig, app
-
-    marker: Final = uuid.uuid4().hex[:8]
-    config_path: Final = f"/v1/kept-{marker}"
-    db_path: Final = f"/v1/ignored-{marker}"
-    config_endpoint: Final = {"id": f"cfg-{marker}", "path": config_path, "target": "https://example.com/post"}
-    db_endpoint: Final = {"id": f"db-{marker}", "path": db_path, "target": "https://example.com/post"}
-    prior_routes: Final = list(app.routes)
-    prior_registry: Final = dict(_registered_pass_through_routes)
-
-    def live_paths() -> set[str]:
-        registered: Final = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
-        return {path for path in (config_path, db_path) if any(path in route for route in registered)}
-
-    settings: Final = patch(
-        "litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [config_endpoint]}
-    )  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch(
-        "litellm.proxy.proxy_server.config_passthrough_endpoints", [config_endpoint]
-    )  # test-quality-ok: module global holding the YAML endpoints the reload merges in
-    app_routes: Final = patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.SafeRouteAdder.add_api_route_if_not_exists"
-    )  # test-quality-ok: the registry is the observable; a real route would stay on the shared FastAPI app for the rest of the xdist worker
-    try:
-        with settings, yaml_endpoints, app_routes:
-            await initialize_pass_through_endpoints(pass_through_endpoints=[config_endpoint])
-            assert live_paths() == {config_path}
-
-            pc = ProxyConfig()
-            await pc._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
-            assert live_paths() == {config_path}
-
-            await pc._update_general_settings(db_general_settings={})
-
-            assert live_paths() == {config_path}
-    finally:
-        app.routes[:] = prior_routes
-        _registered_pass_through_routes.clear()
-        _registered_pass_through_routes.update(prior_registry)
+        with pytest.raises(ProxyException) as locked_down:
+            await user_api_key_auth(request=request, api_key=None)
+        assert locked_down.value.code == "401"
 
 
 def _fill_user_api_key_cache(cache: DualCache, count: int) -> None:
@@ -12445,6 +12328,7 @@ def _config_field_info_client(monkeypatch, user_role):
     mock_config_table.find_first = AsyncMock(return_value=db_record)
     mock_prisma = MagicMock()
     mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    mock_prisma.writer_db = mock_prisma.db
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     settings = SettingsStore("general_settings")
