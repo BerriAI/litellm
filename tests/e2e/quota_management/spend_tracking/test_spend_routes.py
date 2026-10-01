@@ -17,6 +17,7 @@ fast: no batch-write wait, no provider calls.
 """
 
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -104,13 +105,26 @@ def _probe(client: SpendClient, route: str) -> ProbeResult:
     return client.probe(route, params=_date_range())
 
 
-@pytest.mark.parametrize("route", SPEND_ROUTES)
-@meta(
-    Subject(
-        domain=Domain.SPEND_BUDGETS,
-        route=Route.SPEND_REPORTING,
-    )
+_LIST_ROUTES: Final = MappingProxyType(
+    {
+        "/key/list": Route.KEY_MANAGEMENT,
+        "/user/list": Route.USER_MANAGEMENT,
+        "/team/list": Route.TEAM_MANAGEMENT,
+        "/organization/list": Route.ORGANIZATION_MANAGEMENT,
+        "/customer/list": Route.CUSTOMER_MANAGEMENT,
+    }
 )
+
+_ROUTE_CASES: Final = tuple(
+    pytest.param(
+        path,
+        marks=meta(Subject(domain=Domain.SPEND_BUDGETS, route=_LIST_ROUTES.get(path, Route.SPEND_REPORTING))),
+    )
+    for path in SPEND_ROUTES
+)
+
+
+@pytest.mark.parametrize("route", _ROUTE_CASES)
 def test_spend_route_responsive(client: SpendClient, route: str) -> None:
     result = _probe(client, route)
     print(f"{route} -> {result.status_code}\n{result.body[:600]}")

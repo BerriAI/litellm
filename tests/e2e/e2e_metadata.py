@@ -115,6 +115,8 @@ class Route(str, Enum):
     A2A = "a2a"
     USER_MANAGEMENT = "user_management"
     BUDGET_MANAGEMENT = "budget_management"
+    ORGANIZATION_MANAGEMENT = "organization_management"
+    CUSTOMER_MANAGEMENT = "customer_management"
     HEALTH = "health"
     METRICS = "metrics"
     PROXY_CONFIG = "proxy_config"
