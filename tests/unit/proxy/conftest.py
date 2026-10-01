@@ -65,12 +65,19 @@ def _snapshot_mutable_state(module):
     return snapshot
 
 
-def _restored_value(value):
-    if isinstance(value, (list, dict, set, bytearray)):
-        return copy.deepcopy(value)
+_MUTABLE_CONTAINERS = (list, dict, set, bytearray)
+
+
+def _holds_mutable_container(value) -> bool:
+    if isinstance(value, _MUTABLE_CONTAINERS):
+        return True
     if isinstance(value, tuple):
-        return tuple(_restored_value(element) for element in value)
-    return value
+        return any(_holds_mutable_container(element) for element in value)
+    return False
+
+
+def _restored_value(value):
+    return copy.deepcopy(value) if _holds_mutable_container(value) else value
 
 
 def _restore_mutable_state(module, snapshot):
