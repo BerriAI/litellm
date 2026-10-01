@@ -4,15 +4,8 @@ Test suite for MCP server custom fields functionality.
 Tests that mcp_info can accept arbitrary custom fields in addition to predefined ones.
 """
 
-import pytest
-from unittest.mock import Mock, patch
-from typing import Dict, Any
-
-# Add the path to find the modules
-
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
-from litellm.types.mcp import MCPAuth
 from litellm.proxy._types import LiteLLM_MCPServerTable
+from litellm.types.mcp import MCPAuth
 
 
 class TestMCPCustomFields:
@@ -106,6 +99,26 @@ class TestMCPCustomFields:
         assert mcp_info["metadata"] == {"source": "database"}
         assert mcp_info["version"] == "1.0.0"
 
+    async def test_updated_description_is_listed_when_mcp_info_description_is_null(
+        self, config_only_mcp_manager_factory
+    ):
+        manager = config_only_mcp_manager_factory()
+        server = LiteLLM_MCPServerTable(
+            server_id="test-server-id",
+            server_name="Test Server",
+            description=None,
+            url="http://localhost:3000",
+            transport="http",
+            auth_type=MCPAuth.none,
+            mcp_info={"server_name": "Test Server", "description": None},
+        )
+
+        await manager.add_server(server)
+        await manager.update_server(server.model_copy(update={"description": "Updated description"}))
+
+        listed_servers = await manager.get_all_mcp_servers_unfiltered()
+        assert listed_servers[0].description == "Updated description"
+
     async def test_empty_mcp_info_handled_gracefully(self, config_only_mcp_manager_factory):
         """Test that empty or missing mcp_info is handled gracefully."""
         manager = config_only_mcp_manager_factory()
@@ -155,17 +168,16 @@ class TestMCPCustomFields:
         assert mcp_info["server_name"] == "test_server"
         assert mcp_info["description"] == "Server description"
 
-    async def test_config_description_fallback(self, config_only_mcp_manager_factory):
+    async def test_config_description_fallback_when_mcp_info_description_is_null(self, config_only_mcp_manager_factory):
         """Test that description from config level is used as fallback."""
         manager = config_only_mcp_manager_factory()
 
-        # Config with description at server level but not in mcp_info
         mock_config = {
             "test_server": {
                 "url": "http://localhost:3000",
                 "transport": "http",
                 "description": "Config level description",
-                "mcp_info": {"custom_field": "custom_value"},
+                "mcp_info": {"description": None, "custom_field": "custom_value"},
             }
         }
 
