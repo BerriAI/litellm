@@ -13,24 +13,12 @@ from litellm._logging import verbose_logger
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 
-EffectiveAuthContexts: TypeAlias = Callable[
-    [UserAPIKeyAuth], Awaitable[Sequence[UserAPIKeyAuth]]  # mutable-ok: Callable parameter syntax
-]
-TeamObjectPermission: TypeAlias = Callable[
-    [UserAPIKeyAuth], Awaitable[LiteLLM_ObjectPermissionTable | None]  # mutable-ok: Callable parameter syntax
-]
-OwnObjectPermission: TypeAlias = Callable[
-    [UserAPIKeyAuth], Awaitable[LiteLLM_ObjectPermissionTable | None]  # mutable-ok: Callable parameter syntax
-]
-AdmittedContext: TypeAlias = Callable[
-    [UserAPIKeyAuth], Awaitable[UserAPIKeyAuth | None]  # mutable-ok: Callable parameter syntax
-]
-ActingUser: TypeAlias = Callable[
-    [UserAPIKeyAuth], Awaitable[UserAPIKeyAuth]  # mutable-ok: Callable parameter syntax
-]
-GrantedToolsetIds: TypeAlias = Callable[
-    [UserAPIKeyAuth], Awaitable[frozenset[str]]  # mutable-ok: Callable parameter syntax
-]
+EffectiveAuthContexts: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[Sequence[UserAPIKeyAuth]]]
+TeamObjectPermission: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LiteLLM_ObjectPermissionTable | None]]
+OwnObjectPermission: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LiteLLM_ObjectPermissionTable | None]]
+AdmittedContext: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[UserAPIKeyAuth | None]]
+ActingUser: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[UserAPIKeyAuth]]
+GrantedToolsetIds: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[frozenset[str]]]
 
 
 def clone_user_api_key_auth_with_team(
