@@ -5,7 +5,7 @@ use super::{AttributeCatalog, MetadataCatalog, TableSchema};
 use crate::{Error, NormalizedFieldDefinition};
 
 #[derive(Template)]
-#[template(path = "query_help.txt", blocks = [
+#[template(path = "query_help.jinja", escape = "none", blocks = [
     "recent_spans_name",
     "recent_spans_sql",
     "custom_metadata_name",
