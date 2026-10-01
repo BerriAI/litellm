@@ -43,8 +43,10 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token, run_aws_signing
+from litellm.llms.bedrock.guardrail_attachments import find_request_attachments
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -75,6 +77,8 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrailQualifier,
     BedrockGuardrailResponse,
     BedrockGuardrailUsage,
+    BedrockImageContent,
+    BedrockImageSource,
     BedrockRequest,
     BedrockTextContent,
 )
@@ -119,6 +123,7 @@ _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH: Final = "/guardrail-checks/invoke"
 # more text blocks is split across multiple messages so ALL content is scanned --
 # never truncated (truncation would let a user hide content past the limit).
 _BEDROCK_CHECKS_MAX_CONTENT_BLOCKS: Final = 10
+_BEDROCK_APPLY_GUARDRAIL_MAX_IMAGES: Final = 20
 _BEDROCK_CHECKS_KNOWN_KEYS: Final = frozenset({"contentFilter", "promptAttack", "sensitiveInformation"})
 # Keys in a sensitiveInformation result that pinpoint the PII location. They are
 # stripped before the response is handed to standard logging / telemetry so the
@@ -220,6 +225,20 @@ def _redact_assessment_match_fields(assessments: list[dict]) -> list[dict]:
 
 
 _RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
+
+
+def _without_image_bytes(content: Sequence[BedrockContentItem]) -> tuple[BedrockContentItem, ...]:
+    return tuple(
+        BedrockContentItem(
+            image=BedrockImageContent(
+                format=item["image"]["format"],
+                source=BedrockImageSource(bytes=f"<{len(item['image']['source']['bytes'])} base64 chars>"),
+            )
+        )
+        if "image" in item
+        else item
+        for item in content
+    )
 
 
 def _is_responses_api_route(request_route: str | None) -> bool:
@@ -924,21 +943,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         guardrail call and is logged exactly once here.
         """
         start_time: Final = datetime.now(timezone.utc)
-        bedrock_request_data: Final[dict] = dict(
-            self.convert_to_bedrock_format(source=source, messages=messages, response=response)
+        bedrock_request_data, api_key = self._bedrock_request_body(
+            self.convert_to_bedrock_format(source=source, messages=messages, response=response),
+            request_data,
         )
-        api_key: str | None = None
-        if request_data:
-            dynamic_request_body_params = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
-            bedrock_request_data.update(
-                {
-                    key: value
-                    for key, value in dynamic_request_body_params.items()
-                    if key not in _BEDROCK_DYNAMIC_BODY_DENYLIST
-                }
-            )
-            if request_data.get("api_key") is not None:
-                api_key = request_data["api_key"]
 
         event_type: Final = (
             logging_event_type
@@ -956,10 +964,51 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 source,
             )
             return BedrockGuardrailResponse()
+        return await self._apply_guardrail_to_content(
+            content=content,
+            bedrock_request_data=bedrock_request_data,
+            api_key=api_key,
+            request_data=request_data,
+            event_type=event_type,
+            start_time=start_time,
+            allow_chunking=not self._content_uses_contextual_grounding(content),
+        )
+
+    def _bedrock_request_body(
+        self,
+        base_request: BedrockRequest,
+        request_data: dict | None,  # mutable-ok: proxy request body dict, read by the dynamic-params helper
+    ) -> tuple[dict, str | None]:
+        """Merge the request's dynamic ApplyGuardrail params into `base_request` and pick up its api_key."""
+        bedrock_request_data: Final[dict] = dict(base_request)  # mutable-ok: JSON request body
+        api_key: str | None = None
+        if request_data:
+            dynamic_request_body_params = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
+            bedrock_request_data.update(
+                {  # mutable-ok: JSON request body
+                    key: value
+                    for key, value in dynamic_request_body_params.items()
+                    if key not in _BEDROCK_DYNAMIC_BODY_DENYLIST
+                }
+            )
+            if request_data.get("api_key") is not None:
+                api_key = request_data["api_key"]
+        return bedrock_request_data, api_key
+
+    async def _apply_guardrail_to_content(
+        self,
+        content: Sequence[BedrockContentItem],
+        bedrock_request_data: Mapping[str, object],
+        api_key: str | None,
+        request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
+        event_type: GuardrailEventHooks,
+        start_time: "datetime",
+        allow_chunking: bool,
+    ) -> BedrockGuardrailResponse:
+        """Post prepared ApplyGuardrail content and log the call once, as a success or a failure."""
         credentials, aws_region_name = await run_aws_signing(
             self._load_credentials, bearer_token=bedrock_bearer_token(api_key)
         )
-        allow_chunking: Final = not self._content_uses_contextual_grounding(content)
 
         completed_chunk_usages: Final[list[BedrockGuardrailUsage]] = []  # mutable-ok: billed-chunk usage accumulator
         try:
@@ -1230,7 +1279,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         headers_dict: Final = dict(prepared_request.headers)  # mutable-ok: the masking helper requires a dict
         verbose_proxy_logger.debug(
             "Bedrock AI request body: %s, url %s, headers: %s",
-            bedrock_request_data,
+            {**bedrock_request_data, "content": _without_image_bytes(content)}  # mutable-ok: JSON request body
+            if any("image" in item for item in content)
+            else bedrock_request_data,
             prepared_request.url,
             _get_masked_values(headers_dict),
         )
@@ -2505,6 +2556,131 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # This means all actions were ANONYMIZED or NONE, so don't raise exception
         return False
 
+    async def async_scan_request_attachments(
+        self,
+        data: dict,
+        call_type: CallTypesLiteral,
+        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+    ) -> None:
+        """Scan the request's inline PNG/JPEG images and text documents, and block attachments it cannot scan.
+
+        Images go to ApplyGuardrail 20 per call. Text documents go through ``make_bedrock_api_request``
+        as one user turn, and any intervention on them blocks the request, since their text cannot be
+        rewritten with a mask.
+
+        Documents, files, audio, video, and images sent by URL, by file id or in another format block the
+        request unless ``skip_unscannable_attachments`` is set. ``checks`` mode calls the text-only
+        InvokeGuardrailChecks API, so there every image counts as unscannable too. A failed ApplyGuardrail
+        call raises the same error the text scan of the same hook raises. A guardrail whose
+        ``apply_guardrail`` or ``make_bedrock_api_request`` is replaced, by a subclass or on the
+        instance, skips this scan.
+        """
+        if (
+            getattr(self.apply_guardrail, "__func__", None) is not BedrockGuardrail.apply_guardrail
+            or getattr(self.make_bedrock_api_request, "__func__", None) is not BedrockGuardrail.make_bedrock_api_request
+        ):
+            return
+        attachments: Final = find_request_attachments(
+            data,
+            call_type,
+            skip_tool_messages=effective_skip_tool_message_for_guardrail(self),
+            latest_user_message_only=self.experimental_use_latest_role_message_only,
+            scan_only_tool_results=effective_scan_only_tool_results_for_guardrail(self),
+        )
+        images: Final = attachments.images if self.checks is None else ()
+        unscannable: Final = attachments.unscannable + tuple("image" for _ in attachments.images if self.checks)
+        if unscannable:
+            if self.optional_params.get("skip_unscannable_attachments") is not True:
+                raise self._unscannable_attachments_exception(unscannable, request_data=data, event_type=event_type)
+            verbose_proxy_logger.warning(
+                "Bedrock Guardrail %s: letting %d unscannable attachment(s) through unscanned because "
+                "skip_unscannable_attachments is enabled",
+                self.guardrail_name,
+                len(unscannable),
+            )
+        if attachments.document_texts:
+            await self._scan_document_texts(attachments.document_texts, request_data=data, event_type=event_type)
+        if not images:
+            return
+        bedrock_request_data, api_key = self._bedrock_request_body(BedrockRequest(source="INPUT"), data)
+        try:
+            for start in range(0, len(images), _BEDROCK_APPLY_GUARDRAIL_MAX_IMAGES):
+                await self._apply_guardrail_to_content(
+                    content=images[start : start + _BEDROCK_APPLY_GUARDRAIL_MAX_IMAGES],
+                    bedrock_request_data=bedrock_request_data,
+                    api_key=api_key,
+                    request_data=data,
+                    event_type=event_type,
+                    start_time=datetime.now(timezone.utc),
+                    allow_chunking=False,
+                )
+        except (HTTPException, ModifyResponseException):
+            raise
+        except Exception as e:
+            if event_type != GuardrailEventHooks.pre_call:
+                raise
+            verbose_proxy_logger.error("Bedrock Guardrail: Failed to scan attachments: %s", str(e))
+            raise Exception(f"Bedrock guardrail failed: {e}") from e
+
+    async def _scan_document_texts(
+        self,
+        document_texts: Sequence[str],
+        request_data: dict,  # mutable-ok: proxy request body dict, mutated by the logging helper
+        event_type: GuardrailEventHooks,
+    ) -> None:
+        """Scan text documents like a user turn and block when the guardrail intervenes on them."""
+        response: Final = await self.make_bedrock_api_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": text} for text in document_texts],  # mutable-ok: API message payload
+            request_data=request_data,
+            logging_event_type=event_type,
+        )
+        if response.get("action") == "GUARDRAIL_INTERVENED":
+            raise self._unscannable_attachments_exception(
+                tuple("document (text the guardrail would mask)" for _ in document_texts),
+                request_data=request_data,
+                event_type=event_type,
+            )
+
+    def _unscannable_attachments_exception(
+        self,
+        unscannable: Sequence[str],
+        request_data: dict,  # mutable-ok: proxy request body dict, mutated by the logging helper
+        event_type: GuardrailEventHooks,
+    ) -> HTTPException | ModifyResponseException:
+        """Log the refusal and build the block error for attachments ApplyGuardrail cannot scan."""
+        reason: Final = (
+            f"Bedrock guardrail cannot scan {len(unscannable)} attachment(s) "
+            f"({', '.join(sorted(frozenset(unscannable)))}), so the request was blocked"
+        )
+        now: Final = datetime.now(timezone.utc).timestamp()
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_provider=self.guardrail_provider,
+            guardrail_json_response={"unscannable_attachments": list(unscannable)},  # mutable-ok: JSON wire format
+            request_data=request_data,
+            guardrail_status="guardrail_intervened",
+            start_time=now,
+            end_time=now,
+            duration=0.0,
+            event_type=event_type,
+        )
+        if self.disable_exception_on_block is True:
+            return ModifyResponseException(
+                message=reason,
+                model=request_data.get("model", "bedrock-guardrail"),
+                request_data=request_data,
+                guardrail_name=self.guardrail_name,
+            )
+        detail: Final[dict[str, object]] = {  # mutable-ok: HTTPException detail
+            "error": "Violated guardrail policy",
+            "reason": reason,
+        }
+        if self.guardrailIdentifier:
+            detail["guardrailIdentifier"] = self.guardrailIdentifier
+        if self.guardrailVersion:
+            detail["guardrailVersion"] = self.guardrailVersion
+        return HTTPException(status_code=400, detail=detail)
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -2521,6 +2697,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         event_type: Final[GuardrailEventHooks] = GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
+        await self.async_scan_request_attachments(data=data, call_type=call_type, event_type=event_type)
 
         new_messages: Final = self.get_guardrails_messages_for_call_type(
             call_type=cast(CallTypes, call_type),
@@ -2587,6 +2764,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             event_type = GuardrailEventHooks.during_mcp_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
+
+        await self.async_scan_request_attachments(data=data, call_type=call_type, event_type=event_type)
 
         new_messages: Final = self.get_guardrails_messages_for_call_type(
             call_type=cast(CallTypes, call_type),
