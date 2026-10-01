@@ -87,4 +87,20 @@ describe("AlertingSettings", () => {
       });
     });
   });
+
+  it("does not restore a stale typed value after reset", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<AlertingSettings accessToken="sk-test" premiumUser />);
+
+    const budgetInput = await screen.findByDisplayValue("60");
+    fireEvent.change(budgetInput, { target: { value: "75" } });
+
+    await user.click(screen.getByRole("button", { name: "Reset budget_alert_ttl" }));
+    await user.click(screen.getByRole("button", { name: "Update Settings" }));
+
+    await waitFor(() => {
+      expect(updateConfigFieldSetting).toHaveBeenCalledWith("sk-test", "alerting_args", {});
+    });
+  });
+
 });
