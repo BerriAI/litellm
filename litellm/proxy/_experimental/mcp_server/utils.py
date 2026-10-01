@@ -40,14 +40,6 @@ class McpServerPayloadLike(Protocol):
     def tool_name_to_display_name(self) -> Mapping[str, str] | None: ...
 
 
-# Constants
-#
-# NOTE: The environment-backed values below are read once, when this module is
-# first imported, and cached for the lifetime of the process. Changing the
-# corresponding environment variables after import has no effect unless the
-# module is reloaded (e.g. ``importlib.reload``). Tests that override these
-# variables must reload this module — see
-# ``tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_identity_env.py``.
 LITELLM_MCP_SERVER_NAME: Final = os.environ.get("LITELLM_MCP_SERVER_NAME", "litellm-mcp-server")
 LITELLM_MCP_SERVER_VERSION: Final = "1.0.0"
 LITELLM_MCP_SERVER_DESCRIPTION: Final = os.environ.get("LITELLM_MCP_SERVER_DESCRIPTION", "MCP Server for LiteLLM")
