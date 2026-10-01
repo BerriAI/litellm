@@ -470,3 +470,34 @@ def test_azure_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_fl
         and info.get("supports_mid_conversation_system") is not True
     ]
     assert missing == []
+
+
+AUTO_MODE_SAFEGUARDS = [
+    {"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}
+]
+
+
+@pytest.mark.parametrize(
+    ("client_headers", "optional_params", "expected_beta"),
+    [
+        ({}, {"safeguards": AUTO_MODE_SAFEGUARDS}, "dangerous-tool-use-2026-09-03"),
+        (
+            {"anthropic-beta": "context-1m-2025-08-07"},
+            {"safeguards": AUTO_MODE_SAFEGUARDS},
+            "context-1m-2025-08-07,dangerous-tool-use-2026-09-03",
+        ),
+        ({"anthropic-beta": "context-1m-2025-08-07"}, {}, "context-1m-2025-08-07"),
+        ({}, {}, None),
+    ],
+)
+def test_safeguards_request_carries_the_dangerous_tool_use_beta_without_the_client_header(
+    client_headers, optional_params, expected_beta
+):
+    headers, _ = AzureAnthropicMessagesConfig().validate_anthropic_messages_environment(
+        headers=client_headers,
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Run ls -la with the Bash tool"}],
+        optional_params=optional_params,
+        litellm_params={"api_key": "test-api-key"},
+    )
+    assert headers.get("anthropic-beta") == expected_beta, headers
