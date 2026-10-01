@@ -242,6 +242,83 @@ def test_without_excluded_services_the_tenant_still_gets_redis_and_postgres_span
         assert {"redis", "postgresql"} <= systems, f"datastore spans missing at tenant: {systems}"
 
 
+@pytest.mark.parametrize("otel", [None, True, "on", "", []], ids=["null", "true", "on", "empty_string", "empty_list"])
+@pytest.mark.timeout(180)
+def test_a_non_mapping_otel_block_still_publishes_the_tenant_fan_out(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    langfuse_vars: dict[str, JsonValue],
+    tmp_path: Path,
+    otel: JsonValue,
+) -> None:
+    def with_callback_settings(config: dict) -> None:
+        config["litellm_settings"]["callbacks"] = ["langfuse_otel"]
+        config["callback_settings"]["otel"] = otel
+
+    config: Final = _config_with(tmp_path, otel_audit_config, extra=with_callback_settings)
+    overrides: Final = {"LITELLM_OTEL_V2": "1", **_operator_langfuse(audit_sinks)}
+    with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+        traffic: Final = _drive(candidate, langfuse_vars)
+        tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
+        _await_db_span(audit_sinks.tenant, tenant_trace, "redis")
+        tenant_spans: Final = _trace_spans(audit_sinks.tenant, tenant_trace, seconds=15)
+        assert any(span["kind"] == 2 for span in tenant_spans), "tenant SERVER root span missing"
+        assert "redis" in _db_systems(tenant_spans), f"tenant redis span missing: {_db_systems(tenant_spans)}"
+        operator_trace: Final = _trace_id(audit_sinks.operator, traffic)
+        operator_spans: Final = _trace_spans(audit_sinks.operator, operator_trace, seconds=15)
+        assert any(span["kind"] == 2 for span in operator_spans), "operator SERVER root span missing"
+
+
+@pytest.mark.parametrize("name", ["EXCLUDED_SERVICES", "excluded_services"])
+@pytest.mark.timeout(180)
+def test_a_bare_excluded_services_env_var_is_ignored(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    langfuse_vars: dict[str, JsonValue],
+    tmp_path: Path,
+    name: str,
+) -> None:
+    config: Final = _config_with(tmp_path, otel_audit_config)
+    overrides: Final = {"LITELLM_OTEL_V2": "1", name: "redis,postgres"}
+    with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+        tenant_start, _ = recorded_spans(audit_sinks.tenant)
+        traffic: Final = _drive(candidate, langfuse_vars)
+        tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
+        _await_db_span(audit_sinks.tenant, tenant_trace, "redis")
+        _await_db_span(audit_sinks.tenant, tenant_trace, "postgresql")
+        tenant_spans: Final = _trace_spans(audit_sinks.tenant, tenant_trace, seconds=15)
+        systems: Final = _db_systems(tenant_spans)
+        assert {"redis", "postgresql"} <= systems, f"datastore spans missing at tenant: {systems}"
+        _, all_tenant = recorded_spans(audit_sinks.tenant, tenant_start)
+        assert {"redis", "postgresql"} <= _db_systems(all_tenant), f"datastore spans missing at tenant: {systems}"
+
+
+@pytest.mark.timeout(180)
+def test_the_documented_env_var_wins_over_a_bare_excluded_services(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    langfuse_vars: dict[str, JsonValue],
+    tmp_path: Path,
+) -> None:
+    config: Final = _config_with(tmp_path, otel_audit_config)
+    overrides: Final = {
+        "LITELLM_OTEL_V2": "1",
+        "LITELLM_OTEL_EXCLUDED_SERVICES": "redis",
+        "EXCLUDED_SERVICES": "postgres",
+    }
+    with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+        tenant_start, _ = recorded_spans(audit_sinks.tenant)
+        _drive(candidate, langfuse_vars)
+        _await_db_span(audit_sinks.tenant, None, "postgresql")
+        _, tenant_spans = recorded_spans(audit_sinks.tenant, tenant_start)
+        systems: Final = _db_systems(tenant_spans)
+        assert "postgresql" in systems, f"postgresql spans missing at tenant: {systems}"
+        assert "redis" not in systems, f"redis spans reached tenant: {systems}"
+
+
 def test_env_excluded_services_drops_only_redis(
     gateway: Gateway,
     audit_sinks: SpanSinks,
