@@ -6651,9 +6651,7 @@ async def vector_store_access_check(
         else []
     ) or []
     rag_vector_store_id: Final = _get_rag_query_vector_store_id(request_body)
-    requested_ids: Final = (
-        (*registry_ids, rag_vector_store_id) if rag_vector_store_id is not None else registry_ids
-    )
+    requested_ids: Final = (*registry_ids, rag_vector_store_id) if rag_vector_store_id is not None else registry_ids
     vector_store_ids_to_run: Final = list(dict.fromkeys(requested_ids))
     if not vector_store_ids_to_run:
         verbose_proxy_logger.debug("Vector store to run not found, skipping vector store access check")
