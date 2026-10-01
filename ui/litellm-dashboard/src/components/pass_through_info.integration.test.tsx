@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { ComponentProps } from "react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { fireEvent, renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import PassThroughInfoView from "./pass_through_info";
@@ -31,7 +32,9 @@ const endpoint = {
   methods: ["GET"],
 };
 
-const renderView = (premiumUser = true, data = endpoint) =>
+type EndpointData = ComponentProps<typeof PassThroughInfoView>["endpointData"];
+
+const renderView = (premiumUser = true, data: EndpointData = endpoint) =>
   renderWithProviders(
     <PassThroughInfoView
       endpointData={data}
