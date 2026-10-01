@@ -328,6 +328,7 @@ class LiteLLM_Proxy_MCP_Handler:
             litellm_trace_id=litellm_trace_id,
             request_tags=request_tags,
             raw_headers=raw_headers,
+            record_listing=True,
         )
         tools: Final = listing.tools
 

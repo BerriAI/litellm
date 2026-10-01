@@ -3,7 +3,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from mcp.types import GetPromptRequest, GetPromptRequestParams, GetPromptResult
+from mcp.types import Tool as MCPTool
 
+from litellm.proxy._experimental.mcp_server import operations
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller
 from litellm.proxy._experimental.mcp_server.operations import GatewayOperations, prepare_context
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.mcp import MCPAuth, MCPTransport
@@ -665,3 +668,30 @@ async def test_tools_listing_preserves_explicit_spend_log_policy(log_enabled):
         )
     assert result.tools == []
     assert listing.await_args.kwargs["log_list_tools_to_spendlogs"] is log_enabled
+    assert listing.await_args.kwargs["record_listing"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("listing_kwargs", "recorded"), [({}, False), ({"record_listing": True}, True)])
+async def test_list_mcp_tools_records_the_catalog_only_when_asked(
+    listing_kwargs: dict[str, bool], recorded: bool
+) -> None:
+    """The aggregate listing fills the caller's listed-tools slot only when asked: a listing an internal
+    caller never serves must not hand a later tools/call a description the caller never saw."""
+    manager = operations.global_mcp_server_manager
+    server = MCPServer(server_id="listing-slot", name="listing-slot", transport=MCPTransport.http, url="http://slot")
+    user = UserAPIKeyAuth(api_key="sk-listing-slot", user_id="lister")
+    upstream = [MCPTool(name="echo", description="Echo text back", inputSchema={"type": "object"})]
+    with (
+        patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+        patch.object(manager, "_create_mcp_client", AsyncMock(return_value=object())),
+        patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
+        patch.dict(manager.tool_name_to_mcp_server_name_mapping),
+    ):
+        try:
+            listing = await operations._list_mcp_tools(user_api_key_auth=user, **listing_kwargs)
+            listed = manager.get_listed_tool(server, "echo", ListedToolsCaller(user_api_key_auth=user))
+        finally:
+            manager._drop_listed_tools(server.server_id)
+    assert [tool.name for tool in listing.tools] == ["listing-slot-echo"]
+    assert (listed is not None) is recorded

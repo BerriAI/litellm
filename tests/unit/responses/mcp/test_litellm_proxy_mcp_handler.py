@@ -4,20 +4,25 @@ import sys
 import textwrap
 import types
 from typing import Any, Final, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from mcp.types import CallToolResult, TextContent, Tool as MCPTool
 from openai.types.responses.tool_param import Mcp
 
+from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.responses import main as responses_main
 from litellm.responses.mcp import litellm_proxy_mcp_handler as mcp_handler_module
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.mcp import MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.responses.main import OutputFunctionToolCall
 from litellm.types.utils import ModelResponse
 
@@ -1311,3 +1316,40 @@ async def test_responses_discovery_logs_sanitized_caller_headers(monkeypatch: py
     logged: Final = setup.call_args.kwargs["metadata"]["headers"]
     assert logged == {"x-app-id": "app-a", "x-nuid": "user-a", "x-user-id": "identity-a"}
     assert headers["x-mcp-deepwiki-authorization"] == "upstream-sentinel"
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_tools_from_manager_records_the_served_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Responses bridge serves the listing to the model and its own tools/call reads the slot, so
+    this listing records the caller's catalog."""
+    manager: Final = mcp_operations.global_mcp_server_manager
+    server: Final = MCPServer(server_id="responses-slot", name="responses-slot", transport=MCPTransport.http)
+    user: Final = UserAPIKeyAuth(api_key="sk-responses-slot", user_id="responder")
+    upstream: Final = [MCPTool(name="echo", description="Echo text back", inputSchema={"type": "object"})]
+    fake_manager: Final = types.SimpleNamespace(
+        get_registry=MagicMock(return_value={}),
+        get_allowed_mcp_servers=AsyncMock(return_value=[]),
+        get_mcp_servers_from_ids=MagicMock(return_value=[]),
+        get_mcp_server_by_name=MagicMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        fake_manager,
+    )
+    with (
+        patch.dict(manager.tool_name_to_mcp_server_name_mapping),
+        patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+        patch.object(manager, "_create_mcp_client", AsyncMock(return_value=object())),
+        patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
+    ):
+        try:
+            tools, _server_names = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
+                user_api_key_auth=user,
+                mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/responses-slot"}],
+            )
+            listed: Final = manager.get_listed_tool(server, "echo", ListedToolsCaller(user_api_key_auth=user))
+        finally:
+            manager._drop_listed_tools(server.server_id)
+
+    assert [tool.name for tool in tools] == ["responses-slot-echo"]
+    assert listed is not None and listed.description == "Echo text back"

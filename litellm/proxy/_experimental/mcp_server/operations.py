@@ -958,7 +958,7 @@ async def _get_tools_from_mcp_servers(
     client_ip: str | None = None,
     mcp_proxy_mode: bool = False,
     *,
-    record_listing: bool = True,
+    record_listing: bool = False,
 ) -> AggregateToolListing:
     """
     Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -1470,6 +1470,8 @@ async def _list_mcp_tools(
     list_tools_log_source: str | None = None,
     client_ip: str | None = None,
     mcp_proxy_mode: bool = False,
+    *,
+    record_listing: bool = False,
 ) -> AggregateToolListing:
     """
     List all available MCP tools.
@@ -1480,6 +1482,8 @@ async def _list_mcp_tools(
         mcp_servers: Optional list of server names/aliases to filter by
         mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
         client_ip: Client IP for IP-based server access control
+        record_listing: Record each served catalog into the caller's listed-tools slot; only a
+            listing actually served to the caller sets it
 
     Returns:
         AggregateToolListing: Combined tools from all accessible servers plus each server's
@@ -1498,6 +1502,7 @@ async def _list_mcp_tools(
             list_tools_log_source=list_tools_log_source,
             client_ip=client_ip,
             mcp_proxy_mode=mcp_proxy_mode,
+            record_listing=record_listing,
         )
         verbose_logger.debug("Successfully fetched %s tools from managed MCP servers", len(listing.tools))
         return listing
@@ -2757,6 +2762,7 @@ async def _execute_handle_list_tools(
             log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
             list_tools_log_source="mcp_protocol",
             client_ip=_client_ip,
+            record_listing=True,
         )
         verbose_logger.info("MCP list_tools - Successfully returned %s tools", len(listing.tools))
         if not listing.outcomes:
