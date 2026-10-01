@@ -3,20 +3,31 @@
 import type { components } from "@/lib/http/schema";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Aperture, ArrowUpRight, CheckCircle2, Circle, Layers3, Pause, Play, Plus, Settings2 } from "lucide-react";
+import {
+  Aperture,
+  ArrowUpRight,
+  CheckCircle2,
+  Circle,
+  Info,
+  Layers3,
+  Pause,
+  Play,
+  Plus,
+  Settings2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import { apiClient } from "@/components/networking";
 import { TracePanel } from "./TracePanel";
 import { EngineSetup } from "./EngineSetup";
 import { LensRuns } from "./LensRuns";
-import { EngineProgress, NextCheck } from "./EngineProgress";
+import { EngineProgress, NextCheck, ScanDuration } from "./EngineProgress";
 import { WorkerSetup } from "./WorkerSetup";
 import { LensWelcome } from "./LensWelcome";
 import {
-  analysisElapsed,
   engineStatus,
   evidenceTarget,
   sortedFindings,
@@ -331,51 +342,80 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                 {job.error}
               </p>
             )}
-            <label className="flex flex-wrap items-center gap-3 text-sm">
-              Investigation
-              <select
-                aria-label="Investigation batch"
-                className="rounded-md border bg-background px-3 py-2"
-                value={batchId}
-                onChange={(e) => {
-                  setBatchId(e.target.value);
-                  setFindingId(null);
-                }}
-              >
-                <option value="latest">Latest batch</option>
-                {job && selectedOutsideHistory && (
-                  <option value={batchId}>
-                    {when(job.created_at)} · {job.status}
-                  </option>
-                )}
-                {(history.data ?? engine.jobs)?.map((j) => (
-                  <option key={j.id} value={j.id}>
-                    {when(j.created_at)} · {j.status}
-                  </option>
-                ))}
-                <option value="all">All accumulated findings</option>
-              </select>
-            </label>
-            {job && batchId !== "all" && (
-              <p className="text-xs text-muted-foreground">
-                {when(job.start)} to {when(job.end)} · {job.coverage?.screened ?? 0} / {job.coverage?.selected ?? 0}{" "}
-                selected runs reviewed · {money(job.cost ?? 0)}
-                <ScanDuration job={job} />
-              </p>
-            )}
-            {missingSnapshot && (
-              <p className="text-sm text-muted-foreground">
-                This older batch predates saved result snapshots. Its findings remain available under All accumulated
-                findings.
-              </p>
-            )}
             <Tabs value={tab} onValueChange={setTab} key={engine.id}>
-              <TabsList variant="line">
-                <TabsTrigger value="findings">Findings</TabsTrigger>
-                <TabsTrigger value="checks">Questions & checks</TabsTrigger>
-                <TabsTrigger value="runs">Runs</TabsTrigger>
-                <TabsTrigger value="activity">Scans</TabsTrigger>
-              </TabsList>
+              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b">
+                <TabsList variant="line">
+                  <TabsTrigger value="findings">Findings</TabsTrigger>
+                  <TabsTrigger value="checks">Questions & checks</TabsTrigger>
+                  <TabsTrigger value="runs">Runs</TabsTrigger>
+                  <TabsTrigger value="activity">Scans</TabsTrigger>
+                </TabsList>
+                {tab !== "activity" && (
+                  <div className="flex min-w-0 items-center gap-1 pb-1">
+                    <select
+                      aria-label="Investigation batch"
+                      className="h-8 w-44 max-w-full truncate rounded-md border-0 bg-transparent px-2 text-xs text-muted-foreground hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+                      value={batchId}
+                      onChange={(e) => {
+                        setBatchId(e.target.value);
+                        setFindingId(null);
+                      }}
+                    >
+                      <option value="latest">Latest batch</option>
+                      {job && selectedOutsideHistory && (
+                        <option value={batchId}>
+                          {when(job.created_at)} · {job.status}
+                        </option>
+                      )}
+                      {(history.data ?? engine.jobs)?.map((j) => (
+                        <option key={j.id} value={j.id}>
+                          {when(j.created_at)} · {j.status}
+                        </option>
+                      ))}
+                      <option value="all">All accumulated findings</option>
+                    </select>
+                    {job && batchId !== "all" && (
+                      <Popover key={job.id}>
+                        <PopoverTrigger
+                          aria-label="Batch details"
+                          render={<Button variant="ghost" size="icon" className="size-7 text-muted-foreground" />}
+                        >
+                          <Info className="size-3.5" />
+                        </PopoverTrigger>
+                        <PopoverContent align="end" className="gap-3">
+                          <PopoverTitle>Batch details</PopoverTitle>
+                          <p className="text-xs text-muted-foreground">
+                            {job.coverage?.screened ?? 0} / {job.coverage?.selected ?? 0} selected runs reviewed
+                            <ScanDuration job={job} />
+                          </p>
+                          <dl className="space-y-2 text-xs">
+                            <div>
+                              <dt className="text-muted-foreground">Activity window</dt>
+                              <dd className="mt-1">
+                                {when(job.start)} to {when(job.end)}
+                              </dd>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                              <dt className="text-muted-foreground">Analysis cost</dt>
+                              <dd>{money(job.cost ?? 0)}</dd>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                              <dt className="text-muted-foreground">Status</dt>
+                              <dd className="capitalize">{job.status}</dd>
+                            </div>
+                          </dl>
+                        </PopoverContent>
+                      </Popover>
+                    )}
+                  </div>
+                )}
+              </div>
+              {missingSnapshot && tab !== "activity" && (
+                <p className="text-sm text-muted-foreground">
+                  This older batch predates saved result snapshots. Its findings remain available under All accumulated
+                  findings.
+                </p>
+              )}
               <TabsContent value="findings" className="pt-4 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex gap-1" aria-label="Finding category">
@@ -757,15 +797,5 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
         </SheetContent>
       </Sheet>
     </main>
-  );
-}
-
-function ScanDuration({ job }: { job: Job }) {
-  if (!job.finished_at) return null;
-  return (
-    <span title="Total time, including any wait for an analyzer">
-      {" · Took "}
-      {analysisElapsed(job.created_at, Date.parse(job.finished_at))}
-    </span>
   );
 }

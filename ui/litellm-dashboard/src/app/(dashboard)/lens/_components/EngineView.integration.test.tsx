@@ -245,7 +245,10 @@ it("opens the saved results of an older batch", async () => {
   await user.selectOptions(screen.getByRole("combobox", { name: "Investigation batch" }), "older");
   expect(await screen.findByText("Earlier batch finding")).toBeVisible();
   expect(screen.queryByText(issue.title)).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Batch details" }));
   expect(screen.getByText(/Took 2m 13s/)).toBeVisible();
+  expect(screen.getByText("Activity window")).toBeVisible();
+  await user.keyboard("{Escape}");
   await user.click(screen.getByRole("tab", { name: "Scans" }));
   expect(within(screen.getByRole("tabpanel", { name: "Scans" })).getByText(/Took 2m 13s/)).toBeVisible();
 });
