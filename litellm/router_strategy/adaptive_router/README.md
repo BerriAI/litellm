@@ -67,9 +67,21 @@ Callers may pass header `x-litellm-min-quality-tier: 3` (or metadata key
   (uptime, not quality). Skipped if conversation has fewer than
   `SIGNAL_GATE_MIN_MESSAGES` messages.
 - **Persistence.** Bandit cells: aggregated deltas, eventually consistent.
-  Session rows: last-write-wins snapshots.
+  Session rows: last-write-wins snapshots. Failed or cancelled flushes retain
+  unacknowledged rows for the next flush. Retried deltas merge with new feedback;
+  a newer queued session snapshot replaces a failed older snapshot. Flushes of
+  the same queue are serialized within one process, and their return values
+  count acknowledged writes only
 
 ## Known v0 limitations
+
+- **Retries are at-least-once.** If a state increment commits but its response
+  is lost, retrying can count that feedback twice. There is no durable receipt
+  to distinguish that outcome from a failed write. The queues are in memory,
+  so process termination still loses pending updates. Session write ordering
+  across workers, or server queries continuing after client cancellation, is
+  not guaranteed. A prolonged database outage retains pending session keys
+  in memory until a later flush succeeds
 
 - **Latency is not in the score.** Quality + cost only. A pathologically slow
   model can still be picked.
