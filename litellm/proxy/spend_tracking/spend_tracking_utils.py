@@ -153,6 +153,7 @@ def _get_router_metadata_for_spend_log(
 _STAMPED_METADATA_KEYS: Final = frozenset(
     (
         "router_metadata",
+        "spend_context",
         "azure_spillover",
         "autorouter_savings",
         "autorouter_savings_estimate",
@@ -759,6 +760,8 @@ def get_logging_payload(
             if isinstance(cache_write_tokens, int) and cache_write_tokens > 0:
                 additional_usage_values["cache_creation_input_tokens"] = cache_write_tokens
     clean_metadata["additional_usage_values"] = additional_usage_values
+    if standard_logging_payload is not None and (spend_context := standard_logging_payload.get("spend_context")):
+        clean_metadata["spend_context"] = spend_context
 
     if litellm.cache is None:
         cache_key = "Cache OFF"
@@ -769,7 +772,11 @@ def get_logging_payload(
     if cache_hit is True:
         import time
 
-        id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
+        id = (
+            standard_logging_payload["id"]
+            if standard_logging_payload is not None and standard_logging_payload.get("spend_context")
+            else f"{id}_cache_hit{time.time()}"
+        )
 
     mcp_namespaced_tool_name = None
     mcp_tool_call_metadata: Final[StandardLoggingMCPToolCall | None] = clean_metadata.get("mcp_tool_call_metadata")

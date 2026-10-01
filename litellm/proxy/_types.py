@@ -69,6 +69,7 @@ from litellm.types.utils import (
     LiteLLMPydanticObjectBase,
     ModelResponse,
     ProviderField,
+    SpendLoggingContext,
     StandardCallbackDynamicParams,
     StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
@@ -4104,6 +4105,7 @@ class SpendLogsRouterMetadata(TypedDict):
 
 
 class SpendLogsMetadata(TypedDict):
+    spend_context: ReadOnly[NotRequired[SpendLoggingContext]]
     actor_agent_id: ReadOnly[NotRequired[str | None]]
     target_agent_id: ReadOnly[NotRequired[str | None]]
     billing_agent_id: ReadOnly[NotRequired[str | None]]
