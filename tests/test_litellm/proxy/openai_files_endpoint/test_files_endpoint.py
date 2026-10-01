@@ -5907,3 +5907,164 @@ def test_create_file_passthrough_fails_closed_when_guardrails_would_scan_the_bat
     assert error["param"] == "passthrough"
     assert "guardrails" in error["message"]
     assert forwarded_calls == []
+
+
+# --------------------------------------------------------------------------- #
+# OpenAI `project` forwarding on /v1/files: the form field and the header must
+# reach the provider only through the `forward_openai_project` opt-in, and every
+# endpoint of the file lifecycle must resolve the same project.
+# --------------------------------------------------------------------------- #
+
+FILE_UPLOAD_CONTENT = b'{"prompt": "Hello", "completion": "Hi"}'
+
+
+def _stub_create_file_route(monkeypatch, captured: dict) -> None:
+    """Replace the dispatch step so the test can read the forwarded request."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.openai_files_endpoints import files_endpoints as fe
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    async def fake_route_create_file(*, _create_file_request, **kwargs):
+        captured["request"] = dict(_create_file_request)
+        return OpenAIFileObject(
+            id="file-abc123",
+            object="file",
+            bytes=len(FILE_UPLOAD_CONTENT),
+            created_at=1234567890,
+            filename="data.jsonl",
+            purpose="user_data",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr(fe, "route_create_file", fake_route_create_file)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+
+
+def _upload_file(form: dict, headers: dict):
+    return client.post(
+        "/v1/files",
+        files={"file": ("data.jsonl", FILE_UPLOAD_CONTENT, "application/json")},
+        data={"purpose": "user_data", **form},
+        headers={"Authorization": "Bearer test-key", **headers},
+    )
+
+
+def test_create_file_project_form_field_forwarded_when_opted_in(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+
+    captured: dict = {}
+    _stub_create_file_route(monkeypatch, captured)
+    monkeypatch.setattr(ps, "general_settings", {"forward_openai_project": True})
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+
+    try:
+        response = _upload_file({"project": "proj_from_form"}, {})
+        assert response.status_code == 200, response.text
+        assert captured["request"]["project"] == "proj_from_form"
+
+        captured.clear()
+        response = _upload_file({"project": "proj_from_form"}, {"OpenAI-Project": "proj_from_header"})
+        assert response.status_code == 200, response.text
+        assert captured["request"]["project"] == "proj_from_header"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_create_file_drops_client_project_without_opt_in(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+
+    captured: dict = {}
+    _stub_create_file_route(monkeypatch, captured)
+    monkeypatch.setattr(ps, "general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+
+    try:
+        response = _upload_file({"project": "proj_from_form"}, {"OpenAI-Project": "proj_from_header"})
+        assert response.status_code == 200, response.text
+        assert "project" not in captured["request"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_retrieve_file_forwards_project_header_when_opted_in(monkeypatch, llm_router: Router):
+    """A file uploaded inside a project is only readable with that project."""
+    import litellm.proxy.proxy_server as ps
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    retrieved = OpenAIFileObject(
+        id="file-abc123",
+        object="file",
+        bytes=0,
+        created_at=1234567890,
+        filename="data.jsonl",
+        purpose="user_data",
+        status="uploaded",
+    )
+    afile_retrieve = AsyncMock(return_value=retrieved)
+    monkeypatch.setattr(litellm, "afile_retrieve", afile_retrieve)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"forward_openai_project": True})
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+
+    try:
+        response = client.get(
+            "/v1/files/file-abc123",
+            headers={"Authorization": "Bearer test-key", "OpenAI-Project": "proj_from_header"},
+        )
+        assert response.status_code == 200, response.text
+        assert afile_retrieve.call_args.kwargs["project"] == "proj_from_header"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_retrieve_file_drops_project_header_without_opt_in(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    retrieved = OpenAIFileObject(
+        id="file-abc123",
+        object="file",
+        bytes=0,
+        created_at=1234567890,
+        filename="data.jsonl",
+        purpose="user_data",
+        status="uploaded",
+    )
+    afile_retrieve = AsyncMock(return_value=retrieved)
+    monkeypatch.setattr(litellm, "afile_retrieve", afile_retrieve)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+
+    try:
+        response = client.get(
+            "/v1/files/file-abc123",
+            headers={"Authorization": "Bearer test-key", "OpenAI-Project": "proj_from_header"},
+        )
+        assert response.status_code == 200, response.text
+        assert "project" not in afile_retrieve.call_args.kwargs
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)

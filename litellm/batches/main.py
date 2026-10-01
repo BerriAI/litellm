@@ -293,6 +293,7 @@ def create_batch(
                 or os.getenv("OPENAI_ORGANIZATION", None)
                 or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
             )
+            project: Final = optional_params.project or os.getenv("OPENAI_PROJECT", None) or None
             # set API KEY
             api_key = (
                 optional_params.api_key
@@ -305,6 +306,7 @@ def create_batch(
                 api_base=api_base,
                 api_key=api_key,
                 organization=organization,
+                project=project,
                 create_batch_data=_create_batch_request,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
@@ -455,6 +457,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
             or os.getenv("OPENAI_ORGANIZATION", None)
             or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
         )
+        project: Final = optional_params.project or os.getenv("OPENAI_PROJECT", None) or None
         # set API KEY
         api_key = (
             optional_params.api_key
@@ -469,6 +472,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
             api_base=api_base,
             api_key=api_key,
             organization=organization,
+            project=project,
             timeout=timeout,
             max_retries=optional_params.max_retries,
         )
@@ -807,6 +811,7 @@ def list_batches(
                 or os.getenv("OPENAI_ORGANIZATION", None)
                 or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
             )
+            project: Final = optional_params.project or os.getenv("OPENAI_PROJECT", None) or None
 
             response = openai_batches_instance.list_batches(
                 _is_async=_is_async,
@@ -815,6 +820,7 @@ def list_batches(
                 api_base=api_base,
                 api_key=api_key,
                 organization=organization,
+                project=project,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
             )
@@ -1004,6 +1010,7 @@ def cancel_batch(
             organization: Final = (
                 optional_params.organization or litellm.organization or os.getenv("OPENAI_ORGANIZATION", None) or None
             )
+            project: Final = optional_params.project or os.getenv("OPENAI_PROJECT", None) or None
             api_key = optional_params.api_key or litellm.api_key or litellm.openai_key or os.getenv("OPENAI_API_KEY")
 
             response = openai_batches_instance.cancel_batch(
@@ -1012,6 +1019,7 @@ def cancel_batch(
                 api_base=api_base,
                 api_key=api_key,
                 organization=organization,
+                project=project,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
             )

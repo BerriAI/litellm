@@ -26313,6 +26313,8 @@ export interface components {
              * @default false
              */
             passthrough: boolean;
+            /** Project */
+            project?: string | null;
             /** Purpose */
             purpose: string;
             /**
@@ -26342,6 +26344,8 @@ export interface components {
              * @default false
              */
             passthrough: boolean;
+            /** Project */
+            project?: string | null;
             /** Purpose */
             purpose: string;
             /**
@@ -26371,6 +26375,8 @@ export interface components {
              * @default false
              */
             passthrough: boolean;
+            /** Project */
+            project?: string | null;
             /** Purpose */
             purpose: string;
             /**
@@ -34292,6 +34298,8 @@ export interface components {
             output_cost_per_video_token?: number | null;
             /** Output Vector Size */
             output_vector_size?: number | null;
+            /** Project */
+            project?: string | null;
             /** Provider Affinity Header */
             provider_affinity_header?: string | null;
             /** Quality Router Config */
@@ -48650,6 +48658,8 @@ export interface components {
             output_cost_per_video_token?: number | null;
             /** Output Vector Size */
             output_vector_size?: number | null;
+            /** Project */
+            project?: string | null;
             /** Provider Affinity Header */
             provider_affinity_header?: string | null;
             /** Quality Router Config */

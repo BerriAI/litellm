@@ -393,6 +393,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     max_retries: int | None = None
     drop_params: bool | str | None = None
     organization: str | None = None  # for openai orgs
+    project: str | None = None  # for openai projects
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     litellm_credential_name: str | None = None
     provider_affinity_header: str | None = None
