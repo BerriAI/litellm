@@ -1,7 +1,11 @@
 import glob
+import itertools
 import os
 import re
+import subprocess
 import sys
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -12,6 +16,8 @@ sys.path.insert(
         os.path.join(os.path.dirname(__file__), "../../../litellm-proxy-extras")
     ),
 )
+
+import litellm_proxy_extras.utils as utils_module
 
 from litellm_proxy_extras.utils import (
     PARTITIONED_SPEND_LOGS_PUSH_ERROR,
@@ -708,6 +714,18 @@ class TestSpendLogsPartitionDetectionMissingPsycopg:
 
 _ATTEMPT_BUDGET = 4
 
+_P1002_ADVISORY_LOCK_STDERR = (
+    "Error: P1002\n\n"
+    "The database server at `localhost`:`5432` was reached but timed out.\n"
+    "...\n"
+    "Context: Timed out trying to acquire a postgres advisory lock "
+    "(SELECT pg_advisory_lock(72707369)). Elapsed: 10000ms. ..."
+)
+
+_P1002_CONNECTION_TIMEOUT_STDERR = (
+    "Error: P1002\n\nThe database server at `localhost`:`5432` was reached but timed out."
+)
+
 _P3005_STDERR = """Error: P3005
 
 The database schema is not empty. Read more about how to baseline an existing production database: https://pris.ly/d/migrate-baseline
@@ -928,6 +946,72 @@ class TestMigrateDeployAttemptAccounting:
             harness.run()
         assert len(harness.deploy_calls) == 1
         assert harness.resolved == []
+
+
+class _LegacyResolverHarness:
+    def __init__(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        outcomes: list[str],
+    ) -> None:
+        self.deploy_calls: list[list[str]] = []
+        self._outcomes = list(outcomes)
+
+        monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(tmp_path))
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", self._fake_run)
+        monkeypatch.setattr(utils_module, "_get_prisma_env", lambda: {})
+        monkeypatch.setattr(utils_module.time, "sleep", lambda seconds: None)
+
+    def _fake_run(self, cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert cmd[1:] == ["migrate", "deploy"], f"unexpected prisma command: {cmd}"
+        self.deploy_calls.append(cmd)
+        if self._outcomes:
+            outcome = self._outcomes.pop(0)
+        else:
+            raise AssertionError("prisma migrate deploy called more times than scripted")
+        if outcome == "success":
+            return subprocess.CompletedProcess(cmd, 0, stdout="No pending migrations to apply", stderr="")
+        raise subprocess.CalledProcessError(1, cmd, stderr=outcome)
+
+    def run(self, clock: Callable[[], float] = time.monotonic) -> bool:
+        return ProxyExtrasDBManager._run_migrations(use_migrate=True, use_v2_resolver=False, clock=clock)
+
+
+class TestLegacyResolverLockContention:
+    def test_lock_contention_waits_for_the_running_migration(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        harness = _LegacyResolverHarness(monkeypatch, tmp_path, [_P1002_ADVISORY_LOCK_STDERR] * 6 + ["success"])
+
+        assert harness.run() is True
+        assert len(harness.deploy_calls) == 7
+
+    def test_lock_contention_past_the_deadline_stops_startup(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("LITELLM_MIGRATION_LOCK_TIMEOUT", "25")
+        ticks = itertools.count(start=0.0, step=10.0)
+        harness = _LegacyResolverHarness(monkeypatch, tmp_path, [_P1002_ADVISORY_LOCK_STDERR] * 5 + ["success"])
+
+        with pytest.raises(RuntimeError, match="advisory lock"):
+            harness.run(clock=lambda: next(ticks))
+        assert len(harness.deploy_calls) == 3
+
+    @pytest.mark.parametrize(
+        "stderr",
+        (
+            _P1002_CONNECTION_TIMEOUT_STDERR,
+            "Error: P1001\n\nCan't reach database server",
+        ),
+    )
+    def test_other_deploy_failures_still_spend_the_attempt_budget(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stderr: str
+    ) -> None:
+        harness = _LegacyResolverHarness(monkeypatch, tmp_path, [stderr] * 4)
+
+        assert harness.run() is False
+        assert len(harness.deploy_calls) == 4
 
 
 @pytest.mark.parametrize(
