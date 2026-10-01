@@ -168,9 +168,7 @@ async def test_image_generation__missing_required_param_is_400(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", fake_proxy_logger)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.version", "test-version")
-    monkeypatch.setattr(
-        "litellm.proxy.image_endpoints.endpoints.route_request", fake_route_request
-    )
+    monkeypatch.setattr("litellm.proxy.image_endpoints.endpoints.route_request", fake_route_request)
 
     with pytest.raises(ProxyException) as exc_info:
         await endpoints.image_generation(
@@ -354,7 +352,9 @@ async def test_failure_log_carries_the_callers_litellm_call_id(
     async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
         return kwargs["data"]
 
-    async def fake_pre_call_hook(*, user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str) -> dict[str, object]:
+    async def fake_pre_call_hook(
+        *, user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str
+    ) -> dict[str, object]:
         return data
 
     async def fake_post_call_failure_hook(**_: object) -> None:
@@ -391,7 +391,9 @@ async def test_failure_log_carries_the_callers_litellm_call_id(
     )
 
     with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"), pytest.raises(ProxyException) as raised:
-        await endpoints.image_generation(request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth())
+        await endpoints.image_generation(
+            request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth()
+        )
 
     assert raised.value.headers["x-litellm-call-id"] == call_id
     record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
@@ -442,7 +444,9 @@ async def test_failure_before_the_provider_call_bills_the_callers_litellm_call_i
     )
 
     with pytest.raises(ProxyException) as raised:
-        await endpoints.image_generation(request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth())
+        await endpoints.image_generation(
+            request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth()
+        )
 
     assert raised.value.headers["x-litellm-call-id"] == call_id
     assert [data["litellm_call_id"] for data in hook_request_data] == [call_id]

@@ -1,6 +1,4 @@
-
 import pytest
-
 
 
 from typing import Final
@@ -1311,6 +1309,7 @@ async def test_route_request_read_through_disabled_without_store_model_in_db(mon
         )
 
     assert table.find_many_wheres == []
+
 
 @pytest.mark.asyncio
 async def test_route_request_routing_group_name_passes_model_gate():
