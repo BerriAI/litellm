@@ -179,11 +179,11 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_base = api_base.rstrip("/")  # Remove trailing slash if present
 
         language: Final = optional_params.get("language")
-        all_query_params: Final = {
-            "model": model,
-            **self._build_query_params(optional_params, model),
-            **({"language": language} if language is not None else {}),
-        }
+        all_query_params: Final = (
+            ("model", model),
+            *self._build_query_params(optional_params, model).items(),
+            *((("language", language),) if language is not None else ()),
+        )
 
         # Construct URL with proper query string encoding
         base_url: Final = f"{api_base}/listen"
