@@ -1,4 +1,4 @@
-use litellm_traces::decode_otlp;
+use litellm_traces::{OTLP_DEFAULT_MAX_BODY_BYTES, decode_otlp};
 use rstest::rstest;
 
 const FIXTURE: &[u8] = include_bytes!(
@@ -8,7 +8,7 @@ const FIXTURE: &[u8] = include_bytes!(
 #[rstest]
 #[case::json(FIXTURE, Some("application/json"))]
 fn decodes_neutral_spans(#[case] body: &[u8], #[case] content_type: Option<&str>) {
-    let spans = decode_otlp(body, content_type, 8 * 1024 * 1024).expect("valid OTLP export");
+    let spans = decode_otlp(body, content_type).expect("valid OTLP export");
     assert_eq!(spans.len(), 6);
     assert_eq!(spans[0].trace_id, "4bad42b84e9de3ba46fc870185f8f023");
     assert_eq!(spans[0].resource_attributes["service.name"], "agent-demo");
@@ -21,14 +21,20 @@ fn decodes_neutral_spans(#[case] body: &[u8], #[case] content_type: Option<&str>
 }
 
 #[rstest]
-#[case::invalid(b"not protobuf", None, 8 * 1024 * 1024)]
-#[case::too_large(FIXTURE, Some("application/json"), 1)]
-fn rejects_invalid_or_oversized_payload(
-    #[case] body: &[u8],
-    #[case] content_type: Option<&str>,
-    #[case] limit: usize,
-) {
-    assert!(decode_otlp(body, content_type, limit).is_err());
+fn accepts_trace_larger_than_eight_mib(mut span: opentelemetry_proto::tonic::trace::v1::Span) {
+    use prost::Message;
+
+    span.name = "x".repeat(9 * 1024 * 1024);
+    let body = request_with(span).encode_to_vec();
+    let decoded = decode_otlp(&body, None).expect("16 MiB default accepts a 9 MiB trace");
+    assert_eq!(decoded[0].name.len(), 9 * 1024 * 1024);
+}
+
+#[rstest]
+#[case::invalid(b"not protobuf".to_vec(), None)]
+#[case::too_large(vec![b' '; OTLP_DEFAULT_MAX_BODY_BYTES + 1], Some("application/json"))]
+fn rejects_invalid_or_oversized_payload(#[case] body: Vec<u8>, #[case] content_type: Option<&str>) {
+    assert!(decode_otlp(&body, content_type).is_err());
 }
 
 fn request_with(
@@ -68,8 +74,8 @@ fn standard_json_and_protobuf_preserve_the_same_identifiers(
     let request = request_with(span);
     let json = serde_json::to_vec(&request).unwrap();
     let binary = request.encode_to_vec();
-    let json_spans = decode_otlp(&json, Some("application/json; charset=utf-8"), 8192).unwrap();
-    let binary_spans = decode_otlp(&binary, Some("application/x-protobuf"), 8192).unwrap();
+    let json_spans = decode_otlp(&json, Some("application/json; charset=utf-8")).unwrap();
+    let binary_spans = decode_otlp(&binary, Some("application/x-protobuf")).unwrap();
     assert_eq!(
         serde_json::to_value(&json_spans).unwrap(),
         serde_json::to_value(&binary_spans).unwrap()
@@ -99,7 +105,7 @@ fn rejects_ids_and_timestamps_that_cannot_be_stored(
         ..Default::default()
     };
     assert!(matches!(
-        decode_otlp(&request_with(span).encode_to_vec(), None, 8192),
+        decode_otlp(&request_with(span).encode_to_vec(), None),
         Err(litellm_traces::DecodeError::InvalidPayload)
     ));
 }
@@ -116,17 +122,17 @@ fn resource_fanout_is_charged_before_copying(span: opentelemetry_proto::tonic::t
         attributes: vec![KeyValue {
             key: "shared".into(),
             value: Some(AnyValue {
-                value: Some(Value::StringValue("x".repeat(4096))),
+                value: Some(Value::StringValue("x".repeat(16 * 1024))),
             }),
             ..Default::default()
         }],
         ..Default::default()
     });
-    request.resource_spans[0].scope_spans[0].spans = vec![span; 100];
+    request.resource_spans[0].scope_spans[0].spans = vec![span; 1024];
     let body = request.encode_to_vec();
-    assert!(body.len() < 16 * 1024);
+    assert!(body.len() < OTLP_DEFAULT_MAX_BODY_BYTES);
     assert!(matches!(
-        decode_otlp(&body, None, 16 * 1024),
+        decode_otlp(&body, None),
         Err(litellm_traces::DecodeError::TooLarge)
     ));
 }
@@ -153,7 +159,7 @@ fn nested_values_are_serialized_once(span: opentelemetry_proto::tonic::trace::v1
         value: Some(nested),
         ..Default::default()
     }];
-    let spans = decode_otlp(&request.encode_to_vec(), None, 8192).unwrap();
+    let spans = decode_otlp(&request.encode_to_vec(), None).unwrap();
     let expected = (0..8).fold(serde_json::json!("quoted \"value\""), |child, _| {
         serde_json::json!([child])
     });
@@ -169,7 +175,7 @@ fn nested_values_are_serialized_once(span: opentelemetry_proto::tonic::trace::v1
 #[case::nodes(format!("[{}]", vec!["0"; 65537].join(",")).into_bytes())]
 fn rejects_json_structure_before_building_a_tree(#[case] body: Vec<u8>) {
     assert!(matches!(
-        decode_otlp(&body, Some("application/json"), 8 * 1024 * 1024),
+        decode_otlp(&body, Some("application/json")),
         Err(litellm_traces::DecodeError::TooLarge)
     ));
 }
@@ -204,9 +210,9 @@ fn protobuf_preflight_rejects_expansion_before_prost_allocates(
     }];
     request.resource_spans = vec![request.resource_spans[0].clone(); count];
     let body = request.encode_to_vec();
-    assert!(body.len() < 8 * 1024 * 1024);
+    assert!(body.len() < OTLP_DEFAULT_MAX_BODY_BYTES);
     assert!(matches!(
-        decode_otlp(&body, None, 8 * 1024 * 1024),
+        decode_otlp(&body, None),
         Err(litellm_traces::DecodeError::TooLarge)
     ));
 }

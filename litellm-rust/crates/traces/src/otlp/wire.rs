@@ -7,9 +7,9 @@ use crate::DecodeError;
 pub(super) fn decode(
     body: &[u8],
     content_type: Option<&str>,
-    decode_budget_bytes: usize,
+    max_body_bytes: usize,
 ) -> Result<ExportTraceServiceRequest, DecodeError> {
-    if body.len() > decode_budget_bytes {
+    if body.len() > max_body_bytes {
         return Err(DecodeError::TooLarge);
     }
     let media_type = content_type

@@ -6,7 +6,7 @@ mod sql;
 
 pub use error::{DecodeError, Error};
 pub use insert::{InsertTable, encode_rows, insert_rows};
-pub use otlp::{DecodedSpan, decode_otlp};
+pub use otlp::{DecodedSpan, OTLP_DEFAULT_MAX_BODY_BYTES, decode_otlp, otlp_max_body_bytes};
 pub use schema::{ensure_schema, schema_statements};
 pub use sql::{LensQuery, Parameter, ReadQuery, execute_named_read, execute_read};
 use url::Url;

@@ -76,7 +76,7 @@ def decode_otlp(
 ) -> tuple[SpanRow, ...]:
     payload: Final = _decode_content_encoding(body, content_encoding)
     try:
-        spans: Final = native_decode_otlp(payload, content_type, OTLP_MAX_BODY_BYTES)
+        spans: Final = native_decode_otlp(payload, content_type)
     except OverflowError as error:
         raise OTLPPayloadTooLargeError(str(error)) from error
     except ValueError as error:

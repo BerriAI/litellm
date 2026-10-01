@@ -53,7 +53,6 @@ class NativeTraces(Protocol):
         self,
         body: bytes,
         content_type: str | None,
-        decode_budget_bytes: int,
     ) -> list[DecodedSpan]: ...
 
     def trace_encode_error(self, message: str) -> bytes: ...
@@ -75,8 +74,8 @@ def _native() -> NativeTraces:
     return cast(NativeTraces, native)  # cast-ok: the native extension is validated against this protocol at call sites
 
 
-def decode_otlp(body: bytes, content_type: str | None, decode_budget_bytes: int) -> list[DecodedSpan]:
-    return _native().trace_decode_otlp(body, content_type, decode_budget_bytes)
+def decode_otlp(body: bytes, content_type: str | None) -> list[DecodedSpan]:
+    return _native().trace_decode_otlp(body, content_type)
 
 
 def encode_error(message: str) -> bytes:

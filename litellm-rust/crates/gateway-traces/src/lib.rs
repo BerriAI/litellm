@@ -9,9 +9,11 @@ use axum::{
     routing::post,
 };
 use flate2::read::MultiGzDecoder;
-use litellm_traces::{DecodeError, DecodedSpan, decode_otlp};
+use litellm_traces::{
+    DecodeError, DecodedSpan, OTLP_DEFAULT_MAX_BODY_BYTES, decode_otlp, otlp_max_body_bytes,
+};
 
-pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_BODY_BYTES: usize = OTLP_DEFAULT_MAX_BODY_BYTES;
 
 pub trait SpanSink: Send + Sync + 'static {
     fn write(&self, spans: Vec<DecodedSpan>) -> impl Future<Output = Result<(), ()>> + Send;
@@ -24,6 +26,7 @@ pub fn router<S: SpanSink>(sink: S) -> Router {
 }
 
 async fn ingest<S: SpanSink>(State(sink): State<Arc<S>>, request: Request) -> Response {
+    let max_body_bytes = otlp_max_body_bytes();
     let content_type = request
         .headers()
         .get(header::CONTENT_TYPE)
@@ -45,16 +48,14 @@ async fn ingest<S: SpanSink>(State(sink): State<Arc<S>>, request: Request) -> Re
     };
     let result = async {
         let encoding = encoding.transpose().map_err(|_| StatusCode::BAD_REQUEST)?;
-        let body = to_bytes(request.into_body(), MAX_BODY_BYTES + 1)
+        let body = to_bytes(request.into_body(), max_body_bytes.saturating_add(1))
             .await
             .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
-        let payload = decode_content_encoding(&body, encoding.as_deref())?;
+        let payload = decode_content_encoding(&body, encoding.as_deref(), max_body_bytes)?;
         let spans =
-            decode_otlp(&payload, content_type.as_deref(), MAX_BODY_BYTES).map_err(|error| {
-                match error {
-                    DecodeError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-                    DecodeError::InvalidPayload => StatusCode::BAD_REQUEST,
-                }
+            decode_otlp(&payload, content_type.as_deref()).map_err(|error| match error {
+                DecodeError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+                DecodeError::InvalidPayload => StatusCode::BAD_REQUEST,
             })?;
         sink.write(spans)
             .await
@@ -70,8 +71,12 @@ async fn ingest<S: SpanSink>(State(sink): State<Arc<S>>, request: Request) -> Re
     }
 }
 
-fn decode_content_encoding(body: &[u8], encoding: Option<&str>) -> Result<Vec<u8>, StatusCode> {
-    if body.len() > MAX_BODY_BYTES {
+fn decode_content_encoding(
+    body: &[u8],
+    encoding: Option<&str>,
+    max_body_bytes: usize,
+) -> Result<Vec<u8>, StatusCode> {
+    if body.len() > max_body_bytes {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
     match encoding {
@@ -80,10 +85,10 @@ fn decode_content_encoding(body: &[u8], encoding: Option<&str>) -> Result<Vec<u8
         Some(value) if value.eq_ignore_ascii_case("gzip") => {
             let mut payload = Vec::new();
             MultiGzDecoder::new(body)
-                .take(MAX_BODY_BYTES as u64 + 1)
+                .take((max_body_bytes as u64).saturating_add(1))
                 .read_to_end(&mut payload)
                 .map_err(|_| StatusCode::BAD_REQUEST)?;
-            if payload.len() > MAX_BODY_BYTES {
+            if payload.len() > max_body_bytes {
                 return Err(StatusCode::PAYLOAD_TOO_LARGE);
             }
             Ok(payload)
@@ -108,7 +113,7 @@ mod tests {
         let compressed = encoder.finish().unwrap();
         assert!(compressed.len() < MAX_BODY_BYTES);
         assert!(matches!(
-            decode_content_encoding(&compressed, Some("gzip")),
+            decode_content_encoding(&compressed, Some("gzip"), MAX_BODY_BYTES),
             Err(StatusCode::PAYLOAD_TOO_LARGE)
         ));
     }
