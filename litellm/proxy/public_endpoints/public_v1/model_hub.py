@@ -193,7 +193,7 @@ async def _published_rows() -> Sequence[ModelGroupInfoProxy]:
         llm_router,
     )
 
-    pass_through_rows: Final = await published_pass_through_rows()
+    pass_through_rows: Final = published_pass_through_rows()
     if llm_router is None and not pass_through_rows:
         raise ManagementProblem(
             ProblemDetail(

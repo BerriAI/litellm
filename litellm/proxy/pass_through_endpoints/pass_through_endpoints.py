@@ -3771,7 +3771,7 @@ async def create_pass_through_endpoints(
         existing: Final = tuple(response.field_value) if isinstance(response.field_value, list) else ()
         updated_data: Final = ConfigFieldUpdate(
             field_name="pass_through_endpoints",
-            field_value=[*existing, data_dict],  # mutable-ok: the delete path pops from this general_settings list
+            field_value=[*existing, data_dict],
             config_type="general_settings",
         )
         await update_config_general_settings(data=updated_data, user_api_key_dict=user_api_key_dict)

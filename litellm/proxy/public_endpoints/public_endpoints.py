@@ -230,7 +230,7 @@ async def public_model_hub():
         prisma_client,
     )
 
-    pass_through_rows: Final = await published_pass_through_rows()
+    pass_through_rows: Final = published_pass_through_rows()
     if llm_router is None and not pass_through_rows:
         raise HTTPException(status_code=400, detail=CommonProxyErrors.no_llm_router.value)
 

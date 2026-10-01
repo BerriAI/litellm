@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 import litellm
 from litellm.proxy._types import LiteLLMRoutes
-from litellm.proxy.proxy_server import app
+from litellm.proxy.proxy_server import app, proxy_config
 from litellm.types.router import ModelGroupInfo
 
 client = TestClient(app)
@@ -489,9 +489,10 @@ PASS_THROUGH_TARGET = "https://nlp.internal.example/v1"
 
 
 def _configure_pass_throughs(monkeypatch, *endpoints: Mapping[str, object]) -> None:
-    """Pass-through endpoints as `general_settings.pass_through_endpoints` hands them to the proxy."""
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.config_passthrough_endpoints",
+    """Pass-through endpoints as the config sync publishes them into the in-memory settings store."""
+    monkeypatch.setitem(
+        proxy_config.settings,
+        "pass_through_endpoints",
         [{"target": PASS_THROUGH_TARGET, **endpoint} for endpoint in endpoints],
     )
 
@@ -573,7 +574,10 @@ def test_a_pass_through_named_like_a_model_does_not_borrow_its_health(monkeypatc
     rows = _get().json()["data"]
     legacy_rows = client.get(LEGACY_MODEL_HUB_PATH).json()
 
-    assert [(row["pass_through_path"], row["health_status"]) for row in rows] == [(None, "unhealthy"), ("/gpt-4o", None)]
+    assert [(row["pass_through_path"], row["health_status"]) for row in rows] == [
+        (None, "unhealthy"),
+        ("/gpt-4o", None),
+    ]
     assert _asked_about(read) == ["gpt-4o"]
     assert [(row["pass_through_path"], row["health_status"]) for row in legacy_rows] == [
         (None, "unhealthy"),
