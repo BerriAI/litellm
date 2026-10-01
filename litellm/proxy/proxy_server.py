@@ -16625,6 +16625,27 @@ def _nested_setting_source(
     return "db" if field_name in db_values else unset_source
 
 
+def _alerting_field_value(
+    source: FieldSource,
+    field_name: str,
+    config_values: Mapping[str, JsonValue],
+    db_values: Mapping[str, JsonValue],
+) -> JsonValue | None:
+    if source == "config":
+        return config_values.get(field_name)
+    if source == "db":
+        return db_values.get(field_name)
+    return None
+
+
+def _alerting_stored_in_db(source: FieldSource) -> bool | None:
+    if source == "db":
+        return True
+    if source == "config":
+        return False
+    return None
+
+
 def _alerting_field_response(
     *,
     settings: SettingsStore,
@@ -16642,16 +16663,8 @@ def _alerting_field_response(
         field_name,
         field_default,
     )
-    field_value: Final[JsonValue | None] = (
-        config_values.get(field_name)
-        if field_source == "config"
-        else db_values.get(field_name)
-        if field_source == "db"
-        else None
-    )
-    stored_in_db: Final[bool | None] = (
-        True if field_source == "db" else False if field_source == "config" else None
-    )
+    field_value: Final = _alerting_field_value(field_source, field_name, config_values, db_values)
+    stored_in_db: Final = _alerting_stored_in_db(field_source)
     return ConfigList(
         field_name=field_name,
         field_type=allowed_args[field_name],
