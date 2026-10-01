@@ -4555,10 +4555,10 @@ async def test_user_update_rejects_breached_password(_admin_prisma):
 
     password = "Str0ng!Passw0rd"
     sha1 = hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()
-    lookup_paths: Final[list[str]] = []  # mutable-ok: capture the injected handler request path
+    lookups: Final[list[tuple[str, str]]] = []  # mutable-ok: capture the injected handler request method and URL
 
     def handler(request: httpx.Request) -> httpx.Response:
-        lookup_paths.append(request.url.path)
+        lookups.append((request.method, str(request.url)))
         return httpx.Response(200, text=f"{sha1[5:]}:1387")
 
     user_request = UpdateUserRequest(user_id="target-user", password=password)
@@ -4574,7 +4574,7 @@ async def test_user_update_rejects_breached_password(_admin_prisma):
     assert exc_info.value.code == "400"
     assert "data breaches" in exc_info.value.message
     _admin_prisma.db.litellm_usertable.find_first.assert_not_called()
-    assert lookup_paths == [f"/range/{sha1[:5]}"]
+    assert lookups == [("GET", f"https://api.pwnedpasswords.com/range/{sha1[:5]}")]
 
 
 @pytest.mark.asyncio

@@ -2376,9 +2376,12 @@ def test_optional_discovery_rejects_incomplete_walks(
                 if failure == "deadline":
                     loop.advance(0.15)
                     try:
-                        await asyncio.Event().wait()
-                    finally:
+                        for _ in range(1_000):
+                            await asyncio.sleep(0)
+                    except asyncio.CancelledError:
                         cancelled.set()
+                        raise
+                    return httpx2.Response(500)
                 if failure == "unauthorized":
                     return httpx2.Response(401)
                 if failure in ("method_not_found", "internal_error"):
@@ -2431,8 +2434,12 @@ def test_optional_discovery_rejects_incomplete_walks(
         if failure == "deadline":
             assert cancelled.is_set()
 
-    with asyncio.Runner(loop_factory=lambda: loop) as runner:
-        runner.run(run())
+    try:
+        loop.run_until_complete(run())
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.run_until_complete(loop.shutdown_default_executor())
+        loop.close()
 
 
 @pytest.mark.asyncio
