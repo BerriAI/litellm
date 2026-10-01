@@ -9,7 +9,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final, Protocol, TypeAlias
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
@@ -46,6 +46,11 @@ class RestrictedAgentAccess:
 
 
 AgentAccess: TypeAlias = UnrestrictedAgentAccess | RestrictedAgentAccess
+
+
+class AgentAccessLookup(Protocol):
+    def __call__(self, user_api_key_auth: UserAPIKeyAuth | None, /, *, strict: bool) -> Awaitable[AgentAccess]: ...
+
 
 _REQUIRE_ACCESS_FLAG: Final = TypeAdapter(bool)
 
@@ -111,13 +116,18 @@ class AgentRequestHandler:
         *,
         strict: bool = False,
         require_access_defined: Callable[[], bool] = require_key_agent_access_defined,
+        lookup_key_access: AgentAccessLookup | None = None,
+        lookup_team_access: AgentAccessLookup | None = None,
     ) -> AgentAccess:
         """Agents the key may reach: key and team grants, intersected with the agent's access group ceiling
         and, for an agent key acting on behalf of an invoking user, with that user's team grants."""
         if managed_agent_policy(user_api_key_auth) is not None:
             return await _managed_actor_agent_access(user_api_key_auth)
         key_team_access: Final = await AgentRequestHandler.resolve_key_team_agent_access(
-            user_api_key_auth, strict=strict
+            user_api_key_auth,
+            strict=strict,
+            lookup_key_access=lookup_key_access,
+            lookup_team_access=lookup_team_access,
         )
         deny_undefined: Final = strict or (not _is_proxy_admin(user_api_key_auth) and require_access_defined())
         if deny_undefined and isinstance(key_team_access, UnrestrictedAgentAccess):
@@ -145,12 +155,18 @@ class AgentRequestHandler:
         user_api_key_auth: UserAPIKeyAuth | None,
         *,
         strict: bool = False,
+        lookup_key_access: AgentAccessLookup | None = None,
+        lookup_team_access: AgentAccessLookup | None = None,
     ) -> AgentAccess:
         try:
-            key_access: Final = await AgentRequestHandler.get_allowed_agents_for_key(user_api_key_auth, strict=strict)
-            team_access: Final = await AgentRequestHandler._get_allowed_agents_for_team(
-                user_api_key_auth, strict=strict
+            key_lookup: Final = (
+                AgentRequestHandler.get_allowed_agents_for_key if lookup_key_access is None else lookup_key_access
             )
+            team_lookup: Final = (
+                AgentRequestHandler._get_allowed_agents_for_team if lookup_team_access is None else lookup_team_access
+            )
+            key_access: Final = await key_lookup(user_api_key_auth, strict=strict)
+            team_access: Final = await team_lookup(user_api_key_auth, strict=strict)
         except Exception as e:
             if strict:
                 raise HTTPException(503, "Agent invocation policy is unavailable") from e
