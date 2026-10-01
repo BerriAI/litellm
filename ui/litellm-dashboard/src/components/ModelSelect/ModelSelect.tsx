@@ -126,12 +126,19 @@ const filterModels = (
   return filterFn(filterArgs);
 };
 
+const isOfferedListKnown = (
+  proxyModelsLoaded: boolean,
+  context: ModelSelectProps["context"],
+  organizationID: string | undefined,
+  organizationModels: string[] | undefined,
+) => proxyModelsLoaded && !(context === "team" && organizationID !== undefined && organizationModels === undefined);
+
 const unavailableGroups = (
   selectedOptions: ModelOption[],
   offeredByValue: Map<string, ModelOption>,
-  isModelListLoaded: boolean,
+  offeredListKnown: boolean,
 ): ModelOptionGroup[] => {
-  if (!isModelListLoaded) return [];
+  if (!offeredListKnown) return [];
   const items = selectedOptions.filter((option) => !offeredByValue.has(option.value));
   if (items.length === 0) return [];
   return [{ label: "Unavailable", items }];
@@ -162,17 +169,10 @@ export const ModelSelect = (props: ModelSelectProps) => {
 
   const handleChange = (selected: ModelOption[]) => {
     const values = selected.map((option) => option.value);
-    const specialValues = values.filter(isSpecialOption);
+    const addedSpecialValues = values.filter((v) => isSpecialOption(v) && !value.includes(v));
+    const addedSpecial = addedSpecialValues[addedSpecialValues.length - 1];
 
-    let finalValues: string[];
-    if (specialValues.length > 0) {
-      const lastSelectedSpecial = specialValues[specialValues.length - 1];
-      finalValues = [lastSelectedSpecial];
-    } else {
-      finalValues = values;
-    }
-
-    onChange(finalValues);
+    onChange(addedSpecial === undefined ? values : [addedSpecial]);
   };
 
   const filteredModels = filterModels(allProxyModels?.data ?? [], props, {
@@ -242,7 +242,11 @@ export const ModelSelect = (props: ModelSelectProps) => {
   const offeredByValue = new Map(offeredGroups.flatMap((group) => group.items).map((option) => [option.value, option]));
   const selectedOptions = value.map((v) => offeredByValue.get(v) ?? { label: v, value: v });
   const groups: ModelOptionGroup[] = [
-    ...unavailableGroups(selectedOptions, offeredByValue, allProxyModels !== undefined),
+    ...unavailableGroups(
+      selectedOptions,
+      offeredByValue,
+      isOfferedListKnown(allProxyModels !== undefined, context, organizationID, organizationModels),
+    ),
     ...offeredGroups,
   ];
   const overflowOptions = selectedOptions.slice(MAX_VISIBLE_MODEL_CHIPS);

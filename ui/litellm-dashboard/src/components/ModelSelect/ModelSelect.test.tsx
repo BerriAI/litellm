@@ -775,6 +775,52 @@ describe("ModelSelect", () => {
     expect(mockOnChange).toHaveBeenCalledWith(["gpt-4"]);
   });
 
+  it("should keep the other selections when removing one unavailable model alongside a special option", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ModelSelect
+        onChange={mockOnChange}
+        value={["all-proxy-models", "retired-a", "retired-b"]}
+        context="user"
+        options={{ showAllProxyModelsOverride: true, includeSpecialOptions: true }}
+      />,
+    );
+
+    await openModelList(user);
+    await user.click(screen.getByRole("option", { name: "retired-a" }));
+
+    expect(mockOnChange).toHaveBeenCalledWith(["all-proxy-models", "retired-b"]);
+  });
+
+  it("should not mark team selections Unavailable while the organization's model ceiling is unknown", async () => {
+    const user = userEvent.setup();
+    mockUseOrganization.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+    } as unknown as ReturnType<typeof useOrganization>);
+    mockUseTeam.mockReturnValue({
+      data: { team_id: "team-1", organization_models: null },
+      isLoading: false,
+      isFetching: false,
+    } as unknown as ReturnType<typeof useTeam>);
+
+    renderWithProviders(
+      <ModelSelect
+        onChange={mockOnChange}
+        value={["gpt-4", "claude-3"]}
+        context="team"
+        teamID="team-1"
+        organizationID="org-1"
+        options={{ includeSpecialOptions: true }}
+      />,
+    );
+
+    await openModelList(user);
+
+    expectOffered("No Default Models");
+    expectNotOffered("Unavailable");
+  });
+
   it("should not show an Unavailable group when every selection is offered", async () => {
     const user = userEvent.setup();
     renderWithProviders(
