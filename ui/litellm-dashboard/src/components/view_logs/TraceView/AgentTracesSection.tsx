@@ -14,7 +14,7 @@ import { previewText } from "./traceUtils";
 import { TimeRangeControls } from "./TimeRangeControls";
 import { TracesTimeline, type TimeWindow } from "./TracesTimeline";
 import { TracingSetupCard } from "./TracingSetupCard";
-import { traceWindowStartMs, useAgentTraces } from "./useAgentTraces";
+import { type AgentTracesResult, traceWindowStartMs, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
 
 /** Client-side search (input text or trace id) plus service / status filters over the loaded runs. */
 export function filterRuns(
@@ -61,6 +61,20 @@ interface AgentTracesSectionProps {
   onRunOpenChange?: (open: boolean) => void;
 }
 
+function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
+  const [setupResult, setSetupResult] = useState<{ detail: string | null } | null>(null);
+  const waitingForFirstTrace = traces.traces.length === 0 && !rangeChanged;
+  const settledResponse = isActive && !traces.isFetching && !traces.error;
+  if (settledResponse && waitingForFirstTrace && setupResult?.detail !== traces.notEnabledDetail) {
+    setSetupResult({ detail: traces.notEnabledDetail });
+  }
+
+  const disabledDetail = traces.notEnabledDetail ?? (traces.isFetching ? setupResult?.detail : null);
+  const loadingFirstPage = traces.isLoading && setupResult === null;
+  const isEmpty = !loadingFirstPage && !traces.error && traces.traces.length === 0;
+  return { disabledDetail, isEmpty, received: setupResult !== null && traces.traces.length > 0 };
+}
+
 /** The Runs view: filters, the runs table and footer — or one run, in place, once a row is clicked. */
 export function AgentTracesSection({
   accessToken,
@@ -81,6 +95,14 @@ export function AgentTracesSection({
   const [rangeChanged, setRangeChanged] = useState(false);
   const traceQuery = { accessToken, startTime, endTime, isCustomDate, isLiveTail, enabled: isActive };
   const traces = useAgentTraces(traceQuery);
+  const setup = useTracingSetup(traces, isActive, rangeChanged);
+  const checkHistory = setup.isEmpty && !rangeChanged;
+  const history = useTraceAvailability(accessToken, isActive && checkHistory && setup.disabledDetail == null);
+
+  const checkTraces = () => {
+    traces.refetch();
+    if (setup.disabledDetail == null) void history.refetch();
+  };
 
   const services = useMemo(() => Array.from(new Set(traces.traces.map((t) => t.service))).sort(), [traces.traces]);
   // Relative ranges end "now" (the list query uses Date.now() too); round to the minute so the histogram is stable.
@@ -106,10 +128,11 @@ export function AgentTracesSection({
     onRunOpenChange?.(trace !== null);
   };
 
-  if (traces.notEnabledDetail !== null) return <TracingSetupCard detail={traces.notEnabledDetail} />;
+  if (setup.disabledDetail != null)
+    return <TracingSetupCard detail={setup.disabledDetail} onCheck={checkTraces} checking={traces.isFetching} />;
   // Onboarding only on the first, default view; an empty range the user picked keeps its controls.
-  const isEmpty = !traces.isLoading && !traces.error && traces.traces.length === 0;
-  if (isEmpty && !rangeChanged) return <TracingSetupCard detail={null} />;
+  if (checkHistory && history.data === false)
+    return <TracingSetupCard detail={null} onCheck={checkTraces} checking={traces.isFetching} />;
   if (showSetup) {
     return (
       <div>
@@ -120,7 +143,7 @@ export function AgentTracesSection({
         >
           ← Back to traces
         </button>
-        <TracingSetupCard detail={null} connected />
+        <TracingSetupCard detail={null} connected onCheck={checkTraces} checking={traces.isFetching} />
       </div>
     );
   }
@@ -130,6 +153,11 @@ export function AgentTracesSection({
 
   return (
     <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-card">
+      {setup.received && (
+        <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
+          Traces received. Select a run to inspect it.
+        </p>
+      )}
       <RunDrawer trace={openTrace} runs={runs} accessToken={accessToken} onSelect={openRun} />
       <RunsToolbar
         query={query}
@@ -159,8 +187,8 @@ export function AgentTracesSection({
       <TracesTimeline runs={filtered} range={range} selection={zoom} onSelect={setZoom} />
       <AgentTracesTable
         traces={runs}
-        isLoading={traces.isLoading}
-        error={traces.error}
+        isLoading={traces.isLoading || history.isLoading}
+        error={traces.error ?? history.error}
         hasMore={traces.hasMore}
         onLoadMore={traces.loadMore}
         onOpenTrace={toggleRun}

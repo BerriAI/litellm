@@ -2,6 +2,7 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
+import { ApiError } from "@/lib/http/client";
 import { apiClient } from "@/components/networking";
 import { LensView } from "./LensView";
 import { nextCheckStatus, type Lens, type Finding } from "./lensData";
@@ -217,12 +218,16 @@ it("runs saved settings immediately without opening setup", async () => {
 it("guides a first-time administrator into worker connection and lens setup", async () => {
   testQueryClient.clear();
   vi.mocked(apiClient.get).mockImplementation(async (path) =>
-    path === "/lens" ? { lenses: [], workers: [], tracing_enabled: true } : { data: [] },
+    path === "/lens" ? { lenses: [], workers: [], tracing_enabled: true } : { data: [{ trace_id: "first-trace" }] },
   );
   const user = userEvent.setup();
   renderWithProviders(<LensView accessToken="test" />);
   const guide = within(await screen.findByRole("region", { name: "Understand what your agents are doing" }));
-  expect(guide.getByRole("link", { name: "View logs" })).toHaveAttribute("href", "/ui/logs/");
+  expect(apiClient.get).toHaveBeenCalledWith("/v1/traces", { accessToken: "test", query: { start_ms: 0 } });
+  expect(guide.getByRole("link", { name: "View traces" })).toHaveAttribute(
+    "href",
+    expect.stringMatching(/^\/ui\/lens\/?\?tab=traces$/),
+  );
   await user.click(guide.getByRole("button", { name: "Connect analyzer" }));
   const connection = within(await screen.findByRole("dialog", { name: "Set up Lens analysis" }));
   expect(connection.getByRole("button", { name: "Generate setup command" })).toBeVisible();
@@ -297,4 +302,53 @@ it("reads request content from the beginning after its abbreviated preview", asy
   expect(await screen.findByText("Original at 1")).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Previous section" }));
   expect(await screen.findByText("Abbreviated preview")).toBeVisible();
+});
+
+it.each([false, true])(
+  "directs a new user to traces when tracing_enabled=%s and there are no traces",
+  async (enabled) => {
+    testQueryClient.clear();
+    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+      path === "/lens" ? { lenses: [], workers: [], tracing_enabled: enabled } : { data: [] },
+    );
+    renderWithProviders(<LensView accessToken="test" />);
+    expect(await screen.findByRole("heading", { name: "Set up traces to start running investigations" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Set up traces" })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/^\/ui\/lens\/?\?tab=traces$/),
+    );
+    expect(screen.queryByRole("button", { name: "Set up your first lens" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Set up analysis" })).not.toBeInTheDocument();
+  },
+);
+
+it("allows retrying a failed trace readiness check without treating it as an empty account", async () => {
+  testQueryClient.clear();
+  const traceCheck = vi
+    .fn()
+    .mockRejectedValueOnce(new ApiError("Trace storage unavailable", 503, {}))
+    .mockResolvedValue({ data: [] });
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [], workers: [], tracing_enabled: true };
+    if (path === "/v1/traces") return traceCheck();
+    return { data: [] };
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<LensView accessToken="test" />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not check traces. Trace storage unavailable");
+  expect(screen.queryByRole("link", { name: "Set up traces" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByRole("link", { name: "Set up traces" })).toBeVisible();
+});
+
+it("keeps saved investigations accessible when tracing is disabled", async () => {
+  testQueryClient.clear();
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: false };
+    if (path === "/lens/lens/runs") return lens.jobs;
+    return { data: [] };
+  });
+  renderWithProviders(<LensView accessToken="test" readOnly />);
+  expect(await screen.findByText(issue.title)).toBeVisible();
+  expect(screen.queryByRole("link", { name: "Set up traces" })).not.toBeInTheDocument();
 });

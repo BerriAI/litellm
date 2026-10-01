@@ -1,10 +1,10 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import moment from "moment";
 import { useMemo } from "react";
 
 import { ApiError } from "@/lib/http/client";
 
-import { agentTraceListCall } from "../../networking";
+import { agentTraceListCall, apiClient } from "../../networking";
 import { LIVE_TAIL_INTERVAL_MS } from "../log_filter_logic";
 import type { TracePage, TraceSummary } from "./traceTypes";
 
@@ -88,4 +88,15 @@ export function useAgentTraces({
     loadMore: () => void query.fetchNextPage(),
     refetch: () => void query.refetch(),
   };
+}
+
+export function useTraceAvailability(accessToken: string, enabled: boolean) {
+  const options = {
+    queryKey: ["trace-availability", accessToken],
+    queryFn: () => apiClient.get<TracePage>("/v1/traces", { accessToken, query: { start_ms: 0 } }),
+    select: (page: TracePage) => page.data.length > 0,
+    enabled,
+    retry: false,
+  };
+  return useQuery(options);
 }
