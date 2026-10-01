@@ -10,6 +10,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, overload
 
 from fastapi import (
@@ -2708,6 +2709,50 @@ async def delete_group(
         raise handle_exception_on_proxy(e)
 
 
+GROUP_PATCH_READ_ONLY_ATTRIBUTES: Final = frozenset({"id", "schemas", "meta"})
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _pathless_group_resource(op: SCIMPatchOperation) -> Mapping[str, object] | None:
+    """The partial Group resource a path-less op carries, or None when the op names a path.
+
+    RFC 7644 Section 3.5.2 lets ``add`` and ``replace`` omit ``path`` and send the
+    attributes to apply as an object (what Okta Push Groups does on a rename);
+    ``remove`` always needs a path (Section 3.5.2.2).
+    """
+    if op.path:
+        return None
+    resource: Final = _json_object_fields(op.value)
+    if op.op != "remove" and resource is not None:
+        return resource
+    detail: Final[_ScimErrorDetail] = {
+        "error": (
+            "A remove operation requires a 'path' (RFC 7644 Section 3.5.2.2)"
+            if op.op == "remove"
+            else f"A {op.op} operation without a 'path' requires an object 'value' (RFC 7644 Section 3.5.2)"
+        )
+    }
+    raise HTTPException(status_code=400, detail=detail)
+
+
+def _group_patch_attribute_values(op: SCIMPatchOperation) -> tuple[tuple[str, object], ...]:
+    """The (attribute, value) pairs an operation applies, one per key of a path-less value."""
+    resource: Final = _pathless_group_resource(op)
+    if resource is None:
+        return (((op.path or "").lower(), op.value),)
+    return tuple(
+        (key.lower(), value)
+        for key, value in resource.items()
+        if key and key.lower() not in GROUP_PATCH_READ_ONLY_ATTRIBUTES
+    )
+
+
+def _replaces_members(op: SCIMPatchOperation) -> bool:
+    if op.op != "replace":
+        return False
+    return any(attribute.startswith("members") for attribute, _ in _group_patch_attribute_values(op))
+
+
 async def _process_group_patch_operations(
     patch_ops: SCIMPatchOp, existing_team: LiteLLM_TeamTable, prisma_client: PrismaClient
 ) -> tuple[dict[str, object], set[str], set[str] | None]:
@@ -2725,11 +2770,29 @@ async def _process_group_patch_operations(
     conditional on what the id turns out to be and leave members we should never
     have admitted - the phantom users this endpoint used to create for nested
     groups - impossible to clean up.
+
+    A path-less op carries a partial Group resource: each attribute applies as if
+    sent with that path, and its attributes other than ``members`` (the roster
+    lives in members_with_roles) are merged into the ``scim_data`` snapshot the
+    PUT path writes. An empty metadata key left behind by an earlier path-less op
+    (stored whole under ``""``) is dropped.
     """
     update_data: Final[dict[str, object]] = {}
+    existing_metadata: Final = _json_object_fields(existing_team.metadata) or _NO_FIELDS
+    pathless_resources: Final = tuple(
+        resource for resource in map(_pathless_group_resource, patch_ops.Operations) if resource is not None
+    )
 
-    # Create a fresh copy of existing metadata to avoid Prisma issues
-    metadata: Final = {**(existing_team.metadata or {}), SCIM_MANAGED_TEAM_METADATA_KEY: True}
+    kept_metadata_items: Final = ((key, value) for key, value in existing_metadata.items() if key)
+    metadata: Final = dict(chain(kept_metadata_items, ((SCIM_MANAGED_TEAM_METADATA_KEY, True),)))
+    if pathless_resources:
+        existing_snapshot: Final = _json_object_fields(existing_metadata.get(SCIM_TEAM_DATA_METADATA_KEY)) or _NO_FIELDS
+        snapshot_updates: Final = (
+            (key, value)
+            for key, value in chain.from_iterable(resource.items() for resource in pathless_resources)
+            if key.lower() != "members"
+        )
+        metadata[SCIM_TEAM_DATA_METADATA_KEY] = dict(chain(existing_snapshot.items(), snapshot_updates))
 
     # Track member changes. members_with_roles is the source of truth for team
     # membership; the legacy `members` column is not populated by team creation
@@ -2739,58 +2802,51 @@ async def _process_group_patch_operations(
     current_members: Final = set(await _get_team_member_user_ids_from_team(existing_team))
     final_members = current_members.copy()
 
-    # Process each patch operation
     for op in patch_ops.Operations:
-        path = (op.path or "").lower()
-        value = op.value
-        op_type = op.op
+        for attribute, value in _group_patch_attribute_values(op):
+            op_type = op.op
 
-        if path == "displayname":
-            if op_type == "remove":
-                update_data["team_alias"] = None
-            else:
-                update_data["team_alias"] = str(value)
-        elif path == "externalid":
-            if op_type == "remove":
-                metadata.pop("externalId", None)
-            else:
-                metadata["externalId"] = str(value)
-        elif path.startswith("members"):
-            # Handle member operations
-            patched_members = (
-                _parse_member_entries(value)
-                if value is not None
-                else tuple(
-                    SCIMMember(value=member_id) for member_id in _extract_ids_from_path_filter(op.path, "members")
+            if attribute == "displayname":
+                if op_type == "remove":
+                    update_data["team_alias"] = None
+                else:
+                    update_data["team_alias"] = str(value)
+            elif attribute == "externalid":
+                if op_type == "remove":
+                    metadata.pop("externalId", None)
+                else:
+                    metadata["externalId"] = str(value)
+            elif attribute.startswith("members"):
+                patched_members = (
+                    _parse_member_entries(value)
+                    if value is not None
+                    else tuple(
+                        SCIMMember(value=member_id) for member_id in _extract_ids_from_path_filter(op.path, "members")
+                    )
                 )
-            )
 
-            if op_type == "remove":
-                final_members = final_members - await _member_ids_to_drop(
-                    patched_members, frozenset(final_members), prisma_client
-                )
+                if op_type == "remove":
+                    final_members = final_members - await _member_ids_to_drop(
+                        patched_members, frozenset(final_members), prisma_client
+                    )
+                else:
+                    member_result = await _resolve_group_member_ids(
+                        members=patched_members,
+                        created_via="scim_group_patch",
+                        prisma_client=prisma_client,
+                    )
+                    if op_type == "replace":
+                        final_members = set(member_result.all_member_ids)
+                    elif op_type == "add":
+                        final_members = final_members | set(member_result.all_member_ids)
+            elif op_type == "remove":
+                metadata.pop(attribute, None)
             else:
-                member_result = await _resolve_group_member_ids(
-                    members=patched_members,
-                    created_via="scim_group_patch",
-                    prisma_client=prisma_client,
-                )
-                if op_type == "replace":
-                    final_members = set(member_result.all_member_ids)
-                elif op_type == "add":
-                    final_members = final_members | set(member_result.all_member_ids)
-        else:
-            # Handle other generic metadata
-            if op_type == "remove":
-                metadata.pop(path, None)
-            else:
-                metadata[path] = value
+                metadata[attribute] = value
 
     update_data["metadata"] = metadata
 
-    member_replace_present: Final = any(
-        op.op == "replace" and (op.path or "").lower().startswith("members") for op in patch_ops.Operations
-    )
+    member_replace_present: Final = any(map(_replaces_members, patch_ops.Operations))
     replace_target: Final = set(final_members) if member_replace_present else None
 
     return update_data, final_members, replace_target
