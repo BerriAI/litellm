@@ -206,8 +206,13 @@ def test_view_only_admin_cannot_ingest_traces(client, receiver):
     receiver.ingest.assert_not_called()
 
 
-@pytest.mark.parametrize("status_code", [401, 403])
-def test_auth_failure_precedes_disabled_receiver(client: TestClient, status_code: int) -> None:
+@pytest.mark.parametrize(
+    "status_code, field, message",
+    [(401, "detail", "Invalid API key"), (403, "message", "Not allowed to ingest agent traces")],
+)
+def test_auth_failure_precedes_disabled_receiver(
+    client: TestClient, status_code: int, field: str, message: str
+) -> None:
     def unavailable() -> None:
         return None
 
@@ -218,11 +223,9 @@ def test_auth_failure_precedes_disabled_receiver(client: TestClient, status_code
 
     client.app.dependency_overrides[user_api_key_auth] = authenticate
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = unavailable
-    response: Final = client.post("/v1/traces", content=b"{}")
+    response: Final = client.post("/v1/traces", content=b"{}", headers={"content-type": "application/json"})
     assert response.status_code == status_code
-    assert response.json() == {
-        "detail": "Invalid API key" if status_code == 401 else "Not allowed to ingest agent traces"
-    }
+    assert response.json() == {field: message}
 
 
 def test_disabled_receiver_precedes_read_scope_rejection(client: TestClient) -> None:

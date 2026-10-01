@@ -1332,9 +1332,7 @@ async def test_otlp_auth_does_not_consume_chunked_bodies_before_the_receiver_lim
 
 
 @pytest.mark.asyncio
-async def test_auth_body_read_and_trace_handler_leave_stream_for_receiver_limit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_auth_body_read_and_trace_handler_leave_stream_for_receiver_limit() -> None:
     from litellm.constants import OTLP_MAX_BODY_BYTES
     from litellm.proxy import tracing_endpoints
     from litellm.proxy._types import UserAPIKeyAuth
@@ -1351,16 +1349,16 @@ async def test_auth_body_read_and_trace_handler_leave_stream_for_receiver_limit(
     )
     store: Final = MagicMock()
     store.insert_spans = AsyncMock()
-    monkeypatch.setattr(tracing_endpoints, "receiver", TraceReceiver(store))
+    context: Final = tracing_endpoints.TraceAccessContext(
+        auth=UserAPIKeyAuth(token="key", team_id="team"), receiver=TraceReceiver(store)
+    )
 
     parsed, parse_error = await _read_request_body_deferring_parse_failure(request)
     assert parsed == {}
     assert parse_error is None
     receive.assert_not_awaited()
 
-    response: Final = await tracing_endpoints.ingest_otlp_traces(
-        request, UserAPIKeyAuth(token="key", team_id="team")
-    )
+    response: Final = await tracing_endpoints.ingest_otlp_traces(request, context)
     assert response.status_code == 413
     assert receive.await_count == 2
     store.insert_spans.assert_not_awaited()
