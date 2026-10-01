@@ -1037,6 +1037,20 @@ def _build_summary_messages(
     return summary_messages
 
 
+def _count_summary_message_tokens(
+    model: str,
+    messages: Sequence[Mapping[str, object]],
+) -> int:
+    """Count summary-call tokens through a fully annotated wrapper.
+
+    ``litellm.token_counter``'s own signature is partially unknown (bare
+    ``Sequence`` / ``dict`` parameters). Passing that function into
+    ``asyncify`` is a new ``reportUnknownArgumentType``. This wrapper's
+    signature is fully known, so the asyncify boundary stays typed.
+    """
+    return litellm.token_counter(model=model, messages=messages)
+
+
 async def _estimate_summary_input_tokens(
     *,
     summary_model: str,
@@ -1044,7 +1058,7 @@ async def _estimate_summary_input_tokens(
     fallback_tokens: int,
 ) -> int:
     try:
-        return await asyncify(litellm.token_counter)(
+        return await asyncify(_count_summary_message_tokens)(
             model=summary_model,
             messages=summary_messages,
         )
