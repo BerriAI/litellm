@@ -947,6 +947,7 @@ def test_inherit_builtin_service_tier_pricing_fills_only_missing_fields() -> Non
             "input_cost_per_token_above_272k_tokens_ultrafast": _TIER_BACKEND_ENTRY[
                 "input_cost_per_token_above_272k_tokens_ultrafast"
             ],
+            "output_cost_per_token_above_272k_tokens_ultrafast": 0.00999,
         }
     finally:
         _restore_model_cost_entries(model_cost_entries)
@@ -991,24 +992,34 @@ def test_inherit_builtin_service_tier_pricing_noop_without_base_rate_or_backend(
 
 
 @pytest.mark.parametrize(
-    ("tier_field", "preferred_deployment_rates"),
+    ("tier_field", "configured_fields", "deployment_rate_field"),
     [
         (
             "input_cost_per_token_above_272k_tokens_priority",
-            ("input_cost_per_token_priority", "input_cost_per_token_above_272k_tokens"),
+            frozenset({"input_cost_per_token_priority", "input_cost_per_token_above_272k_tokens"}),
+            "input_cost_per_token_above_272k_tokens",
+        ),
+        (
+            "input_cost_per_token_above_272k_tokens_priority",
+            frozenset({"input_cost_per_token_priority"}),
+            "input_cost_per_token_priority",
         ),
         (
             "cache_read_input_token_cost_above_200k_tokens_flex",
-            ("cache_read_input_token_cost_flex", "cache_read_input_token_cost_above_200k_tokens"),
+            frozenset({"cache_read_input_token_cost_flex"}),
+            "cache_read_input_token_cost_flex",
         ),
-        ("input_cost_per_token_priority", ()),
-        ("input_cost_per_token_above_batch_priority", ()),
+        ("input_cost_per_token_above_272k_tokens_priority", frozenset({"input_cost_per_token"}), None),
+        ("input_cost_per_token_priority", frozenset({"input_cost_per_token_priority"}), None),
+        ("input_cost_per_token_above_batch_priority", frozenset({"input_cost_per_token_priority"}), None),
     ],
 )
-def test_deployment_rates_preferred_over_tier_threshold_rate(
-    tier_field: str, preferred_deployment_rates: tuple[str, ...]
+def test_deployment_rate_field_for_tier_threshold_rate(
+    tier_field: str, configured_fields: frozenset[str], deployment_rate_field: str | None
 ) -> None:
-    assert Router._deployment_rates_preferred_over_tier_threshold_rate(tier_field) == preferred_deployment_rates
+    assert (
+        Router._deployment_rate_field_for_tier_threshold_rate(tier_field, configured_fields) == deployment_rate_field
+    )
 
 
 def test_router_completion_uses_custom_standard_and_backend_ultrafast_pricing() -> None:

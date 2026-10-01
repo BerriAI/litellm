@@ -8847,18 +8847,28 @@ class Router:
                 continue
             if field in configured_fields or backend_value is None:
                 continue
-            if not configured_fields.isdisjoint(Router._deployment_rates_preferred_over_tier_threshold_rate(field)):
-                continue
-            model_info[field] = copy.deepcopy(backend_value)
+            model_info[field] = (
+                copy.deepcopy(backend_value)
+                if (
+                    deployment_rate_field := Router._deployment_rate_field_for_tier_threshold_rate(
+                        field, configured_fields
+                    )
+                )
+                is None
+                else model_info[deployment_rate_field]
+            )
 
     @staticmethod
-    def _deployment_rates_preferred_over_tier_threshold_rate(field: str) -> tuple[str, ...]:
+    def _deployment_rate_field_for_tier_threshold_rate(field: str, configured_fields: frozenset[str]) -> str | None:
         tier_suffix: Final = next(suffix for suffix in SERVICE_TIER_COST_KEY_SUFFIXES if field.endswith(suffix))
         untiered_field: Final = field.removesuffix(tier_suffix)
         rate, separator, threshold = untiered_field.rpartition("_above_")
         if not separator or not threshold.endswith("_tokens"):
-            return ()
-        return (f"{rate}{tier_suffix}", untiered_field)
+            return None
+        return next(
+            (rate_field for rate_field in (untiered_field, f"{rate}{tier_suffix}") if rate_field in configured_fields),
+            None,
+        )
 
     @staticmethod
     def _inherit_builtin_base_rates_for_off_peak(

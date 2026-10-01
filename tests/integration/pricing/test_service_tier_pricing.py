@@ -432,6 +432,15 @@ def test_custom_standard_rates_bill_catalog_ultrafast_long_context_rates(gateway
         ),
         (
             "priority",
+            {
+                "input_cost_per_token_priority": 2e-06,
+                "output_cost_per_token_priority": 4e-06,
+                "output_cost_per_token_above_272k_tokens_priority": 7e-06,
+            },
+            300_000 * 2e-06 + 1_000 * 7e-06,
+        ),
+        (
+            "priority",
             {"input_cost_per_token_above_272k_tokens": 3e-06, "output_cost_per_token_above_272k_tokens": 6e-06},
             300_000 * 3e-06 + 1_000 * 6e-06,
         ),
@@ -450,6 +459,7 @@ def test_custom_standard_rates_bill_catalog_ultrafast_long_context_rates(gateway
         "priority_rates",
         "priority_rates_and_untiered_long_context_rates",
         "priority_rates_and_priority_long_context_rates",
+        "priority_rates_and_priority_long_context_output_rate",
         "untiered_long_context_rates",
         "flex_rates",
         "no_service_tier",
@@ -515,11 +525,11 @@ def test_custom_rates_above_272k_bill_the_deployment_rates_over_catalog_long_con
         assert float(rows[0]["spend"]) == pytest.approx(expected_cost, rel=1e-6), rows
 
 
-def test_custom_priority_rates_above_272k_bill_cached_tokens_at_the_catalog_priority_cache_read_rate(
+def test_custom_priority_rates_above_272k_bill_cached_tokens_at_the_catalog_priority_long_context_cache_read_rate(
     gateway: Gateway,
 ) -> None:
     cached_tokens: Final = 100_000
-    cache_read_rate: Final = _bundled_rate("gpt-6-astra", "cache_read_input_token_cost_priority")
+    cache_read_rate: Final = _bundled_rate("gpt-6-astra", "cache_read_input_token_cost_above_272k_tokens_priority")
     with gateway.scenario() as scenario:
         scenario_id: Final = f"custom-priority-cached-long-context-{uuid.uuid4().hex}"
         handle: Final = register_scenario(
