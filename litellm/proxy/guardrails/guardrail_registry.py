@@ -7,9 +7,9 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import chain, count
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, TypeVar, cast
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 import litellm
 from litellm import Router
@@ -500,12 +500,16 @@ def _configure_callback_scoping(
     _apply_configured_bool_overrides(custom_guardrail_callback, litellm_params)
 
 
+_ParamsT = TypeVar("_ParamsT", bound=BaseModel)
+
+
 def parse_tolerant_litellm_params(
     litellm_params_data: Mapping[str, object],
     guardrail_name: str,
-) -> LitellmParams:
+    params_model: type[_ParamsT] = LitellmParams,
+) -> _ParamsT:
     try:
-        return LitellmParams(**litellm_params_data)
+        return params_model.model_validate(litellm_params_data)
     except ValidationError as validation_error:
         if any(tuple(error["loc"]) != ("logging_only_scope",) for error in validation_error.errors()):
             raise
@@ -515,7 +519,7 @@ def parse_tolerant_litellm_params(
             guardrail_name.replace("\r", "").replace("\n", ""),
             str(litellm_params_data.get("logging_only_scope")).replace("\r", "").replace("\n", "")[:100],
         )
-        return LitellmParams(**MappingProxyType({**litellm_params_data, "logging_only_scope": None}))
+        return params_model.model_validate(MappingProxyType({**litellm_params_data, "logging_only_scope": None}))
 
 
 class InMemoryGuardrailHandler:

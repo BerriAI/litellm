@@ -2,7 +2,8 @@ import json
 import time
 from collections.abc import Callable
 from datetime import datetime
-from typing import Dict, List, Optional
+from types import MappingProxyType
+from typing import Dict, Final, List, Optional
 from unittest.mock import AsyncMock
 
 import pytest
@@ -66,6 +67,46 @@ MOCK_DB_GUARDRAIL = {
     "created_at": datetime.now(),
     "updated_at": datetime.now(),
 }
+
+_INVALID_SCOPE_LITELLM_PARAMS: Final = MappingProxyType(
+    {
+        "guardrail": "litellm_content_filter",
+        "mode": "pre_call",
+        "logging_only_scope": "Input",
+        "blocked_words": [{"keyword": "synthetic blocked phrase", "action": "BLOCK"}],
+    }
+)
+_INVALID_SCOPE_DB_GUARDRAIL: Final = MappingProxyType(
+    {
+        "guardrail_id": "invalid-scope-db-guardrail",
+        "guardrail_name": "Invalid scope DB guardrail",
+        "litellm_params": _INVALID_SCOPE_LITELLM_PARAMS,
+        "guardrail_info": MappingProxyType({}),
+    }
+)
+_INVALID_SCOPE_IN_MEMORY_GUARDRAIL: Final = MappingProxyType(
+    {
+        "guardrail_id": "invalid-scope-in-memory-guardrail",
+        "guardrail_name": "Invalid scope in-memory guardrail",
+        "litellm_params": _INVALID_SCOPE_LITELLM_PARAMS,
+        "guardrail_info": MappingProxyType({}),
+    }
+)
+_VALID_SCOPE_DB_GUARDRAIL: Final = MappingProxyType(
+    {
+        "guardrail_id": "valid-scope-db-guardrail",
+        "guardrail_name": "Valid scope DB guardrail",
+        "litellm_params": MappingProxyType(
+            {
+                "guardrail": "litellm_content_filter",
+                "mode": "pre_call",
+                "logging_only_scope": "output",
+                "blocked_words": [{"keyword": "synthetic blocked phrase", "action": "BLOCK"}],
+            }
+        ),
+        "guardrail_info": MappingProxyType({}),
+    }
+)
 
 MOCK_CONFIG_GUARDRAIL = {
     "guardrail_id": "test-config-guardrail",
@@ -227,6 +268,54 @@ async def test_list_guardrails_v2_with_db_and_config(mocker, mock_prisma_client,
     assert config_guardrail.guardrail_name == "Test Config Guardrail"
     assert config_guardrail.guardrail_definition_location == "config"
     assert isinstance(config_guardrail.litellm_params, BaseLitellmParams)
+
+
+@pytest.mark.asyncio
+async def test_list_guardrails_v2_normalizes_invalid_scope_and_keeps_other_db_rows(
+    mocker, mock_prisma_client, mock_in_memory_handler
+):
+    mock_prisma_client.db.litellm_guardrailstable.find_many.return_value = (
+        _INVALID_SCOPE_DB_GUARDRAIL,
+        _VALID_SCOPE_DB_GUARDRAIL,
+    )
+    mock_in_memory_handler.list_in_memory_guardrails.return_value = ()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response: Final = await list_guardrails_v2(user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
+
+    invalid_scope_row: Final = next(
+        guardrail for guardrail in response.guardrails if guardrail.guardrail_id == "invalid-scope-db-guardrail"
+    )
+    assert invalid_scope_row.litellm_params is not None
+    assert invalid_scope_row.litellm_params.logging_only_scope is None
+    assert invalid_scope_row.litellm_params.mode == "pre_call"
+    assert invalid_scope_row.litellm_params.guardrail == "litellm_content_filter"
+    assert any(guardrail.guardrail_id == "valid-scope-db-guardrail" for guardrail in response.guardrails)
+
+
+@pytest.mark.asyncio
+async def test_list_guardrails_v2_normalizes_invalid_scope_in_memory(
+    mocker, mock_prisma_client, mock_in_memory_handler
+):
+    mock_prisma_client.db.litellm_guardrailstable.find_many.return_value = ()
+    mock_in_memory_handler.list_in_memory_guardrails.return_value = (_INVALID_SCOPE_IN_MEMORY_GUARDRAIL,)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response: Final = await list_guardrails_v2(user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
+
+    assert len(response.guardrails) == 1
+    assert response.guardrails[0].litellm_params is not None
+    assert response.guardrails[0].litellm_params.logging_only_scope is None
+    assert response.guardrails[0].litellm_params.mode == "pre_call"
+    assert response.guardrails[0].litellm_params.guardrail == "litellm_content_filter"
 
 
 @pytest.mark.asyncio
@@ -491,6 +580,28 @@ async def test_get_guardrail_info_from_db(mocker, mock_prisma_client):
     assert response.guardrail_name == "Test DB Guardrail"
     assert isinstance(response.litellm_params, BaseLitellmParams)
     assert response.guardrail_info == {"description": "Test guardrail from DB"}
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_normalizes_invalid_scope_from_db(
+    mocker, mock_guardrail_registry, mock_in_memory_handler
+):
+    mock_guardrail_registry.get_guardrail_by_id_from_db.return_value = _INVALID_SCOPE_DB_GUARDRAIL
+    mock_in_memory_handler.get_guardrail_by_id.return_value = None
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response: Final = await get_guardrail_info("invalid-scope-db-guardrail")
+
+    assert response.guardrail_id == "invalid-scope-db-guardrail"
+    assert response.litellm_params is not None
+    assert response.litellm_params.logging_only_scope is None
+    assert response.litellm_params.mode == "pre_call"
+    assert response.litellm_params.guardrail == "litellm_content_filter"
 
 
 @pytest.mark.asyncio

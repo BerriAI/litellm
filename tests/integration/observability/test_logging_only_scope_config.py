@@ -49,6 +49,74 @@ from integration._support.wire import Reply, Request
 from pydantic import JsonValue
 
 
+def test_G7_database_invalid_scope_reads_preserve_pre_call_blocking(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = f"logging-scope-g7-{uuid.uuid4().hex}"
+    blocked_word: Final = f"pineapple{uuid.uuid4().hex[:8]}"
+    prompt: Final = f"synthetic request containing {blocked_word}"
+    reply: Final = f"synthetic upstream response {identity}"
+    scenario_id: Final = f"phase12-g7-{uuid.uuid4().hex}"
+    guardrail_id: Final = str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
+    upstream_handle: Final = register_scenario(scenario_id, _provider_response("chat", scenario_id, reply, False))
+
+    try:
+        with gateway.scenario() as scenario:
+            model: Final = scenario.model(
+                model="openai/gpt-4o-mini",
+                api_base=f"{upstream_handle.api_base()}/v1",
+                api_key="synthetic-provider-key",
+            )
+            write_rows(
+                'INSERT INTO "LiteLLM_GuardrailsTable" '
+                "(guardrail_id, guardrail_name, litellm_params, guardrail_info, updated_at) "
+                "VALUES (%s, %s, %s::jsonb, %s::jsonb, NOW())",
+                (
+                    guardrail_id,
+                    identity,
+                    json.dumps(
+                        {
+                            "guardrail": "litellm_content_filter",
+                            "mode": "pre_call",
+                            "logging_only_scope": "Input",
+                            "default_on": True,
+                            "blocked_words": [{"keyword": blocked_word, "action": "BLOCK"}],
+                        }
+                    ),
+                    "{}",
+                ),
+            )
+            try:
+                config: Final = _empty_proxy_configuration(tmp_path, identity)
+                with owned_proxy(gateway, tmp_path, {}, config=config, workers=1) as candidate:
+                    listing_response: Final = candidate.request("GET", "/v2/guardrails/list")
+                    assert listing_response.status_code == 200, listing_response.text
+                    listing: Final = JSON_OBJECT.validate_json(listing_response.content)
+                    rows: Final = tuple(object_value(row) for row in listing["guardrails"])
+                    stored_guardrail: Final = next(row for row in rows if row.get("guardrail_id") == guardrail_id)
+                    stored_params: Final = object_value(stored_guardrail["litellm_params"])
+                    expected_scope: Final = "Input" if _is_base_audit_leg() else None
+                    assert stored_params.get("logging_only_scope") == expected_scope, stored_guardrail
+                    assert stored_params["mode"] == "pre_call", stored_guardrail
+                    assert stored_params["guardrail"] == "litellm_content_filter", stored_guardrail
+
+                    info_response: Final = candidate.request("GET", f"/guardrails/{guardrail_id}/info")
+                    assert info_response.status_code == 200, info_response.text
+                    info: Final = JSON_OBJECT.validate_json(info_response.content)
+                    info_params: Final = object_value(info["litellm_params"])
+                    assert info_params.get("logging_only_scope") == expected_scope, info
+
+                    blocked_response: Final = candidate.request(
+                        "POST",
+                        "/v1/chat/completions",
+                        {"model": model, "messages": [{"role": "user", "content": prompt}]},
+                    )
+                    assert blocked_response.status_code == 400, blocked_response.text
+                    assert _drain_upstream(gateway.upstream_url) == ()
+            finally:
+                _delete_database_guardrail(identity)
+    finally:
+        delete_scenario(upstream_handle)
+
+
 @pytest.mark.parametrize(
     ("row_id", "scope", "blocked_side"),
     (

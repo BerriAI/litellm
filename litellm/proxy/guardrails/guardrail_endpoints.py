@@ -79,7 +79,6 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 GUARDRAIL_REGISTRY: Final = GuardrailRegistry()
-_BASE_LITELLM_PARAMS_ADAPTER: Final[TypeAdapter[BaseLitellmParams]] = TypeAdapter(BaseLitellmParams)
 
 
 def _as_str_object_mapping(mapping: Mapping[str, object]) -> Mapping[str, object]:
@@ -271,7 +270,11 @@ async def list_guardrails_v2(
                 number_of_asterisks=4,
             )
             masked_litellm_params = (
-                _BASE_LITELLM_PARAMS_ADAPTER.validate_python(masked_litellm_params_dict)
+                parse_tolerant_litellm_params(
+                    masked_litellm_params_dict,
+                    guardrail.get("guardrail_name") or "Unknown",
+                    params_model=BaseLitellmParams,
+                )
                 if masked_litellm_params_dict
                 else None
             )
@@ -314,7 +317,11 @@ async def list_guardrails_v2(
                 number_of_asterisks=4,
             )
             masked_in_memory_litellm_params_typed = (
-                _BASE_LITELLM_PARAMS_ADAPTER.validate_python(masked_in_memory_litellm_params)
+                parse_tolerant_litellm_params(
+                    masked_in_memory_litellm_params,
+                    guardrail.get("guardrail_name") or "Unknown",
+                    params_model=BaseLitellmParams,
+                )
                 if masked_in_memory_litellm_params
                 else None
             )
@@ -1395,7 +1402,11 @@ async def get_guardrail_info(guardrail_id: str):
             number_of_asterisks=4,
         )
         masked_litellm_params = (
-            _BASE_LITELLM_PARAMS_ADAPTER.validate_python(masked_litellm_params_dict)
+            parse_tolerant_litellm_params(
+                masked_litellm_params_dict,
+                result.get("guardrail_name") or "Unknown",
+                params_model=BaseLitellmParams,
+            )
             if masked_litellm_params_dict
             else None
         )
