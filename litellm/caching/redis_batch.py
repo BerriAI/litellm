@@ -489,10 +489,6 @@ class RequestRedisBatches:
     def batches(self) -> tuple[RedisBatch, ...]:
         return tuple(self._batches.values())
 
-    @property
-    def post_call_batches(self) -> tuple[RedisBatch, ...]:
-        return tuple(self._post_call.values())
-
 
 _active_request_batches: Final[ContextVar[RequestRedisBatches | None]] = ContextVar(
     "request_redis_batches", default=None

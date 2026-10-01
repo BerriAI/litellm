@@ -1894,3 +1894,15 @@ model LiteLLM_WorkflowMessage {
   @@unique([run_id, sequence_number])
   @@index([run_id])
 }
+
+model LiteLLM_Engine {
+  id      String @id
+  version Int @default(0)
+  data    Json
+}
+
+model LiteLLM_EngineWorker {
+  id         String @id
+  token_hash String @unique
+  data       Json
+}

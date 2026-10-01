@@ -1639,6 +1639,45 @@ async def test_endpoint_field_is_correctly_mapped_from_call_type():
 
 
 @pytest.mark.asyncio
+async def test_endpoint_field_maps_retrieve_batch_spend_row_to_batches_endpoint():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "request_id": "req-retrieve-batch",
+        "user": "test-user",
+        "call_type": "aretrieve_batch",
+        "startTime": "2024-01-01T12:00:00",
+        "api_key": "test-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4-group",
+        "prompt_tokens": 15,
+        "completion_tokens": 10,
+        "spend": 0.0175,
+        "metadata": '{"usage_object": {}}',
+    }
+
+    writer.daily_spend_update_queue.add_update = AsyncMock()
+
+    await writer.add_spend_log_transaction_to_daily_user_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+    )
+
+    writer.daily_spend_update_queue.add_update.assert_called_once()
+
+    call_args = writer.daily_spend_update_queue.add_update.call_args[1]
+    update_dict = call_args["update"]
+    assert len(update_dict) == 1
+
+    for key, transaction in update_dict.items():
+        assert key == "test-user_2024-01-01_test-key_gpt-4_openai_/batches"
+        assert transaction["endpoint"] == "/batches"
+
+
+@pytest.mark.asyncio
 async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
     """
     Test that when batch upsert fails, detailed error information is logged.

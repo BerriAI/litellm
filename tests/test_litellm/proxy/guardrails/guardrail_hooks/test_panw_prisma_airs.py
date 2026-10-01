@@ -4867,7 +4867,39 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
         assert result["input"][0]["content"] == "First user turn"
 
     @pytest.mark.asyncio
-    async def test_flag_false_responses_scans_full_history(self):
+    @pytest.mark.parametrize(
+        "history_tail",
+        [
+            pytest.param((), id="plain"),
+            pytest.param(
+                ({"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "thinking"}]},),
+                id="reasoning",
+            ),
+        ],
+    )
+    async def test_flag_true_with_skip_system_still_scans_only_the_latest_turn_on_responses(
+        self, history_tail: Sequence[Mapping[str, object]]
+    ) -> None:
+        from litellm.llms.openai.responses.guardrail_translation.handler import (
+            OpenAIResponsesHandler,
+        )
+
+        handler = make_handler(experimental_use_latest_role_message_only=True)
+        handler.skip_system_message_in_guardrail = True
+        request_data = self._responses_request(
+            {"role": "system", "content": "House rules"},
+            *history_tail,
+            {"role": "user", "content": self.LATEST},
+            instructions="answer briefly",
+        )
+        patcher, mock_api = self._scan(handler)
+        with patcher:
+            await OpenAIResponsesHandler().process_input_messages(data=request_data, guardrail_to_apply=handler)
+
+        assert [call.kwargs["content"] for call in mock_api.call_args_list] == [self.LATEST]
+
+    @pytest.mark.asyncio
+    async def test_flag_false_responses_scans_instructions_and_full_history(self) -> None:
         from litellm.llms.openai.responses.guardrail_translation.handler import (
             OpenAIResponsesHandler,
         )
@@ -4878,7 +4910,11 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
         with patcher:
             await OpenAIResponsesHandler().process_input_messages(data=request_data, guardrail_to_apply=handler)
 
-        assert [call.kwargs["content"] for call in mock_api.call_args_list] == ["First user turn", self.LATEST]
+        assert [call.kwargs["content"] for call in mock_api.call_args_list] == [
+            "answer briefly",
+            "First user turn",
+            self.LATEST,
+        ]
 
     @pytest.mark.asyncio
     async def test_flag_true_unalignable_texts_fall_back_to_scanning_everything(self):
@@ -4966,8 +5002,12 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
             ),
         ],
     )
+    @pytest.mark.parametrize(
+        "instructions",
+        [pytest.param(None, id="no_instructions"), pytest.param("answer briefly", id="instructions")],
+    )
     async def test_flag_true_reasoning_content_after_latest_user_turn_still_scans_that_turn(
-        self, tail: Sequence[Mapping[str, object]]
+        self, tail: Sequence[Mapping[str, object]], instructions: str | None
     ):
         from litellm.llms.openai.responses.guardrail_translation.handler import (
             OpenAIResponsesHandler,
@@ -4983,6 +5023,7 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
                 "content": [{"type": "reasoning_text", "text": "model chain of thought"}],
             },
             *tail,
+            **({"instructions": instructions} if instructions is not None else {}),
         )
         patcher, mock_api = self._scan(handler)
         with patcher:
@@ -5015,6 +5056,28 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
             self.LATEST,
             "thinking",
         ]
+
+    @pytest.mark.asyncio
+    async def test_flag_true_texts_short_of_the_input_items_fall_back_to_scanning_everything(self) -> None:
+        handler = make_handler(experimental_use_latest_role_message_only=True)
+        reasoning = {"type": "reasoning", "id": "rs_1", "content": [{"type": "reasoning_text", "text": "thinking"}]}
+        inputs: GenericGuardrailAPIInputs = {
+            "texts": ["thinking", self.LATEST],
+            "structured_messages": [{"role": "user", "content": "thinking"}, {"role": "user", "content": self.LATEST}],
+        }
+        request_data: dict[str, object] = {
+            "litellm_call_id": "test-call-id",
+            "input": [
+                {"role": "user", "content": "First user turn"},
+                reasoning,
+                {"role": "user", "content": self.LATEST},
+            ],
+        }
+        patcher, mock_api = self._scan(handler)
+        with patcher:
+            await handler.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
+
+        assert [call.kwargs["content"] for call in mock_api.call_args_list] == ["thinking", self.LATEST]
 
 
 class TestPanwAirsMcpToolCallWithoutCallId:
