@@ -4,12 +4,13 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { SelectItem } from "@/components/ui/select";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { TRANSPORT, TRANSPORT_ITEMS } from "@/components/mcp_tools/types";
-import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
+import { $api } from "@/lib/http/api";
 
 export const STDIO_DISABLED_MESSAGE =
   "stdio MCP servers are disabled on this proxy. Set LITELLM_ENABLE_MCP_STDIO=true on the proxy and restart to enable them";
 
-export const useMcpStdioEnabled = (): boolean => useUIConfig().data?.mcp_stdio_enabled === true;
+export const useMcpStdioEnabled = (): boolean =>
+  $api.useQuery("get", "/.well-known/litellm-ui-config").data?.mcp_stdio_enabled === true;
 
 export const TransportSelectItems: FC<{ stdioEnabled: boolean }> = ({ stdioEnabled }) => (
   <>

@@ -2,17 +2,11 @@ import React from "react";
 import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Select, SelectContent, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TRANSPORT_ITEMS } from "@/components/mcp_tools/types";
-import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
+import { switchToWorkerUrl } from "@/components/networking";
 import { STDIO_DISABLED_MESSAGE, TransportSelectItems, useMcpStdioEnabled } from "./StdioAvailability";
-
-const getUiConfig = vi.hoisted(() => vi.fn());
-vi.mock("@/components/networking", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/components/networking")>()),
-  getUiConfig,
-}));
 
 function openTransportSelect(stdioEnabled: boolean) {
   render(
@@ -53,26 +47,47 @@ describe("TransportSelectItems", () => {
 });
 
 describe("useMcpStdioEnabled", () => {
+  afterEach(() => {
+    switchToWorkerUrl(null);
+    vi.restoreAllMocks();
+  });
+
   const renderWithConfig = (config: object) => {
-    getUiConfig.mockResolvedValue(config);
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(JSON.stringify(config), { status: 200 }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
     );
-    return renderHook(() => ({ stdioEnabled: useMcpStdioEnabled(), config: useUIConfig() }), { wrapper });
+    const { result } = renderHook(() => useMcpStdioEnabled(), { wrapper });
+    const settled = () =>
+      waitFor(() =>
+        expect(
+          client
+            .getQueryCache()
+            .getAll()
+            .map((query) => query.state.status),
+        ).toEqual(["success"]),
+      );
+    return { result, fetchSpy, settled };
   };
 
-  it("reports stdio as enabled only when the proxy says so", async () => {
-    const { result } = renderWithConfig({ mcp_stdio_enabled: true });
+  it("reads the flag from the worker the dashboard is managing", async () => {
+    switchToWorkerUrl("http://worker-b.example:4000");
+    const { result, fetchSpy, settled } = renderWithConfig({ mcp_stdio_enabled: true });
 
-    await waitFor(() => expect(result.current.config.isSuccess).toBe(true));
-    expect(result.current.stdioEnabled).toBe(true);
+    await settled();
+    expect(result.current).toBe(true);
+    expect(fetchSpy.mock.calls.map(([request]) => (request as Request).url)).toEqual([
+      "http://worker-b.example:4000/.well-known/litellm-ui-config",
+    ]);
   });
 
   it.each([{ mcp_stdio_enabled: false }, {}])("treats %o as stdio disabled", async (config) => {
-    const { result } = renderWithConfig(config);
+    const { result, settled } = renderWithConfig(config);
 
-    await waitFor(() => expect(result.current.config.isSuccess).toBe(true));
-    expect(result.current.stdioEnabled).toBe(false);
+    await settled();
+    expect(result.current).toBe(false);
   });
 });

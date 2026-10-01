@@ -334,7 +334,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._experimental.mcp_server.byok_credential_cache import byok_credential_cache
-from litellm.proxy._experimental.mcp_server.stdio_gate import MCP_STDIO_ENABLED_ENV_VAR
+from litellm.proxy._experimental.mcp_server.stdio_gate import MCP_STDIO_ENABLED_ENV_VAR, is_mcp_stdio_flag_key
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
@@ -6159,6 +6159,12 @@ class ProxyConfig:
                 if key in self._BLOCKED_ENV_KEYS:
                     verbose_proxy_logger.warning("Skipping blocked environment variable key: %s", key)
                     continue
+                if isinstance(key, str) and is_mcp_stdio_flag_key(key):
+                    verbose_proxy_logger.warning(
+                        "Ignoring %s set in the config file. Set it in the proxy's environment instead",
+                        MCP_STDIO_ENABLED_ENV_VAR,
+                    )
+                    continue
                 #########################################################
                 # handles this scenario:
                 # ```yaml
@@ -7560,7 +7566,7 @@ class ProxyConfig:
         """
         decrypted_env_vars: Final = {}
         for k, v in environment_variables.items():
-            if k.upper() == MCP_STDIO_ENABLED_ENV_VAR:
+            if isinstance(k, str) and is_mcp_stdio_flag_key(k):
                 verbose_proxy_logger.warning(
                     "Ignoring %s stored in the database. Set it in the proxy's environment instead",
                     MCP_STDIO_ENABLED_ENV_VAR,

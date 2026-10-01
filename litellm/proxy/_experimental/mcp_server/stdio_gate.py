@@ -15,6 +15,10 @@ def is_mcp_stdio_enabled() -> bool:
     return os.getenv(MCP_STDIO_ENABLED_ENV_VAR, "").strip().lower() == "true"
 
 
+def is_mcp_stdio_flag_key(env_var_name: str) -> bool:
+    return env_var_name.upper() == MCP_STDIO_ENABLED_ENV_VAR
+
+
 def is_mcp_stdio_blocked(transport: str | None) -> bool:
     return transport == MCPTransport.stdio and not is_mcp_stdio_enabled()
 

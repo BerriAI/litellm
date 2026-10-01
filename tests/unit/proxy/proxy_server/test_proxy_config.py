@@ -3516,6 +3516,17 @@ def test_ProxyConfig__decrypt_and_set_db_env_variables_cannot_enable_mcp_stdio(m
     assert os.environ.get("LITELLM_ENABLE_MCP_STDIO") is None
 
 
+@pytest.mark.parametrize("config_key", ["LITELLM_ENABLE_MCP_STDIO", "litellm_enable_mcp_stdio"])
+def test_ProxyConfig__load_environment_variables_cannot_enable_mcp_stdio(monkeypatch, config_key):
+    monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+    monkeypatch.delenv(config_key, raising=False)
+    monkeypatch.delenv("KEY_X", raising=False)
+    ProxyConfig()._load_environment_variables({"environment_variables": {config_key: "true", "KEY_X": "x"}})
+    assert os.environ.get("KEY_X") == "x"
+    assert os.environ.get(config_key) is None
+    assert os.environ.get("LITELLM_ENABLE_MCP_STDIO") is None
+
+
 def test_ProxyConfig__decrypt_and_set_db_env_variables_invalid_dict_raises():
     pc = ProxyConfig()
     with pytest.raises(AttributeError):

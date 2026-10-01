@@ -23,6 +23,9 @@ vi.mock("@/components/networking", () => ({
   getUiConfig: vi.fn().mockResolvedValue({}),
 }));
 
+const stubUiConfig = (config: object) =>
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify(config), { status: 200 }));
+
 const createQueryClient = () =>
   new QueryClient({
     defaultOptions: {
@@ -136,7 +139,7 @@ describe("MCPServers", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(networking.getUiConfig).mockResolvedValue({} as Awaited<ReturnType<typeof networking.getUiConfig>>);
+    stubUiConfig({});
   });
 
   it("should render the MCPServers component with title", async () => {
@@ -305,9 +308,7 @@ describe("MCPServers", () => {
     [false, true],
     [true, false],
   ])("marks stdio servers as disabled only when the proxy reports stdio off (enabled=%s)", async (enabled, flagged) => {
-    vi.mocked(networking.getUiConfig).mockResolvedValue({ mcp_stdio_enabled: enabled } as Awaited<
-      ReturnType<typeof networking.getUiConfig>
-    >);
+    stubUiConfig({ mcp_stdio_enabled: enabled });
     vi.mocked(networking.fetchMCPServers).mockResolvedValue([
       {
         server_id: "stdio-1",
@@ -329,7 +330,7 @@ describe("MCPServers", () => {
     );
 
     const grid = await screen.findByTestId("mcp-servers-grid");
-    await waitFor(() => expect(networking.getUiConfig).toHaveBeenCalled());
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
     await waitFor(() => expect(within(grid).queryByText("stdio disabled") !== null).toBe(flagged));
     expect(within(grid).getByText("STDIO")).toBeInTheDocument();
   });
@@ -346,9 +347,7 @@ describe("MCPServers", () => {
   } as MCPServer;
 
   it("greys out stdio in the create form when the proxy reports stdio off", async () => {
-    vi.mocked(networking.getUiConfig).mockResolvedValue({ mcp_stdio_enabled: false } as Awaited<
-      ReturnType<typeof networking.getUiConfig>
-    >);
+    stubUiConfig({ mcp_stdio_enabled: false });
     vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
     const user = userEvent.setup();
     render(
@@ -356,7 +355,7 @@ describe("MCPServers", () => {
         <MCPServers {...defaultProps} userRole="Internal User" />
       </QueryClientProvider>,
     );
-    await waitFor(() => expect(networking.getUiConfig).toHaveBeenCalled());
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
 
     await user.click(await screen.findByRole("button", { name: "+ Submit MCP Server" }));
     await user.click(await screen.findByRole("combobox", { name: /Transport Type/ }));
@@ -365,12 +364,13 @@ describe("MCPServers", () => {
       "data-disabled",
     );
     expect(screen.getByRole("option", { name: /Streamable HTTP/ })).not.toHaveAttribute("data-disabled");
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
   });
 
   it("explains on the edit page why an existing stdio server cannot run when the proxy reports stdio off", async () => {
-    vi.mocked(networking.getUiConfig).mockResolvedValue({ mcp_stdio_enabled: false } as Awaited<
-      ReturnType<typeof networking.getUiConfig>
-    >);
+    stubUiConfig({ mcp_stdio_enabled: false });
     vi.mocked(networking.fetchMCPServers).mockResolvedValue([stdioServer]);
     vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
     const user = userEvent.setup();
