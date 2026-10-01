@@ -154,6 +154,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     RawRequestTypedDict,
+    SpendLoggingContext,
     StandardBuiltInToolsParams,
     StandardCallbackDynamicParams,
     StandardLoggingAdditionalHeaders,
@@ -613,6 +614,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self.stream = stream
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
+        self.spend_event_id: Final = str(uuid.uuid4())
+        self.response_cost_is_known: bool | None = None
         self.litellm_call_id = litellm_call_id
         self.litellm_trace_id: str = litellm_trace_id if litellm_trace_id else str(uuid.uuid4())
 
@@ -1907,6 +1910,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 ),
             }
         except Exception as e:  # error creating kwargs for cost calculation
+            self.response_cost_is_known = False
             debug_info = StandardLoggingModelCostFailureDebugInformation(
                 error_str=str(e),
                 traceback_str=_get_traceback_str_for_error(str(e)),
@@ -1920,6 +1924,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             verbose_logger.debug("response_cost: %s", response_cost)
             additional_response_cost: Final[object] = self.model_call_details.get("additional_response_cost")
+            self.response_cost_is_known = response_cost is not None
             total_response_cost: Final = (
                 (response_cost or 0.0) + additional_response_cost
                 if isinstance(additional_response_cost, (int, float)) and additional_response_cost > 0
@@ -1933,6 +1938,7 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             return total_response_cost
         except Exception as e:  # error calculating cost
+            self.response_cost_is_known = False
             debug_info = StandardLoggingModelCostFailureDebugInformation(
                 error_str=str(e),
                 traceback_str=_get_traceback_str_for_error(str(e)),
@@ -2200,6 +2206,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def record_partial_usage_for_failure(self, usage: Usage, response_cost: float) -> None:
         """Stash what an interrupted stream already consumed so the failure log bills it instead of zero."""
+        self.response_cost_is_known = self.response_cost_is_known is not False
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
 
@@ -2398,6 +2405,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
 
         if self.model_call_details.get("cache_hit") is True:
+            self.response_cost_is_known = True
             self.model_call_details["response_cost"] = 0.0
         elif "response_cost" in hidden_params:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
@@ -6502,6 +6510,7 @@ def get_standard_logging_object_payload(
         )
 
         id = response_obj.get("id", kwargs.get("litellm_call_id"))
+        provider_response_id: Final = str(response_obj.get("id") or "")
 
         _model_id: Final = metadata.get("model_info", {}).get("id", "")
         _model_group: Final = metadata.get("model_group", "")
@@ -6549,7 +6558,7 @@ def get_standard_logging_object_payload(
 
         saved_cache_cost: float = 0.0
         if cache_hit is True:
-            id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
+            id = f"{id}_cache_hit{logging_obj.spend_event_id}"
             saved_cache_cost = (
                 logging_obj._response_cost_calculator(
                     result=init_response_obj,
@@ -6662,6 +6671,18 @@ def get_standard_logging_object_payload(
                 )
                 if is_classifier_call(call_type or "", litellm_params) and not should_redact_message_logging(kwargs)
                 else EMPTY_MAPPING
+            ),
+            spend_context=SpendLoggingContext(
+                event_id=logging_obj.spend_event_id,
+                request_id=str(id),
+                response_id=provider_response_id,
+                call_id=str(kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id") or ""),
+                pricing_known=cache_hit is True
+                or (
+                    raw_response_cost is not None
+                    and logging_obj.response_cost_is_known is not False
+                    and (status == "success" or kwargs.get("combined_usage_object") is not None)
+                ),
             ),
             id=str(id),
             litellm_call_id=kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),

@@ -3,12 +3,9 @@ Tests for the `clickhouse` spend-log callback.
 """
 
 import json
-import os
-import sys
 from datetime import datetime, timezone
 from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
-
 
 import pytest
 
@@ -19,9 +16,7 @@ from litellm.integrations.clickhouse.clickhouse_spend_logger import (
     spend_log_row_from_payload,
     strip_cache_hit_suffix,
 )
-from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
 from litellm.integrations.clickhouse.context import lens_analysis
-from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils import litellm_logging
 from litellm.tracing.types import SpendLogRecord
 
@@ -76,12 +71,8 @@ def _payload(**overrides: Any) -> dict[str, Any]:
     return {**payload, **overrides}
 
 
-def test_is_a_custom_batch_logger():
-    assert issubclass(ClickHouseSpendLogger, CustomBatchLogger)
-    assert ClickHouseSpendLogger.table == SPEND_LOGS_TABLE
-
-
-def test_success_row_mapping():
+def test_success_row_mapping(monkeypatch):
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
     row = spend_log_row_from_payload(_payload(), {})  # type: ignore[arg-type]
 
     assert set(row) == set(SpendLogRecord.__annotations__)
@@ -168,16 +159,16 @@ def test_turn_off_message_logging_blanks_messages_and_response():
 @pytest.mark.asyncio
 async def test_failure_event_maps_status_and_error():
     client = MagicMock()
-    client.insert_json_each_row = AsyncMock()
+    client.insert_rows = AsyncMock()
     logger = ClickHouseSpendLogger(storage=client)
     payload = _payload(status="failure", error_str="RateLimitError: slow down", response_cost=0.0)
 
     await logger.async_log_failure_event({"standard_logging_object": payload}, None, None, None)
 
-    assert len(logger.log_queue) == 1
-    row = logger.log_queue[0]
+    await logger.aclose()
+    row = client.insert_rows.await_args.args[1][0]
     assert row["status"] == "failure"
-    assert row["error_str"] == "RateLimitError: slow down"
+    assert row["error_str"] == ""
 
 
 @pytest.mark.asyncio
@@ -185,7 +176,7 @@ async def test_missing_payload_and_bad_payload_never_raise():
     logger = ClickHouseSpendLogger(storage=MagicMock())
     await logger.async_log_success_event({}, None, None, None)
     await logger.async_log_success_event({"standard_logging_object": "garbage"}, None, None, None)
-    assert logger.log_queue == []
+    assert logger.buffered_rows == 0
 
 
 @pytest.mark.asyncio
@@ -196,7 +187,7 @@ async def test_trace_ingest_requests_are_not_logged_as_spend():
 
     await logger.async_log_failure_event({"standard_logging_object": payload}, None, None, None)
 
-    assert logger.log_queue == []
+    assert logger.buffered_rows == 0
 
 
 @pytest.mark.asyncio
@@ -267,8 +258,7 @@ async def test_success_and_failure_events_write_scoped_spend_rows():
         now,
     )
     await logger.flush_queue()
-    if logger._flush_task is not None:
-        logger._flush_task.cancel()
+    await logger.aclose()
 
     storage.ensure_schema.assert_not_awaited()
     assert storage.insert_rows.await_count == 1
@@ -328,5 +318,65 @@ async def test_trace_ingest_and_invalid_payload_do_not_write_spend():
     )
     await logger.async_log_success_event({"standard_logging_object": "invalid"}, None, now, now)
 
-    assert logger.log_queue == []
+    assert logger.buffered_rows == 0
     storage.ensure_schema.assert_not_awaited()
+
+
+@pytest.mark.parametrize("store_content", [False, True])
+@pytest.mark.parametrize("redact", [False, True])
+def test_clickhouse_content_obeys_spend_policy_and_request_redaction(
+    monkeypatch, store_content: bool, redact: bool
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": store_content})
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", str(store_content).lower())
+    payload: Final = _payload(
+        messages=[{"role": "user", "content": "SYNTHETIC_PROMPT", "api_key": "SYNTHETIC_SECRET"}],
+        response={"content": "SYNTHETIC_RESPONSE", "authorization": "SYNTHETIC_SECRET"},
+    )
+    row: Final = spend_log_row_from_payload(
+        payload, {"standard_callback_dynamic_params": {"turn_off_message_logging": redact}}
+    )
+    assert row["spend"] == payload["response_cost"]
+    assert row["api_key"] == payload["metadata"]["user_api_key_hash"]
+    assert "SYNTHETIC_SECRET" not in row["messages"] + row["response"]
+    assert ("SYNTHETIC_PROMPT" in row["messages"]) is (store_content and not redact)
+    assert ("SYNTHETIC_RESPONSE" in row["response"]) is (store_content and not redact)
+
+
+@pytest.mark.parametrize("cost", [None, 0.0, 0.000001])
+def test_real_standard_payload_preserves_pricing_and_identity_in_both_spend_sinks(cost: float | None) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging, get_standard_logging_object_payload
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    now: Final = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    logging: Final = Logging(
+        model="audit-model",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=now,
+        litellm_call_id="call",
+        function_id="function",
+    )
+    kwargs: Final = {
+        "model": "audit-model",
+        "response_cost": cost,
+        "litellm_call_id": "call",
+        "messages": [],
+        "litellm_params": {"metadata": {"user_api_key": "key"}},
+    }
+    response: Final = {"id": "response"}
+    payload: Final = get_standard_logging_object_payload(kwargs, response, now, now, logging, "success")
+    assert payload is not None
+    clickhouse: Final = spend_log_row_from_payload(payload, kwargs)
+    postgres: Final = get_logging_payload({**kwargs, "standard_logging_object": payload}, response, now, now)
+    context: Final = payload["spend_context"]
+    assert context["pricing_known"] is (cost is not None)
+    assert json.loads(clickhouse["metadata"])["spend_context"] == context
+    assert json.loads(postgres["metadata"])["spend_context"] == context
+    assert clickhouse["request_id"] == context["event_id"]
+    assert clickhouse["response_id"] == response["id"]
+    assert context["request_id"] == postgres["request_id"]
+    assert context["call_id"] == "call"

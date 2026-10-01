@@ -155,6 +155,7 @@ async fn schema_supports_span_rollups_and_spend_joins(
         serde_json::json!(["response-1"])
     );
     let spend_parameters = BTreeMap::from([
+        ("call_ids".into(), Parameter::Strings(vec![])),
         (
             "response_ids".into(),
             Parameter::Strings(vec!["response-1".into()]),

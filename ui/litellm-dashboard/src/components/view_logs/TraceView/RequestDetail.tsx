@@ -7,9 +7,8 @@ import { Button } from "@/components/ui/button";
 
 import { LogDetailsDrawer } from "../LogDetailsDrawer";
 import { CopyButton } from "./CopyButton";
-import { formatCost } from "./AgentTracesTable";
 import type { Span } from "./traceTypes";
-import { fmtMs, fmtTok } from "./traceUtils";
+import { formatCost, fmtMs, fmtTok } from "./traceUtils";
 import { useSpanRequestLog } from "./useSpanRequestLog";
 
 interface RequestDetailProps {
@@ -22,8 +21,9 @@ interface RequestDetailProps {
 /** Request tab for LLM spans; "Open request log" opens the LiteLLM request drawer over the run. */
 export function RequestDetail({ span, accessToken, traceStartMs }: RequestDetailProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const requestId = span.spend_log_id ?? null;
   const spanStartMs = traceStartMs + span.start_offset_ms;
-  const logQuery = useSpanRequestLog(accessToken, span.litellm_request_id, spanStartMs, drawerOpen);
+  const logQuery = useSpanRequestLog(accessToken, requestId, spanStartMs, drawerOpen);
   const lookupDone = drawerOpen && logQuery.isSuccess;
   const logNotFound = lookupDone && logQuery.data === null;
 
@@ -37,7 +37,7 @@ export function RequestDetail({ span, accessToken, traceStartMs }: RequestDetail
 
   const rows: [string, string][] = [
     ["Model", span.model ?? "—"],
-    ["Cost", span.spend == null ? "—" : formatCost(span.spend)],
+    ["Cost", span.spend == null ? "Unavailable" : formatCost(span.spend)],
     ["Input tokens", fmtTok(span.input_tokens)],
     ["Output tokens", fmtTok(span.output_tokens)],
     ["Total tokens", fmtTok(span.input_tokens + span.output_tokens)],
@@ -61,15 +61,13 @@ export function RequestDetail({ span, accessToken, traceStartMs }: RequestDetail
       <div className="mt-3 rounded border border-border bg-muted/40 p-3">
         <div className="flex items-center font-mono text-[9px] tracking-[0.1em] text-muted-foreground uppercase">
           Request ID
-          {span.litellm_request_id && (
-            <CopyButton value={span.litellm_request_id} label="Copy request ID" iconOnly className="ml-auto" />
-          )}
+          {requestId && <CopyButton value={requestId} label="Copy request ID" iconOnly className="ml-auto" />}
         </div>
         <div className="mt-1.5 font-mono text-[11px] break-all text-foreground">
-          {span.litellm_request_id ?? "Not linked to a LiteLLM request"}
+          {requestId ?? "Not linked to a LiteLLM request"}
         </div>
       </div>
-      {span.litellm_request_id && (
+      {span.spend_log_id && (
         <Button
           variant="outline"
           size="sm"

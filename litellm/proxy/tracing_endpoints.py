@@ -7,10 +7,13 @@ GET  /v1/traces/{trace_id}                   Trace
 GET  /v1/traces/{trace_id}/spans/{span_id}   SpanDetail
 """
 
+import json
 import time
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import TypeAdapter
 
 from litellm.constants import OTLP_MAX_BODY_BYTES, OTLP_RETRY_AFTER_SECONDS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -139,3 +142,47 @@ async def get_agent_trace_span(
     if span is None:
         raise HTTPException(status_code=404, detail=f"Span {span_id} not found")
     return span
+
+
+_POSTGRES_SPEND_ROWS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+async def postgres_trace_spend_fallback(
+    scope: TraceScope,
+    call_ids: Sequence[str],
+    start_ms: int,
+    end_ms: int,
+) -> Sequence[Mapping[str, object]]:
+    from litellm._logging import verbose_proxy_logger
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None or not scope["api_key_hash"] or len(scope["team_ids"]) != 1:
+        return ()
+    try:
+        rows: Final = await prisma_client.db.query_raw(
+            """
+            SELECT metadata->'spend_context'->>'event_id' AS request_id,
+                   metadata->'spend_context'->>'response_id' AS response_id,
+                   request_id AS log_id, litellm_call_id AS call_id,
+                   COALESCE(team_id, '') AS team_id, api_key, spend,
+                   COALESCE((metadata->'spend_context'->>'pricing_known')::boolean, false) AS pricing_known,
+                   (EXTRACT(EPOCH FROM "startTime") * 1000)::bigint AS start_ms
+            FROM "LiteLLM_SpendLogs"
+            WHERE api_key = $1 AND COALESCE(team_id, '') = $2
+              AND litellm_call_id IN (SELECT json_array_elements_text($3::json))
+              AND "startTime" >= to_timestamp($4::double precision / 1000) AT TIME ZONE 'UTC'
+              AND "startTime" < to_timestamp($5::double precision / 1000) AT TIME ZONE 'UTC'
+              AND metadata->'spend_context'->>'event_id' IS NOT NULL
+            LIMIT 1001
+            """,
+            scope["api_key_hash"],
+            scope["team_ids"][0],
+            json.dumps(tuple(call_ids)),
+            start_ms,
+            end_ms,
+        )
+        result: Final = _POSTGRES_SPEND_ROWS.validate_python(rows)
+        return result if len(result) <= 1000 else ()
+    except Exception as error:
+        verbose_proxy_logger.warning("Postgres trace spend lookup unavailable: %s", error)
+        return ()

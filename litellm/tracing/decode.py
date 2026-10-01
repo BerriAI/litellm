@@ -149,10 +149,10 @@ def _lc_message(message: Mapping[str, Any]) -> dict[str, Any]:
 def _langsmith_type(row: SpanRow, attributes: Mapping[str, str]) -> SpanType:
     kind = attributes.get("langsmith.span.kind", "chain")
     name = row["SpanName"]
-    if not row["ParentSpanId"] or name == attributes.get("langsmith.metadata.lc_agent_name"):
-        return "agent"
     if kind in ("llm", "tool"):
         return kind
+    if not row["ParentSpanId"] or name == attributes.get("langsmith.metadata.lc_agent_name"):
+        return "agent"
     if name.endswith(_FRAMEWORK_SUFFIXES):
         return "framework"
     return "chain"
@@ -221,12 +221,12 @@ def normalize_langsmith(row: SpanRow, attributes: Mapping[str, str]) -> None:
 
 def normalize_genai(row: SpanRow, attributes: Mapping[str, str]) -> None:
     operation = attributes.get("gen_ai.operation.name", "")
-    if operation == "invoke_agent" or not row["ParentSpanId"]:
-        row["ObservationType"] = "agent"
-    elif operation in _LLM_OPERATIONS:
+    if operation in _LLM_OPERATIONS:
         row["ObservationType"] = "llm"
     elif operation == "execute_tool":
         row["ObservationType"] = "tool"
+    elif operation == "invoke_agent" or not row["ParentSpanId"]:
+        row["ObservationType"] = "agent"
     row["AgentName"] = attributes.get("gen_ai.agent.name", "")
     row["Model"] = attributes.get("gen_ai.request.model") or attributes.get("gen_ai.response.model", "")
     row["LiteLLMRequestId"] = attributes.get("gen_ai.response.id", "")
@@ -267,6 +267,7 @@ def select_normalizer(scope_name: str, attributes: Mapping[str, str]) -> Callabl
 
 def normalize(row: SpanRow, attributes: Mapping[str, str]) -> None:
     select_normalizer(row["ScopeName"], attributes)(row, attributes)
+    row["LiteLLMRequestId"] = attributes.get("gen_ai.response.id") or row["LiteLLMRequestId"]
     if not row["InputTokens"] and not row["OutputTokens"]:
         _set_tokens(row, attributes)
 

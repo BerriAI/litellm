@@ -2,7 +2,7 @@
 Tests for the pure read-side helpers in litellm/tracing/store.py (no ClickHouse needed).
 """
 
-from typing import Any
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -166,6 +166,15 @@ def test_agent_nodes_parent_and_per_agent_counts():
             "tool_calls": 1,
             "duration_ms": 1000,
             "spend": None,
+            "spend_details": {
+                "status": "unavailable",
+                "subtotal": 0,
+                "matched_calls": 0,
+                "priced_calls": 0,
+                "expected_calls": 1,
+                "reasons": ("missing_spend",),
+                "sources": (),
+            },
         },
         {
             "name": "researcher",
@@ -175,6 +184,15 @@ def test_agent_nodes_parent_and_per_agent_counts():
             "tool_calls": 1,
             "duration_ms": 5,
             "spend": None,
+            "spend_details": {
+                "status": "unavailable",
+                "subtotal": 0,
+                "matched_calls": 0,
+                "priced_calls": 0,
+                "expected_calls": 1,
+                "reasons": ("missing_spend",),
+                "sources": (),
+            },
         },
     )
 
@@ -338,6 +356,7 @@ async def test_trace_cost_is_scoped_and_counts_repeated_request_once():
             "team_id": "team-a",
             "api_key": "key-a",
             "spend": 0.25,
+            "pricing_known": True,
             "start_ms": T0 // MS,
         },
         {
@@ -372,6 +391,7 @@ async def test_run_list_uses_matching_spend_and_leaves_missing_cost_unavailable(
             "team_id": "team-a",
             "api_key_hash": "key-a",
             "request_ids": [request_id],
+            "llm_spans": [("span", request_id, "", 1000, 1100)],
             "name": "agent",
             "service": "service",
             "input_preview": "",
@@ -395,16 +415,21 @@ async def test_run_list_uses_matching_spend_and_leaves_missing_cost_unavailable(
             "team_id": "team-a",
             "api_key": "key-a",
             "spend": 0.25,
+            "pricing_known": True,
             "start_ms": 1000,
         }
     ]
-    client.query = AsyncMock(side_effect=[rows, spend])
+    client.query = AsyncMock(side_effect=[rows, spend, []])
     scope: TraceScope = {"team_ids": ("team-a",), "api_key_hash": ""}
 
     page = await ClickHouseTraceStore(client).list_traces(scope, 0, 2000)
 
     assert [run["spend"] for run in page["data"]] == [0.25, None]
-    assert [call.args[0] for call in client.query.await_args_list] == ["list_traces", "spend_by_response_ids"]
+    assert [call.args[0] for call in client.query.await_args_list] == [
+        "list_traces",
+        "spend_by_response_ids",
+        "spend_by_response_ids",
+    ]
 
 
 @pytest.mark.asyncio
@@ -431,3 +456,165 @@ async def test_ambiguous_cache_response_id_keeps_cost_unavailable():
     assert trace is not None
     assert trace["summary"]["spend"] is None
     assert trace["spans"][0]["spend"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("primary", ["missing", "unavailable", "matched", "ambiguous", "unpriced"])
+async def test_postgres_fallback_only_recovers_missing_analytical_calls(primary: str) -> None:
+    span: Final = _llm_row("llm", "", "agent", "response", team_id="team", api_key_hash="key", litellm_call_id="call")
+    record: Final = {
+        "request_id": "event",
+        "log_id": "postgres-log",
+        "response_id": "response",
+        "call_id": "call",
+        "team_id": "team",
+        "api_key": "key",
+        "spend": 0.25,
+        "pricing_known": True,
+        "start_ms": T0 // MS,
+    }
+    primary_rows: Final = {
+        "missing": [],
+        "unavailable": RuntimeError("offline"),
+        "matched": [record],
+        "ambiguous": [record, {**record, "request_id": "other"}],
+        "unpriced": [{**record, "pricing_known": False}],
+    }
+    storage: Final = MagicMock(query=AsyncMock(side_effect=[[span], primary_rows[primary]]))
+    fallback: Final = AsyncMock(return_value=[record])
+    store: Final = ClickHouseTraceStore(storage, spend_fallback=fallback)
+
+    trace: Final = await store.get_trace("trace", {"team_ids": ("team",), "api_key_hash": ""})
+
+    assert trace is not None
+    resolved: Final = trace["spans"][0]
+    if primary in ("missing", "unavailable"):
+        fallback.assert_awaited_once()
+        assert fallback.await_args.args[0] == {"team_ids": ("team",), "api_key_hash": "key"}
+        assert fallback.await_args.args[1] == ("call",)
+        assert resolved["spend"] == record["spend"]
+        assert resolved["spend_log_id"] == "postgres-log"
+        assert resolved["spend_source"] == "postgres_fallback"
+        assert resolved["spend_fallback_reason"] == (
+            "clickhouse_rows_missing" if primary == "missing" else "clickhouse_unavailable"
+        )
+        assert trace["summary"]["spend_details"]["sources"] == ("postgres_fallback",)
+    else:
+        fallback.assert_not_awaited()
+        assert resolved["spend_fallback_reason"] is None
+        assert resolved["spend"] == (record["spend"] if primary == "matched" else None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pricing_known", [True, False])
+async def test_missing_identity_and_unknown_pricing_cannot_produce_complete_totals(pricing_known: bool) -> None:
+    rows: Final = [
+        _row("root", "", "agent", "agent", "agent", team_id="team", api_key_hash="key"),
+        _llm_row("linked", "root", "agent", "response", team_id="team", api_key_hash="key"),
+        _llm_row("duplicate", "root", "agent", "response", team_id="team", api_key_hash="key"),
+        _llm_row("unlinked", "root", "agent", "", team_id="team", api_key_hash="key"),
+    ]
+    spend: Final = [
+        {
+            "request_id": "event",
+            "response_id": "response",
+            "team_id": "team",
+            "api_key": "key",
+            "spend": 0.25,
+            "pricing_known": pricing_known,
+            "start_ms": T0 // MS,
+        }
+    ]
+    trace: Final = await ClickHouseTraceStore(MagicMock(query=AsyncMock(side_effect=[rows, spend]))).get_trace(
+        "trace", {"team_ids": ("team",), "api_key_hash": "key"}
+    )
+
+    assert trace is not None
+    assert trace["summary"]["spend"] is None
+    assert trace["agents"][0]["spend"] is None
+    details: Final = trace["summary"]["spend_details"]
+    assert details["subtotal"] == 0.25
+    assert details["matched_calls"] == 1
+    assert details["expected_calls"] == 2
+    assert details["priced_calls"] == int(pricing_known)
+    assert trace["agents"][0]["spend_details"] == details
+
+
+@pytest.mark.asyncio
+async def test_call_id_distinguishes_cache_hits_and_rejects_reused_call_ids() -> None:
+    rows: Final = [
+        _llm_row("cached", "", "agent", "response", team_id="team", api_key_hash="key", litellm_call_id="cached-call")
+    ]
+    base: Final = {
+        "response_id": "response",
+        "team_id": "team",
+        "api_key": "key",
+        "pricing_known": True,
+        "start_ms": T0 // MS,
+    }
+    records: Final = [
+        {**base, "request_id": "original", "call_id": "original-call", "spend": 0.25},
+        {**base, "request_id": "cached", "call_id": "cached-call", "spend": 0.0},
+    ]
+    storage: Final = MagicMock(
+        query=AsyncMock(side_effect=[rows, records, rows, records + [{**records[1], "request_id": "collision"}]])
+    )
+    store: Final = ClickHouseTraceStore(storage)
+    scope: Final = {"team_ids": ("team",), "api_key_hash": "key"}
+    cached: Final = await store.get_trace("trace", scope)
+    ambiguous: Final = await store.get_trace("trace", scope)
+    assert cached is not None and ambiguous is not None
+    assert cached["summary"]["spend"] == 0
+    assert cached["summary"]["spend_details"]["status"] == "complete"
+    assert ambiguous["summary"]["spend"] is None
+    assert ambiguous["spans"][0]["spend_reason"] == "ambiguous_identity"
+
+
+@pytest.mark.asyncio
+async def test_trace_matching_does_not_change_with_neighboring_traces() -> None:
+    start: Final = T0 // MS
+    root: Final = {
+        "trace_id": "target",
+        "trace_ref": "target",
+        "team_id": "team",
+        "api_key_hash": "key",
+        "name": "agent",
+        "service": "test",
+        "input_preview": "",
+        "start_ms": start,
+        "duration_ms": 100,
+        "status": "STATUS_CODE_OK",
+        "span_count": 1,
+        "agent_count": 0,
+        "llm_calls": 1,
+        "tool_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "models": [],
+        "llm_spans": [("span", "response", "", start, start + 100)],
+    }
+    neighbor: Final = {
+        **root,
+        "trace_id": "neighbor",
+        "trace_ref": "neighbor",
+        "start_ms": start + 3600000,
+        "llm_spans": [],
+        "llm_calls": 0,
+    }
+    cached: Final = {
+        "request_id": "cache",
+        "response_id": "response",
+        "team_id": "team",
+        "api_key": "key",
+        "spend": 0,
+        "pricing_known": True,
+        "start_ms": start + 3600000,
+    }
+    storage: Final = MagicMock(query=AsyncMock(side_effect=[[root], [cached], [root, neighbor], [cached]]))
+    store: Final = ClickHouseTraceStore(storage)
+    scope: Final = {"team_ids": ("team",), "api_key_hash": "key"}
+    alone: Final = await store.list_traces(scope, start, start + 7200000)
+    together: Final = await store.list_traces(scope, start, start + 7200000)
+    assert alone["data"][0] == together["data"][0]
+    assert alone["data"][0]["spend"] is None
+    assert alone["data"][0]["spend_details"]["reasons"] == ("missing_spend",)

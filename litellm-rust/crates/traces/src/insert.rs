@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, io::Write, time::Duration};
+use std::{
+    collections::BTreeMap,
+    io::{self, Write},
+    time::Duration,
+};
 
 use flate2::{Compression, write::GzEncoder};
 use litellm_http::Client;
@@ -78,6 +82,8 @@ pub async fn insert_rows(
                     | "wait_for_async_insert"
                     | "input_format_skip_unknown_fields"
                     | "date_time_input_format"
+                    | "wait_end_of_query"
+                    | "insert_deduplication_token"
             )
         })
         .map(|(key, value)| (key.into_owned(), value.into_owned()))
@@ -96,9 +102,10 @@ pub async fn insert_rows(
         .append_pair("async_insert", "1")
         .append_pair("async_insert_deduplicate", "1")
         .append_pair("wait_for_async_insert", "1")
+        .append_pair("wait_end_of_query", "1")
         .append_pair("input_format_skip_unknown_fields", "0")
         .append_pair("date_time_input_format", "best_effort");
-    let response = client
+    let mut response = client
         .post(url)
         .timeout(INSERT_TIMEOUT)
         .header("Content-Encoding", "gzip")
@@ -108,6 +115,11 @@ pub async fn insert_rows(
         .map_err(|_| Error::Transport)?;
     if !response.status().is_success() {
         return Err(Error::InsertFailed(response.status().as_u16()));
+    }
+    while let Some(chunk) = response.chunk().await.map_err(|_| Error::Transport)? {
+        if !chunk.iter().all(u8::is_ascii_whitespace) {
+            return Err(Error::InvalidResponse);
+        }
     }
     Ok(())
 }
@@ -126,21 +138,41 @@ fn encode_rows_with_limit(
             .into_iter()
             .map(|(name, value)| insert_value(&name, value).map(|value| (name, value)))
             .collect::<Result<BTreeMap<_, _>, _>>()?;
-        let record = serde_json::to_vec(&encoded).map_err(|_| Error::InvalidRow)?;
-        let size = body
-            .len()
-            .checked_add(record.len())
-            .and_then(|size| size.checked_add(usize::from(!body.is_empty())))
-            .ok_or(Error::InsertTooLarge)?;
-        if size > limit {
-            return Err(Error::InsertTooLarge);
+        let mut writer = LimitedWriter {
+            body: &mut body,
+            limit,
+        };
+        if !writer.body.is_empty() {
+            writer.write_all(b"\n").map_err(|_| Error::InsertTooLarge)?;
         }
-        if !body.is_empty() {
-            body.push(b'\n');
-        }
-        body.extend_from_slice(&record);
+        serde_json::to_writer(&mut writer, &encoded).map_err(|error| {
+            if error.is_io() {
+                Error::InsertTooLarge
+            } else {
+                Error::InvalidRow
+            }
+        })?;
     }
     String::from_utf8(body).map_err(|_| Error::InvalidRow)
+}
+
+struct LimitedWriter<'a> {
+    body: &'a mut Vec<u8>,
+    limit: usize,
+}
+
+impl Write for LimitedWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() > self.limit.saturating_sub(self.body.len()) {
+            return Err(io::Error::other("insert size limit exceeded"));
+        }
+        self.body.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 fn insert_value(name: &str, value: Value) -> Result<Value, Error> {

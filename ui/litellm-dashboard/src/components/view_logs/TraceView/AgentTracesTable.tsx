@@ -1,5 +1,7 @@
 "use client";
 
+import { formatSpend } from "./traceUtils";
+
 import { ArrowDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -32,12 +34,6 @@ export function relativeTime(iso: string, now: number = Date.now()): string {
   if (diffH < DAY_H) return `${diffH}h ago`;
   return `${Math.round(diffH / DAY_H)}d ago`;
 }
-
-export const formatCost = (cost: number): string => {
-  if (cost === 0) return "$0.00";
-  if (cost < 0.01) return `$${cost.toFixed(4)}`;
-  return `$${cost.toFixed(2)}`;
-};
 
 const firstLine = (text: string): string => text.split("\n")[0] ?? text;
 
@@ -106,9 +102,7 @@ export function AgentTracesTable({
               <td className={TD_NUM}>{run.agent_count.toLocaleString()}</td>
               <td className={TD_NUM}>{run.span_count.toLocaleString()}</td>
               <td className="px-3 text-right font-mono tabular-nums text-foreground">{fmtMs(run.duration_ms)}</td>
-              <td className="px-3 text-right font-mono tabular-nums text-foreground">
-                {run.spend == null ? "—" : formatCost(run.spend)}
-              </td>
+              <td className="px-3 text-right font-mono tabular-nums text-foreground">{formatSpend(run)}</td>
               <td className="px-3 text-right">
                 {run.error_count > 0 ? (
                   <StatusMark status="error" count={run.error_count} />
