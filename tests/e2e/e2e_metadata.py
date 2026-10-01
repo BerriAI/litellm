@@ -1,14 +1,4 @@
-"""Per-test metadata for the e2e suite: the step log each test records as it runs.
-
-`steps` is appended at runtime by `@step`-decorated harness helpers, in call
-order, so the list IS the test's user story and its last element is where a
-failing test died. Nothing about it is hand-written, so it cannot drift from
-what the test actually did.
-
-tests/e2e is a black-box HTTP suite that imports litellm in zero files and is
-shipped to the runner image as tests/e2e alone, and every harness module imports
-this one, so it imports only the stdlib and pydantic.
-"""
+"""Typed per-test metadata for the e2e suite: what a test drives (`Subject`) and what it did (`steps`). See AGENTS.md"""
 
 from __future__ import annotations
 
@@ -20,12 +10,188 @@ import threading
 from collections import deque
 from collections.abc import Callable, Generator, Iterable, Mapping
 from contextlib import AbstractContextManager, contextmanager
+from dataclasses import asdict, dataclass
 from enum import Enum
 from functools import reduce, wraps
-from types import TracebackType
+from itertools import chain
+from types import MappingProxyType, TracebackType
 from typing import Final, ParamSpec, TypeVar, cast
 
+import pytest
 from pydantic import BaseModel
+
+
+class Domain(str, Enum):
+    """The OSS issue-label taxonomy, so an issue and a test join on one string"""
+
+    LLM_TRANSLATION = "llm-translation"
+    SPEND_BUDGETS = "spend-budgets"
+    UI = "ui"
+    MCP = "mcp"
+    OBSERVABILITY = "observability"
+    ROUTING = "routing"
+    DEPLOY_OPS = "deploy-ops"
+    COST_MAP = "cost-map"
+    PROXY_AUTH = "proxy-auth"
+    GUARDRAILS = "guardrails"
+    MANAGEMENT = "management"
+    SDK = "sdk"
+    PASSTHROUGH = "passthrough"
+    DB = "db"
+    CACHING = "caching"
+    DOCS = "docs"
+    AGENTS_API = "agents-api"
+    UNKNOWN = "unknown"
+
+
+class Route(str, Enum):
+    """The endpoint the test is checking; unset when the call only triggers the behavior under test"""
+
+    CHAT_COMPLETIONS = "chat_completions"
+    MESSAGES = "messages"
+    RESPONSES = "responses"
+    EMBEDDINGS = "embeddings"
+    COMPLETIONS = "completions"
+    FILES = "files"
+    BATCHES = "batches"
+    PASSTHROUGH = "passthrough"
+    MCP = "mcp"
+    GUARDRAILS = "guardrails"
+    KEY_MANAGEMENT = "key_management"
+    TEAM_MANAGEMENT = "team_management"
+    SPEND_REPORTING = "spend_reporting"
+    MODEL_MANAGEMENT = "model_management"
+    IMAGES = "images"
+    AUDIO = "audio"
+    MODERATIONS = "moderations"
+    RERANK = "rerank"
+    OCR = "ocr"
+    VECTOR_STORES = "vector_stores"
+    REALTIME = "realtime"
+    A2A = "a2a"
+    USER_MANAGEMENT = "user_management"
+    BUDGET_MANAGEMENT = "budget_management"
+    ORGANIZATION_MANAGEMENT = "organization_management"
+    CUSTOMER_MANAGEMENT = "customer_management"
+    HEALTH = "health"
+    METRICS = "metrics"
+    PROXY_CONFIG = "proxy_config"
+    ADMIN_UI = "admin_ui"
+
+
+class Provider(str, Enum):
+    """Mirrors litellm's `LlmProviders` without importing litellm; `TestProviderMirrorsLitellm` catches drift"""
+
+    OPENAI = "openai"
+    OPENAI_LIKE = "openai_like"
+    CUSTOM_OPENAI = "custom_openai"
+    AZURE = "azure"
+    AZURE_AI = "azure_ai"
+    ANTHROPIC = "anthropic"
+    GEMINI = "gemini"
+    VERTEX_AI = "vertex_ai"
+    BEDROCK = "bedrock"
+    SAGEMAKER = "sagemaker"
+    XAI = "xai"
+    GROQ = "groq"
+    DEEPSEEK = "deepseek"
+    MISTRAL = "mistral"
+    COHERE = "cohere"
+    PERPLEXITY = "perplexity"
+    OPENROUTER = "openrouter"
+    TOGETHER_AI = "together_ai"
+    FIREWORKS_AI = "fireworks_ai"
+    CEREBRAS = "cerebras"
+    SAMBANOVA = "sambanova"
+    NVIDIA_NIM = "nvidia_nim"
+    DATABRICKS = "databricks"
+    WATSONX = "watsonx"
+    OLLAMA = "ollama"
+    VLLM = "vllm"
+    HOSTED_VLLM = "hosted_vllm"
+    VOYAGE = "voyage"
+    JINA_AI = "jina_ai"
+    DEEPGRAM = "deepgram"
+    ELEVENLABS = "elevenlabs"
+    ASSEMBLYAI = "assemblyai"
+    LITELLM_PROXY = "litellm_proxy"
+
+
+class Capability(str, Enum):
+    """A model feature, 1:1 with a `supports_*` key in model_prices_and_context_window.json"""
+
+    FUNCTION_CALLING = "function_calling"
+    PARALLEL_FUNCTION_CALLING = "parallel_function_calling"
+    TOOL_CHOICE = "tool_choice"
+    TOOL_SEARCH = "tool_search"
+    VISION = "vision"
+    PDF_INPUT = "pdf_input"
+    AUDIO_INPUT = "audio_input"
+    REASONING = "reasoning"
+    WEB_SEARCH = "web_search"
+    PROMPT_CACHING = "prompt_caching"
+    RESPONSE_SCHEMA = "response_schema"
+    MID_CONVERSATION_SYSTEM = "mid_conversation_system"
+
+
+class Mode(str, Enum):
+    """How the route was driven"""
+
+    NONSTREAM = "nonstream"
+    STREAM = "stream"
+    BATCH = "batch"
+    WEBSOCKET = "websocket"
+
+
+_M = TypeVar("_M")
+
+
+def _scalar(value: object) -> str:
+    """`str()` on a (str, Enum) gives `Route.RESPONSES`, and StrEnum needs 3.11"""
+    if isinstance(value, Enum):
+        return str(value.value)  # pyright: ignore[reportAny]  # Enum.value is Any for every enum
+    return str(value)
+
+
+def _members(value: object) -> tuple[object, ...] | None:
+    return cast("tuple[object, ...]", value) if isinstance(value, tuple) else None
+
+
+def _canonical(name: str, value: object, member_type: type[_M]) -> tuple[_M, ...]:
+    """Validated, deduped and sorted; a bare str like `("gpt-5.5")` raises at import"""
+    members = _members(value)
+    if members is None:
+        raise TypeError(
+            f"Subject.{name} must be a tuple, got {type(value).__name__}: {value!r}."
+            f" A one-member tuple needs its trailing comma: {name}=(x,), not {name}=(x)"
+        )
+    typed = tuple(member for member in members if isinstance(member, member_type))
+    if len(typed) != len(members):
+        raise TypeError(f"Subject.{name} takes {member_type.__name__} members, got {value!r}")
+    return tuple(sorted(frozenset(member for member in typed if _scalar(member)), key=_scalar))
+
+
+@dataclass(frozen=True, slots=True)
+class Subject:
+    """What a test is about. Not named `Test*` so pytest does not try to collect it"""
+
+    domain: Domain | None = None
+    route: Route | None = None
+    providers: tuple[Provider, ...] = ()
+    models: tuple[str, ...] = ()
+    capabilities: tuple[Capability, ...] = ()
+    mode: Mode | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "providers", _canonical("providers", self.providers, Provider))
+        object.__setattr__(self, "models", _canonical("models", self.models, str))
+        object.__setattr__(self, "capabilities", _canonical("capabilities", self.capabilities, Capability))
+
+
+def meta(subject: Subject) -> pytest.MarkDecorator:
+    """Attach a `Subject` to a test: `@meta(Subject(route=Route.RESPONSES, ...))`"""
+    return pytest.mark.meta(subject)
+
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -277,6 +443,35 @@ def step(label: str) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
         return wrapper
 
     return decorate
+
+
+_REPEATED: Final = MappingProxyType({"providers": "provider", "models": "model", "capabilities": "capability"})
+
+
+def _declared_subject(args: tuple[object, ...]) -> Subject | None:
+    first = args[0] if args else None
+    return first if isinstance(first, Subject) else None
+
+
+def subject_properties(item: pytest.Item) -> tuple[tuple[str, str], ...]:
+    """The declared fields as <property> pairs, plural fields repeated under their singular name"""
+    marker: Final = item.get_closest_marker("meta")
+    if marker is None:
+        return ()
+    subject: Final = _declared_subject(marker.args)
+    if subject is None:
+        return ()
+    declared: Final[dict[str, object]] = asdict(subject)
+    return tuple(chain.from_iterable(_field_properties(name, value) for name, value in declared.items()))
+
+
+def _field_properties(name: str, value: object) -> tuple[tuple[str, str], ...]:
+    repeated: Final = _REPEATED.get(name)
+    if repeated is not None:
+        return tuple((repeated, _scalar(member)) for member in _members(value) or ())
+    if value is None or value == "":
+        return ()
+    return ((name, _scalar(value)),)
 
 
 def step_properties() -> tuple[tuple[str, str], ...]:

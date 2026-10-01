@@ -1,4 +1,4 @@
-"""The e2e step recorder's edge cases: label templates, dedupe, the cap, nesting, context managers.
+"""The e2e test metadata: `@meta(Subject(...))` properties and the step recorder's edge cases.
 
 Harness logic, so it lives here rather than under tests/e2e, which holds only
 tests that drive a live proxy. The harness modules are imported off
@@ -18,12 +18,30 @@ import threading
 import warnings
 from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import fields, replace
 from pathlib import Path
 from types import UnionType
 from typing import Final, cast, get_args, get_type_hints
 
 import pytest
-from e2e_metadata import MASK, MAX_STEPS, STEP_FRAMES, STEPS, StepRecorder, environment_secrets, step
+from e2e_metadata import (
+    MASK,
+    MAX_STEPS,
+    STEP_FRAMES,
+    STEPS,
+    Capability,
+    Domain,
+    Mode,
+    Provider,
+    Route,
+    StepRecorder,
+    Subject,
+    environment_secrets,
+    meta,
+    step,
+    subject_properties,
+)
+from junit_properties import package_from_nodeid, result_properties, source_from_item
 from proxy_client import ProxyClient
 from pydantic import BaseModel, Field
 from pydantic.fields import FieldInfo
@@ -36,6 +54,191 @@ def empty_step_log() -> Generator[None]:
     STEPS.reset()
     yield
     STEPS.reset()
+
+
+def collected_item(request: pytest.FixtureRequest, name: str) -> pytest.Item:
+    return next(item for item in request.session.items if item.path == request.path and item.name == name)
+
+
+def fixed_prefix(item: pytest.Item, covers: str) -> tuple[tuple[str, str], ...]:
+    """Spelled out rather than taken from `result_properties`, so a change to either fails a test."""
+    return (
+        ("package", package_from_nodeid(item.nodeid)),
+        ("covers", covers),
+        ("source", source_from_item(item)),
+    )
+
+
+class TestSubjectProperties:
+    """Markers go on via `request.applymarker` so the coverage registry's collect-only pass never sees them."""
+
+    def test_every_declared_field_becomes_a_property_in_field_order(self, request: pytest.FixtureRequest) -> None:
+        test = type(self).test_every_declared_field_becomes_a_property_in_field_order
+        request.applymarker(
+            meta(
+                Subject(
+                    domain=Domain.SPEND_BUDGETS,
+                    route=Route.CHAT_COMPLETIONS,
+                    providers=(Provider.GEMINI, Provider.ANTHROPIC),
+                    models=("gemini-2.5-flash", "claude-haiku-4-5"),
+                    capabilities=(Capability.VISION, Capability.FUNCTION_CALLING, Capability.VISION),
+                    mode=Mode.NONSTREAM,
+                )
+            )
+        )
+        assert subject_properties(collected_item(request, test.__name__)) == (
+            ("domain", "spend-budgets"),
+            ("route", "chat_completions"),
+            ("provider", "anthropic"),
+            ("provider", "gemini"),
+            ("model", "claude-haiku-4-5"),
+            ("model", "gemini-2.5-flash"),
+            ("capability", "function_calling"),
+            ("capability", "vision"),
+            ("mode", "nonstream"),
+        )
+
+    def test_one_provider_with_three_models_pairs_nothing(self, request: pytest.FixtureRequest) -> None:
+        test = type(self).test_one_provider_with_three_models_pairs_nothing
+        request.applymarker(
+            meta(
+                Subject(
+                    providers=(Provider.BEDROCK,),
+                    models=("claude-sonnet-4-5", "claude-opus-4-7", "claude-haiku-4-5"),
+                )
+            )
+        )
+        assert subject_properties(collected_item(request, test.__name__)) == (
+            ("provider", "bedrock"),
+            ("model", "claude-haiku-4-5"),
+            ("model", "claude-opus-4-7"),
+            ("model", "claude-sonnet-4-5"),
+        )
+
+    def test_an_empty_plural_field_emits_nothing(self, request: pytest.FixtureRequest) -> None:
+        test = type(self).test_an_empty_plural_field_emits_nothing
+        request.applymarker(meta(Subject(domain=Domain.MANAGEMENT)))
+        assert subject_properties(collected_item(request, test.__name__)) == (("domain", "management"),)
+
+    def test_scalar_property_names_are_the_dataclass_field_names(self, request: pytest.FixtureRequest) -> None:
+        test = type(self).test_scalar_property_names_are_the_dataclass_field_names
+        request.applymarker(meta(Subject(domain=Domain.UNKNOWN, route=Route.HEALTH, mode=Mode.STREAM)))
+        declared = tuple(field.name for field in fields(Subject))
+        emitted = tuple(name for name, _ in subject_properties(collected_item(request, test.__name__)))
+        assert emitted == tuple(name for name in declared if name in {"domain", "route", "mode"})
+
+    def test_every_plural_field_is_deduped_and_sorted_at_declaration(self) -> None:
+        subject = Subject(
+            providers=(Provider.OPENAI, Provider.ANTHROPIC, Provider.OPENAI),
+            models=("gpt-5.5", "claude-haiku-4-5", "gpt-5.5"),
+            capabilities=(Capability.VISION, Capability.REASONING, Capability.VISION),
+        )
+        assert subject.providers == (Provider.ANTHROPIC, Provider.OPENAI)
+        assert subject.models == ("claude-haiku-4-5", "gpt-5.5")
+        assert subject.capabilities == (Capability.REASONING, Capability.VISION)
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("models", "gpt-5.5"),
+            ("models", ["gpt-5.5"]),
+            ("providers", Provider.OPENAI),
+            ("providers", [Provider.OPENAI]),
+            ("capabilities", Capability.VISION),
+            ("capabilities", frozenset({Capability.VISION})),
+        ],
+    )
+    def test_a_plural_field_refuses_anything_but_a_tuple(self, field: str, value: object) -> None:
+        """`replace` is the untyped way in, since the typed constructor would not let the test spell the mistake."""
+        with pytest.raises(TypeError, match=rf"Subject\.{field} must be a tuple"):
+            _ = replace(Subject(), **{field: value})
+
+    @pytest.mark.parametrize(
+        ("field", "value", "member_type"),
+        [
+            ("providers", ("openai",), "Provider"),
+            ("capabilities", ("vision",), "Capability"),
+            ("models", (5,), "str"),
+        ],
+    )
+    def test_a_plural_field_refuses_a_member_of_the_wrong_type(
+        self, field: str, value: object, member_type: str
+    ) -> None:
+        with pytest.raises(TypeError, match=rf"Subject\.{field} takes {member_type} members"):
+            _ = replace(Subject(), **{field: value})
+
+    def test_a_blank_model_is_dropped_rather_than_refused(self) -> None:
+        """A blank env override must cost one missing property, not collection of the whole module."""
+        assert Subject(models=("", "gpt-5.5")).models == ("gpt-5.5",)
+
+    def test_the_typed_marker_only_ever_appends_to_the_fixed_prefix(self, request: pytest.FixtureRequest) -> None:
+        test = type(self).test_the_typed_marker_only_ever_appends_to_the_fixed_prefix
+        request.applymarker(pytest.mark.covers("quota_management.budget.key.blocks_over_limit"))
+        request.applymarker(meta(Subject(route=Route.SPEND_REPORTING)))
+        item = collected_item(request, test.__name__)
+        assert result_properties(item) == fixed_prefix(item, "quota_management.budget.key.blocks_over_limit") + (
+            ("route", "spend_reporting"),
+        )
+
+    def test_a_test_with_only_the_old_string_covers_is_unchanged(self, request: pytest.FixtureRequest) -> None:
+        test = type(self).test_a_test_with_only_the_old_string_covers_is_unchanged
+        request.applymarker(pytest.mark.covers("llm.responses.openai.tool_use.nonstream.works"))
+        item = collected_item(request, test.__name__)
+        assert result_properties(item) == fixed_prefix(item, "llm.responses.openai.tool_use.nonstream.works")
+
+    def test_a_test_with_neither_marker_carries_only_the_prefix(self, request: pytest.FixtureRequest) -> None:
+        test = type(self).test_a_test_with_neither_marker_carries_only_the_prefix
+        item = collected_item(request, test.__name__)
+        assert subject_properties(item) == ()
+        assert result_properties(item) == fixed_prefix(item, "")
+
+    def test_a_marker_carrying_something_other_than_a_subject_emits_nothing(
+        self, request: pytest.FixtureRequest
+    ) -> None:
+        test = type(self).test_a_marker_carrying_something_other_than_a_subject_emits_nothing
+        request.applymarker(pytest.mark.meta("spend-budgets"))
+        assert subject_properties(collected_item(request, test.__name__)) == ()
+
+
+class TestProviderMirrorsLitellm:
+    """`Provider` copies `LlmProviders` values so collecting tests/e2e never needs litellm; skips where it is absent."""
+
+    def test_every_provider_value_is_a_real_litellm_provider(self) -> None:
+        try:
+            from litellm.types.utils import LlmProviders
+        except ImportError:  # pragma: no cover - the runner image's shape
+            pytest.skip("litellm is not importable here, which is the property under test")
+        known = {str(member.value) for member in LlmProviders}
+        unknown = sorted(member.value for member in Provider if member.value not in known)
+        assert not unknown, f"not LlmProviders values: {unknown}"
+
+
+E2E_DIR: Final = Path(__file__).resolve().parents[1] / "e2e"
+
+
+def _hand_typed_models(path: Path) -> Iterator[str]:
+    for node in ast.walk(ast.parse(path.read_text())):
+        match node:
+            case ast.Call(func=ast.Name(id="Subject"), keywords=keywords):
+                for keyword in keywords:
+                    match keyword:
+                        case ast.keyword(arg="models", value=ast.Tuple(elts=models)):
+                            yield from (
+                                f"{path.relative_to(E2E_DIR)}:{model.lineno} {model.value!r}"
+                                for model in models
+                                if isinstance(model, ast.Constant)
+                            )
+                        case _:
+                            pass
+            case _:
+                pass
+
+
+def test_a_declared_model_names_the_constant_the_test_drives() -> None:
+    offenders: Final = tuple(
+        offender for path in sorted(E2E_DIR.rglob("*.py")) for offender in _hand_typed_models(path)
+    )
+    assert offenders == ()
 
 
 class TestStepRecording:
