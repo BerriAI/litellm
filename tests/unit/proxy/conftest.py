@@ -4,6 +4,7 @@ import asyncio
 import copy
 import inspect
 import warnings
+from collections.abc import Iterator
 from typing import Dict
 
 import pytest
@@ -192,6 +193,14 @@ def pytest_runtest_teardown(item, nextitem):
 @pytest.fixture
 def secret_vault_factory() -> type[FakeSecretVault]:
     return FakeSecretVault
+
+
+@pytest.fixture
+def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
 
 
 @pytest.fixture(autouse=True)

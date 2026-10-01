@@ -630,17 +630,9 @@ async def test_claim_token_rejects_short_password_before_consuming_invite():
     prisma.db.litellm_usertable.update.assert_not_called()
 
 
-@pytest.fixture
-def hibp_httpx_transport(monkeypatch):
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    litellm.in_memory_llm_clients_cache.flush_cache()
-    yield
-    litellm.in_memory_llm_clients_cache.flush_cache()
-
-
 @pytest.mark.asyncio
 @respx.mock
-async def test_claim_token_rejects_breached_password_before_consuming_invite(hibp_httpx_transport):
+async def test_claim_token_rejects_breached_password_before_consuming_invite(httpx_transport):
     """A password found in the HIBP corpus must be rejected and never stored."""
     from litellm.proxy.proxy_server import claim_onboarding_link
 
@@ -674,7 +666,7 @@ async def test_claim_token_rejects_breached_password_before_consuming_invite(hib
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_claim_token_fails_open_when_hibp_unreachable(hibp_httpx_transport):
+async def test_claim_token_fails_open_when_hibp_unreachable(httpx_transport):
     """An HIBP outage must never block onboarding: the claim proceeds."""
     from litellm.proxy.proxy_server import claim_onboarding_link
 
