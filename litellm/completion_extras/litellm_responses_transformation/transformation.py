@@ -716,7 +716,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         Backfills reasoning_content and reasoning_items onto the merged choice
         so encrypted reasoning survives the assistant+tool_calls merge path.
         """
-        from litellm.types.utils import Choices, Message
+        from litellm.types.utils import Choices, Message, chat_completion_tool_call_from_dict
 
         last_msg_choice = next(
             (
@@ -740,7 +740,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             choices.append(Choices(message=msg, finish_reason="tool_calls", index=fallback_index))
             return
 
-        last_msg_choice.message.tool_calls = accumulated_tool_calls
+        last_msg_choice.message.tool_calls = [
+            chat_completion_tool_call_from_dict(tool_call) for tool_call in accumulated_tool_calls
+        ]
         if getattr(last_msg_choice.message, "content", None) is None:
             last_msg_choice.message.content = ""
         last_msg_choice.finish_reason = "tool_calls"

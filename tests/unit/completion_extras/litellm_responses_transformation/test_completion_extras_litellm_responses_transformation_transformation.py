@@ -3194,6 +3194,10 @@ def test_message_plus_function_call_merged_into_single_choice():
     assert tool_calls[0]["id"] == "call_paris"
     assert tool_calls[0]["function"]["name"] == "get_weather"
     assert tool_calls[0]["function"]["arguments"] == '{"location": "Paris"}'
+    # Regression (reported by @chrikrah on #33931): merged tool_calls must be real
+    # ChatCompletionMessageToolCall objects, not plain dicts, so downstream hooks
+    # (e.g. tool_permission) that read `.function.name` don't raise AttributeError.
+    assert getattr(getattr(tool_calls[0], "function", None), "name", None) == "get_weather"
 
 
 def test_tool_only_turn_unchanged():
