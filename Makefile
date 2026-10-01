@@ -4,7 +4,7 @@
 .PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc \
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
-	test-rust-extension \
+	test-rust-extension rust-sqlx-prepare \
 	info lint lint-inner lint-dev lint-checks format \
 	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
@@ -56,6 +56,7 @@ help:
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
 	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests"
+	@echo "  make rust-sqlx-prepare  - Refresh litellm-rust/crates/db/.sqlx against a migrated Postgres container"
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
@@ -306,6 +307,9 @@ test-rust-extension:
 	LITELLM_RUST=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
 	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
 
+rust-sqlx-prepare:
+	cd litellm-rust && cargo run -p litellm-db-testing --bin sqlx-prepare
+
 test: install-test-deps
 	$(UV_RUN) pytest tests/
 
@@ -317,13 +321,13 @@ test-unit-llms: install-test-deps
 	$(UV_RUN) pytest tests/unit/llms --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-guardrails: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/management_helpers --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/guardrails tests/unit/proxy/management_endpoints tests/unit/proxy/management_helpers --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-core: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/proxy/auth tests/test_litellm/proxy/client tests/test_litellm/proxy/db tests/test_litellm/proxy/hooks tests/test_litellm/proxy/policy_engine --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/auth tests/unit/proxy/client tests/test_litellm/proxy/db tests/unit/proxy/hooks tests/unit/proxy/policy_engine --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-misc: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/agent_endpoints tests/test_litellm/proxy/anthropic_endpoints tests/test_litellm/proxy/common_utils tests/test_litellm/proxy/discovery_endpoints tests/test_litellm/proxy/experimental tests/test_litellm/proxy/google_endpoints tests/test_litellm/proxy/health_endpoints tests/test_litellm/proxy/image_endpoints tests/test_litellm/proxy/middleware tests/test_litellm/proxy/openai_files_endpoint tests/test_litellm/proxy/pass_through_endpoints tests/test_litellm/proxy/prompts tests/test_litellm/proxy/public_endpoints tests/test_litellm/proxy/response_api_endpoints tests/test_litellm/proxy/shutdown tests/test_litellm/proxy/spend_tracking tests/test_litellm/proxy/ui_crud_endpoints tests/test_litellm/proxy/vector_store_endpoints tests/test_litellm/proxy/test_*.py --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/agent_endpoints tests/test_litellm/proxy/anthropic_endpoints tests/test_litellm/proxy/common_utils tests/test_litellm/proxy/discovery_endpoints tests/test_litellm/proxy/experimental tests/test_litellm/proxy/google_endpoints tests/test_litellm/proxy/health_endpoints tests/test_litellm/proxy/image_endpoints tests/test_litellm/proxy/middleware tests/test_litellm/proxy/openai_files_endpoint tests/test_litellm/proxy/pass_through_endpoints tests/test_litellm/proxy/prompts tests/test_litellm/proxy/public_endpoints tests/test_litellm/proxy/response_api_endpoints tests/test_litellm/proxy/shutdown tests/test_litellm/proxy/spend_tracking tests/test_litellm/proxy/ui_crud_endpoints tests/test_litellm/proxy/vector_store_endpoints tests/test_litellm/proxy/test_*.py tests/unit/proxy/test_proxy_server_endpoints_and_startup.py tests/unit/proxy/test_proxy_utils_model_creation_and_error_logging.py tests/unit/proxy/_experimental/mcp_server/test_mcp_server_tool_calls_and_headers.py --tb=short -vv -n 4 --durations=20
 
 test-unit-integrations: install-test-deps
 	$(UV_RUN) pytest tests/unit/integrations --tb=short -vv -n 4 --durations=20

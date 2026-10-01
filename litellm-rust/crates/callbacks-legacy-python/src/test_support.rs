@@ -3,7 +3,7 @@ use std::ffi::CStr;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
-use crate::{LegacyLogging, LegacySurface, PublicCall};
+use crate::{LegacyLogging, PublicCall};
 
 /// The parameters of every `callbacks_legacy_python` function, as the real module declares them.
 /// `tests/unit/rust_bridge/test_callbacks_legacy_python.py` pins this file to the Python
@@ -45,11 +45,14 @@ def contracted(name, fake):
 if not hasattr(legacy, 'is_internal'):
     legacy.is_internal = contextvars.ContextVar('is_internal_call', default=False)
 
+def setup(call_type, args, kwargs, start, asynchronous):
+    logger = kwargs['logger_factory'](kwargs) if 'logger_factory' in kwargs else kwargs['logger']
+    logger.setup_call_type = call_type
+    return types.SimpleNamespace(logger=logger, kwargs=kwargs)
+
+
 FAKES = {
-    'setup': lambda call_type, args, kwargs, start, asynchronous: types.SimpleNamespace(
-        logger=kwargs['logger_factory'](kwargs) if 'logger_factory' in kwargs else kwargs['logger'],
-        kwargs=kwargs,
-    ),
+    'setup': setup,
     'finalize': lambda response, logger, kwargs, start, end: logger.record('finalize', response),
     'update_logging': lambda logger, kwargs, model, optional_params, litellm_params, provider: logger.update_from_kwargs(
         kwargs=kwargs,
@@ -82,10 +85,10 @@ FAKES = {
     ),
     'after_deployment_failure': lambda kwargs, error, call_type: kwargs['logger'].hook('failure', error, call_type),
     'stream_opened': lambda logger: logger.record('stream_opened', None),
-    'stream_success': lambda logger, request_body, chunks, start, end, first_chunk: logger.record(
+    'stream_success': lambda logger, url_route, endpoint_type, request_body, chunks, start, end, first_chunk: logger.record(
         'stream_success', list(chunks)
     ),
-    'stream_failure': lambda logger, request_body, chunks, error: logger.record('stream_failure', error),
+    'stream_failure': lambda logger, endpoint_type, request_body, chunks, error: logger.record('stream_failure', error),
 }
 assert FAKES.keys() == CONTRACT.keys(), sorted(FAKES.keys() ^ CONTRACT.keys())
 for name, fake in FAKES.items():
@@ -186,14 +189,5 @@ pub(crate) fn legacy_call(
         .map(|kwargs| kwargs.cast_into::<PyDict>().unwrap())
         .unwrap_or_else(|| PyDict::new(py));
     let call = PublicCall::capture(&request, &PyTuple::empty(py), &kwargs).unwrap();
-    LegacyLogging::new(
-        py,
-        LegacySurface {
-            call_type: "test",
-            input_description: "test input",
-            stream: None,
-        },
-        call,
-        asynchronous,
-    )
+    LegacyLogging::new(py, crate::LoggingOperation::Ocr, call, asynchronous)
 }

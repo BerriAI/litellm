@@ -4,8 +4,8 @@ mod host;
 mod project;
 
 use host::OcrPythonHost;
-use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
-use litellm_core::ocr::{provider_config, route::ocr_machine};
+use litellm_callbacks_legacy_python::LoggingOperation;
+use litellm_core::ocr::provider_config;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::to_py;
 use litellm_llms::base_llm::ocr::settings::OcrSettings;
@@ -18,7 +18,6 @@ use crate::{
     coercion::FieldSpec,
     http,
     python_settings::{PythonSettings, Snapshot},
-    secrets,
 };
 
 const VERTEX_PROJECT: FieldSpec<Option<String>> =
@@ -30,17 +29,6 @@ const ENABLE_AZURE_AD_TOKEN_REFRESH: FieldSpec<bool> =
         Ok(field.exact_true())
     });
 
-const SURFACE: LegacySurface = LegacySurface {
-    call_type: "ocr",
-    input_description: "OCR document processing",
-    stream: None,
-};
-
-const ASYNC_SURFACE: LegacySurface = LegacySurface {
-    call_type: "aocr",
-    ..SURFACE
-};
-
 fn run_ocr(
     py: Python<'_>,
     request: Bound<'_, PyAny>,
@@ -48,18 +36,33 @@ fn run_ocr(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let secrets = secrets::source(py)?;
-    let config = http::call_config(py, &kwargs, asynchronous)?;
-    let client = http::resources()
-        .ocr_client(&config, http::url_policy(py)?, ocr_settings(py)?, secrets)
-        .map_err(http::client_error)?;
-    run_legacy_call(
+    let (arguments, hooks) = crate::routes::call_hooks(
         py,
-        if asynchronous { ASYNC_SURFACE } else { SURFACE },
-        PublicCall::capture(&request, &args, &kwargs)?,
-        crate::logger::LoggedMachine::new(ocr_machine(client)),
+        LoggingOperation::Ocr,
+        &request,
+        &args,
+        &kwargs,
+        asynchronous,
+    )?;
+    crate::routes::run_public_call(
+        py,
+        arguments,
+        move |py, arguments, request| {
+            let config = http::call_config(py, arguments, asynchronous)?;
+            let client = litellm_llms::base_llm::ocr::handler::OcrClient::new(
+                &http::resources().pool,
+                &config,
+                http::url_policy(py)?,
+                http::resources().auth.clone(),
+                ocr_settings(py)?,
+                crate::secrets::source(py)?,
+            )
+            .map_err(http::client_error)?;
+            let route = litellm_core::ocr::OcrRoute::new(client);
+            Ok(route.machine(request, None))
+        },
         OcrPythonHost::new(request.unbind()),
-        crate::preflight::sdk_preflight,
+        hooks,
         asynchronous,
     )
 }
@@ -127,7 +130,7 @@ mod tests {
 
     use crate::python_settings::PythonSettings;
 
-    #[test]
+    #[rstest::rstest]
     fn provider_defaults_distinguish_falsey_values_and_exact_true() {
         Python::initialize();
         Python::attach(|py| {

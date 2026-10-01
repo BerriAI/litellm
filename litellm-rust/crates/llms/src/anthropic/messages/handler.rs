@@ -1,7 +1,7 @@
-use litellm_types::{
-    llms::anthropic_messages::anthropic_request::{
-        AdaptiveThinking, AnthropicMessage, AnthropicMessagesOptionalParams,
-        AnthropicMessagesRequest, EnabledThinking, ThinkingConfig, ThinkingDisplay,
+use litellm_llms_types::{
+    formats::messages::{
+        AdaptiveThinking, EnabledThinking, Message, MessagesOptionalParams, MessagesRequest,
+        ThinkingConfig, ThinkingDisplay,
     },
     recognized::Recognized,
 };
@@ -16,12 +16,12 @@ use crate::{
 };
 
 pub fn shape_anthropic_messages_request(
-    request: AnthropicMessagesRequest,
+    request: MessagesRequest,
     reasoning_auto_summary: bool,
-) -> Result<AnthropicMessagesRequest, Error> {
-    Ok(AnthropicMessagesRequest {
+) -> Result<MessagesRequest, Error> {
+    Ok(MessagesRequest {
         messages: sanitize_anthropic_messages(request.messages),
-        params: AnthropicMessagesOptionalParams {
+        params: MessagesOptionalParams {
             metadata: request
                 .params
                 .metadata
@@ -35,7 +35,7 @@ pub fn shape_anthropic_messages_request(
     })
 }
 
-fn sanitize_anthropic_messages(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMessage> {
+fn sanitize_anthropic_messages(messages: Vec<Message>) -> Vec<Message> {
     strip_provider_specific_fields(flatten_unencrypted_web_search_results(
         sanitize_tool_use_ids(strip_empty_content_blocks(messages)),
     ))
@@ -43,16 +43,20 @@ fn sanitize_anthropic_messages(messages: Vec<AnthropicMessage>) -> Vec<Anthropic
 
 fn validate_anthropic_api_metadata(metadata: &Value) -> Result<Value, Error> {
     let Value::Object(fields) = metadata else {
-        return Err(Error::InvalidRequest(format!(
-            "metadata must be an object, got {metadata}"
-        )));
+        return Err(Error::InvalidRequest(crate::ErrorDetail::InvalidValue {
+            field: "metadata",
+            expected: "an object",
+            actual: metadata.clone(),
+        }));
     };
     match fields.get("user_id") {
         None | Some(Value::Null) => Ok(json!({})),
         Some(Value::String(user_id)) => Ok(json!({"user_id": user_id})),
-        Some(other) => Err(Error::InvalidRequest(format!(
-            "metadata.user_id must be a string, got {other}"
-        ))),
+        Some(other) => Err(Error::InvalidRequest(crate::ErrorDetail::InvalidValue {
+            field: "metadata.user_id",
+            expected: "a string",
+            actual: other.clone(),
+        })),
     }
 }
 
@@ -96,11 +100,11 @@ mod tests {
 
     use super::*;
 
-    fn messages(value: Value) -> Vec<AnthropicMessage> {
+    fn messages(value: Value) -> Vec<Message> {
         serde_json::from_value(value).unwrap()
     }
 
-    fn request(body: Value) -> AnthropicMessagesRequest {
+    fn request(body: Value) -> MessagesRequest {
         serde_json::from_value(body).unwrap()
     }
 
@@ -204,21 +208,24 @@ mod tests {
     #[case::empty(json!({}), Ok(json!({})))]
     #[case::numeric_user_id(
         json!({"user_id": 123}),
-        Err(Error::InvalidRequest("metadata.user_id must be a string, got 123".to_string())),
+        Err(Error::InvalidRequest("metadata.user_id must be a string, got 123".to_string().into())),
     )]
     #[case::boolean_user_id(
         json!({"user_id": true}),
-        Err(Error::InvalidRequest("metadata.user_id must be a string, got true".to_string())),
+        Err(Error::InvalidRequest("metadata.user_id must be a string, got true".to_string().into())),
     )]
     #[case::not_an_object(
         json!(["u-1"]),
-        Err(Error::InvalidRequest(r#"metadata must be an object, got ["u-1"]"#.to_string())),
+        Err(Error::InvalidRequest(r#"metadata must be an object, got ["u-1"]"#.to_string().into())),
     )]
     fn validate_anthropic_api_metadata_passes_only_a_string_user_id(
         #[case] metadata: Value,
         #[case] expected: Result<Value, Error>,
     ) {
-        assert_eq!(validate_anthropic_api_metadata(&metadata), expected);
+        assert_eq!(
+            validate_anthropic_api_metadata(&metadata).map_err(|error| error.to_string()),
+            expected.map_err(|error| error.to_string()),
+        );
     }
 
     #[rstest]

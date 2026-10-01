@@ -13,8 +13,9 @@ from typing import Final, Literal, Protocol, TypeAlias
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.caching.redis_cache import RedisCache
-from litellm.constants import DEFAULT_IN_MEMORY_TTL
+from litellm.constants import DEFAULT_IN_MEMORY_TTL, REGISTRY_ERROR_NEGATIVE_CACHE_TTL
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.team import LiteLLM_TeamTableCachedObj
 from litellm.models.team_membership import LiteLLM_TeamMembership
@@ -218,11 +219,23 @@ def _set_in_memory(memory: _InMemoryCache, cache_key: str, value: object, ttl: f
         memory.set_cache(key=cache_key, value=value, ttl=ttl)
 
 
+async def _read_redis_rows(keys: list[str], redis_cache: RedisCache) -> Mapping[str, object]:
+    """On the request pipeline when one is open; a failed pipeline reads as a miss, like ``async_batch_get_cache``."""
+    batch: Final = active_request_redis_batch(redis_cache)
+    if batch is None:
+        return await redis_cache.async_batch_get_cache(key_list=keys)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped cache API
+    try:
+        return await batch.mget(keys)
+    except Exception as e:  # noqa: BLE001  # the DB fill below takes over, as it does after a failed MGET today
+        verbose_proxy_logger.debug("auth prefetch Redis read failed, filling from the database: %s", e)
+        return MappingProxyType({})
+
+
 async def _fill_from_redis(entries: Sequence[_CacheEntry], redis_cache: RedisCache, memory: _InMemoryCache) -> None:
     if not entries:
         return
     found: Final = _RowValues.validate_python(
-        await redis_cache.async_batch_get_cache(key_list=sorted(entry.cache_key for entry in entries))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped cache API
+        await _read_redis_rows(sorted(entry.cache_key for entry in entries), redis_cache)
     )
     for entry, value in ((entry, found.get(entry.cache_key)) for entry in entries):
         if value is not None:
@@ -267,8 +280,14 @@ async def _write_back(entries: Sequence[tuple[_CacheEntry, BaseModel]], cache: U
     memory: Final[_InMemoryCache] = cache.in_memory_cache
     for cache_key, payload, ttl in payloads:
         _set_in_memory(memory, cache_key, payload, cache.default_in_memory_ttl if ttl is None else ttl)
-    if cache.redis_cache is not None:
+    if cache.redis_cache is None:
+        return
+    batch: Final = active_request_redis_batch(cache.redis_cache)
+    if batch is None:
         await cache.redis_cache.async_set_cache_pipeline_with_ttls(payloads)
+        return
+    for cache_key, payload, ttl in payloads:  # rides the request's next round trip; the scope drains leftovers
+        batch.set(cache_key, payload, ttl)
 
 
 async def _fill_from_db(
@@ -305,3 +324,35 @@ async def prefetch_auth_objects(
         await _fill_from_db(refs, _missing_in_memory(missing, memory), user_api_key_cache, prisma_client)
     except Exception as e:  # noqa: BLE001  # warm-up only; the getters enforce and fail closed on their own
         verbose_proxy_logger.warning("auth prefetch skipped, falling back to per-object lookups: %s", e)
+
+
+def _identity_memory_ttl(value: object, management_ttl: float) -> float:
+    """A registry stored as a string is a sentinel, written with the shorter of the two registry TTLs."""
+    return min(REGISTRY_ERROR_NEGATIVE_CACHE_TTL, management_ttl) if isinstance(value, str) else management_ttl
+
+
+async def prefetch_identity_keys(cache_keys: Sequence[str], user_api_key_cache: UserApiKeyCache) -> None:
+    """Warm the entries auth reads before it knows the key's owners (the key object, the end user and the two
+    registries) in one MGET on the request pipeline. Keys the MGET finds absent stay noted on the pipeline, so the
+    per-key getters that follow go to the database without a GET of their own. Best effort, like the
+    owner prefetch: the getters read and enforce on their own."""
+    try:
+        redis_cache: Final = user_api_key_cache.redis_cache
+        if redis_cache is None:
+            return
+        missing: Final = tuple(
+            key
+            for key in dict.fromkeys(cache_keys)
+            if user_api_key_cache.in_memory_cache_for(key).get_cache(key=key) is None
+        )
+        if not missing:
+            return
+        found: Final = _RowValues.validate_python(await _read_redis_rows(sorted(missing), redis_cache))
+        management_ttl: Final = get_management_object_ttl(user_api_key_cache)
+    except Exception as e:  # noqa: BLE001  # warm-up only; the getters read Redis and the database on their own
+        verbose_proxy_logger.warning("auth identity prefetch skipped, falling back to per-key lookups: %s", e)
+        return
+    for key, value in ((key, found.get(key)) for key in missing):
+        if value is not None:
+            memory: _InMemoryCache = user_api_key_cache.in_memory_cache_for(key)
+            _set_in_memory(memory, key, value, _identity_memory_ttl(value, management_ttl))

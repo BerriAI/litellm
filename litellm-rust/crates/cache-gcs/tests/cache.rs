@@ -56,6 +56,7 @@ async fn set_writes_encoded_object_and_headers(#[future(awt)] server: MockServer
 )]
 #[case::missing("missing", ResponseTemplate::new(404), Ok(None))]
 #[case::server_error("server-error", ResponseTemplate::new(500), Err(Error::Unavailable))]
+#[case::unauthorized("unauthorized", ResponseTemplate::new(401), Err(Error::Unavailable))]
 #[case::invalid(
     "invalid",
     ResponseTemplate::new(200).set_body_string("not json"),
