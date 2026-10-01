@@ -1,6 +1,6 @@
 import asyncio
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Final

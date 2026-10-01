@@ -18,7 +18,6 @@ from litellm.proxy.spend_tracking.spend_capture_rate import (
     ProviderBillingCredentialMissing,
     ProviderBillingRequestFailed,
     alert_message,
-    captured_spend_by_day,
     compute_capture_rate,
     run_scheduled_spend_capture_rate_check,
     run_spend_capture_rate_check,

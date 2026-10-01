@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Final
@@ -47,6 +48,12 @@ _OTHER_BACKENDS_SQL: Final = """
 """
 
 
+@dataclass(frozen=True)
+class _Settle:
+    previous: Mapping[str, int] | None
+    count: int
+
+
 def _create_spend_logs_table(database_url: str) -> None:
     write_rows(_SPEND_LOGS_DDL, (), database_url=database_url)
     write_rows(_API_KEY_START_TIME_INDEX_MIGRATION.read_text(), (), database_url=database_url)
@@ -78,21 +85,20 @@ def _settled_stats(database_url: str, seeded_rows: int | None = None) -> dict[st
         lambda backends: backends == 0,
         seconds=60,
     )
-    streak: dict[str, int] = {"count": 0}
-    previous: dict[str, dict[str, int] | None] = {"value": None}
+    settle = _Settle(previous=None, count=0)
 
     def probe() -> dict[str, int]:
+        nonlocal settle
         current: Final = _spend_log_stats(database_url)
-        if current == previous["value"]:
-            streak["count"] += 1
+        if current == settle.previous:
+            settle = _Settle(previous=current, count=settle.count + 1)
         else:
-            streak["count"] = 0
-        previous["value"] = current
+            settle = _Settle(previous=current, count=0)
         return current
 
     settled: Final = eventually(
         probe,
-        lambda stats: streak["count"] >= 5 and (seeded_rows is None or stats["n_tup_ins"] >= seeded_rows),
+        lambda stats: settle.count >= 5 and (seeded_rows is None or stats["n_tup_ins"] >= seeded_rows),
         seconds=60,
     )
     return settled
@@ -227,7 +233,8 @@ async def test_recover_key_metadata_from_spend_logs_reads_two_rows_per_key_howev
         )
 
         assert {digest: meta.get("user_id") for digest, meta in result.items()} == owners
-        assert _rows_read_since(database_url, baseline) <= 10
+        rows_read: Final = _rows_read_since(database_url, baseline)
+        assert len(owners) <= rows_read <= 10
 
 
 @pytest.mark.asyncio
@@ -261,7 +268,8 @@ async def test_recover_key_metadata_from_spend_logs_walks_a_bounded_number_of_na
         )
 
         assert {digest: meta.get("user_id") for digest, meta in result.items()} == named_late
-        assert _rows_read_since(database_url, baseline) <= 1800
+        rows_read: Final = _rows_read_since(database_url, baseline)
+        assert len(frozenset(named_late) | never_named) <= rows_read <= 1800
 
 
 @pytest.mark.asyncio
@@ -283,7 +291,8 @@ async def test_recover_key_metadata_from_spend_logs_reads_a_short_nameless_key_o
         )
 
         assert dict(result) == {}
-        assert _rows_read_since(database_url, baseline) <= 1000
+        rows_read: Final = _rows_read_since(database_url, baseline)
+        assert len(never_named) <= rows_read <= 1000
 
 
 @pytest.mark.asyncio
@@ -308,7 +317,8 @@ async def test_recover_key_metadata_from_spend_logs_bounds_a_busy_nameless_key_a
         result: Final = await _recover(monkeypatch, database_url, busy, (datetime(2026, 9, 7), datetime(2026, 9, 10)))
 
         assert dict(result) == {}
-        assert _rows_read_since(database_url, baseline) <= 900
+        rows_read: Final = _rows_read_since(database_url, baseline)
+        assert len(busy) <= rows_read <= 900
 
 
 @pytest.mark.asyncio
@@ -352,10 +362,14 @@ async def test_recover_key_metadata_from_spend_logs_finds_a_name_logged_where_th
             ),
         )
 
+        _analyze(database_url, vacuum=False)
+        baseline: Final = _settled_stats(database_url)
+        digests: Final = {past_the_stop, tied_with_the_stop}
+
         result: Final = await _recover(
             monkeypatch,
             database_url,
-            {past_the_stop, tied_with_the_stop},
+            digests,
             (start, datetime(2026, 9, 10)),
         )
 
@@ -363,3 +377,4 @@ async def test_recover_key_metadata_from_spend_logs_finds_a_name_logged_where_th
             past_the_stop: {"key_alias": "cli-p", "team_id": None, "user_id": "pat"},
             tied_with_the_stop: {"key_alias": "cli-t", "team_id": None, "user_id": "tess"},
         }
+        assert len(digests) <= _rows_read_since(database_url, baseline)

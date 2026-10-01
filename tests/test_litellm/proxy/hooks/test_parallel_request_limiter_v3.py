@@ -4,7 +4,6 @@ Unit Tests for the max parallel request limiter v3 for the proxy
 
 import asyncio
 import logging
-import os
 import sys
 import time
 from collections.abc import Iterator, Sequence

@@ -100,7 +100,7 @@ def _seed(prefix: str, cases: tuple[_Case, ...] = _CASES) -> None:
                 "anthropic",
                 "0.01",
                 json.dumps(dict(case.metadata)),
-                case.cache_hit or "",
+                case.cache_hit,
             ),
         )
 
