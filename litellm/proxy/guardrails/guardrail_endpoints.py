@@ -124,7 +124,7 @@ def _get_guardrails_list_response(
             GuardrailInfoResponse(
                 guardrail_id=guardrail.get("guardrail_id"),
                 guardrail_name=guardrail.get("guardrail_name"),
-                litellm_params=masked_params,
+                litellm_params=with_tolerated_stream_scope(masked_params),
                 guardrail_info=guardrail.get("guardrail_info"),
             )
         )

@@ -575,6 +575,40 @@ def test_get_guardrails_list_response_includes_guardrail_id():
     assert response.guardrails[0].guardrail_id == "stable-config-id"
 
 
+def test_get_guardrails_list_response_tolerates_invalid_config_stream_scope():
+    from litellm.proxy.guardrails.guardrail_endpoints import (
+        _get_guardrails_list_response,
+    )
+
+    response = _get_guardrails_list_response(
+        [
+            {
+                "guardrail_id": "invalid-scope",
+                "guardrail_name": "invalid-scope",
+                "litellm_params": {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": "pre_call",
+                    "stream_scope": "sometimes",
+                },
+            },
+            {
+                "guardrail_id": "valid-scope",
+                "guardrail_name": "valid-scope",
+                "litellm_params": {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": "pre_call",
+                    "stream_scope": "STREAMING",
+                },
+            },
+        ]
+    )
+
+    assert response.guardrails[0].litellm_params is not None
+    assert response.guardrails[0].litellm_params.stream_scope is None
+    assert response.guardrails[1].litellm_params is not None
+    assert response.guardrails[1].litellm_params.stream_scope == "streaming"
+
+
 def test_get_provider_specific_params():
     """Test getting provider-specific parameters"""
     from litellm.proxy.guardrails.guardrail_endpoints import _get_fields_from_model

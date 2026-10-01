@@ -724,6 +724,19 @@ def test_invalid_yaml_stream_scope_keeps_rail_running_on_both_shapes(rig: ReproR
             response.text for response, _ in observations
         )
         assert tuple(len(sink_rows) for _, sink_rows in observations) == (1, 1), (markers, observations)
+        listed: Final = owned.gateway.request("GET", "/guardrails/list")
+        assert listed.status_code == 200, listed.text
+        list_payload: Final = JSON_OBJECT.validate_json(listed.content)
+        listed_guardrails: Final = list_payload.get("guardrails")
+        assert isinstance(listed_guardrails, list), list_payload
+        listed_rail: Final = next(
+            (row for row in listed_guardrails if isinstance(row, dict) and row.get("guardrail_name") == name),
+            None,
+        )
+        assert isinstance(listed_rail, dict), list_payload
+        listed_params: Final = listed_rail.get("litellm_params")
+        assert isinstance(listed_params, dict), listed_rail
+        assert listed_params.get("stream_scope") is None, listed_rail
 
 
 def test_persisted_invalid_stream_scope_row_stays_readable_and_enforced(
