@@ -98,7 +98,7 @@ class BedrockAgentCoreA2AHandler:
             request_id=request_id,
             params=params,
             litellm_params=litellm_params,
-            method="message/send",
+            method="message/stream",
             stream=True,
             agent_extra_headers=agent_extra_headers,
         )

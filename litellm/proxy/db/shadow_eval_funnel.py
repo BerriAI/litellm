@@ -40,7 +40,7 @@ def pending_shadow_eval_funnel_events() -> int:
 def record_shadow_eval_funnel_event(job_id: str, stage: ShadowEvalFunnelStage) -> None:
     """Count one skipped request for one job leg; synchronous so the hook's read-modify-
     write cannot interleave with the flush's snapshot on the shared event loop."""
-    counters: Final = _pending.setdefault(job_id, dict.fromkeys(FUNNEL_STAGES, 0))  # mutable-ok: queue entry
+    counters: Final = _pending.setdefault(job_id, dict.fromkeys(FUNNEL_STAGES, 0))
     counters[stage] += 1
 
 

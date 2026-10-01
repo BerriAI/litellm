@@ -257,6 +257,14 @@ IAM_TOKEN_DB_AUTH / AZURE_POSTGRESQL_AUTH toggle that only the writer sets.
 - name: DATABASE_SCHEMA
   value: {{ .schema | quote }}
 {{- end }}
+{{- if .sslMode }}
+- name: DATABASE_SSLMODE
+  value: {{ .sslMode | quote }}
+{{- end }}
+{{- if .sslRootCert }}
+- name: DATABASE_SSLROOTCERT
+  value: {{ .sslRootCert | quote }}
+{{- end }}
 {{- if and .useIAMAuth .useAzureEntraAuth }}
 {{- fail "database.writer.useIAMAuth and database.writer.useAzureEntraAuth are mutually exclusive: the database password can only come from one token source" }}
 {{- end }}

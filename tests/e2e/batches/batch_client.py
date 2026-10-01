@@ -233,6 +233,14 @@ class BatchClient:
             response_type=FileDeleteResponse,
         )
 
+    def delete_file_as_admin(self, file_id: str, *, provider: str | None = None) -> Result[FileDeleteResponse]:
+        return self.proxy.transport.delete(
+            f"{_files_path(provider)}/{file_id}",
+            headers=self.proxy.transport.master,
+            json=NoBody(),
+            response_type=FileDeleteResponse,
+        )
+
 
 def _files_path(provider: str | None) -> str:
     return f"/{provider}/v1/files" if provider else "/v1/files"

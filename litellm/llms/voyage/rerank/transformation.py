@@ -4,11 +4,12 @@ Transformation logic for Voyage AI's /v1/rerank endpoint.
 Docs - https://docs.voyageai.com/docs/reranker
 """
 
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 import httpx
 
+from litellm._uuid import uuid
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
@@ -33,7 +34,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: Sequence[str | Mapping[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,
@@ -127,7 +128,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
         return RerankResponse(
-            id=_json_response.get("id", f"voyage-rerank-{model}"),
+            id=_json_response.get("id") or str(uuid.uuid4()),
             results=transformed_results,
             meta=rerank_meta,
         )

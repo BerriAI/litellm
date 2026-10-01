@@ -56,6 +56,29 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("completion")).toBeInTheDocument();
   });
 
+  it("shows the requesting user's email and id in Request Details when the email is resolved", () => {
+    render(
+      <LogDetailContent logEntry={createLogEntry({ user: "106514937785257944828" })} userEmail="alice@example.com" />,
+    );
+
+    expect(screen.getByText("User")).toBeInTheDocument();
+    expect(screen.getByText("alice@example.com")).toBeInTheDocument();
+    expect(screen.getByText("106514937785257944828")).toBeInTheDocument();
+  });
+
+  it("falls back to the user id in Request Details when no email is resolved", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ user: "106514937785257944828" })} />);
+
+    expect(screen.getByText("User")).toBeInTheDocument();
+    expect(screen.getByText("106514937785257944828")).toBeInTheDocument();
+  });
+
+  it("omits the User row when the log has no internal user", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ user: undefined })} />);
+
+    expect(screen.queryByText("User")).not.toBeInTheDocument();
+  });
+
   it("should display error alert when request has failed", () => {
     render(
       <LogDetailContent
@@ -376,6 +399,38 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("192.168.1.1")).toBeInTheDocument();
   });
 
+  it("shows Client OAuth token as the credential when the client's OAuth token was forwarded upstream", () => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({ metadata: { status: "success", used_client_oauth_token: true } })}
+      />,
+    );
+
+    expect(screen.getByText("Credential")).toBeInTheDocument();
+    expect(screen.getByText("Client OAuth token")).toBeInTheDocument();
+    expect(screen.queryByText("Configured key")).not.toBeInTheDocument();
+  });
+
+  it("shows Configured key as the credential when the deployment's own API key was used", () => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({ metadata: { status: "success", used_client_oauth_token: false } })}
+      />,
+    );
+
+    expect(screen.getByText("Credential")).toBeInTheDocument();
+    expect(screen.getByText("Configured key")).toBeInTheDocument();
+    expect(screen.queryByText("Client OAuth token")).not.toBeInTheDocument();
+  });
+
+  it("omits the Credential row for a log written before the credential was recorded", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ metadata: { status: "success" } })} />);
+
+    expect(screen.queryByText("Credential")).not.toBeInTheDocument();
+    expect(screen.queryByText("Client OAuth token")).not.toBeInTheDocument();
+    expect(screen.queryByText("Configured key")).not.toBeInTheDocument();
+  });
+
   it("should display guardrail label when guardrail data exists", () => {
     render(
       <LogDetailContent
@@ -634,5 +689,24 @@ describe("GuardrailJumpLink", () => {
     const pill = screen.getByText(/2 guardrails evaluated/);
     expect(pill).toHaveClass(expectedClass);
     expect(pill).toHaveTextContent(glyph);
+  });
+
+  it.each([
+    [["success", "not_run"], "text-success", "\u2713"],
+    [["guardrail_intervened", "not_run"], "text-destructive", "\u2717"],
+  ])("ignores not_run when styling %j as %s", (statuses, expectedClass, glyph) => {
+    render(<GuardrailJumpLink guardrailEntries={statuses.map((s) => ({ guardrail_status: s }))} />);
+
+    const pill = screen.getByText(/1 guardrail evaluated, 1 not run/);
+    expect(pill).toHaveClass(expectedClass);
+    expect(pill).toHaveTextContent(glyph);
+  });
+
+  it("renders an all not_run request as neutral rather than passed", () => {
+    render(<GuardrailJumpLink guardrailEntries={[{ guardrail_status: "not_run" }]} />);
+
+    const pill = screen.getByText(/0 guardrails evaluated, 1 not run/);
+    expect(pill).toHaveClass("text-muted-foreground");
+    expect(pill).not.toHaveTextContent("\u2713");
   });
 });

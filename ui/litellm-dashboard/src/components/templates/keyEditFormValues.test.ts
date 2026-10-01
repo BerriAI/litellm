@@ -1,7 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { keyEditFormSchema } from "./keyEditFormValues";
+import type { KeyResponse } from "../key_team_helpers/key_list";
+import { keyEditFormSchema, toKeyEditFormValues, toSubmittedValues } from "./keyEditFormValues";
 
 const parse = (values: Record<string, unknown>) => keyEditFormSchema.safeParse(values);
+
+describe("tpd_limit round trip", () => {
+  const keyData = { token: "tok", models: [], rpm_limit: 5, tpd_limit: 250000 } as unknown as KeyResponse;
+
+  it("hydrates the stored daily batch budget into the edit form", () => {
+    expect(toKeyEditFormValues(keyData)).toMatchObject({ rpm_limit: 5, tpd_limit: 250000 });
+  });
+
+  it("submits tpd_limit next to the minute limits", () => {
+    const submitted = toSubmittedValues(toKeyEditFormValues(keyData), { canViewPolicies: true, canViewPrompts: true });
+    expect(submitted).toMatchObject({ rpm_limit: 5, tpd_limit: 250000 });
+  });
+
+  it("submits null when the operator cleared tpd_limit", () => {
+    const submitted = toSubmittedValues(
+      { ...toKeyEditFormValues(keyData), tpd_limit: null },
+      { canViewPolicies: true, canViewPrompts: true },
+    );
+    expect(submitted.tpd_limit).toBeNull();
+  });
+});
 
 describe("keyEditFormSchema", () => {
   it("accepts an empty form", () => {
