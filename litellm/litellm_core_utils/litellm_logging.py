@@ -3285,13 +3285,16 @@ class Logging(LiteLLMLoggingBaseClass):
             if litellm.store_batch_line_items_in_callbacks and (has_explicit_batch_data or should_compute_batch_data):
                 from litellm.batches.batch_line_item_logging import log_batch_line_items
 
+                _line_item_litellm_params: Final = cast(  # cast-ok: shared attribute is an untyped dict
+                    "dict[str, object] | None", self.litellm_params
+                )
                 try:
                     await log_batch_line_items(
                         batch=result,
                         custom_llm_provider=self.custom_llm_provider,
                         parent=self,
                         model_name=self.get_deployment_model_for_cost(),
-                        litellm_params=cast("dict[str, object] | None", self.litellm_params),
+                        litellm_params=_line_item_litellm_params,
                         model_info=self.get_router_deployment_model_info(),
                         result_files=result_files,
                     )
@@ -6440,11 +6443,11 @@ def _extract_response_obj_and_hidden_params(
         response_obj = {}
 
     if original_exception is not None and hidden_params is None:
-        exception_hidden_params: Final = getattr(original_exception, "_hidden_params", None)
+        exception_hidden_params: Final[Mapping[str, object] | None] = getattr(
+            original_exception, "_hidden_params", None
+        )
         if isinstance(exception_hidden_params, dict) and exception_hidden_params:
-            # cast-ok: isinstance(dict) leaves the value type unparameterized
-            # mutable-ok: hidden_params downstream expects a plain dict
-            hidden_params = dict(cast("dict[str, object]", exception_hidden_params))
+            hidden_params = dict(exception_hidden_params)  # mutable-ok: hidden_params downstream expects a plain dict
         elif (response_headers := _get_response_headers(original_exception)) is not None:
             hidden_params = dict(
                 StandardLoggingHiddenParams(

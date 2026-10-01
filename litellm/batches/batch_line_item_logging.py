@@ -108,7 +108,9 @@ async def _release_line_item_claim(claim_cache: DualCache, claim_key: str, token
 
 def _json_fallback(value: object) -> dict[str, object] | str:
     mapping: Final = _as_object_mapping(value)
-    return dict(mapping) if mapping is not None else str(value)
+    if mapping is None:
+        return str(value)
+    return dict(mapping)  # mutable-ok: json.dumps default hook must return a plain dict
 
 
 class _BatchLineFailure(Exception):
