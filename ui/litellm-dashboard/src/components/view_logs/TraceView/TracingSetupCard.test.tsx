@@ -150,6 +150,26 @@ describe("TracingSetupCard", () => {
     expect(copyToClipboard).toHaveBeenLastCalledWith(SECRET);
   });
 
+  it("keeps a generated tracing key when tracing briefly goes unavailable", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.post).mockResolvedValue({ key: SECRET });
+    const props = { accessToken: "sk-admin", onOpenTrace: vi.fn(), canMintTracingKey: true };
+    const { rerender } = renderWithProviders(<TracingSetupCard detail={null} {...props} />);
+
+    await user.click(screen.getByRole("button", { name: "Generate tracing key" }));
+    expect(await screen.findByText("Your tracing key")).toBeVisible();
+
+    rerender(<TracingSetupCard detail="Agent tracing is not enabled" {...props} />);
+    expect(screen.queryByText("Your tracing key")).not.toBeInTheDocument();
+    rerender(<TracingSetupCard detail={null} {...props} />);
+
+    expect(screen.getByText("Your tracing key")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Generate tracing key" })).not.toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "Copy" })[0]);
+    expect(copyToClipboard).toHaveBeenLastCalledWith(SECRET);
+    expect(apiClient.post).toHaveBeenCalledOnce();
+  });
+
   it("sends a test trace, waits for it to land, then opens it", async () => {
     const user = userEvent.setup();
     const summary = { trace_id: "abc", name: "weather_agent" } as Trace["summary"];
