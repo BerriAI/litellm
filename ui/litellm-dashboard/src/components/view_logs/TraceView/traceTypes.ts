@@ -2,6 +2,8 @@ import type { components, paths } from "@/lib/http/schema";
 
 export type Trace = paths["/v1/traces/{trace_id}"]["get"]["responses"][200]["content"]["application/json"];
 export type TracePage = paths["/v1/traces"]["get"]["responses"][200]["content"]["application/json"];
+export type SpanErrorPage =
+  paths["/v1/traces/{trace_id}/spans/{span_id}/error"]["get"]["responses"][200]["content"]["application/json"];
 type ApiSpanDetail =
   paths["/v1/traces/{trace_id}/spans/{span_id}"]["get"]["responses"][200]["content"]["application/json"];
 export type Span = Trace["spans"][number];
