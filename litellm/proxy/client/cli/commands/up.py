@@ -57,10 +57,13 @@ def secure_create(path: Path) -> Iterator[IO[str]]:
     `os.open` closes that window for a brand-new file, but `O_CREAT`'s mode argument is only
     applied on creation: if the file already exists its old, broader permissions carry over
     untouched. `os.fchmod` right after opening -- before a single byte of the new content is
-    written -- covers both cases.
+    written -- covers both cases. The fchmod is POSIX-only: Windows only gained it in 3.13,
+    and there chmod can merely toggle the read-only flag (0o600 keeps the write bit, so it
+    would be a no-op) -- the file is protected by the user profile directory's ACL instead.
     """
     fd: Final = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.fchmod(fd, 0o600)
+    if os.name == "posix":
+        os.fchmod(fd, 0o600)
     f: Final[IO[str]] = os.fdopen(fd, "w")
     try:
         yield f
