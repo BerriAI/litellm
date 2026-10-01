@@ -111,7 +111,15 @@ test.describe("Logs page", () => {
     await dismissFeedbackPopup(page);
     const search = visibleTestId(page, "datatable-search");
     await expect(search).toBeVisible({ timeout: 20_000 });
+    const searched = page.waitForResponse(
+      (response) =>
+        response.url().includes("/spend/logs/ui") &&
+        new URL(response.url()).searchParams.get("search") === callId &&
+        response.status() === 200,
+      { timeout: 20_000 },
+    );
     await search.fill(callId);
+    await searched;
 
     const row = requestLogsRows(page).filter({ hasText: requestId });
     await expect(row, `no logs row for call id ${callId}`).toHaveCount(1, { timeout: 30_000 });

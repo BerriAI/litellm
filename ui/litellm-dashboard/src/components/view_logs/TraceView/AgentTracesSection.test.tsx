@@ -163,17 +163,51 @@ describe("AgentTracesSection", () => {
     expect(failed.length + ok.length).toBe(runs.length);
   });
 
-  it("opens the run in place and goes back to the list", async () => {
+  it("opens a run in a side drawer over the list and swaps runs without closing it", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
     renderSection();
     const rows = await screen.findAllByTestId("agent-trace-row");
 
     fireEvent.click(rows[0]);
-    expect(screen.getByTestId("run-view")).toHaveTextContent(`run ${runs[0].trace_id}`);
-    expect(screen.queryByTestId("runs-table")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByText("back"));
+    const drawer = screen.getByRole("complementary", { name: "Trace details" });
+    expect(within(drawer).getByTestId("run-view")).toHaveTextContent(`run ${runs[0].trace_id}`);
     expect(screen.getByTestId("runs-table")).toBeInTheDocument();
+    expect(rows[0]).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.click(rows[1]);
+    expect(screen.getByRole("complementary", { name: "Trace details" })).toBe(drawer);
+    expect(within(drawer).getByTestId("run-view")).toHaveTextContent(`run ${runs[1].trace_id}`);
+    expect(rows[1]).toHaveAttribute("aria-selected", "true");
+    expect(rows[0]).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("closes the drawer when the open row is clicked again or Escape is pressed", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
+    renderSection();
+    const rows = await screen.findAllByTestId("agent-trace-row");
+
+    fireEvent.click(rows[0]);
+    fireEvent.click(rows[0]);
+    expect(rows[0]).toHaveAttribute("aria-selected", "false");
+
+    fireEvent.click(rows[1]);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(rows[1]).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("moves to the next and previous run with j / k and the header arrows", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
+    renderSection();
+    const rows = await screen.findAllByTestId("agent-trace-row");
+
+    fireEvent.click(rows[0]);
+    fireEvent.keyDown(window, { key: "j" });
+    expect(screen.getByTestId("run-view")).toHaveTextContent(`run ${runs[1].trace_id}`);
+    fireEvent.keyDown(window, { key: "k" });
+    expect(screen.getByTestId("run-view")).toHaveTextContent(`run ${runs[0].trace_id}`);
+    expect(screen.getByRole("button", { name: "Previous trace (K)" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Next trace (J)" }));
+    expect(screen.getByTestId("run-view")).toHaveTextContent(`run ${runs[1].trace_id}`);
   });
 
   it("plots every loaded run on the timeline", async () => {
