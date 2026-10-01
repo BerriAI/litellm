@@ -9,7 +9,7 @@ import { apiClient, proxyBaseUrl } from "@/components/networking";
 import type { EngineList, WorkerCreated } from "./engineData";
 
 export const LENS_WORKER_IMAGE =
-  "ghcr.io/berriai/litellm-lens-worker@sha256:47445afedfb6de2ae37a3a246ea1c939196bfd365436a880ab96ecf5f42b2342";
+  "ghcr.io/berriai/litellm-lens-worker@sha256:2b5d54bf21afa5d0252b24696951c18f09be69b0e4af59dd806633292a19fd50";
 
 function initialProxyAddress(): string {
   const url = new URL(proxyBaseUrl || serverRootPath, window.location.origin);
