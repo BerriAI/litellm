@@ -38417,6 +38417,11 @@ export interface components {
              */
             persist_session?: boolean | null;
             /**
+             * Pii
+             * @description Whether to run MLS's PII detection head. Defaults to True.
+             */
+            pii?: boolean | null;
+            /**
              * Pii Check
              * @description Enable PII (Personally Identifiable Information) detection.
              */
@@ -38434,6 +38439,11 @@ export interface components {
             pii_entities_config?: {
                 [key: string]: components["schemas"]["PiiAction"];
             } | null;
+            /**
+             * Pii Mask
+             * @description What to do with detected PII. True (default) rewrites each span as its type in brackets, e.g. "My name is Alex" -> "My name is [name]", and lets the request through. False blocks the request instead.
+             */
+            pii_mask?: boolean | null;
             /**
              * Policy Id
              * @description Policy ID for Zscaler AI Guard. Can also be set via ZSCALER_AI_GUARD_POLICY_ID environment variable

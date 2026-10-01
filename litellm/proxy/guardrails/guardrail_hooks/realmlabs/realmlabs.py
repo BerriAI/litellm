@@ -1,4 +1,4 @@
-"""RealmLabs MLS request hazard guardrail."""
+"""RealmLabs MLS request guardrail with hazard screening and PII protection."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # helper is untyped in http_handler
     httpxSpecialProvider,
 )
+from litellm.proxy.guardrails.guardrail_hooks.realmlabs.pii_masking import mask_pii_in_text
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.realmlabs import (
@@ -27,6 +28,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.realmlabs import (
     RealmLabsGuardrailConfigModel,
     RealmLabsGuardrailRequest,
     RealmLabsGuardrailResponse,
+    RealmLabsPIISpan,
 )
 
 if TYPE_CHECKING:
@@ -56,7 +58,7 @@ class _InvalidResponse:
 
 
 class RealmLabsGuardrail(CustomGuardrail):
-    """Blocks hazardous prompts using the RealmLabs MLS endpoint."""
+    """Blocks hazardous prompts and masks PII using the RealmLabs MLS endpoint."""
 
     def __init__(
         self,
@@ -64,6 +66,8 @@ class RealmLabsGuardrail(CustomGuardrail):
         api_base: str | None = None,
         probes: Sequence[str] | str | None = None,
         hazard_threshold: float | None = None,
+        pii: bool | None = None,
+        pii_mask: bool | None = None,
         block_on_error: bool | None = None,
         enable_thinking: bool | None = None,
         timeout: float | None = None,
@@ -84,6 +88,8 @@ class RealmLabsGuardrail(CustomGuardrail):
         self.api_base = (api_base or get_secret_str("REALMLABS_API_BASE") or _DEFAULT_API_BASE).rstrip("/")
         self.probes: Sequence[str] | str = (_HAZARD_PROBE,) if probes is None else probes
         self.hazard_threshold = _DEFAULT_HAZARD_THRESHOLD if hazard_threshold is None else hazard_threshold
+        self.pii = True if pii is None else pii
+        self.pii_mask = True if pii_mask is None else pii_mask
         self.block_on_error = False if block_on_error is None else block_on_error
         self.enable_thinking = False if enable_thinking is None else enable_thinking
         self.timeout = _DEFAULT_TIMEOUT if timeout is None else timeout
@@ -115,11 +121,18 @@ class RealmLabsGuardrail(CustomGuardrail):
                 return None if result.get("role_mismatch") else result["prob"]
         return None
 
+    @staticmethod
+    def _span_types(spans: Sequence[RealmLabsPIISpan]) -> str:
+        """Distinct span types in first-seen order, for block messages and logs; ``"unknown"`` if none."""
+        entity_types: Final = (span.get("type") for span in spans)
+        unique_types: Final = tuple(dict.fromkeys(entity_type for entity_type in entity_types if entity_type))
+        return ", ".join(unique_types) or "unknown"
+
     def _build_request(self, messages: Sequence[Mapping[str, object]]) -> RealmLabsGuardrailRequest:
         return RealmLabsGuardrailRequest(
             messages=messages,
             probes=self.probes,
-            pii=False,
+            pii=self.pii,
             enable_thinking=self.enable_thinking,
         )
 
@@ -129,6 +142,10 @@ class RealmLabsGuardrail(CustomGuardrail):
         except ValidationError as exc:
             return _InvalidResponse(exc.json(include_input=False, include_context=False, include_url=False))
 
+        if any(not span.get("type") for span in result["pii_spans"]):
+            return _InvalidResponse("pii_spans must include a nonempty type")
+        if self.pii_mask and any(not span.get("text") for span in result["pii_spans"]):
+            return _InvalidResponse("pii_spans must include nonempty text when masking is enabled")
         return result
 
     async def _call_mls(
@@ -136,10 +153,11 @@ class RealmLabsGuardrail(CustomGuardrail):
     ) -> RealmLabsGuardrailResponse | _InvalidResponse:
         endpoint: Final = f"{self.api_base}{_GUARDRAIL_ENDPOINT}"
         verbose_proxy_logger.debug(
-            "RealmLabs MLS: %s msgs=%d probes=%s",
+            "RealmLabs MLS: %s msgs=%d probes=%s pii=%s",
             endpoint,
             len(messages),
             self.probes,
+            self.pii,
         )
         response: Final[HttpxResponse] = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.post is untyped
             url=endpoint,
@@ -170,7 +188,7 @@ class RealmLabsGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
-        """Screen requests for hazardous content through LiteLLM's unified guardrail layer."""
+        """Screen requests for hazardous content and PII through LiteLLM's unified guardrail layer."""
         if input_type != "request":
             return inputs
         texts: Final = tuple(inputs.get("texts") or ())
@@ -188,6 +206,7 @@ class RealmLabsGuardrail(CustomGuardrail):
         if isinstance(result, _InvalidResponse):
             return self._handle_mls_error(inputs, f"Invalid RealmLabs guardrail response: {result.reason}")
 
+        # Hazard is checked before PII, so a hazardous prompt is rejected rather than masked and forwarded.
         hazard_score: Final = self._hazard_score(result)
         if hazard_score is not None and hazard_score > self.hazard_threshold:
             verbose_proxy_logger.warning(
@@ -205,4 +224,19 @@ class RealmLabsGuardrail(CustomGuardrail):
                 blocked_content=True,
             )
 
-        return inputs
+        spans: Final = result["pii_spans"]
+        if not spans:
+            return inputs
+
+        if not self.pii_mask:
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                message=f"Blocked by RealmLabs: PII detected in the {input_type} ({self._span_types(spans)})",
+                blocked_content=True,
+            )
+
+        masked_texts: Final = tuple(mask_pii_in_text(text, spans) for text in texts)
+        if masked_texts == texts:
+            return inputs
+        verbose_proxy_logger.debug("RealmLabs MLS masked PII types in the %s: %s", input_type, self._span_types(spans))
+        return {**inputs, "texts": list(masked_texts)}

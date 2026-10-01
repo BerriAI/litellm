@@ -34,11 +34,25 @@ class RealmLabsProbeResult(TypedDict, total=False):
     role_mismatch: ReadOnly[Annotated[bool, Field(strict=True)] | None]
 
 
+class RealmLabsPIISpan(TypedDict, total=False):
+    """One detected PII span.
+
+    ``start``/``end`` index MLS's rendering of the whole conversation, not a single message, so they are not
+    used for masking; ``text`` is matched within each message instead.
+    """
+
+    type: ReadOnly[Annotated[str, Field(strict=True, min_length=1)]]
+    text: ReadOnly[str | None]
+    start: ReadOnly[int | None]
+    end: ReadOnly[int | None]
+
+
 class RealmLabsGuardrailResponse(TypedDict, total=False):
     """Response body of ``POST {api_base}/guardrail``. MLS is stateless, so it carries no turn id."""
 
     results: ReadOnly[Required[Sequence[RealmLabsProbeResult]]]
     focal_role: ReadOnly[str | None]
+    pii_spans: ReadOnly[Required[Sequence[RealmLabsPIISpan]]]
 
 
 class RealmLabsGuardrailOptionalParams(BaseModel):
@@ -51,6 +65,14 @@ class RealmLabsGuardrailOptionalParams(BaseModel):
     hazard_threshold: float | None = Field(
         default=None,
         description="Block hazard scores strictly above this value. Overrides top-level hazard_threshold when supplied.",
+    )
+    pii: bool | None = Field(
+        default=None,
+        description="Whether to run PII detection. Overrides top-level pii when supplied.",
+    )
+    pii_mask: bool | None = Field(
+        default=None,
+        description="Mask detected PII when true, otherwise block. Overrides top-level pii_mask when supplied.",
     )
     block_on_error: bool | None = Field(
         default=None,
@@ -101,6 +123,18 @@ class RealmLabsGuardrailConfigModel(GuardrailConfigModel[RealmLabsGuardrailOptio
             "value. Defaults to 0.703, the threshold MLS reports for that probe. Note "
             'the probe also responds to instruction-style phrasing such as "repeat this '
             'back verbatim", so raise this if benign traffic is being blocked.'
+        ),
+    )
+    pii: bool | None = Field(
+        default=None,
+        description=("Whether to run MLS's PII detection head. Defaults to True."),
+    )
+    pii_mask: bool | None = Field(
+        default=None,
+        description=(
+            "What to do with detected PII. True (default) rewrites each span as its "
+            'type in brackets, e.g. "My name is Alex" -> "My name is [name]", and '
+            "lets the request through. False blocks the request instead."
         ),
     )
     block_on_error: bool | None = Field(
