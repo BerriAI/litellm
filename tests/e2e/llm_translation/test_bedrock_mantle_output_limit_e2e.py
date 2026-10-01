@@ -70,7 +70,7 @@ def _prompt() -> list[ChatMessage]:
 
 
 def _weather_prompt() -> list[ChatMessage]:
-    return [ChatMessage(role="user", content="What is the weather in Paris? Use the get_weather tool.")]
+    return [ChatMessage(role="user", content="What is the weather in Paris?")]
 
 
 class _StreamToolCallFunction(BaseModel):
@@ -144,6 +144,7 @@ class TestBedrockMantleChatOutputLimit:
                 stream=True,
                 stream_options=ChatStreamOptions(include_usage=True),
                 tools=[WEATHER_TOOL],
+                tool_choice="required",
             ),
         )
         assert result.ok and result.stream_error is None and result.stream_done, (
