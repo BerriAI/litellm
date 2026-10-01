@@ -11,6 +11,7 @@ All /customer management endpoints
 
 #### END-USER/CUSTOMER MANAGEMENT ####
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Final, Protocol, TypeVar, overload
 
@@ -55,6 +56,17 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
 _RowT_co: Final = TypeVar("_RowT_co", covariant=True)
 _STR_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
 _CLEARABLE_LIST_FIELDS: Final = frozenset({"models"})
+
+
+def _should_update_field(field: str, value: object, sent_fields: AbstractSet[str]) -> bool:
+    if value is None:
+        return False
+    if field in sent_fields and (isinstance(value, bool) or field in _CLEARABLE_LIST_FIELDS):
+        return True
+    if isinstance(value, (list, dict)):
+        return bool(value)
+    return value != 0
+
 
 if TYPE_CHECKING:
 
@@ -629,15 +641,10 @@ async def update_end_user(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        # get non default values for key
-        non_default_values: Final = dict[str, object]()
-        for k, v in data_json.items():
-            if v is not None and (
-                (isinstance(v, bool) and k in data.fields_set())
-                or (bool(v) if isinstance(v, (list, dict)) else v != 0)
-                or (k in _CLEARABLE_LIST_FIELDS and k in data.fields_set())
-            ):
-                non_default_values[k] = v
+        sent_fields: Final = data.fields_set()
+        non_default_values: Final[dict[str, object]] = {
+            k: v for k, v in data_json.items() if _should_update_field(k, v, sent_fields)
+        }
 
         ## Get end user table data ##
         end_user_table_data: Final = await _typed_table(EndUserRepository(prisma_client)).find_first(

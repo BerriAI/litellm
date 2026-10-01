@@ -13,7 +13,7 @@ from litellm.proxy._types import (
     ProxyException,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
-from litellm.proxy.management_endpoints.customer_endpoints import router
+from litellm.proxy.management_endpoints.customer_endpoints import _should_update_field, router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -40,6 +40,42 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 app.include_router(router)
 client = TestClient(app)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "sent_fields", "expected"),
+    (
+        ("models", None, frozenset({"models"}), False),
+        ("blocked", False, frozenset({"blocked"}), True),
+        ("blocked", False, frozenset(), False),
+        ("models", [], frozenset({"models"}), True),
+        ("models", [], frozenset(), False),
+        ("metadata", {}, frozenset({"metadata"}), False),
+        ("models", ["m1"], frozenset(), True),
+        ("max_budget", 0, frozenset({"max_budget"}), False),
+        ("max_budget", 5.0, frozenset(), True),
+        ("alias", "a", frozenset(), True),
+    ),
+    ids=(
+        "null-models",
+        "explicit-false",
+        "omitted-false",
+        "clear-models",
+        "omitted-empty-models",
+        "empty-metadata",
+        "nonempty-models",
+        "zero-budget",
+        "nonzero-budget",
+        "alias",
+    ),
+)
+def test_should_update_field(
+    field: str,
+    value: object,
+    sent_fields: frozenset[str],
+    expected: bool,
+) -> None:
+    assert _should_update_field(field, value, sent_fields) is expected
 
 
 @pytest.fixture
