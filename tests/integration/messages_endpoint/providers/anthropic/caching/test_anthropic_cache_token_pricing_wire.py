@@ -143,7 +143,6 @@ def test_fast_mode_multiplies_cache_reads_and_writes_along_with_input_and_output
 
 @pytest.mark.parametrize("stream", _STREAM_IDS)
 def test_fast_mode_cost_breakdown_reports_the_multiplied_cache_costs(gateway: Gateway, stream: bool) -> None:
-    pytest.skip("BUG: fast mode bills 6x cache costs but cost_breakdown.cache_read_cost/cache_creation_cost stay 1x")
     row: Final = _billed_row(
         gateway,
         _FAST_MODE_MODEL,
