@@ -490,7 +490,10 @@ def test_sync_guardrail_from_db_applies_an_edit_to_a_guardrail_loaded_with_an_un
     with patch.object(handler, "reinitialize_guardrail") as reinitialize:
         handler.sync_guardrail_from_db(edited)
 
-    reinitialize.assert_called_once()
+    synced_params = reinitialize.call_args.kwargs["guardrail"]["litellm_params"]
+    assert synced_params["mode"] == "post_call"
+    assert synced_params["default_on"] is False
+    assert synced_params["api_key"] == "litellm_enc::stale"
 
 
 def _db_litellm_params() -> dict:
