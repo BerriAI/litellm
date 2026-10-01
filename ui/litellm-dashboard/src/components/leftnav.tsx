@@ -23,6 +23,7 @@ import {
 } from "@/components/shared/Sidebar";
 import {
   Activity,
+  Aperture,
   BarChart3,
   Calculator,
   Bell,
@@ -69,6 +70,7 @@ import { cn } from "@/lib/cva.config";
 import { rolesWithCapability } from "../utils/capabilities";
 import {
   all_admin_roles,
+  proxyAdminTierRoles,
   internalUserRoles,
   isAdminRole,
   isUserTeamAdminForAnyTeam,
@@ -244,6 +246,17 @@ const menuGroups: MenuGroup[] = [
         ),
       },
       { key: "logs", page: "logs", label: "Logs", icon: <Activity {...ICON} /> },
+      {
+        key: "lens",
+        page: "lens",
+        label: (
+          <span className="flex items-center gap-2">
+            Lens <BetaBadge />
+          </span>
+        ),
+        icon: <Aperture {...ICON} />,
+        roles: proxyAdminTierRoles,
+      },
       {
         key: "guardrails-monitor",
         page: "guardrails-monitor",
