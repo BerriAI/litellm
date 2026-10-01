@@ -2,6 +2,9 @@
 Tests for the agent tracing endpoints (litellm/proxy/tracing_endpoints.py).
 """
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,58 +12,79 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from litellm.proxy import tracing_endpoints
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
+from litellm.rust_bridge.traces import ClickHouseStorage
 from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
-from litellm.tracing.store import ClickHouseTraceStore
+from litellm.tracing.store import TraceStore
+from litellm.tracing.types import TraceScope
 
 TEAM_KEY = UserAPIKeyAuth(
     token="hashed-key", team_id="team-research", org_id="org-1", user_role=LitellmUserRoles.INTERNAL_USER
 )
 
 
-# ---------------------------------------------------------------- scope / tenant
+@pytest.mark.parametrize(
+    ("auth", "scope", "can_write"),
+    (
+        pytest.param(
+            UserAPIKeyAuth(token="admin-key", team_id="team-a", user_role=LitellmUserRoles.PROXY_ADMIN),
+            TraceScope(team_ids=(), api_key_hash=""),
+            True,
+            id="admin",
+        ),
+        pytest.param(
+            UserAPIKeyAuth(token="view-key", team_id="team-a", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
+            TraceScope(team_ids=(), api_key_hash=""),
+            False,
+            id="view-only-admin",
+        ),
+        pytest.param(
+            TEAM_KEY,
+            TraceScope(team_ids=("team-research",), api_key_hash=""),
+            True,
+            id="team-key",
+        ),
+        pytest.param(
+            UserAPIKeyAuth(token="hashed-key", user_role=LitellmUserRoles.INTERNAL_USER),
+            TraceScope(team_ids=("",), api_key_hash="hashed-key"),
+            True,
+            id="teamless-key",
+        ),
+    ),
+)
+def test_trace_read_and_write_permissions(
+    client: TestClient, receiver: MagicMock, auth: UserAPIKeyAuth, scope: TraceScope, can_write: bool
+) -> None:
+    client.app.dependency_overrides[user_api_key_auth] = lambda: auth
 
+    read: Final = client.get("/v1/traces?start_ms=1&end_ms=2")
+    assert read.status_code == 200, read.text
+    receiver.list_traces.assert_awaited_once_with(scope=scope, start_ms=1, end_ms=2, cursor=None)
 
-def test_scope_for_admin_sees_everything():
-    for role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
-        auth = UserAPIKeyAuth(token="k", team_id="team-a", user_role=role)
-        assert tracing_endpoints.scope_for(auth) == {"team_ids": (), "api_key_hash": ""}
-
-
-def test_scope_for_team_key_sees_its_team():
-    assert tracing_endpoints.scope_for(TEAM_KEY) == {"team_ids": ("team-research",), "api_key_hash": ""}
-
-
-def test_scope_for_teamless_key_sees_only_its_own_traces():
-    auth = UserAPIKeyAuth(token="hashed-key", user_role=LitellmUserRoles.INTERNAL_USER)
-    assert tracing_endpoints.scope_for(auth) == {"team_ids": ("",), "api_key_hash": "hashed-key"}
-
-
-def test_scope_for_no_team_no_token_is_forbidden():
-    with pytest.raises(HTTPException) as e:
-        tracing_endpoints.scope_for(UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER))
-    assert e.value.status_code == 403
-
-
-def test_tenant_for_comes_from_auth():
-    tenant = tracing_endpoints.tenant_for(TEAM_KEY)
-    assert (tenant.team_id, tenant.api_key_hash, tenant.org_id) == ("team-research", "hashed-key", "org-1")
-    blank = tracing_endpoints.tenant_for(UserAPIKeyAuth())
-    assert (blank.team_id, blank.api_key_hash, blank.org_id) == ("", "", "")
-
-
-# ---------------------------------------------------------------- endpoints
+    write: Final = client.post("/v1/traces", json={})
+    assert write.status_code == (200 if can_write else 403), write.text
+    if not can_write:
+        receiver.ingest.assert_not_awaited()
+        return
+    receiver.ingest.assert_awaited_once()
+    tenant: Final = receiver.ingest.await_args.kwargs["tenant"]
+    assert (tenant.team_id, tenant.api_key_hash, tenant.org_id) == (
+        auth.team_id or "",
+        auth.token or "",
+        auth.org_id or "",
+    )
 
 
 @pytest.fixture
-def receiver(monkeypatch) -> MagicMock:
+def receiver(client) -> MagicMock:
     fake = MagicMock()
     fake.ingest = AsyncMock(return_value=1)
     fake.list_traces = AsyncMock(return_value={"data": [], "next_cursor": None})
     fake.get_trace = AsyncMock(return_value=None)
     fake.get_span = AsyncMock(return_value=None)
-    monkeypatch.setattr(tracing_endpoints, "receiver", fake)
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: fake
     return fake
 
 
@@ -72,8 +96,7 @@ def client() -> TestClient:
     return TestClient(app)
 
 
-def test_501_when_tracing_not_enabled(client, monkeypatch):
-    monkeypatch.setattr(tracing_endpoints, "receiver", None)
+def test_501_when_tracing_not_enabled(client):
     assert client.post("/v1/traces", content=b"").status_code == 501
     assert client.get("/v1/traces").status_code == 501
 
@@ -149,13 +172,13 @@ def test_get_span_404_and_200(client, receiver):
     receiver.get_span.assert_awaited_with("t1", "s1", {"team_ids": ("team-research",), "api_key_hash": ""}, "")
 
 
-def test_get_span_serves_ui_content_from_stored_payloads(client, monkeypatch):
+def test_get_span_serves_ui_content_from_stored_payloads(client):
     storage = MagicMock()
     stored_output = '{"role": "ai", "content": "", "tool_calls": [{"name": "lookup", "args": {"id": 7}}]}'
     storage.query = AsyncMock(
         return_value=[{"span_id": "s1", "input": '{"city": "Paris"}', "output": stored_output, "attributes": {}}]
     )
-    monkeypatch.setattr(tracing_endpoints, "receiver", TraceReceiver(ClickHouseTraceStore(storage)))
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
     body = client.get("/v1/traces/t1/spans/s1").json()
     assert body["output"] == stored_output
     assert body["input_ui"] == {"kind": "fields", "fields": [{"key": "city", "value": "Paris"}]}
@@ -197,3 +220,259 @@ def test_view_only_admin_cannot_ingest_traces(client, receiver):
     response = client.post("/v1/traces", content=b"{}")
     assert response.status_code == 403
     receiver.ingest.assert_not_called()
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_auth_failure_precedes_disabled_receiver(client: TestClient, status_code: int) -> None:
+    def unavailable() -> None:
+        return None
+
+    def authenticate() -> UserAPIKeyAuth:
+        if status_code == 401:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+
+    client.app.dependency_overrides[user_api_key_auth] = authenticate
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = unavailable
+    response: Final = client.post("/v1/traces", content=b"{}")
+    assert response.status_code == status_code
+    assert response.json() == {
+        "detail": "Invalid API key" if status_code == 401 else "Not allowed to ingest agent traces"
+    }
+
+
+def test_disabled_receiver_precedes_read_scope_rejection(client: TestClient) -> None:
+    client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    response: Final = client.get("/v1/traces")
+    assert response.status_code == 501
+    assert response.json() == {
+        "detail": "Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL."
+    }
+
+
+@pytest.mark.requires_rust_extension
+def test_injected_receiver_persists_authenticated_tenant(client: TestClient) -> None:
+    storage: Final = MagicMock(spec=ClickHouseStorage)
+    storage.insert_rows = AsyncMock()
+    tracing: Final = TraceReceiver(TraceStore(storage))
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
+    response: Final = client.post(
+        "/v1/traces",
+        json={
+            "resourceSpans": [
+                {
+                    "resource": {
+                        "attributes": [
+                            {"key": "litellm.team_id", "value": {"stringValue": "spoofed-team"}},
+                            {"key": "litellm.api_key_hash", "value": {"stringValue": "spoofed-key"}},
+                            {"key": "litellm.org_id", "value": {"stringValue": "spoofed-org"}},
+                        ]
+                    },
+                    "scopeSpans": [
+                        {
+                            "spans": [
+                                {
+                                    "traceId": "01" * 16,
+                                    "spanId": "02" * 8,
+                                    "name": "dependency-injection",
+                                    "startTimeUnixNano": "1000000000",
+                                    "endTimeUnixNano": "1000000001",
+                                }
+                            ]
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {}
+    storage.insert_rows.assert_awaited_once()
+    table, rows = storage.insert_rows.await_args.args
+    assert table == "otel_traces"
+    assert len(rows) == 1
+    assert rows[0]["TeamId"] == TEAM_KEY.team_id
+    assert rows[0]["ApiKeyHash"] == TEAM_KEY.token
+    assert rows[0]["ResourceAttributes"] == {
+        "litellm.team_id": TEAM_KEY.team_id,
+        "litellm.api_key_hash": TEAM_KEY.token,
+        "litellm.org_id": TEAM_KEY.org_id,
+    }
+
+
+def test_lifespan_receivers_are_app_local() -> None:
+    first_storage: Final = MagicMock(spec=ClickHouseStorage)
+    first_storage.query = AsyncMock(
+        return_value=[
+            {
+                "span_id": "first-span",
+                "input": "first-input",
+                "output": "",
+                "attributes": {},
+            }
+        ]
+    )
+    second_storage: Final = MagicMock(spec=ClickHouseStorage)
+    second_storage.query = AsyncMock(
+        return_value=[
+            {
+                "span_id": "second-span",
+                "input": "second-input",
+                "output": "",
+                "attributes": {},
+            }
+        ]
+    )
+    first_receiver: Final = TraceReceiver(TraceStore(first_storage))
+    second_receiver: Final = TraceReceiver(TraceStore(second_storage))
+    first_storage.ensure_schema = AsyncMock()
+    second_storage.ensure_schema = AsyncMock()
+
+    @asynccontextmanager
+    async def first_lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
+        async with manage_tracing(True, lambda: first_receiver) as receiver:
+            state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
+            yield state
+
+    @asynccontextmanager
+    async def second_lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
+        async with manage_tracing(True, lambda: second_receiver) as receiver:
+            state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
+            yield state
+
+    first_app: Final = FastAPI(lifespan=first_lifespan)
+    second_app: Final = FastAPI(lifespan=second_lifespan)
+    first_app.include_router(tracing_endpoints.router)
+    second_app.include_router(tracing_endpoints.router)
+    first_app.dependency_overrides[user_api_key_auth] = lambda: TEAM_KEY
+    second_app.dependency_overrides[user_api_key_auth] = lambda: TEAM_KEY
+
+    with TestClient(first_app) as first_client:
+        with TestClient(second_app) as second_client:
+            second_response: Final = second_client.get("/v1/traces/t1/spans/second-span?trace_ref=second-run")
+            simultaneous: Final = first_client.get("/v1/traces/t1/spans/first-span?trace_ref=first-run")
+        first_response: Final = first_client.get("/v1/traces/t1/spans/first-span?trace_ref=first-run")
+        assert simultaneous.json() == first_response.json()
+    first_storage.ensure_schema.assert_awaited_once()
+    second_storage.ensure_schema.assert_awaited_once()
+
+    assert first_response.status_code == second_response.status_code == 200
+    assert first_response.json() == {
+        "span_id": "first-span",
+        "input": "first-input",
+        "output": "",
+        "attributes": {},
+        "input_ui": {"kind": "text", "text": "first-input"},
+        "output_ui": {"kind": "text", "text": ""},
+    }
+    assert second_response.json() == {
+        "span_id": "second-span",
+        "input": "second-input",
+        "output": "",
+        "attributes": {},
+        "input_ui": {"kind": "text", "text": "second-input"},
+        "output_ui": {"kind": "text", "text": ""},
+    }
+    assert first_storage.query.await_count == 2
+    first_storage.query.assert_awaited_with(
+        "span_detail",
+        {
+            "team_ids": (TEAM_KEY.team_id,),
+            "api_key_hash": "",
+            "trace_id": "t1",
+            "span_id": "first-span",
+            "trace_ref": "first-run",
+        },
+    )
+    second_storage.query.assert_awaited_once_with(
+        "span_detail",
+        {
+            "team_ids": (TEAM_KEY.team_id,),
+            "api_key_hash": "",
+            "trace_id": "t1",
+            "span_id": "second-span",
+            "trace_ref": "second-run",
+        },
+    )
+
+
+@pytest.mark.parametrize("auth", [TEAM_KEY, UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)])
+def test_query_validation_precedes_trace_access_checks(client: TestClient, auth: UserAPIKeyAuth) -> None:
+    client.app.dependency_overrides[user_api_key_auth] = lambda: auth
+    response: Final = client.get("/v1/traces", params={"start_ms": "invalid"})
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["query", "start_ms"]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_unavailable_lifespan_receiver_returns_501(enabled: bool) -> None:
+    storage: Final = MagicMock(spec=ClickHouseStorage)
+    storage.ensure_schema = AsyncMock(side_effect=RuntimeError("storage unavailable"))
+    tracing: Final = TraceReceiver(TraceStore(storage))
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
+        async with manage_tracing(enabled, lambda: tracing) as receiver:
+            state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
+            yield state
+
+    app: Final = FastAPI(lifespan=lifespan)
+    app.include_router(tracing_endpoints.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: TEAM_KEY
+    with TestClient(app) as client:
+        response: Final = client.get("/v1/traces")
+    assert response.status_code == 501
+    assert storage.ensure_schema.await_count == int(enabled)
+    storage.query.assert_not_called()
+
+
+def test_lens_reads_from_the_lifespan_storage() -> None:
+    from litellm.proxy.lens.endpoints import router as lens_router
+
+    storage: Final = MagicMock(spec=ClickHouseStorage)
+    storage.ensure_schema = AsyncMock()
+    storage.lens_sample = AsyncMock(return_value=[])
+    tracing: Final = TraceReceiver(TraceStore(storage))
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
+        async with manage_tracing(True, lambda: tracing) as receiver:
+            state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
+            yield state
+
+    app: Final = FastAPI(lifespan=lifespan)
+    app.include_router(lens_router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    with TestClient(app) as client:
+        response: Final = client.post(
+            "/lens/preview/sample",
+            json={"settings": {"name": "Review", "model": "analysis", "context": "Find failed executions"}},
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["executions"] == []
+    storage.lens_sample.assert_awaited_once()
+    assert storage.lens_sample.await_args.args[0]["all_teams"] == 1
+
+
+def test_lens_reads_from_injected_storage_without_receiver() -> None:
+    from litellm.proxy.lens.endpoints import router as lens_router
+    from litellm.proxy.lens.sources import Storage
+
+    storage: Final = MagicMock(spec=Storage)
+    storage.lens_sample = AsyncMock(return_value=[])
+    app: Final = FastAPI()
+    app.include_router(lens_router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    app.dependency_overrides[provide_storage] = lambda: storage
+
+    with TestClient(app) as client:
+        response: Final = client.post(
+            "/lens/preview/sample",
+            json={"settings": {"name": "Review", "model": "analysis", "context": "Find failed executions"}},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["executions"] == []
+    storage.lens_sample.assert_awaited_once()

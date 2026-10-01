@@ -1,6 +1,5 @@
-use std::{collections::BTreeMap, io::Write, time::Duration};
+use std::collections::BTreeMap;
 
-use flate2::{Compression, write::GzEncoder};
 use litellm_http::Client;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -9,7 +8,6 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use crate::{Connection, Error};
 
 const MAX_INSERT_BYTES: usize = 64 * 1024 * 1024;
-const INSERT_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub enum InsertTable {
     OtelTraces,
@@ -61,55 +59,15 @@ pub async fn insert_rows(
         })
         .collect();
     let encoded = encode_rows_with_limit(rows, MAX_INSERT_BYTES)?;
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder
-        .write_all(encoded.as_bytes())
-        .map_err(|_| Error::InvalidRow)?;
-    let body = encoder.finish().map_err(|_| Error::InvalidRow)?;
-    let mut url = connection.url().clone();
-    let existing_pairs: Vec<(String, String)> = url
-        .query_pairs()
-        .filter(|(key, _)| {
-            !matches!(
-                key.as_ref(),
-                "query"
-                    | "async_insert"
-                    | "async_insert_deduplicate"
-                    | "wait_for_async_insert"
-                    | "input_format_skip_unknown_fields"
-                    | "date_time_input_format"
-            )
-        })
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect();
-    url.query_pairs_mut()
-        .clear()
-        .extend_pairs(existing_pairs)
-        .append_pair(
-            "query",
-            &format!(
-                "INSERT INTO `{database}`.{} FORMAT JSONEachRow",
-                table.name()
-            ),
-        )
-        .append_pair("insert_deduplication_token", &token)
-        .append_pair("async_insert", "1")
-        .append_pair("async_insert_deduplicate", "1")
-        .append_pair("wait_for_async_insert", "1")
-        .append_pair("input_format_skip_unknown_fields", "0")
-        .append_pair("date_time_input_format", "best_effort");
-    let response = client
-        .post(url)
-        .timeout(INSERT_TIMEOUT)
-        .header("Content-Encoding", "gzip")
-        .body(body)
-        .send()
-        .await
-        .map_err(|_| Error::Transport)?;
-    if !response.status().is_success() {
-        return Err(Error::InsertFailed(response.status().as_u16()));
-    }
-    Ok(())
+    litellm_storage_clickhouse::insert_encoded_rows(
+        client,
+        connection,
+        database,
+        table.name(),
+        &token,
+        &encoded,
+    )
+    .await
 }
 
 pub fn encode_rows(rows: Vec<BTreeMap<String, Value>>) -> Result<String, Error> {
