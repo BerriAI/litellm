@@ -170,6 +170,101 @@ def test_each_application_binding_records_its_history_atomically() -> None:
     assert replacement["retired_identities"]["create"]["client_id"] == HUMAN
 
 
+def test_native_agent_user_uses_proven_subject_without_optional_facets() -> None:
+    from litellm.types.proxy.agent_identity import VerifiedAgentSubject
+
+    subject: Final = VerifiedAgentSubject(
+        issuer=ISSUER,
+        tenant_id=TENANT,
+        oid=HUMAN,
+        agent_id=BINDING.agent_id,
+        parent_client_id=CLIENT,
+        scim_resource_id="scim-subject",
+    )
+    result: Final = classify_agent_subject(
+        BINDING,
+        claims(oid=HUMAN, scp="user_impersonation"),
+        "autonomous",
+        native_subject=subject,
+    )
+    assert result == AgentSubject(kind="agent_user", oid=HUMAN, mode="autonomous")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"oid": PRINCIPAL},
+        {"azp": HUMAN},
+        {"tid": HUMAN},
+        {"scp": "unrelated"},
+        {"scp": None},
+        {"idtyp": "app"},
+    ],
+)
+def test_native_subject_binding_rejects_other_subjects_parents_and_scopes(overrides: dict[str, object]) -> None:
+    from litellm.types.proxy.agent_identity import VerifiedAgentSubject
+
+    subject: Final = VerifiedAgentSubject(
+        issuer=ISSUER,
+        tenant_id=TENANT,
+        oid=HUMAN,
+        agent_id=BINDING.agent_id,
+        parent_client_id=CLIENT,
+        scim_resource_id="scim-subject",
+    )
+    result: Final = classify_agent_subject(
+        BINDING,
+        claims(**{"oid": HUMAN, "scp": "user_impersonation", **overrides}),
+        "both",
+        native_subject=subject,
+    )
+    assert isinstance(result, AgentIdentityFailure)
+
+
+@pytest.mark.parametrize("change", [None, {"client_id": HUMAN}, {"provisioning_source_id": "another-source"}])
+def test_directory_owned_identity_cannot_be_unbound_or_reassigned(change: dict[str, str] | None) -> None:
+    native_binding: Final = BINDING.model_copy(update={"provisioning_source_id": "source"})
+    existing: Final = AgentResponse(
+        agent_id="agent-one",
+        agent_name="Native",
+        agent_card_params={},
+        identity=native_binding,
+        identity_managed=True,
+        execution_mode="autonomous",
+    )
+    identity: Final = (
+        None
+        if change is None
+        else {
+            "provider": "microsoft_entra",
+            "tenant_id": TENANT,
+            "client_id": CLIENT,
+            "provisioning_source_id": "source",
+            **change,
+        }
+    )
+    result: Final = managed_write_fields({"identity": identity}, existing, "admin")
+    assert isinstance(result, AgentIdentityFailure)
+    assert "directory-owned" in result.message
+
+
+def test_manual_registration_cannot_claim_directory_ownership() -> None:
+    result: Final = managed_write_fields(
+        {
+            "identity": {
+                "provider": "microsoft_entra",
+                "tenant_id": TENANT,
+                "client_id": CLIENT,
+                "provisioning_source_id": "source",
+            }
+        },
+        None,
+        "admin",
+    )
+    assert isinstance(result, AgentIdentityFailure)
+    assert "Only SCIM" in result.message
+
+
 def test_unchanged_binding_preserves_revision_and_authentication_evidence() -> None:
     configuration: Final = BINDING.model_dump(
         exclude={"agent_id", "issuer", "revision", "last_authenticated_at", "active"}
@@ -205,6 +300,15 @@ def test_explicit_empty_scope_requirements_can_be_registered_and_preserved(mode:
     updated: Final = managed_write_fields({"execution_mode": mode}, agent, "admin")
     assert not isinstance(updated, AgentIdentityFailure)
     assert updated["execution_mode"] == mode
+
+@pytest.mark.parametrize("mode", ["delegated", "both"])
+def test_native_directory_identity_cannot_switch_to_delegated_execution(mode: str) -> None:
+    agent: Final = managed_agent().model_copy(
+        update={"identity": BINDING.model_copy(update={"provisioning_source_id": "source"})}
+    )
+    result: Final = managed_write_fields({"execution_mode": mode}, agent, "admin")
+    assert isinstance(result, AgentIdentityFailure)
+    assert "autonomous mode" in result.message
 
 
 @pytest.mark.parametrize(
@@ -354,3 +458,10 @@ def test_recreated_or_converted_lifetime_budget_gets_a_fresh_allowance(previous_
     assert "spend" not in result
     assert "create" in result["litellm_budget_table"]
     assert "update" not in result["litellm_budget_table"]
+
+
+def test_directory_binding_cannot_fall_back_to_an_application_token() -> None:
+    binding: Final = BINDING.model_copy(update={"provisioning_source_id": "source"})
+    result: Final = classify_agent_subject(binding, claims(), "autonomous")
+    assert isinstance(result, AgentIdentityFailure)
+    assert "verified provisioned agent-user" in result.message

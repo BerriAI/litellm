@@ -142,6 +142,7 @@ from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
     DeletedVerificationTokenRepository,
     DeprecatedVerificationTokenRepository,
+    SCIMSourceRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
@@ -2433,14 +2434,25 @@ async def _update_key_row_with_soft_budget(
 ) -> _KeyUpdateResult:
     hashed_token: Final = _hash_token_if_needed(key)
     key_where: Final[_KeyRowWhere] = {"token": hashed_token}
-    tx: _KeyUpdateTx
     async with prisma_client.tx() as tx:
-        update_values: Final = await _apply_soft_budget_update(
-            data=data,
-            non_default_values=non_default_values,
-            db=tx,
+        if "allowed_routes" in data.model_fields_set:
+            await _lock_and_validate_source_key_change(tx, hashed_token, data.allowed_routes)
+        permission_values: Final = await _handle_update_object_permission(
+            data_json=dict(non_default_values),
             existing_key_row=existing_key_row,
-            changed_by=changed_by,
+            prisma_client=prisma_client,
+            tx=tx,
+        )
+        update_values: Final = (
+            await _apply_soft_budget_update(
+                data=data,
+                non_default_values=permission_values,
+                db=tx,
+                existing_key_row=existing_key_row,
+                changed_by=changed_by,
+            )
+            if "soft_budget" in data.model_fields_set
+            else permission_values
         )
         include_object_permission: Final[prisma.types.LiteLLM_VerificationTokenInclude] = {"object_permission": True}
         updated_row: Final = await tx.litellm_verificationtoken.update(
@@ -2567,6 +2579,8 @@ async def _handle_update_object_permission(
     data_json: dict,
     existing_key_row: LiteLLM_VerificationToken,
     prisma_client: PrismaClient,
+    *,
+    tx: "Prisma | None" = None,
 ) -> dict:
     """Persist the requested object permission row and swap it for its id, only after the key policy allowed the write."""
     if "object_permission" not in data_json:
@@ -2576,6 +2590,7 @@ async def _handle_update_object_permission(
         data_json=data_json,
         existing_object_permission_id=existing_key_row.object_permission_id,
         prisma_client=prisma_client,
+        tx=tx,
     )
 
     # Add the object_permission_id to data_json if one was created/updated
@@ -2743,6 +2758,13 @@ async def _process_single_key_update(
             token=update_key_request.key,
             prisma_client=prisma_client,
         )
+
+    if (
+        "allowed_routes" in update_key_request.model_fields_set
+        and tuple(update_key_request.allowed_routes or ()) != ("/scim/*",)
+        and prisma_client is not None
+    ):
+        await _reject_source_bound_key_change(prisma_client, existing_key_row)
 
     _check_disable_global_guardrails_caller_permission(
         update_key_request.disable_global_guardrails,
@@ -3490,6 +3512,9 @@ async def update_key_fn(
 
         await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=data)
 
+        if "allowed_routes" in data.model_fields_set and tuple(data.allowed_routes or ()) != ("/scim/*",):
+            await _reject_source_bound_key_change(prisma_client, existing_key_row)
+
         # Enforce upperbound key params on update (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
         non_default_values: Final = await prepare_key_update_data(
@@ -3528,10 +3553,15 @@ async def update_key_fn(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        update_values: Final = await _handle_update_object_permission(
-            data_json=non_default_values,
-            existing_key_row=existing_key_row,
-            prisma_client=prisma_client,
+        uses_transaction: Final = bool(data.model_fields_set.intersection(("soft_budget", "allowed_routes")))
+        update_values: Final = (
+            non_default_values
+            if uses_transaction
+            else await _handle_update_object_permission(
+                data_json=non_default_values,
+                existing_key_row=existing_key_row,
+                prisma_client=prisma_client,
+            )
         )
         changed_by: Final = user_api_key_dict.user_id or litellm_proxy_admin_name
         response: Final = (
@@ -3543,7 +3573,7 @@ async def update_key_fn(
                 existing_key_row=existing_key_row,
                 changed_by=changed_by,
             )
-            if "soft_budget" in data.model_fields_set
+            if uses_transaction
             else await prisma_client.update_data(token=key, data=MappingProxyType({**update_values, "token": key}))
         )
 
@@ -5476,6 +5506,7 @@ async def _insert_deprecated_key(
     old_token_hash: str,
     new_token_hash: str,
     grace_period: str | None,
+    tx: "Prisma | None" = None,
 ) -> None:
     """
     Insert old key into deprecated table so it remains valid during grace period.
@@ -5506,7 +5537,12 @@ async def _insert_deprecated_key(
 
     try:
         revoke_at: Final = datetime.now(timezone.utc) + timedelta(seconds=grace_seconds)
-        await _deprecated_verification_token_table(prisma_client).upsert(
+        table: Final = (
+            tx.litellm_deprecatedverificationtoken
+            if tx is not None
+            else _deprecated_verification_token_table(prisma_client)
+        )
+        await table.upsert(
             where={"token": old_token_hash},
             data={
                 "create": {
@@ -5532,6 +5568,36 @@ async def _insert_deprecated_key(
         )
 
 
+async def _lock_and_validate_source_key_change(
+    tx: "Prisma", token: str, allowed_routes: Sequence[str] | None = None
+) -> None:
+    from litellm.proxy.management_endpoints.scim.source_endpoints import lock_provisioning_token
+
+    await lock_provisioning_token(tx, token)
+    key: Final = await tx.litellm_verificationtoken.find_unique(where={"token": token})
+    if key is None:
+        raise HTTPException(409, "The key changed during the request; retry with the current key")
+    if tuple(allowed_routes or ()) == ("/scim/*",):
+        return
+    source: Final = await tx.litellm_scimsource.find_unique(where={"key_hash": token})
+    if source is not None:
+        raise HTTPException(
+            409, "A provisioning source token cannot be regenerated or have its SCIM restriction removed"
+        )
+
+
+async def _reject_source_bound_key_change(prisma_client: PrismaClient, key: LiteLLM_VerificationToken) -> None:
+    if tuple(key.allowed_routes or ()) != ("/scim/*",):
+        return
+    source: Final = await SCIMSourceRepository(prisma_client, use_writer=True).table.find_unique(
+        where={"key_hash": key.token}
+    )
+    if source is not None:
+        raise HTTPException(
+            409, "A provisioning source token cannot be regenerated or have its SCIM restriction removed"
+        )
+
+
 async def _execute_virtual_key_regeneration(
     *,
     prisma_client: PrismaClient,
@@ -5548,6 +5614,8 @@ async def _execute_virtual_key_regeneration(
     """Generate new token, update DB, invalidate cache, and return response."""
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import hash_token
+
+    await _reject_source_bound_key_change(prisma_client, key_in_db)
 
     # Mirror the /key/update ownership rebind guard. See helper docstring.
     _validate_caller_can_change_key_ownership(
@@ -5624,14 +5692,6 @@ async def _execute_virtual_key_regeneration(
             request=data if data is not None else RegenerateKeyRequest(),
         ),
     )
-    update_values: Final = await _handle_update_object_permission(
-        data_json=non_default_values,
-        existing_key_row=key_in_db,
-        prisma_client=prisma_client,
-    )
-    update_data.update(update_values)
-    jsonified_update_data: Final[Mapping[str, object]] = prisma_client.jsonify_object(data=update_data)
-
     # Snapshot before the token update: the FK cascade rewrites mapping rows to the new hash,
     # but their cached jwt_key_mapping entries still point at the old token (LIT-5379).
     jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_token(
@@ -5639,27 +5699,35 @@ async def _execute_virtual_key_regeneration(
         prisma_client=prisma_client,
     )
 
-    await _persist_deleted_verification_tokens(
-        keys=[key_in_db],
-        prisma_client=prisma_client,
-        user_api_key_dict=user_api_key_dict,
-        litellm_changed_by=litellm_changed_by,
-    )
-
-    # If grace period set, insert deprecated key so old key remains valid
-    await _insert_deprecated_key(
-        prisma_client=prisma_client,
-        old_token_hash=hashed_api_key,
-        new_token_hash=new_token_hash,
-        grace_period=data.grace_period if data else None,
-    )
-
-    updated_token: Final[LiteLLM_VerificationToken | None] = await _prisma_table(
-        VerificationTokenRepository(prisma_client)
-    ).update(
-        where={"token": hashed_api_key},
-        data=with_settings_updated_at(jsonified_update_data),
-    )
+    async with prisma_client.tx() as tx:
+        await _lock_and_validate_source_key_change(tx, hashed_api_key)
+        update_values: Final = await _handle_update_object_permission(
+            data_json=non_default_values,
+            existing_key_row=key_in_db,
+            prisma_client=prisma_client,
+            tx=tx,
+        )
+        jsonified_update_data: Final[Mapping[str, object]] = prisma_client.jsonify_object(
+            data={**update_data, **update_values}
+        )
+        await _persist_deleted_verification_tokens(
+            keys=[key_in_db],
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+            tx=tx,
+        )
+        await _insert_deprecated_key(
+            prisma_client=prisma_client,
+            old_token_hash=hashed_api_key,
+            new_token_hash=new_token_hash,
+            grace_period=data.grace_period if data else None,
+            tx=tx,
+        )
+        updated_token: Final = await tx.litellm_verificationtoken.update(
+            where={"token": hashed_api_key},
+            data=with_settings_updated_at(jsonified_update_data),
+        )
     updated_token_dict: Final[dict[str, object]] = dict(updated_token) if updated_token is not None else {}
     updated_token_dict["key"] = new_token
     updated_token_dict["token_id"] = updated_token_dict.pop("token")

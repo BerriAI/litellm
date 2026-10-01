@@ -20,6 +20,22 @@ TENANT: Final = "11111111-1111-4111-8111-111111111111"
 SUBJECT: Final = "22222222-2222-4222-8222-222222222222"
 
 
+@pytest.mark.asyncio
+async def test_source_ownership_collects_scim_and_local_ids_across_query_batches() -> None:
+    from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
+
+    client: Final = MagicMock(spec=PrismaClient)
+    client.writer_db = MagicMock()
+    client.db = MagicMock()
+    local_ids: Final = tuple(f"subject-{index}" for index in range(IN_LIST_CHUNK_SIZE + 1))
+    by_scim_id: Final = SimpleNamespace(id=local_ids[-1], local_id="local-human")
+    by_local_id: Final = SimpleNamespace(id="scim-human", local_id=local_ids[0])
+    client.writer_db.litellm_scimresource.find_many = AsyncMock(side_effect=[[], [by_scim_id], [], [by_local_id]])
+    owned: Final = await scim_v2._source_owned_ids(client, "Users", local_ids)
+    assert owned == frozenset((local_ids[-1], "local-human", "scim-human", local_ids[0]))
+    client.db.litellm_scimresource.find_many.assert_not_called()
+
+
 def human_fixture():
     now: Final = datetime.now(timezone.utc)
     source: Final = LiteLLM_SCIMSource(

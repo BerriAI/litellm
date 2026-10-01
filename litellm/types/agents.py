@@ -351,6 +351,9 @@ class AgentResponse(BaseModel):
     budget_id: str | None = None
     lifetime_budget_spend: float = 0.0
     litellm_budget_table: AgentBudgetState | None = None
+
+    directory_active: bool = True
+    directory_access_group_ids: tuple[str, ...] | None = None
     identity: AgentIdentityBinding | None = None
     identity_managed: bool = False
     enabled: bool = True

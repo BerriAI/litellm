@@ -9,8 +9,9 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
-from itertools import chain
-from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, overload
+from itertools import chain, groupby
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypeVar, overload
 
 from fastapi import (
     APIRouter,
@@ -22,6 +23,7 @@ from fastapi import (
     Request,
     Response,
 )
+from prisma.types import LiteLLM_SCIMResourceWhereInput
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
@@ -72,9 +74,11 @@ from litellm.proxy.utils import (
     _premium_user_check,
     handle_exception_on_proxy,
 )
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE, find_many_in
 from litellm.repositories.table_repositories import (
     InvitationLinkRepository,
     OrganizationMembershipRepository,
+    SCIMResourceRepository,
     TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
@@ -87,6 +91,8 @@ from litellm.types.proxy.management_endpoints.scim_v2 import *
 if TYPE_CHECKING:
     from prisma import Prisma
     from prisma.models import LiteLLM_VerificationToken as PrismaVerificationToken
+
+    from litellm.proxy.management_endpoints.scim.agent_provisioning import AgentProvisioningService
 
 
 class _UserTableClient(Protocol):
@@ -176,6 +182,7 @@ class UserProvisionerHelpers:
         prisma_client: PrismaClient,
         new_user_request: NewUserRequest,
         admin_group: str | None = None,
+        auth: UserAPIKeyAuth | None = None,
     ) -> SCIMUser | None:
         """
         Check if a user with the given email already exists and update them if found.
@@ -212,8 +219,12 @@ class UserProvisionerHelpers:
         if not existing_user:
             return None
 
-        requested_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
+        await _assert_legacy_source_access(auth, "Users", existing_user.user_id)
+        requested_teams: Final = list(
+            dict.fromkeys(team if isinstance(team, str) else team.team_id for team in new_user_request.teams or [])
+        )
         new_teams: Final = requested_teams if requested_teams else list(existing_user.teams or [])
+        await assert_legacy_team_changes_unowned(auth, existing_user.teams or (), new_teams)
 
         if new_user_request.user_id != existing_user.user_id:
             verbose_proxy_logger.info(
@@ -275,6 +286,21 @@ scim_router: Final = APIRouter(
     tags=["✨ SCIM v2 (Enterprise Only)"],
     dependencies=[Depends(_premium_user_check)],
 )
+
+from litellm.proxy.management_endpoints.scim.source_endpoints import router as scim_source_router
+
+scim_router.include_router(scim_source_router)
+
+
+async def _agent_provisioning_service(auth: UserAPIKeyAuth | None) -> "AgentProvisioningService | None":
+    from litellm.proxy.management_endpoints.scim.agent_provisioning import AgentProvisioningService, source_for_auth
+
+    if not isinstance(auth, UserAPIKeyAuth):
+        return None
+    client: Final = await _get_prisma_client_or_raise_exception()
+    source: Final = await source_for_auth(auth, client)
+    return AgentProvisioningService(client, source) if source is not None else None
+
 
 SCIM_MAX_PAGE_SIZE: Final = 100
 
@@ -450,6 +476,219 @@ def _resolve_scim_user_role(
     return default_role
 
 
+async def _source_owned_ids(
+    prisma_client: "PrismaClient | _GroupWriteDatabase", kind: Literal["Users", "Groups"], local_ids: tuple[str, ...]
+) -> frozenset[str]:
+    if not local_ids:
+        return frozenset()
+    table: Final = SCIMResourceRepository(prisma_client, use_writer=True).table
+    source_kind: Final = LiteLLM_SCIMResourceWhereInput(kind=kind)
+    by_scim_id: Final = await find_many_in(table, "id", local_ids, where=source_kind)
+    by_local_id: Final = await find_many_in(table, "local_id", local_ids, where=source_kind)
+    resources: Final = chain(by_scim_id, by_local_id)
+    return frozenset(filter(None, chain.from_iterable((resource.id, resource.local_id) for resource in resources)))
+
+
+_UNOWNED_USER_PREDICATES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "username": "($1::text IS NULL OR u.user_email = $1 OR u.user_id = $1)",
+        "emails.value": "($1::text IS NULL OR u.user_email = $1)",
+    }
+)
+_UNOWNED_USERS_FROM: Final = """
+FROM "LiteLLM_UserTable" u
+WHERE {predicate}
+  AND NOT EXISTS (SELECT 1 FROM "LiteLLM_SCIMResource" r WHERE r.kind = 'Users' AND r.local_id = u.user_id)
+"""
+_UNOWNED_TEAMS_FROM: Final = """
+FROM "LiteLLM_TeamTable" t
+WHERE ($1::text IS NULL OR t.team_alias = $1)
+  AND NOT EXISTS (SELECT 1 FROM "LiteLLM_SCIMResource" r WHERE r.kind = 'Groups' AND r.local_id = t.team_id)
+"""
+
+
+class _LocalIdRow(BaseModel):
+    local_id: str
+
+
+class _CountRow(BaseModel):
+    total: int
+
+
+_LOCAL_ID_ROWS: Final = TypeAdapter(tuple[_LocalIdRow, ...])
+_COUNT_ROWS: Final = TypeAdapter(tuple[_CountRow, ...])
+
+
+@dataclass(frozen=True)
+class _UnownedPage:
+    local_ids: tuple[str, ...]
+    total: int
+
+
+async def _unowned_page(
+    prisma_client: PrismaClient,
+    kind: Literal["Users", "Groups"],
+    filter_value: str | None,
+    start_index: int,
+    page_size: int,
+    *,
+    filter_attribute: str = "username",
+) -> _UnownedPage:
+    body: Final = (
+        _UNOWNED_USERS_FROM.format(predicate=_UNOWNED_USER_PREDICATES[filter_attribute])
+        if kind == "Users"
+        else _UNOWNED_TEAMS_FROM
+    )
+    column: Final = "u.user_id" if kind == "Users" else "t.team_id"
+    created_at: Final = "u.created_at" if kind == "Users" else "t.created_at"
+    page_sql: Final = f"SELECT {column} AS local_id {body} ORDER BY {created_at} DESC LIMIT $2 OFFSET $3"
+    count_sql: Final = f"SELECT COUNT(*)::int AS total {body}"
+    async with prisma_client.tx() as tx:
+        page_rows: Final = await tx.query_raw(page_sql, filter_value, page_size, start_index - 1)
+        count_rows: Final = await tx.query_raw(count_sql, filter_value)
+    local_ids: Final = tuple(row.local_id for row in _LOCAL_ID_ROWS.validate_python(page_rows))
+    totals: Final = _COUNT_ROWS.validate_python(count_rows)
+    return _UnownedPage(local_ids=local_ids, total=totals[0].total if totals else 0)
+
+
+_RowT = TypeVar("_RowT")
+
+
+def _in_page_order(local_ids: Sequence[str], rows: Iterable[_RowT], key: Callable[[_RowT], str]) -> tuple[_RowT, ...]:
+    by_id: Final = {key(row): row for row in rows}
+    return tuple(by_id[local_id] for local_id in local_ids if local_id in by_id)
+
+
+async def _assert_legacy_source_access(
+    auth: UserAPIKeyAuth | None, kind: Literal["Users", "Groups"], local_id: str
+) -> None:
+    if auth is None:
+        return
+    client: Final = await _get_prisma_client_or_raise_exception()
+    if await _source_owned_ids(client, kind, (local_id,)):
+        raise HTTPException(403, "This record is owned by a different provisioning source")
+
+
+async def assert_legacy_team_changes_unowned(
+    auth: UserAPIKeyAuth | None, current: Sequence[str], proposed: Sequence[str]
+) -> None:
+    if auth is None:
+        return
+    changed: Final = tuple(frozenset(current) ^ frozenset(proposed))
+    if not changed:
+        return
+    client: Final = await _get_prisma_client_or_raise_exception()
+    if await _source_owned_ids(client, "Groups", changed):
+        raise HTTPException(403, "Team membership is owned by a different provisioning source")
+
+
+_FOLDED_EMAIL_USERS_SQL: Final = """
+SELECT user_id, LOWER(user_email) AS folded_email
+FROM "LiteLLM_UserTable"
+WHERE LOWER(user_email) = ANY($1::text[])
+"""
+
+
+class _FoldedEmailRow(BaseModel):
+    user_id: str
+    folded_email: str
+
+
+_FOLDED_EMAIL_ROWS: Final = TypeAdapter(tuple[_FoldedEmailRow, ...])
+
+
+def _pair_key(pair: tuple[str, str]) -> str:
+    return pair[0]
+
+
+def _pair_user_id(pair: tuple[str, str]) -> str:
+    return pair[1]
+
+
+def _ids_by_key(pairs: Iterable[tuple[str | None, str]]) -> Mapping[str, frozenset[str]]:
+    keyed: Final = sorted(((key, user_id) for key, user_id in pairs if key), key=_pair_key)
+    grouped: Final = groupby(keyed, _pair_key)
+    return MappingProxyType({key: frozenset(map(_pair_user_id, group)) for key, group in grouped})
+
+
+async def _users_by_folded_email(
+    prisma_client: PrismaClient, subjects: tuple[str, ...]
+) -> Mapping[str, frozenset[str]]:
+    """Case-insensitive email match in chunked writer reads; `find_many_in` cannot fold the chunked field."""
+    folded: Final = tuple(dict.fromkeys(subject.lower() for subject in subjects))
+    starts: Final = range(0, len(folded), IN_LIST_CHUNK_SIZE)
+
+    async def _page(start: int) -> tuple[_FoldedEmailRow, ...]:
+        async with prisma_client.tx() as tx:
+            rows: Final = await tx.query_raw(_FOLDED_EMAIL_USERS_SQL, folded[start : start + IN_LIST_CHUNK_SIZE])
+        return _FOLDED_EMAIL_ROWS.validate_python(rows)
+
+    pages: Final = tuple([await _page(start) for start in starts])
+    return _ids_by_key((row.folded_email, row.user_id) for row in chain.from_iterable(pages))
+
+
+async def _accounts_named_by_member_values(
+    values: tuple[str, ...], prisma_client: PrismaClient
+) -> Mapping[str, frozenset[str]]:
+    """``_accounts_named_by_member_value`` for many values in O(chunks) writer reads: exact user id, exact
+    stripped SSO id, case-insensitive stripped email."""
+    users: Final = _table(UserRepository(prisma_client, use_writer=True))
+    subjects: Final = tuple(dict.fromkeys(value.strip() for value in values))
+    by_id: Final = _ids_by_key((row.user_id, row.user_id) for row in await find_many_in(users, "user_id", values))
+    by_sso: Final = _ids_by_key(
+        (row.sso_user_id, row.user_id) for row in await find_many_in(users, "sso_user_id", subjects)
+    )
+    by_email: Final = await _users_by_folded_email(prisma_client, subjects)
+    empty: Final = frozenset[str]()
+    return MappingProxyType(
+        {
+            value: by_id.get(value, empty)
+            | by_sso.get(value.strip(), empty)
+            | by_email.get(value.strip().lower(), empty)
+            for value in values
+        }
+    )
+
+
+async def _assert_legacy_members_unowned(auth: UserAPIKeyAuth | None, members: Sequence[SCIMMember]) -> None:
+    """403 for a legacy (non-source) write naming a source-owned subject by SCIM id, local id, SSO id or email."""
+    if auth is None or not members:
+        return
+    client: Final = await _get_prisma_client_or_raise_exception()
+    values: Final = tuple(dict.fromkeys(_member_value(member) for member in members))
+    owned_directly: Final = await _source_owned_ids(client, "Users", values)
+    direct: Final = next((value for value in values if value in owned_directly), None)
+    if direct is not None:
+        raise _owned_member_error(direct)
+    named: Final = await _accounts_named_by_member_values(values, client)
+    alias_ids: Final = tuple(frozenset(chain.from_iterable(named.values())))
+    owned_by_alias: Final = await _source_owned_ids(client, "Users", alias_ids)
+    aliased: Final = next((value for value, ids in named.items() if not owned_by_alias.isdisjoint(ids)), None)
+    if aliased is not None:
+        raise _owned_member_error(aliased)
+
+
+def _owned_member_error(value: str) -> HTTPException:
+    return HTTPException(
+        403, f"Group member '{value}' is owned by a different provisioning source and cannot be added here"
+    )
+
+
+def _patched_members(op: SCIMPatchOperation) -> tuple[SCIMMember, ...]:
+    """The members named by a ``members`` patch operation, from its value or its path filter."""
+    if op.value is not None:
+        return _parse_member_entries(op.value)
+    return tuple(SCIMMember(value=member_id) for member_id in _extract_ids_from_path_filter(op.path, "members"))
+
+
+def _members_a_patch_admits(patch_ops: SCIMPatchOp) -> tuple[SCIMMember, ...]:
+    """The members an ``add`` or ``replace`` operation on ``members`` would put on the roster."""
+    roster_ops: Final = tuple(
+        op for op in patch_ops.Operations if op.op != "remove" and (op.path or "").lower().startswith("members")
+    )
+    return tuple(chain.from_iterable(_patched_members(op) for op in roster_ops))
+
+
 async def _scim_groups_from_team_ids(
     prisma_client: "PrismaClient | _GroupWriteDatabase", team_ids: list[str]
 ) -> list[SCIMUserGroup]:
@@ -458,6 +697,7 @@ async def _scim_groups_from_team_ids(
     team's alias so admin-group matching by display name works the same way it
     does on PUT (where SCIM groups carry display names natively).
     """
+    source_owned: Final = await _source_owned_ids(prisma_client, "Groups", tuple(team_ids))
     teams: Final = [
         await _table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id}) for team_id in team_ids
     ]
@@ -467,6 +707,7 @@ async def _scim_groups_from_team_ids(
             display=team.team_alias if team is not None else None,
         )
         for team_id, team in zip(team_ids, teams)
+        if team_id not in source_owned
     ]
 
 
@@ -490,7 +731,11 @@ async def write_scim_member_roles(
     if admin_group is None:
         return
     default_role: Final = _default_scim_user_role()
-    for user_id in user_ids:
+    candidates: Final = tuple(user_ids)
+    source_owned: Final = await _source_owned_ids(prisma_client, "Users", candidates)
+    for user_id in candidates:
+        if user_id in source_owned:
+            continue
         user = await _table(UserRepository(prisma_client)).find_unique(where={"user_id": user_id})
         if user is None:
             continue
@@ -1200,6 +1445,9 @@ def _get_resource_types(base_url: str = "/scim/v2") -> Sequence[SCIMResourceType
             name="User",
             description="User Account",
             endpoint="/Users",
+            schemaExtensions=[  # mutable-ok: SCIMResourceType list contract
+                SCIMSchemaExtension(schema_=SCIM_AGENT_USER_SCHEMA, required=False)
+            ],
             schema_="urn:ietf:params:scim:schemas:core:2.0:User",
             meta={
                 "location": f"{base_url}/ResourceTypes/User",
@@ -1425,6 +1673,14 @@ def _get_schemas() -> Sequence[SCIMSchema]:
                 "resourceType": "Schema",
             },
         ),
+        SCIMSchema(
+            id=SCIM_AGENT_USER_SCHEMA,
+            name="LiteLLMAgentUser",
+            description="Entra agent-user identity, enabled through a trusted provisioning source",
+            attributes=[  # mutable-ok: SCIMSchema list contract
+                SCIMSchemaAttribute(name="identityParentId", type="string", required=True, mutability="immutable")
+            ],
+        ),
     ]
 
 
@@ -1600,10 +1856,14 @@ async def get_users(
     startIndex: int = Query(1, ge=1),
     count: int = Query(10, ge=0),
     filter: str | None = Query(None),
+    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Get a list of users according to SCIM v2 protocol
     """
+    service: Final = await _agent_provisioning_service(auth)
+    if service is not None:
+        return await service.list("Users", startIndex, count, filter)
     page_size: Final = min(count, SCIM_MAX_PAGE_SIZE)
     verbose_proxy_logger.debug(
         "SCIM GET USERS request: startIndex=%s count=%s filter=%s",
@@ -1613,33 +1873,7 @@ async def get_users(
     )
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
-        # Parse filter if provided (basic support)
-        where_conditions: Final[dict[str, object]] = {}
-        if filter:
-            # Okta locates users by userName before deprovisioning. LiteLLM
-            # exposes SCIM userName from user_email, while older SCIM-created
-            # users may still have user_id == userName, so support both.
-            parsed_filter: Final = parse_scim_eq_filter(filter)
-            if parsed_filter:
-                filter_attribute, filter_value = parsed_filter
-                if filter_attribute == "username":
-                    where_conditions["OR"] = [
-                        {"user_email": filter_value},
-                        {"user_id": filter_value},
-                    ]
-                elif filter_attribute == "emails.value":
-                    where_conditions["user_email"] = filter_value
-
-        # Get users from database
-        users: Final[Sequence[LiteLLM_UserTable]] = await _table(UserRepository(prisma_client)).find_many(
-            where=where_conditions,
-            skip=(startIndex - 1),
-            take=page_size,
-            order={"created_at": "desc"},
-        )
-
-        # Get total count for pagination
-        total_count: Final = await _table(UserRepository(prisma_client)).count(where=where_conditions)
+        users, total_count = await _legacy_users_page(prisma_client, auth, filter, startIndex, page_size)
 
         # Convert to SCIM format
         scim_users: Final[list[SCIMUser]] = []
@@ -1666,10 +1900,15 @@ async def get_users(
 )
 async def get_user(
     user_id: str = Path(..., title="User ID"),
+    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Get a single user by ID according to SCIM v2 protocol
     """
+    service: Final = await _agent_provisioning_service(auth)
+    if service is not None:
+        return await service.get("Users", user_id)
+    await _assert_legacy_source_access(auth, "Users", user_id)
     verbose_proxy_logger.debug("SCIM GET USER request for user_id=%s", user_id)
     try:
         user: Final = await _check_user_exists(user_id)
@@ -1690,16 +1929,23 @@ async def get_user(
 )
 async def create_user(
     user: SCIMUser = Body(...),
+    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Create a user according to SCIM v2 protocol
     """
+    service: Final = await _agent_provisioning_service(auth)
+    if service is not None:
+        return await service.create_user(user)
+    if user.agent_user is not None:
+        raise HTTPException(400, "Configure an Entra provisioning source before provisioning agent-users")
     try:
         verbose_proxy_logger.debug("SCIM CREATE USER request: %s", user.model_dump())
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
 
         # Extract data from SCIM user
         user_data: Final = _extract_scim_user_data(user)
+        await assert_legacy_team_changes_unowned(auth, (), user_data["teams"] or ())
 
         # Check if user already exists
         if user.userName:
@@ -1739,6 +1985,7 @@ async def create_user(
             prisma_client=prisma_client,
             new_user_request=new_user_request,
             admin_group=admin_group,
+            auth=auth,
         )
 
         if existing_user_scim:
@@ -1830,10 +2077,17 @@ async def finish_provisioned_user_update(user_id: str, tokens: tuple[str, ...]) 
 async def update_user(
     user_id: str = Path(..., title="User ID"),
     user: SCIMUser = Body(...),
+    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Update a user according to SCIM v2 protocol (full replacement)
     """
+    service: Final = await _agent_provisioning_service(auth)
+    if service is not None:
+        return await service.update_user(user_id, user)
+    if user.agent_user is not None:
+        raise HTTPException(400, "Configure an Entra provisioning source before provisioning agent-users")
+    await _assert_legacy_source_access(auth, "Users", user_id)
     verbose_proxy_logger.debug(
         "SCIM PUT USER request for user_id=%s: %s",
         user_id,
@@ -1851,6 +2105,7 @@ async def update_user(
         client_set_active: Final = "active" in user.model_fields_set
         metadata: Final = replacement.metadata
         target_teams: Final = replacement.teams
+        await assert_legacy_team_changes_unowned(auth, existing_user.teams or (), target_teams or ())
         await _handle_team_membership_changes(
             user_id=user_id,
             existing_teams=existing_user.teams,
@@ -1964,10 +2219,16 @@ async def write_scim_group_deletion(tx: "Prisma", group_id: str, admin_group: st
 )
 async def delete_user(
     user_id: str = Path(..., title="User ID"),
+    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Delete a user according to SCIM v2 protocol
     """
+    service: Final = await _agent_provisioning_service(auth)
+    if service is not None:
+        await service.delete("Users", user_id)
+        return Response(status_code=204)
+    await _assert_legacy_source_access(auth, "Users", user_id)
     verbose_proxy_logger.debug("SCIM DELETE USER request for user_id=%s", user_id)
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
@@ -1986,7 +2247,9 @@ async def delete_user(
     response_model=tuple[SCIMPlaceholder, ...],
     dependencies=(Depends(user_api_key_auth),),
 )
-async def list_placeholders() -> tuple[SCIMPlaceholder, ...]:
+async def list_placeholders(
+    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
+) -> tuple[SCIMPlaceholder, ...]:
     """
     List user rows whose id is another account's SSO identity or email.
 
@@ -1998,6 +2261,8 @@ async def list_placeholders() -> tuple[SCIMPlaceholder, ...]:
     its own or owns virtual keys is left out: someone uses that account.
     """
     try:
+        if await _agent_provisioning_service(auth) is not None:
+            raise HTTPException(403, "Provisioning source tokens cannot access global placeholder maintenance")
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
         async with prisma_client.tx() as tx:
             return await UserRepository(prisma_client).find_shadowing_placeholders(tx)
@@ -2026,6 +2291,7 @@ def _placeholder_rejection(placeholder: LiteLLM_UserTable, resolved: tuple[str, 
 )
 async def merge_placeholder(
     user_id: str = Path(..., title="User ID"),
+    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ) -> SCIMPlaceholderMergeResult:
     """
     Fold a placeholder user into the one account its id names by SSO identity or email.
@@ -2036,6 +2302,8 @@ async def merge_placeholder(
     has an SSO identity of its own, owns virtual keys, or names no account or several.
     """
     try:
+        if await _agent_provisioning_service(auth) is not None:
+            raise HTTPException(403, "Provisioning source tokens cannot access global placeholder maintenance")
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
         placeholder: Final = await _check_user_exists(user_id)
         resolved: Final = tuple(
@@ -2433,10 +2701,19 @@ async def patch_team_membership(
 async def patch_user(
     user_id: str = Path(..., title="User ID"),
     patch_ops: SCIMPatchOp = Body(...),
+    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Patch a user according to SCIM v2 protocol
     """
+    service: Final = await _agent_provisioning_service(auth)
+    if service is not None:
+        return await service.update_user(user_id, patch_ops)
+    from litellm.proxy.management_endpoints.scim.agent_provisioning import patch_changes_identity
+
+    if patch_changes_identity(patch_ops):
+        raise HTTPException(400, "SCIM PATCH cannot change a subject's identity classification")
+    await _assert_legacy_source_access(auth, "Users", user_id)
     verbose_proxy_logger.debug(
         "SCIM PATCH USER request for user_id=%s: %s",
         user_id,
@@ -2454,6 +2731,8 @@ async def patch_user(
             patch_ops=patch_ops,
         )
 
+        await assert_legacy_team_changes_unowned(auth, existing_user.teams or (), tuple(final_team_set))
+
         patched_metadata: Final = update_data.get("metadata")
         new_active: Final = _scim_active_value(patched_metadata if isinstance(patched_metadata, Mapping) else None)
 
@@ -2467,7 +2746,7 @@ async def patch_user(
         update_data["teams"] = list(final_team_set)
 
         admin_group: Final = await _get_scim_admin_group()
-        if admin_group is not None:
+        if admin_group is not None and not await _source_owned_ids(prisma_client, "Users", (user_id,)):
             update_data["user_role"] = _resolve_scim_user_role(
                 await _scim_groups_from_team_ids(prisma_client, list(final_team_set)),
                 admin_group,
@@ -2499,10 +2778,63 @@ async def patch_user(
         raise handle_exception_on_proxy(e)
 
 
+def _legacy_user_filter(filter: str | None) -> tuple[str, str | None]:
+    # Okta locates users by userName before deprovisioning. LiteLLM
+    # exposes SCIM userName from user_email, while older SCIM-created
+    # users may still have user_id == userName, so support both.
+    parsed_filter: Final = parse_scim_eq_filter(filter) if filter else None
+    if parsed_filter and parsed_filter[0] in _UNOWNED_USER_PREDICATES:
+        return parsed_filter
+    return ("username", None)
+
+
+async def _legacy_users_page(
+    prisma_client: PrismaClient, auth: UserAPIKeyAuth | None, filter: str | None, start_index: int, page_size: int
+) -> tuple[Sequence[LiteLLM_UserTable], int]:
+    filter_attribute, filter_value = _legacy_user_filter(filter)
+    table: Final = _table(UserRepository(prisma_client, use_writer=auth is not None))
+    if auth is not None:
+        page: Final = await _unowned_page(
+            prisma_client, "Users", filter_value, start_index, page_size, filter_attribute=filter_attribute
+        )
+        rows: Final = await find_many_in(table, "user_id", page.local_ids)
+        return _in_page_order(page.local_ids, rows, lambda user: user.user_id), page.total
+    where_conditions: Final[dict[str, object]] = {}
+    if filter_value is not None and filter_attribute == "username":
+        where_conditions["OR"] = [{"user_email": filter_value}, {"user_id": filter_value}]
+    elif filter_value is not None:
+        where_conditions["user_email"] = filter_value
+    users: Final = await table.find_many(
+        where=where_conditions, skip=start_index - 1, take=page_size, order={"created_at": "desc"}
+    )
+    return users, await table.count(where=where_conditions)
+
+
 class _TeamWhereConditions(TypedDict, total=False):
     """The team columns SCIM GET /Groups can filter on, as Prisma where-conditions."""
 
-    team_alias: str
+    team_alias: ReadOnly[str]
+
+
+def _legacy_team_alias(filter: str | None) -> str | None:
+    # Very basic filter support - only handling displayName eq
+    return filter.split("displayName eq ")[1].strip("\"'") if filter and "displayName eq" in filter else None
+
+
+async def _legacy_teams_page(
+    prisma_client: PrismaClient, auth: UserAPIKeyAuth | None, filter: str | None, start_index: int, page_size: int
+) -> tuple[Sequence[LiteLLM_TeamTable], int]:
+    team_alias: Final = _legacy_team_alias(filter)
+    table: Final = _table(TeamRepository(prisma_client, use_writer=auth is not None))
+    if auth is not None:
+        page: Final = await _unowned_page(prisma_client, "Groups", team_alias, start_index, page_size)
+        rows: Final = await find_many_in(table, "team_id", page.local_ids)
+        return _in_page_order(page.local_ids, rows, lambda team: team.team_id), page.total
+    where_conditions: Final[_TeamWhereConditions] = {} if team_alias is None else {"team_alias": team_alias}
+    teams: Final = await table.find_many(
+        where=where_conditions, skip=start_index - 1, take=page_size, order={"created_at": "desc"}
+    )
+    return teams, await table.count(where=where_conditions)
 
 
 # Group Endpoints
@@ -2516,10 +2848,14 @@ async def get_groups(
     startIndex: int = Query(1, ge=1),
     count: int = Query(10, ge=0),
     filter: str | None = Query(None),
+    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Get a list of groups according to SCIM v2 protocol
     """
+    service: Final = await _agent_provisioning_service(auth)
+    if service is not None:
+        return await service.list("Groups", startIndex, count, filter)
     page_size: Final = min(count, SCIM_MAX_PAGE_SIZE)
     verbose_proxy_logger.debug(
         "SCIM GET GROUPS request: startIndex=%s count=%s filter=%s",
@@ -2529,24 +2865,7 @@ async def get_groups(
     )
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
-        # Parse filter if provided (basic support)
-        where_conditions: Final[_TeamWhereConditions] = {}
-        if filter:
-            # Very basic filter support - only handling displayName eq
-            if "displayName eq" in filter:
-                team_alias = filter.split("displayName eq ")[1].strip("\"'")
-                where_conditions["team_alias"] = team_alias
-
-        # Get teams from database
-        teams: Final = await _table(TeamRepository(prisma_client)).find_many(
-            where=where_conditions,
-            skip=(startIndex - 1),
-            take=page_size,
-            order={"created_at": "desc"},
-        )
-
-        # Get total count for pagination
-        total_count: Final = await _table(TeamRepository(prisma_client)).count(where=where_conditions)
+        teams, total_count = await _legacy_teams_page(prisma_client, auth, filter, startIndex, page_size)
 
         # Convert to SCIM format
         scim_groups: Final[list[SCIMGroup]] = []
@@ -2594,10 +2913,15 @@ async def get_groups(
 )
 async def get_group(
     group_id: str = Path(..., title="Group ID"),
+    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Get a single group by ID according to SCIM v2 protocol
     """
+    service: Final = await _agent_provisioning_service(auth)
+    if service is not None:
+        return await service.get("Groups", group_id)
+    await _assert_legacy_source_access(auth, "Groups", group_id)
     verbose_proxy_logger.debug("SCIM GET GROUP request for group_id=%s", group_id)
     try:
         team: Final = await _check_team_exists(group_id)
@@ -2787,10 +3111,14 @@ def _group_replacement_data(existing: LiteLLM_TeamTable, group: SCIMGroup) -> Ma
 )
 async def create_group(
     group: SCIMGroup = Body(...),
+    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Create a group according to SCIM v2 protocol
     """
+    service: Final = await _agent_provisioning_service(auth)
+    if service is not None:
+        return await service.create_group(group)
     verbose_proxy_logger.debug(
         "SCIM CREATE GROUP request: %s",
         group.model_dump(),
@@ -2810,6 +3138,7 @@ async def create_group(
                 detail={"error": f"Group already exists with ID: {team_id}"},
             )
 
+        await _assert_legacy_members_unowned(auth, group.members or ())
         # Extract and validate group members (all users must exist)
         member_result: Final = await _extract_group_member_ids(group)
         members_with_roles = [Member(user_id=member_id, role="user") for member_id in member_result.all_member_ids]
@@ -2842,10 +3171,15 @@ async def create_group(
 async def update_group(
     group_id: str = Path(..., title="Group ID"),
     group: SCIMGroup = Body(...),
+    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Update a group according to SCIM v2 protocol
     """
+    service: Final = await _agent_provisioning_service(auth)
+    if service is not None:
+        return await service.update_group(group_id, group)
+    await _assert_legacy_source_access(auth, "Groups", group_id)
     verbose_proxy_logger.debug(
         "SCIM PUT GROUP request for group_id=%s: %s",
         group_id,
@@ -2854,6 +3188,7 @@ async def update_group(
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
         existing_team: Final = await _check_team_exists(group_id)
+        await _assert_legacy_members_unowned(auth, group.members or ())
 
         # Extract and validate group members (all users must exist)
         member_result: Final = await _extract_group_member_ids(group)
@@ -2904,10 +3239,16 @@ async def update_group(
 )
 async def delete_group(
     group_id: str = Path(..., title="Group ID"),
+    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Delete a group according to SCIM v2 protocol
     """
+    service: Final = await _agent_provisioning_service(auth)
+    if service is not None:
+        await service.delete("Groups", group_id)
+        return Response(status_code=204)
+    await _assert_legacy_source_access(auth, "Groups", group_id)
     verbose_proxy_logger.debug("SCIM DELETE GROUP request for group_id=%s", group_id)
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
@@ -2971,13 +3312,7 @@ async def _process_group_patch_operations(
                 metadata["externalId"] = str(value)
         elif path.startswith("members"):
             # Handle member operations
-            patched_members = (
-                _parse_member_entries(value)
-                if value is not None
-                else tuple(
-                    SCIMMember(value=member_id) for member_id in _extract_ids_from_path_filter(op.path, "members")
-                )
-            )
+            patched_members = _patched_members(op)
 
             if op_type == "remove":
                 final_members = final_members - await _member_ids_to_drop(
@@ -3087,10 +3422,15 @@ async def _handle_group_membership_changes(group_id: str, current_members: set[s
 async def patch_group(
     group_id: str = Path(..., title="Group ID"),
     patch_ops: SCIMPatchOp = Body(...),
+    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ):
     """
     Patch a group according to SCIM v2 protocol
     """
+    service: Final = await _agent_provisioning_service(auth)
+    if service is not None:
+        return await service.update_group(group_id, patch_ops)
+    await _assert_legacy_source_access(auth, "Groups", group_id)
     verbose_proxy_logger.debug(
         "SCIM PATCH GROUP request for group_id=%s: %s",
         group_id,
@@ -3100,6 +3440,7 @@ async def patch_group(
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
         existing_team: Final = await _check_team_exists(group_id)
+        await _assert_legacy_members_unowned(auth, _members_a_patch_admits(patch_ops))
 
         # Process patch operations
         update_data, final_members, replace_target = await _process_group_patch_operations(

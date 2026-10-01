@@ -25,6 +25,7 @@ from litellm.repositories.prisma_protocols import DatabaseClient, TableActions
 from litellm.repositories.table_repositories import MCPServerRepository
 
 if TYPE_CHECKING:
+    from prisma import Prisma
     from prisma import models as prisma_models
 
     from litellm.proxy._types import (
@@ -84,6 +85,8 @@ async def prepare_object_permission_upsert(
     new_object_permission: Mapping[str, object],
     existing_object_permission_id: str | None,
     prisma_client: PrismaClient,
+    *,
+    tx: "Prisma | None" = None,
 ) -> ObjectPermissionUpsert:
     """
     Read-and-merge half of an object permission upsert; performs no writes.
@@ -101,7 +104,10 @@ async def prepare_object_permission_upsert(
     update cannot leave permission changes live.
     """
     object_permission_id: Final = existing_object_permission_id or str(uuid.uuid4())
-    existing_object_permission: Final = await ObjectPermissionRepository(prisma_client).table.find_unique(
+    permission_table: Final = (
+        tx.litellm_objectpermissiontable if tx is not None else ObjectPermissionRepository(prisma_client).table
+    )
+    existing_object_permission: Final = await permission_table.find_unique(
         where={"object_permission_id": object_permission_id},
     )
     existing_fields: Final[dict[str, object]] = (
@@ -134,6 +140,8 @@ async def handle_update_object_permission_common(
     data_json: dict,
     existing_object_permission_id: str | None,
     prisma_client: PrismaClient | None,
+    *,
+    tx: "Prisma | None" = None,
 ) -> str | None:
     """
     Common logic for handling object permission updates across organizations, teams, and keys.
@@ -170,8 +178,12 @@ async def handle_update_object_permission_common(
         new_object_permission=new_object_permission if isinstance(new_object_permission, dict) else {},
         existing_object_permission_id=existing_object_permission_id,
         prisma_client=prisma_client,
+        tx=tx,
     )
-    created_object_permission_row: Final = await ObjectPermissionRepository(prisma_client).table.upsert(
+    permission_table: Final = (
+        tx.litellm_objectpermissiontable if tx is not None else ObjectPermissionRepository(prisma_client).table
+    )
+    created_object_permission_row: Final = await permission_table.upsert(
         where={"object_permission_id": upsert.object_permission_id},
         data={
             "create": upsert.record,

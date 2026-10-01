@@ -34,6 +34,7 @@ def source_database(monkeypatch: pytest.MonkeyPatch):
     client: Final = MagicMock(spec=PrismaClient)
     tx: Final = client.tx.return_value.__aenter__.return_value
     monkeypatch.setattr(proxy_server, "prisma_client", client)
+    tx.execute_raw = AsyncMock()
     tx.litellm_scimsource.find_unique = AsyncMock(return_value=None)
     tx.litellm_verificationtoken.find_unique = AsyncMock(return_value=SimpleNamespace(allowed_routes=["/scim/*"]))
     tx.litellm_accessgrouptable.find_many = AsyncMock(return_value=[])
@@ -239,3 +240,18 @@ async def test_source_mapping_accepts_access_groups_across_query_batches(
     )
     assert result.group_mappings[0].access_group_ids == group_ids
     assert tx.litellm_accessgrouptable.find_many.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("current_key", [None, SimpleNamespace(allowed_routes=["/*"])])
+async def test_source_creation_revalidates_key_after_waiting_for_mutation(monkeypatch, current_key):
+    tx = source_database(monkeypatch)
+
+    async def complete_concurrent_mutation(*args):
+        tx.litellm_verificationtoken.find_unique.return_value = current_key
+
+    tx.execute_raw.side_effect = complete_concurrent_mutation
+    with pytest.raises(HTTPException) as denied:
+        await create_source(SCIMSourceCreate(display_name="Source", tenant_id=TENANT, provisioning_token="test-token"), ADMIN)
+    assert denied.value.status_code == 400
+    tx.litellm_scimsource.create.assert_not_awaited()

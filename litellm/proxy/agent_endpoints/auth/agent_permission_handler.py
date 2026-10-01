@@ -186,6 +186,8 @@ class AgentRequestHandler:
             elif isinstance(target, AgentResponse) and target.identity_managed:
                 if (
                     not target.enabled
+                    or not target.directory_active
+                    or target.directory_access_group_ids == ()
                     or target.identity is None
                     or not target.identity.active
                     or user_api_key_auth is None
