@@ -26,6 +26,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
+from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.websockets import WebSocketState
 from websockets.asyncio.client import connect
@@ -2297,6 +2298,7 @@ def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
 
 _WEBSOCKET_FORWARDED_HEADERS: Final = frozenset(("x-goog-user-project",))
 _PASS_THROUGH_CONFIG_WRITE: Final = asyncio.Lock()
+_CONFIG_ENTRIES: Final = TypeAdapter(list[dict[str, object]])
 
 
 def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict[str, str]:
@@ -3646,7 +3648,7 @@ async def update_pass_through_endpoints(
     # Find the index for updating the list
     endpoint_index = None
     for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint(**endpoint) if isinstance(endpoint, dict) else endpoint
+        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
         if _endpoint.id == endpoint_id:
             endpoint_index = idx
             break
@@ -3768,7 +3770,9 @@ async def create_pass_through_endpoints(
             )
         except Exception:
             response = ConfigFieldInfo(field_name="pass_through_endpoints", field_value=None)
-        existing: Final = tuple(response.field_value) if isinstance(response.field_value, list) else ()
+        existing: Final = (
+            _CONFIG_ENTRIES.validate_python(response.field_value) if isinstance(response.field_value, list) else []
+        )
         updated_data: Final = ConfigFieldUpdate(
             field_name="pass_through_endpoints",
             field_value=[*existing, data_dict],
@@ -3870,7 +3874,7 @@ async def delete_pass_through_endpoints(
     # Find the index for deleting from the list
     endpoint_index = None
     for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint(**endpoint) if isinstance(endpoint, dict) else endpoint
+        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
         if _endpoint.id == endpoint_id:
             endpoint_index = idx
             break
@@ -3916,7 +3920,7 @@ def _find_endpoint_by_id(
     for endpoint in endpoints_data:
         _endpoint: PassThroughGenericEndpoint | None = None
         if isinstance(endpoint, dict):
-            _endpoint = PassThroughGenericEndpoint(**endpoint)
+            _endpoint = PassThroughGenericEndpoint.model_validate(endpoint)
         elif isinstance(endpoint, PassThroughGenericEndpoint):
             _endpoint = endpoint
 
