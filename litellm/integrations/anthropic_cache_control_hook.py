@@ -167,8 +167,9 @@ def _message_accepts_cache_control(message: object) -> bool:
     """Whether a marker written on this message reaches the provider."""
     if not isinstance(message, dict):
         return False
-    on_a_tool_message: Final = message.get("role") == "tool"
-    content: Final = message.get("content")
+    fields: Final = cast(dict[str, object], message)  # cast-ok: a runtime dict whose value types are not known here
+    on_a_tool_message: Final = fields.get("role") == "tool"
+    content: Final = fields.get("content")
     if isinstance(content, str):
         return content != "" or on_a_tool_message
     if isinstance(content, list):
@@ -470,7 +471,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     @staticmethod
     def _resolve_target_indices(
         point: CacheControlMessageInjectionPoint, messages: list[AllMessageValues]
-    ) -> list[int]:
+    ) -> tuple[int, ...]:
         """Resolve which message indices an injection point targets."""
         _targetted_index: Final[int | str | None] = point.get("index", None)
         targetted_index: int | None = None
@@ -497,7 +498,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         # Case 1: Target by role alone
         if targetted_index is None:
-            return [] if targetted_role is None else [index for index in candidates if index in free]
+            return () if targetted_role is None else tuple(index for index in candidates if index in free)
 
         # Case 2: Target by index, counted within the role the point named
         position: Final = targetted_index + len(candidates) if targetted_index < 0 else targetted_index
@@ -508,10 +509,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 len(candidates),
                 position,
             )
-            return []
+            return ()
 
         landing: Final = next((candidates[step] for step in range(position, -1, -1) if candidates[step] in free), None)
-        return [] if landing is None else [landing]
+        return () if landing is None else (landing,)
 
     @staticmethod
     def _count_cache_control_blocks(message: object) -> int:
