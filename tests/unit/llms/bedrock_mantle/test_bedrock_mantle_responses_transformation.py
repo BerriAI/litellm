@@ -1863,3 +1863,80 @@ class TestBedrockMantleResponsesPricing:
     def test_models_registered(self, local_cost_map):
         assert "bedrock_mantle/openai.gpt-5.5" in litellm.bedrock_mantle_models
         assert "bedrock_mantle/openai.gpt-5.4" in litellm.bedrock_mantle_models
+
+
+class TestBedrockMantleResponsesStripSearchContentTypes:
+    """Codex/OpenAI may send search_content_types on web_search tools; Mantle 400s."""
+
+    def test_map_openai_params_strips_search_content_types_from_web_search(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={
+                "tools": [
+                    {
+                        "type": "web_search",
+                        "external_web_access": False,
+                        "search_content_types": ["text"],
+                    }
+                ]
+            },
+            model="openai.gpt-5.6-sol",
+            drop_params=False,
+        )
+        assert params["tools"] == [{"type": "web_search", "external_web_access": False}]
+
+    def test_map_openai_params_strips_search_content_types_from_web_search_preview(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={
+                "tools": [{"type": "web_search_preview", "search_content_types": ["text"]}]
+            },
+            model="openai.gpt-5.6-sol",
+            drop_params=False,
+        )
+        assert params["tools"] == [{"type": "web_search_preview"}]
+
+    def test_other_web_search_options_are_preserved(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        tool = {"type": "web_search", "external_web_access": False}
+        params = cfg.map_openai_params(
+            response_api_optional_params={"tools": [tool]},
+            model="openai.gpt-5.6-sol",
+            drop_params=False,
+        )
+        assert params["tools"] == [tool]
+
+    def test_non_web_search_tools_keep_unrelated_fields(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        tool = {"type": "function", "name": "exec_command", "search_content_types": ["text"]}
+        params = cfg.map_openai_params(
+            response_api_optional_params={"tools": [tool]},
+            model="openai.gpt-5.6-sol",
+            drop_params=False,
+        )
+        assert params["tools"] == [tool]
+
+    def test_stripped_tool_reaches_outbound_body(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={
+                "tools": [
+                    {
+                        "type": "web_search_preview",
+                        "search_content_types": ["text"],
+                    }
+                ]
+            },
+            model="openai.gpt-5.6-sol",
+            drop_params=False,
+        )
+        body = cfg.transform_responses_api_request(
+            model="openai.gpt-5.6-sol",
+            input="What did AWS announce today?",
+            response_api_optional_request_params=params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["tools"] == [{"type": "web_search_preview"}]
+        assert "search_content_types" not in body["tools"][0]
+

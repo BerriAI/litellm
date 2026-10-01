@@ -158,3 +158,39 @@ def mantle_base_segment(model: str | None, model_cost: dict) -> str:
     """
     entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}", {}) if model else {}
     return "openai/v1" if entry.get("use_openai_responses_path") is True else "v1"
+
+_WEB_SEARCH_TOOL_TYPE_PREFIX: Final = "web_search"
+_UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS: Final = frozenset({"search_content_types"})
+
+
+def strip_unsupported_web_search_tool_fields(tools: object) -> object:
+    """Drop Mantle-rejected nested fields from web-search tool definitions.
+
+    Bedrock Mantle accepts ``web_search`` tools but rejects OpenAI/Codex fields such
+    as ``search_content_types`` (validation_error 400). ``additional_drop_params`` only
+    reaches top-level request keys, so nested tool fields need an explicit strip.
+    Non-dict tools and non-web-search tool types are left unchanged. Returns the
+    original object when nothing needs rewriting so callers can keep identity.
+    """
+    if not isinstance(tools, list):
+        return tools
+
+    rewritten = False
+    cleaned: list[object] = []  # mutable-ok: build a fresh tools list only when stripping
+    for tool in tools:
+        if not isinstance(tool, dict):
+            cleaned.append(tool)
+            continue
+        tool_type = tool.get("type")
+        if not isinstance(tool_type, str) or not tool_type.startswith(_WEB_SEARCH_TOOL_TYPE_PREFIX):
+            cleaned.append(tool)
+            continue
+        if not _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS.intersection(tool):
+            cleaned.append(tool)
+            continue
+        rewritten = True
+        cleaned.append(
+            {key: value for key, value in tool.items() if key not in _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS}
+        )
+    return cleaned if rewritten else tools
+

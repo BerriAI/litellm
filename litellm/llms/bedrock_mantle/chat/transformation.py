@@ -21,6 +21,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
     BedrockMantleAuthMixin,
+    strip_unsupported_web_search_tool_fields,
 )
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.secret_managers.main import get_secret_str
@@ -125,6 +126,26 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         except Exception as e:
             verbose_logger.debug("BedrockMantleChatConfig: error checking reasoning support: %s", e)
             return False
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+        replace_max_completion_tokens_with_max_tokens: bool = True,
+    ) -> dict:
+        mapped_params: Final = super().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            replace_max_completion_tokens_with_max_tokens=replace_max_completion_tokens_with_max_tokens,
+        )
+        tools: Final = mapped_params.get("tools")
+        if tools is not None:
+            mapped_params["tools"] = strip_unsupported_web_search_tool_fields(tools)
+        return mapped_params
 
     def get_model_response_iterator(
         self,
