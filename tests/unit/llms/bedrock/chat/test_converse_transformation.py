@@ -7769,6 +7769,17 @@ def test_mid_conversation_system_entry_without_text_is_dropped(empty_content):
     assert out_messages == [{"role": "user", "content": "hi"}, {"role": "user", "content": "done"}]
 
 
+def test_system_entry_without_content_key_transforms_like_an_empty_one():
+    config = AmazonConverseConfig()
+    leading_without_key = [{"role": "system"}, {"role": "user", "content": "hi"}]
+    leading_empty = [{"role": "system", "content": ""}, {"role": "user", "content": "hi"}]
+    assert config._transform_system_message(leading_without_key) == config._transform_system_message(leading_empty)
+    assert config._transform_system_message(leading_without_key) == ([{"role": "user", "content": "hi"}], [])
+    mid_without_key = [{"role": "user", "content": "hi"}, {"role": "system"}, {"role": "user", "content": "done"}]
+    mid_empty = [{"role": "user", "content": "hi"}, {"role": "system", "content": ""}, {"role": "user", "content": "done"}]
+    assert config._transform_system_message(mid_without_key) == config._transform_system_message(mid_empty)
+
+
 def _thinking_reply(text: str) -> dict:
     return {
         "role": "assistant",
