@@ -28,6 +28,7 @@ from models import BudgetWindow
 
 pytestmark = pytest.mark.e2e
 
+MODEL = "claude-haiku-4-5"
 WINDOW_SECONDS = 30
 RESET_DEADLINE_SECONDS = 150
 TINY_CAP = 3e-6
@@ -35,7 +36,7 @@ SPEND_SETTLE_DEADLINE_SECONDS = 90
 
 
 def _call(client: BudgetClient, key: str):
-    return client.chat(key, "claude-haiku-4-5", f"advance {unique_marker()}", max_tokens=16)
+    return client.chat(key, MODEL, f"advance {unique_marker()}", max_tokens=16)
 
 
 def _poll_key_spend(client: BudgetClient, key: str, settled: Callable[[float], bool], problem: str) -> None:
@@ -98,7 +99,7 @@ def test_key_with_budget_duration_schedules_reset_at_creation(client: BudgetClie
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
-        models=("claude-haiku-4-5",),
+        models=(MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -124,7 +125,7 @@ def test_key_spend_blocks_at_cap(client: BudgetClient, resources: ResourceManage
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
-        models=("claude-haiku-4-5",),
+        models=(MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -169,7 +170,7 @@ def test_key_budget_reset_at_advances_after_window(client: BudgetClient, resourc
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
-        models=("claude-haiku-4-5",),
+        models=(MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -222,7 +223,7 @@ def test_multi_window_key_resets_each_window_independently(client: BudgetClient,
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
-        models=("claude-haiku-4-5",),
+        models=(MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -264,7 +265,7 @@ def test_team_member_budget_reset_at_advances(client: BudgetClient, resources: R
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
-        models=("claude-haiku-4-5",),
+        models=(MODEL,),
         mode=Mode.NONSTREAM,
     )
 )

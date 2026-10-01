@@ -24,12 +24,13 @@ from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
 
+MODEL = "claude-haiku-4-5"
 TINY_CAP = 3e-6
 ROOMY_CAP = 100.0
 
 
 def _chat(client: BudgetClient, key: str, *, user: str | None = None) -> StreamingResponse:
-    return client.chat(key, "claude-haiku-4-5", f"spend {unique_marker()}", max_tokens=16, user=user)
+    return client.chat(key, MODEL, f"spend {unique_marker()}", max_tokens=16, user=user)
 
 
 def _assert_budget_blocks(client: BudgetClient, key: str, *, user: str = "") -> StreamingResponse:
@@ -62,7 +63,7 @@ class TestBudgetBlocksPerLevel:
             domain=Domain.SPEND_BUDGETS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
-            models=("claude-haiku-4-5",),
+            models=(MODEL,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -78,7 +79,7 @@ class TestBudgetBlocksPerLevel:
             domain=Domain.SPEND_BUDGETS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
-            models=("claude-haiku-4-5",),
+            models=(MODEL,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -103,7 +104,7 @@ class TestBudgetBlocksPerLevel:
             domain=Domain.SPEND_BUDGETS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
-            models=("claude-haiku-4-5",),
+            models=(MODEL,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -146,7 +147,7 @@ class TestBudgetBlocksPerLevel:
             domain=Domain.SPEND_BUDGETS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
-            models=("claude-haiku-4-5",),
+            models=(MODEL,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -156,7 +157,7 @@ class TestBudgetBlocksPerLevel:
         customer = f"e2e-budget-cust-{unique_marker()}"
         client.create_customer(customer, max_budget=TINY_CAP)
         resources.defer(lambda: client.delete_customers([customer]))
-        key = client.generate_key(models=["claude-haiku-4-5"])
+        key = client.generate_key(models=[MODEL])
         resources.defer(lambda: client.delete_key(key))
 
         _assert_budget_blocks(client, key, user=customer)
@@ -167,7 +168,7 @@ class TestBudgetBlocksPerLevel:
             domain=Domain.SPEND_BUDGETS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
-            models=("claude-haiku-4-5",),
+            models=(MODEL,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -190,7 +191,7 @@ class TestBudgetBlocksPerLevel:
             domain=Domain.SPEND_BUDGETS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
-            models=("claude-haiku-4-5",),
+            models=(MODEL,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -226,7 +227,7 @@ class TestKeyBudgetBlocksAcrossKeyKinds:
             domain=Domain.SPEND_BUDGETS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
-            models=("claude-haiku-4-5",),
+            models=(MODEL,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -249,7 +250,7 @@ class TestKeyBudgetBlocksAcrossKeyKinds:
             domain=Domain.SPEND_BUDGETS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
-            models=("claude-haiku-4-5",),
+            models=(MODEL,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -270,7 +271,7 @@ class TestKeyBudgetBlocksAcrossKeyKinds:
             domain=Domain.SPEND_BUDGETS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
-            models=("claude-haiku-4-5",),
+            models=(MODEL,),
             mode=Mode.NONSTREAM,
         )
     )

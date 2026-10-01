@@ -19,7 +19,7 @@ from lifecycle import ResourceManager
 from proxy_client import Converged, await_converged
 from pydantic import BaseModel
 from spend_e2e_client import SpendClient
-from spend_reconciliation import TeamTraffic, assert_logs_match, create_traffic
+from spend_reconciliation import BACKEND, TeamTraffic, assert_logs_match, create_traffic
 
 pytestmark = pytest.mark.e2e
 
@@ -88,7 +88,7 @@ class TestTeamDailyActivity:
             domain=Domain.SPEND_BUDGETS,
             route=Route.SPEND_REPORTING,
             providers=(Provider.OPENAI,),
-            models=("openai/gpt-5.6-luna",),
+            models=(BACKEND,),
         )
     )
     def test_valid_date_range_returns_results_and_metadata(

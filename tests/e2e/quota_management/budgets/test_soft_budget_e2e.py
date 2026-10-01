@@ -17,6 +17,8 @@ from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
 
+MODEL = "claude-haiku-4-5"
+
 
 @pytest.mark.covers("quota_management.budget.soft.alerts_without_blocking")
 @meta(
@@ -24,7 +26,7 @@ pytestmark = pytest.mark.e2e
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
-        models=("claude-haiku-4-5",),
+        models=(MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -37,7 +39,7 @@ def test_soft_budget_does_not_block(
 
     for _ in range(3):
         result = client.chat(
-            key, "claude-haiku-4-5", f"hi {unique_marker()}", max_tokens=16
+            key, MODEL, f"hi {unique_marker()}", max_tokens=16
         )
         assert not is_budget_block(result), (
             "soft_budget blocked a request; it must alert only, not block "

@@ -12,6 +12,7 @@ from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
 
+MODEL = "claude-haiku-4-5"
 TINY_CAP = 3e-6
 ROOMY_CAP = 100.0
 WINDOW = "30s"
@@ -19,7 +20,7 @@ RESET_DEADLINE_SECONDS = 150
 
 
 def _call(client: BudgetClient, key: str):
-    return client.chat(key, "claude-haiku-4-5", f"reset {unique_marker()}", max_tokens=16)
+    return client.chat(key, MODEL, f"reset {unique_marker()}", max_tokens=16)
 
 
 def _drive_to_block(client: BudgetClient, key: str) -> None:
@@ -55,7 +56,7 @@ class TestBudgetResetPerLevel:
             domain=Domain.SPEND_BUDGETS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
-            models=("claude-haiku-4-5",),
+            models=(MODEL,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -72,7 +73,7 @@ class TestBudgetResetPerLevel:
             domain=Domain.SPEND_BUDGETS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
-            models=("claude-haiku-4-5",),
+            models=(MODEL,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -93,7 +94,7 @@ class TestBudgetResetPerLevel:
             domain=Domain.SPEND_BUDGETS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
-            models=("claude-haiku-4-5",),
+            models=(MODEL,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -124,7 +125,7 @@ class TestBudgetResetPerLevel:
             domain=Domain.SPEND_BUDGETS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
-            models=("claude-haiku-4-5",),
+            models=(MODEL,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -151,7 +152,7 @@ class TestKeyBudgetResetAcrossKeyKinds:
             domain=Domain.SPEND_BUDGETS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
-            models=("claude-haiku-4-5",),
+            models=(MODEL,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -170,7 +171,7 @@ class TestKeyBudgetResetAcrossKeyKinds:
             domain=Domain.SPEND_BUDGETS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
-            models=("claude-haiku-4-5",),
+            models=(MODEL,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -189,7 +190,7 @@ class TestKeyBudgetResetAcrossKeyKinds:
             domain=Domain.SPEND_BUDGETS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
-            models=("claude-haiku-4-5",),
+            models=(MODEL,),
             mode=Mode.NONSTREAM,
         )
     )

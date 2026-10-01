@@ -11,6 +11,7 @@ from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
 
+MODEL = "claude-haiku-4-5"
 MEMBER_BUDGET = 1.0 # default member budget is $50, we're testing with a smaller value
 
 def _as_datetime(value: str) -> datetime:
@@ -23,7 +24,7 @@ def _as_datetime(value: str) -> datetime:
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
-        models=("claude-haiku-4-5",),
+        models=(MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -44,7 +45,7 @@ def test_team_member_budget_reset_keeps_advancing(client: BudgetClient, resource
     # the member can spend within the team while the window is live
     key = client.generate_key(team_id=team_id, user_id=user_id)
     resources.defer(lambda: client.delete_key(key))
-    require_successful_call(client.chat(key, "claude-haiku-4-5", f"reset {unique_marker()}", max_tokens=16))
+    require_successful_call(client.chat(key, MODEL, f"reset {unique_marker()}", max_tokens=16))
 
     # once the window elapses the reset job must move budget_reset_at forward; a job
     # that skips the member's budget row (the #25109 regression) leaves it pinned at

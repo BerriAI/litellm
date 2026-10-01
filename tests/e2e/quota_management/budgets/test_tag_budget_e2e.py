@@ -18,13 +18,14 @@ from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
 
+MODEL = "claude-haiku-4-5"
 TINY_BUDGET = 1e-6
 
 
 def _tagged_call(client: BudgetClient, key: str, tag: str):
     result = client.chat(
         key,
-        "claude-haiku-4-5",
+        MODEL,
         f"hi {unique_marker()}",
         tags=[tag],
         max_tokens=64,
@@ -40,7 +41,7 @@ def _tagged_call(client: BudgetClient, key: str, tag: str):
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
-        models=("claude-haiku-4-5",),
+        models=(MODEL,),
         mode=Mode.NONSTREAM,
     )
 )

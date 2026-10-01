@@ -30,6 +30,7 @@ from models import BudgetWindow
 
 pytestmark = pytest.mark.e2e
 
+MODEL = "claude-haiku-4-5"
 WINDOW_SECONDS = 30
 SHORT_WINDOW = f"{WINDOW_SECONDS}s"
 LONG_WINDOW = "1d"
@@ -39,7 +40,7 @@ RESET_DEADLINE_SECONDS = 150
 
 
 def _call(client: BudgetClient, key: str):
-    return client.chat(key, "claude-haiku-4-5", f"team-window {unique_marker()}", max_tokens=16)
+    return client.chat(key, MODEL, f"team-window {unique_marker()}", max_tokens=16)
 
 
 def _drive_to_block(client: BudgetClient, key: str) -> StreamingResponse:
@@ -58,7 +59,7 @@ def _drive_to_block(client: BudgetClient, key: str) -> StreamingResponse:
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
-        models=("claude-haiku-4-5",),
+        models=(MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -71,7 +72,7 @@ def test_team_short_window_blocks_then_resets(client: BudgetClient, resources: R
         ],
     )
     resources.defer(lambda: client.delete_team(team_id))
-    key = client.generate_key(team_id=team_id, models=["claude-haiku-4-5"])
+    key = client.generate_key(team_id=team_id, models=[MODEL])
     resources.defer(lambda: client.delete_key(key))
 
     # 1. exhaust the tight window -> litellm returns budget_exceeded
@@ -100,7 +101,7 @@ def test_team_short_window_blocks_then_resets(client: BudgetClient, resources: R
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
-        models=("claude-haiku-4-5",),
+        models=(MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -115,7 +116,7 @@ def test_team_long_window_blocks_after_short_window_resets(client: BudgetClient,
         ],
     )
     resources.defer(lambda: client.delete_team(team_id))
-    key = client.generate_key(team_id=team_id, models=["claude-haiku-4-5"])
+    key = client.generate_key(team_id=team_id, models=[MODEL])
     resources.defer(lambda: client.delete_key(key))
     
     # 1. drive the key to being blocked, assert its blocked by budget budget_exceeded

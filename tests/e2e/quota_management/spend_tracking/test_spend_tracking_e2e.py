@@ -33,8 +33,15 @@ from spend_e2e_client import (
     unique_marker,
     unwrap,
 )
+from spend_reconciliation import BACKEND as TRAFFIC_BACKEND
 
 pytestmark = pytest.mark.e2e
+
+GEMINI_MODEL = "gemini-2.5-flash"
+CLAUDE_MODEL = "claude-haiku-4-5"
+CODEX_MODEL = "openai-responses-codex"
+EMBEDDING_MODEL = "openai-text-embedding-3-small"
+OPENAI_BACKEND = "openai/gpt-5.5"
 
 
 def _approx_equal(actual: float, expected: float) -> bool:
@@ -76,7 +83,7 @@ def _require_row(
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI,),
-        models=("gemini-2.5-flash",),
+        models=(GEMINI_MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -86,7 +93,7 @@ def test_chat_completion_writes_nonzero_spend_row(
     chat = unwrap(
         client.chat(
             scoped_key,
-            "gemini-2.5-flash",
+            GEMINI_MODEL,
             f"reply with one word {unique_marker()}",
             max_tokens=16,
         )
@@ -100,7 +107,7 @@ def test_chat_completion_writes_nonzero_spend_row(
     assert (row.spend or 0) > 0, f"chat row should cost > 0: {_summarize(rows)}"
     assert row.status == "success"
     assert row.cache_hit != "True", "fresh call must not be a cache hit"
-    assert "gemini-2.5-flash" in (row.model or "")
+    assert GEMINI_MODEL in (row.model or "")
 
     prompt = row.prompt_tokens or 0
     completion = row.completion_tokens or 0
@@ -120,7 +127,7 @@ def test_chat_completion_writes_nonzero_spend_row(
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI,),
-        models=("gemini-2.5-flash",),
+        models=(GEMINI_MODEL,),
         mode=Mode.STREAM,
     )
 )
@@ -129,7 +136,7 @@ def test_streaming_chat_completion_tracks_spend(
 ) -> None:
     result = client.chat_stream(
         scoped_key,
-        "gemini-2.5-flash",
+        GEMINI_MODEL,
         f"count to three {unique_marker()}",
         max_tokens=64,
     )
@@ -157,7 +164,7 @@ def test_streaming_chat_completion_tracks_spend(
         domain=Domain.SPEND_BUDGETS,
         route=Route.MESSAGES,
         providers=(Provider.OPENAI,),
-        models=("openai-responses-codex",),
+        models=(CODEX_MODEL,),
         mode=Mode.STREAM,
     )
 )
@@ -178,7 +185,7 @@ def test_streaming_messages_via_responses_bridge_tracks_spend(
     """
     result = client.messages_stream(
         scoped_key,
-        "openai-responses-codex",
+        CODEX_MODEL,
         f"reply with exactly one word {unique_marker()}",
         max_tokens=64,
     )
@@ -236,7 +243,7 @@ def test_streaming_messages_via_responses_bridge_tracks_spend(
         domain=Domain.SPEND_BUDGETS,
         route=Route.EMBEDDINGS,
         providers=(Provider.OPENAI,),
-        models=("openai-text-embedding-3-small",),
+        models=(EMBEDDING_MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -246,7 +253,7 @@ def test_embedding_writes_nonzero_spend_row(
     _ = unwrap(
         client.embed(
             scoped_key,
-            "openai-text-embedding-3-small",
+            EMBEDDING_MODEL,
             f"vectorize this sentence {unique_marker()}",
         )
     )
@@ -268,7 +275,7 @@ def test_embedding_writes_nonzero_spend_row(
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI,),
-        models=("gemini-2.5-flash",),
+        models=(GEMINI_MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -280,8 +287,8 @@ def test_cache_hit_is_zero_cost_and_suffixed(
     # populated. The marker keeps each run isolated - a fixed prompt would persist
     # in the shared response cache across runs and make both calls hit (flaky).
     prompt = f"What is the capital of France? Answer in one word. {unique_marker()}"
-    _ = unwrap(client.chat(scoped_key, "gemini-2.5-flash", prompt, max_tokens=16, cache=None))
-    _ = unwrap(client.chat(scoped_key, "gemini-2.5-flash", prompt, max_tokens=16, cache=None))
+    _ = unwrap(client.chat(scoped_key, GEMINI_MODEL, prompt, max_tokens=16, cache=None))
+    _ = unwrap(client.chat(scoped_key, GEMINI_MODEL, prompt, max_tokens=16, cache=None))
 
     rows = client.poll_logs_for_key(
         scoped_key,
@@ -313,7 +320,7 @@ def test_cache_hit_is_zero_cost_and_suffixed(
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI,),
-        models=("gemini-2.5-flash",),
+        models=(GEMINI_MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -322,7 +329,7 @@ def test_key_spend_equals_sum_of_logs(client: SpendClient, scoped_key: str) -> N
         _ = unwrap(
             client.chat(
                 scoped_key,
-                "gemini-2.5-flash",
+                GEMINI_MODEL,
                 f"say hi {unique_marker()}",
                 max_tokens=16,
             )
@@ -350,7 +357,7 @@ def test_key_spend_equals_sum_of_logs(client: SpendClient, scoped_key: str) -> N
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.OPENAI,),
-        models=("openai/gpt-5.6-luna",),
+        models=(TRAFFIC_BACKEND,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -376,7 +383,7 @@ def test_burst_of_concurrent_calls_loses_no_spend(
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI,),
-        models=("gemini-2.5-flash",),
+        models=(GEMINI_MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -396,7 +403,7 @@ def test_spend_logs_v2_pagination_caps_pages_and_keeps_total(
         _ = unwrap(
             client.chat(
                 scoped_key,
-                "gemini-2.5-flash",
+                GEMINI_MODEL,
                 f"page fodder {unique_marker()}",
                 max_tokens=16,
             )
@@ -438,7 +445,7 @@ def test_spend_logs_v2_pagination_caps_pages_and_keeps_total(
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI,),
-        models=("gemini-2.5-flash",),
+        models=(GEMINI_MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -446,7 +453,7 @@ def test_request_tags_round_trip(client: SpendClient, scoped_key: str) -> None:
     tag = f"e2e-spend-{unique_marker()}"
     _ = unwrap(
         client.chat(
-            scoped_key, "gemini-2.5-flash", "tagged request", tags=[tag], max_tokens=16
+            scoped_key, GEMINI_MODEL, "tagged request", tags=[tag], max_tokens=16
         )
     )
 
@@ -464,7 +471,7 @@ def test_request_tags_round_trip(client: SpendClient, scoped_key: str) -> None:
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI,),
-        models=("gemini-2.5-flash",),
+        models=(GEMINI_MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -478,7 +485,7 @@ def test_tag_spend_matches_sum_of_tagged_logs(
         _ = unwrap(
             client.chat(
                 scoped_key,
-                "gemini-2.5-flash",
+                GEMINI_MODEL,
                 f"hi {unique_marker()}",
                 tags=[tag],
                 max_tokens=16,
@@ -511,7 +518,7 @@ def test_tag_spend_matches_sum_of_tagged_logs(
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI,),
-        models=("gemini-2.5-flash",),
+        models=(GEMINI_MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -520,7 +527,7 @@ def test_end_user_spend_attributed_on_row(
 ) -> None:
     customer = resources.customer(f"e2e-cust-{unique_marker()}")
     _ = unwrap(
-        client.chat(scoped_key, "gemini-2.5-flash", "hi", user=customer, max_tokens=16)
+        client.chat(scoped_key, GEMINI_MODEL, "hi", user=customer, max_tokens=16)
     )
 
     rows = client.poll_logs_for_key(
@@ -548,7 +555,7 @@ def test_end_user_header_attributes_responses_row(
         {"authorization": f"Bearer {scoped_key}", header: customer, "x-litellm-tags": tag}
     )
     sent = client.send_responses_with_headers(
-        headers, "openai-responses-codex", f"one word {unique_marker()}"
+        headers, CODEX_MODEL, f"one word {unique_marker()}"
     )
     assert sent.ok, f"/v1/responses failed with {sent.status_code}: {sent.body[:300]}"
 
@@ -573,7 +580,7 @@ def test_end_user_header_attributes_responses_row(
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI, Provider.ANTHROPIC),
-        models=("gemini-2.5-flash", "claude-haiku-4-5"),
+        models=(GEMINI_MODEL, CLAUDE_MODEL),
         mode=Mode.NONSTREAM,
     )
 )
@@ -587,27 +594,27 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
     sibling deployment, or collapses both calls onto one request_id fails here."""
     gemini = unwrap(
         client.chat(
-            scoped_key, "gemini-2.5-flash", f"one word {unique_marker()}", max_tokens=16
+            scoped_key, GEMINI_MODEL, f"one word {unique_marker()}", max_tokens=16
         )
     )
     claude = unwrap(
         client.chat(
-            scoped_key, "claude-haiku-4-5", f"one word {unique_marker()}", max_tokens=16
+            scoped_key, CLAUDE_MODEL, f"one word {unique_marker()}", max_tokens=16
         )
     )
 
     def both_models_costed(rows: list[SpendLogRow]) -> bool:
         costed = [r.model or "" for r in rows if (r.spend or 0) > 0]
-        return any("gemini-2.5-flash" in m for m in costed) and any(
-            "claude-haiku-4-5" in m for m in costed
+        return any(GEMINI_MODEL in m for m in costed) and any(
+            CLAUDE_MODEL in m for m in costed
         )
 
     rows = client.poll_logs_for_key(scoped_key, min_rows=2, predicate=both_models_costed)
     gemini_row = _require_row(
-        rows, lambda r: "gemini-2.5-flash" in (r.model or ""), "for the gemini call"
+        rows, lambda r: GEMINI_MODEL in (r.model or ""), "for the gemini call"
     )
     claude_row = _require_row(
-        rows, lambda r: "claude-haiku-4-5" in (r.model or ""), "for the claude call"
+        rows, lambda r: CLAUDE_MODEL in (r.model or ""), "for the claude call"
     )
 
     assert (gemini_row.spend or 0) > 0, f"gemini row should cost > 0: {_summarize(rows)}"
@@ -631,7 +638,7 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.OPENAI,),
-        models=("openai/gpt-5.5",),
+        models=(OPENAI_BACKEND,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -641,7 +648,7 @@ def test_failure_call_writes_failure_status_row(
     model = f"e2e-spend-failure-{unique_marker()}"
     model_id = client.proxy.create_model(
         model,
-        LiteLLMParamsBody(model="openai/gpt-5.5", api_key="sk-invalid-e2e-failure-row"),
+        LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="sk-invalid-e2e-failure-row"),
     )
     resources.defer(lambda: client.proxy.delete_model(model_id))
 
@@ -668,7 +675,7 @@ def test_failure_rows_share_normalized_error_across_provider_wording(
     carries the same stable normalized_error cluster key."""
     marker = unique_marker()
     deployments: Final = (
-        (f"e2e-norm-openai-{marker}", "openai/gpt-5.5"),
+        (f"e2e-norm-openai-{marker}", OPENAI_BACKEND),
         (f"e2e-norm-anthropic-{marker}", "anthropic/claude-haiku-4-5"),
     )
     for name, provider_model in deployments:
@@ -711,7 +718,7 @@ def test_pre_call_rejection_row_attributes_provider_and_model_id(
     can count it."""
     model = f"e2e-spend-precall-{unique_marker()}"
     model_id = client.proxy.create_model(
-        model, LiteLLMParamsBody(model="openai/gpt-5.5", api_key="os.environ/OPENAI_API_KEY")
+        model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
     )
     resources.defer(lambda: client.proxy.delete_model(model_id))
     key = client.proxy.generate_key(KeyGenerateBody(models=[model], rpm_limit=1))
@@ -747,12 +754,12 @@ def test_pre_call_rejection_row_attributes_provider_and_model_id(
         domain=Domain.SPEND_BUDGETS,
         route=Route.SPEND_REPORTING,
         providers=(Provider.GEMINI,),
-        models=("gemini-2.5-flash",),
+        models=(GEMINI_MODEL,),
     )
 )
 def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
     cost = client.calculate_spend(
-        "gemini-2.5-flash", "estimate the cost of this request"
+        GEMINI_MODEL, "estimate the cost of this request"
     )
     assert cost > 0, (
         "/spend/calculate returned 0 for gemini-2.5-flash; "
@@ -765,7 +772,7 @@ def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
         domain=Domain.SPEND_BUDGETS,
         route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI,),
-        models=("gemini-2.5-flash",),
+        models=(GEMINI_MODEL,),
         mode=Mode.NONSTREAM,
     )
 )
@@ -779,7 +786,7 @@ def test_spend_logs_endpoint_returns_spend(
     call's nonzero spend must surface before the deadline."""
     unwrap(
         client.chat(
-            scoped_key, "gemini-2.5-flash", f"spend logs {unique_marker()}", max_tokens=16
+            scoped_key, GEMINI_MODEL, f"spend logs {unique_marker()}", max_tokens=16
         )
     )
 

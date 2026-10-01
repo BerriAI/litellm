@@ -272,6 +272,36 @@ class TestProviderMirrorsLitellm:
         assert not unknown, f"not LlmProviders values: {unknown}"
 
 
+E2E_DIR: Final = Path(__file__).resolve().parents[1] / "e2e"
+
+
+def _hand_typed_models(path: Path) -> Iterator[str]:
+    for node in ast.walk(ast.parse(path.read_text())):
+        match node:
+            case ast.Call(func=ast.Name(id="Subject"), keywords=keywords):
+                for keyword in keywords:
+                    match keyword:
+                        case ast.keyword(arg="models", value=ast.Tuple(elts=models)):
+                            yield from (
+                                f"{path.relative_to(E2E_DIR)}:{model.lineno} {model.value!r}"
+                                for model in models
+                                if isinstance(model, ast.Constant)
+                            )
+                        case _:
+                            pass
+            case _:
+                pass
+
+
+def test_a_declared_model_names_the_constant_the_test_drives() -> None:
+    """A model typed out in `@meta` is a second copy of the one the test calls, so
+    changing the call would leave the coverage report naming the old model."""
+    offenders: Final = tuple(
+        offender for path in sorted(E2E_DIR.rglob("*.py")) for offender in _hand_typed_models(path)
+    )
+    assert offenders == ()
+
+
 class TestStepRecording:
     """`@step`-decorated harness helpers append to the running test's story as
     they execute.
