@@ -11,7 +11,7 @@ import contextlib
 import copy
 import json
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import anyio
 from fastapi import HTTPException
@@ -117,7 +117,7 @@ def _held_choices(held_chars_per_choice: Mapping[int, int]) -> frozenset[int]:
 def _recorded_guardrail_information(request_data: dict) -> tuple[StandardLoggingGuardrailInformation, ...]:
     _metadata_key, metadata_bucket = get_or_create_metadata_bucket(request_data)
     entries: Final = metadata_bucket.get("standard_logging_guardrail_information")
-    return tuple(entries) if isinstance(entries, list) else ()
+    return tuple(cast("list[StandardLoggingGuardrailInformation]", entries)) if isinstance(entries, list) else ()
 
 
 def _is_redundant_scan(scan_key: "StreamingScanKey | None", last_scan_key: "StreamingScanKey | None") -> bool:
@@ -1429,7 +1429,12 @@ class UnifiedLLMGuardrails(CustomLogger):
                         yield error_item
         except (GeneratorExit, asyncio.CancelledError):
             translation_class: Final = None if call_type is None else mappings.get(CallTypes(call_type))
-            if chunks_yielded and not end_of_stream_scan_started and translation_class is not None:
+            if (
+                chunks_yielded
+                and not end_of_stream_scan_started
+                and translation_class is not None
+                and isinstance(guardrail_to_apply, CustomGuardrail)
+            ):
                 await self._scan_released_stream_after_disconnect(
                     endpoint_translation=translation_class(),
                     responses_so_far=responses_so_far,

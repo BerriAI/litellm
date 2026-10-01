@@ -9798,7 +9798,7 @@ async def async_data_generator(
     client_disconnected = False
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
     needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
-    stream_iterator: Final = (
+    stream_iterator: Final[AsyncIterator[object]] = (
         proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
             response=response,
