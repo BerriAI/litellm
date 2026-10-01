@@ -1294,7 +1294,7 @@ class TestFunctionCallTransformation:
         )
 
         assert "parallel_tool_calls" not in empty_tools_result
-        assert "parallel_tool_calls" not in hosted_only_result
+        assert hosted_only_result["parallel_tool_calls"] is True
         assert function_tools_result["parallel_tool_calls"] is True
 
     def test_function_call_without_call_id_fallback_to_id(self):
@@ -1708,7 +1708,7 @@ class TestToolTransformation:
         assert len(result_tools) == 0
         assert web_search_options is None
 
-    def test_transform_codex_tools_drops_hosted_tool_search(self) -> None:
+    def test_transform_codex_tools_converts_client_tool_search(self) -> None:
         codex_tools: Final = [
             {
                 "type": "function",
@@ -1761,7 +1761,7 @@ class TestToolTransformation:
             },
             {"type": "web_search", "external_web_access": False, "search_content_types": ["text", "image"]},
         ]
-        function_and_custom_count: Final = sum(1 for tool in codex_tools if tool["type"] in ("function", "custom"))
+        expected_tool_count: Final = sum(1 for tool in codex_tools if tool["type"] in ("function", "custom")) + 1
 
         (
             result_tools,
@@ -1770,7 +1770,7 @@ class TestToolTransformation:
 
         assert not any(tool.get("type") == "tool_search" for tool in result_tools)
         assert all(tool.get("type") == "function" for tool in result_tools)
-        assert len(result_tools) == function_and_custom_count
+        assert len(result_tools) == expected_tool_count
         assert web_search_options is not None
 
     def test_transform_local_shell_tools_dropped(self) -> None:
@@ -3918,6 +3918,7 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._next_tool_output_index = 1
         iterator._final_tool_events_queued = False
         iterator._custom_tool_names = set()
+        iterator._tool_search_requested = False
         iterator.responses_api_request = {}
         iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(None)
         iterator._web_search_calls = {}

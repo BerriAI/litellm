@@ -112,6 +112,83 @@ ResponseTools: TypeAlias = Sequence[Mapping[str, object]] | None
 ChatToolParam: TypeAlias = ChatCompletionToolParam | OpenAIMcpServerTool
 NAMESPACE_DESCRIPTION_SEPARATOR: Final = "\n\n"
 NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS: Final = frozenset({"function", "custom"})
+TOOL_SEARCH_FUNCTION_NAME: Final = "tool_search"
+
+
+def _is_tool_search_tool(tool: Mapping[str, object]) -> bool:
+    return tool.get("type") == TOOL_SEARCH_FUNCTION_NAME and tool.get("execution") == "client"
+
+
+def _tool_search_function_tool(tool: Mapping[str, object]) -> ChatCompletionToolParam:
+    raw_parameters: Final[object] = tool.get("parameters")
+    parameters: Final[dict[str, object]] = (
+        dict(raw_parameters)  # mutable-ok: Chat Completions tool parameters are mutable payloads
+        if isinstance(raw_parameters, Mapping)
+        else {  # mutable-ok: default Chat Completions schema
+            "type": "object",
+            "properties": {  # mutable-ok: JSON schema mapping
+                "query": {  # mutable-ok: JSON schema property
+                    "type": "string",
+                    "description": "Search query for deferred tools.",
+                }
+            },
+            "required": ["query"],  # mutable-ok: JSON schema array
+            "additionalProperties": False,
+        }
+    )
+    return ChatCompletionToolParam(
+        type="function",
+        function=ChatCompletionToolParamFunctionChunk(
+            name=TOOL_SEARCH_FUNCTION_NAME,
+            description=str(
+                tool.get("description") or "Search deferred tool definitions by name, description, or intended use."
+            ),
+            parameters=parameters,
+            strict=False,
+        ),
+    )
+
+
+def _tool_search_call_item(
+    tool_call: Mapping[str, object],
+) -> dict[str, object]:
+    call_id: Final = str(tool_call.get("id") or "")
+    arguments: Final[object] = tool_call.get("arguments")
+    try:
+        parsed_arguments: Final[object] = json.loads(arguments) if isinstance(arguments, str) else arguments
+    except (TypeError, ValueError):
+        parsed_arguments = arguments
+    return {  # mutable-ok: dynamic item consumed immediately by the caller
+        "type": "tool_search_call",
+        "id": str(tool_call.get("id") or f"ts_{uuid.uuid4()}"),
+        "call_id": call_id,
+        "status": "completed",
+        "execution": "client",
+        "arguments": (parsed_arguments if parsed_arguments is not None else {}),  # mutable-ok: default JSON object
+    }
+
+
+def _tool_search_output_messages(input_item: Mapping[str, object]) -> list[ChatCompletionToolMessage]:
+    call_id: Final[str] = str(input_item.get("call_id") or "")
+    if not call_id:
+        return []  # mutable-ok: empty drop result
+    found_tools: object | None = input_item.get("tools")
+    if not isinstance(found_tools, list):
+        found_tools = input_item.get("output")  # rebind-ok: choose the schema field before serialization
+    try:
+        serialized_tools: Final[str] = json.dumps(found_tools, default=str)
+        content: Final[str] = found_tools if isinstance(found_tools, str) else serialized_tools
+    except (TypeError, ValueError):
+        content = str(found_tools or [])  # mutable-ok: fallback payload
+    return [  # mutable-ok: single tool message result
+        ChatCompletionToolMessage(
+            role="tool",
+            content=content,
+            tool_call_id=call_id,
+        )
+    ]
+
+
 _INCOMPLETE_REASON_BY_FINISH_REASON: Final[Mapping[str, Literal["max_output_tokens", "content_filter"]]] = (
     MappingProxyType({"length": "max_output_tokens", "content_filter": "content_filter", "refusal": "content_filter"})
 )
@@ -1358,6 +1435,24 @@ class LiteLLMCompletionResponsesConfig:
                     content="Hosted web search: " + search.model_dump_json(exclude_none=True),
                 )
             ]
+        if input_item.get("type") == "tool_search_call":
+            return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+                function_call=cast(  # cast-ok: callee coerces the fields it reads
+                    Mapping[str, str],
+                    {  # mutable-ok: adapter input consumed immediately
+                        **input_item,
+                        "type": "function_call",
+                        "name": TOOL_SEARCH_FUNCTION_NAME,
+                        "arguments": (
+                            input_item.get("arguments")
+                            if isinstance(input_item.get("arguments"), str)
+                            else json.dumps(input_item.get("arguments") or {})  # mutable-ok: default JSON object
+                        ),
+                    },
+                )
+            )
+        if input_item.get("type") == "tool_search_output":
+            return _tool_search_output_messages(input_item)
         if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(input_item):
             # handle executed tool call results
             return (
@@ -2038,7 +2133,15 @@ class LiteLLMCompletionResponsesConfig:
         if tool_type == "custom":
             converted: Final = convert_custom_tool_to_function_tool(tool)
             return ResponsesToolChatForm(chat_tools=() if converted is None else (converted,), web_search_options=None)
-        if tool_type in ("computer_use", "image_generation", "local_shell", "shell", "tool_search"):
+        if tool_type == "tool_search":
+            if tool.get("execution") != "client":
+                verbose_logger.warning(
+                    "Dropping Responses API tool of type 'tool_search': only client-executed "
+                    "tool_search has a Chat Completions equivalent.",
+                )
+                return ResponsesToolChatForm(chat_tools=(), web_search_options=None)
+            return ResponsesToolChatForm(chat_tools=(_tool_search_function_tool(tool),), web_search_options=None)
+        if tool_type in ("computer_use", "image_generation", "local_shell", "shell"):
             verbose_logger.warning(
                 "Dropping Responses API tool of type '%s': it has no Chat Completions "
                 "equivalent and the target provider would reject the request.",
@@ -2164,14 +2267,13 @@ class LiteLLMCompletionResponsesConfig:
         """
         all_chat_completion_tools: Final[list[ChatCompletionMessageToolCall]] = []
         for choice in chat_completion_response.choices:
-            if isinstance(choice, Choices):
-                if choice.message.tool_calls:
-                    all_chat_completion_tools.extend(choice.message.tool_calls)
-                    for tool_call in choice.message.tool_calls:
-                        TOOL_CALLS_CACHE.set_cache(
-                            key=tool_call.id,
-                            value=tool_call,
-                        )
+            if isinstance(choice, Choices) and choice.message.tool_calls:
+                all_chat_completion_tools.extend(choice.message.tool_calls)
+                for tool_call in choice.message.tool_calls:
+                    TOOL_CALLS_CACHE.set_cache(
+                        key=tool_call.id,
+                        value=tool_call,
+                    )
 
         request_tools: Final = responses_api_request.get("tools") if responses_api_request is not None else None
         custom_tool_names: Final = extract_custom_tool_names(request_tools)
@@ -2180,8 +2282,11 @@ class LiteLLMCompletionResponsesConfig:
         web_search_calls: Final = LiteLLMCompletionResponsesConfig._web_search_calls_by_call_id(
             chat_completion_response
         )
+        tool_search_requested: Final = any(
+            _is_tool_search_tool(tool) for tool in request_tools or () if isinstance(tool, Mapping)
+        )
         responses_tools: Final[
-            list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem]
+            list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem | dict[str, object]]
         ] = []  # mutable-ok: preserves provider tool-call order
         for tool in all_chat_completion_tools:
             if tool.type == "function":
@@ -2193,6 +2298,15 @@ class LiteLLMCompletionResponsesConfig:
                 web_search_call = web_search_calls.get(tool_id)
                 if web_search_call is not None:
                     responses_tools.append(web_search_call)
+                elif tool_search_requested and tool_name == TOOL_SEARCH_FUNCTION_NAME:
+                    responses_tools.append(
+                        _tool_search_call_item(
+                            {  # mutable-ok: helper input consumed immediately
+                                "id": tool.id,
+                                "arguments": tool_arguments,
+                            }
+                        )
+                    )
                 elif is_custom_tool_call(tool_name, custom_tool_names):
                     # Build custom_tool_call output item
                     input_str = unwrap_custom_tool_arguments(tool_arguments)

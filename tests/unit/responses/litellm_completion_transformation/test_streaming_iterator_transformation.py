@@ -144,6 +144,45 @@ def test_tool_call_delta_is_emitted_as_responses_events():
     assert len(evt2.delta) <= 10  # Chunks are max 10 characters
 
 
+def test_client_tool_search_delta_is_emitted_as_tool_search_call():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Find a weather tool",
+        responses_api_request={"tools": [{"type": "tool_search", "execution": "client"}]},
+    )
+    chunk = ModelResponseStream(
+        id="chunk-1",
+        created=123,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_tool_search",
+                            "type": "function",
+                            "function": {"name": "tool_search", "arguments": '{"query":"weather"}'},
+                        }
+                    ],
+                ),
+            )
+        ],
+    )
+
+    added = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
+
+    assert added is not None
+    assert added.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    assert added.item.type == "tool_search_call"
+    assert added.item.arguments == {}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize(
