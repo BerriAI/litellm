@@ -948,6 +948,19 @@ class TestEchoedRowsReachingTheLLM:
         ], "the guardrail must see the whole row so its masking of it reaches the LLM"
 
     @pytest.mark.asyncio
+    async def test_an_unchanged_echo_of_a_rejected_part_holding_a_tuple_applies_the_masked_texts(self) -> None:
+        guardrail: Final = _guardrail_answering(_echo_every_row_and_mask_texts)
+        tagged_part: Final = {"type": "guarded_text", "text": "keep this guarded", "tags": ("a", "b")}
+
+        llm_bound: Final = await _llm_bound_messages(
+            guardrail, [{"role": "user", "content": [{"type": "text", "text": f"my ssn is {_SSN}"}, tagged_part]}]
+        )
+
+        assert llm_bound == [
+            {"role": "user", "content": [{"type": "text", "text": "my ssn is [SSN]"}, tagged_part]}
+        ], "the rows an echo is compared with must equal the JSON the guardrail received"
+
+    @pytest.mark.asyncio
     async def test_an_echoed_row_holding_a_part_the_request_model_rejects_is_restored_to_the_callers_row(
         self,
     ) -> None:
