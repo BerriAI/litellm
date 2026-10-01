@@ -498,7 +498,7 @@ def build_inspection_messages(data: dict[str, Any]) -> list[dict[str, str]]:
     for message in _iter_inspection_messages(data):
         if not isinstance(message, dict):
             continue
-        if "_tool_index" in message:
+        if "_tool_index" in message and isinstance(message.get("content"), str):
             flattened.append(
                 {  # mutable-ok: fresh synthetic message, not stored in the original request
                     "role": message.get("role") or "tool",
