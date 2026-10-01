@@ -340,6 +340,26 @@ def test_cognition_provider_fields():
     assert fields_by_key["api_base"]["required"] is False
 
 
+def test_zerogpu_add_model_form_defaults_resolve_to_a_priced_zerogpu_model():
+    import litellm
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    app_instance: Final = FastAPI()
+    app_instance.include_router(router)
+    providers: Final = TestClient(app_instance).get("/public/providers/fields").json()
+
+    zerogpu: Final = next(p for p in providers if p["litellm_provider"] == "zerogpu")
+    fields_by_key: Final = {f["key"]: f for f in zerogpu["credential_fields"]}
+    placeholder: Final = zerogpu["default_model_placeholder"]
+    _, provider, _, api_base = get_llm_provider(model=placeholder)
+
+    assert provider == "zerogpu"
+    assert api_base == fields_by_key["api_base"]["placeholder"]
+    assert litellm.model_cost[placeholder]["litellm_provider"] == "zerogpu"
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+
 def test_qwen_mainland_provider_fields_carry_the_qianwen_brand():
     app_instance = FastAPI()
     app_instance.include_router(router)
