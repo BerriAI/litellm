@@ -159,6 +159,7 @@ def mantle_base_segment(model: str | None, model_cost: dict) -> str:
     entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}", {}) if model else {}
     return "openai/v1" if entry.get("use_openai_responses_path") is True else "v1"
 
+
 _WEB_SEARCH_TOOL_TYPE_PREFIX: Final = "web_search"
 _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS: Final = frozenset({"search_content_types"})
 
@@ -189,8 +190,5 @@ def strip_unsupported_web_search_tool_fields(tools: object) -> object:
             cleaned.append(tool)
             continue
         rewritten = True
-        cleaned.append(
-            {key: value for key, value in tool.items() if key not in _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS}
-        )
+        cleaned.append({key: value for key, value in tool.items() if key not in _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS})
     return cleaned if rewritten else tools
-

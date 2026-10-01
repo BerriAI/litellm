@@ -143,9 +143,12 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             replace_max_completion_tokens_with_max_tokens=replace_max_completion_tokens_with_max_tokens,
         )
         tools: Final = mapped_params.get("tools")
-        if tools is not None:
-            mapped_params["tools"] = strip_unsupported_web_search_tool_fields(tools)
-        return mapped_params
+        if tools is None:
+            return mapped_params
+        return {
+            **mapped_params,
+            "tools": strip_unsupported_web_search_tool_fields(tools),
+        }  # mutable-ok: map_openai_params contract returns a plain dict
 
     def get_model_response_iterator(
         self,

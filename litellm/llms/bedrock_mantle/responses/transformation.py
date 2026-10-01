@@ -264,8 +264,5 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         tools_list: Final = tools if isinstance(tools, list) else [tools]
         filtered: Final = self._filter_unsupported_tools(tools_list)
         if filtered:
-            params["tools"] = filtered
-        else:
-            params.pop("tools", None)
-
-        return params
+            return {**params, "tools": filtered}  # mutable-ok: map_openai_params contract returns a plain dict
+        return {key: value for key, value in params.items() if key != "tools"}
