@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { requiredRule } from "../common_components/formRules";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { MountedFormField, type MountedFormValues } from "../common_components/MountedFormField";
-import { Providers } from "../provider_info_helpers";
+import { getProviderLogoAndName, Providers } from "../provider_info_helpers";
 
 interface LiteLLMModelNameFieldProps {
   selectedProvider: string | null;
@@ -21,6 +21,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
   const form = useFormContext<MountedFormValues>();
   const modelValue = useWatch({ control: form.control, name: "model" });
   const selectedModels = Array.isArray(modelValue) ? modelValue : [modelValue];
+  const providerDisplayName = selectedProvider ? getProviderLogoAndName(selectedProvider).displayName : "provider";
 
   const handleModelChange = (value: string | string[]) => {
     // Ensure value is always treated as an array
@@ -131,7 +132,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
                 }
               }}
             />
-          ) : providerModels.length > 0 ? (
+          ) : providerModels.length > 0 || providerDisplayName === Providers.NANOGPT ? (
             <MultiSelect
               id={control.id}
               placeholder="Select models"
@@ -147,7 +148,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
                   value: "custom",
                 },
                 {
-                  label: `All ${selectedProvider ?? "provider"} Models (Wildcard)`,
+                  label: `All ${providerDisplayName} Models (Wildcard)`,
                   value: "all-wildcard",
                 },
                 ...providerModels.map((model) => ({

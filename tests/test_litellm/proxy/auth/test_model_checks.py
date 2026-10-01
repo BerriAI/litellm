@@ -980,3 +980,77 @@ def test_transcribe_is_a_known_provider_for_wildcard_expansion():
     assert get_known_models_from_wildcard("transcribe/*") == [
         "transcribe/StartTranscriptionJob"
     ]
+
+
+@pytest.mark.parametrize("public_prefix", ["nano-gpt", "my-nanogpt"])
+def test_nanogpt_wildcard_discovers_catalog_and_preserves_publisher(public_prefix: str) -> None:
+    from typing import Final
+
+    import respx
+
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    with respx.mock as http:
+        catalog: Final = http.get(
+            f"https://{public_prefix}.example/api/v1/models",
+            headers={"Authorization": "Bearer deployment-key"},
+        ).respond(200, json={"data": [{"id": "openai/example"}, {"id": "publisher/new-model"}]})
+        router: Final = Router(model_list=[{
+            "model_name": f"{public_prefix}/*",
+            "litellm_params": {
+                "model": "nano-gpt/*",
+                "api_key": "deployment-key",
+                "api_base": f"https://{public_prefix}.example/api/v1",
+            },
+        }])
+        for _ in range(2):
+            assert get_complete_model_list(
+                key_models=[], team_models=[], proxy_model_list=[f"{public_prefix}/*"],
+                user_model=None, infer_model_from_keys=False, llm_router=router,
+            ) == [f"{public_prefix}/openai/example", f"{public_prefix}/publisher/new-model"]
+        assert catalog.call_count == 1
+
+
+def test_nanogpt_catalog_cache_separates_credentials_and_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typing import Final
+
+    import respx
+
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setenv("NANOGPT_API_BASE", "https://cache-nanogpt.example/api/v1")
+    params: Final = LiteLLM_Params(model="nano-gpt/*")
+    with respx.mock as http:
+        for key in ("account-a", "account-b"):
+            monkeypatch.setenv("NANOGPT_API_KEY", key)
+            route: Final = http.get(
+                "https://cache-nanogpt.example/api/v1/models", headers={"Authorization": f"Bearer {key}"},
+            ).respond(200, json={"data": [{"id": f"publisher/{key}"}]})
+            assert get_known_models_from_wildcard("nano-gpt/*", params) == [f"nano-gpt/publisher/{key}"]
+            assert route.call_count == 1
+        monkeypatch.setenv("NANOGPT_API_BASE", "https://other-nanogpt.example/api/v1")
+        http.get("https://other-nanogpt.example/api/v1/models").respond(
+            200, json={"data": [{"id": "publisher/other-base"}]},
+        )
+        assert get_known_models_from_wildcard("nano-gpt/*", params) == ["nano-gpt/publisher/other-base"]
+        explicit: Final = LiteLLM_Params(
+            model="nano-gpt/*", api_key="account-a", api_base="https://cache-nanogpt.example/api/v1",
+        )
+        assert get_known_models_from_wildcard("nano-gpt/*", explicit) == ["nano-gpt/publisher/account-a"]
+        assert params.api_key is None
+        assert params.api_base is None
+
+
+def test_nanogpt_catalog_failure_does_not_break_model_listing() -> None:
+    import respx
+
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    with respx.mock as http:
+        http.get("https://unavailable-nanogpt.example/v1/models").respond(503)
+        assert get_known_models_from_wildcard(
+            "nano-gpt/*", LiteLLM_Params(model="nano-gpt/*", api_base="https://unavailable-nanogpt.example/v1"),
+        ) == []

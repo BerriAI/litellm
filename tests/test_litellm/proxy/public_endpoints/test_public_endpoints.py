@@ -377,6 +377,20 @@ def test_chatgpt_provider_fields():
     assert chatgpt["credential_fields"] == []
 
 
+def test_nanogpt_provider_fields_allow_environment_credentials_and_custom_base():
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    response = TestClient(app_instance).get("/public/providers/fields")
+    assert response.status_code == 200
+    provider = next(p for p in response.json() if p["litellm_provider"] == "nano-gpt")
+    assert provider["provider"] == "NANOGPT"
+    assert provider["provider_display_name"] == "NanoGPT"
+    fields = {field["key"]: field for field in provider["credential_fields"]}
+    assert fields["api_key"]["field_type"] == "password"
+    assert fields["api_key"]["required"] is False
+    assert fields["api_base"]["required"] is False
+
+
 ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
     {
         "a2a",
@@ -399,7 +413,6 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "meta",
         "modelscope",
         "mongodb",
-        "nano-gpt",
         "neosantara",
         "parasail",
         "pinstripes",

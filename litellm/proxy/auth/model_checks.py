@@ -42,6 +42,11 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
     if provider == "*":
         return get_valid_models(litellm_params=litellm_params)
 
+    if provider == LlmProviders.NANOGPT.value:
+        return get_valid_models(
+            check_provider_endpoint=True, custom_llm_provider=provider, litellm_params=litellm_params
+        )
+
     if provider in litellm.models_by_provider:
         provider_models: Final = get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
         return provider_models

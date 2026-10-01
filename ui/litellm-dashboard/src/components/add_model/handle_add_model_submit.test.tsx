@@ -106,6 +106,7 @@ describe("prepareModelAddRequest", () => {
     ["OpenAI", "openai/*"],
     ["Azure_AI_Studio", "azure_ai/*"],
     ["Petals", "petals/*"],
+    ["NANOGPT", "nano-gpt/*"],
   ])("composes wildcard names for the all-model selection", async (custom_llm_provider, wildcardModel) => {
     const formValues = {
       model_mappings: [],
