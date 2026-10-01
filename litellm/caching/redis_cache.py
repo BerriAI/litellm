@@ -787,6 +787,9 @@ class RedisCache(BaseCache):
     def _async_commands(self) -> _AsyncRedisCommands:
         return self.init_async_client()
 
+    async def async_eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> object:
+        return await self._async_commands().eval(script, numkeys, *keys_and_args)
+
     def check_and_fix_namespace(self, key: str) -> str:
         """
         Make sure each key starts with the given namespace

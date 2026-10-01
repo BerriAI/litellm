@@ -1,6 +1,7 @@
 """Tests for the session-token KDF and the edge/token-endpoint resolvers."""
 
 from datetime import datetime, timedelta, timezone
+from typing import Final
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -27,6 +28,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credent
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
     SESSION_TTL_SECONDS,
     AsymmetricSessionKeys,
+    HostedAppGrant,
     MintedSessionToken,
     SessionKeys,
     SessionPrincipal,
@@ -104,6 +106,20 @@ def test_resolve_admits_valid_access_token_with_and_without_scheme():
 def test_resolve_passes_non_session_bearers_through():
     for value in ("Bearer sk-1234", "Bearer llm_env_whatever", "Bearer eyJhbGciOi"):
         assert isinstance(resolve_session_bearer(value, KEYS, NOW), NotSessionBearer)
+
+
+@pytest.mark.parametrize("hosted", [False, True])
+def test_mcp_resolver_rejects_proxy_audience_access(hosted: bool) -> None:
+    grant: Final = HostedAppGrant(
+        grant_id="g",
+        redirect_uri="https://app.example/callback",
+        resource="https://gateway.example",
+        expires_at=int(NOW.timestamp()) + 600,
+    )
+    principal: Final = SessionPrincipal(user_id="u", client_id="c", audience="proxy_api", app_grant=grant if hosted else None)
+    minted: Final = mint_session_token(principal, KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    assert isinstance(resolve_session_bearer(minted.token.get_secret_value(), KEYS, NOW), SessionBearerInvalid)
 
 
 def test_resolve_fails_expired_token_closed_and_flags_expiry():

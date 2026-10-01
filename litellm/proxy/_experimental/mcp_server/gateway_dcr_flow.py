@@ -55,6 +55,15 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.proxy._experimental.mcp_server.bridge_token_flow import load_active_user_by_id
+from litellm.proxy._experimental.mcp_server.hosted_proxy_auth import (
+    HOSTED_ADMIN_SCOPE,
+    HostedFailure,
+    HostedProxyAuth,
+    hosted_proxy_auth,
+    hosted_redirect_is_allowed,
+    hosted_supported_scopes,
+)
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     canonical_resource_uri,
@@ -70,8 +79,11 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credent
     open_session_refresh_bearer,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
+    HOSTED_ACCESS_TTL,
+    HOSTED_GRANT_TTL,
     SESSION_ISSUER,
     SESSION_REFRESH_TTL_SECONDS,
+    HostedAppGrant,
     MintedSessionToken,
     OpenedSessionToken,
     SessionAudience,
@@ -84,6 +96,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     open_session_refresh_token,
     open_session_token,
 )
+from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -302,6 +315,7 @@ class _ConnectFlow(BaseModel):
     exp: int
     resource_server_id: str | None = None
     audience: SessionAudience | None = None
+    app_grant: HostedAppGrant | None = None
 
 
 class _GatewayAuthCode(BaseModel):
@@ -320,6 +334,7 @@ class _GatewayAuthCode(BaseModel):
     exp: int
     resource_server_id: str | None = None
     audience: SessionAudience | None = None
+    app_grant: HostedAppGrant | None = None
     team_id: str | None = None
 
 
@@ -563,24 +578,30 @@ async def native_client_authorize(
     response_type: str | None,
     session_user_id: str | None,
     lookup_consent_teams: LookupConsentTeams,
+    scope: str | None = None,
 ) -> Response:
-    """The authorize verb for a native client that named the proxy API itself as its
-    RFC 8707 ``resource``: the same client, redirect, PKCE, and sign-in checks as the
-    aggregate verb plus a loopback-only redirect (the credential this grant mints is the
-    user's personal proxy key, which belongs on their own machine and never behind a hosted
-    callback), then the consent page rendered right here (no connect-page interlude, since
-    there is no per-server vaulting to do) with the flow sealed into the per-flow cookie
-    and its handle carried only in the form, never in a URL."""
+    """Use the configured gateway login and consent for native or trusted admin applications."""
     rejected: Final = _rejected_authorize_request(
         client_id, redirect_uri, state, code_challenge, code_challenge_method, response_type
     )
     if rejected is not None:
         return rejected
-    if not is_loopback_redirect_host(urlparse(redirect_uri)):
-        return _oauth_error(400, "invalid_request", "a proxy-API grant may only redirect to a loopback address")
+    is_hosted: Final = not is_loopback_redirect_host(urlparse(redirect_uri))
+    if is_hosted and not hosted_redirect_is_allowed(redirect_uri):
+        return _oauth_error(
+            400, "invalid_request", "redirects require a loopback address or an explicitly trusted HTTPS callback"
+        )
+    if is_hosted and scope != HOSTED_ADMIN_SCOPE:
+        return _oauth_error(400, "invalid_scope", "hosted applications require explicit proxy:admin scope")
     base_url: Final = get_request_base_url(request)
     if session_user_id is None:
         return _login_redirect(base_url, request)
+    if is_hosted:
+        user: Final = await load_active_user_by_id(session_user_id, source="database")
+        if isinstance(user, str):
+            return _consent_lookup_failure_response(user)
+        if user.user_role != LitellmUserRoles.PROXY_ADMIN:
+            return _oauth_error(403, "access_denied", "application access requires a current proxy admin")
     teams: Final = await lookup_consent_teams(session_user_id)
     if not isinstance(teams, tuple):
         return _consent_lookup_failure_response(teams)
@@ -593,6 +614,14 @@ async def native_client_authorize(
         code_challenge=code_challenge or "",
         resource_server_id=None,
         audience=PROXY_API_AUDIENCE,
+        app_grant=HostedAppGrant(
+            grant_id=secrets.token_urlsafe(24),
+            redirect_uri=redirect_uri,
+            resource=base_url,
+            expires_at=int(datetime.now(timezone.utc).timestamp()) + HOSTED_GRANT_TTL,
+        )
+        if is_hosted
+        else None,
     )
     page: Final = render_native_client_consent_page(
         client_origin=_origin_only(redirect_uri),
@@ -600,6 +629,7 @@ async def native_client_authorize(
         teams=tuple((team.team_id, team.team_alias or team.team_id) for team in teams),
         flow_handle=handle,
         complete_url=f"{base_url}/authorize/complete",
+        hosted=is_hosted,
     )
     response: Final = HTMLResponse(page, headers=_CONSENT_PAGE_HEADERS)
     _set_flow_cookie(response, request, handle, flow)
@@ -619,6 +649,12 @@ NATIVE_CLIENT_AUTH_CONTRACT_VERSION: Final = 1
 Bump it only when an existing field changes meaning or goes away; adding fields is free."""
 
 
+class HostedAppAuthContract(TypedDict):
+    scopes_supported: ReadOnly[tuple[str, ...]]
+    access_token_ttl: ReadOnly[int]
+    refresh_token_ttl: ReadOnly[int]
+
+
 class NativeClientAuthContract(TypedDict):
     contract_version: ReadOnly[int]
     issuer: ReadOnly[str]
@@ -632,6 +668,7 @@ class NativeClientAuthContract(TypedDict):
     code_challenge_methods_supported: ReadOnly[tuple[str, ...]]
     token_endpoint_auth_methods_supported: ReadOnly[tuple[str, ...]]
     revocation_endpoint_auth_methods_supported: ReadOnly[tuple[str, ...]]
+    hosted_app: ReadOnly[HostedAppAuthContract]
 
 
 def native_client_auth_contract(request: Request, token_exchange_available: bool) -> NativeClientAuthContract:
@@ -653,6 +690,11 @@ def native_client_auth_contract(request: Request, token_exchange_available: bool
         "code_challenge_methods_supported": ("S256",),
         "token_endpoint_auth_methods_supported": ("none",),
         "revocation_endpoint_auth_methods_supported": ("none",),
+        "hosted_app": {
+            "scopes_supported": hosted_supported_scopes(),
+            "access_token_ttl": HOSTED_ACCESS_TTL,
+            "refresh_token_ttl": HOSTED_GRANT_TTL,
+        },
     }
     return contract
 
@@ -705,6 +747,7 @@ def _new_connect_flow(
     code_challenge: str,
     resource_server_id: str | None,
     audience: SessionAudience | None,
+    app_grant: HostedAppGrant | None = None,
 ) -> _ConnectFlow:
     now: Final = datetime.now(timezone.utc)
     return _ConnectFlow(
@@ -717,6 +760,7 @@ def _new_connect_flow(
         exp=int(now.timestamp()) + CONNECT_FLOW_TTL_SECONDS,
         resource_server_id=resource_server_id,
         audience=audience,
+        app_grant=app_grant,
     )
 
 
@@ -876,6 +920,8 @@ async def complete_connect_flow(
     opened: Final = _open_flow_for(request, flow_handle, session_user_id, now)
     if isinstance(opened, Response):
         return opened
+    if opened.app_grant is not None and not hosted_redirect_is_allowed(opened.redirect_uri):
+        return _oauth_error(400, "invalid_request", "the application callback is no longer trusted")
     if decision != "deny":
         described: Final = await _describe_opened_flow(opened, lookup_vendor_credential, lookup_server_reachability)
         if isinstance(described, Response):
@@ -926,6 +972,7 @@ def _approved_flow_response(flow: _ConnectFlow, delivery: str | None, team_id: s
             exp=int(now.timestamp()) + code_ttl,
             resource_server_id=flow.resource_server_id,
             audience=flow.audience,
+            app_grant=flow.app_grant,
             team_id=(team_id or None) if flow.audience == PROXY_API_AUDIENCE else None,
         ),
     )
@@ -1063,14 +1110,35 @@ class _SingleUseGuard:
         return "unclaimed" if local is None else "claimed"
 
 
-def _session_token_pair(principal: SessionPrincipal, keys: SessionSigningKeys, now: datetime) -> Response:
+async def _session_token_pair(
+    principal: SessionPrincipal,
+    keys: SessionSigningKeys,
+    now: datetime,
+    hosted_auth: HostedProxyAuth | None = None,
+    previous_refresh_jti: str | None = None,
+) -> Response:
     access: Final = mint_session_token(principal, keys, now)
     refresh: Final = mint_session_refresh_token(principal, keys, now)
     if not isinstance(access, MintedSessionToken) or not isinstance(refresh, MintedSessionToken):
         return _oauth_error(500, "server_error", "failed to mint the session credential")
+    if hosted_auth is not None:
+        failure: Final = await hosted_auth.advance(principal, previous_refresh_jti, refresh.jti)
+        if failure is not None:
+            return _hosted_failure_response(failure)
+    app_fields: Final = (
+        {
+            "scope": principal.app_grant.scope,
+            "user_id": principal.user_id,
+            "team_id": principal.team_id,
+            "refresh_expires_in": int((refresh.expires_at - now).total_seconds()),
+        }
+        if principal.app_grant is not None
+        else {}
+    )
     return JSONResponse(
         status_code=200,
         content={
+            **app_fields,
             "access_token": access.token.get_secret_value(),
             "token_type": "Bearer",
             "expires_in": int((access.expires_at - now).total_seconds()),
@@ -1193,6 +1261,7 @@ async def aggregate_token(
     subject_token_type: str | None = None,
     requested_token_type: str | None = None,
     exchange_subject_token: ExchangeSubjectToken = _refuse_subject_token,
+    hosted_auth: HostedProxyAuth | None = None,
 ) -> Response:
     """The aggregate token verb: authorization_code and refresh_token grants for the
     identity-only session pair, or for the proxy-API credential when the grant was issued
@@ -1215,6 +1284,7 @@ async def aggregate_token(
         reload_user=reload_user,
         mint_proxy_credential=mint_proxy_credential,
         guard=_SingleUseGuard(cache),
+        hosted_auth=hosted_auth,
     )
     if grant_type == "authorization_code":
         return await _authorization_code_grant(
@@ -1268,6 +1338,7 @@ class _GrantIssuer:
         reload_user: ReloadUser,
         mint_proxy_credential: MintProxyCredential,
         guard: _SingleUseGuard,
+        hosted_auth: HostedProxyAuth | None = None,
     ) -> None:
         self._request: Final = request
         self._resource: Final = resource
@@ -1276,6 +1347,7 @@ class _GrantIssuer:
         self._reload_user: Final = reload_user
         self._mint_proxy_credential: Final = mint_proxy_credential
         self._guard: Final = guard
+        self._hosted_auth: Final = hosted_auth
 
     async def __call__(
         self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str
@@ -1297,7 +1369,7 @@ class _GrantIssuer:
         refusal: Final = await self._claim_refusal(claim_key, claim_ttl_seconds, replayed)
         if refusal is not None:
             return refusal
-        return _session_token_pair(principal, self._keys, self._now)
+        return await _session_token_pair(principal, self._keys, self._now)
 
     async def _issue_proxy_credential(
         self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str
@@ -1312,6 +1384,22 @@ class _GrantIssuer:
         if refusal is not None:
             return refusal
         return _proxy_credential_response(minted, principal, self._keys, self._now)
+
+    async def issue_hosted(self, principal: SessionPrincipal, previous_refresh_jti: str | None = None) -> Response:
+        target_refusal: Final = self._proxy_api_target_refusal()
+        if target_refusal is not None:
+            return target_refusal
+        service: Final = self._hosted_auth or hosted_proxy_auth()
+        if isinstance(service, HostedFailure):
+            return _hosted_failure_response(service)
+        identity: Final = await service.validate(
+            principal,
+            get_request_base_url(self._request),
+            require_active=previous_refresh_jti is not None,
+        )
+        if isinstance(identity, HostedFailure):
+            return _hosted_failure_response(identity)
+        return await _session_token_pair(principal, self._keys, self._now, service, previous_refresh_jti)
 
     async def exchange(
         self, subject_token: str, client_id: str, exchange_subject_token: ExchangeSubjectToken
@@ -1371,6 +1459,18 @@ async def _authorization_code_grant(
         return _oauth_error(400, "invalid_target", "resource does not match the scope this code was issued for")
     if not _pkce_verifier_matches(code_verifier, parsed.code_challenge):
         return _oauth_error(400, "invalid_grant", "PKCE verification failed")
+    if parsed.app_grant is not None:
+        return await issue.issue_hosted(
+            SessionPrincipal(
+                user_id=parsed.user_id,
+                client_id=client_id,
+                audience=parsed.audience,
+                team_id=parsed.team_id,
+                app_grant=parsed.app_grant,
+            )
+        )
+    if parsed.audience == PROXY_API_AUDIENCE and not is_loopback_redirect_host(urlparse(parsed.redirect_uri)):
+        return _oauth_error(400, "invalid_grant", "this application must sign in again")
     # The marker's TTL derives from the code's own remaining lifetime so it outlives
     # whichever lifetime the code was minted with.
     return await issue(
@@ -1401,6 +1501,8 @@ async def _refresh_token_grant(
     opened: Final = open_session_refresh_bearer(refresh_token, keys, now, expected_client_id=client_id)
     if not isinstance(opened, SessionRefreshOpened):
         return _oauth_error(400, "invalid_grant", "the refresh token is invalid for this client")
+    if opened.principal.app_grant is not None:
+        return await issue.issue_hosted(opened.principal, opened.jti)
     if _resource_conflicts_with_scope(request, resource, opened.principal.resource_server_id):
         return _oauth_error(400, "invalid_target", "resource does not match the scope this token was issued for")
     # Refresh-token rotation (OAuth 2.0 Security BCP section 4.13): the presented refresh token is
@@ -1440,7 +1542,17 @@ async def _token_exchange_grant(
     return await issue.exchange(subject_token, client_id, exchange_subject_token)
 
 
-async def revoke_refresh_token(token: str, client_id: str, master_key: str | None, cache: DualCache) -> Response:
+def _hosted_failure_response(failure: HostedFailure) -> Response:
+    return _oauth_error(503 if failure.error == "temporarily_unavailable" else 400, failure.error, failure.description)
+
+
+async def revoke_refresh_token(
+    token: str,
+    client_id: str,
+    master_key: str | None,
+    cache: DualCache,
+    hosted_auth: HostedProxyAuth | None = None,
+) -> Response:
     """RFC 7009 revocation for the gateway's refresh tokens: burn the presented token's
     ``jti`` so neither the holder nor a thief can rotate it again. Access tokens are
     stateless and expire on their own (the proxy-API credential within
@@ -1459,6 +1571,19 @@ async def revoke_refresh_token(token: str, client_id: str, master_key: str | Non
         verbose_logger.error("mcp_gateway_dcr revoke rejected: %s", keys.detail)
         return _oauth_error(500, "server_error", "the gateway session signing configuration is invalid")
     now: Final = datetime.now(timezone.utc)
+    app_token: Final = (
+        open_session_token(token, keys, now, for_revocation=True)
+        if is_session_token(token)
+        else open_session_refresh_token(token, keys, now, for_revocation=True)
+    )
+    if isinstance(app_token, OpenedSessionToken) and app_token.principal.app_grant is not None:
+        if app_token.principal.client_id != client_id:
+            return Response(content="{}", media_type="application/json", headers=TOKEN_NO_CACHE_HEADERS)
+        service: Final = hosted_auth or hosted_proxy_auth()
+        result: Final = service if isinstance(service, HostedFailure) else await service.revoke(app_token.principal)
+        if isinstance(result, HostedFailure):
+            return _hosted_failure_response(result)
+        return Response(content="{}", media_type="application/json", headers=TOKEN_NO_CACHE_HEADERS)
     opened: Final = open_session_refresh_bearer(token, keys, now, expected_client_id=client_id)
     if isinstance(opened, SessionRefreshOpened):
         burned: Final = await _SingleUseGuard(cache).claim(
@@ -1485,6 +1610,8 @@ def _active_introspection_response(opened: OpenedSessionToken) -> Response:
             ("team_id", principal.team_id),
             ("resource_server_id", principal.resource_server_id),
             ("audience", principal.audience),
+            ("scope", principal.app_grant.scope if principal.app_grant is not None else None),
+            ("resource", principal.app_grant.resource if principal.app_grant is not None else None),
         )
         if value is not None
     }
@@ -1510,6 +1637,8 @@ async def introspect_gateway_token(
     master_key: str | None,
     reload_user: ReloadUser,
     cache: DualCache,
+    request: Request | None = None,
+    hosted_auth: HostedProxyAuth | None = None,
 ) -> Response:
     """RFC 7662 introspection for the gateway's session tokens, so an external gateway
     (Kong, an API management layer) can validate a LiteLLM-issued MCP session credential
@@ -1535,6 +1664,26 @@ async def introspect_gateway_token(
         return _inactive_introspection_response()
     if not isinstance(opened, OpenedSessionToken):
         return _inactive_introspection_response()
+    if opened.principal.app_grant is not None:
+        if request is None:
+            return _inactive_introspection_response()
+        service: Final = hosted_auth or hosted_proxy_auth()
+        identity: Final = (
+            service
+            if isinstance(service, HostedFailure)
+            else await service.validate(
+                opened.principal,
+                get_request_base_url(request),
+                refresh_jti=opened.jti if opened.kind == "session_refresh" else None,
+            )
+        )
+        if isinstance(identity, HostedFailure):
+            return (
+                _hosted_failure_response(identity)
+                if identity.error == "temporarily_unavailable"
+                else _inactive_introspection_response()
+            )
+        return _active_introspection_response(opened)
     if opened.kind == "session_refresh":
         peeked: Final = await _SingleUseGuard(cache).peek(f"{_USED_REFRESH_CACHE_PREFIX}{opened.jti}")
         if peeked == "unavailable":

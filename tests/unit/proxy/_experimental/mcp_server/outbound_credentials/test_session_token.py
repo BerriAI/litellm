@@ -1,6 +1,7 @@
 """Tests for the identity-only gateway session token (mint/open, hostile-input totality)."""
 
 from datetime import datetime, timedelta, timezone
+from typing import Final, Literal
 
 import jwt
 import pytest
@@ -10,6 +11,8 @@ from jwt.utils import base64url_decode, base64url_encode
 from pydantic import SecretStr, ValidationError
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
+    HOSTED_ACCESS_TTL,
+    HOSTED_GRANT_TTL,
     MAX_SESSION_TOKEN_BYTES,
     SESSION_ISSUER,
     SESSION_REFRESH_PREFIX,
@@ -17,6 +20,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     SESSION_TOKEN_PREFIX,
     SESSION_TTL_SECONDS,
     AsymmetricSessionKeys,
+    HostedAppGrant,
     MintedSessionToken,
     NotASessionToken,
     OpenedSessionToken,
@@ -53,6 +57,12 @@ NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 KEYS = SessionKeys(signing_key=SecretStr("k" * 32))
 OTHER_KEYS = SessionKeys(signing_key=SecretStr("x" * 32))
 PRINCIPAL = SessionPrincipal(user_id="user-123", client_id="llm_client_abc")
+APP_GRANT: Final = HostedAppGrant(
+    grant_id="grant-1",
+    redirect_uri="https://app.example/callback",
+    resource="https://gateway.example",
+    expires_at=int(NOW.timestamp()) + HOSTED_GRANT_TTL,
+)
 
 
 def _mint_access() -> str:
@@ -74,7 +84,8 @@ def _corrupt_signature(token: str) -> str:
 
 
 def _sign_claims(payload: dict, prefix: str = SESSION_TOKEN_PREFIX, keys: SessionKeys = KEYS) -> str:
-    return prefix + jwt.encode(payload, keys.signing_key.get_secret_value(), algorithm="HS256")
+    marker: Final = "app_" if payload.get("app_grant") is not None else ""
+    return prefix + marker + jwt.encode(payload, keys.signing_key.get_secret_value(), algorithm="HS256")
 
 
 def _valid_claims(**overrides) -> dict:
@@ -95,6 +106,8 @@ def test_access_round_trip_recovers_principal_and_caps_ttl():
     assert isinstance(minted, MintedSessionToken)
     assert minted.expires_at == NOW + timedelta(seconds=SESSION_TTL_SECONDS)
     token = minted.token.get_secret_value()
+    marked: Final = token.replace(SESSION_TOKEN_PREFIX, SESSION_TOKEN_PREFIX + "app_", 1)
+    assert isinstance(open_session_token(marked, KEYS, NOW), SessionMalformed)
     assert is_session_token(token)
     assert not is_session_refresh_token(token)
     opened = open_session_token(token, KEYS, NOW)
@@ -107,10 +120,58 @@ def test_refresh_round_trip_recovers_principal_and_caps_ttl():
     assert isinstance(minted, MintedSessionToken)
     assert minted.expires_at == NOW + timedelta(seconds=SESSION_REFRESH_TTL_SECONDS)
     token = minted.token.get_secret_value()
+    marked: Final = token.replace(SESSION_REFRESH_PREFIX, SESSION_REFRESH_PREFIX + "app_", 1)
+    assert isinstance(open_session_refresh_token(marked, KEYS, NOW), SessionMalformed)
     assert is_session_refresh_token(token)
     opened = open_session_refresh_token(token, KEYS, NOW)
     assert isinstance(opened, OpenedSessionToken)
     assert opened.principal == PRINCIPAL
+
+
+@pytest.mark.parametrize("remaining", [30, HOSTED_GRANT_TTL])
+@pytest.mark.parametrize("refresh", [False, True])
+def test_hosted_token_round_trip_and_grant_deadline(remaining: int, refresh: bool) -> None:
+    grant: Final = APP_GRANT.model_copy(update={"expires_at": int(NOW.timestamp()) + remaining})
+    principal: Final = SessionPrincipal(user_id="u", client_id="c", audience="proxy_api", app_grant=grant)
+    mint: Final = mint_session_refresh_token if refresh else mint_session_token
+    opener: Final = open_session_refresh_token if refresh else open_session_token
+    minted: Final = mint(principal, KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    assert minted.expires_at == NOW + timedelta(seconds=remaining if refresh else min(remaining, HOSTED_ACCESS_TTL))
+    unmarked: Final = minted.token.get_secret_value().replace("_app_", "_", 1)
+    assert isinstance(opener(unmarked, KEYS, NOW), SessionMalformed)
+    opened: Final = opener(minted.token.get_secret_value(), KEYS, NOW)
+    assert isinstance(opened, OpenedSessionToken)
+    assert opened.principal == principal
+    assert opened.jti == minted.jti
+
+
+@pytest.mark.parametrize("audience,server", [(None, None), ("proxy_api", "mcp-server")])
+def test_hosted_grant_requires_exclusive_proxy_audience(audience: Literal["proxy_api"] | None, server: str | None) -> None:
+    with pytest.raises(ValidationError):
+        SessionPrincipal(user_id="u", client_id="c", audience=audience, resource_server_id=server, app_grant=APP_GRANT)
+    claims: Final = _valid_claims(audience=audience, resource_server_id=server, app_grant=APP_GRANT.model_dump())
+    assert isinstance(open_session_token(_sign_claims(claims), KEYS, NOW), SessionMalformed)
+
+
+@pytest.mark.parametrize("hosted", [False, True])
+@pytest.mark.parametrize("refresh", [False, True])
+def test_revocation_expiry_is_extended_only_for_a_live_hosted_grant(hosted: bool, refresh: bool) -> None:
+    claims: Final = _valid_claims(
+        audience="proxy_api",
+        app_grant=APP_GRANT.model_dump() if hosted else None,
+        kind="session_refresh" if refresh else "session",
+    )
+    token: Final = _sign_claims(claims, prefix=SESSION_REFRESH_PREFIX if refresh else SESSION_TOKEN_PREFIX)
+    opener: Final = open_session_refresh_token if refresh else open_session_token
+    later: Final = NOW + timedelta(seconds=600)
+    assert isinstance(opener(token, KEYS, later), SessionExpired)
+    assert isinstance(
+        opener(token, KEYS, later, for_revocation=True), OpenedSessionToken if hosted else SessionExpired
+    )
+    deadline: Final = NOW + timedelta(seconds=HOSTED_GRANT_TTL)
+    assert isinstance(opener(token, KEYS, deadline, for_revocation=True), SessionExpired)
+    assert isinstance(opener(_corrupt_signature(token), KEYS, later, for_revocation=True), SessionBadSignature)
 
 
 def test_access_token_reprefixed_as_refresh_is_rejected_by_signed_kind():
@@ -190,6 +251,10 @@ def test_alg_none_token_is_rejected():
         _valid_claims(kind="access"),
         _valid_claims(user_id=""),
         _valid_claims(nbf=0),
+        _valid_claims(audience="proxy_api", app_grant={**APP_GRANT.model_dump(), "scope": "proxy:read"}),
+        _valid_claims(audience="proxy_api", app_grant={**APP_GRANT.model_dump(), "expires_at": str(APP_GRANT.expires_at)}),
+        _valid_claims(audience="proxy_api", app_grant={**APP_GRANT.model_dump(), "extra": "forbidden"}),
+        _valid_claims(audience="proxy_api", app_grant=APP_GRANT.model_dump(), exp=APP_GRANT.expires_at + 1),
         {k: v for k, v in _valid_claims().items() if k != "client_id"},
         {k: v for k, v in _valid_claims().items() if k != "exp"},
     ],
@@ -253,6 +318,7 @@ def test_mcp_principal_wire_claims_carry_no_audience_or_team_keys():
     for claims in (access_claims, refresh_claims):
         assert "audience" not in claims
         assert "team_id" not in claims
+        assert "app_grant" not in claims
 
 
 def test_legacy_signed_claims_open_with_no_audience_and_no_team():

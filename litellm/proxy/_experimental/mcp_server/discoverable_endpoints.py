@@ -1974,6 +1974,7 @@ async def authorize(
                 response_type=response_type,
                 session_user_id=_session_cookie_user_id(request),
                 lookup_consent_teams=lookup_consent_teams,
+                scope=scope,
             )
         return aggregate_authorize(
             request=request,
@@ -2169,7 +2170,7 @@ async def revoke_endpoint(request: Request, token: str = Form(...), client_id: s
 
 
 @router.post("/introspect", dependencies=[Depends(user_api_key_auth)])
-async def introspect_endpoint(token: str = Form(...)) -> Response:
+async def introspect_endpoint(request: Request, token: str = Form(...)) -> Response:
     """RFC 7662 introspection for gateway-issued session tokens (``llm_session_`` /
     ``llm_srefresh_``), so an external gateway can validate them without the signing
     secret. The caller authenticates with a LiteLLM virtual key (section 2.1, enforced by
@@ -2181,6 +2182,7 @@ async def introspect_endpoint(token: str = Form(...)) -> Response:
     )
 
     return await introspect_gateway_token(
+        request=request,
         token=token,
         master_key=master_key,
         reload_user=_reload_active_user_by_id,

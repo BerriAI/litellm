@@ -234,6 +234,8 @@ def resolve_session_bearer(
         return NotSessionBearer()
     opened: Final = open_session_token(candidate, keys, now)
     if isinstance(opened, OpenedSessionToken):
+        if opened.principal.audience is not None or opened.principal.app_grant is not None:
+            return SessionBearerInvalid()
         return SessionBearerAdmitted(principal=opened.principal)
     return SessionBearerInvalid(expired=isinstance(opened, SessionExpired))
 

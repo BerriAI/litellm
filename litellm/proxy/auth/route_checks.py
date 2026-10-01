@@ -67,7 +67,53 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES: Final = ("/regenerate", "/reset_spe
 _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS: Final = frozenset(("openai_routes", "llm_api_routes"))
 
 
+_ADMIN_OPERATIONS: Final = (
+    "/budget/new",
+    "/budget/update",
+    "/budget/info",
+    "/budget/delete",
+    "/team/bulk_member_add",
+    "/team/model/add",
+    "/team/model/delete",
+    "/team/{team_id}/disable_logging",
+)
+
+
 class RouteChecks:
+    @staticmethod
+    def hosted_admin_route_allowed(route: str) -> bool:
+        if not route.isprintable() or any(segment in (".", "..") for segment in route.split("/")):
+            return False
+        if route in (
+            *LiteLLMRoutes.master_key_only_routes.value,
+            "/user/password/change",
+            "/session/logout",
+        ) or route.startswith(("/server/oauth/", "/sso/", "/jwt/", "/v1/mcp/server/oauth/")):
+            return False
+        if route.startswith("/v1/mcp/server/") and any(
+            segment in ("user-credential", "user-credentials", "oauth-user-credential", "user-env-vars")
+            for segment in route.split("/")
+        ):
+            return False
+        if "/realtime/" in route and route.endswith(("/client_secrets", "/transcription_sessions")):
+            return False
+        groups: Final = (
+            LiteLLMRoutes.management_routes,
+            LiteLLMRoutes.self_managed_routes,
+            LiteLLMRoutes.org_admin_only_routes,
+            LiteLLMRoutes.admin_viewer_routes,
+            LiteLLMRoutes.info_routes,
+            LiteLLMRoutes.spend_tracking_routes,
+            LiteLLMRoutes.global_spend_tracking_routes,
+            LiteLLMRoutes.openai_routes,
+            LiteLLMRoutes.anthropic_routes,
+            LiteLLMRoutes.google_routes,
+            LiteLLMRoutes.model_info_routes,
+        )
+        return RouteChecks.check_route_access(route=route, allowed_routes=_ADMIN_OPERATIONS) or any(
+            RouteChecks.check_route_access(route=route, allowed_routes=group.value) for group in groups
+        )
+
     @staticmethod
     def should_call_route(
         route: str,

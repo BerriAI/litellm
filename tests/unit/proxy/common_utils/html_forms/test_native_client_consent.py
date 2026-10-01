@@ -1,4 +1,4 @@
-
+from typing import Final
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.proxy.common_utils.html_forms.native_client_consent import render_native_client_consent_page
@@ -65,3 +65,13 @@ def test_consent_page_promises_only_what_logout_can_deliver():
     assert f"expires within {CLI_JWT_EXPIRATION_HOURS} hours" in page
     assert "<code>lite logout</code> stops it from being renewed" in page
     assert "revoked" not in page
+
+
+def test_hosted_consent_discloses_admin_changes_model_billing_and_revocation() -> None:
+    page: Final = _render(hosted=True, client_origin="https://admin.example")
+    assert "A web application at <code>https://admin.example</code>" in page
+    assert "manage keys, users, teams and models" in page
+    assert "current administrator permissions" in page
+    assert "Model calls can incur charges" in page
+    assert "Disconnecting the application revokes access immediately" in page
+    assert "lite logout" not in page

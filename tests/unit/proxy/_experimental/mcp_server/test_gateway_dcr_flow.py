@@ -43,6 +43,7 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     register_aggregate_client,
     revoke_refresh_token,
 )
+from litellm.proxy._experimental.mcp_server.hosted_proxy_auth import HostedProxyAuth, load_hosted_user
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
     SessionBearerAdmitted,
     SessionRefreshOpened,
@@ -57,6 +58,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     mint_session_refresh_token,
     mint_session_token,
 )
+from tests.unit.proxy._experimental.mcp_server.test_hosted_proxy_auth import NOW, DatabaseTable, GrantStore
 
 MASTER_KEY = "sk-gateway-dcr-flow-tests"
 REDIRECT_URI = "https://claude.ai/api/mcp/auth_callback"
@@ -69,11 +71,14 @@ VSCODE_REDIRECT_URIS: Final = (
 MAX_LENGTH_REDIRECT_URIS: Final = tuple(f"https://client.example/{index}/".ljust(256, "a") for index in range(4))
 CODE_VERIFIER = "verifier-" + "v" * 43
 CODE_CHALLENGE = urlsafe_b64encode(hashlib.sha256(CODE_VERIFIER.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
+HOSTED_REDIRECT_URI: Final = "https://admin.example/oauth/callback"
+HOSTED_CALLBACK_SETTING: Final = "LITELLM_PROXY_API_OAUTH_ADMIN_REDIRECT_URIS"
 
 
 @pytest.fixture(autouse=True)
 def _salt_key(monkeypatch):
     monkeypatch.setenv("LITELLM_SALT_KEY", MASTER_KEY)
+    monkeypatch.delenv(HOSTED_CALLBACK_SETTING, raising=False)
 
 
 def _request(path="/authorize", query="", cookies=None, method="GET"):
@@ -1540,8 +1545,6 @@ async def test_native_authorize_validation_failures_never_reach_consent():
 
 @pytest.mark.asyncio
 async def test_native_authorize_refuses_a_hosted_redirect_for_the_proxy_api():
-    """Registration accepts any https redirect because MCP clients can be hosted, but a
-    proxy-API grant hands out the user's personal key, so it only ever goes back to loopback."""
     hosted = "https://evil.example/cb"
     client_id = (await _register([hosted]))["client_id"]
     lookup = _ConsentTeams()
@@ -1549,7 +1552,9 @@ async def test_native_authorize_refuses_a_hosted_redirect_for_the_proxy_api():
     assert response.status_code == 400
     assert json.loads(response.body) == {
         "error": "invalid_request",
-        "error_description": "a proxy-API grant may only redirect to a loopback address",
+        "error_description": (
+            "redirects require a loopback address or an explicitly trusted HTTPS callback"
+        ),
     }
     assert "set-cookie" not in response.headers
     assert lookup.calls == []
@@ -1985,6 +1990,7 @@ def test_native_client_auth_contract_points_every_endpoint_at_this_proxy():
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
         "revocation_endpoint_auth_methods_supported": ["none"],
+        "hosted_app": {"scopes_supported": [], "access_token_ttl": 300, "refresh_token_ttl": 86400},
     }
 
 
@@ -2238,8 +2244,13 @@ async def test_token_exchange_mints_the_proxy_credential_for_the_idp_subject():
 
 
 @pytest.mark.asyncio
-async def test_exchanged_credential_refreshes_and_rotates_like_a_consented_one():
-    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+@pytest.mark.parametrize(
+    "redirect_uris", [(LOOPBACK_REDIRECT_URI,), (REDIRECT_URI,), (LOOPBACK_REDIRECT_URI, REDIRECT_URI)],
+)
+async def test_exchanged_credential_refreshes_and_rotates_like_a_consented_one(
+    redirect_uris: tuple[str, ...],
+) -> None:
+    client_id: Final = (await _register(list(redirect_uris)))["client_id"]
     minter, cache = _Minter(), DualCache()
     exchanged = json.loads((await _exchange_native(client_id, minter, _Exchanger(), cache=cache)).body)
     refreshed = await _refresh_native(exchanged["refresh_token"], client_id, minter, cache)
@@ -2354,3 +2365,120 @@ async def test_token_exchange_relays_a_mint_refusal(failure, status, error):
     response = await _exchange_native(client_id, _Minter(failure), _Exchanger())
     assert response.status_code == status
     assert json.loads(response.body)["error"] == error
+
+
+@pytest.fixture
+def hosted_admin_database(monkeypatch: pytest.MonkeyPatch) -> DatabaseTable:
+    from types import SimpleNamespace
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    users: Final = DatabaseTable(LiteLLM_UserTable(user_id="u1", user_role="proxy_admin"))
+    writer: Final = SimpleNamespace(litellm_usertable=users)
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(writer_db=writer, db=None))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(proxy_server, "user_custom_auth", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setenv(HOSTED_CALLBACK_SETTING, HOSTED_REDIRECT_URI)
+    return users
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("callback", [
+    "https://admin.example/other", "https://admin.example/oauth/callback/child",
+    "https://admin.example.evil.example/oauth/callback", "https://sub.admin.example/oauth/callback",
+    "https://admin.example:444/oauth/callback", "https://admin.example/oauth/callback?next=other",
+])
+async def test_hosted_callback_allowlist_requires_exact_uri(
+    hosted_admin_database: DatabaseTable, callback: str,
+) -> None:
+    client_id: Final = (await _register([callback]))["client_id"]
+    lookup: Final = _ConsentTeams()
+    response: Final = await _native_authorize(client_id, redirect_uri=callback, scope="proxy:admin", lookup=lookup)
+    assert response.status_code == 400 and "location" not in response.headers
+    assert lookup.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("decision", ["approve", "deny"])
+async def test_removed_hosted_callback_cannot_receive_consent_redirect(
+    monkeypatch: pytest.MonkeyPatch, hosted_admin_database: DatabaseTable, decision: str,
+) -> None:
+    client_id: Final = (await _register([HOSTED_REDIRECT_URI]))["client_id"]
+    consent: Final = await _native_authorize(client_id, redirect_uri=HOSTED_REDIRECT_URI, scope="proxy:admin")
+    monkeypatch.delenv(HOSTED_CALLBACK_SETTING)
+    response: Final = await _complete_consent(consent, decision=decision)
+    assert response.status_code == 400 and "location" not in response.headers
+
+
+@pytest.mark.asyncio
+async def test_removed_hosted_callback_cannot_redeem_pending_code(
+    monkeypatch: pytest.MonkeyPatch, hosted_admin_database: DatabaseTable,
+) -> None:
+    client_id: Final = (await _register([HOSTED_REDIRECT_URI]))["client_id"]
+    consent: Final = await _native_authorize(client_id, redirect_uri=HOSTED_REDIRECT_URI, scope="proxy:admin")
+    approved: Final = await _complete_consent(consent, decision="approve")
+    monkeypatch.delenv(HOSTED_CALLBACK_SETTING)
+    minter: Final = _Minter()
+    response: Final = await _redeem(
+        _code_from(approved), client_id, redirect_uri=HOSTED_REDIRECT_URI, resource=PROXY_API_RESOURCE,
+        hosted_auth=HostedProxyAuth(GrantStore(), load_hosted_user, NOW), mint_proxy_credential=minter,
+    )
+    assert response.status_code == 400 and json.loads(response.body)["error"] == "invalid_grant"
+    assert minter.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["internal_user", "proxy_admin_viewer"])
+async def test_hosted_consent_checks_current_role_instead_of_cached_admin(
+    hosted_admin_database: DatabaseTable, role: str,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    client_id: Final = (await _register([HOSTED_REDIRECT_URI]))["client_id"]
+    await proxy_server.user_api_key_cache.async_set_cache(key="u1", value=hosted_admin_database.row)
+    hosted_admin_database.row = LiteLLM_UserTable(user_id="u1", user_role=role)
+    response: Final = await _native_authorize(client_id, redirect_uri=HOSTED_REDIRECT_URI, scope="proxy:admin")
+    assert response.status_code == 403 and json.loads(response.body)["error"] == "access_denied"
+    assert "set-cookie" not in response.headers
+
+
+@pytest.mark.asyncio
+async def test_hosted_demotion_after_consent_prevents_credential_issuance(
+    hosted_admin_database: DatabaseTable,
+) -> None:
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    client_id: Final = (await _register([HOSTED_REDIRECT_URI]))["client_id"]
+    consent: Final = await _native_authorize(client_id, redirect_uri=HOSTED_REDIRECT_URI, scope="proxy:admin")
+    approved: Final = await _complete_consent(consent, decision="approve")
+    hosted_admin_database.row = LiteLLM_UserTable(user_id="u1", user_role="internal_user")
+    minter: Final = _Minter()
+    response: Final = await _redeem(
+        _code_from(approved), client_id, redirect_uri=HOSTED_REDIRECT_URI, resource=PROXY_API_RESOURCE,
+        hosted_auth=HostedProxyAuth(GrantStore(), load_hosted_user, NOW), mint_proxy_credential=minter,
+    )
+    assert response.status_code == 400 and json.loads(response.body)["error"] == "insufficient_scope"
+    assert minter.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [None, "proxy:write", "proxy:admin extra"])
+async def test_hosted_callback_requires_explicit_admin_scope(
+    hosted_admin_database: DatabaseTable, scope: str | None,
+) -> None:
+    client_id: Final = (await _register([HOSTED_REDIRECT_URI]))["client_id"]
+    response: Final = await _native_authorize(
+        client_id, redirect_uri=HOSTED_REDIRECT_URI, scope=scope, session_user_id=None,
+    )
+    assert response.status_code == 400 and json.loads(response.body)["error"] == "invalid_scope"
+    assert "location" not in response.headers
+
+
+def test_discovery_advertises_hosted_admin_when_configured(hosted_admin_database: DatabaseTable) -> None:
+    contract: Final = native_client_auth_contract(_request("/.well-known/litellm-cli-auth"), False)
+    assert contract["hosted_app"] == {
+        "scopes_supported": ("proxy:admin",), "access_token_ttl": 300, "refresh_token_ttl": 86400,
+    }

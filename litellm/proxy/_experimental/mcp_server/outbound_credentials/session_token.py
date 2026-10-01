@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import secrets
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Final, Literal, TypeAlias
 
@@ -62,20 +62,22 @@ the envelope issuer so a token of one family can never validate in the other eve
 hypothetical shared signing key."""
 
 SESSION_TTL_SECONDS: Final = 3600
-"""Session ACCESS token lifetime (1h), matching the BYOK session bearer window: a
+"""Default session ACCESS token lifetime (1h), matching the BYOK session bearer window: a
 client-held credential never outlives a bounded window, and each refresh re-validates
 the live user before re-minting."""
 
 SESSION_REFRESH_TTL_SECONDS: Final = 1209600
-"""Session REFRESH token lifetime (14 days), matching the refresh-envelope bound. Each
+"""Default session REFRESH token lifetime (14 days), matching the refresh-envelope bound. Each
 renewal re-validates the sealed user against the live record (deactivation gates it) and
 rotates the refresh token, so the practical bound is idle time, not a fixed session."""
 
+HOSTED_ACCESS_TTL: Final = 300
+HOSTED_GRANT_TTL: Final = 86400
+_HOSTED_SESSION_MARKER: Final = "app_"
+
 MAX_SESSION_TOKEN_BYTES: Final = 4096
 """Size cap on the serialized token (prefix + JWT, in bytes) and on any candidate accepted
-by the openers. Session claims are small; the only variable-length field is ``client_id``
-(a sealed DCR client record), and 4096 leaves ample headroom under common 8-16KB header
-limits while bounding hostile input before JWT parsing."""
+by the openers, bounding hostile input before JWT parsing."""
 
 _SESSION_JWT_ALGORITHM: Final = "HS256"
 
@@ -90,11 +92,25 @@ on open, so a signature-valid token of one kind cannot be replayed as the other 
 wire prefix is swapped (the prefix is not part of the signed payload; this claim is)."""
 
 SessionAudience = Literal["proxy_api"]
-"""The non-MCP audience a session REFRESH token can be minted for. ``None`` (the default and
-the only value ever on an MCP wire) means the aggregate MCP gateway; ``"proxy_api"`` means the
-refresh grant re-mints the proxy-API CLI credential instead of an MCP session pair. The audience
-is read only from the signed claims, never from the request, so a token of one audience can
-never be redeemed as the other."""
+"""``None`` denotes MCP; ``"proxy_api"`` denotes proxy API access. Native API refresh grants
+re-mint CLI credentials; hosted app grants use a signed session pair. The audience is read
+only from signed claims, never from the request."""
+
+
+class HostedAppGrant(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+    grant_id: str = Field(min_length=1)
+    redirect_uri: str = Field(min_length=1)
+    resource: str = Field(min_length=1)
+    expires_at: int
+    scope: Literal["proxy:admin"] = "proxy:admin"
+
+
+def _validate_app_scope(
+    app_grant: HostedAppGrant | None, audience: SessionAudience | None, resource_server_id: str | None
+) -> None:
+    if app_grant is not None and (audience != "proxy_api" or resource_server_id is not None):
+        raise ValueError("An app grant requires the proxy API audience without an MCP server scope")
 
 
 class SessionPrincipal(BaseModel):
@@ -119,6 +135,12 @@ class SessionPrincipal(BaseModel):
     resource_server_id: str | None = None
     audience: SessionAudience | None = None
     team_id: str | None = None
+    app_grant: HostedAppGrant | None = None
+
+    @model_validator(mode="after")
+    def validate_app_scope(self) -> SessionPrincipal:
+        _validate_app_scope(self.app_grant, self.audience, self.resource_server_id)
+        return self
 
 
 class SessionKeys(BaseModel):
@@ -218,6 +240,7 @@ class MintedSessionToken(BaseModel):
     model_config = ConfigDict(frozen=True)
     token: SecretStr
     expires_at: datetime
+    jti: str
 
 
 class OpenedSessionToken(BaseModel):
@@ -302,6 +325,14 @@ class _SessionClaims(BaseModel):
     resource_server_id: str | None = None
     audience: SessionAudience | None = None
     team_id: str | None = None
+    app_grant: HostedAppGrant | None = None
+
+    @model_validator(mode="after")
+    def validate_app_scope(self) -> _SessionClaims:
+        _validate_app_scope(self.app_grant, self.audience, self.resource_server_id)
+        if self.app_grant is not None and self.exp > self.app_grant.expires_at:
+            raise ValueError("A session token cannot outlive its app grant")
+        return self
 
 
 def is_session_token(candidate: str) -> bool:
@@ -316,6 +347,12 @@ def is_session_refresh_token(candidate: str) -> bool:
     return candidate.startswith(SESSION_REFRESH_PREFIX)
 
 
+def is_hosted_session_token(candidate: str) -> bool:
+    return candidate.startswith(
+        (SESSION_TOKEN_PREFIX + _HOSTED_SESSION_MARKER, SESSION_REFRESH_PREFIX + _HOSTED_SESSION_MARKER)
+    )
+
+
 def mint_session_token(
     principal: SessionPrincipal,
     keys: SessionSigningKeys,
@@ -323,14 +360,13 @@ def mint_session_token(
 ) -> MintedSessionToken | SessionTokenMintError:
     """Mint the short-lived session ACCESS token for ``principal``.
 
-    ``exp`` is ``SESSION_TTL_SECONDS`` from ``now``. Returns ``SessionTokenTooLarge`` when
-    the serialized token exceeds ``MAX_SESSION_TOKEN_BYTES``.
+    Hosted access lasts at most ``HOSTED_ACCESS_TTL`` and cannot outlive its app grant.
+    Other sessions use ``SESSION_TTL_SECONDS``. Oversized tokens return ``SessionTokenTooLarge``.
     """
     return _mint(
         kind="session",
         prefix=SESSION_TOKEN_PREFIX,
         principal=principal,
-        expires_at=now + timedelta(seconds=SESSION_TTL_SECONDS),
         keys=keys,
         now=now,
     )
@@ -343,7 +379,7 @@ def mint_session_refresh_token(
 ) -> MintedSessionToken | SessionTokenMintError:
     """Mint the long-lived session REFRESH token for ``principal``.
 
-    ``exp`` is ``SESSION_REFRESH_TTL_SECONDS`` from ``now``. Minting a distinct
+    Hosted refresh expires with its app grant; other sessions use ``SESSION_REFRESH_TTL_SECONDS``. A distinct
     ``kind="session_refresh"`` claim is what keeps a refresh token from ever opening as an
     access credential at the MCP edge.
     """
@@ -351,7 +387,6 @@ def mint_session_refresh_token(
         kind="session_refresh",
         prefix=SESSION_REFRESH_PREFIX,
         principal=principal,
-        expires_at=now + timedelta(seconds=SESSION_REFRESH_TTL_SECONDS),
         keys=keys,
         now=now,
     )
@@ -361,19 +396,30 @@ def open_session_token(
     candidate: str,
     keys: SessionSigningKeys,
     now: datetime,
+    *,
+    for_revocation: bool = False,
 ) -> OpenedSessionToken | SessionTokenOpenError:
     """Validate a session ACCESS ``candidate`` and recover the principal.
 
     Never raises for bad input: every invalid, expired, tampered, or wrong-kind candidate
     maps to a distinct ``SessionTokenOpenError`` variant.
     """
-    return _open(candidate, prefix=SESSION_TOKEN_PREFIX, expected_kind="session", keys=keys, now=now)
+    return _open(
+        candidate,
+        prefix=SESSION_TOKEN_PREFIX,
+        expected_kind="session",
+        keys=keys,
+        now=now,
+        for_revocation=for_revocation,
+    )
 
 
 def open_session_refresh_token(
     candidate: str,
     keys: SessionSigningKeys,
     now: datetime,
+    *,
+    for_revocation: bool = False,
 ) -> OpenedSessionToken | SessionTokenOpenError:
     """Validate a session REFRESH ``candidate`` and recover the principal.
 
@@ -381,19 +427,34 @@ def open_session_refresh_token(
     ``kind="session_refresh"`` claim is required, so an access token re-prefixed as a
     refresh one is rejected as ``SessionMalformed``.
     """
-    return _open(candidate, prefix=SESSION_REFRESH_PREFIX, expected_kind="session_refresh", keys=keys, now=now)
+    return _open(
+        candidate,
+        prefix=SESSION_REFRESH_PREFIX,
+        expected_kind="session_refresh",
+        keys=keys,
+        now=now,
+        for_revocation=for_revocation,
+    )
+
+
+def _session_expiry(principal: SessionPrincipal, kind: SessionTokenKind, now: datetime) -> datetime:
+    if principal.app_grant is None:
+        ttl: Final = SESSION_TTL_SECONDS if kind == "session" else SESSION_REFRESH_TTL_SECONDS
+        return now + timedelta(seconds=ttl)
+    deadline: Final = datetime.fromtimestamp(principal.app_grant.expires_at, tz=timezone.utc)
+    return min(now + timedelta(seconds=HOSTED_ACCESS_TTL), deadline) if kind == "session" else deadline
 
 
 def _mint(
     kind: SessionTokenKind,
     prefix: str,
     principal: SessionPrincipal,
-    expires_at: datetime,
     keys: SessionSigningKeys,
     now: datetime,
 ) -> MintedSessionToken | SessionTokenTooLarge:
     """Sign the claims for either token kind and enforce the size cap. Shared by both mints
     so the JWT shape, issuer, and size guard cannot drift between access and refresh."""
+    expires_at: Final = _session_expiry(principal, kind, now)
     claims: Final = _SessionClaims(
         iss=SESSION_ISSUER,
         iat=int(now.timestamp()),
@@ -405,12 +466,14 @@ def _mint(
         resource_server_id=principal.resource_server_id,
         audience=principal.audience,
         team_id=principal.team_id,
+        app_grant=principal.app_grant,
     )
-    token: Final = prefix + _sign_claims(claims, keys)
+    marker: Final = _HOSTED_SESSION_MARKER if principal.app_grant is not None else ""
+    token: Final = prefix + marker + _sign_claims(claims, keys)
     size_bytes: Final = len(token.encode("utf-8"))
     if size_bytes > MAX_SESSION_TOKEN_BYTES:
         return SessionTokenTooLarge(size_bytes=size_bytes, max_bytes=MAX_SESSION_TOKEN_BYTES)
-    return MintedSessionToken(token=SecretStr(token), expires_at=expires_at)
+    return MintedSessionToken(token=SecretStr(token), expires_at=expires_at, jti=claims.jti)
 
 
 def _sign_claims(claims: _SessionClaims, keys: SessionSigningKeys) -> str:
@@ -434,6 +497,7 @@ def _open(
     expected_kind: SessionTokenKind,
     keys: SessionSigningKeys,
     now: datetime,
+    for_revocation: bool,
 ) -> OpenedSessionToken | SessionTokenOpenError:
     """Prefix-route, size-bound, signature-verify, kind-check, and expiry-check an
     attacker-controlled candidate, shared by both openers so the security gate is identical
@@ -447,12 +511,16 @@ def _open(
         return SessionMalformed()
     if len(candidate.encode("utf-8", "surrogatepass")) > MAX_SESSION_TOKEN_BYTES:
         return SessionMalformed()
-    claims: Final = _decode_claims(candidate.removeprefix(prefix), keys)
+    compact: Final = candidate.removeprefix(prefix)
+    claims: Final = _decode_claims(compact.removeprefix(_HOSTED_SESSION_MARKER), keys)
     if not isinstance(claims, _SessionClaims):
         return claims
+    if compact.startswith(_HOSTED_SESSION_MARKER) != (claims.app_grant is not None):
+        return SessionMalformed()
     if claims.kind != expected_kind:
         return SessionMalformed()
-    if now.timestamp() >= claims.exp:
+    expires_at: Final = claims.app_grant.expires_at if for_revocation and claims.app_grant is not None else claims.exp
+    if now.timestamp() >= expires_at:
         return SessionExpired()
     return OpenedSessionToken(
         principal=SessionPrincipal(
@@ -461,6 +529,7 @@ def _open(
             resource_server_id=claims.resource_server_id,
             audience=claims.audience,
             team_id=claims.team_id,
+            app_grant=claims.app_grant,
         ),
         jti=claims.jti,
         kind=claims.kind,

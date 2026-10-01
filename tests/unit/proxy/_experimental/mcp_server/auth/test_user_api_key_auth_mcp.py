@@ -8124,12 +8124,25 @@ class TestGatewaySessionAdmission:
             ("/mcp", None, ((b"x-mcp-servers", b"github"),)),
         ],
     )
-    async def test_arm_admits_session_bearer_on_per_server_scopes(self, path, original_path, extra_headers):
+    @pytest.mark.parametrize("server_auth", ["true_passthrough", "oauth_delegate", "oauth2"])
+    async def test_arm_admits_session_bearer_on_per_server_scopes(self, path, original_path, extra_headers, server_auth):
         """A valid session bearer admits the live user on per-server paths (the standard
         spelling and the legacy /{server}/mcp spelling as dynamic_mcp_route rewrites it) and
         x-mcp-servers scoped requests, never touching user_api_key_auth; downstream grant
         resolution then intersects the named servers against the admitted subject's grants,
         so the narrower scope can never broaden access (LIT-4864)."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        global_mcp_server_manager.registry["github"] = MCPServer(
+            server_id="github",
+            name="github",
+            server_name="github",
+            transport="http",
+            auth_type=MCPAuth(server_auth),
+            dcr_bridge=server_auth == "oauth_delegate",
+        )
         token = self._access_token(user_id="sso-user-42")
         scope = self._scope(token, path=path, extra_headers=extra_headers)
         if original_path is not None:
@@ -9340,7 +9353,7 @@ class TestSessionBearerEgressScrub:
     admission marker (design-review finding: a session bearer misdirected to a per-server true_passthrough
     path would otherwise be forwarded upstream verbatim and replayed against the aggregate endpoint)."""
 
-    async def test_session_bearer_misdirected_to_passthrough_is_scrubbed(self):
+    async def test_session_bearer_misdirected_to_passthrough_is_rejected(self):
         from litellm.types.mcp import MCPAuth
 
         scope = {
@@ -9353,6 +9366,7 @@ class TestSessionBearerEgressScrub:
         ttp_server.auth_type = MCPAuth.true_passthrough
 
         with (
+            patch("litellm.proxy.proxy_server.master_key", "sk-session-passthrough-test"),
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 new_callable=AsyncMock,
@@ -9360,11 +9374,11 @@ class TestSessionBearerEgressScrub:
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = ttp_server
-            (_auth, _mah, _srv, _sah, oauth2_headers, raw_headers) = await MCPRequestHandler.process_mcp_request(scope)
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
 
-        mock_auth.assert_not_called()  # true_passthrough → LiteLLM auth skipped (anonymous arm, no marker)
-        assert oauth2_headers is None  # session-shaped bearer scrubbed from oauth2 egress
-        assert all(k.lower() != "authorization" for k in raw_headers)  # ...and from raw egress headers
+        mock_auth.assert_not_called()
+        assert exc_info.value.status_code == 401
 
     async def test_legitimate_upstream_token_is_not_scrubbed(self):
         """A genuine upstream/passthrough token is never session- or envelope-shaped, so the shape-anchored

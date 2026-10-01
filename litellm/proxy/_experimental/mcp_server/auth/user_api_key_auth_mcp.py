@@ -524,6 +524,13 @@ class MCPRequestHandler:
                 api_key=f"Bearer {_get_bearer_token_or_received_api_key(litellm_api_key)}",
                 request=request,
             )
+        elif oauth2_headers and is_session_bearer_shaped(oauth2_headers["Authorization"]):
+            validated_user_api_key_auth = await MCPRequestHandler._admit_gateway_session(
+                authorization_value=oauth2_headers["Authorization"],
+                request=request,
+                route=request_route,
+                mcp_servers=mcp_servers,
+            )
         elif MCPRequestHandler._target_servers_are_true_passthrough(
             path=request_route,
             mcp_servers=mcp_servers,
@@ -558,19 +565,6 @@ class MCPRequestHandler:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 request=request,
                 route=request_route,
-            )
-        elif oauth2_headers and is_session_bearer_shaped(oauth2_headers["Authorization"]):
-            # A gateway DCR session bearer at any MCP scope: open the identity-only session
-            # token and admit under the live litellm user; downstream grant resolution
-            # intersects the admitted subject's servers with any path or header target, so a
-            # per-server scope narrows and never broadens. One that does not open fails
-            # closed with the scope's invalid_token challenge; a non-session bearer falls
-            # through to the oauth2 arm.
-            validated_user_api_key_auth = await MCPRequestHandler._admit_gateway_session(
-                authorization_value=oauth2_headers["Authorization"],
-                request=request,
-                route=request_route,
-                mcp_servers=mcp_servers,
             )
         elif oauth2_headers:
             # Authorization on a non-delegated server: the bearer must be a real

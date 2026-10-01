@@ -509,7 +509,11 @@ def _proxy_server_attrs_for_custom_auth(*, user_custom_auth):
 
 
 @pytest.mark.asyncio
-async def test_user_custom_auth_skips_post_custom_auth_checks_by_default():
+@pytest.mark.parametrize("api_key,admitted", [
+    ("sk-custom-auth-trusted", True), ("llm_session_custom", True), ("llm_srefresh_custom", True),
+    ("llm_session_app_bad", False), ("llm_srefresh_app_bad", False),
+])
+async def test_user_custom_auth_skips_post_custom_auth_checks_by_default(api_key: str, admitted: bool) -> None:
     """
     Regression test: after v1.82.6, _run_post_custom_auth_checks was unconditionally
     invoked on the user_custom_auth return path, which caused a ~44% RPS drop for
@@ -548,9 +552,9 @@ async def test_user_custom_auth_skips_post_custom_auth_checks_by_default():
             request = Request(scope={"type": "http"})
             request._url = URL(url="/chat/completions")
 
-            result = await _user_api_key_auth_builder(
+            pending = _user_api_key_auth_builder(
                 request=request,
-                api_key="Bearer sk-custom-auth-trusted",
+                api_key=f"Bearer {api_key}",
                 azure_api_key_header="",
                 anthropic_api_key_header=None,
                 google_ai_studio_api_key_header=None,
@@ -558,6 +562,13 @@ async def test_user_custom_auth_skips_post_custom_auth_checks_by_default():
                 request_data={},
             )
 
+            if not admitted:
+                with pytest.raises(ProxyException) as error:
+                    await pending
+                assert str(error.value.code) == "401"
+                mock_user_custom_auth.assert_not_awaited()
+                return
+            result = await pending
             mock_user_custom_auth.assert_awaited_once()
             mock_post_checks.assert_not_awaited()
             assert result.user_id == "custom-user-123"
@@ -5028,7 +5039,6 @@ async def test_centralized_common_checks_skips_public_routes():
     from fastapi import Request
     from starlette.datastructures import URL
 
-    token = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
     request = Request(scope={"type": "http"})
     request._url = URL(url="/health/liveness")
 
@@ -5041,6 +5051,16 @@ async def test_centralized_common_checks_skips_public_routes():
             "litellm.proxy.auth.user_api_key_auth.common_checks",
             new_callable=AsyncMock,
         ) as mock_checks:
+            token = await _user_api_key_auth_builder(
+                request=request,
+                api_key="Bearer llm_session_native",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+            assert token.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
             await _run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
