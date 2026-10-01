@@ -187,7 +187,9 @@ class Session:
     def stop(self) -> State:
         return run_sync(self._inner.astop(), "stop")
 
-    def history(self) -> list[dict[str, Any]]:
+    def history(
+        self,
+    ) -> list[dict[str, Any]]:  # mutable-ok: public API returns OpenAI-format message dicts from the handler
         return run_sync(self._inner.history(), "history")
 
     @property
@@ -199,8 +201,8 @@ class Session:
         return self._inner.usage
 
     @property
-    def results(self) -> list[Result]:
-        return list(self._inner.results)
+    def results(self) -> list[Result]:  # mutable-ok: public property; returns a detached copy of the session's results
+        return list(self._inner.results)  # mutable-ok: detached copy so callers cannot mutate the session's accumulator
 
     @property
     def session_id(self) -> str:
@@ -418,7 +420,7 @@ def agent(
     Prefix the model with `litellm_proxy/` to route every model call through your
     LiteLLM AI Gateway.
     """
-    kwargs: dict[str, Any] = {
+    kwargs: dict[str, Any] = {  # mutable-ok: forwarded as **kwargs to _run/_stream
         "sandbox": sandbox,
         "model": model,
         "api_key": api_key,
