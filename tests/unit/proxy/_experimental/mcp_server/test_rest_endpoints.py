@@ -3326,8 +3326,7 @@ async def test_request_selected_tool_specific_guardrail_applies_to_virtual_execu
         default_on=False,
         custom_code="def apply_guardrail(inputs, request_data, input_type):\n"
         '    if inputs.get("tools", [{}])[0].get("function", {}).get("name") == "execute":\n'
-        '        texts = [t.replace("confidential", "redacted") for t in inputs.get("texts", [])]\n'
-        f'        return {{"action": "{action}", "reason": "resolved tool blocked", "texts": texts}}\n'
+        f'        return {{"action": "{action}", "reason": "resolved tool blocked", "texts": ["redacted"]}}\n'
         "    return allow()\n",
     )
     manager: Final = mcp_server_manager.MCPServerManager()

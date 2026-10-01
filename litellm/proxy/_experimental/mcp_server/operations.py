@@ -141,7 +141,6 @@ from litellm.types.mcp import (
     without_header,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
-from litellm.types.mcp_server.tool_registry import MCPTool as RegisteredTool
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
 
@@ -1609,17 +1608,10 @@ async def _list_mcp_resource_templates(
     return managed_resource_templates
 
 
-def _registered_tool_metadata(
-    name: str, registered: RegisteredTool, server: MCPServer, caller: ListedToolsCaller
-) -> MCPTool:
-    """The tool as ``tools/list`` served it to this caller (pinned, overridden, guardrail-masked) when a
-    listing was recorded, else the registry entry with the admin description override applied."""
-    listed: Final = global_mcp_server_manager.get_listed_tool(server, name, caller)
-    if listed is not None:
-        return listed
-    overrides: Final = server.tool_name_to_description
-    description: Final = overrides.get(name, registered.description) if overrides else registered.description
-    return MCPTool(name=name, description=description, input_schema=registered.input_schema)
+def _registered_tool_metadata(name: str, server: MCPServer, caller: ListedToolsCaller) -> MCPTool | None:
+    """The tool as ``tools/list`` served it to this caller (pinned, overridden, guardrail-masked), or None when
+    no listing was recorded so the call hands the hooks name and arguments only."""
+    return global_mcp_server_manager.get_listed_tool(server, name, caller)
 
 
 def _resolve_display_name_to_original(
@@ -2093,7 +2085,6 @@ async def _execute_mcp_tool(
             guardrail_context=guardrail_context,
             tool=_registered_tool_metadata(
                 original_tool_name,
-                local_tool,
                 mcp_server,
                 listed_tools_caller_for(
                     mcp_server, user_api_key_auth, mcp_auth_header, mcp_server_auth_headers, raw_headers, oauth2_headers
@@ -2212,7 +2203,6 @@ async def _execute_mcp_tool(
                 guardrail_context=guardrail_context,
                 tool=_registered_tool_metadata(
                     original_tool_name,
-                    registered_local_tool,
                     prefix_server,
                     listed_tools_caller_for(
                         prefix_server,
