@@ -1,6 +1,7 @@
 import json
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from typing import Final
 
 import openai
@@ -69,8 +70,27 @@ def _sent_messages(request: Request) -> list[dict[str, JsonValue]]:
     return _MESSAGES.validate_python(_JSON_OBJECT.validate_json(request.body)["messages"])
 
 
+_DISCOVERY_PROBE: Final = ("GET", "/v1/models")
+
+
+def _is_discovery_probe(request: Request) -> bool:
+    return (request.method, request.target) == _DISCOVERY_PROBE
+
+
+@contextmanager
+def _vllm_server(respond: Callable[[Request], Reply]) -> Iterator[Wire]:
+    with wire_server(
+        lambda request: Reply(body=b'{"object":"list","data":[]}') if _is_discovery_probe(request) else respond(request)
+    ) as wire:
+        yield wire
+
+
+def _provider_calls(wire: Wire) -> tuple[Request, ...]:
+    return tuple(request for request in wire.drain() if not _is_discovery_probe(request))
+
+
 def _only_request(wire: Wire) -> Request:
-    received: Final = wire.drain()
+    received: Final = _provider_calls(wire)
     assert [(request.method, request.target) for request in received] == [("POST", "/v1/chat/completions")]
     return received[0]
 
@@ -139,7 +159,7 @@ def test_hosted_vllm_assistant_reasoning_content_reaches_the_wire(gateway: Gatew
         ], body["messages"]
         return Reply(body=_completion(identity, "The totals differ by 42."))
 
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
+    with _vllm_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"hosted_vllm/{_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY)
         response: Final = gateway.request(
             "POST",
@@ -167,13 +187,13 @@ def test_hosted_vllm_assistant_reasoning_content_reaches_the_wire(gateway: Gatew
         assert response.status_code == 200, response.text
         payload: Final = _JSON_OBJECT.validate_json(response.content)
         assert payload["id"] == identity
-        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/chat/completions")]
+        _only_request(wire)
 
 
 def test_openai_sdk_replayed_reasoning_reaches_hosted_vllm_and_is_billed_once(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
     identity: Final = f"chatcmpl-sdk-{marker}"
-    with wire_server(lambda _: Reply(body=_completion(identity, "They differ by 42."))) as wire:
+    with _vllm_server(lambda _: Reply(body=_completion(identity, "They differ by 42."))) as wire:
         with gateway.scenario() as scenario:
             model: Final = scenario.model(model=f"hosted_vllm/{_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY)
             completion: Final = _openai_client(gateway).chat.completions.create(
@@ -195,7 +215,7 @@ def test_openai_sdk_replayed_reasoning_reaches_hosted_vllm_and_is_billed_once(ga
 async def test_async_openai_sdk_stream_forwards_replayed_reasoning_to_hosted_vllm(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
     identity: Final = f"chatcmpl-stream-{marker}"
-    with wire_server(lambda _: _streamed_completion(identity, "They differ by 42.")) as wire:
+    with _vllm_server(lambda _: _streamed_completion(identity, "They differ by 42.")) as wire:
         with gateway.scenario() as scenario:
             model: Final = scenario.model(model=f"hosted_vllm/{_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY)
             stream: Final = await _async_openai_client(gateway).chat.completions.create(
@@ -224,7 +244,7 @@ def test_each_replayed_turn_keeps_its_own_reasoning_in_order(gateway: Gateway) -
         {"role": "assistant", "content": "Step two.", "reasoning_content": f"second thought {marker}"},
         {"role": "user", "content": "Summarize."},
     ]
-    with wire_server(lambda _: Reply(body=_completion(f"chatcmpl-{marker}", "Done."))) as wire:
+    with _vllm_server(lambda _: Reply(body=_completion(f"chatcmpl-{marker}", "Done."))) as wire:
         with gateway.scenario() as scenario:
             model: Final = scenario.model(model=f"hosted_vllm/{_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY)
             assert _post_chat(gateway, model, conversation)["id"] == f"chatcmpl-{marker}"
@@ -246,7 +266,7 @@ def test_only_string_reasoning_content_is_forwarded_to_hosted_vllm(
     gateway: Gateway, reasoning: JsonValue, forwarded: str | None
 ) -> None:
     marker: Final = uuid.uuid4().hex
-    with wire_server(lambda _: Reply(body=_completion(f"chatcmpl-{marker}", "Done."))) as wire:
+    with _vllm_server(lambda _: Reply(body=_completion(f"chatcmpl-{marker}", "Done."))) as wire:
         with gateway.scenario() as scenario:
             model: Final = scenario.model(model=f"hosted_vllm/{_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY)
             assert _post_chat(gateway, model, _replayed_conversation(reasoning, marker))["id"] == f"chatcmpl-{marker}"
@@ -264,7 +284,7 @@ def test_assistant_turn_without_reasoning_gets_no_reasoning_key(gateway: Gateway
         {"role": "assistant", "content": "Hi there."},
         {"role": "user", "content": "Again"},
     ]
-    with wire_server(lambda _: Reply(body=_completion(f"chatcmpl-{marker}", "Hello again."))) as wire:
+    with _vllm_server(lambda _: Reply(body=_completion(f"chatcmpl-{marker}", "Hello again."))) as wire:
         with gateway.scenario() as scenario:
             model: Final = scenario.model(model=f"hosted_vllm/{_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY)
             _post_chat(gateway, model, conversation)
@@ -281,7 +301,7 @@ def test_same_reasoning_on_two_turns_is_forwarded_on_both(gateway: Gateway) -> N
         {"role": "assistant", "content": "Second.", "reasoning_content": reasoning},
         {"role": "user", "content": "Three"},
     ]
-    with wire_server(lambda _: Reply(body=_completion(f"chatcmpl-{marker}", "Third."))) as wire:
+    with _vllm_server(lambda _: Reply(body=_completion(f"chatcmpl-{marker}", "Third."))) as wire:
         with gateway.scenario() as scenario:
             model: Final = scenario.model(model=f"hosted_vllm/{_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY)
             _post_chat(gateway, model, conversation)
@@ -290,7 +310,7 @@ def test_same_reasoning_on_two_turns_is_forwarded_on_both(gateway: Gateway) -> N
 
 def test_thinking_blocks_are_stripped_while_reasoning_content_is_kept(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
-    with wire_server(lambda _: Reply(body=_completion(f"chatcmpl-{marker}", "Done."))) as wire:
+    with _vllm_server(lambda _: Reply(body=_completion(f"chatcmpl-{marker}", "Done."))) as wire:
         with gateway.scenario() as scenario:
             model: Final = scenario.model(model=f"hosted_vllm/{_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY)
             _post_chat(
@@ -316,7 +336,7 @@ def test_thinking_blocks_are_stripped_while_reasoning_content_is_kept(gateway: G
 
 def test_list_content_is_flattened_while_reasoning_content_is_kept(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
-    with wire_server(lambda _: Reply(body=_completion(f"chatcmpl-{marker}", "Done."))) as wire:
+    with _vllm_server(lambda _: Reply(body=_completion(f"chatcmpl-{marker}", "Done."))) as wire:
         with gateway.scenario() as scenario:
             model: Final = scenario.model(model=f"hosted_vllm/{_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY)
             _post_chat(
@@ -341,7 +361,7 @@ def test_list_content_is_flattened_while_reasoning_content_is_kept(gateway: Gate
 
 def test_unauthenticated_replay_is_rejected_before_hosted_vllm(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
-    with wire_server(lambda _: Reply(body=_completion(f"chatcmpl-{marker}", "Done."))) as wire:
+    with _vllm_server(lambda _: Reply(body=_completion(f"chatcmpl-{marker}", "Done."))) as wire:
         with gateway.scenario() as scenario:
             model: Final = scenario.model(model=f"hosted_vllm/{_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY)
             response: Final = gateway.request(
@@ -351,7 +371,7 @@ def test_unauthenticated_replay_is_rejected_before_hosted_vllm(gateway: Gateway)
                 key=f"sk-not-a-key-{marker}",
             )
             assert response.status_code == 401, response.text
-            assert wire.drain() == ()
+            assert _provider_calls(wire) == ()
 
 
 def test_hosted_vllm_auth_error_reaches_the_caller_after_one_attempt_with_reasoning(gateway: Gateway) -> None:
@@ -361,7 +381,7 @@ def test_hosted_vllm_auth_error_reaches_the_caller_after_one_attempt_with_reason
         status=401,
         body=json.dumps({"error": {"message": error_message, "type": "authentication_error"}}).encode(),
     )
-    with wire_server(lambda _: reply) as wire, gateway.scenario() as scenario:
+    with _vllm_server(lambda _: reply) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"hosted_vllm/{_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY)
         response: Final = gateway.request(
             "POST",
@@ -381,7 +401,7 @@ def test_fallback_attempt_replays_reasoning_to_the_second_deployment(gateway: Ga
             return Reply(status=500, body=b'{"error": {"message": "primary deployment is down"}}')
         return Reply(body=_completion(f"chatcmpl-fallback-{marker}", "Recovered."))
 
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
+    with _vllm_server(respond) as wire, gateway.scenario() as scenario:
         primary: Final = scenario.model(model=f"hosted_vllm/{_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY)
         fallback: Final = scenario.model(
             model=f"hosted_vllm/{_FALLBACK_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY
@@ -399,7 +419,7 @@ def test_fallback_attempt_replays_reasoning_to_the_second_deployment(gateway: Ga
         )
         assert response.status_code == 200, response.text
         assert _JSON_OBJECT.validate_json(response.content)["id"] == f"chatcmpl-fallback-{marker}"
-        attempts: Final = wire.drain()
+        attempts: Final = _provider_calls(wire)
         assert [_JSON_OBJECT.validate_json(attempt.body)["model"] for attempt in attempts] == [
             _BACKEND,
             _FALLBACK_BACKEND,
@@ -413,13 +433,13 @@ def test_fallback_attempt_replays_reasoning_to_the_second_deployment(gateway: Ga
 def test_identical_uncached_replays_are_each_forwarded_and_billed_once(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
     identities: Final = iter((f"chatcmpl-first-{marker}", f"chatcmpl-second-{marker}"))
-    with wire_server(lambda _: Reply(body=_completion(next(identities), "Done."))) as wire:
+    with _vllm_server(lambda _: Reply(body=_completion(next(identities), "Done."))) as wire:
         with gateway.scenario() as scenario:
             model: Final = scenario.model(model=f"hosted_vllm/{_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY)
             first: Final = _post_chat(gateway, model, _replayed_conversation(_REASONING, marker))
             second: Final = _post_chat(gateway, model, _replayed_conversation(_REASONING, marker))
             assert (first["id"], second["id"]) == (f"chatcmpl-first-{marker}", f"chatcmpl-second-{marker}")
-            assert [_sent_messages(request) for request in wire.drain()] == [
+            assert [_sent_messages(request) for request in _provider_calls(wire)] == [
                 _replayed_conversation(_REASONING, marker),
                 _replayed_conversation(_REASONING, marker),
             ]
@@ -430,7 +450,7 @@ def test_identical_uncached_replays_are_each_forwarded_and_billed_once(gateway: 
 def test_cached_replay_hits_only_for_the_same_reasoning(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
     identities: Final = iter((f"chatcmpl-cached-{marker}", f"chatcmpl-other-{marker}"))
-    with wire_server(lambda _: Reply(body=_completion(next(identities), "Done."))) as wire:
+    with _vllm_server(lambda _: Reply(body=_completion(next(identities), "Done."))) as wire:
         with gateway.scenario() as scenario:
             model: Final = scenario.model(model=f"hosted_vllm/{_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY)
 
@@ -446,7 +466,7 @@ def test_cached_replay_hits_only_for_the_same_reasoning(gateway: Gateway) -> Non
             assert ask(_REASONING)["id"] == f"chatcmpl-cached-{marker}"
             assert ask(_REASONING)["id"] == f"chatcmpl-cached-{marker}"
             assert ask(f"a different thought {marker}")["id"] == f"chatcmpl-other-{marker}"
-            assert [_sent_messages(request)[1].get("reasoning_content") for request in wire.drain()] == [
+            assert [_sent_messages(request)[1].get("reasoning_content") for request in _provider_calls(wire)] == [
                 _REASONING,
                 f"a different thought {marker}",
             ]
@@ -514,14 +534,14 @@ def _responses_reply(identity: str, stream: bool) -> Reply:
 
 
 def _only_responses_body(wire: Wire) -> dict[str, JsonValue]:
-    received: Final = wire.drain()
+    received: Final = _provider_calls(wire)
     assert [(request.method, request.target) for request in received] == [("POST", "/v1/responses")]
     return _JSON_OBJECT.validate_json(received[0].body)
 
 
 def test_openai_sdk_responses_replay_reaches_hosted_vllm_with_its_reasoning_item(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
-    with wire_server(lambda _: _responses_reply(f"resp_upstream_{marker}", stream=False)) as wire:
+    with _vllm_server(lambda _: _responses_reply(f"resp_upstream_{marker}", stream=False)) as wire:
         with gateway.scenario() as scenario:
             model: Final = scenario.model(model=f"hosted_vllm/{_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY)
             response: Final = _openai_client(gateway).responses.create(
@@ -542,7 +562,7 @@ async def test_async_openai_sdk_responses_stream_reaches_hosted_vllm_with_its_re
     gateway: Gateway,
 ) -> None:
     marker: Final = uuid.uuid4().hex
-    with wire_server(lambda _: _responses_reply(f"resp_upstream_{marker}", stream=True)) as wire:
+    with _vllm_server(lambda _: _responses_reply(f"resp_upstream_{marker}", stream=True)) as wire:
         with gateway.scenario() as scenario:
             model: Final = scenario.model(model=f"hosted_vllm/{_BACKEND}", api_base=wire.url + "/v1", api_key=_API_KEY)
             stream: Final = await _async_openai_client(gateway).responses.create(
