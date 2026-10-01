@@ -42,7 +42,7 @@ describe("Worker setup", () => {
     await user.click(screen.getByRole("combobox", { name: "Charge analysis to" }));
     await user.click(await screen.findByRole("option", { name: "Analysis" }));
     await user.click(screen.getByRole("button", { name: "Generate setup command" }));
-    expect(apiClient.post).toHaveBeenCalledWith("/engine/workers/register", {
+    expect(apiClient.post).toHaveBeenCalledWith("/lens/workers/register", {
       accessToken: "admin",
       body: { name: "Lens analyzer", analysis_key_id: "b".repeat(64) },
     });
@@ -71,7 +71,7 @@ describe("Worker setup", () => {
     await user.click(screen.getByRole("combobox", { name: "Charge analysis to" }));
     await user.click(await screen.findByRole("option", { name: "Analysis" }));
     await user.click(screen.getByRole("button", { name: "Save billing key" }));
-    expect(apiClient.put).toHaveBeenCalledWith("/engine/workers/worker/billing-key", {
+    expect(apiClient.put).toHaveBeenCalledWith("/lens/workers/worker/billing-key", {
       accessToken: "admin",
       body: { analysis_key_id: "b".repeat(64) },
     });

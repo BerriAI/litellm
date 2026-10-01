@@ -3235,6 +3235,7 @@ async def test_e2e_generate_cold_storage_object_key_successful():
             prefix="",  # No prefix for cold storage
             start_time=start_time,
             s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
+            partition_granularity="day",
         )
 
         # Verify the result
@@ -3284,6 +3285,7 @@ async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path()
             prefix="",
             start_time=start_time,
             s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
+            partition_granularity="day",
         )
 
         # Verify the result
@@ -3328,6 +3330,7 @@ async def test_e2e_generate_cold_storage_object_key_with_logger_no_s3_path():
             prefix="",
             start_time=start_time,
             s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
+            partition_granularity="day",
         )
 
         # Verify the result
