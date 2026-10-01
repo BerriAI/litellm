@@ -111,6 +111,7 @@ mod tests {
                 "NativeDiagnosticProcessor",
                 "NativeTraceStorage",
                 "trace_decode_otlp",
+                "trace_encode_error",
                 "TokenCounter",
                 "Tokenizer",
                 "gil_stats",

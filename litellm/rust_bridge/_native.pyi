@@ -352,6 +352,7 @@ __all__ = [
     "reserve_process_for_forking",
     "responses",
     "trace_decode_otlp",
+    "trace_encode_error",
     "transcription",
 ]
 
