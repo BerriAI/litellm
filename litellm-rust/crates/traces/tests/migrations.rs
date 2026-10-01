@@ -561,6 +561,12 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
             Parameter::Strings(vec!["release".into()]),
         ),
         ("limit".into(), Parameter::Integer(10)),
+        ("offset".into(), Parameter::Integer(0)),
+        ("sample_percent".into(), Parameter::Text("100".into())),
+        ("sample_cap".into(), Parameter::Integer(0)),
+        ("preview".into(), Parameter::Integer(0)),
+        ("selected_team".into(), Parameter::Text(String::new())),
+        ("execution_ids".into(), Parameter::Strings(vec![])),
     ]);
     let sample: serde_json::Value = serde_json::from_str(
         &execute_read(
@@ -649,6 +655,12 @@ async fn lens_request_sample_does_not_trust_caller_tags(
         ("filter_keys".into(), Parameter::Strings(vec![])),
         ("filter_values".into(), Parameter::Strings(vec![])),
         ("limit".into(), Parameter::Integer(10)),
+        ("offset".into(), Parameter::Integer(0)),
+        ("sample_percent".into(), Parameter::Text("100".into())),
+        ("sample_cap".into(), Parameter::Integer(0)),
+        ("preview".into(), Parameter::Integer(0)),
+        ("selected_team".into(), Parameter::Text(String::new())),
+        ("execution_ids".into(), Parameter::Strings(vec![])),
     ]);
     let sample: serde_json::Value = serde_json::from_str(
         &execute_read(
@@ -662,5 +674,122 @@ async fn lens_request_sample_does_not_trust_caller_tags(
     let rows = sample["data"].as_array().expect("sample rows");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["trace_id"], "external");
+    Ok(())
+}
+
+#[rstest]
+#[case::all("100", 0, 0, 1001)]
+#[case::percentage("10", 0, 0, 101)]
+#[case::capped("100", 25, 0, 25)]
+#[case::preview("10", 25, 1, 1001)]
+#[tokio::test]
+async fn lens_selection_pages_without_losing_or_repeating_runs(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] percent: &str,
+    #[case] cap: i64,
+    #[case] preview: i64,
+    #[case] expected: usize,
+) -> TestResult {
+    use litellm_traces::LensQuery;
+    let database = database?;
+    ensure_schema(
+        &database.client,
+        &Connection::writer(&database.url)?,
+        "trace_test",
+        7,
+        14,
+    )
+    .await?;
+    execute_write(&database, "INSERT INTO trace_test.spend_logs (request_id,team_id,start_time,end_time) SELECT toString(number),'team',now64(3)-INTERVAL 5 MINUTE,now64(3)-INTERVAL 5 MINUTE FROM numbers(1001)").await?;
+    let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let end = time::OffsetDateTime::now_utc().unix_timestamp() * 1000 + 60000;
+    let mut seen = std::collections::BTreeSet::new();
+    for offset in (0..expected).step_by(100) {
+        let parameters = BTreeMap::from([
+            ("source".into(), Parameter::Text("requests".into())),
+            ("all_teams".into(), Parameter::Integer(0)),
+            ("team".into(), Parameter::Text("team".into())),
+            ("key_hash".into(), Parameter::Text(String::new())),
+            ("start".into(), Parameter::Integer(0)),
+            ("end".into(), Parameter::Integer(end)),
+            ("service".into(), Parameter::Text(String::new())),
+            ("filter_keys".into(), Parameter::Strings(vec![])),
+            ("filter_values".into(), Parameter::Strings(vec![])),
+            ("limit".into(), Parameter::Integer(100)),
+            ("offset".into(), Parameter::Integer(offset as i64)),
+            ("sample_percent".into(), Parameter::Text(percent.into())),
+            ("sample_cap".into(), Parameter::Integer(cap)),
+            ("preview".into(), Parameter::Integer(preview)),
+            ("selected_team".into(), Parameter::Text(String::new())),
+            ("execution_ids".into(), Parameter::Strings(vec![])),
+        ]);
+        let body = execute_read(
+            &database.client,
+            &connection,
+            LensQuery::Sample.sql(),
+            &parameters,
+        )
+        .await?;
+        let json: serde_json::Value = serde_json::from_str(&body)?;
+        let rows = json["data"].as_array().expect("sample rows");
+        assert_eq!(rows.len(), 100.min(expected - offset));
+        for row in rows {
+            assert_eq!(row["eligible"], 1001);
+            assert!(seen.insert(row["trace_id"].as_str().expect("run id").to_owned()));
+        }
+    }
+    assert_eq!(seen.len(), expected);
+    Ok(())
+}
+
+#[rstest]
+#[case::short(100)]
+#[case::boundary(7970)]
+#[case::long(16000)]
+#[tokio::test]
+async fn lens_content_keeps_output_visible_after_long_input(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] input_length: usize,
+) -> TestResult {
+    use litellm_traces::LensQuery;
+    let database = database?;
+    ensure_schema(
+        &database.client,
+        &Connection::writer(&database.url)?,
+        "trace_test",
+        7,
+        14,
+    )
+    .await?;
+    insert_rows(&database, "spend_logs", vec![serde_json::from_value(serde_json::json!({
+        "request_id": "request", "team_id": "team", "start_time": time::OffsetDateTime::now_utc().unix_timestamp()*1000, "end_time": time::OffsetDateTime::now_utc().unix_timestamp()*1000, "messages": "x".repeat(input_length), "response": "Delivered result"
+    }))?]).await?;
+    let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let parameters = BTreeMap::from([
+        ("source".into(), Parameter::Text("requests".into())),
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("team".into(), Parameter::Text("team".into())),
+        ("record_team".into(), Parameter::Text("team".into())),
+        ("key_hash".into(), Parameter::Text(String::new())),
+        ("trace_ref".into(), Parameter::Text(String::new())),
+        ("id".into(), Parameter::Text("request".into())),
+        ("cursor".into(), Parameter::Text(String::new())),
+        ("offset".into(), Parameter::Integer(1)),
+    ]);
+    let body = execute_read(
+        &database.client,
+        &connection,
+        LensQuery::Content.sql(),
+        &parameters,
+    )
+    .await?;
+    let json: serde_json::Value = serde_json::from_str(&body)?;
+    let text = json["data"][0]["content"].as_str().expect("content");
+    assert!(text.contains("Output: Delivered result"));
+    assert!(text.len() <= 8000);
+    assert_eq!(
+        json["data"][0]["truncated"],
+        u8::from(input_length + "Input: \nOutput: Delivered result\nError: ".len() > 8000)
+    );
     Ok(())
 }

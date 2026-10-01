@@ -37,7 +37,9 @@ class EngineWorker:
             return await self.model_request(path, body, attempt + 1)
 
     async def run_once(self) -> bool:
-        response: Final = await self.client.post("/engine/worker/claim")
+        response: Final = await self.client.post(
+            "/engine/worker/claim", params=MappingProxyType({"protocol_version": 2})
+        )
         response.raise_for_status()
         if response.json() is None:
             return False

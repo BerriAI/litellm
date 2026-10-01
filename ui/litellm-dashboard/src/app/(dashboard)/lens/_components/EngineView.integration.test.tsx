@@ -1,12 +1,12 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "@/../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { apiClient } from "@/components/networking";
 import { EngineView } from "./EngineView";
 import { nextCheckStatus, type Engine, type Finding } from "./engineData";
 
-vi.mock("@/components/networking", () => ({ apiClient: { get: vi.fn() } }));
+vi.mock("@/components/networking", () => ({ apiClient: { get: vi.fn(), post: vi.fn() }, proxyBaseUrl: "" }));
 
 const executionId = btoa(JSON.stringify(["traces", "", "trace-42"]));
 const pattern: Finding = {
@@ -46,6 +46,10 @@ const engine: Engine = {
     filters: [],
     interval_minutes: 15,
     sample_size: 100,
+    sample_percent: 100,
+    concurrency: 8,
+    team_id: "",
+    execution_ids: [],
     monthly_budget: 20,
     name: "Release reviews",
     model: "analysis",
@@ -60,6 +64,8 @@ const engine: Engine = {
   jobs: [
     {
       id: "scan",
+      findings: [pattern, issue],
+      assessments: [],
       attempts: 0,
       error: "",
       cost: 0,
@@ -87,6 +93,10 @@ const engine: Engine = {
         filters: [],
         interval_minutes: 15,
         sample_size: 100,
+        sample_percent: 100,
+        concurrency: 8,
+        team_id: "",
+        execution_ids: [],
         monthly_budget: 20,
         enabled: false,
         name: "Release reviews",
@@ -96,6 +106,7 @@ const engine: Engine = {
       revision: 1,
       sample: {
         eligible: 1,
+        selected: 1,
         executions: [
           {
             id: executionId,
@@ -119,9 +130,11 @@ const engine: Engine = {
 describe("Lens findings and runs", () => {
   beforeEach(() => {
     vi.mocked(apiClient.get).mockReset();
-    vi.mocked(apiClient.get).mockImplementation(async (path) =>
-      path === "/engine" ? { engines: [engine], workers: [], tracing_enabled: true } : { data: [] },
-    );
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === "/engine") return { engines: [engine], workers: [], tracing_enabled: true };
+      if (path === "/engine/lens/runs") return engine.jobs;
+      return { data: [] };
+    });
   });
 
   it("separates patterns from issues and reveals original evidence only when requested", async () => {
@@ -167,4 +180,65 @@ it("shows the actual next schedule and avoids a stale countdown during active sc
     "Waiting for an analyzer",
   );
   expect(nextCheckStatus(engine, now)).toBeNull();
+});
+
+it("runs saved settings immediately without opening setup", async () => {
+  testQueryClient.clear();
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/engine")
+      return {
+        engines: [engine],
+        tracing_enabled: true,
+        workers: [
+          { id: "worker", name: "Worker", revoked: false, scope: engine.scope, last_seen: new Date().toISOString() },
+        ],
+      };
+    if (path === "/engine/lens/runs") return engine.jobs;
+    return { data: [] };
+  });
+  vi.mocked(apiClient.post).mockResolvedValue(engine);
+  const user = userEvent.setup();
+  renderWithProviders(<EngineView accessToken="test" />);
+  await user.click(await screen.findByRole("button", { name: "Run now" }));
+  expect(apiClient.post).toHaveBeenCalledWith("/engine/lens/runs", { accessToken: "test", body: {} });
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+it("guides a first-time administrator into worker connection and lens setup", async () => {
+  testQueryClient.clear();
+  vi.mocked(apiClient.get).mockImplementation(async (path) =>
+    path === "/engine" ? { engines: [], workers: [], tracing_enabled: true } : { data: [] },
+  );
+  const user = userEvent.setup();
+  renderWithProviders(<EngineView accessToken="test" />);
+  const guide = within(await screen.findByRole("region", { name: "Understand what your agents are doing" }));
+  expect(guide.getByRole("link", { name: "View logs" })).toHaveAttribute("href", "/ui/logs/");
+  await user.click(guide.getByRole("button", { name: "Connect analyzer" }));
+  const connection = within(await screen.findByRole("dialog", { name: "Set up Lens analysis" }));
+  expect(connection.getByRole("button", { name: "Generate setup command" })).toBeVisible();
+  await user.click(connection.getByRole("button", { name: "Close" }));
+  await user.click(guide.getByRole("button", { name: "Set up your first lens" }));
+  expect(await screen.findByRole("dialog", { name: "Set up a lens" })).toBeVisible();
+});
+
+it("opens the saved results of an older batch", async () => {
+  testQueryClient.clear();
+  const older = {
+    ...engine.jobs[0],
+    id: "older",
+    created_at: "2026-09-29T10:00:00Z",
+    findings: [{ ...issue, title: "Earlier batch finding" }],
+  };
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/engine") return { engines: [engine], workers: [], tracing_enabled: true };
+    if (path === "/engine/lens/runs") return [engine.jobs[0], older];
+    if (path === "/engine/lens/runs/older") return older;
+    return { data: [] };
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<EngineView accessToken="test" readOnly />);
+  await screen.findByRole("option", { name: `${new Date(older.created_at).toLocaleString()} · completed` });
+  await user.selectOptions(screen.getByRole("combobox", { name: "Investigation batch" }), "older");
+  expect(await screen.findByText("Earlier batch finding")).toBeVisible();
+  expect(screen.queryByText(issue.title)).not.toBeInTheDocument();
 });
