@@ -1,6 +1,6 @@
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import AlertingSettings from "./alerting_settings";
@@ -115,4 +115,38 @@ describe("AlertingSettings", () => {
     });
     expect(updateConfigFieldSetting).toHaveBeenNthCalledWith(2, "sk-new", "alerting", ["slack"]);
   });
+
+  it("ignores an older settings response after the access token changes", async () => {
+    let resolveOldRequest!: (value: typeof settingsResponse) => void;
+    let resolveNewRequest!: (value: typeof settingsResponse) => void;
+    const oldRequest = new Promise<typeof settingsResponse>((resolve) => {
+      resolveOldRequest = resolve;
+    });
+    const newRequest = new Promise<typeof settingsResponse>((resolve) => {
+      resolveNewRequest = resolve;
+    });
+    const refreshedSettings = settingsResponse.map((setting) =>
+      setting.field_name === "budget_alert_ttl" ? { ...setting, field_value: 90 } : setting,
+    );
+
+    alertingSettingsCall.mockImplementation((token: string) => (token === "sk-new" ? newRequest : oldRequest));
+
+    const { rerender } = renderWithProviders(<AlertingSettings accessToken="sk-old" premiumUser />);
+    rerender(<AlertingSettings accessToken="sk-new" premiumUser />);
+
+    await act(async () => {
+      resolveNewRequest(refreshedSettings);
+      await newRequest;
+    });
+    await screen.findByDisplayValue("90");
+
+    await act(async () => {
+      resolveOldRequest(settingsResponse);
+      await oldRequest;
+    });
+
+    expect(screen.getByDisplayValue("90")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("60")).not.toBeInTheDocument();
+  });
+
 });
