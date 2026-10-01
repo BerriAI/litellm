@@ -3535,6 +3535,21 @@ def test_openai_passthrough_prefix_wins_over_native_provider_routes(method, path
 
 
 @pytest.mark.parametrize(
+    "method, path",
+    [
+        ("POST", "/anthropic/v1/files"),
+        ("GET", "/anthropic/v1/files"),
+        ("GET", "/anthropic/v1/files/file-abc123"),
+        ("DELETE", "/anthropic/v1/files/file-abc123"),
+        ("POST", "/anthropic/v1/batches"),
+        ("POST", "/anthropic/v1/messages"),
+    ],
+)
+def test_anthropic_passthrough_prefix_wins_over_native_provider_routes(method, path):
+    assert _resolve_route_name(method, path) == "anthropic_passthrough_route"
+
+
+@pytest.mark.parametrize(
     "method, path, expected_name",
     [
         ("POST", "/openai/v1/files", "create_file"),
