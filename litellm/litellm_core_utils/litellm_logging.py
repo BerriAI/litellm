@@ -72,6 +72,7 @@ from litellm.litellm_core_utils.classifier_logging import (
 from litellm.litellm_core_utils.core_helpers import (
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
+    proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
     set_response_cost_in_hidden_params,
 )
@@ -285,7 +286,10 @@ else:
     _PAGERDUTY_ALERTING_FACTORY: Final = PagerDutyAlerting
 _in_memory_loggers: Final[list[CustomLogger]] = []
 
-_STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = frozenset(StandardLoggingMetadata.__annotations__.keys())
+_STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(("used_client_oauth_token",))
+_STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = (
+    frozenset(StandardLoggingMetadata.__annotations__.keys()) - _STANDARD_LOGGING_METADATA_RESOLVED_KEYS
+)
 
 
 def _get_provider_request_id(original_exception: Exception) -> str | None:
@@ -5731,6 +5735,7 @@ class StandardLoggingPayloadSetup:
         proxy_server_request: dict | None = None,
         start_time: dt_object | None = None,
         response_id: str | None = None,
+        custom_llm_provider: str | None = None,
     ) -> StandardLoggingMetadata:
         """
         Clean and filter the metadata dictionary to include only the specified keys in StandardLoggingMetadata.
@@ -5745,6 +5750,9 @@ class StandardLoggingPayloadSetup:
             - If the input metadata is None or not a dictionary, an empty StandardLoggingMetadata object is returned.
             - If 'user_api_key' is present in metadata and is a valid SHA256 hash, it's stored as 'user_api_key_hash'.
         """
+        from litellm.llms.anthropic.common_utils import (  # noqa: PLC0415  # that module imports this one transitively
+            resolve_used_client_oauth_token,
+        )
 
         prompt_management_metadata: StandardLoggingPromptManagementMetadata | None = None
         if litellm_params is not None:
@@ -5794,6 +5802,10 @@ class StandardLoggingPayloadSetup:
             user_api_key_auth_metadata=None,
             team_alias=None,
             team_id=None,
+            used_client_oauth_token=resolve_used_client_oauth_token(
+                proxy_stamped_used_client_oauth_token(metadata, litellm_params),
+                custom_llm_provider,
+            ),
         )
         if isinstance(metadata, dict):
             for key in metadata.keys() & _STANDARD_LOGGING_METADATA_KEYS:
@@ -6521,6 +6533,7 @@ def get_standard_logging_object_payload(
             stream=kwargs.get("stream", False),
         )
         # clean up litellm metadata
+        selected_provider: Final = kwargs.get("custom_llm_provider")
         clean_metadata: Final = StandardLoggingPayloadSetup.get_standard_logging_metadata(
             metadata=metadata,
             litellm_params=litellm_params,
@@ -6532,6 +6545,7 @@ def get_standard_logging_object_payload(
             proxy_server_request=proxy_server_request,
             start_time=start_time,
             response_id=id,
+            custom_llm_provider=selected_provider if isinstance(selected_provider, str) else None,
         )
         _request_body: Final = proxy_server_request.get("body", {})
         end_user_id: Final = clean_metadata["user_api_key_end_user_id"] or _request_body.get(
@@ -6806,6 +6820,7 @@ def get_standard_logging_metadata(
         user_api_key_auth_metadata=None,
         team_alias=None,
         team_id=None,
+        used_client_oauth_token=None,
     )
     if isinstance(metadata, dict):
         # Update the clean_metadata with values from input metadata that match StandardLoggingMetadata fields

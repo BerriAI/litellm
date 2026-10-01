@@ -13,6 +13,7 @@ const coverage: Job["coverage"] = {
   selected: 0,
   screened: 0,
   investigated: 0,
+  inconclusive: 0,
   grouping_batches: 0,
   grouped_batches: 0,
   candidates: 0,
@@ -21,6 +22,7 @@ const coverage: Job["coverage"] = {
 };
 
 const job: Job = {
+  assessments: [],
   coverage,
   attempts: 0,
   error: "",
@@ -41,6 +43,10 @@ const job: Job = {
     enabled: false,
     interval_minutes: 15,
     sample_size: 100,
+    sample_percent: 100,
+    concurrency: 8,
+    team_id: "",
+    execution_ids: [],
     monthly_budget: 20,
     name: "Release reviews",
     model: "analysis",

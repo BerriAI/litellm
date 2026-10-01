@@ -520,10 +520,10 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/rag/ingest",
         "/rag/query",
         "/v1/rag/query",
-        # agent tracing: OTLP ingest + reads (scoped to the caller's team in the handler)
         "/engine",
         "/engine/{engine_id}",
         "/engine/{engine_id}/runs",
+        "/engine/{engine_id}/runs/{job_id}",
         "/engine/{engine_id}/executions/{execution_id}",
         "/engine/{engine_id}/cancel",
         "/engine/{engine_id}/findings/{finding_id}",
@@ -4156,6 +4156,7 @@ class SpendLogsMetadata(TypedDict):
     litellm_gateway_injected_cache: ReadOnly[str | None]
     router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
     azure_spillover: ReadOnly[AzureSpillover | None]  # None = Azure did not report spillover
+    used_client_oauth_token: ReadOnly[bool | None]  # None = row written before the flag existed
 
 
 class SpendLogsPayload(TypedDict):

@@ -1,6 +1,7 @@
 import asyncio
 import socket
 import threading
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Final
@@ -9,6 +10,7 @@ from urllib.parse import urlsplit, urlunsplit
 from pydantic import TypeAdapter
 
 PORT: Final = TypeAdapter(int)
+OUTAGE_SECONDS: Final = 10.0
 
 
 def _free_port() -> int:
@@ -28,6 +30,7 @@ class DatabaseRelay:
         self.tripped: Final = threading.Event()
         self.refused = 0
         self.reconnected: Final = threading.Event()
+        self._tripped_at = 0.0
         self._writers: tuple[asyncio.StreamWriter, ...] = ()
         self._ready: Final = threading.Event()
         self._thread: Final = threading.Thread(target=self._run, daemon=True)
@@ -55,7 +58,7 @@ class DatabaseRelay:
         self._writers = ()
 
     async def _serve(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
-        if self.tripped.is_set() and self.refused < 5:
+        if self.tripped.is_set() and time.monotonic() - self._tripped_at < OUTAGE_SECONDS:
             self.refused += 1
             client_writer.close()
             return
@@ -68,6 +71,7 @@ class DatabaseRelay:
             try:
                 while chunk := await reader.read(65536):
                     if inspect and self._armed.is_set() and not self.tripped.is_set() and self._trigger in chunk:
+                        self._tripped_at = time.monotonic()
                         self.tripped.set()
                         self._drop_all()
                         return
