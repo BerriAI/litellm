@@ -2379,7 +2379,9 @@ async def test_optional_discovery_rejects_incomplete_walks(
         )
 
     responder: Final = AsyncMock(side_effect=respond)
-    client: Final = _MockTransportClient(responder, server_url="https://example.com/mcp", timeout=0.2)
+    client: Final = _MockTransportClient(
+        responder, server_url="https://example.com/mcp", timeout=2 if failure == "deadline" else 30
+    )
     operation: Final = {
         "prompts/list": client.list_prompts,
         "resources/list": client.list_resources,
