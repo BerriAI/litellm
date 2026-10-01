@@ -8,8 +8,11 @@ Pure functions, no I/O. Two steps:
                      Deep Agents), OTEL GenAI semconv, OpenInference.
 """
 
+import json
 from collections.abc import Mapping
 from typing import Final
+
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.constants import OTLP_MAX_ATTRIBUTE_VALUE_BYTES, OTLP_MAX_BODY_BYTES
 from litellm.rust_bridge.traces import DecodedSpan
@@ -17,6 +20,8 @@ from litellm.rust_bridge.traces import decode_otlp as native_decode_otlp
 from litellm.tracing.normalizers import select_normalizer
 from litellm.tracing.normalizers.base import to_int
 from litellm.tracing.types import SpanRow
+
+_MESSAGE_LIST: Final = TypeAdapter(tuple[dict[str, JsonValue], ...])
 
 # attributes whose content we lift into Input/Output and drop from SpanAttributes
 _HEAVY_ATTRIBUTES: Final = frozenset(
@@ -49,6 +54,34 @@ def _truncate(value: str) -> str:
         return value
     kept = value.encode("utf-8")[:OTLP_MAX_ATTRIBUTE_VALUE_BYTES].decode("utf-8", "ignore")
     return f"{kept}…[truncated {size - OTLP_MAX_ATTRIBUTE_VALUE_BYTES} bytes]"
+
+
+def _fits(value: str) -> bool:
+    return len(value.encode("utf-8")) <= OTLP_MAX_ATTRIBUTE_VALUE_BYTES
+
+
+def _truncate_payload(value: str) -> str:
+    """Message arrays drop their oldest middle messages to stay valid JSON; anything else is byte-truncated."""
+    if _fits(value) or not value.startswith("["):
+        return _truncate(value)
+    try:
+        messages: Final = _MESSAGE_LIST.validate_json(value)
+    except ValidationError:
+        return _truncate(value)
+    head: Final = messages[:1]
+    fitting: Final = next(
+        (
+            candidate
+            for keep in range(len(messages) - 1, 0, -1)
+            if _fits(candidate := json.dumps((*head, _elided(len(messages) - 1 - keep), *messages[-keep:])))
+        ),
+        None,
+    )
+    return fitting if fitting is not None else _truncate(value)
+
+
+def _elided(count: int) -> dict[str, str]:
+    return {"role": "system", "content": f"…[{count} earlier messages truncated]"}
 
 
 def decode_otlp(
@@ -107,7 +140,7 @@ def _span_row(span: DecodedSpan) -> SpanRow:
     row["SpanAttributes"] = {  # mutable-ok: the Rust JSON bridge requires a plain dict for span attributes
         k: _truncate(v) for k, v in attributes.items() if k not in _HEAVY_ATTRIBUTES
     }
-    row["Input"], row["Output"] = _truncate(row["Input"]), _truncate(row["Output"])
+    row["Input"], row["Output"] = _truncate_payload(row["Input"]), _truncate(row["Output"])
     return row
 
 

@@ -232,6 +232,29 @@ def test_long_values_are_truncated_with_marker():
     assert len(task["Input"].split("…")[0].encode()) <= 100
 
 
+def test_long_message_history_drops_middle_messages_and_stays_valid_json():
+    history = [{"kwargs": {"type": "human", "content": f"turn {i} " + "x" * 60}} for i in range(12)]
+    prompt = json.dumps({"messages": [[{"kwargs": {"type": "system", "content": "be brief"}}, *history]]})
+    completion = json.dumps({"generations": [[{"message": {"kwargs": {"type": "ai", "content": "ok"}}}]]})
+    span = _span(
+        "ChatOpenAI",
+        b"\x03" * 8,
+        b"\x02" * 8,
+        langsmith__span__kind="llm",
+        gen_ai__prompt=prompt,
+        gen_ai__completion=completion,
+    )
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 400):
+        rows = decode_otlp(_export(span, scope="langsmith"), "application/x-protobuf")
+    messages = json.loads(rows[0]["Input"])
+    assert len(rows[0]["Input"].encode()) <= 400
+    assert messages[0]["content"] == "be brief"
+    assert "earlier messages truncated" in messages[1]["content"]
+    assert messages[-1]["content"].startswith("turn 11 ")
+    kept = int(messages[1]["content"].split("[")[1].split()[0])
+    assert kept + len(messages) - 2 == 12
+
+
 # ---------------------------------------------------------------- status / exceptions
 
 

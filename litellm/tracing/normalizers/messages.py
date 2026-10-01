@@ -15,6 +15,7 @@ class _ContentBlock(BaseModel):
 
 
 _CONTENT_BLOCKS: Final = TypeAdapter(tuple[_ContentBlock, ...])
+_NON_TEXT_BLOCKS: Final = frozenset({"reasoning", "function_call", "tool_use", "tool_call"})
 
 
 def content_text(content: object) -> str:
@@ -25,10 +26,9 @@ def content_text(content: object) -> str:
         blocks: Final = _CONTENT_BLOCKS.validate_python(content)
     except ValidationError:
         return json.dumps(content)
-    texts: Final = tuple(block.text for block in blocks if block.text is not None)
-    if texts or all(block.type == "reasoning" for block in blocks):
-        return "\n\n".join(texts)
-    return json.dumps(content)
+    if not all(block.text is not None or block.type in _NON_TEXT_BLOCKS for block in blocks):
+        return json.dumps(content)
+    return "\n\n".join(block.text for block in blocks if block.text is not None)
 
 
 def lc_message(message: Mapping[str, Any]) -> dict[str, Any]:
