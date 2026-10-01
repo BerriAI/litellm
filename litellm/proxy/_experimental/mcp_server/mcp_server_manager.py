@@ -5981,6 +5981,7 @@ class MCPServerManager:
         raw_headers: Mapping[str, str] | None = None,
         client_ip: str | None = None,
         allow_input_required: bool = False,
+        on_dispatch: Callable[[], None] | None = None,
     ) -> CallToolResult | InputRequiredResult:
         """Call a token_exchange (OBO) tool; on an upstream 401/403 re-mint the token once and retry.
 
@@ -5995,6 +5996,7 @@ class MCPServerManager:
                 host_progress_callback=host_progress_callback,
                 raise_on_error=True,
                 allow_input_required=allow_input_required,
+                on_dispatch=on_dispatch,
             )
         except Exception as exc:
             if _extract_upstream_auth_failure(exc) is None:
@@ -6016,6 +6018,7 @@ class MCPServerManager:
                 call_tool_params,
                 host_progress_callback=host_progress_callback,
                 allow_input_required=allow_input_required,
+                on_dispatch=on_dispatch,
             )
 
     async def _call_regular_mcp_tool(
@@ -6034,6 +6037,7 @@ class MCPServerManager:
         user_api_key_auth: UserAPIKeyAuth | None = None,
         client_ip: str | None = None,
         allow_input_required: bool = False,
+        on_dispatch: Callable[[], None] | None = None,
     ) -> CallToolResult | InputRequiredResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -6197,6 +6201,7 @@ class MCPServerManager:
                         client=client,
                         call_tool_params=call_tool_params,
                         host_progress_callback=host_progress_callback,
+                        on_dispatch=on_dispatch,
                         mcp_server=mcp_server,
                         server_auth_header=server_auth_header,
                         extra_headers=extra_headers,
@@ -6223,6 +6228,7 @@ class MCPServerManager:
                             params,
                             host_progress_callback=host_progress_callback,
                             allow_input_required=allow_input_required,
+                            on_dispatch=on_dispatch,
                         )
                     # The client-forwarded modes carry the caller's own upstream token, so an upstream
                     # 401 (expired/invalid token) is the caller's to resolve: relay it as
@@ -6239,6 +6245,7 @@ class MCPServerManager:
                             host_progress_callback=host_progress_callback,
                             raise_on_error=True,
                             allow_input_required=allow_input_required,
+                            on_dispatch=on_dispatch,
                         )
                     except Exception as e:
                         auth_info: Final = _extract_upstream_auth_failure(e)
@@ -6496,6 +6503,7 @@ class MCPServerManager:
         guardrail_context: Mapping[str, object] | None = None,
         client_ip: str | None = None,
         wire_compat: WireCompat = WireCompat.LEGACY,
+        on_dispatch: Callable[[], None] | None = None,
     ) -> CallToolResult | InputRequiredResult:
         """
         Call a tool with the given name and arguments
@@ -6511,6 +6519,8 @@ class MCPServerManager:
             litellm_logging_obj: Optional request logger the guardrail hooks record
                 their evaluations onto, so MCP guardrail activity reaches the
                 Guardrails Monitor. See ``pre_call_tool_check``
+            on_dispatch: Optional callback run right before the call is sent to the server,
+                after its headers and client are ready, even if the server never returns a result
 
 
         Returns:
@@ -6605,6 +6615,8 @@ class MCPServerManager:
                 resolved_token: Final = _request_resolved_auth_headers.set(resolved_auth_headers)
                 try:
                     async with self._limit_outbound_concurrency(mcp_server):
+                        if on_dispatch is not None:
+                            on_dispatch()
                         return await self._call_openapi_tool_handler(mcp_server, name, arguments, wire_compat)
                 finally:
                     _request_auth_header.reset(auth_token)
@@ -6628,6 +6640,7 @@ class MCPServerManager:
                 hook_extra_headers=hook_result.get("extra_headers"),
                 user_api_key_auth=user_api_key_auth,
                 allow_input_required=wire_compat is WireCompat.MODERN,
+                on_dispatch=on_dispatch,
             )
 
         return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)

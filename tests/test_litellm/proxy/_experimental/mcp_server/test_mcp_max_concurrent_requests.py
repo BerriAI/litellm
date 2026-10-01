@@ -47,7 +47,9 @@ def _make_server(server_id: str, max_concurrent_requests: Optional[int]) -> MCPS
 def _patch_client_with_tracker(manager: MCPServerManager, tracker: _ConcurrencyTracker):
     async def fake_create_mcp_client(server, **kwargs):
         class _ProbeClient:
-            async def call_tool(self, params, host_progress_callback=None, allow_input_required=False):
+            async def call_tool(
+                self, params, host_progress_callback=None, allow_input_required=False, on_dispatch=None
+            ):
                 tracker.enter(server.server_id)
                 try:
                     await asyncio.sleep(HOLD_SECONDS)
