@@ -314,7 +314,7 @@ class PromptCachingCache:
         return _first_pin(
             _PINS_ADAPTER.validate_python(
                 await self.cache.async_batch_get_cache(
-                    keys=list(cache_keys),  # mutable-ok: DualCache.async_batch_get_cache only takes a list
+                    keys=list(cache_keys),
                 )
             )
         )
@@ -331,7 +331,7 @@ class PromptCachingCache:
         return _first_pin(
             _PINS_ADAPTER.validate_python(
                 self.cache.batch_get_cache(
-                    keys=list(cache_keys),  # mutable-ok: DualCache.batch_get_cache only takes a list
+                    keys=list(cache_keys),
                 )
             )
         )

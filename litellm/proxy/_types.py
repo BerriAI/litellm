@@ -520,16 +520,16 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/rag/ingest",
         "/rag/query",
         "/v1/rag/query",
-        "/engine",
-        "/engine/{engine_id}",
-        "/engine/{engine_id}/runs",
-        "/engine/{engine_id}/runs/{job_id}",
-        "/engine/{engine_id}/executions/{execution_id}",
-        "/engine/{engine_id}/cancel",
-        "/engine/{engine_id}/findings/{finding_id}",
-        "/engine/preview/sample",
-        "/engine/workers/register",
-        "/engine/workers/{worker_id}",
+        "/lens",
+        "/lens/{lens_id}",
+        "/lens/{lens_id}/runs",
+        "/lens/{lens_id}/runs/{job_id}",
+        "/lens/{lens_id}/executions/{execution_id}",
+        "/lens/{lens_id}/cancel",
+        "/lens/{lens_id}/findings/{finding_id}",
+        "/lens/preview/sample",
+        "/lens/workers/register",
+        "/lens/workers/{worker_id}",
         "/v1/traces",
         "/v1/traces/{trace_id}",
         "/v1/traces/{trace_id}/spans/{span_id}",
@@ -3957,6 +3957,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "AWS_SECRET_ACCESS_KEY",
             "AWS_REGION_NAME",
             "S3_LOG_PROMPTS_ONLY",
+            "S3_PARTITION_GRANULARITY",
         ],
     )
 
@@ -4059,7 +4060,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     pointfive: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="pointfive",
         ui_callback_name="PointFive",
-        litellm_callback_params=[  # mutable-ok: the registry field is typed list
+        litellm_callback_params=[
             "POINTFIVE_API_KEY",
             "POINTFIVE_API_URL",
         ],
@@ -4074,7 +4075,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     zerobus: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="zerobus",
         ui_callback_name="Databricks Zerobus",
-        litellm_callback_params=[  # mutable-ok: the registry field is typed list
+        litellm_callback_params=[
             "ZEROBUS_WORKSPACE_URL",
             "ZEROBUS_SERVER_ENDPOINT",
             "ZEROBUS_CLIENT_ID",

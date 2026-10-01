@@ -7,10 +7,10 @@ import { Input } from "@/components/ui/input";
 import { serverRootPath } from "@/lib/serverRootPath";
 import { apiClient, proxyBaseUrl } from "@/components/networking";
 import { AnalysisKey } from "./AnalysisKey";
-import type { EngineList, WorkerCreated } from "./engineData";
+import type { LensList, WorkerCreated } from "./lensData";
 
 export const LENS_WORKER_IMAGE =
-  "ghcr.io/berriai/litellm-lens-worker@sha256:c41e932eaf3e4efbcaf8cc5027c7e93021e5b2823f21cb8785cd107e37b91c9a";
+  "ghcr.io/berriai/litellm-lens-worker@sha256:a8e8731d954916594eea462969946b9292fb771681ff515a9fd296b53f856c77";
 
 function initialProxyAddress(): string {
   const url = new URL(proxyBaseUrl || serverRootPath, window.location.origin);
@@ -30,7 +30,7 @@ export function workerSetupCommand(address: string, token: string): string {
   ].join(" \\\n");
 }
 
-function workerStatus(worker: EngineList["workers"][number], now: number): string {
+function workerStatus(worker: LensList["workers"][number], now: number): string {
   if (!worker.analysis_key_id) return "Billing key required";
   return now - Date.parse(worker.last_seen) < 120000 ? "Connected · ready to analyze" : "Not connected";
 }
@@ -42,7 +42,7 @@ export function WorkerSetup({
   onChanged,
 }: {
   accessToken: string;
-  workers: EngineList["workers"];
+  workers: LensList["workers"];
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -59,7 +59,7 @@ export function WorkerSetup({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const actionLabel = editingWorker ? "Save billing key" : "Generate setup command";
-  const editBilling = (worker: EngineList["workers"][number]) => {
+  const editBilling = (worker: LensList["workers"][number]) => {
     setCreated(null);
     setEditingWorker(worker.id);
     setAnalysisKey(worker.analysis_key_id ?? null);
@@ -69,7 +69,7 @@ export function WorkerSetup({
     setError("");
     try {
       if (editingWorker) {
-        await apiClient.put(`/engine/workers/${editingWorker}/billing-key`, {
+        await apiClient.put(`/lens/workers/${editingWorker}/billing-key`, {
           accessToken,
           body: { analysis_key_id: analysisKey },
         });
@@ -79,7 +79,7 @@ export function WorkerSetup({
         return;
       }
       setCreated(
-        await apiClient.post<WorkerCreated>("/engine/workers/register", {
+        await apiClient.post<WorkerCreated>("/lens/workers/register", {
           accessToken,
           body: { name: "Lens analyzer", analysis_key_id: analysisKey },
         }),
@@ -189,7 +189,7 @@ export function WorkerSetup({
                 size="sm"
                 onClick={async () => {
                   try {
-                    await apiClient.delete(`/engine/workers/${worker.id}`, { accessToken });
+                    await apiClient.delete(`/lens/workers/${worker.id}`, { accessToken });
                     onChanged();
                   } catch (e) {
                     setError(e instanceof Error ? e.message : "Could not revoke worker");

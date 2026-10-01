@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildWeeklySeries, DailyMetric, formatMetric, modelOrder, rankModels } from "./modelInsightsData";
+import { buildBucketTotals, buildSeries, DailyMetric, formatMetric, modelOrder, rankModels } from "./modelInsightsData";
 
 const row = (over: Partial<DailyMetric>): DailyMetric => ({
   model_group: "a",
@@ -16,7 +16,7 @@ const row = (over: Partial<DailyMetric>): DailyMetric => ({
   ...over,
 });
 
-describe("buildWeeklySeries", () => {
+describe("buildSeries", () => {
   const range = { start: "2026-01-01", end: "2026-01-15" };
 
   it("sums days into 7-day buckets per model", () => {
@@ -26,7 +26,7 @@ describe("buildWeeklySeries", () => {
       row({ date: "2026-01-08", requests: 4 }),
       row({ date: "2026-01-02", model_group: "b", requests: 8 }),
     ];
-    expect(buildWeeklySeries(rows, ["a", "b"], "requests", range)).toEqual([
+    expect(buildSeries(rows, ["a", "b"], "requests", { ...range, granularity: "week" })).toEqual([
       { date: "2026-01-01", a: 3, b: 8 },
       { date: "2026-01-08", a: 4, b: 0 },
       { date: "2026-01-15", a: 0, b: 0 },
@@ -35,11 +35,57 @@ describe("buildWeeklySeries", () => {
 
   it("keeps weeks with no usage as zero instead of dropping them", () => {
     const rows = [row({ date: "2026-01-01", requests: 1 }), row({ date: "2026-01-15", requests: 2 })];
-    expect(buildWeeklySeries(rows, ["a"], "requests", range).map((week) => [week.date, week.a])).toEqual([
+    expect(
+      buildSeries(rows, ["a"], "requests", { ...range, granularity: "week" }).map((week) => [week.date, week.a]),
+    ).toEqual([
       ["2026-01-01", 1],
       ["2026-01-08", 0],
       ["2026-01-15", 2],
     ]);
+  });
+
+  it("gives every day its own bucket with that day's token total", () => {
+    const rows = [
+      row({ date: "2026-01-01", prompt_tokens: 100, completion_tokens: 50 }),
+      row({ date: "2026-01-01", prompt_tokens: 10, completion_tokens: 5 }),
+      row({ date: "2026-01-03", prompt_tokens: 7, completion_tokens: 3 }),
+    ];
+    const daily = buildSeries(rows, ["a"], "tokens", { start: "2026-01-01", end: "2026-01-03", granularity: "day" });
+    expect(daily).toEqual([
+      { date: "2026-01-01", a: 165 },
+      { date: "2026-01-02", a: 0 },
+      { date: "2026-01-03", a: 10 },
+    ]);
+  });
+});
+
+describe("buildBucketTotals", () => {
+  const total = (date: string, prompt_tokens: number) => ({
+    date,
+    spend: 0,
+    prompt_tokens,
+    completion_tokens: 1,
+    requests: 0,
+  });
+  const totals = [total("2026-01-01", 9), total("2026-01-03", 4), total("2026-01-08", 99)];
+
+  it("keys each day's gateway-wide total by its own date", () => {
+    const daily = buildBucketTotals(totals, "tokens", { start: "2026-01-01", end: "2026-01-08", granularity: "day" });
+    expect([...daily]).toEqual([
+      ["2026-01-01", 10],
+      ["2026-01-03", 5],
+      ["2026-01-08", 100],
+    ]);
+  });
+
+  it("sums days into the same week start used by the chart's x-axis", () => {
+    const window = { start: "2026-01-01", end: "2026-01-08", granularity: "week" } as const;
+    const weekly = buildBucketTotals(totals, "tokens", window);
+    expect([...weekly]).toEqual([
+      ["2026-01-01", 15],
+      ["2026-01-08", 100],
+    ]);
+    expect([...weekly.keys()]).toEqual(buildSeries([], [], "tokens", window).map((bucket) => bucket.date));
   });
 });
 

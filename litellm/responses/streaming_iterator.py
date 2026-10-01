@@ -346,9 +346,7 @@ class BaseResponsesAPIStreamingIterator:
         self._hidden_params["additional_headers"] = process_response_headers(
             self.response.headers or {}
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
-        self._raw_response_headers: Mapping[str, str] = MappingProxyType(
-            dict(self.response.headers or {})  # mutable-ok: immediately frozen by MappingProxyType
-        )
+        self._raw_response_headers: Mapping[str, str] = MappingProxyType(dict(self.response.headers or {}))
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -601,9 +599,9 @@ class BaseResponsesAPIStreamingIterator:
         raw_headers: Final[Mapping[str, object]] = raw if isinstance(raw, Mapping) else EMPTY_MAPPING
         # rebuild by value and let existing keys win: sharing the source dicts would alias what the proxy
         # splats into the client's HTTP headers, and copying non-header keys would carry response_cost
-        target._hidden_params = {  # mutable-ok: logging aliases _hidden_params into request metadata and writes into it
-            "additional_headers": {**headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
-            "headers": {**raw_headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
+        target._hidden_params = {
+            "additional_headers": {**headers},
+            "headers": {**raw_headers},
             **existing,
         }
 
@@ -2424,9 +2422,9 @@ class ResponsesWebSocketStreaming:
             try:
                 await self.websocket.send_text(
                     json.dumps(
-                        {  # mutable-ok: WebSocket wire payload requires JSON objects
+                        {
                             "type": "error",
-                            "error": {  # mutable-ok: nested WebSocket error object
+                            "error": {
                                 "type": "rate_limit_exceeded",
                                 "message": str(e),
                             },
