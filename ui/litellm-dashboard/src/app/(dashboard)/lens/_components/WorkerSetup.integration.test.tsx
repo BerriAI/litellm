@@ -98,14 +98,18 @@ describe("Worker setup", () => {
     expect(screen.getByRole("button", { name: "Get install command" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Analysis model" })).toBeVisible();
   });
-  it("creates a restricted, budgeted key as part of setup and reuses it when registration is retried", async () => {
+  it("cleans up a newly created key when registration fails before retrying", async () => {
     const user = userEvent.setup();
-    vi.mocked(apiClient.get).mockImplementation(async (path) =>
-      path === "/models" ? { data: [{ id: "analysis-model" }] } : { keys: [], total_pages: 0 },
-    );
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === "/models") return { data: [{ id: "analysis-model" }] };
+      if (path === "/lens") return { workers: [] };
+      return { keys: [], total_pages: 0 };
+    });
     vi.mocked(apiClient.post)
       .mockResolvedValueOnce({ token_id: "limited-key-id", key: "sk-secret-not-displayed" })
       .mockRejectedValueOnce(new Error("Registration unavailable"))
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ token_id: "retry-key-id" })
       .mockResolvedValueOnce(created);
     renderWithProviders(<WorkerSetup accessToken="admin" workers={[]} onClose={vi.fn()} onChanged={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Get install command" })).toBeDisabled();
@@ -128,10 +132,14 @@ describe("Worker setup", () => {
     });
     await user.click(screen.getByRole("button", { name: "Get install command" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Waiting for your worker");
-    expect(apiClient.post).toHaveBeenCalledTimes(3);
+    expect(apiClient.post).toHaveBeenCalledWith("/key/delete", {
+      accessToken: "admin",
+      body: { keys: ["limited-key-id"] },
+    });
+    expect(apiClient.post).toHaveBeenCalledTimes(5);
     expect(apiClient.post).toHaveBeenLastCalledWith("/lens/workers/register", {
       accessToken: "admin",
-      body: { name: "Lens worker", analysis_key_id: "limited-key-id" },
+      body: { name: "Lens worker", analysis_key_id: "retry-key-id" },
     });
     expect(screen.queryByText("sk-secret-not-displayed")).not.toBeInTheDocument();
   });

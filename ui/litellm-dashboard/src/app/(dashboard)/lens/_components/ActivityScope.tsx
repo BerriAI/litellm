@@ -23,7 +23,14 @@ export type ActivitySelection = Pick<Settings, "source"> &
   Partial<
     Pick<
       Settings,
-      "service" | "filters" | "lookback_hours" | "sample_percent" | "sample_size" | "team_id" | "execution_ids"
+      | "service"
+      | "agent_name"
+      | "filters"
+      | "lookback_hours"
+      | "sample_percent"
+      | "sample_size"
+      | "team_id"
+      | "execution_ids"
     >
   >;
 
@@ -63,7 +70,8 @@ export function ActivityScope({
   nameField?: ReactNode;
 }) {
   const id = useId();
-  const [advanced, setAdvanced] = useState(!!value.filters?.length || !!value.team_id || value.source !== "traces");
+  const hasFilters = !!value.filters?.length || !!value.team_id;
+  const [advanced, setAdvanced] = useState(hasFilters || !!value.service || value.source !== "traces");
   const [offset, setOffset] = useState(0);
   const [scope, setScope] = useState(value);
   const [trace, setTrace] = useState<{ id: string; ref?: string } | null>(null);
@@ -117,6 +125,13 @@ export function ActivityScope({
     enabled: validWindow,
   };
   const discovery = useQuery(discoveryOptions);
+  const agentOptions = {
+    queryKey: ["lens-agents", accessToken, asOf],
+    queryFn: () => apiClient.get<string[]>("/lens/agents", { accessToken }),
+    enabled: value.source !== "requests",
+    staleTime: 60000,
+  };
+  const agents = useQuery(agentOptions);
   const previewOptions = {
     queryKey: ["lens-activity-preview", scope, offset, asOf, accessToken],
     queryFn: () => load(scope, offset),
@@ -136,6 +151,10 @@ export function ActivityScope({
   };
   const runs = discovery.data?.executions ?? [];
   const services = [...new Set(runs.map((r) => r.service).filter(Boolean))].sort();
+  const selectedName = value.source === "requests" ? value.service : value.agent_name;
+  const names = value.source === "requests" ? services : agents.data ?? [];
+  const selectName = (name: string) =>
+    onChange({ ...value, [value.source === "requests" ? "service" : "agent_name"]: name, execution_ids: [] });
   const attributes = runs.flatMap((r) => r.metadata ?? []);
   const keys = [...new Set(attributes.map((a) => a.key).filter((key) => !key.startsWith("litellm.")))].sort();
   const pending = serialized !== JSON.stringify(scope) || preview.isFetching;
@@ -151,7 +170,7 @@ export function ActivityScope({
     onChange({ ...value, filters: filters.map((f, i) => (i === index ? { ...f, [field]: text } : f)) });
 
   const changeSource = (source: Settings["source"]) => {
-    const selection = { ...value, source, service: "", filters: [], execution_ids: [] };
+    const selection = { ...value, source, service: "", agent_name: "", filters: [], execution_ids: [] };
     onChange(selection);
   };
   const windowLabel = validWindow
@@ -174,35 +193,55 @@ export function ActivityScope({
             <label className="grid gap-2 text-sm font-medium">
               {value.source === "requests" ? "Model group (optional)" : "Agent (optional)"}
               <Combobox
-                items={services}
-                value={value.service || null}
-                inputValue={value.service ?? ""}
-                onInputValueChange={(service) => onChange({ ...value, service, execution_ids: [] })}
-                onValueChange={(service) => onChange({ ...value, service: service ?? "", execution_ids: [] })}
+                items={names}
+                value={selectedName || null}
+                inputValue={selectedName ?? ""}
+                onInputValueChange={selectName}
+                onValueChange={(name) => selectName(name ?? "")}
               >
                 <ComboboxInput
                   aria-label={value.source === "requests" ? "Model group (optional)" : "Agent (optional)"}
-                  placeholder="All agents and activity"
-                  showClear={!!value.service}
+                  placeholder={value.source === "requests" ? "All model groups" : "All agents and activity"}
+                  showClear={!!selectedName}
                   className="w-full h-9"
                 />
                 <ComboboxContent>
-                  <ComboboxEmpty>No recent matches. You can enter a recorded name.</ComboboxEmpty>
+                  <ComboboxEmpty>
+                    {agents.isFetching ? "Loading agents…" : "No matches. You can enter a recorded name."}
+                  </ComboboxEmpty>
                   <ComboboxList>
-                    {(service: string) => (
-                      <ComboboxItem key={service} value={service}>
-                        {service}
+                    {(name: string) => (
+                      <ComboboxItem key={name} value={name}>
+                        {name}
                       </ComboboxItem>
                     )}
                   </ComboboxList>
                 </ComboboxContent>
               </Combobox>
             </label>
+            {value.source !== "requests" && agents.isError && (
+              <p role="alert" className="text-sm text-destructive">
+                Could not load agents.{" "}
+                <button type="button" className="underline" onClick={() => void agents.refetch()}>
+                  Retry
+                </button>
+              </p>
+            )}
             <details open={advanced} onToggle={(event) => setAdvanced(event.currentTarget.open)} className="group">
               <summary className="cursor-pointer text-sm font-medium">
                 Advanced filters{filters.length ? ` (${filters.length})` : ""}
               </summary>
               <div className="mt-4 space-y-4">
+                {value.source !== "requests" && (
+                  <label className="grid gap-2 text-sm">
+                    Application (optional)
+                    <Input
+                      value={value.service ?? ""}
+                      placeholder="All applications"
+                      onChange={(event) => onChange({ ...value, service: event.target.value, execution_ids: [] })}
+                    />
+                  </label>
+                )}
                 <label className="grid gap-2 text-sm">
                   Activity type
                   <select

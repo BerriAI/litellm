@@ -41,6 +41,7 @@ const job: Job = {
     source: "traces",
     lookback_hours: 24,
     service: "",
+    agent_name: "",
     filters: [],
     enabled: false,
     interval_minutes: 15,

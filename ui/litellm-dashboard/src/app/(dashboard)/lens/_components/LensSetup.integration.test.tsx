@@ -7,7 +7,7 @@ import { LensSetup } from "./LensSetup";
 import { apiClient } from "@/components/networking";
 import type { Settings } from "./lensData";
 
-vi.mock("@/components/networking", () => ({ apiClient: { post: vi.fn() } }));
+vi.mock("@/components/networking", () => ({ apiClient: { post: vi.fn(), get: vi.fn() } }));
 
 const settings: Settings = {
   lookback_hours: 24,
@@ -25,6 +25,7 @@ const settings: Settings = {
   team_id: "",
   execution_ids: [],
   service: "",
+  agent_name: "",
   checks: [
     { id: "first", instruction: "Find repeated searches", enabled: false },
     { id: "second", instruction: "Find incomplete reports", enabled: true },
@@ -32,6 +33,8 @@ const settings: Settings = {
 };
 
 beforeEach(() => {
+  vi.mocked(apiClient.get).mockReset();
+  vi.mocked(apiClient.get).mockResolvedValue([]);
   vi.mocked(apiClient.post).mockReset();
   vi.mocked(apiClient.post).mockResolvedValue({ eligible: 1, selected: 1, executions: [] });
 });
@@ -119,6 +122,7 @@ describe("Lens setup", () => {
     const expected = {
       name: "Research follow-up",
       service: "",
+      agent_name: "",
       filters: [{ key: "swarm", value: "research" }],
       enabled: false,
       sample_size: null,
@@ -153,7 +157,7 @@ it("searches providers and saves custom history while preserving existing schedu
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.selectOptions(screen.getByRole("combobox", { name: "Review the last unit" }), "1");
   fireEvent.change(screen.getByRole("spinbutton", { name: "Review the last" }), { target: { value: "3" } });
-  await user.click(screen.getByText("Advanced options"));
+  expect(screen.getByText(/is no longer available/)).toBeVisible();
   await user.clear(screen.getByRole("combobox", { name: "Analysis model" }));
   await user.type(screen.getByRole("combobox", { name: "Analysis model" }), "OpenAI");
   expect(screen.queryByRole("option", { name: /Anthropic/ })).not.toBeInTheDocument();
@@ -197,7 +201,7 @@ it("keeps the draft when readiness changes and blocks a run until the worker rec
   await waitFor(() => expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled());
 });
 
-it.each(["empty", "error"])("blocks saving when the preview is %s", async (state) => {
+it.each(["empty", "error"])("allows editing saved settings when the preview is %s", async (state) => {
   if (state === "error") vi.mocked(apiClient.post).mockRejectedValue(new Error("Storage unavailable"));
   else vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
   const user = userEvent.setup();
@@ -206,7 +210,7 @@ it.each(["empty", "error"])("blocks saving when the preview is %s", async (state
   );
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
-  expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
   if (state === "error") expect(await screen.findByRole("button", { name: "Retry preview" })).toBeVisible();
   else expect(await screen.findByText(/No matches/)).toBeVisible();
 });
@@ -274,7 +278,7 @@ it("refreshes agent suggestions when the first activity arrives", async () => {
     renderWithProviders(<LensSetup models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
     await vi.advanceTimersByTimeAsync(400);
     await user.click(screen.getByRole("combobox", { name: "Agent (optional)" }));
-    expect(await screen.findByText(/No recent matches/)).toBeVisible();
+    expect(await screen.findByText(/No matches. You can enter/)).toBeVisible();
     await user.keyboard("{Escape}");
     vi.mocked(apiClient.post).mockResolvedValue({
       eligible: 1,
@@ -291,10 +295,73 @@ it("refreshes agent suggestions when the first activity arrives", async () => {
         },
       ],
     });
+    vi.mocked(apiClient.get).mockResolvedValue(["support-agent"]);
     await vi.advanceTimersByTimeAsync(15000);
     await user.click(screen.getByRole("combobox", { name: "Agent (optional)" }));
     expect(await screen.findByRole("option", { name: "support-agent" })).toBeVisible();
   } finally {
     vi.useRealTimers();
   }
+});
+
+it.each(["empty", "error"])("blocks a new investigation when its preview is %s", async (state) => {
+  if (state === "error") vi.mocked(apiClient.post).mockRejectedValue(new Error("Storage unavailable"));
+  else vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
+  const user = userEvent.setup();
+  renderWithProviders(
+    <LensSetup
+      mode="duplicate"
+      initial={settings}
+      models={["analysis"]}
+      accessToken="test"
+      onClose={vi.fn()}
+      onSave={vi.fn()}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  expect(screen.getByRole("button", { name: "Run investigation" })).toBeDisabled();
+});
+
+it("exposes an unsupported inherited model before allowing a run", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <LensSetup
+      mode="duplicate"
+      initial={settings}
+      models={["analysis"]}
+      modelDetails={[{ model_group: "analysis", mode: "embedding", providers: [] }]}
+      accessToken="test"
+      onClose={vi.fn()}
+      onSave={vi.fn()}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  expect(screen.getByText("Choose a chat model that supports JSON output.")).toBeVisible();
+  expect(screen.getByRole("combobox", { name: "Analysis model" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Run investigation" })).toBeDisabled();
+});
+
+it("saves a discovered agent independently of the application name", async () => {
+  vi.mocked(apiClient.get).mockResolvedValue(["research_agent", "support_agent"]);
+  const user = userEvent.setup();
+  const save = vi.fn();
+  renderWithProviders(
+    <LensSetup
+      initial={{ ...settings, service: "shared-service" }}
+      models={["analysis"]}
+      accessToken="test"
+      onClose={vi.fn()}
+      onSave={save}
+    />,
+  );
+  await user.click(screen.getByRole("combobox", { name: "Agent (optional)" }));
+  await user.click(await screen.findByRole("option", { name: "research_agent" }));
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.click(screen.getByRole("button", { name: "Save changes" }));
+  expect(save).toHaveBeenCalledWith(
+    expect.objectContaining({ agent_name: "research_agent", service: "shared-service" }),
+  );
 });

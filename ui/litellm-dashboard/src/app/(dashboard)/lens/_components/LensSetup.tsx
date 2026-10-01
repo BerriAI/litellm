@@ -41,6 +41,7 @@ export function LensSetup({
   modelsLoading = false,
   modelsError,
   defaultModel,
+  defaultSource = "traces",
   accessToken,
   ready = true,
   onClose,
@@ -53,6 +54,7 @@ export function LensSetup({
   modelsLoading?: boolean;
   modelsError?: string;
   defaultModel?: string;
+  defaultSource?: Settings["source"];
   accessToken: string;
   ready?: boolean;
   onClose: () => void;
@@ -63,8 +65,9 @@ export function LensSetup({
   const [manualSelection, setManualSelection] = useState(!!initial?.execution_ids?.length);
   const [name, setName] = useState(initial?.name ?? "");
   const initialSelection: Required<ActivitySelection> = {
-    source: initial?.source ?? "traces",
+    source: initial?.source ?? defaultSource,
     service: initial?.service ?? "",
+    agent_name: initial?.agent_name ?? "",
     filters: initial?.filters ?? [],
     lookback_hours: initial?.lookback_hours ?? 24,
     sample_size: initial?.sample_size ?? null,
@@ -87,7 +90,7 @@ export function LensSetup({
   const title = name.trim() || suggestedName.slice(0, 100);
   const changeSelection = (next: ActivitySelection) => {
     const pool = (s: ActivitySelection) =>
-      JSON.stringify([s.source, s.service, s.filters, s.lookback_hours, s.team_id]);
+      JSON.stringify([s.source, s.service, s.agent_name, s.filters, s.lookback_hours, s.team_id]);
     setSelection({
       ...selection,
       ...next,
@@ -141,12 +144,17 @@ export function LensSetup({
   const unsupported = modelDetails.some((m) => m.model_group === model && m.mode && m.mode !== "chat");
   const budgetValid = Number.isFinite(budget) && budget > 0 && budget <= 100000;
   const canRun = ready || mode === "edit";
-  const modelValid = !!model && !unsupported;
+  const modelsReady = !modelsLoading && !modelsError;
+  const unavailable = !!model && modelsReady && !models.includes(model);
+  const supported = !unsupported && !unavailable;
+  const modelValid = !!model && supported && modelsReady;
   const intervalRangeValid = interval >= 1 && interval <= 10080;
   const intervalValid = !repeat || (Number.isInteger(interval) && intervalRangeValid);
   const configurationValid = modelValid && budgetValid && intervalValid;
-  const runReady = canRun && previewReady;
-  const canSave = !busy && runReady && configurationValid;
+  const runReady = canRun && (mode === "edit" || previewReady);
+  const selectionValid = !manualSelection || !!selection.execution_ids?.length;
+  const validSettings = configurationValid && selectionValid;
+  const canSave = !busy && runReady && validSettings;
   const createLabel = repeat ? "Run and monitor" : "Run investigation";
   const saveLabel = mode === "edit" ? "Save changes" : createLabel;
   const headings = [
@@ -283,7 +291,7 @@ export function LensSetup({
           )}
           {step === 2 && (
             <>
-              <details open={!model || undefined}>
+              <details open={!modelValid || undefined}>
                 <summary className="cursor-pointer text-sm font-medium">Advanced options</summary>
                 <div className="mt-4 space-y-5">
                   <div className="space-y-2">
@@ -300,6 +308,11 @@ export function LensSetup({
                     {modelsError && (
                       <p role="alert" className="text-sm text-destructive">
                         Could not load models: {modelsError}
+                      </p>
+                    )}
+                    {unavailable && (
+                      <p role="alert" className="text-sm text-destructive">
+                        {model} is no longer available. Choose another analysis model.
                       </p>
                     )}
                     {unsupported && (

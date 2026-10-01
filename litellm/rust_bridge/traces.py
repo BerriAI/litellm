@@ -108,6 +108,12 @@ class ClickHouseStorage:
     async def lens_sample(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
         return await self._lens_query("sample", parameters)
 
+    async def lens_availability(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        return await self._lens_query("availability", parameters)
+
+    async def lens_agents(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        return await self._lens_query("agents", parameters)
+
     async def lens_content(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
         return await self._lens_query("content", parameters)
 

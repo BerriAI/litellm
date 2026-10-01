@@ -12,10 +12,11 @@ export function workerConnected(worker: LensList["workers"][number], now = Date.
   return !worker.revoked && !!worker.analysis_key_id && now - Date.parse(worker.last_seen) < 120000;
 }
 
-export function scopeLabel(settings: Partial<Pick<Settings, "service" | "filters">>): string {
+export function scopeLabel(settings: Partial<Pick<Settings, "service" | "agent_name" | "filters">>): string {
   return (
-    [settings.service, ...(settings.filters ?? []).map((f) => `${f.key}: ${f.value}`)].filter(Boolean).join(" · ") ||
-    "All activity"
+    [settings.agent_name, settings.service, ...(settings.filters ?? []).map((f) => `${f.key}: ${f.value}`)]
+      .filter(Boolean)
+      .join(" · ") || "All activity"
   );
 }
 

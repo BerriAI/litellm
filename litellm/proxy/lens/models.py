@@ -31,6 +31,7 @@ class LensSettings(Record):
     source: Literal["traces", "requests", "both"] = "traces"
     lookback_hours: int = Field(default=24, ge=1, le=8760)
     service: str = Field(default="", max_length=200)
+    agent_name: str = Field(default="", max_length=200)
     filters: tuple[MetadataFilter, ...] = Field(default=(), max_length=8)
     checks: tuple[Check, ...] = ()
     model: str = Field(min_length=1, max_length=200)

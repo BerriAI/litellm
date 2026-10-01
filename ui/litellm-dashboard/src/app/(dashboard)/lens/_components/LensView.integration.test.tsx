@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders as renderProviders, testQueryClient } from "@/../tests/test-utils";
 import { ApiError } from "@/lib/http/client";
 import { apiClient } from "@/components/networking";
-import { LIVE_TAIL_INTERVAL_MS } from "@/components/view_logs/log_filter_logic";
 import { LensView } from "./LensView";
 import { nextCheckStatus, runTime, type Lens, type Finding } from "./lensData";
 
@@ -12,7 +11,10 @@ function renderWithProviders(ui: React.ReactElement, options?: Parameters<typeof
   return renderProviders(ui, { searchParams: window.location.search, ...options });
 }
 
-vi.mock("@/components/networking", () => ({ apiClient: { get: vi.fn(), post: vi.fn() }, proxyBaseUrl: "" }));
+vi.mock("@/components/networking", () => ({
+  apiClient: { get: vi.fn(), post: vi.fn(), request: vi.fn() },
+  proxyBaseUrl: "",
+}));
 
 beforeEach(() => {
   window.history.replaceState({}, "", "/lens/?lens=lens");
@@ -57,6 +59,7 @@ const lens: Lens = {
     source: "traces",
     lookback_hours: 24,
     service: "",
+    agent_name: "",
     filters: [],
     interval_minutes: 15,
     sample_size: 100,
@@ -105,6 +108,7 @@ const lens: Lens = {
         source: "traces",
         lookback_hours: 24,
         service: "",
+        agent_name: "",
         filters: [],
         interval_minutes: 15,
         sample_size: 100,
@@ -129,6 +133,7 @@ const lens: Lens = {
             metadata: [],
             root_seen: true,
             service: "",
+            agent_name: "",
             source: "traces",
             trace_id: "trace-42",
             team_id: "",
@@ -216,7 +221,7 @@ it("runs saved settings immediately without opening setup", async () => {
         ],
       };
     if (path === "/lens/lens/runs") return lens.jobs;
-    if (path === "/v1/traces") return { data: [{ trace_id: "old-trace" }] };
+    if (path === "/lens/activity/available") return { traces: true, requests: false };
     return { data: [] };
   });
   vi.mocked(apiClient.post).mockResolvedValue(lens);
@@ -230,13 +235,15 @@ it("runs saved settings immediately without opening setup", async () => {
 it("guides a first-time administrator into worker connection and lens setup", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
-  vi.mocked(apiClient.get).mockImplementation(async (path) =>
-    path === "/lens" ? { lenses: [], workers: [], tracing_enabled: true } : { data: [{ trace_id: "first-trace" }] },
-  );
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [], workers: [], tracing_enabled: true };
+    if (path === "/lens/agents") return [];
+    return { traces: true, requests: false, data: [] };
+  });
   const user = userEvent.setup();
   renderWithProviders(<LensView accessToken="test" />);
   const guide = within(await screen.findByRole("region", { name: "Find what needs attention" }));
-  expect(apiClient.get).toHaveBeenCalledWith("/v1/traces", { accessToken: "test", query: { start_ms: 0 } });
+  expect(apiClient.get).toHaveBeenCalledWith("/lens/activity/available", { accessToken: "test" });
   expect(await guide.findByRole("link", { name: "View traces" })).toHaveAttribute(
     "href",
     expect.stringMatching(/^\/ui\/lens\/?\?tab=traces$/),
@@ -359,7 +366,7 @@ it.each([false, true])(
 it("enables first-lens setup when a trace arrives without leaving Investigations", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
-  const traceCheck = vi.fn().mockResolvedValue({ data: [] });
+  const traceCheck = vi.fn().mockResolvedValue({ traces: false, requests: false });
   vi.mocked(apiClient.get).mockImplementation(async (path) =>
     path === "/lens" ? { lenses: [], workers: [], tracing_enabled: true } : traceCheck(),
   );
@@ -369,15 +376,15 @@ it("enables first-lens setup when a trace arrives without leaving Investigations
     await act(async () => vi.advanceTimersByTimeAsync(50));
     expect(screen.getByRole("link", { name: "Set up traces" })).toBeVisible();
 
-    traceCheck.mockResolvedValue({ data: [{ trace_id: "first-trace" }] });
-    await act(async () => vi.advanceTimersByTimeAsync(LIVE_TAIL_INTERVAL_MS));
+    traceCheck.mockResolvedValue({ traces: true, requests: false });
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
     expect(screen.getByRole("button", { name: "Connect worker" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "New investigation" })).toBeDisabled();
     expect(screen.queryByRole("link", { name: "Set up traces" })).not.toBeInTheDocument();
 
     const completedChecks = traceCheck.mock.calls.length;
-    await act(async () => vi.advanceTimersByTimeAsync(LIVE_TAIL_INTERVAL_MS * 2));
-    expect(traceCheck).toHaveBeenCalledTimes(completedChecks);
+    await act(async () => vi.advanceTimersByTimeAsync(5000 * 2));
+    expect(traceCheck.mock.calls.length).toBeGreaterThan(completedChecks);
     view.unmount();
   } finally {
     vi.useRealTimers();
@@ -393,12 +400,14 @@ it("allows retrying a failed trace readiness check without treating it as an emp
     .mockResolvedValue({ data: [] });
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [], workers: [], tracing_enabled: true };
-    if (path === "/v1/traces") return traceCheck();
+    if (path === "/lens/activity/available") return traceCheck();
     return { data: [] };
   });
   const user = userEvent.setup();
   renderWithProviders(<LensView accessToken="test" />);
-  expect(await screen.findByRole("alert")).toHaveTextContent("Could not check traces. Trace storage unavailable");
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Could not check recorded activity. Trace storage unavailable",
+  );
   expect(screen.getByRole("button", { name: "Connect worker" })).toBeDisabled();
   await user.click(screen.getByRole("button", { name: "Retry" }));
   expect(await screen.findByRole("link", { name: "Set up traces" })).toBeVisible();
@@ -414,4 +423,39 @@ it("keeps saved investigations accessible when tracing is disabled", async () =>
   renderWithProviders(<LensView accessToken="test" readOnly />);
   expect(await screen.findByText(issue.title)).toBeVisible();
   expect(screen.queryByRole("link", { name: "Set up traces" })).not.toBeInTheDocument();
+});
+
+it("allows request-only accounts to connect a worker without requiring agent traces", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [], workers: [], tracing_enabled: true };
+    if (path === "/lens/activity/available") return { traces: false, requests: true };
+    return { data: [] };
+  });
+  renderWithProviders(<LensView accessToken="test" />);
+  expect(await screen.findByText("Request logs received")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Connect worker" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "New investigation" })).toBeDisabled();
+});
+
+it("closes editing when browser navigation leaves the investigation", async () => {
+  testQueryClient.clear();
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
+    if (path === "/lens/lens/runs") return lens.jobs;
+    if (path === "/lens/agents") return [];
+    return { data: [] };
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<LensView accessToken="test" />);
+  await user.click(await screen.findByRole("button", { name: "Investigation actions" }));
+  await user.click(await screen.findByRole("menuitem", { name: "Edit investigation" }));
+  expect(await screen.findByRole("dialog")).toBeVisible();
+  await act(async () => {
+    window.history.replaceState({}, "", "/lens/");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(apiClient.request).not.toHaveBeenCalled();
 });

@@ -18,7 +18,14 @@ from litellm.proxy.lens.models import (
 )
 
 
+class ActivityAvailability(BaseModel):
+    traces: bool = False
+    requests: bool = False
+
+
 class Storage(Protocol):
+    def lens_availability(self, parameters: Mapping[str, object]) -> Awaitable[object]: ...
+    def lens_agents(self, parameters: Mapping[str, object]) -> Awaitable[object]: ...
     def lens_sample(self, parameters: Mapping[str, object]) -> Awaitable[object]: ...
     def lens_content(self, parameters: Mapping[str, object]) -> Awaitable[object]: ...
     def lens_evidence(self, parameters: Mapping[str, object]) -> Awaitable[object]: ...
@@ -53,6 +60,12 @@ class CountRow(BaseModel):
     count: int
 
 
+class AgentRow(BaseModel):
+    agent_name: str
+
+
+_AVAILABILITY: Final = TypeAdapter(tuple[ActivityAvailability, ...])
+_AGENTS: Final = TypeAdapter(tuple[AgentRow, ...])
 _ROWS: Final = TypeAdapter(tuple[ExecutionRow, ...])
 _PARTS: Final = TypeAdapter(tuple[PartRow, ...])
 _COUNTS: Final = TypeAdapter(tuple[CountRow, ...])
@@ -90,6 +103,14 @@ class SourceReader:
     def __init__(self, storage: Storage) -> None:
         self.storage: Final = storage
 
+    async def availability(self, scope: Scope) -> ActivityAvailability:
+        rows: Final = _AVAILABILITY.validate_python(await self.storage.lens_availability(parameters(scope, ())))
+        return rows[0] if rows else ActivityAvailability()
+
+    async def agents(self, scope: Scope) -> tuple[str, ...]:
+        rows: Final = _AGENTS.validate_python(await self.storage.lens_agents(parameters(scope, ())))
+        return tuple(row.agent_name for row in rows)
+
     async def sample(
         self,
         scope: Scope,
@@ -108,6 +129,7 @@ class SourceReader:
                 "start": start,
                 "end": end,
                 "service": settings.service,
+                "agent_name": settings.agent_name,
                 "limit": page_size,
                 "offset": offset,
                 "after": cursor,

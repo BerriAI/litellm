@@ -13,7 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { serverRootPath } from "@/lib/serverRootPath";
 import { apiClient, proxyBaseUrl } from "@/components/networking";
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { CheckCircle2, Copy, Loader2 } from "lucide-react";
 import { workerConnected } from "./lensData";
 import { AnalysisKeyDetails } from "./AnalysisKeyDetails";
 import { Switch } from "@/components/ui/switch";
@@ -66,7 +66,6 @@ export function WorkerSetup({
   }, []);
   const [access, setAccess] = useState<AnalysisAccess>({ model: null, budget: "100" });
   const [useExisting, setUseExisting] = useState(false);
-  const [preparedKey, setPreparedKey] = useState<string | null>(null);
   const [analysisKey, setAnalysisKey] = useState<string | null>(null);
   const [editingWorker, setEditingWorker] = useState<string | null>(null);
   const [address, setAddress] = useState(initialProxyAddress);
@@ -103,12 +102,13 @@ export function WorkerSetup({
   const createWorker = async () => {
     setBusy(true);
     setError("");
+    let newKey: string | null = null;
     try {
       const parsedAddress = new URL(address);
       if (!["http:", "https:"].includes(parsedAddress.protocol) || parsedAddress.username || parsedAddress.password)
         throw new Error("Enter an HTTP or HTTPS proxy URL without credentials");
-      const keyId = useExisting ? analysisKey : preparedKey ?? (await createAnalysisKey(accessToken, access));
-      if (!useExisting) setPreparedKey(keyId);
+      const keyId = useExisting ? analysisKey : await createAnalysisKey(accessToken, access);
+      if (!useExisting) newKey = keyId;
       if (editingWorker) {
         await apiClient.put(`/lens/workers/${editingWorker}/billing-key`, {
           accessToken,
@@ -127,7 +127,21 @@ export function WorkerSetup({
       );
       onChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not create credential");
+      const message = e instanceof Error ? e.message : "Could not create credential";
+      setError(message);
+      if (newKey) {
+        try {
+          const current = await apiClient.get<LensList>("/lens", { accessToken });
+          if (!current.workers.some((worker) => !worker.revoked && worker.analysis_key_id === newKey)) {
+            await apiClient.post("/key/delete", { accessToken, body: { keys: [newKey] } });
+          }
+          onChanged();
+        } catch {
+          setError(
+            `${message}. Could not confirm cleanup. Check the Lens analysis key in Virtual Keys before retrying.`,
+          );
+        }
+      }
     } finally {
       setBusy(false);
     }
@@ -137,6 +151,10 @@ export function WorkerSetup({
     : "Deploy the worker on your server to run investigations.";
   const awaitingConnection = !editingWorker && !connected;
   const describeSetup = awaitingConnection && (formVisible || !!created);
+  const completed = !!created && connected;
+  const installSize = connected ? "sm:max-w-sm p-8" : "sm:max-w-lg";
+  const modalSize = created ? installSize : "sm:max-w-xl";
+  const description = describeSetup ? setupDescription : "Worker status and model access";
   return (
     <Dialog
       open
@@ -144,18 +162,20 @@ export function WorkerSetup({
         if (!open && !busy) onClose();
       }}
     >
-      <DialogContent className="sm:max-w-xl max-h-[90dvh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-xl">
-            {created && connected && <CheckCircle2 className="size-5 text-emerald-700 dark:text-emerald-400" />}
-            {dialogTitle}
-          </DialogTitle>
-          <DialogDescription className={describeSetup ? undefined : "sr-only"}>
-            {describeSetup ? setupDescription : "Worker status and model access"}
+      <DialogContent className={`max-h-[90dvh] overflow-y-auto ${modalSize}`}>
+        <DialogHeader className={completed ? "items-center gap-3 text-center sm:text-center" : undefined}>
+          {completed && (
+            <div className="flex size-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400">
+              <CheckCircle2 className="size-6" />
+            </div>
+          )}
+          <DialogTitle className="text-xl leading-7">{dialogTitle}</DialogTitle>
+          <DialogDescription className={describeSetup || completed ? undefined : "sr-only"}>
+            {completed ? "Ready to run investigations." : description}
           </DialogDescription>
         </DialogHeader>
         {formVisible && !created && (
-          <div className="space-y-5">
+          <div className="min-w-0 space-y-5">
             {useExisting ? (
               <AnalysisKey accessToken={accessToken} value={analysisKey} onChange={setAnalysisKey} />
             ) : (
@@ -164,7 +184,6 @@ export function WorkerSetup({
                 value={access}
                 onChange={(next) => {
                   setAccess(next);
-                  setPreparedKey(null);
                 }}
               />
             )}
@@ -189,11 +208,12 @@ export function WorkerSetup({
           </div>
         )}
         {created ? (
-          <div className="space-y-3">
+          <div className="min-w-0 space-y-5">
             {!connected && (
               <>
                 <Button
                   variant="default"
+                  className="w-full gap-2"
                   onClick={async () => {
                     try {
                       await navigator.clipboard.writeText(workerSetupCommand(address, created.token));
@@ -203,6 +223,7 @@ export function WorkerSetup({
                     }
                   }}
                 >
+                  {copied ? <CheckCircle2 className="size-4" /> : <Copy className="size-4" />}
                   {copied ? "Copied" : "Copy Docker command"}
                 </Button>
                 <details className="text-sm">
@@ -218,23 +239,24 @@ export function WorkerSetup({
               </>
             )}
             {!connected && (
-              <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" /> Waiting for your worker to connect…
+              <div className="space-y-3 border-t pt-5">
+                <div role="status" className="flex items-center gap-2.5 text-sm">
+                  <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" /> Waiting for your worker to
+                  connect…
+                </div>
+                <details className="pl-6.5 text-sm text-muted-foreground">
+                  <summary className="cursor-pointer">Not connecting?</summary>
+                  <p className="mt-2 break-words leading-6">
+                    Check that Docker is running and can reach {address}. Inspect the container logs for connection or
+                    authentication errors. This page updates automatically.
+                  </p>
+                </details>
               </div>
             )}
-            {!connected && (
-              <details className="text-sm">
-                <summary className="cursor-pointer">Not connecting?</summary>
-                <p className="mt-2 leading-6 text-muted-foreground">
-                  Run the command on a machine with Docker. Check that it can reach the proxy URL above, then inspect
-                  the container logs for a connection or authentication error. This page updates automatically.
-                </p>
-              </details>
-            )}
             {connected && (
-              <DialogFooter>
-                <Button onClick={onReady ?? onClose}>{onReady ? "New investigation" : "Done"}</Button>
-              </DialogFooter>
+              <Button className="w-full" onClick={onReady ?? onClose}>
+                {onReady ? "New investigation" : "Done"}
+              </Button>
             )}
           </div>
         ) : null}
@@ -276,7 +298,6 @@ export function WorkerSetup({
                     onClick={async () => {
                       try {
                         await apiClient.delete(`/lens/workers/${worker.id}`, { accessToken });
-                        setPreparedKey(null);
                         setAnalysisKey(null);
                         setUseExisting(false);
                         onChanged();

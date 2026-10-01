@@ -35,7 +35,6 @@ import { LensRuns } from "./LensRuns";
 import { LensProgress, ScanDuration } from "./LensProgress";
 import { WorkerSetup } from "./WorkerSetup";
 import { useAnalysisKeyInfo } from "./AnalysisKeyDetails";
-import { isTracingNotEnabled, useTraceAvailability } from "@/components/view_logs/TraceView/useAgentTraces";
 import { uiHref } from "@/utils/uiHref";
 import { ApiError } from "@/lib/http/client";
 import {
@@ -122,6 +121,7 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
   };
   useEffect(() => {
     const restoreLocation = () => {
+      setEditing(null);
       setBatchId("latest");
       setHistoryOffset(0);
       setFindingId(null);
@@ -142,10 +142,17 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
   const defaultKeyId = activeWorkers.length === 1 ? activeWorkers[0].analysis_key_id : undefined;
   const analysisAccess = useAnalysisKeyInfo(accessToken, defaultKeyId ?? undefined);
   const defaultModel = analysisAccess.data?.models.length === 1 ? analysisAccess.data.models[0] : undefined;
-  const traces = useTraceAvailability(accessToken, query.data?.tracing_enabled ?? false);
-  const tracesReady = !!query.data?.tracing_enabled && traces.data === true && !traces.error;
-  const ready = tracesReady && connected && !query.error;
-  const traceError = traces.error && !isTracingNotEnabled(traces.error) ? traces.error.message : undefined;
+  const activityOptions = {
+    queryKey: ["lens-activity-available", accessToken],
+    queryFn: () => apiClient.get<{ traces: boolean; requests: boolean }>("/lens/activity/available", { accessToken }),
+    enabled: loaded,
+    refetchInterval: 5000,
+  };
+  const activity = useQuery(activityOptions);
+  const tracesReady = activity.data?.traces === true && !activity.error;
+  const requestsReady = activity.data?.requests === true && !activity.error;
+  const activityReady = tracesReady || requestsReady;
+  const ready = activityReady && connected && !query.error;
   const historyQuery = {
     queryKey: ["lens-history", lens?.id, historyOffset, accessToken],
     enabled: !!lens,
@@ -211,8 +218,10 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
     }
   };
   const save = async (settings: Settings) => {
+    if (editing === "edit" && (!lens || lens.id !== selected))
+      throw new Error("Reopen the investigation to edit its settings");
     if (editing !== "edit" && !ready)
-      throw new Error("Wait for traces and a connected worker before starting an investigation");
+      throw new Error("Wait for recorded activity and a connected worker before starting an investigation");
     const saved = await apiClient.request<Lens>(
       editing === "edit" ? "PUT" : "POST",
       editing === "edit" ? `/lens/${lens?.id}` : "/lens",
@@ -240,7 +249,7 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
           )}
           {showActions && (
             <div className="flex flex-wrap gap-2">
-              <Button variant="ghost" disabled={!tracesReady} onClick={() => setWorkerSetup(true)}>
+              <Button variant="ghost" disabled={!activityReady} onClick={() => setWorkerSetup(true)}>
                 <Circle
                   className={`size-2 ${connected ? "fill-emerald-500 text-emerald-500" : "fill-amber-500 text-amber-500"}`}
                 />
@@ -277,12 +286,13 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
       {loaded && showEmpty && (
         <LensWelcome
           tracesReady={tracesReady}
-          checking={!!query.data?.tracing_enabled && traces.isPending}
-          traceError={traceError}
+          requestsReady={requestsReady}
+          checking={activity.isPending}
+          traceError={activity.error?.message}
           connected={connected}
           readOnly={!!readOnly}
           onRetry={() => {
-            void traces.refetch();
+            void activity.refetch();
             refresh();
           }}
           onConnect={() => setWorkerSetup(true)}
@@ -292,10 +302,10 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
       )}
       {showReadiness && !ready && (
         <div role="status" className="flex flex-wrap items-center gap-2 border-y py-3 text-sm text-muted-foreground">
-          {tracesReady
+          {activityReady
             ? "Connect a worker to run new investigations. Saved results are still available."
-            : "Trace storage is not ready. Saved results are still available."}
-          {!tracesReady && (
+            : "Recorded activity is not ready. Saved results are still available."}
+          {!activityReady && (
             <a className="font-medium underline" href={uiHref("lens/?tab=traces")}>
               Check traces
             </a>
@@ -651,6 +661,7 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
           mode={editing}
           initial={setupSettings()}
           defaultModel={defaultModel}
+          defaultSource={!tracesReady && requestsReady ? "requests" : "traces"}
           models={models.data?.data.map((m) => m.id) ?? []}
           modelDetails={modelDetails.data?.data ?? []}
           modelsLoading={models.isLoading}
