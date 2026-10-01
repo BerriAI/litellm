@@ -115,5 +115,4 @@ describe("AlertingSettings", () => {
     });
     expect(updateConfigFieldSetting).toHaveBeenNthCalledWith(2, "sk-new", "alerting", ["slack"]);
   });
-
 });
