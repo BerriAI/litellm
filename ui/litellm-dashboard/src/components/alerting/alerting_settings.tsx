@@ -27,14 +27,22 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
   const [resetFields, setResetFields] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    // get values
     if (!accessToken) {
       return;
     }
+
+    let isCurrentRequest = true;
     alertingSettingsCall(accessToken).then((data) => {
+      if (!isCurrentRequest) {
+        return;
+      }
       setResetFields(new Set());
       setAlertingSettings(data);
     });
+
+    return () => {
+      isCurrentRequest = false;
+    };
   }, [accessToken]);
 
   const handleInputChange = (fieldName: string, newValue: any) => {
