@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
@@ -2209,8 +2210,6 @@ class TestRecordsOwnGuardrailInformation:
 
 
 def _skip_success_record_then(inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
-    from litellm.exceptions import GuardrailRaisedException
-
     texts: Final = inputs.get("texts") or []
     if "skip" in texts:
         skip_guardrail_success_record()
@@ -2240,8 +2239,6 @@ class _SuccessRecordSkippingGuardrail(CustomGuardrail):
 
 
 async def _recorded_after_check(branch: Literal["async", "sync"], texts: list[str]) -> list[str]:
-    from litellm.exceptions import GuardrailRaisedException
-
     guardrail: Final = _SuccessRecordSkippingGuardrail(guardrail_name="skipper")
     request_data: Final[dict] = {"metadata": {}}
     inputs: Final = GenericGuardrailAPIInputs(texts=texts)
@@ -2312,8 +2309,6 @@ class _UndecoratedGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        from litellm.exceptions import GuardrailRaisedException
-
         if any("forbidden" in text for text in inputs.get("texts") or []):
             raise GuardrailRaisedException(guardrail_name=self.guardrail_name, message="Content blocked")
         return inputs
@@ -2368,8 +2363,6 @@ class TestUndecoratedApplyGuardrailIsLogged:
 
     @pytest.mark.asyncio
     async def test_undecorated_block_is_recorded_and_reraised(self):
-        from litellm.exceptions import GuardrailRaisedException
-
         guardrail = _UndecoratedGuardrail(guardrail_name="docs-style")
         request_data: dict = {"model": "gpt-4o"}
 

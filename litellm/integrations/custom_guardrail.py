@@ -78,10 +78,7 @@ _guardrail_success_record_skipped: Final[contextvars.ContextVar[bool]] = context
 
 
 def skip_guardrail_success_record() -> None:
-    """Skip the entry ``log_guardrail_information`` would record for this call's normal return.
-
-    Only the success branch reads this flag, so a later raise still records its error entry.
-    """
+    """Only the success branch reads this flag, so a later raise still records its error entry"""
     _guardrail_success_record_skipped.set(True)
 
 

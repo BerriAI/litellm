@@ -1,8 +1,11 @@
 import json
 from typing import Final, Literal
 
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic_core import to_jsonable_python
+from typing_extensions import assert_never
 
+from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GuardrailInformationScope
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -12,6 +15,22 @@ DEFAULT_GUARDRAIL_INFORMATION_SCOPE: Final[GuardrailInformationScope] = "per_cal
 _SESSION_CACHE_MAX_ENTRIES: Final = 100_000
 _SESSION_CACHE_TTL_SECONDS: Final = 3600
 _REWRITABLE_KEYS: Final = ("texts", "images", "tools", "structured_messages")
+_SCOPE_ADAPTER: Final[TypeAdapter[GuardrailInformationScope]] = TypeAdapter(
+    GuardrailInformationScope, config=ConfigDict(title="guardrail_information_scope")
+)
+
+
+def guardrail_information_scope_from_config(value: object) -> GuardrailInformationScope:
+    if value is None:
+        return DEFAULT_GUARDRAIL_INFORMATION_SCOPE
+    try:
+        return _SCOPE_ADAPTER.validate_python(value)
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "Ignoring guardrail_information_scope=%r, expected per_call, per_session or off. Recording every call",
+            value,
+        )
+        return DEFAULT_GUARDRAIL_INFORMATION_SCOPE
 
 
 def _jsonable(value: object) -> object:
@@ -48,6 +67,8 @@ class RecordScope:
                 return False
             case "per_session":
                 return session_id is None or self._claim_session(json.dumps([tenant, session_id, input_type]))
+            case _:
+                assert_never(self._scope)
 
     def _claim_session(self, key: str) -> bool:
         if self._recorded_sessions.get_cache(key) is True:
