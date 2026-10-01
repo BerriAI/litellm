@@ -150,19 +150,21 @@ class DualCache(BaseCache):
     def set_cache(self, key, value, local_only: bool = False, **kwargs):
         # Update both Redis and in-memory cache
         try:
+            # Keep each tier's injected ttl on its own dict so one tier's ttl never reaches the
+            # other, and the caller's kwargs object is never mutated.
+            ttl_given: Final = "ttl" in kwargs
             if self.in_memory_cache is not None:
-                mem_kwargs = dict(kwargs)  # mutable-ok: per-tier copy; tiers must not share a ttl
-                if "ttl" not in mem_kwargs and self.default_in_memory_ttl is not None:
-                    mem_kwargs["ttl"] = self.default_in_memory_ttl
+                in_mem_kwargs: Final = dict(kwargs)
+                if not ttl_given and self.default_in_memory_ttl is not None:
+                    in_mem_kwargs["ttl"] = self.default_in_memory_ttl
 
-                self.in_memory_cache.set_cache(key, value, **mem_kwargs)
+                self.in_memory_cache.set_cache(key, value, **in_mem_kwargs)
 
             if self.redis_cache is not None and local_only is False:
-                redis_kwargs = dict(kwargs)  # mutable-ok: per-tier copy; tiers must not share a ttl
-                if "ttl" not in redis_kwargs:
-                    redis_ttl = self.default_redis_ttl
-                    if redis_ttl is None:
-                        redis_ttl = self.default_in_memory_ttl
+                redis_kwargs: Final = dict(kwargs)
+                if not ttl_given:
+                    base_ttl: Final = self.default_redis_ttl
+                    redis_ttl: Final = base_ttl if base_ttl is not None else self.default_in_memory_ttl
                     if redis_ttl is not None:
                         redis_kwargs["ttl"] = redis_ttl
                 self.redis_cache.set_cache(key, value, **redis_kwargs)
@@ -513,18 +515,18 @@ class DualCache(BaseCache):
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
         print_verbose(f"async set cache: cache key: {key}; local_only: {local_only}; value: {value}")
         try:
+            ttl_given: Final = "ttl" in kwargs
             if self.in_memory_cache is not None:
-                mem_kwargs = dict(kwargs)  # mutable-ok: per-tier copy; tiers must not share a ttl
-                if "ttl" not in mem_kwargs and self.default_in_memory_ttl is not None:
-                    mem_kwargs["ttl"] = self.default_in_memory_ttl
-                await self.in_memory_cache.async_set_cache(key, value, **mem_kwargs)
+                in_mem_kwargs: Final = dict(kwargs)
+                if not ttl_given and self.default_in_memory_ttl is not None:
+                    in_mem_kwargs["ttl"] = self.default_in_memory_ttl
+                await self.in_memory_cache.async_set_cache(key, value, **in_mem_kwargs)
 
             if self.redis_cache is not None and local_only is False:
-                redis_kwargs = dict(kwargs)  # mutable-ok: per-tier copy; tiers must not share a ttl
-                if "ttl" not in redis_kwargs:
-                    redis_ttl = self.default_redis_ttl
-                    if redis_ttl is None:
-                        redis_ttl = self.default_in_memory_ttl
+                redis_kwargs: Final = dict(kwargs)
+                if not ttl_given:
+                    base_ttl: Final = self.default_redis_ttl
+                    redis_ttl: Final = base_ttl if base_ttl is not None else self.default_in_memory_ttl
                     if redis_ttl is not None:
                         redis_kwargs["ttl"] = redis_ttl
                 await self.redis_cache.async_set_cache(key, value, **redis_kwargs)
@@ -553,9 +555,8 @@ class DualCache(BaseCache):
         effective_ttl: Final = self.default_in_memory_ttl if ttl is None else ttl
         if self.in_memory_cache is not None:
             await self.in_memory_cache.async_set_cache(key, value, ttl=effective_ttl)
-        redis_ttl = self.default_redis_ttl if ttl is None else ttl
-        if redis_ttl is None:
-            redis_ttl = effective_ttl
+        base_redis_ttl: Final = self.default_redis_ttl if ttl is None else ttl
+        redis_ttl: Final = base_redis_ttl if base_redis_ttl is not None else effective_ttl
         return batch.set(key, value, redis_ttl)
 
     # async_batch_set_cache
@@ -567,18 +568,18 @@ class DualCache(BaseCache):
         """
         print_verbose(f"async batch set cache: cache keys: {cache_list}; local_only: {local_only}")
         try:
+            ttl_given: Final = "ttl" in kwargs
             if self.in_memory_cache is not None:
-                mem_kwargs = dict(kwargs)  # mutable-ok: per-tier copy; tiers must not share a ttl
-                if "ttl" not in mem_kwargs and self.default_in_memory_ttl is not None:
-                    mem_kwargs["ttl"] = self.default_in_memory_ttl
-                await self.in_memory_cache.async_set_cache_pipeline(cache_list=cache_list, **mem_kwargs)
+                in_mem_kwargs: Final = dict(kwargs)
+                if not ttl_given and self.default_in_memory_ttl is not None:
+                    in_mem_kwargs["ttl"] = self.default_in_memory_ttl
+                await self.in_memory_cache.async_set_cache_pipeline(cache_list=cache_list, **in_mem_kwargs)
 
             if self.redis_cache is not None and local_only is False:
-                redis_kwargs = dict(kwargs)  # mutable-ok: per-tier copy; tiers must not share a ttl
-                if "ttl" not in redis_kwargs:
-                    redis_ttl = self.default_redis_ttl
-                    if redis_ttl is None:
-                        redis_ttl = self.default_in_memory_ttl
+                redis_kwargs: Final = dict(kwargs)
+                if not ttl_given:
+                    base_ttl: Final = self.default_redis_ttl
+                    redis_ttl: Final = base_ttl if base_ttl is not None else self.default_in_memory_ttl
                     if redis_ttl is not None:
                         redis_kwargs["ttl"] = redis_ttl
                 await self.redis_cache.async_set_cache_pipeline(
