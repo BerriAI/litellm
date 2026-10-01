@@ -25,7 +25,13 @@ vi.mock("@/utils/dataUtils", () => ({ copyToClipboard: vi.fn().mockResolvedValue
 const SECRET = "sk-abcdefghijklmnopWXYZ";
 
 const renderCard = (
-  props: { detail?: string | null; connected?: boolean; onCheck?: () => void; readOnly?: boolean } = {},
+  props: {
+    detail?: string | null;
+    connected?: boolean;
+    onCheck?: () => void;
+    readOnly?: boolean;
+    canMintTracingKey?: boolean;
+  } = {},
 ) => {
   const onOpenTrace = vi.fn();
   renderWithProviders(
@@ -34,6 +40,7 @@ const renderCard = (
       connected={props.connected}
       onCheck={props.onCheck}
       readOnly={props.readOnly}
+      canMintTracingKey={props.canMintTracingKey ?? true}
       accessToken="sk-admin"
       onOpenTrace={onOpenTrace}
     />,
@@ -113,8 +120,15 @@ describe("TracingSetupCard", () => {
     const { card } = renderCard({ readOnly: true });
     expect(screen.queryByRole("button", { name: "Send a test trace" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Generate tracing key" })).not.toBeInTheDocument();
-    expect(card).toHaveTextContent("Ask a proxy admin for a LiteLLM virtual key.");
+    expect(card).toHaveTextContent("ask a proxy admin for one");
     expect(card).toHaveTextContent("OpenTelemetry (OTEL) endpoints");
+  });
+
+  it("offers a scoped tracing key only to callers allowed to set key routes", () => {
+    const { card } = renderCard({ canMintTracingKey: false });
+    expect(screen.queryByRole("button", { name: "Generate tracing key" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send a test trace" })).toBeVisible();
+    expect(card).toHaveTextContent("Use any LiteLLM virtual key you already have");
   });
 
   it("generates a tracing key that stays masked on screen but copies in full", async () => {
