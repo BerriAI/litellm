@@ -6,12 +6,14 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import fnmatch
+import json
 import os
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 import httpx
 from pydantic import JsonValue
+from pydantic_core import to_jsonable_python
 from typing_extensions import TypeIs
 
 from litellm._logging import verbose_proxy_logger
@@ -158,7 +160,15 @@ def _is_part_list(value: object) -> TypeIs[list[object]]:  # guard-ok: trivial i
     return isinstance(value, list)
 
 
-def _row_as_sent(dumped: JsonValue, caller: Mapping[str, object]) -> object:
+def _as_posted_json(value: object) -> JsonValue:
+    """httpx encodes the body with the stdlib codec, so the rows an echo is compared with must go through it too"""
+    posted: Final[JsonValue] = json.loads(  # pyright: ignore[reportAny]  # untyped stdlib parse of json.dumps output
+        json.dumps(value, default=to_jsonable_python)
+    )
+    return posted
+
+
+def _row_as_sent(dumped: JsonValue, caller: Mapping[str, object]) -> JsonValue:
     """The request model dumps a part list holding any part it rejects as [], so such a row is sent with the
     caller's content"""
     caller_content: Final = caller.get("content")
@@ -167,13 +177,13 @@ def _row_as_sent(dumped: JsonValue, caller: Mapping[str, object]) -> object:
     dumped_content: Final = dumped.get("content")
     if isinstance(dumped_content, list) and len(dumped_content) == len(caller_content):
         return dumped
-    return {**dumped, "content": caller_content}  # mutable-ok: json.dumps encodes dict, not MappingProxyType
+    return {**dumped, "content": _as_posted_json(caller_content)}  # mutable-ok: a JsonValue object is a dict
 
 
-def _rows_as_sent(dumped_rows: JsonValue, caller_rows: Sequence[Mapping[str, object]] | None) -> object:
+def _rows_as_sent(dumped_rows: JsonValue, caller_rows: Sequence[Mapping[str, object]] | None) -> JsonValue:
     if caller_rows is None or not isinstance(dumped_rows, list):
         return dumped_rows
-    return [  # mutable-ok: a JSON array, which structured_messages_from_json requires to be a list
+    return [  # mutable-ok: a JsonValue array is a list
         _row_as_sent(dumped, caller) for dumped, caller in zip(dumped_rows, caller_rows, strict=True)
     ]
 
