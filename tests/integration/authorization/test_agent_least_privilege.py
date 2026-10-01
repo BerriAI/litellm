@@ -13,7 +13,7 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 
 
-def _write_access_config(directory: Path, *, require_access_defined: bool, model_name: str) -> Path:
+def _write_access_config(directory: Path, *, require_access_defined: bool, model_name: str, api_base: str) -> Path:
     source: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config: Final = {
         **source,
@@ -23,7 +23,7 @@ def _write_access_config(directory: Path, *, require_access_defined: bool, model
                 "litellm_params": {
                     "model": "openai/gpt-4o-mini",
                     "api_key": "integration-provider-key",
-                    "api_base": "http://127.0.0.1:15772/v1",
+                    "api_base": api_base,
                 },
             }
         ],
@@ -193,7 +193,9 @@ def test_require_key_agent_access_defined_denies_ungranted_key_but_keeps_explici
 ) -> None:
     agent_name: Final = "least-privilege-" + uuid.uuid4().hex
     v2_model: Final = "listing-" + agent_name
-    config: Final = _write_access_config(tmp_path, require_access_defined=True, model_name=v2_model)
+    config: Final = _write_access_config(
+        tmp_path, require_access_defined=True, model_name=v2_model, api_base=gateway.upstream_url + "/v1"
+    )
 
     def upstream(request: Request) -> Reply:
         return _peer_response(request, wire, agent_name)
