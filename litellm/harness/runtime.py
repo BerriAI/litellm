@@ -14,6 +14,7 @@ import os
 import uuid
 from collections.abc import AsyncIterator, Callable, Coroutine, Generator, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import (
     Any,
     Final,
@@ -121,14 +122,15 @@ def resolve_model_route(
     return group, GatewayTarget(api_base=base.rstrip("/"), api_key=key)
 
 
-def _normalize_skills(skills: Sequence[str | os.PathLike[str]]) -> list[str]:
-    normalized: list[str] = []
-    for skill in skills:
-        path = os.path.abspath(os.fspath(skill))
-        if not os.path.isfile(os.path.join(path, SKILL_FILE)):
-            raise ValueError(f"Skill folder {path!r} has no {SKILL_FILE}")
-        normalized.append(path)
-    return normalized
+def _normalize_skill(skill: str | os.PathLike[str]) -> str:
+    path = os.path.abspath(os.fspath(skill))
+    if not os.path.isfile(os.path.join(path, SKILL_FILE)):
+        raise ValueError(f"Skill folder {path!r} has no {SKILL_FILE}")
+    return path
+
+
+def _normalize_skills(skills: Sequence[str | os.PathLike[str]]) -> tuple[str, ...]:
+    return tuple(_normalize_skill(skill) for skill in skills)
 
 
 def _check_basic(config: SessionConfig) -> None:
@@ -220,7 +222,7 @@ def build_config(
         output=output,
         max_turns=max_turns,
         timeout=timeout,
-        metadata=dict(metadata or {}),
+        metadata=MappingProxyType(dict(metadata or ())),
         options=options,
         install=install,
     )
@@ -371,14 +373,14 @@ class _Turn:
         self.control = control
         self.interactive = interactive
         self.queue: asyncio.Queue[Event | _End] = asyncio.Queue(maxsize=HARNESS_EVENT_QUEUE_MAX_SIZE)
-        self.events: list[Event] = []
-        self.text_parts: list[str] = []
-        self.emitted_files: set[tuple[str, str]] = set()
-        self.approval_tasks: list[asyncio.Future[None]] = []
+        self.events: list[Event] = []  # mutable-ok: per-turn accumulator the runtime appends events to
+        self.text_parts: list[str] = []  # mutable-ok: per-turn accumulator of streamed text deltas
+        self.emitted_files: set[tuple[str, str]] = set()  # mutable-ok: per-turn record of emitted FileChanges
+        self.approval_tasks: list[asyncio.Future[None]] = []  # mutable-ok: per-turn in-flight approval tasks
         self.stop_reason: StopReason = "done"
         self.error_text: str | None = None
-        self.before: dict[str, str] = {}
-        self.before_contents: dict[str, bytes] = {}
+        self.before: Mapping[str, str] = MappingProxyType({})
+        self.before_contents: Mapping[str, bytes] = MappingProxyType({})
         self.usage_before: tuple[int, int, int, float] = (0, 0, 0, 0.0)
         self.deadline: float | None = None
 
@@ -401,10 +403,9 @@ class _Turn:
             self.control.producer.cancel()
 
     async def _stop_producer(self) -> None:
-        pending = [task for task in self.approval_tasks if not task.done()]
         producer = self.control.producer
-        if producer is not None and not producer.done():
-            pending.append(producer)
+        live_producer = (producer,) if producer is not None and not producer.done() else ()
+        pending = (*(task for task in self.approval_tasks if not task.done()), *live_producer)
         for task in pending:
             task.cancel()
         if pending:
@@ -469,11 +470,13 @@ class _Turn:
 
     # -- results ------------------------------------------------------------
 
-    async def _file_changes(self) -> list[FileChange]:
+    async def _file_changes(self) -> list[FileChange]:  # mutable-ok: becomes the public Result.files list
         sandbox = self.ctx.sandbox
         after = await sandbox.snapshot()
         files = await build_file_changes(sandbox, self.before, after, self.before_contents)
-        seen = {change.path for change in files}
+        seen = {  # mutable-ok: dedupe set grown while merging streamed FileChange events
+            change.path for change in files
+        }
         for event in self.events:
             if isinstance(event, FileChange) and event.path not in seen:
                 files.append(event)
@@ -496,13 +499,19 @@ class _Turn:
         )
         return usage, max(now[3] - before[3], 0.0)
 
-    def _result(self, files: list[FileChange], output: BaseModel | None) -> Result:
+    def _result(
+        self,
+        files: list[FileChange],  # mutable-ok: Result.files is a public list field
+        output: BaseModel | None,
+    ) -> Result:
         usage, cost = self._usage()
         return Result(
             text=self._text(),
             output=output,
             files=files,
-            events=list(self.events),
+            events=list(  # mutable-ok: Result.events is a public list field; copy detaches it from the accumulator
+                self.events
+            ),
             usage=usage,
             cost=cost,
             stop_reason=self.stop_reason,
@@ -616,7 +625,7 @@ class AsyncSession:
         # Config-specific static checks (managed option keys, required model) before any I/O.
         self.harness_config.validate_environment(self.ctx)
         self.handler: BaseHarnessHandler = get_harness_handler(self.harness_config)
-        self.results: list[Result] = []
+        self.results: list[Result] = []  # mutable-ok: session accumulator; each turn's Result is appended
         self._resume_from = resume_from
         self._native_id: str | None = resume_from
         self._started = False
@@ -767,7 +776,9 @@ class AsyncSession:
     async def arun(self, prompt: str) -> Result:
         return await _collect(self.turn_events(prompt, TurnControl(), False))
 
-    async def history(self) -> list[dict[str, Any]]:
+    async def history(
+        self,
+    ) -> list[dict[str, Any]]:  # mutable-ok: public API returns OpenAI-format message dicts from the handler
         if not self.harness_config.capabilities.history:
             raise CapabilityUnsupported(f"Harness.{self.config.harness.name} does not expose history")
         await self._ensure_ready()
@@ -1028,7 +1039,7 @@ def aagent(
     `await litellm.aagent(...)` returns a Result. With stream=True it returns an async
     iterator of events instead: `async for event in litellm.aagent(..., stream=True)`.
     """
-    kwargs: dict[str, Any] = {
+    kwargs: dict[str, Any] = {  # mutable-ok: forwarded as **kwargs to _arun/_astream
         "sandbox": sandbox,
         "model": model,
         "api_key": api_key,
