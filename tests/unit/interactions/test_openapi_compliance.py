@@ -38,6 +38,8 @@ def _load_openapi_spec_dict() -> Dict[str, Any]:
         )
 
 
+
+
 def _declared_type_value(variant_schema: Dict[str, Any]) -> Any:
     """The single `type` value a union variant pins, whether spelled as a const or a 1-item enum."""
     type_property = variant_schema.get("properties", {}).get("type", {})
@@ -114,7 +116,6 @@ class TestRequestCompliance:
         """Verify the model request schema declared by POST /interactions."""
         schema = _model_request_schema(spec_dict)
 
-        # Required fields per spec
         assert "model" in schema["required"]
         for field in ("model", "input"):
             assert field in schema["properties"]
