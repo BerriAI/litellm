@@ -4,10 +4,10 @@ Tests for AnthropicResponsesStreamWrapper
 """
 
 import asyncio
+import datetime
 import json
 import os
 import sys
-import time
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 
@@ -641,7 +641,7 @@ def _logging_obj_with_failure_hook(on_failure: Callable[[Exception], Awaitable[N
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
         call_type="anthropic_messages",
-        start_time=time.time(),
+        start_time=datetime.datetime(2026, 1, 1),
         litellm_call_id="lit-6871-test",
         function_id="lit-6871-test",
     )

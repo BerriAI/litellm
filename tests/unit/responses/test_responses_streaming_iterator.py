@@ -174,6 +174,15 @@ class FailureRecorder(CustomLogger):
         self.success_payloads = (*self.success_payloads, kwargs["standard_logging_object"])
 
 
+class _ChunkRecorder:
+    def __init__(self) -> None:
+        self.chunks: tuple = ()
+
+    async def drain(self, iterator: ResponsesAPIStreamingIterator) -> None:
+        async for chunk in iterator:
+            self.chunks = (*self.chunks, chunk)
+
+
 class _UpstreamThatTimesOutAfterThreeDeltas:
     headers: dict = {}
 
@@ -211,20 +220,13 @@ async def test_mid_stream_read_timeout_logs_failure_with_partial_usage_and_no_su
         logging_obj=logging_obj,
         custom_llm_provider="openai",
     )
-    received: list = []
-
-    async def _drain():
-        async for chunk in iterator:
-            received.append(chunk)
+    received = _ChunkRecorder()
 
     with pytest.raises(httpx.ReadTimeout, match="Timeout on reading data from socket"):
-        await _drain()
-    assert [chunk.delta for chunk in received] == ["The sea ", "is wide ", "and deep."]
+        await received.drain(iterator)
+    assert [chunk.delta for chunk in received.chunks] == ["The sea ", "is wide ", "and deep."]
 
-    for _ in range(50):
-        if recorder.failure_payloads:
-            break
-        await asyncio.sleep(0.1)
+    await iterator._await_pending_logging()
     (payload,) = recorder.failure_payloads
     assert payload["status"] == "failure"
     assert payload["prompt_tokens"] > 0
