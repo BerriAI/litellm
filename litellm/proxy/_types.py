@@ -1,7 +1,7 @@
 import enum
 import json
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, TypeAlias
@@ -520,6 +520,19 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/rag/ingest",
         "/rag/query",
         "/v1/rag/query",
+        # agent tracing: OTLP ingest + reads (scoped to the caller's team in the handler)
+        "/engine",
+        "/engine/{engine_id}",
+        "/engine/{engine_id}/runs",
+        "/engine/{engine_id}/executions/{execution_id}",
+        "/engine/{engine_id}/cancel",
+        "/engine/{engine_id}/findings/{finding_id}",
+        "/engine/preview/sample",
+        "/engine/workers/register",
+        "/engine/workers/{worker_id}",
+        "/v1/traces",
+        "/v1/traces/{trace_id}",
+        "/v1/traces/{trace_id}/spans/{span_id}",
     ]
 
     anthropic_routes = [
@@ -897,7 +910,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/spend/by_user",
         "/team/{team_id}/members/me",
         # POST/GET the team's logging callbacks, and DELETE one of them. Every
-        # handler calls _verify_team_access, which admits only a proxy admin, an
+        # handler asks TeamAccess.allows for TEAM_OR_ORG_ADMIN: a proxy admin, an
         # org admin for the team, or an admin of this team.
         #
         # team_id is a free-form string, so it spells these with the same path
@@ -2240,6 +2253,12 @@ class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
 
 class DeleteTeamRequest(LiteLLMPydanticObjectBase):
     team_ids: list[str]  # required
+
+    @field_validator("team_ids")
+    @classmethod
+    def distinct_team_ids(cls, team_ids: Sequence[str]) -> list[str]:
+        """One delete per team: a repeated id would otherwise write its tombstone and audit row twice."""
+        return list(dict.fromkeys(team_ids))
 
 
 class BlockTeamRequest(LiteLLMPydanticObjectBase):
@@ -4140,6 +4159,7 @@ class SpendLogsMetadata(TypedDict):
     litellm_gateway_injected_cache: ReadOnly[str | None]
     router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
     azure_spillover: ReadOnly[AzureSpillover | None]  # None = Azure did not report spillover
+    used_client_oauth_token: ReadOnly[bool | None]  # None = row written before the flag existed
 
 
 class SpendLogsPayload(TypedDict):

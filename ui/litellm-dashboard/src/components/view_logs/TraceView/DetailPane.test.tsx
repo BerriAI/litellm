@@ -125,7 +125,7 @@ describe("DetailPane", () => {
     expect(screen.getByRole("tab", { name: "Attributes" })).toBeInTheDocument();
     expect(await screen.findByText("You are a LiteLLM support agent.")).toBeInTheDocument();
     expect(screen.getByText("get_customer_plan")).toBeInTheDocument();
-    expect(vi.mocked(agentTraceSpanCall)).toHaveBeenCalledWith("sk-test", "t1", "llm1");
+    expect(vi.mocked(agentTraceSpanCall)).toHaveBeenCalledWith("sk-test", "t1", "llm1", undefined);
   });
 
   it("shows a tool failure as 'Tool · <reason>' with the exception line and no traceback", async () => {
