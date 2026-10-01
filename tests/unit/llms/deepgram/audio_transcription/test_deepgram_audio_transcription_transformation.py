@@ -1,12 +1,12 @@
 import io
 import os
 import pathlib
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
+from httpx import Request, Response
 
-
-import litellm
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
 )
@@ -31,7 +31,6 @@ def test_file():
     pwd = os.path.dirname(os.path.realpath(__file__))
     pwd_path = pathlib.Path(pwd)
     test_root = pwd_path.parents[3]
-    print(f"test_root: {test_root}")
     file_path = os.path.join(test_root, "gettysburg.wav")
     f = open(file_path, "rb")
     content = f.read()
@@ -147,23 +146,17 @@ def test_get_complete_url_with_multiple_params():
     assert url.startswith("https://api.deepgram.com/v1/listen?")
 
 
-def test_get_complete_url_with_language_parameter():
-    """Test that language parameter is excluded from query string (handled separately)"""
+@pytest.mark.parametrize("language", ["es", "en"])
+def test_get_complete_url_with_language_parameter(language: str):
     handler = DeepgramAudioTranscriptionConfig()
     url = handler.get_complete_url(
         api_base=None,
         api_key=None,
         model="nova-2",
-        optional_params={
-            "language": "en",
-            "punctuate": True,
-        },
+        optional_params={"language": language},
         litellm_params={},
     )
-    expected_url = "https://api.deepgram.com/v1/listen?model=nova-2&punctuate=true"
-    assert url == expected_url
-    # Language should NOT appear in URL as it's handled separately
-    assert "language=" not in url
+    assert url == f"https://api.deepgram.com/v1/listen?model=nova-2&language={language}"
 
 
 def test_get_complete_url_with_custom_api_base():
@@ -212,9 +205,7 @@ def test_get_complete_url_with_detect_language():
         optional_params={"detect_language": True},
         litellm_params={},
     )
-    expected_url = (
-        "https://api.deepgram.com/v1/listen?model=nova-2&detect_language=true"
-    )
+    expected_url = "https://api.deepgram.com/v1/listen?model=nova-2&detect_language=true"
     assert url == expected_url
 
 
@@ -238,6 +229,31 @@ def test_get_complete_url_with_detect_language_and_other_params():
     assert "punctuate=true" in url
     assert "diarize=false" in url
     assert url.startswith("https://api.deepgram.com/v1/listen?")
+
+
+@pytest.mark.parametrize(
+    ("query", "detected_language", "expected_language"),
+    [
+        ("language=es", None, "es"),
+        ("language=es", "fr", "fr"),
+        ("", None, "en"),
+    ],
+)
+def test_transform_response_language(query: str, detected_language: str | None, expected_language: str):
+    channel: Final = {
+        "alternatives": [{"transcript": "Hola mundo", "words": []}],
+        **({"detected_language": detected_language} if detected_language is not None else {}),
+    }
+    request_url: Final = "https://api.deepgram.com/v1/listen?model=nova-3" + (f"&{query}" if query else "")
+    raw_response: Final = Response(
+        200,
+        json={"metadata": {"duration": 1.0}, "results": {"channels": [channel]}},
+        request=Request("POST", request_url),
+    )
+
+    result: Final = DeepgramAudioTranscriptionConfig().transform_audio_transcription_response(raw_response)
+
+    assert result["language"] == expected_language
 
 
 def test_transform_response_without_diarization():
@@ -335,9 +351,7 @@ def test_transform_response_with_diarization_and_paragraphs():
 
     assert isinstance(result, TranscriptionResponse)
     # Should use the pre-formatted paragraphs transcript
-    assert (
-        result.text == "\nSpeaker 0: Hello how are you\n\nSpeaker 1: I am fine thanks\n"
-    )
+    assert result.text == "\nSpeaker 0: Hello how are you\n\nSpeaker 1: I am fine thanks\n"
     assert result["task"] == "transcribe"
     assert result["duration"] == 15.0
 
