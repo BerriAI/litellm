@@ -710,9 +710,6 @@ def test_build_inspection_messages_custom_tool_call_output():
     assert any("custom-tool-leak" in m["content"] for m in msgs)
 
 
-# -------------------------------------------------------------------
-# client tool_search guardrail coverage
-# -------------------------------------------------------------------
 
 def test_guardrails_inspect_and_redact_tool_search_output_tool_descriptions():
     data = {
