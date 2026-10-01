@@ -1284,6 +1284,23 @@ async def test_search_tool_litellm_params_are_encrypted_at_rest_and_decrypted_on
 
 
 @pytest.mark.asyncio
+async def test_search_tool_is_stored_as_written_when_no_encryption_key_is_configured(monkeypatch):
+    from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr(ps, "master_key", None)
+    monkeypatch.setattr(ps, "general_settings", {})
+    table = _InMemorySearchToolsTable()
+
+    created = await SearchToolRegistry().add_search_tool_to_db(
+        search_tool={"search_tool_name": "agentcore-search", "litellm_params": SECRET_PARAMS},
+        prisma_client=_prisma_client_over(table),
+    )
+
+    assert table.rows[created["search_tool_id"]].litellm_params == SECRET_PARAMS
+
+
+@pytest.mark.asyncio
 async def test_plaintext_search_tool_rows_written_before_encryption_still_load(salt_key):
     from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
     from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
