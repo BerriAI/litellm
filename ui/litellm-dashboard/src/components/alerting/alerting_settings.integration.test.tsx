@@ -129,9 +129,7 @@ describe("AlertingSettings", () => {
       setting.field_name === "budget_alert_ttl" ? { ...setting, field_value: 90 } : setting,
     );
 
-    alertingSettingsCall.mockImplementation((token: string) =>
-      token === "sk-new" ? newRequest : oldRequest,
-    );
+    alertingSettingsCall.mockImplementation((token: string) => (token === "sk-new" ? newRequest : oldRequest));
 
     const { rerender } = renderWithProviders(<AlertingSettings accessToken="sk-old" premiumUser />);
     rerender(<AlertingSettings accessToken="sk-new" premiumUser />);
