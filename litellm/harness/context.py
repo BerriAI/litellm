@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from pydantic import BaseModel
 
@@ -15,7 +15,9 @@ from litellm.harness.types import Approval, Harness, PermissionMode
 if TYPE_CHECKING:
     from litellm.harness.endpoint import ModelEndpoint
 
-ApprovalHandler = Callable[[Approval], bool | Awaitable[bool]]
+ApprovalHandler: TypeAlias = Callable[
+    [Approval], bool | Awaitable[bool]  # mutable-ok: Callable parameter list in a type alias, not a runtime collection
+]
 
 
 @dataclass(frozen=True)
