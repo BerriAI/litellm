@@ -275,9 +275,13 @@ async def granted_toolset_ids(
     from litellm.proxy.proxy_server import general_settings
 
     require: Final = (
-        bool(general_settings.get("require_key_mcp_access_defined", False))
-        if require_key_access is None
-        else require_key_access
+        require_key_access
+        if require_key_access is not None
+        else bool(
+            general_settings.get(  # pyright: ignore[reportUnknownArgumentType]  # general_settings is an untyped dict; truthiness must match the /mcp path's read of this flag
+                "require_key_mcp_access_defined", False
+            )
+        )
     )
     inherits_team: Final = is_keyless_mcp_subject(user_api_key_auth) or not require
     load_team_permission: Final = team_object_permission or MCPRequestHandler.team_object_permission
