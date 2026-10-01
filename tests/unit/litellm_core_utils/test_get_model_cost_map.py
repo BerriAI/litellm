@@ -559,13 +559,13 @@ def test_boot_load_success_does_not_start_background_retry():
     assert get_model_cost_map_source_info()["source"] == "remote"
 
 
-def test_boot_load_transient_failure_returns_local_then_background_retry_adopts_remote(monkeypatch):
+@pytest.fixture
+def isolated_litellm_cost_state(monkeypatch):
     import litellm
     from litellm import utils as litellm_utils
     from litellm.litellm_core_utils import get_model_cost_map as module
 
-    original_model_cost = litellm.model_cost
-    monkeypatch.setattr(litellm, "model_cost", dict(original_model_cost))
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     for name, provider_models in tuple(vars(litellm).items()):
         if name.endswith("_models") and isinstance(provider_models, set):
             monkeypatch.setattr(litellm, name, set(provider_models))
@@ -578,6 +578,10 @@ def test_boot_load_transient_failure_returns_local_then_background_retry_adopts_
     source_info = module._cost_map_source_info
     for name in ("source", "url", "is_env_forced", "fallback_reason", "loaded_at", "source_revision", "etag"):
         monkeypatch.setattr(source_info, name, getattr(source_info, name))
+
+
+def test_boot_load_transient_failure_returns_local_then_background_retry_adopts_remote(isolated_litellm_cost_state):
+    import litellm
 
     remote_map = _load_root_cost_map()
     remote_map["claude-remote-only-test"] = {"litellm_provider": "anthropic", "mode": "chat"}
@@ -734,3 +738,129 @@ def test_boot_load_skips_remote_fetch_for_cli_processes(
         assert source["source"] == "local"
     else:
         assert source["source"] == "remote"
+
+
+def _fetch_threads():
+    return [thread for thread in threading.enumerate() if thread.name == "litellm-model-cost-map-fetch"]
+
+
+def _held_client(outcome):
+    """Serves `outcome` only after `release` is set, so a test can observe the caller before the fetch finishes."""
+    started = threading.Event()
+    release = threading.Event()
+
+    def handler(request):
+        started.set()
+        release.wait(timeout=10)
+        return outcome
+
+    return httpx.Client(transport=httpx.MockTransport(handler)), started, release
+
+
+def _finish_fetch(release):
+    release.set()
+    threads = _fetch_threads()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert all(not thread.is_alive() for thread in threads)
+
+
+def _remote_map_with(model: str) -> bytes:
+    remote_map = _load_root_cost_map()
+    remote_map[model] = {"litellm_provider": "anthropic", "mode": "chat"}
+    return json.dumps(remote_map).encode()
+
+
+def test_import_load_returns_the_bundled_map_before_the_remote_fetch_answers_then_adopts_it(
+    isolated_litellm_cost_state, monkeypatch
+):
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    client, started, release = _held_client(httpx.Response(200, content=_remote_map_with("claude-remote-only-test")))
+    try:
+        cost_map = load_model_cost_map_at_import(url=_URL, client=client)
+        assert started.wait(timeout=10)
+        assert cost_map.keys() == _finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map()).keys()
+        source = get_model_cost_map_source_info()
+        assert source["source"] == "local"
+        assert source["fallback_reason"] == "Remote fetch in progress"
+        monkeypatch.setattr(litellm, "model_cost", cost_map)
+    finally:
+        _finish_fetch(release)
+
+    assert "claude-remote-only-test" in litellm.model_cost
+    assert "claude-remote-only-test" in litellm.anthropic_models
+    source = get_model_cost_map_source_info()
+    assert source["source"] == "remote"
+    assert source["fallback_reason"] is None
+
+
+def test_import_load_never_overwrites_a_model_cost_the_caller_replaced(isolated_litellm_cost_state, monkeypatch):
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    client, started, release = _held_client(httpx.Response(200, content=_remote_map_with("claude-remote-only-test")))
+    try:
+        monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
+        assert started.wait(timeout=10)
+        callers_map = {"my-model": {"litellm_provider": "openai", "mode": "chat"}}
+        monkeypatch.setattr(litellm, "model_cost", callers_map)
+    finally:
+        _finish_fetch(release)
+
+    assert litellm.model_cost is callers_map
+    assert get_model_cost_map_source_info()["source"] == "local"
+
+
+def test_import_load_reports_why_the_remote_fetch_failed(isolated_litellm_cost_state):
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    client, _, release = _held_client(httpx.Response(404))
+    try:
+        load_model_cost_map_at_import(url=_URL, client=client)
+    finally:
+        _finish_fetch(release)
+
+    source = get_model_cost_map_source_info()
+    assert source["source"] == "local"
+    assert source["fallback_reason"].startswith("Remote fetch failed: HTTP 404")
+
+
+def test_import_load_with_the_local_env_override_starts_no_fetch(monkeypatch):
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    def _fail(request):
+        raise AssertionError("no HTTP request should be made when local map is forced")
+
+    cost_map = load_model_cost_map_at_import(url=_URL, client=httpx.Client(transport=httpx.MockTransport(_fail)))
+
+    assert cost_map
+    assert _fetch_threads() == []
+    assert get_model_cost_map_source_info()["is_env_forced"] is True
+
+
+def test_import_litellm_returns_while_the_cost_map_server_has_not_answered(tmp_path):
+    import socket
+    import subprocess
+
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen()
+        url = f"http://127.0.0.1:{server.getsockname()[1]}/model_prices.json"
+        env = {key: value for key, value in os.environ.items() if key != "LITELLM_LOCAL_MODEL_COST_MAP"}
+        env["LITELLM_MODEL_COST_MAP_URL"] = url
+        probe = (
+            "import litellm\n"
+            "from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map_source_info\n"
+            "info = get_model_cost_map_source_info()\n"
+            "print(info['source'], info['fallback_reason'], len(litellm.model_cost) > 100)\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-P", "-c", probe], capture_output=True, text=True, env=env, cwd=tmp_path, timeout=120
+        )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "local Remote fetch in progress True"
