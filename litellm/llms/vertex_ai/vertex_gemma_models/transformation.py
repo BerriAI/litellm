@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import ValidationError
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -20,13 +21,22 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.vertex_ai.common_utils import VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.vertex_ai_gemma import VertexGemmaContainerError
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
-    from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+
+
+def parse_vertex_gemma_container_error(predictions: object) -> VertexGemmaContainerError | None:
+    try:
+        return VertexGemmaContainerError.model_validate(predictions)
+    except ValidationError:
+        return None
 
 
 class VertexGemmaConfig(OpenAIGPTConfig):
@@ -39,6 +49,13 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
     def __init__(self) -> None:
         super().__init__()
+
+    def get_supported_openai_params(self, model: str) -> list[str]:
+        return [
+            param
+            for param in super().get_supported_openai_params(model=model)
+            if param not in VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS
+        ]
 
     def should_fake_stream(
         self,
@@ -56,7 +73,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         self,
         model_response: ModelResponse,
         stream: bool,
-    ) -> "ModelResponse | MockResponseIterator":
+        model: str,
+        logging_obj: "LiteLLMLoggingObj",
+    ) -> "ModelResponse | CustomStreamWrapper":
         """
         Helper method to return fake stream iterator if streaming is requested.
 
@@ -65,12 +84,18 @@ class VertexGemmaConfig(OpenAIGPTConfig):
             stream: Whether streaming was requested
 
         Returns:
-            MockResponseIterator if stream=True, otherwise the model_response
+            CustomStreamWrapper if stream=True, otherwise the model_response
         """
         if stream:
+            from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
             from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 
-            return MockResponseIterator(model_response=model_response)
+            return CustomStreamWrapper(
+                completion_stream=MockResponseIterator(model_response=model_response),
+                model=model,
+                custom_llm_provider="vertex_ai",
+                logging_obj=logging_obj,
+            )
         return model_response
 
     def transform_request(
@@ -123,7 +148,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         Unwrap the Vertex Gemma predictions format to OpenAI format.
 
         Vertex Gemma wraps the OpenAI-compatible response in a 'predictions' field.
-        This method extracts it so the parent class can process it normally.
+        This method extracts it so the parent class can process it normally. A serving
+        container can also answer with its own OpenAI-shaped error object inside that
+        field, still under HTTP 200, which is raised with its own status and message.
         """
         if "predictions" not in response_json:
             raise BaseLLMException(
@@ -131,7 +158,11 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 message="Invalid response format: missing 'predictions' field",
             )
 
-        return response_json["predictions"]
+        predictions: Final = response_json["predictions"]
+        container_error: Final = parse_vertex_gemma_container_error(predictions)
+        if container_error is None:
+            return predictions
+        raise BaseLLMException(status_code=container_error.code, message=container_error.message)
 
     @staticmethod
     def _sync_post(
@@ -350,7 +381,12 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Return fake stream iterator if streaming was requested
-        return self._handle_fake_stream_response(model_response=model_response, stream=stream)
+        return self._handle_fake_stream_response(
+            model_response=model_response,
+            stream=stream,
+            model=model,
+            logging_obj=logging_obj,
+        )
 
     async def _async_completion(
         self,
@@ -440,4 +476,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Return fake stream iterator if streaming was requested
-        return self._handle_fake_stream_response(model_response=model_response, stream=stream)
+        return self._handle_fake_stream_response(
+            model_response=model_response,
+            stream=stream,
+            model=model,
+            logging_obj=logging_obj,
+        )

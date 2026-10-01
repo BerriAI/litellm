@@ -16,7 +16,7 @@ import litellm
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, is_anthropic_oauth_key
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
 )
@@ -505,7 +505,7 @@ class TokenCounter(Protocol):
 def _count_objects(
     values: Sequence[Mapping[str, JsonValue]],
 ) -> list[dict[str, JsonValue]]:  # mutable-ok: the existing provider count API requires JSON lists/dicts
-    return [dict(value) for value in values]  # mutable-ok: serialize read-only inputs at the provider API boundary
+    return [dict(value) for value in values]
 
 
 def _messages_url(model: str, api_key: str, api_base: str | None) -> str:

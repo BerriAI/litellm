@@ -111,6 +111,12 @@ class DailySpendMetadata(BaseModel):
         description="Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key "
         "lists are truncated to the highest-spend keys.",
     )
+    entity_total_api_keys: dict[str, int] | None = Field(
+        default=None,
+        description="Distinct API keys per entity over the requested range, set when the entity breakdown is "
+        "included. When an entity's count exceeds api_key_limit, its api_key_breakdown lists only its keys "
+        "among the top api_key_limit keys overall.",
+    )
 
 
 class SpendAnalyticsPaginatedResponse(BaseModel):

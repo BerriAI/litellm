@@ -3,8 +3,10 @@ from typing import Any, Final
 
 from pydantic import BaseModel, Field
 
-CHAT_COMPLETION_AGENTIC_SURFACE: Final = "chat_completions"
-RESPONSES_AGENTIC_SURFACE: Final = "responses"
+from litellm.types.litellm_params import AgenticSurface
+
+CHAT_COMPLETION_AGENTIC_SURFACE: Final[AgenticSurface] = "chat_completions"
+RESPONSES_AGENTIC_SURFACE: Final[AgenticSurface] = "responses"
 CODE_INTERPRETER_INTERCEPTION_PREFIX: Final = "_code_interpreter_interception"
 HEADROOM_INTERCEPTION_PREFIX: Final = "_headroom_interception"
 HEADROOM_CONVERTED_STREAM_KEY: Final = f"{HEADROOM_INTERCEPTION_PREFIX}_converted_stream"

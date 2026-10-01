@@ -1,5 +1,5 @@
-import asyncio
 import base64
+import copy
 import json
 import uuid
 from types import SimpleNamespace
@@ -11,13 +11,11 @@ import pytest
 
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
-
 import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
 
 ONE_PIXEL_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
@@ -92,9 +90,7 @@ def local_beta_headers_config(monkeypatch):
 
 def test_get_supported_params_thinking():
     config = AmazonAnthropicClaudeConfig()
-    params = config.get_supported_openai_params(
-        model="anthropic.claude-sonnet-4-20250514-v1:0"
-    )
+    params = config.get_supported_openai_params(model="anthropic.claude-sonnet-4-20250514-v1:0")
     assert "thinking" in params
 
 
@@ -147,53 +143,23 @@ def test_aws_params_filtered_from_request_body():
     result_json = json.dumps(result)
 
     # Verify AWS authentication params are NOT in the request body
-    assert (
-        "aws_access_key_id" not in result_json
-    ), "AWS access key should not be in request body"
-    assert (
-        "aws_secret_access_key" not in result_json
-    ), "AWS secret key should not be in request body"
-    assert (
-        "aws_session_token" not in result_json
-    ), "AWS session token should not be in request body"
-    assert (
-        "aws_region_name" not in result_json
-    ), "AWS region should not be in request body"
-    assert (
-        "aws_role_name" not in result_json
-    ), "AWS role name should not be in request body"
-    assert (
-        "aws_session_name" not in result_json
-    ), "AWS session name should not be in request body"
-    assert (
-        "aws_profile_name" not in result_json
-    ), "AWS profile name should not be in request body"
-    assert (
-        "aws_web_identity_token" not in result_json
-    ), "AWS web identity token should not be in request body"
-    assert (
-        "aws_sts_endpoint" not in result_json
-    ), "AWS STS endpoint should not be in request body"
-    assert (
-        "aws_bedrock_runtime_endpoint" not in result_json
-    ), "AWS bedrock endpoint should not be in request body"
-    assert (
-        "aws_external_id" not in result_json
-    ), "AWS external ID should not be in request body"
-    assert (
-        "aws_session_tags" not in result_json
-    ), "AWS session tags should not be in request body"
+    assert "aws_access_key_id" not in result_json, "AWS access key should not be in request body"
+    assert "aws_secret_access_key" not in result_json, "AWS secret key should not be in request body"
+    assert "aws_session_token" not in result_json, "AWS session token should not be in request body"
+    assert "aws_region_name" not in result_json, "AWS region should not be in request body"
+    assert "aws_role_name" not in result_json, "AWS role name should not be in request body"
+    assert "aws_session_name" not in result_json, "AWS session name should not be in request body"
+    assert "aws_profile_name" not in result_json, "AWS profile name should not be in request body"
+    assert "aws_web_identity_token" not in result_json, "AWS web identity token should not be in request body"
+    assert "aws_sts_endpoint" not in result_json, "AWS STS endpoint should not be in request body"
+    assert "aws_bedrock_runtime_endpoint" not in result_json, "AWS bedrock endpoint should not be in request body"
+    assert "aws_external_id" not in result_json, "AWS external ID should not be in request body"
+    assert "aws_session_tags" not in result_json, "AWS session tags should not be in request body"
 
     # Also check that the sensitive values themselves are not in the response
-    assert (
-        "AKIAIOSFODNN7EXAMPLE" not in result_json
-    ), "AWS access key value leaked in request body"
-    assert (
-        "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" not in result_json
-    ), "AWS secret key value leaked in request body"
-    assert (
-        "arn:aws:iam::123456789012:role/test-role" not in result_json
-    ), "AWS role ARN leaked in request body"
+    assert "AKIAIOSFODNN7EXAMPLE" not in result_json, "AWS access key value leaked in request body"
+    assert "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" not in result_json, "AWS secret key value leaked in request body"
+    assert "arn:aws:iam::123456789012:role/test-role" not in result_json, "AWS role ARN leaked in request body"
     assert "test-session" not in result_json, "AWS session name leaked in request body"
 
     # Verify normal params ARE still in the request body
@@ -202,9 +168,7 @@ def test_aws_params_filtered_from_request_body():
     assert result["top_p"] == 0.9, "top_p should be in request body"
 
     # Verify Bedrock-specific params are added
-    assert (
-        result["anthropic_version"] == "bedrock-2023-05-31"
-    ), "anthropic_version should be set"
+    assert result["anthropic_version"] == "bedrock-2023-05-31", "anthropic_version should be set"
     assert "model" not in result, "model should be removed for Bedrock Invoke API"
     assert "stream" not in result, "stream should be removed for Bedrock Invoke API"
 
@@ -261,9 +225,7 @@ def test_output_format_conversion_to_inline_schema():
     )
 
     # Verify output_format was removed from the request
-    assert (
-        "output_format" not in result
-    ), "output_format should be removed from request body"
+    assert "output_format" not in result, "output_format should be removed from request body"
 
     # Verify the schema was added to the last user message content
     assert "messages" in result
@@ -414,9 +376,7 @@ def test_opus_4_5_model_detection():
     ]
 
     for model in non_opus_4_5_models:
-        assert not config._is_claude_opus_4_5(
-            model
-        ), f"Should not detect {model} as Opus 4.5"
+        assert not config._is_claude_opus_4_5(model), f"Should not detect {model} as Opus 4.5"
 
 
 # def test_structured_outputs_beta_header_filtered_for_bedrock_invoke():
@@ -594,9 +554,7 @@ def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(local_mo
         ("anthropic.claude-opus-4-7", "xhigh"),
     ],
 )
-def test_output_config_effort_normalized_for_bedrock_chat_invoke_request(
-    model, expected_effort
-):
+def test_output_config_effort_normalized_for_bedrock_chat_invoke_request(model, expected_effort):
     """Bedrock Invoke chat path accepts ``xhigh`` and forwards the provider-safe effort."""
     config = AmazonAnthropicClaudeConfig()
 
@@ -667,9 +625,9 @@ def test_output_format_removed_from_bedrock_invoke_request():
     )
 
     # Verify output_format is not in the request
-    assert (
-        "output_format" not in result
-    ), f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
+    assert "output_format" not in result, (
+        f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
+    )
 
 
 def test_bedrock_chat_invoke_forwards_output_config_format_natively(local_model_cost_map):
@@ -865,7 +823,9 @@ async def test_bedrock_invoke_claude_async_completion_inlines_remote_images_off_
     assert async_only_image_fetch.base64_png in captured["body"]
 
 
-async def test_bedrock_invoke_claude_async_completion_inlines_document_url_sources_off_the_event_loop(async_only_image_fetch):
+async def test_bedrock_invoke_claude_async_completion_inlines_document_url_sources_off_the_event_loop(
+    async_only_image_fetch,
+):
     pdf_url = f"http://docs.example/{uuid.uuid4()}.pdf"
     captured = {}
 
@@ -957,6 +917,62 @@ def test_bedrock_chat_invoke_tool_search_beta_follows_model_map(
     assert result.get("anthropic_beta") == expected_betas
 
 
+def test_bedrock_chat_invoke_adds_thinking_display_updates_beta(
+    local_model_cost_map, local_beta_headers_config
+) -> None:
+    from litellm.types.llms.anthropic import ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
+
+    config: Final = AmazonAnthropicClaudeConfig()
+    model: Final = "us.anthropic.claude-opus-5"
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            "max_tokens": 512,
+            "thinking": {"type": "adaptive", "display": "updates"},
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    result: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive", "display": "updates"}
+    assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in result.get("anthropic_beta", [])
+
+
+def test_bedrock_chat_invoke_preserves_display_when_translating_legacy_thinking(
+    local_model_cost_map, local_beta_headers_config
+) -> None:
+    from litellm.types.llms.anthropic import ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
+
+    config: Final = AmazonAnthropicClaudeConfig()
+    model: Final = "us.anthropic.claude-opus-5"
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            "max_tokens": 512,
+            "thinking": {"type": "enabled", "budget_tokens": 2048, "display": "updates"},
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    result: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive", "display": "updates"}
+    assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in result.get("anthropic_beta", [])
+
+
 FINE_GRAINED_TOOL_STREAMING_BETA: Final = "fine-grained-tool-streaming-2025-05-14"
 EAGER_TOOL_SCHEMA: Final = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
 
@@ -1010,3 +1026,113 @@ def test_bedrock_chat_invoke_eager_input_streaming_beta_not_duplicated_with_clie
     )
 
     assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
+
+
+def _mid_conversation_system_conversation() -> list[dict]:
+    return [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "user", "content": "First question"},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "user", "content": "Second question"},
+        {"role": "system", "content": "<system-reminder>Answer with exactly one word.</system-reminder>"},
+        {"role": "assistant", "content": "Second answer"},
+        {"role": "user", "content": "Third question"},
+    ]
+
+
+def test_chat_unflagged_model_converts_mid_conversation_system_instead_of_hoisting(local_model_cost_map):
+    """A hoisted reminder rewrites the top-level system block and invalidates the
+    prompt cache for the whole conversation (#36559)."""
+    result = AmazonAnthropicClaudeConfig().transform_request(
+        model="invoke/us.anthropic.claude-opus-4-7",
+        messages=_mid_conversation_system_conversation(),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["system"] == [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]
+    assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user", "assistant", "user"]
+    texts = [b["text"] for b in result["messages"][2]["content"] if b.get("type") == "text"]
+    assert texts[0] == "Second question"
+    assert texts[-1] == "<system-reminder>Answer with exactly one word.</system-reminder>"
+
+
+def test_chat_flagged_model_keeps_mid_conversation_system_role_in_place(local_model_cost_map):
+    result = AmazonAnthropicClaudeConfig().transform_request(
+        model="invoke/us.anthropic.claude-opus-4-8",
+        messages=_mid_conversation_system_conversation(),
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["system"] == [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]
+    assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]
+    assert result["messages"][3] == {
+        "role": "system",
+        "content": [{"type": "text", "text": "<system-reminder>Answer with exactly one word.</system-reminder>"}],
+    }
+
+
+def _thinking_reply(text: str) -> dict:
+    return {
+        "role": "assistant",
+        "content": text,
+        "thinking_blocks": [{"type": "thinking", "thinking": "Working it out.", "signature": f"sig-{text}"}],
+    }
+
+
+def _preserved_thinking_turns(reminder_after_user: bool) -> tuple[list[dict], list[dict], list[dict]]:
+    turn_n = [{"role": "system", "content": "You are terse."}, {"role": "user", "content": "First question"}]
+    reminder = {"role": "system", "content": "<system-reminder>Answer with exactly one word.</system-reminder>"}
+    second_question = {"role": "user", "content": "Second question"}
+    second_turn = [second_question, reminder] if reminder_after_user else [reminder, second_question]
+    turn_n_plus_one = [*turn_n, _thinking_reply("First answer"), *second_turn]
+    turn_n_plus_two = [
+        *turn_n_plus_one,
+        _thinking_reply("Second answer"),
+        {"role": "user", "content": "Third question"},
+    ]
+    return turn_n, turn_n_plus_one, turn_n_plus_two
+
+
+def _replayed_prefix(request: dict, message_count: int) -> str:
+    replayed = {
+        "system": request.get("system"),
+        "tools": request.get("tools"),
+        "messages": request["messages"][:message_count],
+    }
+    return json.dumps(replayed, sort_keys=True)
+
+
+def _assert_prefix_stable(requests: list[dict]) -> None:
+    for earlier, later in zip(requests, requests[1:]):
+        count = len(earlier["messages"])
+        assert _replayed_prefix(later, count) == _replayed_prefix(earlier, count)
+
+
+@pytest.mark.parametrize("reminder_after_user", [True, False])
+def test_chat_flagged_model_replays_a_byte_identical_prefix_around_a_mid_conversation_reminder(
+    local_model_cost_map, reminder_after_user
+):
+    """Preserved thinking binds each signed block to the request prefix it was created
+    under (``system``, ``tools`` and the earlier messages), so turn N's transformed
+    request must be a byte-identical prefix of turn N+1's or the block is dropped."""
+    requests = [
+        AmazonAnthropicClaudeConfig().transform_request(
+            model="invoke/us.anthropic.claude-fable-5-1",
+            messages=copy.deepcopy(turn),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        for turn in _preserved_thinking_turns(reminder_after_user)
+    ]
+
+    _assert_prefix_stable(requests)
+    assert [m["role"] for m in requests[1]["messages"]] == ["user", "assistant", "user", "system"]
+    assert [m["role"] for m in requests[2]["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]

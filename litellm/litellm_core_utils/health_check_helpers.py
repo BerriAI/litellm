@@ -6,8 +6,10 @@ import base64
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Final, Literal
 
-from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, DocumentType
-from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS, LlmProviders
+from litellm.llms.base_llm.ocr.transformation import DocumentType
+from litellm.rust_bridge import runtime
+from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
+from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -29,11 +31,12 @@ def get_image_file_for_health_check() -> bytes:
 
 
 def _ocr_health_check_document(model: str, custom_llm_provider: str) -> DocumentType:
-    from litellm.utils import ProviderConfigManager
-
-    provider: Final = next((known for known in LlmProviders if known.value == custom_llm_provider), None)
-    config: Final = ProviderConfigManager.get_provider_ocr_config(model=model, provider=provider) if provider else None
-    return (config or BaseOCRConfig()).get_health_check_document()
+    native: Final = NATIVE_OCR_HEALTH_CHECK_DOCUMENT.load()
+    if native is None:
+        raise runtime.NoPythonImplementationError(
+            "ocr health check documents are resolved by the Rust extension, which is not available"
+        )
+    return native(model, custom_llm_provider)
 
 
 class HealthCheckHelpers:
@@ -111,10 +114,9 @@ class HealthCheckHelpers:
         """
         Health check for batch mode.
 
-        Calls list_batches for providers that support it (openai, hosted_vllm, azure,
-        vertex_ai). For all other providers (e.g. bedrock) the batch API surface doesn't
-        include list_batches, so we fall back to acompletion to verify connectivity and
-        credential validity instead.
+        Calls list_batches for providers that support it. For all other providers (e.g. bedrock)
+        the batch API surface doesn't include list_batches, so we fall back to acompletion to
+        verify connectivity and credential validity instead.
         """
         import litellm
 
@@ -129,10 +131,9 @@ class HealthCheckHelpers:
                 litellm_params={"api_base": api_base} if api_base else None,
             )
 
-        if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS:
-            return await litellm.alist_batches(**filtered_model_params)
-        else:
+        if custom_llm_provider not in LIST_BATCHES_SUPPORTED_PROVIDERS:
             return await litellm.acompletion(**model_params)
+        return await litellm.alist_batches(**{**filtered_model_params, "custom_llm_provider": custom_llm_provider})
 
     @staticmethod
     async def _image_edit_health_check(edit_request: Callable[[], Awaitable["ImageResponse"]]) -> "ImageResponse":

@@ -243,28 +243,28 @@ def _inferred_format(file: Mapping[str, object], url: str) -> Mapping[str, str]:
 
 
 def _inlined_image_url(image_url: Mapping[str, object] | None, data_url: str) -> Mapping[str, object] | str:
-    return {**image_url, "url": data_url} if image_url is not None else data_url  # mutable-ok: json-serialized part
+    return {**image_url, "url": data_url} if image_url is not None else data_url
 
 
 def _inlined_file(file: Mapping[str, object], url: str, data_url: str) -> Mapping[str, object]:
-    kept: Final = {k: v for k, v in file.items() if k != "file_id"}  # mutable-ok: json-serialized message part
-    return {**kept, **_inferred_format(file, url), "file_data": data_url}  # mutable-ok: json-serialized part
+    kept: Final = {k: v for k, v in file.items() if k != "file_id"}
+    return {**kept, **_inferred_format(file, url), "file_data": data_url}
 
 
 def _base64_source(url: str, data_url: str) -> Mapping[str, str]:
     fetched_media_type, data = data_url.removeprefix("data:").split(";base64,", 1)
     media_type: Final = "application/pdf" if url.lower().endswith(".pdf") else fetched_media_type
-    return {"type": "base64", "media_type": media_type, "data": data}  # mutable-ok: json-serialized message part
+    return {"type": "base64", "media_type": media_type, "data": data}
 
 
 def _inline(remote: _RemoteImage | _RemoteFile | _RemoteSource, data_url: str) -> Mapping[str, object]:
     match remote:
         case _RemoteImage(part, image_url, _):
-            return {**part, "image_url": _inlined_image_url(image_url, data_url)}  # mutable-ok: json-serialized part
+            return {**part, "image_url": _inlined_image_url(image_url, data_url)}
         case _RemoteFile(part, file, url):
-            return {**part, "file": _inlined_file(file, url, data_url)}  # mutable-ok: json-serialized message part
+            return {**part, "file": _inlined_file(file, url, data_url)}
         case _RemoteSource(part, _, url):
-            return {**part, "source": _base64_source(url, data_url)}  # mutable-ok: json-serialized message part
+            return {**part, "source": _base64_source(url, data_url)}
 
 
 def _content_parts(message: Mapping[str, object]) -> tuple[object, ...]:
@@ -286,10 +286,8 @@ def _inline_message(
     parts: Final = _content_parts(message)
     if not parts:
         return message
-    inlined_parts: Final = [  # mutable-ok: content must stay a list for the transforms' isinstance checks
-        _inline_part(part, data_urls, should_inline) for part in parts
-    ]
-    inlined_message: Final = {**message, "content": inlined_parts}  # mutable-ok: json-serialized message
+    inlined_parts: Final = [_inline_part(part, data_urls, should_inline) for part in parts]
+    inlined_message: Final = {**message, "content": inlined_parts}
     return inlined_message  # pyright: ignore[reportReturnType]  # the same message with its remote parts inlined
 
 
@@ -326,6 +324,4 @@ async def async_inline_remote_media(
         return messages
     data_urls: Final = await _fetch_data_urls(remote_urls)
     inlined: Final = MappingProxyType(dict(zip(remote_urls, data_urls, strict=True)))
-    return [  # mutable-ok: transform_request takes a list
-        _inline_message(message, inlined, should_inline) for message in messages
-    ]
+    return [_inline_message(message, inlined, should_inline) for message in messages]
