@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Final
 
@@ -1021,7 +1022,7 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
             record_property("chaos_missing_upstream_observation_counts", str(missing_observations))
             request_ids: Final = tuple(str(JSON_OBJECT.validate_python(response.json())["id"]) for response in valid)
             spend_rows: Final = tuple(
-                eventually(lambda: _spend_rows(request_id), lambda values: len(values) == 1, seconds=60)
+                eventually(partial(_spend_rows, request_id), lambda values: len(values) == 1, seconds=60)
                 for request_id in request_ids
             )
             assert all(rows[0]["request_id"] == request_id for rows, request_id in zip(spend_rows, request_ids)), (
