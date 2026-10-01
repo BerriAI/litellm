@@ -4,12 +4,34 @@ import asyncio
 import copy
 import inspect
 import warnings
+from collections.abc import Iterator
+from typing import Dict
 
 import pytest
+from prisma.errors import ClientNotConnectedError
 
 
 import litellm
 import litellm.proxy.proxy_server
+from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
+
+
+class StubClientNotConnectedError(ClientNotConnectedError):
+    pass
+
+
+class DisconnectedPrisma:
+    def is_connected(self) -> bool:
+        return False
+
+    @property
+    def _engine(self) -> None:
+        raise StubClientNotConnectedError()
+
+
+@pytest.fixture
+def disconnected_prisma() -> DisconnectedPrisma:
+    return DisconnectedPrisma()
 
 
 # Top-level assignments of these types are the ones importlib.reload(litellm)
@@ -148,3 +170,63 @@ def pytest_collection_modifyitems(config, items):
 
     # Reorder the items list
     items[:] = custom_logger_tests + other_tests
+
+
+_PROXY_MODULE_GLOBALS_TO_ISOLATE = (
+    "master_key",
+    "prisma_client",
+    "llm_router",
+)
+
+_proxy_module_globals_snapshot = pytest.StashKey[Dict[str, object]]()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_setup(item):
+    from litellm.proxy import proxy_server
+
+    item.stash[_proxy_module_globals_snapshot] = {
+        name: vars(proxy_server)[name]
+        for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE
+        if name in vars(proxy_server)
+    }
+    yield
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item, nextitem):
+    yield
+    snapshot = item.stash.get(_proxy_module_globals_snapshot, None)
+    if snapshot is None:
+        return
+    from litellm.proxy import proxy_server
+
+    for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE:
+        if name in snapshot:
+            setattr(proxy_server, name, snapshot[name])
+        elif name in vars(proxy_server):
+            delattr(proxy_server, name)
+
+
+@pytest.fixture
+def secret_vault_factory() -> type[FakeSecretVault]:
+    return FakeSecretVault
+
+
+@pytest.fixture
+def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.fixture(autouse=True)
+def _reset_graceful_shutdown_state():
+    from litellm.proxy.shutdown.graceful_shutdown_manager import (
+        GracefulShutdownManager,
+    )
+
+    GracefulShutdownManager.reset()
+    yield
+    GracefulShutdownManager.reset()
