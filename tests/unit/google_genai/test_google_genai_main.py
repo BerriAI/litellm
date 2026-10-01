@@ -304,8 +304,7 @@ def test_vertex_location_recorded_for_cost_calculation(configured_location):
 
     recorded = logging_obj.model_call_details["litellm_params"]
     assert recorded.get("vertex_location") == configured_location, (
-        "the configured vertex_location must reach the cost calculator; "
-        f"got {recorded.get('vertex_location')!r}"
+        f"the configured vertex_location must reach the cost calculator; got {recorded.get('vertex_location')!r}"
     )
 
 
