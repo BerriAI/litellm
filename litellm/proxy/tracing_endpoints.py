@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from litellm.constants import OTLP_MAX_BODY_BYTES, OTLP_RETRY_AFTER_SECONDS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.tracing_lifespan import provide_receiver, require_receiver
 from litellm.tracing import (
     Tenant,
     TraceReceiver,
@@ -28,21 +29,6 @@ router = APIRouter(tags=["agent tracing"])  # mutable-ok: FastAPI copies the mut
 
 MS_PER_DAY: Final = 24 * 60 * 60 * 1000
 _ADMIN_ROLES: Final = (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
-
-receiver: TraceReceiver | None = None
-
-
-def get_receiver() -> TraceReceiver:
-    return _require_receiver(receiver)
-
-
-def _require_receiver(tracing: TraceReceiver | None) -> TraceReceiver:
-    if tracing is None:
-        raise HTTPException(
-            status_code=501,
-            detail="Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL.",
-        )
-    return tracing
 
 
 def tenant_for(user_api_key_dict: UserAPIKeyAuth) -> Tenant:
@@ -70,16 +56,12 @@ class TraceAccessContext:
     receiver: TraceReceiver | None
 
     def reader(self) -> tuple[TraceReceiver, TraceScope]:
-        return _require_receiver(self.receiver), scope_for(self.auth)
+        return require_receiver(self.receiver), scope_for(self.auth)
 
     def writer(self) -> tuple[TraceReceiver, Tenant]:
         if self.auth.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
             raise HTTPException(status_code=403, detail="Not allowed to ingest agent traces")
-        return _require_receiver(self.receiver), tenant_for(self.auth)
-
-
-async def provide_receiver() -> TraceReceiver | None:
-    return receiver
+        return require_receiver(self.receiver), tenant_for(self.auth)
 
 
 async def provide_trace_access(

@@ -3,6 +3,8 @@ Tests for the CustomBatchLogger-based ClickHouse base logger.
 """
 
 import asyncio
+from collections.abc import Mapping, Sequence
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -79,3 +81,27 @@ async def test_failed_insert_is_requeued_then_dropped():
     assert logger.rows_dropped == 2
     assert logger.rows_written == 0
     assert logger.log_queue == []
+
+
+@pytest.mark.asyncio
+async def test_close_waits_for_active_insert_and_stops_periodic_flush() -> None:
+    started: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+
+    async def insert_rows(table: str, rows: Sequence[Mapping[str, object]]) -> None:
+        started.set()
+        await release.wait()
+
+    insert: Final = AsyncMock(side_effect=insert_rows)
+    logger: Final = _logger(insert)
+    logger.flush_interval = 0.001
+    logger.enqueue([{"i": 1}])
+    await asyncio.wait_for(started.wait(), timeout=1)
+    closing: Final = asyncio.create_task(logger.aclose())
+    await asyncio.sleep(0)
+    assert not closing.done()
+    release.set()
+    await asyncio.wait_for(closing, timeout=1)
+    assert logger.rows_written == 1
+    insert.assert_awaited_once_with("test_table", [{"i": 1}])
+    assert logger._flush_task is not None and logger._flush_task.cancelled()

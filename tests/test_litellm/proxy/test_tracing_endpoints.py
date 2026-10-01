@@ -2,6 +2,8 @@
 Tests for the agent tracing endpoints (litellm/proxy/tracing_endpoints.py).
 """
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -12,6 +14,7 @@ from fastapi.testclient import TestClient
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.tracing_lifespan import TracingState, tracing_lifespan
 from litellm.rust_bridge.traces import TraceStorage
 from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.store import ClickHouseTraceStore
@@ -262,7 +265,7 @@ def test_injected_receiver_persists_authenticated_tenant(client: TestClient) -> 
     }
 
 
-def test_receiver_overrides_are_app_local() -> None:
+def test_lifespan_receivers_are_app_local() -> None:
     first_storage: Final = MagicMock(spec=TraceStorage)
     first_storage.query = AsyncMock(
         return_value=[
@@ -287,18 +290,34 @@ def test_receiver_overrides_are_app_local() -> None:
     )
     first_receiver: Final = TraceReceiver(ClickHouseTraceStore(first_storage))
     second_receiver: Final = TraceReceiver(ClickHouseTraceStore(second_storage))
-    first_app: Final = FastAPI()
-    second_app: Final = FastAPI()
+    first_storage.ensure_schema = AsyncMock()
+    second_storage.ensure_schema = AsyncMock()
+
+    @asynccontextmanager
+    async def first_lifespan(app: FastAPI) -> AsyncGenerator[TracingState, None]:
+        async with tracing_lifespan(True, lambda: first_receiver) as state:
+            yield state
+
+    @asynccontextmanager
+    async def second_lifespan(app: FastAPI) -> AsyncGenerator[TracingState, None]:
+        async with tracing_lifespan(True, lambda: second_receiver) as state:
+            yield state
+
+    first_app: Final = FastAPI(lifespan=first_lifespan)
+    second_app: Final = FastAPI(lifespan=second_lifespan)
     first_app.include_router(tracing_endpoints.router)
     second_app.include_router(tracing_endpoints.router)
     first_app.dependency_overrides[user_api_key_auth] = lambda: TEAM_KEY
     second_app.dependency_overrides[user_api_key_auth] = lambda: TEAM_KEY
-    first_app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: first_receiver
-    second_app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: second_receiver
 
-    with TestClient(first_app) as first_client, TestClient(second_app) as second_client:
+    with TestClient(first_app) as first_client:
+        with TestClient(second_app) as second_client:
+            second_response: Final = second_client.get("/v1/traces/t1/spans/second-span?trace_ref=second-run")
+            simultaneous: Final = first_client.get("/v1/traces/t1/spans/first-span?trace_ref=first-run")
         first_response: Final = first_client.get("/v1/traces/t1/spans/first-span?trace_ref=first-run")
-        second_response: Final = second_client.get("/v1/traces/t1/spans/second-span?trace_ref=second-run")
+        assert simultaneous.json() == first_response.json()
+    first_storage.ensure_schema.assert_awaited_once()
+    second_storage.ensure_schema.assert_awaited_once()
 
     assert first_response.status_code == second_response.status_code == 200
     assert first_response.json() == {
@@ -313,7 +332,8 @@ def test_receiver_overrides_are_app_local() -> None:
         "output": "",
         "attributes": {},
     }
-    first_storage.query.assert_awaited_once_with(
+    assert first_storage.query.await_count == 2
+    first_storage.query.assert_awaited_with(
         "span_detail",
         {
             "team_ids": (TEAM_KEY.team_id,),
@@ -341,3 +361,51 @@ def test_query_validation_precedes_trace_access_checks(client: TestClient, auth:
     response: Final = client.get("/v1/traces", params={"start_ms": "invalid"})
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"] == ["query", "start_ms"]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_unavailable_lifespan_receiver_returns_501(enabled: bool) -> None:
+    storage: Final = MagicMock(spec=TraceStorage)
+    storage.ensure_schema = AsyncMock(side_effect=RuntimeError("storage unavailable"))
+    tracing: Final = TraceReceiver(ClickHouseTraceStore(storage))
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncGenerator[TracingState, None]:
+        async with tracing_lifespan(enabled, lambda: tracing) as state:
+            yield state
+
+    app: Final = FastAPI(lifespan=lifespan)
+    app.include_router(tracing_endpoints.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: TEAM_KEY
+    with TestClient(app) as client:
+        response: Final = client.get("/v1/traces")
+    assert response.status_code == 501
+    assert storage.ensure_schema.await_count == int(enabled)
+    storage.query.assert_not_called()
+
+
+def test_lens_reads_from_the_lifespan_receiver() -> None:
+    from litellm.proxy.engine.endpoints import router as engine_router
+
+    storage: Final = MagicMock(spec=TraceStorage)
+    storage.ensure_schema = AsyncMock()
+    storage.lens_sample = AsyncMock(return_value=[])
+    tracing: Final = TraceReceiver(ClickHouseTraceStore(storage))
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncGenerator[TracingState, None]:
+        async with tracing_lifespan(True, lambda: tracing) as state:
+            yield state
+
+    app: Final = FastAPI(lifespan=lifespan)
+    app.include_router(engine_router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    with TestClient(app) as client:
+        response: Final = client.post(
+            "/engine/preview/sample",
+            json={"settings": {"name": "Review", "model": "analysis", "context": "Find failed executions"}},
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["executions"] == []
+    storage.lens_sample.assert_awaited_once()
+    assert storage.lens_sample.await_args.args[0]["all_teams"] == 1

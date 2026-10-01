@@ -44,10 +44,13 @@ from litellm.proxy.engine.state import (
     replace_job,
     snapshot_finding,
 )
+from litellm.proxy.tracing_lifespan import provide_receiver, require_receiver
+from litellm.tracing import TraceReceiver
 
 router: Final = APIRouter(prefix="/engine", tags=["Lens"])  # mutable-ok: FastAPI requires list
 _bearer: Final = HTTPBearer()
 Auth: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
+Tracing: TypeAlias = Annotated[TraceReceiver | None, Depends(provide_receiver)]
 
 
 def repository() -> EngineRepository:
@@ -58,10 +61,8 @@ def repository() -> EngineRepository:
     return EngineRepository(WriterDatabase(writer_wrapper(prisma_client.db)))
 
 
-def source_reader() -> SourceReader:
-    from litellm.proxy.tracing_endpoints import get_receiver
-
-    return SourceReader(get_receiver().store.storage)
+def source_reader(tracing: TraceReceiver | None) -> SourceReader:
+    return SourceReader(require_receiver(tracing).store.storage)
 
 
 def user_scope(auth: UserAPIKeyAuth, write: bool = False) -> Scope:
@@ -137,14 +138,12 @@ def validate_model(settings: EngineSettings, auth: UserAPIKeyAuth) -> None:
 
 
 @router.get("", response_model=EngineList)
-async def list_engines(auth: Auth) -> EngineList:
-    from litellm.proxy import tracing_endpoints
-
+async def list_engines(auth: Auth, tracing: Tracing) -> EngineList:
     scope: Final = user_scope(auth)
     return EngineList(
         engines=tuple(e for e in await repository().engines() if can_access(scope, e.scope)),
         workers=tuple(w for w in await repository().workers() if can_access(scope, w.scope)),
-        tracing_enabled=tracing_endpoints.receiver is not None,
+        tracing_enabled=tracing is not None,
     )
 
 
@@ -264,10 +263,10 @@ class Preview(BaseModel):
 
 
 @router.post("/preview/sample", response_model=Sample)
-async def preview_sample(body: Preview, auth: Auth) -> Sample:
+async def preview_sample(body: Preview, auth: Auth, tracing: Tracing) -> Sample:
     validate_selection(body.settings)
     now: Final = min(body.as_of or datetime.now(timezone.utc), datetime.now(timezone.utc))
-    return await source_reader().sample(
+    return await source_reader(tracing).sample(
         user_scope(auth),
         body.settings,
         int((now - timedelta(hours=body.lookback_hours)).timestamp() * 1000),
@@ -340,14 +339,14 @@ async def progress(engine_id: str, job_id: str, body: Progress, worker: WorkerAu
 
 
 @router.get("/worker/{engine_id}/{job_id}/sample", response_model=Sample)
-async def sample(engine_id: str, job_id: str, worker: WorkerAuth) -> Sample:
+async def sample(engine_id: str, job_id: str, worker: WorkerAuth, tracing: Tracing) -> Sample:
     engine, job = await assigned(engine_id, job_id, worker)
     if job.sample is not None:
         return job.sample
     pages: list[Sample] = []  # mutable-ok: freeze selection after stable cursor traversal
     cursor = ""  # rebind-ok: advance by immutable identity, never by shifting row positions
     while True:
-        page = await source_reader().sample(
+        page = await source_reader(tracing).sample(
             engine.scope,
             job.settings,
             int(job.start.timestamp() * 1000),
@@ -386,6 +385,7 @@ async def content(
     job_id: str,
     execution_id: str,
     worker: WorkerAuth,
+    tracing: Tracing,
     cursor: str = "",
     offset: int = Query(default=0, ge=0),
 ) -> ExecutionContent:
@@ -394,7 +394,7 @@ async def content(
     execution: Final = next((e for e in selected.executions if e.id == execution_id), None)
     if execution is None:
         raise HTTPException(404, "Execution is outside this job's sample")
-    return await source_reader().content(engine.scope, execution, cursor, offset)
+    return await source_reader(tracing).content(engine.scope, execution, cursor, offset)
 
 
 @router.post("/worker/{engine_id}/{job_id}/model", response_model=ModelResult)
@@ -406,7 +406,7 @@ async def model(engine_id: str, job_id: str, body: ModelRequest, worker: WorkerA
 
 
 @router.post("/worker/{engine_id}/{job_id}/result", response_model=Engine)
-async def result(engine_id: str, job_id: str, body: Result, worker: WorkerAuth) -> Engine:
+async def result(engine_id: str, job_id: str, body: Result, worker: WorkerAuth, tracing: Tracing) -> Engine:
     engine: Final = await get_engine(engine_id, worker.scope)
     old: Final = next((j for j in engine.jobs if j.id == job_id), None)
     if old and old.status in ("completed", "failed") and old.worker_id == worker.id:
@@ -428,7 +428,7 @@ async def result(engine_id: str, job_id: str, body: Result, worker: WorkerAuth) 
         raise HTTPException(422, "Finding references evidence outside the job")
 
     for finding in body.findings:
-        await validate_finding(engine, selected, finding)
+        await validate_finding(engine, selected, finding, tracing)
 
     def finish(e: Engine) -> Engine:
         active: Final = current_job(e)
@@ -494,12 +494,14 @@ async def claim_candidate(candidate: Engine, worker: Worker, now: datetime) -> C
     return None
 
 
-async def validate_finding(engine: Engine, selected: Sample, finding: FindingDraft) -> None:
+async def validate_finding(
+    engine: Engine, selected: Sample, finding: FindingDraft, tracing: TraceReceiver | None
+) -> None:
     previous: Final = next((f for f in engine.findings if f.id == finding.existing_finding_id), None)
     if finding.existing_finding_id and (previous is None or previous.check_id != finding.check_id):
         raise HTTPException(422, "Existing finding must belong to the same check")
     for evidence in finding.evidence:
-        if not await source_reader().verify_evidence(
+        if not await source_reader(tracing).verify_evidence(
             engine.scope, next(e for e in selected.executions if e.id == evidence.execution_id), evidence
         ):
             raise HTTPException(422, "Evidence quote does not match stored content")
@@ -507,7 +509,12 @@ async def validate_finding(engine: Engine, selected: Sample, finding: FindingDra
 
 @router.get("/{engine_id}/executions/{execution_id}", response_model=ExecutionContent)
 async def evidence_content(
-    engine_id: str, execution_id: str, auth: Auth, cursor: str = "", offset: int = Query(default=0, ge=0)
+    engine_id: str,
+    execution_id: str,
+    auth: Auth,
+    tracing: Tracing,
+    cursor: str = "",
+    offset: int = Query(default=0, ge=0),
 ) -> ExecutionContent:
     engine: Final = await get_engine(engine_id, user_scope(auth))
     try:
@@ -527,4 +534,4 @@ async def evidence_content(
         span_count=1,
         root_seen=source == "requests",
     )
-    return await source_reader().content(engine.scope, execution, cursor, offset)
+    return await source_reader(tracing).content(engine.scope, execution, cursor, offset)

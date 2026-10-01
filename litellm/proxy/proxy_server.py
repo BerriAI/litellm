@@ -791,6 +791,7 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.tracing_lifespan import TracingState, tracing_lifespan
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
     router as latest_release_endpoints_router,
@@ -851,7 +852,6 @@ from litellm.secret_managers.main import (
     secret_manager_would_be_consulted,
     str_to_bool,
 )
-from litellm.tracing import TraceReceiver
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
@@ -1221,7 +1221,7 @@ async def _connect_to_count_stored_values() -> SupportsRawQueries:
 
 
 @asynccontextmanager
-async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
+async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[TracingState, None]:
     global \
         prisma_client, \
         master_key, \
@@ -1528,9 +1528,6 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
                 _tagged.strategy._state_loaded = True
     asyncio.create_task(_adaptive_router_flusher_loop())
 
-    ## [Optional] Initialize agent tracing
-    asyncio.create_task(ProxyStartupEvent.init_tracing(general_settings))
-
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
@@ -1564,76 +1561,80 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
 
         register_scheduled_sync(scheduler)
 
-    # End of startup event
-    yield
+    tracing_settings: Final = general_settings.get("tracing")
+    tracing_enabled: Final = TypeAdapter(bool).validate_python(
+        isinstance(tracing_settings, dict) and tracing_settings.get("store") == "clickhouse"
+    )
+    async with tracing_lifespan(enabled=tracing_enabled) as tracing_state:
+        yield tracing_state
 
-    if model_info_scheduler is not None and model_info_scheduler.running:
-        model_info_scheduler.remove_job("refresh_model_info")
-        if model_info_scheduler is not scheduler:
-            model_info_scheduler.shutdown(wait=False)
+        if model_info_scheduler is not None and model_info_scheduler.running:
+            model_info_scheduler.remove_job("refresh_model_info")
+            if model_info_scheduler is not scheduler:
+                model_info_scheduler.shutdown(wait=False)
 
-    # Shutdown event - stop starting scheduled jobs; the ones already running keep the drain window
-    if scheduler is not None:
-        pause_scheduled_jobs(scheduler)
+        # Shutdown event - stop starting scheduled jobs; the ones already running keep the drain window
+        if scheduler is not None:
+            pause_scheduled_jobs(scheduler)
 
-    # Shutdown event - drain in-flight requests before tearing down dependencies
-    # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
-    GracefulShutdownManager.start_shutdown()
-    await GracefulShutdownManager.wait_for_drain()
+        # Shutdown event - drain in-flight requests before tearing down dependencies
+        # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
+        GracefulShutdownManager.start_shutdown()
+        await GracefulShutdownManager.wait_for_drain()
 
-    # Shutdown event - close shared aiohttp session
-    if shared_aiohttp_session is not None:
-        try:
-            await shared_aiohttp_session.close()
-            verbose_proxy_logger.info("SESSION REUSE: Closed shared aiohttp session")
-        except Exception as e:
-            verbose_proxy_logger.error("Error closing shared aiohttp session: %s", e)
+        # Shutdown event - close shared aiohttp session
+        if shared_aiohttp_session is not None:
+            try:
+                await shared_aiohttp_session.close()
+                verbose_proxy_logger.info("SESSION REUSE: Closed shared aiohttp session")
+            except Exception as e:
+                verbose_proxy_logger.error("Error closing shared aiohttp session: %s", e)
 
-    # Shutdown event - stop RDS IAM token refresh background task
-    if (
-        prisma_client is not None
-        and hasattr(prisma_client, "db")
-        and hasattr(prisma_client.db, "stop_token_refresh_task")
-    ):
-        try:
-            await prisma_client.db.stop_token_refresh_task()
-        except Exception as e:
-            verbose_proxy_logger.error("Error stopping token refresh task: %s", e)
+        # Shutdown event - stop RDS IAM token refresh background task
+        if (
+            prisma_client is not None
+            and hasattr(prisma_client, "db")
+            and hasattr(prisma_client.db, "stop_token_refresh_task")
+        ):
+            try:
+                await prisma_client.db.stop_token_refresh_task()
+            except Exception as e:
+                verbose_proxy_logger.error("Error stopping token refresh task: %s", e)
 
-    # Shutdown event - stop Prisma DB health watchdog task
-    if prisma_client is not None and hasattr(prisma_client, "stop_db_health_watchdog_task"):
-        try:
-            await prisma_client.stop_db_health_watchdog_task()
-        except Exception as e:
-            verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
+        # Shutdown event - stop Prisma DB health watchdog task
+        if prisma_client is not None and hasattr(prisma_client, "stop_db_health_watchdog_task"):
+            try:
+                await prisma_client.stop_db_health_watchdog_task()
+            except Exception as e:
+                verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
 
-    if prisma_client is not None and hasattr(prisma_client, "stop_view_setup_task"):
-        try:
-            await prisma_client.stop_view_setup_task()
-        except Exception as e:
-            verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
+        if prisma_client is not None and hasattr(prisma_client, "stop_view_setup_task"):
+            try:
+                await prisma_client.stop_view_setup_task()
+            except Exception as e:
+                verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
 
-    await _drain_spend_event_producer_on_shutdown()
+        await _drain_spend_event_producer_on_shutdown()
 
-    # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
-    if scheduler is not None and scheduler_executor is not None:
-        try:
-            await stop_in_flight_scheduler_jobs(scheduler, scheduler_executor)
-        except Exception as e:
-            verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
+        # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
+        if scheduler is not None and scheduler_executor is not None:
+            try:
+                await stop_in_flight_scheduler_jobs(scheduler, scheduler_executor)
+            except Exception as e:
+                verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
-    await flush_spend_counters_on_shutdown()
+        await flush_spend_counters_on_shutdown()
 
-    await _flush_spend_logs_queue_on_shutdown()
+        await _flush_spend_logs_queue_on_shutdown()
 
-    await proxy_config.stop_config_sync_subscriber()
+        await proxy_config.stop_config_sync_subscriber()
 
-    await proxy_config.stop_auth_cache_invalidation_subscriber()
+        await proxy_config.stop_auth_cache_invalidation_subscriber()
 
-    await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
+        await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
 
-    if prometheus_multiproc_dir:
-        mark_worker_exit(os.getpid())
+        if prometheus_multiproc_dir:
+            mark_worker_exit(os.getpid())
 
 
 def _generate_stable_operation_id(route: "APIRoute") -> str:
@@ -11358,39 +11359,6 @@ class ProxyStartupEvent:
                     e,
                 )
             return connected_client
-
-    @classmethod
-    async def init_tracing(cls, general_settings: dict, receiver: TraceReceiver | None = None) -> None:
-        """
-        Enable agent tracing (`POST/GET /v1/traces`) when configured:
-
-            general_settings:
-              tracing:
-                store: clickhouse
-        """
-        from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
-
-        manager: Final = litellm.logging_callback_manager
-        for callback in manager.get_custom_loggers_for_type(ClickHouseSpendLogger):
-            manager.remove_callback_from_all_lists(callback)
-        tracing_endpoints.receiver = None
-        settings: Final = general_settings.get("tracing")
-        if not isinstance(settings, dict) or settings.get("store") != "clickhouse":
-            return
-        try:
-            tracing: Final = receiver if receiver is not None else TraceReceiver.from_env()
-            await tracing.start()
-        except (KeyError, OSError, RuntimeError, ValueError) as error:
-            verbose_proxy_logger.warning("Agent tracing unavailable: %s", error)
-            return
-        tracing_endpoints.receiver = tracing
-        spend_logger: Final = ClickHouseSpendLogger(storage=tracing.store.storage)
-        manager.add_litellm_callback(spend_logger)
-        manager.add_litellm_success_callback(spend_logger)
-        manager.add_litellm_failure_callback(spend_logger)
-        manager.add_litellm_async_success_callback(spend_logger)
-        manager.add_litellm_async_failure_callback(spend_logger)
-        verbose_proxy_logger.info("Agent tracing enabled (store=clickhouse)")
 
     @classmethod
     def _init_dd_tracer(cls):

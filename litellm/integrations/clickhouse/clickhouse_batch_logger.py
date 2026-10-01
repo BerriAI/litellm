@@ -11,6 +11,7 @@ gzip JSONEachRow insert, either every `CLICKHOUSE_FLUSH_INTERVAL_SECONDS` or as 
 import asyncio
 import os
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from typing import Any, ClassVar
 
 from litellm._logging import verbose_logger
@@ -49,6 +50,15 @@ class ClickHouseBatchLogger(CustomBatchLogger):
     def start(self) -> None:
         if self._flush_task is None or self._flush_task.done():
             self._flush_task = asyncio.get_running_loop().create_task(self.periodic_flush())
+
+    async def aclose(self) -> None:
+        if self._flush_task is not None:
+            if self.flush_lock is not None:
+                async with self.flush_lock:
+                    self._flush_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._flush_task
+        await self.flush_queue()
 
     def is_full(self) -> bool:
         """Backpressure signal: producers should reject (429) instead of enqueueing."""
