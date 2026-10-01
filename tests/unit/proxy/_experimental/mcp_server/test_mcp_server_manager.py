@@ -7233,6 +7233,41 @@ class TestMCPServerManager:
         assert listed is not None and listed.description == "after save"
 
     @pytest.mark.asyncio
+    async def test_update_server_refreshing_openapi_tools_drops_a_listing_recorded_during_the_spec_fetch(self):
+        """An OpenAPI server's registry entries are rebuilt after the save is published, so a listing that
+        records while the spec is fetched holds the pre-save entries; the catalog is dropped again once the
+        registry is current."""
+        manager = MCPServerManager()
+        old = MCPServer(
+            server_id="srv", name="srv", transport=MCPTransport.http, url="http://old", spec_path="/old.json"
+        )
+        manager.registry[old.server_id] = old
+        new = MCPServer(
+            server_id="srv", name="srv", transport=MCPTransport.http, url="http://new", spec_path="/new.json"
+        )
+        caller = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm", user_id="lister"))
+
+        async def register_while_a_listing_records(server: MCPServer, *, initialize_mapping: bool = True) -> None:
+            manager._record_listed_tools(
+                server,
+                [MCPTool(name="search", description="pre-save", inputSchema={})],
+                caller,
+                manager._listed_tools_generations.get(server.server_id, 0),
+            )
+
+        manager.build_mcp_server_from_table = AsyncMock(return_value=new)
+        manager._maybe_register_openapi_tools = register_while_a_listing_records
+        manager.prime_oauth_metadata_discovery = MagicMock()
+        record = LiteLLM_MCPServerTable(
+            server_id="srv", server_name="srv", url="http://new", transport=MCPTransport.http
+        )
+
+        await manager.update_server(record)
+
+        assert manager.registry["srv"] is new
+        assert manager.get_listed_tool(new, "search", caller) is None
+
+    @pytest.mark.asyncio
     async def test_user_oauth_refresh_keeps_listed_tools(self):
         manager = MCPServerManager()
         server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")

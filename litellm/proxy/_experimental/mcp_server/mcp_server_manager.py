@@ -2035,7 +2035,7 @@ class MCPServerManager:
         }
         """
         self._listed_tools_by_server_id: dict[str, _ListedToolsByCaller] = {}  # mutable-ok: refreshed per tools/list
-        self._listed_tools_generations: Mapping[str, int] = MappingProxyType({})
+        self._listed_tools_generations: dict[str, int] = {}  # mutable-ok: bumped per server save
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
         # empty result, or failure). Used to throttle re-probes for servers that do
@@ -3351,6 +3351,8 @@ class MCPServerManager:
                 self._invalidate_server_definition_caches(mcp_server.server_id)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
+                if new_server.spec_path:
+                    self._invalidate_server_definition_caches(mcp_server.server_id)
                 self.prime_oauth_metadata_discovery(new_server)
                 verbose_logger.debug("Added MCP Server: %s", new_server.name)
 
@@ -3388,6 +3390,8 @@ class MCPServerManager:
                 self._invalidate_server_definition_caches(mcp_server.server_id)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
+                if new_server.spec_path:
+                    self._invalidate_server_definition_caches(mcp_server.server_id)
                 self.prime_oauth_metadata_discovery(new_server)
                 verbose_logger.debug("Updated MCP Server: %s", new_server.name)
 
@@ -4672,9 +4676,7 @@ class MCPServerManager:
 
         self._invalidate_discovery_lists(server_id)
         self._listed_tools_by_server_id.pop(server_id, None)
-        self._listed_tools_generations = MappingProxyType(
-            {**self._listed_tools_generations, server_id: self._listed_tools_generations.get(server_id, 0) + 1}
-        )
+        self._listed_tools_generations[server_id] = self._listed_tools_generations.get(server_id, 0) + 1
         invalidate_oauth_metadata_cache(server_id)
 
     def _listed_tools_identity(self, server: MCPServer, caller: ListedToolsCaller | None) -> str | None:
@@ -4727,8 +4729,7 @@ class MCPServerManager:
         generation: int | None = None,
     ) -> None:
         """Store the catalog served to ``caller``. ``generation`` is the server's listed-tools generation
-        read before the listing's upstream fetch; a server save that landed mid-fetch moved it, and the
-        pre-save catalog is then dropped rather than written over the invalidation."""
+        read before the listing's upstream fetch; the record is skipped when it no longer matches."""
         if generation is not None and generation != self._listed_tools_generations.get(server.server_id, 0):
             return
         identity: Final = self._listed_tools_identity(server, caller)
@@ -6059,7 +6060,6 @@ class MCPServerManager:
         start_time: datetime.datetime,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         guardrail_context: Mapping[str, object] | None = None,
-        tool: MCPTool | None = None,
     ):
         """Create and return a during hook task for MCP tool calls.
 
@@ -6074,8 +6074,6 @@ class MCPServerManager:
             tool_name=name,
             arguments=arguments,
             server_name=server_name_from_prefix,
-            tool_description=tool.description if tool is not None else None,
-            tool_input_schema=tool.input_schema if tool is not None else None,
             start_time=start_time.timestamp() if start_time else None,
             hidden_params=HiddenParams(),
         )

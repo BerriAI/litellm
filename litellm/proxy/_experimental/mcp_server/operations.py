@@ -81,7 +81,6 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     outcome_wire_value,
 )
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-    ListedToolsCaller,
     MCPServerManager,
     _caller_authorization_fans_out,
     _client_forwarded_authorization_headers,
@@ -1610,12 +1609,6 @@ async def _list_mcp_resource_templates(
     return managed_resource_templates
 
 
-def _registered_tool_metadata(name: str, server: MCPServer, caller: ListedToolsCaller) -> MCPTool | None:
-    """The tool as ``tools/list`` served it to this caller (pinned, overridden, guardrail-masked), or None when
-    no listing was recorded so the call hands the hooks name and arguments only."""
-    return global_mcp_server_manager.get_listed_tool(server, name, caller)
-
-
 def _resolve_display_name_to_original(
     name: str,
     allowed_mcp_servers: list[MCPServer],
@@ -2086,9 +2079,9 @@ async def _execute_mcp_tool(
             raw_headers=raw_headers,
             litellm_logging_obj=litellm_logging_obj,
             guardrail_context=guardrail_context,
-            tool=_registered_tool_metadata(
-                original_tool_name,
+            tool=global_mcp_server_manager.get_listed_tool(
                 mcp_server,
+                original_tool_name,
                 listed_tools_caller_for(
                     mcp_server,
                     user_api_key_auth,
@@ -2210,9 +2203,9 @@ async def _execute_mcp_tool(
                 raw_headers=raw_headers,
                 litellm_logging_obj=litellm_logging_obj,
                 guardrail_context=guardrail_context,
-                tool=_registered_tool_metadata(
-                    original_tool_name,
+                tool=global_mcp_server_manager.get_listed_tool(
                     prefix_server,
+                    original_tool_name,
                     listed_tools_caller_for(
                         prefix_server,
                         user_api_key_auth,
