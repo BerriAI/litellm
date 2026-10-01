@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import os
 import shutil
 import signal
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final
 
 from litellm.constants import HARNESS_PROCESS_KILL_GRACE_SECONDS
@@ -47,11 +49,12 @@ def is_secret_env_name(name: str) -> bool:
 def filtered_environ(
     base: Mapping[str, str] | None = None,
     extra: Mapping[str, str] | None = None,
-) -> dict[str, str]:
+) -> Mapping[str, str]:
     """base (default os.environ) without provider secrets, then extra on top."""
     source = os.environ if base is None else base
-    kept = {k: v for k, v in source.items() if not is_secret_env_name(k)}
-    return {**kept, **(extra or {})}
+    kept = ((k, v) for k, v in source.items() if not is_secret_env_name(k))
+    overlay = extra.items() if extra else ()
+    return MappingProxyType(dict(itertools.chain(kept, overlay)))
 
 
 def _signal_process(proc: asyncio.subprocess.Process, sig: int) -> None:
@@ -108,7 +111,7 @@ async def _read_all(handle: SubprocessHandle) -> tuple[bytes, bytes, int]:
     return stdout, stderr, exit_code
 
 
-async def collect_output(handle: SubprocessHandle, cmd: list[str], timeout: float | None) -> CompletedRun:
+async def collect_output(handle: SubprocessHandle, cmd: Sequence[str], timeout: float | None) -> CompletedRun:
     """Close stdin, read stdout/stderr to EOF; kill and raise SandboxError on timeout."""
     try:
         stdout, stderr, code = await asyncio.wait_for(_read_all(handle), timeout)
@@ -134,8 +137,8 @@ class LocalSandbox:
         if not os.path.isdir(resolved):
             raise SandboxError(f"sandbox path does not exist or is not a directory: {resolved}")
         self.workdir: str = resolved
-        self._processes: set[SubprocessHandle] = set()
-        self._tempdirs: list[str] = []
+        self._processes: set[SubprocessHandle] = set()  # mutable-ok: live-process registry (add/discard)
+        self._tempdirs: list[str] = []  # mutable-ok: tempdirs created on demand by tempdir(), removed on close()
         self._closed = False
 
     def __repr__(self) -> str:
@@ -145,8 +148,8 @@ class LocalSandbox:
         if self._closed:
             raise SandboxError("sandbox is closed")
 
-    def _allowed_roots(self) -> list[str]:
-        return [self.workdir, *self._tempdirs]
+    def _allowed_roots(self) -> tuple[str, ...]:
+        return (self.workdir, *self._tempdirs)
 
     def resolve_path(self, path: str) -> str:
         """Absolute real path for path; SandboxError if it escapes the sandbox."""
@@ -164,12 +167,12 @@ class LocalSandbox:
             raise SandboxError(f"cwd is not a directory: {cwd}")
         return resolved
 
-    def child_env(self, env: Mapping[str, str] | None = None) -> dict[str, str]:
+    def child_env(self, env: Mapping[str, str] | None = None) -> Mapping[str, str]:
         return filtered_environ(extra=env)
 
     async def exec(
         self,
-        cmd: list[str],
+        cmd: Sequence[str],
         *,
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
@@ -195,7 +198,7 @@ class LocalSandbox:
 
     async def run(
         self,
-        cmd: list[str],
+        cmd: Sequence[str],
         *,
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
@@ -236,7 +239,7 @@ class LocalSandbox:
         self._tempdirs.append(path)
         return path
 
-    async def snapshot(self) -> dict[str, str]:
+    async def snapshot(self) -> Mapping[str, str]:
         self._check_open()
         return await snapshot_local(self.workdir)
 
@@ -244,7 +247,7 @@ class LocalSandbox:
         if self._closed:
             return
         self._closed = True
-        live = [h for h in self._processes if h.returncode is None]
+        live = tuple(h for h in self._processes if h.returncode is None)
         await asyncio.gather(*(h.kill() for h in live), return_exceptions=True)
         self._processes.clear()
         for path in self._tempdirs:
