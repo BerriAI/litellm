@@ -37,7 +37,12 @@ export default function LensPage() {
           </TabsTrigger>
         </TabsList>
         <TabsContent value="traces" keepMounted className="min-h-0">
-          <AgentTracesPage accessToken={accessToken} isActive={activeTab === "traces"} readOnly={isViewOnly} />
+          <AgentTracesPage
+            accessToken={accessToken}
+            isActive={activeTab === "traces"}
+            readOnly={isViewOnly}
+            canMintTracingKey={isProxyAdminRole(userRole ?? "")}
+          />
         </TabsContent>
         <TabsContent value="investigations">
           {isProxyAdminTierRole(userRole ?? "") ? (
