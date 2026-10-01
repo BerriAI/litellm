@@ -212,9 +212,7 @@ async def test_filter_db_fallback_receives_resolved_model_names():
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_db)
-    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
-        return_value=[mock_db_model]
-    )
+    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[mock_db_model])
 
     result = await _filter_models_by_team_id(
         all_models=all_models,
@@ -231,3 +229,114 @@ async def test_filter_db_fallback_receives_resolved_model_names():
         "gpt-5",
     }, f"DB query should receive resolved model names, got {queried_names}"
     assert "Group-A" not in queried_names, "Raw access group name should not be in DB query"
+
+
+@pytest.mark.asyncio
+async def test_filter_excludes_blocked_public_model_with_no_team_assignment():
+    """
+    GH#38949: a disabled (blocked) public deployment with no team assignment in
+    the DB must not appear in a team's model list, even when a stale
+    team.models entry still resolves to its public model name via the router.
+
+    Reproduction from the issue: team "Team-Alpha" has its own aliased
+    deployment; a chat call through the team key writes the public model name
+    into team.models; the team filter then resolves that name to the disabled
+    public deployment and listed it as a second, team-attached model.
+    """
+    # Disabled public deployment: no team_id, paused by the admin.
+    public_blocked = {
+        "model_name": "gpt-5.1",
+        "litellm_params": {"model": "gpt-5.1"},
+        "model_info": {"id": "id-public-blocked", "blocked": True, "team_id": None},
+    }
+    # The team's own deployment (unique alias name), active.
+    team_alias = {
+        "model_name": "gpt-5.1-team-alpha",
+        "litellm_params": {"model": "gpt-5.1"},
+        "model_info": {"id": "id-team-alias", "blocked": False, "team_id": "team_alpha"},
+    }
+    all_models = [public_blocked, team_alias]
+
+    mock_router = MagicMock()
+    mock_router.get_model_access_groups.return_value = {}
+    # Public reachability: resolving the (stale) team.models name returns the
+    # disabled public deployment. This mirrors should_include_deployment's
+    # semantics, which this fix deliberately does not touch.
+    mock_router.get_model_list = MagicMock(
+        side_effect=lambda model_name=None, team_id=None: [public_blocked] if model_name == "gpt-5.1" else []
+    )
+
+    team_db = _make_team(models=["gpt-5.1"])
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_db)
+    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+    result = await _filter_models_by_team_id(
+        all_models=all_models,
+        team_id="team_alpha",
+        prisma_client=mock_prisma,
+        llm_router=mock_router,
+    )
+
+    result_ids = {m["model_info"]["id"] for m in result}
+    assert result_ids == {
+        "id-team-alias",
+    }, f"Disabled public model must not be listed for the team, got {result_ids}"
+
+
+@pytest.mark.asyncio
+async def test_filter_excludes_blocked_models_not_owned_by_team():
+    """
+    A blocked deployment the team does not own (explicit access_via_team_ids
+    grant or name resolution) must not surface in the team's list, while a
+    blocked deployment owned by the team stays visible so admins can re-enable
+    it from the team view.
+    """
+    blocked_granted = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {
+            "id": "id-granted-blocked",
+            "blocked": True,
+            "access_via_team_ids": ["team_alpha"],
+        },
+    }
+    blocked_owned = {
+        "model_name": "claude-3",
+        "litellm_params": {"model": "claude-3"},
+        "model_info": {"id": "id-owned-blocked", "blocked": True, "team_id": "team_alpha"},
+    }
+    active_granted = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {
+            "id": "id-granted-active",
+            "blocked": False,
+            "access_via_team_ids": ["team_alpha"],
+        },
+    }
+    all_models = [blocked_granted, blocked_owned, active_granted]
+
+    mock_router = MagicMock()
+    mock_router.get_model_access_groups.return_value = {}
+    mock_router.get_model_list = MagicMock(return_value=[])
+
+    team_db = _make_team(models=["gpt-4o"])
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_db)
+    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+    result = await _filter_models_by_team_id(
+        all_models=all_models,
+        team_id="team_alpha",
+        prisma_client=mock_prisma,
+        llm_router=mock_router,
+    )
+
+    result_ids = {m["model_info"]["id"] for m in result}
+    assert result_ids == {
+        "id-owned-blocked",
+        "id-granted-active",
+    }, f"Blocked non-owned deployments must be hidden, team-owned kept; got {result_ids}"
