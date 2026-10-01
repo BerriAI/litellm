@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useMutation } from "@tanstack/react-query";
-import { Code, LoaderCircle, Send } from "lucide-react";
+import { Code, Info, LoaderCircle, Send } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { makeSystemOneRequest } from "../../llm_calls/system_one";
 import { SYSTEM_ONE_PRESETS } from "./system_one_presets";
@@ -161,10 +161,14 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
             </Button>
           </div>
         </div>
-        <p className="text-sm text-muted-foreground">
-          Send System One requests (choice, noul, score) to TypeSafe Jev through /typesafe/v1/systemone. Requires
-          TYPESAFE_API_KEY on the proxy.
-        </p>
+        <Alert role="note" aria-label="System One beta notice">
+          <Info />
+          <AlertTitle>Beta: TypeSafe Jev only for now</AlertTitle>
+          <AlertDescription>
+            Sends System One requests (choice, noul, score) through /typesafe/v1/systemone and requires TYPESAFE_API_KEY
+            on the proxy. Support for more System One-compatible models is in progress.
+          </AlertDescription>
+        </Alert>
       </section>
 
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-2">

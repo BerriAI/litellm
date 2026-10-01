@@ -59,6 +59,15 @@ describe("SystemOneUI integration", () => {
     );
   });
 
+  it("flags the tab as a TypeSafe-only beta without announcing it as an alert", () => {
+    render(<SystemOneUI accessToken="session-key" />);
+
+    expect(screen.getByRole("note", { name: "System One beta notice" })).toHaveTextContent(
+      "Support for more System One-compatible models is in progress.",
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("shows invalid JSON and disables Send", async () => {
     render(<SystemOneUI accessToken="session-key" />);
 
