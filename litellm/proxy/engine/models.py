@@ -193,6 +193,7 @@ class Engine(Record):
 
 
 class Worker(Record):
+    analysis_key_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     id: str
     name: str
     scope: Scope

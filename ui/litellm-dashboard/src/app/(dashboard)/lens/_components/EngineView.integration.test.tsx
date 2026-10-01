@@ -193,7 +193,14 @@ it("runs saved settings immediately without opening setup", async () => {
         engines: [engine],
         tracing_enabled: true,
         workers: [
-          { id: "worker", name: "Worker", revoked: false, scope: engine.scope, last_seen: new Date().toISOString() },
+          {
+            id: "worker",
+            name: "Worker",
+            revoked: false,
+            analysis_key_id: "a".repeat(64),
+            scope: engine.scope,
+            last_seen: new Date().toISOString(),
+          },
         ],
       };
     if (path === "/engine/lens/runs") return engine.jobs;

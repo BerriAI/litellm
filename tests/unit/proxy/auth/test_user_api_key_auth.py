@@ -1440,7 +1440,11 @@ def test_jwt_path_enforces_the_user_model_budget_before_returning():
 
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder)))
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
+        + "\n"
+        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+    )
 
     def calls_before_each_return(node):
         seen_check = []
@@ -1481,7 +1485,11 @@ def test_every_jwt_branch_carries_the_user_model_budget():
 
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder)))
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
+        + "\n"
+        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+    )
 
     assignments = [
         node
@@ -1614,7 +1622,11 @@ def test_zero_cost_models_skip_the_user_budget_check_on_every_path():
 
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder)))
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
+        + "\n"
+        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+    )
 
     def guarded_by_skip(node: ast.AST, target: ast.AST) -> bool:
         for parent in ast.walk(node):
@@ -1755,7 +1767,11 @@ def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
 
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder)))
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
+        + "\n"
+        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+    )
 
     # Half one: the shared block copies the user row's budget onto the token.
     copies_user_row = [

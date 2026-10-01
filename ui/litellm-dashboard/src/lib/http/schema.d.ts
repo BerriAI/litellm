@@ -4984,6 +4984,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/engine/workers/{worker_id}/billing-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Worker Billing */
+        put: operations["set_worker_billing_engine_workers__worker_id__billing_key_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/engine/{engine_id}": {
         parameters: {
             query?: never;
@@ -47996,6 +48013,8 @@ export interface components {
         };
         /** Worker */
         Worker: {
+            /** Analysis Key Id */
+            analysis_key_id?: string | null;
             /** Id */
             id: string;
             /**
@@ -48012,6 +48031,11 @@ export interface components {
             revoked: boolean;
             scope: components["schemas"]["Scope"];
         };
+        /** WorkerBilling */
+        WorkerBilling: {
+            /** Analysis Key Id */
+            analysis_key_id: string;
+        };
         /** WorkerCreated */
         WorkerCreated: {
             /** Token */
@@ -48020,6 +48044,8 @@ export interface components {
         };
         /** WorkerName */
         WorkerName: {
+            /** Analysis Key Id */
+            analysis_key_id: string;
             /**
              * Name
              * @default Lens worker
@@ -55828,6 +55854,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": boolean;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_worker_billing_engine_workers__worker_id__billing_key_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerBilling"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Worker"];
                 };
             };
             /** @description Validation Error */

@@ -95,7 +95,9 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
   const showEmpty = !query.isLoading && !query.error && engines.length === 0;
   const engine = engines.find((e) => e.id === selected) ?? engines[0];
   const connected =
-    query.data?.workers?.some((w) => !w.revoked && query.dataUpdatedAt - Date.parse(w.last_seen) < 120000) ?? false;
+    query.data?.workers?.some(
+      (w) => !w.revoked && w.analysis_key_id && query.dataUpdatedAt - Date.parse(w.last_seen) < 120000,
+    ) ?? false;
   const historyQuery = {
     queryKey: ["lens-history", engine?.id, historyOffset, accessToken],
     enabled: !!engine,
