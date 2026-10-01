@@ -4037,16 +4037,14 @@ def test_stream_chunk_builder_stamps_zero_cost_for_free_model(monkeypatch: pytes
     assert response.usage.cost == 0.0
 
 
-def test_stream_chunk_builder_does_not_stamp_zero_cost_for_priced_model(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stream_chunk_builder_does_not_stamp_zero_cost_for_priced_model() -> None:
     logging_obj: Final = _stream_builder_logging_obj()
-
-    def zero_cost_calculator(result: object) -> float:
-        return 0.0
-
-    monkeypatch.setattr(logging_obj, "_response_cost_calculator", zero_cost_calculator)
+    usage_chunk: Final = _stream_builder_text_chunk("gpt-4o", "")
+    usage_chunk.usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
     chunks: Final = [
         _stream_builder_text_chunk("gpt-4o", "Hello "),
         _stream_builder_text_chunk("gpt-4o", "world.", finish_reason="stop"),
+        usage_chunk,
     ]
 
     response: Final = litellm.stream_chunk_builder(

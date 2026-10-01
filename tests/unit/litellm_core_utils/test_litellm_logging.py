@@ -631,20 +631,14 @@ class TestZeroCostDiagnostic:
 
         assert logging_obj.prices_usage_as_free(response) is False
 
-    def test_prices_usage_as_free_is_false_when_pricing_lookup_raises(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_prices_usage_as_free_is_false_when_pricing_lookup_raises(self) -> None:
         usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
-        logging_obj: Final = self._logging_obj(self.FREE_PRICING)
+        logging_obj: Final = self._logging_obj({})
+        logging_obj.litellm_params["input_cost_per_token"] = 0.0
+        logging_obj.litellm_params["metadata"] = "malformed"
         response: Final = self._response(usage)
-        pricing_lookup: Final = MagicMock(side_effect=Exception("pricing lookup failed"))
-        monkeypatch.setattr(
-            "litellm.litellm_core_utils.litellm_logging.pricing_entry_for_cost_calc",
-            pricing_lookup,
-        )
 
         assert logging_obj.prices_usage_as_free(response) is False
-        pricing_lookup.assert_called_once()
 
     def test_zero_cost_with_a_missing_rate_warns_once_and_is_recorded(
         self, deployment_pricing: Mapping[str, float], caplog: pytest.LogCaptureFixture
