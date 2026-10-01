@@ -27,6 +27,7 @@ class CapturedAgentCall:
     agent_extra_headers: dict[str, str] | None
     cost_per_query: object
     api_base: object
+    pricing: Mapping[str, object]
 
 
 @pytest.mark.asyncio
@@ -500,6 +501,7 @@ async def _invoke_message_method(
         agent_extra_headers=kwargs.get("agent_extra_headers"),
         cost_per_query=kwargs["litellm_params"].get("cost_per_query"),
         api_base=kwargs["api_base"],
+        pricing=kwargs["litellm_params"],
     )
 
 
@@ -2753,3 +2755,41 @@ async def test_native_dispatch_returns_not_found_for_a_removed_agent(monkeypatch
     )
     assert response.status_code == 404
     assert json.loads(response.body)["error"]["message"] == "Agent 'removed' not found"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ("message/send", "message/stream"))
+@pytest.mark.parametrize("fixed_fee", (None, 0.0, 0.25))
+async def test_unbudgeted_managed_agent_keeps_token_pricing_without_a_fixed_fee(
+    monkeypatch: pytest.MonkeyPatch, method: str, fixed_fee: float | None,
+) -> None:
+    from litellm import Usage
+    from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+    from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
+
+    policy: Final = AgentResponse(
+        agent_id="test-agent", agent_name="test-agent", identity_managed=True,
+        agent_card_params={"url": "https://agent.test/"},
+        litellm_params={"input_cost_per_token": 0.02, "output_cost_per_token": 0.03,
+                        **({"cost_per_query": fixed_fee} if fixed_fee is not None else {})},
+    )
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(policy)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=policy)
+    auth: Final = UserAPIKeyAuth(user_role="proxy_admin")
+    with ExitStack() as stack:
+        for context in _base_patches(policy):
+            stack.enter_context(context)
+        await prepare_agent_invocation(auth, policy.agent_id, AgentIdentityStore.from_client(database))
+        captured: Final = await _invoke_message_method(
+            method, _make_request_mock(method, _HELLO_MESSAGE_PARAMS), auth, agent=policy,
+        )
+    logging: Final = MagicMock(model_call_details={
+        "litellm_params": captured.pricing,
+        "usage": Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+    })
+    assert A2ACostCalculator.calculate_a2a_cost(logging) == pytest.approx(0.26 if fixed_fee is None else fixed_fee)
