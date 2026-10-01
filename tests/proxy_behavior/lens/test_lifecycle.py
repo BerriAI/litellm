@@ -132,8 +132,16 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         charged: Final = await endpoints.get_engine(engine.id, worker.scope)
         assert charged.spent == pytest.approx(response.cost)
         assert charged.jobs[0].cost == pytest.approx(response.cost)
+        legacy: Final = worker.model_copy(update={"analysis_key_id": None})
+        await endpoints.repository().save_worker(legacy)
+        authenticated_legacy: Final = await endpoints.worker_auth(credentials)
+        assert authenticated_legacy.analysis_key_id is None
+        with pytest.raises(HTTPException) as needs_billing:
+            await endpoints.claim(authenticated_legacy, protocol_version=2)
+        assert needs_billing.value.status_code == 409
+        assert await endpoints.heartbeat(engine.id, claimed.job.id, authenticated_legacy)
         finished: Final = await endpoints.result(
-            engine.id, claimed.job.id, Result(coverage=Coverage(screened=2)), worker
+            engine.id, claimed.job.id, Result(coverage=Coverage(screened=2)), authenticated_legacy
         )
         assert finished.jobs[0].status == "completed"
         assert finished.jobs[0].coverage.screened == 2
