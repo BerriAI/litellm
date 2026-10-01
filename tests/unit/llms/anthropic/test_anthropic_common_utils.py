@@ -2431,7 +2431,7 @@ def test_thinking_display_beta_requires_active_thinking(thinking: object, expect
     (
         ("summarized", {"type": "adaptive", "display": "summarized"}),
         ("omitted", {"type": "adaptive", "display": "omitted"}),
-        ("updates", {"type": "adaptive"}),
+        ("updates", {"type": "adaptive", "display": "updates"}),
     ),
 )
 def test_shared_legacy_thinking_translation_preserves_supported_display(

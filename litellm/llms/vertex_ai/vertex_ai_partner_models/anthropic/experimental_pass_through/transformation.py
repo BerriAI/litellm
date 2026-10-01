@@ -8,6 +8,8 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
+    ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
+    ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
 )
 from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
@@ -115,8 +117,21 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         if _messages_carry_output_config(messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
 
-        if beta_values:
-            headers["anthropic-beta"] = ",".join(beta_values)
+        thinking_display_betas: Final = (
+            (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,)
+            if anthropic_model_info.is_thinking_display_updates_used(
+                optional_params.get("thinking"),  # pyright: ignore[reportUnknownArgumentType]  # detector accepts unvalidated input
+            )
+            else ()
+        )
+        tool_change_betas: Final = (
+            (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,)
+            if anthropic_model_info.is_mid_conversation_tool_change_used(messages)
+            else ()
+        )
+        all_beta_values: Final = beta_values.union(thinking_display_betas, tool_change_betas)
+        if all_beta_values:
+            headers["anthropic-beta"] = ",".join(sorted(all_beta_values))
 
         return headers, api_base
 
