@@ -1446,3 +1446,54 @@ async def test_plaintext_values_that_are_not_base64_load_and_rotate_unchanged(sa
 
     assert loaded["litellm_params"] == legacy_params
     assert table.rows["legacy-id"].litellm_params == legacy_params
+
+
+@pytest.mark.asyncio
+async def test_list_and_info_show_the_loaded_tool_when_db_params_do_not_decrypt(master_key_only):
+    """After /key/regenerate rewrites the rows and before a restart, the admin views read the loaded tool."""
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+
+    rewritten_params = {
+        "search_provider": encrypt_value_helper("perplexity", new_encryption_key="sk-new-master-key"),
+        "api_key": encrypt_value_helper("pplx-loaded-key", new_encryption_key="sk-new-master-key"),
+        "api_base": encrypt_value_helper("https://api.perplexity.ai", new_encryption_key="sk-new-master-key"),
+    }
+    table = _InMemorySearchToolsTable([_stored_row("rotated-id", "rotated", rewritten_params)])
+    loaded_tool = {
+        "search_tool_id": "rotated-id",
+        "search_tool_name": "rotated",
+        "litellm_params": {
+            "search_provider": "perplexity",
+            "api_key": "pplx-loaded-key",
+            "api_base": "https://api.perplexity.ai",
+        },
+        "search_tool_info": {},
+        "created_at": "2026-09-01T00:00:00",
+        "updated_at": "2026-09-01T00:00:00",
+    }
+    fake_router = MagicMock()
+    fake_router.search_tools = [loaded_tool]
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", _prisma_client_over(table)
+        ),  # test-quality-ok: proxy globals are the only seam; see the module note above
+        patch(
+            "litellm.proxy.proxy_server.llm_router", fake_router
+        ),  # test-quality-ok: proxy globals are the only seam; see the module note above
+        patch(  # test-quality-ok: proxy globals are the only seam; see the module note above
+            "litellm.proxy.search_endpoints.search_tool_management.SEARCH_TOOL_REGISTRY", SearchToolRegistry()
+        ),
+        _override_auth(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")),
+    ):
+        listed = TestClient(app).get("/search_tools/list")
+        info = TestClient(app).get("/search_tools/rotated-id")
+
+    assert listed.status_code == 200
+    assert info.status_code == 200
+    listed_params = [tool["litellm_params"] for tool in listed.json()["search_tools"]]
+    assert [params["search_provider"] for params in listed_params] == ["perplexity"]
+    assert info.json()["litellm_params"]["search_provider"] == "perplexity"
+    assert info.json()["litellm_params"]["api_base"] == listed_params[0]["api_base"] != rewritten_params["api_base"]
+    assert "pplx-loaded-key" not in listed.text + info.text
