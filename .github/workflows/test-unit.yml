@@ -216,6 +216,15 @@ jobs:
               tests/unit/proxy/enterprise_billing
               tests/unit/proxy/types_utils
               tests/unit/proxy/logging_endpoints
+            unit-flag: proxy-infra
+            workers: 4
+            reruns: 2
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+
+          - shard: proxy-infra-root
+            artifact-name: proxy-infra-root
+            test-path: >-
               tests/unit/proxy/test_*.py
               --ignore=tests/unit/proxy/test_aproxy_startup.py
               --ignore=tests/unit/proxy/test_credential_slot_registry.py
@@ -242,7 +251,6 @@ jobs:
               --ignore=tests/unit/proxy/test_unit_test_proxy_hooks.py
               --ignore=tests/unit/proxy/test_update_spend.py
               --ignore=tests/unit/proxy/test_zero_cost_model_budget_bypass.py
-            unit-flag: proxy-infra
             workers: 4
             reruns: 2
             timeout-minutes: 20
