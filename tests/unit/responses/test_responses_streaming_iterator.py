@@ -164,14 +164,14 @@ async def test_sync_callbacks_run_only_after_async_handler_completes(recording_e
 class FailureRecorder(CustomLogger):
     def __init__(self):
         super().__init__()
-        self.failure_payloads: list = []
-        self.success_payloads: list = []
+        self.failure_payloads: tuple = ()
+        self.success_payloads: tuple = ()
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        self.failure_payloads.append(kwargs["standard_logging_object"])
+        self.failure_payloads = (*self.failure_payloads, kwargs["standard_logging_object"])
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self.success_payloads.append(kwargs["standard_logging_object"])
+        self.success_payloads = (*self.success_payloads, kwargs["standard_logging_object"])
 
 
 class _UpstreamThatTimesOutAfterThreeDeltas:
@@ -230,4 +230,4 @@ async def test_mid_stream_read_timeout_logs_failure_with_partial_usage_and_no_su
     assert payload["prompt_tokens"] > 0
     assert payload["completion_tokens"] > 0
     assert payload["response_cost"] > 0
-    assert recorder.success_payloads == []
+    assert recorder.success_payloads == ()

@@ -892,7 +892,9 @@ class BaseResponsesAPIStreamingIterator:
         )
         if estimate is None:
             return
-        usage: Final = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(estimate)
+        usage: Final = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # same shared transform the success path above uses
+            estimate
+        )
         self.logging_obj.record_assembled_response_for_failure(ModelResponse(model=self.model, usage=usage))
 
     def _handle_failure(self, exception: Exception):

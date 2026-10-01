@@ -7,6 +7,8 @@ import asyncio
 import json
 import os
 import sys
+import time
+from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +17,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
+from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,
 )
@@ -622,3 +625,98 @@ class TestUpstreamFailureEndsStreamWithErrorEvent:
         chunks = _collect(iter(()))
         assert [chunk["type"] for chunk in chunks] == ["message_start", "error"]
         assert chunks[1]["error"] == {"type": "api_error", "message": INCOMPLETE_STREAM_ERROR_MESSAGE}
+
+
+class _FailureHookRecorder:
+    def __init__(self) -> None:
+        self.received: tuple[Exception, ...] = ()
+
+    async def __call__(self, failure: Exception) -> None:
+        self.received = (*self.received, failure)
+
+
+def _logging_obj_with_failure_hook(on_failure: Callable[[Exception], Awaitable[None]]) -> LitellmLogging:
+    logging_obj = LitellmLogging(
+        model="m",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="lit-6871-test",
+        function_id="lit-6871-test",
+    )
+    logging_obj._on_detached_stream_failure = on_failure
+    return logging_obj
+
+
+def _collect_with_logging(stream, logging_obj: LitellmLogging) -> list:
+    async def _run() -> list:
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=stream, model="m", litellm_logging_obj=logging_obj)
+        return [chunk async for chunk in wrapper]
+
+    return asyncio.run(_run())
+
+
+class TestUpstreamFailureReachesTheProxyFailureHook:
+    """The ``error`` event alone leaves the proxy unaware the stream failed, so the wrapper also hands
+    the failure to the hook the proxy arms on the logging object, the one that writes the failure
+    spend row and releases the budget reservation."""
+
+    def test_raised_upstream_failure_reaches_the_hook_unwrapped_before_the_error_event(self):
+        rate_limit = litellm.RateLimitError(message="You have no credits remaining.", llm_provider="openai", model="m")
+        wrapped = MidStreamFallbackError(
+            message=str(rate_limit),
+            model="m",
+            llm_provider="openai",
+            original_exception=rate_limit,
+            is_pre_first_chunk=False,
+        )
+        recorder = _FailureHookRecorder()
+
+        async def _gen():
+            yield {"type": "response.created"}
+            yield {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}}
+            yield {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hi"}
+            raise wrapped
+
+        chunks = _collect_with_logging(_gen(), _logging_obj_with_failure_hook(recorder))
+        assert [chunk["type"] for chunk in chunks] == [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "error",
+        ]
+        assert recorder.received == (rate_limit,)
+
+    def test_response_failed_event_reaches_the_hook_as_an_exception_carrying_the_upstream_status(self):
+        recorder = _FailureHookRecorder()
+        failed = SimpleNamespace(
+            status="failed",
+            output=[],
+            usage=None,
+            error={"code": "rate_limit_exceeded", "message": "Rate limit reached for gpt-5.5, try again in 20s."},
+        )
+
+        async def _gen():
+            yield {"type": "response.created"}
+            yield {"type": "response.failed", "response": failed}
+
+        chunks = _collect_with_logging(_gen(), _logging_obj_with_failure_hook(recorder))
+        assert chunks[-1]["type"] == "error"
+        (failure,) = recorder.received
+        assert failure.status_code == 429
+        assert "Rate limit reached for gpt-5.5, try again in 20s." in failure.message
+
+    def test_a_raising_hook_never_hides_the_error_event_from_the_client(self):
+        async def _exploding_hook(failure: Exception) -> None:
+            raise RuntimeError("spend writer is down")
+
+        logging_obj = _logging_obj_with_failure_hook(_exploding_hook)
+
+        async def _gen():
+            yield {"type": "response.created"}
+            raise ConnectionResetError("Response payload is not completed")
+
+        chunks = _collect_with_logging(_gen(), logging_obj)
+        assert [chunk["type"] for chunk in chunks] == ["message_start", "error"]
+        assert chunks[-1]["error"] == {"type": "api_error", "message": "Response payload is not completed"}
