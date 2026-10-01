@@ -14,23 +14,26 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.types.agents import AgentResponse
+
 # ---------------------------------------------------------------------------
-# Helper: build a minimal mock agent
+# Helper: build a minimal agent
 # ---------------------------------------------------------------------------
 
 
 def _make_mock_agent(
-    static_headers=None,
-    extra_headers=None,
-    url="http://backend-agent:10001",
-):
-    mock_agent = MagicMock()
-    mock_agent.agent_id = "agent-123"
-    mock_agent.agent_card_params = {"url": url, "name": "Test Agent"}
-    mock_agent.litellm_params = {}
-    mock_agent.static_headers = static_headers or {}
-    mock_agent.extra_headers = extra_headers or []
-    return mock_agent
+    static_headers: dict[str, str] | None = None,
+    extra_headers: list[str] | None = None,
+    url: str = "http://backend-agent:10001",
+) -> AgentResponse:
+    return AgentResponse(
+        agent_id="agent-123",
+        agent_name="Test Agent",
+        agent_card_params={"url": url, "name": "Test Agent"},
+        litellm_params={},
+        static_headers=static_headers or {},
+        extra_headers=extra_headers or [],
+    )
 
 
 def _make_mock_request(extra_headers=None, method="message/send"):
