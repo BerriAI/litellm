@@ -31,6 +31,7 @@ from integration.cost_calculation.cost_tracking_case import (
 )
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from starlette.applications import Starlette
+from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route, WebSocketRoute
@@ -57,6 +58,12 @@ def error_type(status: int) -> str:
     if status == 429:
         return "rate_limit_error"
     return "invalid_request_error" if status < 500 else "server_error"
+
+
+def _form_observation_value(value: str | StarletteUploadFile) -> JsonValue:
+    if isinstance(value, StarletteUploadFile):
+        return {"filename": value.filename, "content_type": value.content_type}
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,7 +246,8 @@ class Provider:
         response: Final = self.scenario_store.get(scenario_id)
         if response is None:
             return JSONResponse({"error": "Unknown scenario"}, status_code=404)
-        if request.method == "POST" and "json" in request.headers.get("content-type", ""):
+        content_type: Final = request.headers.get("content-type", "")
+        if request.method == "POST" and "json" in content_type:
             raw_body: Final = await request.body()
             if raw_body:
                 body: Final = JSON_OBJECT.validate_json(raw_body)
@@ -247,6 +255,12 @@ class Provider:
                     self.observations.put(
                         Observation(request.url.path, request.headers.get("authorization", ""), body)
                     )
+        elif request.method == "POST" and "multipart/form-data" in content_type:
+            fields: Final = await request.form()
+            body: Final = {name: _form_observation_value(value) for name, value in fields.items()}
+            self.observations.put(Observation(request.url.path, request.headers.get("authorization", ""), body))
+        elif request.method == "GET":
+            self.observations.put(Observation(request.url.path, request.headers.get("authorization", ""), {}))
         if isinstance(response, RoutedResponse):
             route_key: Final = f"{request.method} /{'/'.join(segments[1:])}"
             route: Final = next(
