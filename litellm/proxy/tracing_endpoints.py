@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from litellm.constants import OTLP_MAX_BODY_BYTES, OTLP_RETRY_AFTER_SECONDS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.tracing_lifespan import provide_receiver, require_receiver
+from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
 from litellm.tracing import (
     Tenant,
     TraceReceiver,

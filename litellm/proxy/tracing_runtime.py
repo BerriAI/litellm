@@ -8,24 +8,28 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
+from litellm.rust_bridge.traces import TraceStorage
 from litellm.tracing import TraceReceiver
 
 _RECEIVER_ADAPTER: Final[TypeAdapter[TraceReceiver | None]] = TypeAdapter(
     TraceReceiver | None, config=ConfigDict(arbitrary_types_allowed=True)
 )
+_UNAVAILABLE_DETAIL: Final = "Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL."
 
 
 def require_receiver(tracing: TraceReceiver | None) -> TraceReceiver:
     if tracing is None:
-        raise HTTPException(
-            status_code=501,
-            detail="Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL.",
-        )
+        raise HTTPException(status_code=501, detail=_UNAVAILABLE_DETAIL)
     return tracing
 
 
 async def provide_receiver(request: Request) -> TraceReceiver | None:
     return _RECEIVER_ADAPTER.validate_python(getattr(request.state, "tracing_receiver", None))
+
+
+async def provide_storage(request: Request) -> TraceStorage | None:
+    tracing: Final = await provide_receiver(request)
+    return tracing.store.storage if tracing is not None else None
 
 
 async def _start_receiver(factory: Callable[[], TraceReceiver]) -> TraceReceiver | None:
@@ -39,7 +43,7 @@ async def _start_receiver(factory: Callable[[], TraceReceiver]) -> TraceReceiver
 
 
 @asynccontextmanager
-async def tracing_lifespan(
+async def manage_tracing(
     enabled: bool, receiver_factory: Callable[[], TraceReceiver] = TraceReceiver.from_env
 ) -> AsyncGenerator[TraceReceiver | None, None]:
     tracing: Final = await _start_receiver(receiver_factory) if enabled else None

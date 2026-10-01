@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.tracing_lifespan import tracing_lifespan
+from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
 from litellm.rust_bridge.traces import TraceStorage
 from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.store import ClickHouseTraceStore
@@ -314,13 +314,13 @@ def test_lifespan_receivers_are_app_local() -> None:
 
     @asynccontextmanager
     async def first_lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
-        async with tracing_lifespan(True, lambda: first_receiver) as receiver:
+        async with manage_tracing(True, lambda: first_receiver) as receiver:
             state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
             yield state
 
     @asynccontextmanager
     async def second_lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
-        async with tracing_lifespan(True, lambda: second_receiver) as receiver:
+        async with manage_tracing(True, lambda: second_receiver) as receiver:
             state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
             yield state
 
@@ -392,7 +392,7 @@ def test_unavailable_lifespan_receiver_returns_501(enabled: bool) -> None:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
-        async with tracing_lifespan(enabled, lambda: tracing) as receiver:
+        async with manage_tracing(enabled, lambda: tracing) as receiver:
             state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
             yield state
 
@@ -406,7 +406,7 @@ def test_unavailable_lifespan_receiver_returns_501(enabled: bool) -> None:
     storage.query.assert_not_called()
 
 
-def test_lens_reads_from_the_lifespan_receiver() -> None:
+def test_lens_reads_from_the_lifespan_storage() -> None:
     from litellm.proxy.engine.endpoints import router as engine_router
 
     storage: Final = MagicMock(spec=TraceStorage)
@@ -416,7 +416,7 @@ def test_lens_reads_from_the_lifespan_receiver() -> None:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
-        async with tracing_lifespan(True, lambda: tracing) as receiver:
+        async with manage_tracing(True, lambda: tracing) as receiver:
             state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
             yield state
 
@@ -432,3 +432,25 @@ def test_lens_reads_from_the_lifespan_receiver() -> None:
     assert response.json()["executions"] == []
     storage.lens_sample.assert_awaited_once()
     assert storage.lens_sample.await_args.args[0]["all_teams"] == 1
+
+
+def test_lens_reads_from_injected_storage_without_receiver() -> None:
+    from litellm.proxy.engine.endpoints import router as engine_router
+    from litellm.proxy.engine.sources import Storage
+
+    storage: Final = MagicMock(spec=Storage)
+    storage.lens_sample = AsyncMock(return_value=[])
+    app: Final = FastAPI()
+    app.include_router(engine_router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    app.dependency_overrides[provide_storage] = lambda: storage
+
+    with TestClient(app) as client:
+        response: Final = client.post(
+            "/engine/preview/sample",
+            json={"settings": {"name": "Review", "model": "analysis", "context": "Find failed executions"}},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["executions"] == []
+    storage.lens_sample.assert_awaited_once()

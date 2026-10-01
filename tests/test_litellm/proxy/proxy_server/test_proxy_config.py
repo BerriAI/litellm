@@ -48,7 +48,7 @@ from .conftest import normalize
 @pytest.mark.parametrize("shutdown_error", [False, True])
 async def test_tracing_config_automatically_logs_spend_without_callback_setting(shutdown_error: bool) -> None:
     from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
-    from litellm.proxy.tracing_lifespan import tracing_lifespan
+    from litellm.proxy.tracing_runtime import manage_tracing
     from litellm.tracing import TraceReceiver
     from litellm.tracing.store import ClickHouseTraceStore
 
@@ -59,7 +59,7 @@ async def test_tracing_config_automatically_logs_spend_without_callback_setting(
 
     outcome: Final = pytest.raises(RuntimeError, match="shutdown failure") if shutdown_error else nullcontext()
     with outcome:
-        async with tracing_lifespan(enabled=True, receiver_factory=lambda: receiver):
+        async with manage_tracing(enabled=True, receiver_factory=lambda: receiver):
             storage.ensure_schema.assert_awaited_once()
             logger: Final = next(
                 callback for callback in litellm._async_success_callback

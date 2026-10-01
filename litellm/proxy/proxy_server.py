@@ -792,7 +792,7 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.proxy.tracing_lifespan import tracing_lifespan
+from litellm.proxy.tracing_runtime import manage_tracing
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
     router as latest_release_endpoints_router,
@@ -1566,7 +1566,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
     tracing_enabled: Final = TypeAdapter(bool).validate_python(
         isinstance(tracing_settings, dict) and tracing_settings.get("store") == "clickhouse"
     )
-    async with tracing_lifespan(enabled=tracing_enabled) as receiver:
+    async with manage_tracing(enabled=tracing_enabled) as receiver:
         state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
         yield state
 
