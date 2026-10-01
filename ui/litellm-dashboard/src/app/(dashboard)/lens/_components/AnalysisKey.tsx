@@ -1,10 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 import { apiClient } from "@/components/networking";
-import { Button } from "@/components/ui/button";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { Input } from "@/components/ui/input";
+import { AnalysisKeyDetails } from "./AnalysisKeyDetails";
 import {
   Combobox,
   ComboboxContent,
@@ -22,17 +24,14 @@ export function AnalysisKey({
   accessToken,
   value,
   onChange,
-  name,
 }: {
   accessToken: string;
   value: string | null;
   onChange: (key: string | null) => void;
-  name: string;
 }) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Key | null>(value ? { token: value } : null);
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState("");
+
   const queryOptions = {
     queryKey: ["lens-analysis-keys", accessToken, query],
     initialPageParam: 1,
@@ -61,28 +60,6 @@ export function AnalysisKey({
   const choice = keys.find((key) => key.token === value) ?? selected;
   const loading = keyPages.isFetching;
 
-  const create = async () => {
-    setCreating(true);
-    setError("");
-    try {
-      const result = await apiClient.post("/key/generate", {
-        accessToken,
-        body: {
-          key_alias: `Lens: ${name}`,
-          models: [],
-          metadata: { purpose: "lens" },
-        },
-      });
-      if (!result.token_id) throw new Error("The proxy did not return the new key's ID");
-      const key = { token: result.token_id, key_alias: `Lens: ${name}` };
-      setSelected(key);
-      onChange(key.token);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not create a key");
-    } finally {
-      setCreating(false);
-    }
-  };
   const changeKey = (key: Key | null, details: { cancel: () => void }) => {
     if (key?.token === "load-more") {
       details.cancel();
@@ -99,7 +76,7 @@ export function AnalysisKey({
   return (
     <div className="space-y-2">
       <p className="text-sm">Charge analysis to</p>
-      <div className="flex items-start gap-2">
+      <div className="flex flex-wrap items-start gap-2">
         <div className="min-w-0 flex-1">
           <Combobox
             items={items}
@@ -127,18 +104,82 @@ export function AnalysisKey({
             </ComboboxContent>
           </Combobox>
         </div>
-        <Button variant="outline" disabled={creating} onClick={() => void create()}>
-          {creating ? "Creating…" : "Create worker key"}
-        </Button>
       </div>
-      <p className="text-xs text-muted-foreground">
-        Spend appears under this key in API Keys. Its permissions and limits apply.
-      </p>
-      {(error || keyPages.error) && (
+      {choice && <AnalysisKeyDetails accessToken={accessToken} keyId={choice.token} />}
+      {keyPages.error && (
         <p role="alert" className="text-sm text-destructive">
-          {error || keyPages.error?.message}
+          {keyPages.error.message}
         </p>
       )}
     </div>
   );
+}
+
+export type AnalysisAccess = { model: string | null; budget: string };
+
+export function AnalysisAccessFields({
+  accessToken,
+  value,
+  onChange,
+}: {
+  accessToken: string;
+  value: AnalysisAccess;
+  onChange: (value: AnalysisAccess) => void;
+}) {
+  const models = useQuery({
+    queryKey: ["lens-models", accessToken],
+    queryFn: () => apiClient.get<{ data: { id: string }[] }>("/models", { accessToken }),
+  });
+  return (
+    <div className="space-y-5">
+      <div className="space-y-2">
+        <label htmlFor="analysis-access-model" className="block text-sm font-medium">
+          Analysis model
+        </label>
+        <SearchSelect
+          inputId="analysis-access-model"
+          options={(models.data?.data ?? []).map(({ id }) => ({ label: id, value: id }))}
+          value={value.model}
+          onValueChange={(model) => onChange({ ...value, model })}
+          placeholder={models.isLoading ? "Loading models…" : "Select a model"}
+        />
+      </div>
+      <div className="space-y-2">
+        <label htmlFor="analysis-access-budget" className="block text-sm font-medium">
+          Monthly limit (USD)
+        </label>
+        <Input
+          id="analysis-access-budget"
+          type="number"
+          min="0.01"
+          step="0.01"
+          value={value.budget}
+          onChange={(e) => onChange({ ...value, budget: e.target.value })}
+        />
+        <p className="text-xs text-muted-foreground">Shared across investigations. Resets each calendar month.</p>
+      </div>
+      {models.error && (
+        <p role="alert" className="text-sm text-destructive">
+          {models.error.message}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export async function createAnalysisKey(accessToken: string, access: AnalysisAccess): Promise<string> {
+  if (!access.model || !Number.isFinite(Number(access.budget)) || Number(access.budget) <= 0)
+    throw new Error("Choose a model and a monthly limit greater than zero");
+  const result = await apiClient.post("/key/generate", {
+    accessToken,
+    body: {
+      key_alias: "Lens analysis",
+      models: [access.model],
+      max_budget: Number(access.budget),
+      budget_duration: "1mo",
+      metadata: { purpose: "lens" },
+    },
+  });
+  if (!result.token_id) throw new Error("The proxy did not return the new key's ID");
+  return result.token_id;
 }

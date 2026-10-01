@@ -264,7 +264,7 @@ class Preview(BaseModel):
     as_of: AwareDatetime | None = None
     offset: int = Field(default=0, ge=0)
     settings: LensSettings
-    lookback_hours: int = Field(default=24, ge=1, le=720)
+    lookback_hours: int = Field(default=24, ge=1, le=8760)
 
 
 @router.post("/preview/sample", response_model=Sample)

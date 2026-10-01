@@ -1,7 +1,8 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
+import { MonitoringSetup } from "./LensOverview";
 import { LensSetup } from "./LensSetup";
 import { apiClient } from "@/components/networking";
 import type { Settings } from "./lensData";
@@ -30,21 +31,23 @@ const settings: Settings = {
   ],
 };
 
+beforeEach(() => {
+  vi.mocked(apiClient.post).mockReset();
+  vi.mocked(apiClient.post).mockResolvedValue({ eligible: 1, selected: 1, executions: [] });
+});
 describe("Lens setup", () => {
-  beforeEach(() => {
-    vi.mocked(apiClient.post).mockReset();
-    vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, executions: [] });
-  });
   it("preserves check identity and disabled state when questions are reordered", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderWithProviders(
       <LensSetup initial={settings} models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={save} />,
     );
-    fireEvent.change(screen.getByRole("textbox", { name: "Specific checks (optional)" }), {
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "What should we look out for?" }), {
       target: { value: "Find incomplete reports\nFind repeated searches" },
     });
     await user.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ checks: [settings.checks[1], settings.checks[0]] }));
@@ -53,13 +56,12 @@ describe("Lens setup", () => {
   it("rejects invalid metadata before reviewing the selection", async () => {
     const user = userEvent.setup();
     renderWithProviders(<LensSetup models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
-    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Research" } });
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByText("Advanced filters"));
     await user.click(screen.getByRole("button", { name: "Add condition" }));
     fireEvent.change(screen.getByRole("combobox", { name: "Metadata key 1" }), { target: { value: "swarm" } });
     await user.click(screen.getByRole("button", { name: "Continue" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Choose a key and value for every condition, or remove it");
-    expect(screen.queryByRole("textbox", { name: "Specific checks (optional)" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "What should we look out for?" })).not.toBeInTheDocument();
   });
   it("previews identifiable matching runs and saves the same filter selection", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
@@ -69,6 +71,7 @@ describe("Lens setup", () => {
       return body.settings.filters?.some((f) => f.key === "swarm" && f.value === "research")
         ? {
             eligible: 1,
+            selected: 1,
             executions: [
               {
                 id: "run",
@@ -83,26 +86,40 @@ describe("Lens setup", () => {
         : { eligible: 0, executions: [] };
     });
     renderWithProviders(<LensSetup models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={save} />);
-    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Research" } });
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Investigation name" }), {
+      target: { value: "Research follow-up" },
+    });
+    await user.click(screen.getByText("Advanced filters"));
     await user.click(screen.getByRole("button", { name: "Add condition" }));
     fireEvent.change(screen.getByRole("combobox", { name: "Metadata key 1" }), { target: { value: "swarm" } });
     fireEvent.change(screen.getByRole("combobox", { name: "Metadata value 1" }), { target: { value: "research" } });
-    expect(await screen.findByText("1 matching runs")).toBeInTheDocument();
+    expect(await screen.findByText("1 matching run")).toBeInTheDocument();
     expect(screen.getByText("Research report")).toBeInTheDocument();
     expect(screen.getByText("request-42")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(screen.getByText("swarm is research")).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "What should we look out for?" }), "Find incomplete reports");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(screen.getByText(/swarm: research/)).toBeInTheDocument();
+    expect(screen.getByText("Research follow-up")).toBeVisible();
+    expect(screen.getByText(/no count limit/)).toBeVisible();
+    expect(screen.getByRole("spinbutton", { name: "Monthly limit (USD)" })).not.toBeVisible();
     await user.click(screen.getByRole("combobox", { name: "Analysis model" }));
     await user.click(await screen.findByRole("option", { name: /analysis/ }));
-    await user.click(screen.getByRole("button", { name: "Run analysis" }));
-    expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({ filters: [{ key: "swarm", value: "research" }], enabled: false }),
-    );
+    await user.click(screen.getByRole("button", { name: "Run investigation" }));
+    const expected = {
+      name: "Research follow-up",
+      service: "",
+      filters: [{ key: "swarm", value: "research" }],
+      enabled: false,
+      sample_size: null,
+    };
+    expect(save).toHaveBeenCalledWith(expect.objectContaining(expected));
   });
 });
 
-it("searches providers and saves custom history and schedule values", async () => {
+it("searches providers and saves custom history while preserving existing schedule values", async () => {
   const user = userEvent.setup();
   const save = vi.fn().mockResolvedValue(undefined);
   renderWithProviders(
@@ -119,18 +136,125 @@ it("searches providers and saves custom history and schedule values", async () =
     />,
   );
   await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.selectOptions(screen.getByRole("combobox", { name: "Review the last unit" }), "1");
   fireEvent.change(screen.getByRole("spinbutton", { name: "Review the last" }), { target: { value: "3" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.clear(screen.getByRole("combobox", { name: "Analysis model" }));
   await user.type(screen.getByRole("combobox", { name: "Analysis model" }), "OpenAI");
   expect(screen.queryByRole("option", { name: /Anthropic/ })).not.toBeInTheDocument();
   await user.click(await screen.findByRole("option", { name: /review.*JSON output supported/ }));
-  await user.click(screen.getByRole("radio", { name: "Run now and keep monitoring" }));
-  fireEvent.change(screen.getByRole("spinbutton", { name: "Check every" }), { target: { value: "2" } });
   await user.click(screen.getByRole("button", { name: "Save changes" }));
-  const expectedSettings = { model: "review", lookback_hours: 3, interval_minutes: 2, enabled: true };
-  expect(save).toHaveBeenCalledWith(expect.objectContaining(expectedSettings));
+  const expected = { model: "review", lookback_hours: 3, interval_minutes: 15, enabled: false };
+  expect(save).toHaveBeenCalledWith(expect.objectContaining(expected));
+});
+
+it("configures monitoring separately and rejects a zero interval", async () => {
+  const user = userEvent.setup();
+  const save = vi.fn().mockResolvedValue(undefined);
+  renderWithProviders(<MonitoringSetup settings={settings} ready onSave={save} onClose={vi.fn()} />);
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Check every" }), { target: { value: "2" } });
+  await user.click(screen.getByRole("button", { name: "Enable monitoring" }));
+  expect(save).toHaveBeenCalledWith(expect.objectContaining({ interval_minutes: 2, enabled: true }));
   fireEvent.change(screen.getByRole("spinbutton", { name: "Check every" }), { target: { value: "0" } });
-  expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Enable monitoring" })).toBeDisabled();
+});
+
+it("keeps the draft when readiness changes and blocks a run until the worker recovers", async () => {
+  const user = userEvent.setup();
+  const save = vi.fn();
+  const props = {
+    initial: settings,
+    mode: "duplicate" as const,
+    models: ["analysis"],
+    accessToken: "test",
+    onClose: vi.fn(),
+    onSave: save,
+  };
+  const view = renderWithProviders(<LensSetup {...props} ready />);
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.type(screen.getByRole("textbox", { name: "What should the agent be doing?" }), "Finish the report");
+  view.rerender(<LensSetup {...props} ready={false} />);
+  expect(screen.getByRole("textbox", { name: "What should the agent be doing?" })).toHaveValue("Finish the report");
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  expect(screen.getByRole("button", { name: "Run investigation" })).toBeDisabled();
+  view.rerender(<LensSetup {...props} ready />);
+  expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled();
+});
+
+it.each(["empty", "error"])("blocks the review step when the preview is %s", async (state) => {
+  if (state === "error") vi.mocked(apiClient.post).mockRejectedValue(new Error("Storage unavailable"));
+  else vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
+  const user = userEvent.setup();
+  renderWithProviders(
+    <LensSetup initial={settings} models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />,
+  );
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+  if (state === "error") expect(await screen.findByRole("button", { name: "Retry preview" })).toBeVisible();
+  else expect(await screen.findByText(/No matches/)).toBeVisible();
+});
+
+it("shows optional budget and repeat controls only under advanced options and saves their values", async () => {
+  const user = userEvent.setup();
+  const save = vi.fn().mockResolvedValue(undefined);
+  renderWithProviders(
+    <LensSetup
+      initial={settings}
+      mode="duplicate"
+      models={["analysis"]}
+      accessToken="test"
+      onClose={vi.fn()}
+      onSave={save}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  expect(screen.getByText(/Runs once/)).toBeVisible();
+  await user.click(screen.getByText("Advanced options"));
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly limit (USD)" }), { target: { value: "8" } });
+  await user.click(screen.getByRole("checkbox", { name: "Repeat this investigation" }));
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Repeat every" }), { target: { value: "120" } });
+  expect(screen.getByText(/Repeats every 2 hours/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Run and monitor" }));
+  expect(save).toHaveBeenCalledWith(
+    expect.objectContaining({ enabled: true, interval_minutes: 120, monthly_budget: 8 }),
+  );
+});
+
+it("does not silently analyze everything after individual selection is enabled", async () => {
+  const user = userEvent.setup();
+  vi.mocked(apiClient.post).mockResolvedValue({
+    eligible: 1,
+    selected: 1,
+    executions: [
+      {
+        id: "selected-run",
+        name: "Example run",
+        trace_id: "trace",
+        source: "traces",
+        start_time: "2026-10-01T12:00:00Z",
+        span_count: 2,
+      },
+    ],
+  });
+  renderWithProviders(
+    <LensSetup initial={settings} models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />,
+  );
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.click(screen.getByText("More options"));
+  await user.click(screen.getByRole("checkbox", { name: "Choose individual runs" }));
+  expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+  expect(screen.queryByRole("combobox", { name: "Analysis model" })).not.toBeInTheDocument();
+  await user.click(await screen.findByRole("checkbox", { name: "Select Example run" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  expect(screen.getByRole("combobox", { name: "Analysis model" })).toBeVisible();
 });

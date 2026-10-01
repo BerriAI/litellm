@@ -3,6 +3,7 @@
 import { ArrowDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { formatActivityTimestamp } from "@/utils/activityTimestamp";
 import { cn } from "@/lib/cva.config";
 
 import { StatusMark } from "./StatusMark";
@@ -17,22 +18,6 @@ interface AgentTracesTableProps {
   onLoadMore: () => void;
   onOpenTrace: (trace: TraceSummary) => void;
   selectedKey?: string | null;
-}
-
-const SECOND_MS = 1000;
-const MINUTE_S = 60;
-const HOUR_M = 60;
-const DAY_H = 24;
-
-export function relativeTime(iso: string, now: number = Date.now()): string {
-  const diffS = Math.round((now - new Date(iso).getTime()) / SECOND_MS);
-  if (diffS < 5) return "just now";
-  if (diffS < MINUTE_S) return `${diffS}s ago`;
-  const diffM = Math.round(diffS / MINUTE_S);
-  if (diffM < HOUR_M) return `${diffM}m ago`;
-  const diffH = Math.round(diffM / HOUR_M);
-  if (diffH < DAY_H) return `${diffH}h ago`;
-  return `${Math.round(diffH / DAY_H)}d ago`;
 }
 
 export const formatCost = (cost: number): string => {
@@ -63,7 +48,7 @@ export function AgentTracesTable({
       <table aria-label="Agent runs" className="w-full min-w-[900px] table-fixed border-collapse text-left">
         <thead className="sticky top-0 z-sticky bg-muted/40 backdrop-blur">
           <tr className="h-8 border-b border-border text-[10px] tracking-[0.08em] text-muted-foreground uppercase">
-            <th className={`w-[96px] ${TH}`}>
+            <th className={`w-[190px] ${TH}`}>
               <span className="inline-flex items-center gap-1">
                 Time <ArrowDown className="size-2.5" />
               </span>
@@ -94,9 +79,9 @@ export function AgentTracesTable({
             >
               <td
                 className="px-3 font-mono text-[11px] tabular-nums text-muted-foreground"
-                title={new Date(run.start_time).toLocaleString()}
+                title={formatActivityTimestamp(run.start_time)}
               >
-                {relativeTime(run.start_time)}
+                {formatActivityTimestamp(run.start_time)}
               </td>
               <td className="truncate px-3 text-muted-foreground" title={run.service}>
                 {run.service}

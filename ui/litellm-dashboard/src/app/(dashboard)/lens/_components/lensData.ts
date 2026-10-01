@@ -1,3 +1,4 @@
+import { formatActivityTimestamp } from "@/utils/activityTimestamp";
 import type { components } from "@/lib/http/schema";
 
 export type Lens = components["schemas"]["Lens"];
@@ -6,6 +7,17 @@ export type LensList = components["schemas"]["LensList"];
 export type Finding = components["schemas"]["Finding"];
 export type Sample = components["schemas"]["Sample"];
 export type WorkerCreated = components["schemas"]["WorkerCreated"];
+
+export function workerConnected(worker: LensList["workers"][number], now = Date.now()): boolean {
+  return !worker.revoked && !!worker.analysis_key_id && now - Date.parse(worker.last_seen) < 120000;
+}
+
+export function scopeLabel(settings: Partial<Pick<Settings, "service" | "filters">>): string {
+  return (
+    [settings.service, ...(settings.filters ?? []).map((f) => `${f.key}: ${f.value}`)].filter(Boolean).join(" · ") ||
+    "All activity"
+  );
+}
 
 export const starterQuestions = [
   "Find repeated work or tool calls that add no useful information.",
@@ -20,10 +32,7 @@ export function normalizeFilters(filters: NonNullable<Settings["filters"]>): Set
   });
 }
 
-export function runTime(value: string): string {
-  const date = new Date(value.includes("T") ? value : value.replace(" ", "T").slice(0, 23) + "Z");
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
+export { formatActivityTimestamp as runTime } from "@/utils/activityTimestamp";
 
 export function sortedFindings(findings: Finding[]): Finding[] {
   const rank = { high: 0, medium: 1, low: 2 };
@@ -37,9 +46,12 @@ export function lensStatus(lens: Lens, connected: boolean): string {
   const active = lens.jobs?.find((job) => ["queued", "running"].includes(job.status ?? ""));
   if (active) return connected ? active.stage ?? "Queued" : "Waiting for analyzer";
   const spent = lens.budget_month === new Date().toISOString().slice(0, 7) ? lens.spent ?? 0 : 0;
-  if (spent >= (lens.settings.monthly_budget ?? 20)) return "Budget reached";
-  if (!lens.settings.enabled) return "Paused";
-  return connected ? "Monitoring" : "Analyzer disconnected";
+  if (spent >= (lens.settings.monthly_budget ?? 100)) return "Budget reached";
+  const latest = lens.jobs?.[0];
+  if (latest?.status === "failed") return "Failed";
+  if (latest?.status === "cancelled") return "Cancelled";
+  if (latest?.status === "completed") return "Completed";
+  return "Ready";
 }
 
 export function evidenceTarget(id: string): { source: string; team: string; id: string; traceRef?: string } | null {
@@ -67,10 +79,10 @@ export function analysisProgress(job: Job) {
   if (job.status === "queued") {
     return {
       step: -1,
-      title: "Waiting for an analyzer",
+      title: "Queued for your worker",
       done: 0,
       total: 0,
-      detail: "Analysis will start when an analyzer is available.",
+      detail: "The worker picks up queued investigations automatically.",
     };
   }
   if (job.stage === "Grouping observations") {
@@ -145,13 +157,6 @@ export function durationLabel(value: number, base: "minutes" | "hours" = "minute
   return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
 }
 
-const nextCheckTimeFormat: Intl.DateTimeFormatOptions = {
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-};
-
 export function nextCheckStatus(lens: Lens, now: number): string | null {
   if (!lens.settings.enabled) return null;
   const active = lens.jobs.find((job) => job.status === "queued" || job.status === "running");
@@ -162,6 +167,6 @@ export function nextCheckStatus(lens: Lens, now: number): string | null {
   if (remaining <= 0) return "Due now · waiting for an analyzer";
   const minutes = Math.ceil(remaining / 60000);
   const relative = minutes === 1 ? "in less than a minute" : `in ${minutes} minutes`;
-  const time = next.toLocaleString(undefined, nextCheckTimeFormat);
+  const time = formatActivityTimestamp(lens.next_run_at);
   return `Next check ${time} · ${relative}`;
 }

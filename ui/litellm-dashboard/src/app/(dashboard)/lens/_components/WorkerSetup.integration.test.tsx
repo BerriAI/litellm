@@ -26,27 +26,32 @@ describe("Worker setup", () => {
   beforeEach(() => {
     testQueryClient.clear();
     vi.clearAllMocks();
-    vi.mocked(apiClient.get).mockResolvedValue({
-      keys: [{ token: "b".repeat(64), key_alias: "Analysis" }],
-      total_pages: 1,
-    });
+    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+      path === "/key/info"
+        ? { info: { models: ["analysis-model"], max_budget: 15, budget_duration: "1mo" } }
+        : {
+            keys: [{ token: "b".repeat(64), key_alias: "Analysis" }],
+            total_pages: 1,
+          },
+    );
   });
   it("generates a complete command using one worker credential and the configured proxy address", async () => {
     vi.mocked(apiClient.post).mockResolvedValue(created);
     const user = userEvent.setup();
     renderWithProviders(<WorkerSetup accessToken="admin" workers={[]} onClose={vi.fn()} onChanged={vi.fn()} />);
-    expect(screen.getByRole("textbox", { name: "Your LiteLLM deployment URL" })).toHaveValue(
-      "https://gateway.example/proxy",
-    );
-    expect(screen.getByRole("button", { name: "Generate setup command" })).toBeDisabled();
+    await user.click(screen.getByText("Advanced options"));
+    await user.click(screen.getByRole("switch", { name: "Use an existing virtual key" }));
+    expect(screen.getByRole("textbox", { name: "LiteLLM proxy URL" })).toHaveValue("https://gateway.example/proxy");
+    expect(screen.getByRole("button", { name: "Get install command" })).toBeDisabled();
     await user.click(screen.getByRole("combobox", { name: "Charge analysis to" }));
     await user.click(await screen.findByRole("option", { name: "Analysis" }));
-    await user.click(screen.getByRole("button", { name: "Generate setup command" }));
+    await user.click(screen.getByRole("button", { name: "Get install command" }));
     expect(apiClient.post).toHaveBeenCalledWith("/lens/workers/register", {
       accessToken: "admin",
-      body: { name: "Lens analyzer", analysis_key_id: "b".repeat(64) },
+      body: { name: "Lens worker", analysis_key_id: "b".repeat(64) },
     });
-    expect(screen.getByRole("status")).toHaveTextContent("Waiting for your analyzer to connect");
+    expect(screen.getByRole("status")).toHaveTextContent("Waiting for your worker to connect");
+    expect(screen.getByLabelText("Docker command preview")).not.toBeVisible();
     await user.click(screen.getByRole("button", { name: "Copy Docker command" }));
     const command = await navigator.clipboard.readText();
     expect(command).toContain("LITELLM_URL=https://gateway.example/proxy");
@@ -67,15 +72,52 @@ describe("Worker setup", () => {
       />,
     );
     expect(screen.getByText("Billing key required")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Billing key" }));
+    await user.click(screen.getByRole("button", { name: "Change virtual key" }));
     await user.click(screen.getByRole("combobox", { name: "Charge analysis to" }));
     await user.click(await screen.findByRole("option", { name: "Analysis" }));
-    await user.click(screen.getByRole("button", { name: "Save billing key" }));
+    await user.click(screen.getByRole("button", { name: "Save analysis access" }));
     expect(apiClient.put).toHaveBeenCalledWith("/lens/workers/worker/billing-key", {
       accessToken: "admin",
       body: { analysis_key_id: "b".repeat(64) },
     });
     expect(changed).toHaveBeenCalledOnce();
     expect(apiClient.post).not.toHaveBeenCalled();
+  });
+  it("creates a restricted, budgeted key as part of setup and reuses it when registration is retried", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+      path === "/models" ? { data: [{ id: "analysis-model" }] } : { keys: [], total_pages: 0 },
+    );
+    vi.mocked(apiClient.post)
+      .mockResolvedValueOnce({ token_id: "limited-key-id", key: "sk-secret-not-displayed" })
+      .mockRejectedValueOnce(new Error("Registration unavailable"))
+      .mockResolvedValueOnce(created);
+    renderWithProviders(<WorkerSetup accessToken="admin" workers={[]} onClose={vi.fn()} onChanged={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Get install command" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "LiteLLM proxy URL", hidden: true })).not.toBeVisible();
+    await user.click(screen.getByRole("combobox", { name: "Analysis model" }));
+    await user.click(await screen.findByRole("option", { name: "analysis-model" }));
+    await user.clear(screen.getByLabelText("Monthly limit (USD)"));
+    await user.type(screen.getByLabelText("Monthly limit (USD)"), "12");
+    await user.click(screen.getByRole("button", { name: "Get install command" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Registration unavailable");
+    expect(apiClient.post).toHaveBeenNthCalledWith(1, "/key/generate", {
+      accessToken: "admin",
+      body: {
+        key_alias: "Lens analysis",
+        models: ["analysis-model"],
+        max_budget: 12,
+        budget_duration: "1mo",
+        metadata: { purpose: "lens" },
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Get install command" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Waiting for your worker");
+    expect(apiClient.post).toHaveBeenCalledTimes(3);
+    expect(apiClient.post).toHaveBeenLastCalledWith("/lens/workers/register", {
+      accessToken: "admin",
+      body: { name: "Lens worker", analysis_key_id: "limited-key-id" },
+    });
+    expect(screen.queryByText("sk-secret-not-displayed")).not.toBeInTheDocument();
   });
 });

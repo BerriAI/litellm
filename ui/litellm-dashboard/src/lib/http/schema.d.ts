@@ -32872,7 +32872,7 @@ export interface components {
             model: string;
             /**
              * Monthly Budget
-             * @default 20
+             * @default 100
              */
             monthly_budget: number;
             /** Name */
