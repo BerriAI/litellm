@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import os
 
 import pytest
 
@@ -76,3 +77,62 @@ def config_only_mcp_manager_factory():
             return None
 
     return ConfigOnlyManager
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_mcp_server_registry():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    saved_registry = dict(global_mcp_server_manager.registry)
+    saved_config_servers = dict(global_mcp_server_manager.config_mcp_servers)
+    saved_tool_mapping = dict(global_mcp_server_manager.tool_name_to_mcp_server_name_mapping)
+    saved_oauth_slots = global_mcp_server_manager._oauth_discovery_slots
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.config_mcp_servers.clear()
+    global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
+    global_mcp_server_manager._oauth_discovery_slots = ()
+    try:
+        yield
+    finally:
+        global_mcp_server_manager.registry.clear()
+        global_mcp_server_manager.registry.update(saved_registry)
+        global_mcp_server_manager.config_mcp_servers.clear()
+        global_mcp_server_manager.config_mcp_servers.update(saved_config_servers)
+        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
+        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.update(saved_tool_mapping)
+        global_mcp_server_manager._oauth_discovery_slots = saved_oauth_slots
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_server_root_path():
+    saved = os.environ.pop("SERVER_ROOT_PATH", None)
+    try:
+        yield
+    finally:
+        if saved is not None:
+            os.environ["SERVER_ROOT_PATH"] = saved
+
+
+@pytest.fixture
+def _mcp_request_ctx():
+    def _mcp_request_ctx(**overrides):
+        from types import SimpleNamespace
+
+        from mcp.server.context import ServerRequestContext
+
+        kwargs = {
+            "session": SimpleNamespace(),
+            "lifespan_context": {},
+            "protocol_version": "2025-06-18",
+            "method": "",
+            "params": None,
+            "request_id": 1,
+            "meta": None,
+            "request": None,
+        }
+        kwargs.update(overrides)
+        return ServerRequestContext(**kwargs)
+
+    return _mcp_request_ctx
