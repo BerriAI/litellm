@@ -55,6 +55,7 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
 
 _RowT_co: Final = TypeVar("_RowT_co", covariant=True)
 _STR_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
+_UPDATE_FIELD_CONTAINER_ADAPTER: Final = TypeAdapter(list[object] | dict[str, object])
 _CLEARABLE_LIST_FIELDS: Final = frozenset({"models"})
 
 
@@ -64,7 +65,8 @@ def _should_update_field(field: str, value: object, sent_fields: AbstractSet[str
     if field in sent_fields and (isinstance(value, bool) or field in _CLEARABLE_LIST_FIELDS):
         return True
     if isinstance(value, (list, dict)):
-        return bool(value)
+        container_input: Final[object] = value
+        return bool(_UPDATE_FIELD_CONTAINER_ADAPTER.validate_python(container_input))
     return value != 0
 
 

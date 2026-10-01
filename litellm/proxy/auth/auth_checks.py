@@ -1111,7 +1111,7 @@ async def common_checks(
                     key_model_aliases=key_model_aliases_for_auth_check(valid_token),
                     object_type="customer",
                 )
-            for fallback_model in request_fallback_model_names(request_body):
+            for fallback_model in request_fallback_model_names(_typed_request_body(request_body)):
                 _can_object_call_model(
                     model=fallback_model,
                     llm_router=llm_router,
