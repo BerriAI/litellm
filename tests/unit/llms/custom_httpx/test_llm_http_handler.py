@@ -31,7 +31,7 @@ from litellm.llms.brave.search.transformation import BraveSearchConfig
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import BaseImageGenerationConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, get_ssl_verify
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
     _collect_ws_project_quota_callbacks,
@@ -4041,9 +4041,20 @@ async def test_a_ws_backend_from_an_http_api_base_is_dialed_without_ssl(
 @pytest.mark.parametrize(
     "dial_backend", [_dial_realtime_backend, _dial_responses_backend], ids=["realtime", "responses_websocket"]
 )
+@pytest.mark.parametrize(
+    ("ssl_verify", "verify_mode", "check_hostname"),
+    [("True", ssl.CERT_REQUIRED, True), ("False", ssl.CERT_NONE, False)],
+    ids=["verify_on", "verify_off"],
+)
 async def test_a_wss_backend_from_an_https_api_base_keeps_tls_and_honors_ssl_verify(
+    monkeypatch: pytest.MonkeyPatch,
     dial_backend: Callable[[str], Awaitable[None]],
+    ssl_verify: str,
+    verify_mode: ssl.VerifyMode,
+    check_hostname: bool,
 ):
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._shared_realtime_ssl_context", None)
+    monkeypatch.setenv("SSL_VERIFY", ssl_verify)
     connect: Final = _RecordingConnect()
     with patch("websockets.connect", connect):
         await dial_backend("https://backend.test")
@@ -4051,10 +4062,7 @@ async def test_a_wss_backend_from_an_https_api_base_keeps_tls_and_honors_ssl_ver
     assert [scheme for scheme, _ in connect.dials] == ["wss"]
     backend_ssl: Final = connect.dials[0][1]
     assert isinstance(backend_ssl, ssl.SSLContext), connect.dials
-    verifies: Final = get_ssl_verify() is not False
-    assert (backend_ssl.verify_mode, backend_ssl.check_hostname) == (
-        (ssl.CERT_REQUIRED, True) if verifies else (ssl.CERT_NONE, False)
-    )
+    assert (backend_ssl.verify_mode, backend_ssl.check_hostname) == (verify_mode, check_hostname)
 
 
 @pytest.mark.asyncio
