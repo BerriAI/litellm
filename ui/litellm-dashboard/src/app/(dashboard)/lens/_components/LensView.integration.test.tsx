@@ -3,8 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { apiClient } from "@/components/networking";
-import { EngineView } from "./EngineView";
-import { nextCheckStatus, type Engine, type Finding } from "./engineData";
+import { LensView } from "./LensView";
+import { nextCheckStatus, type Lens, type Finding } from "./lensData";
 
 vi.mock("@/components/networking", () => ({ apiClient: { get: vi.fn(), post: vi.fn() }, proxyBaseUrl: "" }));
 
@@ -35,7 +35,7 @@ const issue: Finding = {
   kind: "issue",
   priority: "high",
 };
-const engine: Engine = {
+const lens: Lens = {
   version: 0,
   spent: 0,
   id: "lens",
@@ -134,15 +134,15 @@ describe("Lens findings and runs", () => {
   beforeEach(() => {
     vi.mocked(apiClient.get).mockReset();
     vi.mocked(apiClient.get).mockImplementation(async (path) => {
-      if (path === "/engine") return { engines: [engine], workers: [], tracing_enabled: true };
-      if (path === "/engine/lens/runs") return engine.jobs;
+      if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
+      if (path === "/lens/lens/runs") return lens.jobs;
       return { data: [] };
     });
   });
 
   it("separates patterns from issues and reveals original evidence only when requested", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<EngineView accessToken="test" readOnly />);
+    renderWithProviders(<LensView accessToken="test" readOnly />);
     expect(await screen.findByText("Review used the wrong defect rate")).toBeInTheDocument();
     expect(screen.queryByText(pattern.title)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Patterns (1)" }));
@@ -159,7 +159,7 @@ describe("Lens findings and runs", () => {
 
   it("shows the actual frozen run selection in the Runs tab", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<EngineView accessToken="test" readOnly />);
+    renderWithProviders(<LensView accessToken="test" readOnly />);
     await user.click(await screen.findByRole("tab", { name: "Runs" }));
     expect(screen.getByText("Release-42")).toBeInTheDocument();
     expect(screen.getByText("trace-42")).toBeInTheDocument();
@@ -170,27 +170,27 @@ describe("Lens findings and runs", () => {
 it("shows the actual next schedule and avoids a stale countdown during active scans", () => {
   const now = Date.parse("2026-09-30T10:00:00Z");
   const monitoring = {
-    ...engine,
-    settings: { ...engine.settings, enabled: true },
+    ...lens,
+    settings: { ...lens.settings, enabled: true },
     next_run_at: "2026-09-30T10:12:00Z",
   };
   expect(nextCheckStatus(monitoring, now)).toContain("in 12 minutes");
   expect(nextCheckStatus(monitoring, now + 12 * 60000)).toBe("Due now · waiting for an analyzer");
-  expect(nextCheckStatus({ ...monitoring, jobs: [{ ...engine.jobs[0], status: "running" }] }, now)).toBe(
+  expect(nextCheckStatus({ ...monitoring, jobs: [{ ...lens.jobs[0], status: "running" }] }, now)).toBe(
     "Next check scheduled after this scan finishes",
   );
-  expect(nextCheckStatus({ ...monitoring, jobs: [{ ...engine.jobs[0], status: "queued" }] }, now)).toBe(
+  expect(nextCheckStatus({ ...monitoring, jobs: [{ ...lens.jobs[0], status: "queued" }] }, now)).toBe(
     "Waiting for an analyzer",
   );
-  expect(nextCheckStatus(engine, now)).toBeNull();
+  expect(nextCheckStatus(lens, now)).toBeNull();
 });
 
 it("runs saved settings immediately without opening setup", async () => {
   testQueryClient.clear();
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
-    if (path === "/engine")
+    if (path === "/lens")
       return {
-        engines: [engine],
+        lenses: [lens],
         tracing_enabled: true,
         workers: [
           {
@@ -198,29 +198,29 @@ it("runs saved settings immediately without opening setup", async () => {
             name: "Worker",
             revoked: false,
             analysis_key_id: "a".repeat(64),
-            scope: engine.scope,
+            scope: lens.scope,
             last_seen: new Date().toISOString(),
           },
         ],
       };
-    if (path === "/engine/lens/runs") return engine.jobs;
+    if (path === "/lens/lens/runs") return lens.jobs;
     return { data: [] };
   });
-  vi.mocked(apiClient.post).mockResolvedValue(engine);
+  vi.mocked(apiClient.post).mockResolvedValue(lens);
   const user = userEvent.setup();
-  renderWithProviders(<EngineView accessToken="test" />);
+  renderWithProviders(<LensView accessToken="test" />);
   await user.click(await screen.findByRole("button", { name: "Run now" }));
-  expect(apiClient.post).toHaveBeenCalledWith("/engine/lens/runs", { accessToken: "test", body: {} });
+  expect(apiClient.post).toHaveBeenCalledWith("/lens/lens/runs", { accessToken: "test", body: {} });
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
 
 it("guides a first-time administrator into worker connection and lens setup", async () => {
   testQueryClient.clear();
   vi.mocked(apiClient.get).mockImplementation(async (path) =>
-    path === "/engine" ? { engines: [], workers: [], tracing_enabled: true } : { data: [] },
+    path === "/lens" ? { lenses: [], workers: [], tracing_enabled: true } : { data: [] },
   );
   const user = userEvent.setup();
-  renderWithProviders(<EngineView accessToken="test" />);
+  renderWithProviders(<LensView accessToken="test" />);
   const guide = within(await screen.findByRole("region", { name: "Understand what your agents are doing" }));
   expect(guide.getByRole("link", { name: "View logs" })).toHaveAttribute("href", "/ui/logs/");
   await user.click(guide.getByRole("button", { name: "Connect analyzer" }));
@@ -234,20 +234,20 @@ it("guides a first-time administrator into worker connection and lens setup", as
 it("opens the saved results of an older batch", async () => {
   testQueryClient.clear();
   const older = {
-    ...engine.jobs[0],
+    ...lens.jobs[0],
     id: "older",
     created_at: "2026-09-29T10:00:00Z",
     finished_at: "2026-09-29T10:02:13Z",
     findings: [{ ...issue, title: "Earlier batch finding" }],
   };
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
-    if (path === "/engine") return { engines: [engine], workers: [], tracing_enabled: true };
-    if (path === "/engine/lens/runs") return [engine.jobs[0], older];
-    if (path === "/engine/lens/runs/older") return older;
+    if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
+    if (path === "/lens/lens/runs") return [lens.jobs[0], older];
+    if (path === "/lens/lens/runs/older") return older;
     return { data: [] };
   });
   const user = userEvent.setup();
-  renderWithProviders(<EngineView accessToken="test" readOnly />);
+  renderWithProviders(<LensView accessToken="test" readOnly />);
   await screen.findByRole("option", { name: `${new Date(older.created_at).toLocaleString()} · completed` });
   await user.selectOptions(screen.getByRole("combobox", { name: "Investigation batch" }), "older");
   expect(await screen.findByText("Earlier batch finding")).toBeVisible();
@@ -264,15 +264,15 @@ it("reads request content from the beginning after its abbreviated preview", asy
   testQueryClient.clear();
   const requestId = btoa(JSON.stringify(["requests", "", "request-1"]));
   const job = {
-    ...engine.jobs[0],
+    ...lens.jobs[0],
     sample: {
       eligible: 1,
-      executions: [{ ...engine.jobs[0].sample!.executions[0], id: requestId, source: "requests" as const }],
+      executions: [{ ...lens.jobs[0].sample!.executions[0], id: requestId, source: "requests" as const }],
     },
   };
   vi.mocked(apiClient.get).mockImplementation(async (path, options) => {
-    if (path === "/engine") return { engines: [{ ...engine, jobs: [job] }], workers: [], tracing_enabled: true };
-    if (path === "/engine/lens/runs") return [job];
+    if (path === "/lens") return { lenses: [{ ...lens, jobs: [job] }], workers: [], tracing_enabled: true };
+    if (path === "/lens/lens/runs") return [job];
     const offset = options?.query?.offset ?? 0;
     return {
       parts: [
@@ -285,7 +285,7 @@ it("reads request content from the beginning after its abbreviated preview", asy
     };
   });
   const user = userEvent.setup();
-  renderWithProviders(<EngineView accessToken="test" readOnly />);
+  renderWithProviders(<LensView accessToken="test" readOnly />);
   await user.click(await screen.findByRole("tab", { name: "Runs" }));
   await user.click(screen.getByRole("button", { name: "Open request" }));
   expect(await screen.findByText("Abbreviated preview")).toBeVisible();

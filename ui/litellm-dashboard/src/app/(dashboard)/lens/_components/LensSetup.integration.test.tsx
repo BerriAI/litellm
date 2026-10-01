@@ -2,9 +2,9 @@ import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
-import { EngineSetup } from "./EngineSetup";
+import { LensSetup } from "./LensSetup";
 import { apiClient } from "@/components/networking";
-import type { Settings } from "./engineData";
+import type { Settings } from "./lensData";
 
 vi.mock("@/components/networking", () => ({ apiClient: { post: vi.fn() } }));
 
@@ -30,7 +30,7 @@ const settings: Settings = {
   ],
 };
 
-describe("Engine setup", () => {
+describe("Lens setup", () => {
   beforeEach(() => {
     vi.mocked(apiClient.post).mockReset();
     vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, executions: [] });
@@ -39,7 +39,7 @@ describe("Engine setup", () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderWithProviders(
-      <EngineSetup initial={settings} models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={save} />,
+      <LensSetup initial={settings} models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={save} />,
     );
     fireEvent.change(screen.getByRole("textbox", { name: "Specific checks (optional)" }), {
       target: { value: "Find incomplete reports\nFind repeated searches" },
@@ -52,7 +52,7 @@ describe("Engine setup", () => {
 
   it("rejects invalid metadata before reviewing the selection", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<EngineSetup models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
+    renderWithProviders(<LensSetup models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
     fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Research" } });
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: "Add condition" }));
@@ -82,7 +82,7 @@ describe("Engine setup", () => {
           }
         : { eligible: 0, executions: [] };
     });
-    renderWithProviders(<EngineSetup models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={save} />);
+    renderWithProviders(<LensSetup models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={save} />);
     fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Research" } });
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: "Add condition" }));
@@ -106,7 +106,7 @@ it("searches providers and saves custom history and schedule values", async () =
   const user = userEvent.setup();
   const save = vi.fn().mockResolvedValue(undefined);
   renderWithProviders(
-    <EngineSetup
+    <LensSetup
       initial={settings}
       models={["review", "other"]}
       modelDetails={[
