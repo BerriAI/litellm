@@ -2644,12 +2644,21 @@ async def test_outer_deadline_delivers_session_termination(termination: str, gro
     client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", timeout=30)
 
     async def invoke():
-        with anyio.fail_after(0.2):
-            pending: Final = client.call_tool(CallToolRequestParams(name="slow", arguments={}), raise_on_error=raise_on_error)
-            if grouped:
-                await asyncio.gather(pending)
-            else:
+        pending: Final = asyncio.ensure_future(client.call_tool(CallToolRequestParams(name="slow", arguments={}), raise_on_error=raise_on_error))
+        try:
+            with anyio.fail_after(2.0):
+                await started.wait()
+            with anyio.fail_after(0.2):
+                if grouped:
+                    await asyncio.gather(pending)
+                else:
+                    await pending
+        finally:
+            pending.cancel()
+            try:
                 await pending
+            except BaseException:
+                pass
 
     before: Final = anyio.current_time()
     with pytest.raises(TimeoutError):
