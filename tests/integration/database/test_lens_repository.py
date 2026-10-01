@@ -68,7 +68,8 @@ async def test_heartbeat_never_restores_revoked_access(lens_db: Prisma) -> None:
         await lens_db.execute_raw('DELETE FROM "LiteLLM_LensWorker" WHERE id=$1', worker.id)
 
 
-def test_lens_rename_preserves_saved_data_and_worker_credentials() -> None:
+@pytest.mark.parametrize("populated", (False, True))
+def test_lens_rename_preserves_saved_data_and_worker_credentials(populated: bool) -> None:
     migrations: Final = (
         Path(__file__).resolve().parents[3] / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
     )
@@ -79,20 +80,21 @@ def test_lens_rename_preserves_saved_data_and_worker_credentials() -> None:
             connection.execute(sql.SQL("SET LOCAL search_path TO {}").format(sql.Identifier(schema)))
             for name in ("20260930000000_agent_engine", "20261001000000_lens_run_history"):
                 connection.execute(sql.SQL((migrations / name / "migration.sql").read_text()))
-            connection.execute(
-                """INSERT INTO "LiteLLM_Engine" VALUES ('lens', 7, '{"findings":[{"id":"finding"}]}');
-                INSERT INTO "LiteLLM_EngineWorker" VALUES ('worker', 'token-hash', '{"analysis_key_id":"key"}');
-                INSERT INTO "LiteLLM_EngineRun" VALUES ('batch', 'lens', '2026-01-01', '{"cost":1.25}')"""
-            )
+            if populated:
+                connection.execute(
+                    """INSERT INTO "LiteLLM_Engine" VALUES ('lens', 7, '{"findings":[{"id":"finding"}]}');
+                    INSERT INTO "LiteLLM_EngineWorker" VALUES ('worker', 'token-hash', '{"analysis_key_id":"key"}');
+                    INSERT INTO "LiteLLM_EngineRun" VALUES ('batch', 'lens', '2026-01-01', '{"cost":1.25}')"""
+                )
             connection.execute(sql.SQL((migrations / "20261001100000_rename_lens" / "migration.sql").read_text()))
-            assert connection.execute('SELECT id, version, data FROM "LiteLLM_Lens"').fetchall() == [
-                ("lens", 7, {"findings": [{"id": "finding"}]})
-            ]
-            assert connection.execute('SELECT id, token_hash, data FROM "LiteLLM_LensWorker"').fetchall() == [
-                ("worker", "token-hash", {"analysis_key_id": "key"})
-            ]
-            assert connection.execute('SELECT id, lens_id, data FROM "LiteLLM_LensRun"').fetchall() == [
-                ("batch", "lens", {"cost": 1.25})
-            ]
+            assert connection.execute('SELECT id, version, data FROM "LiteLLM_Lens"').fetchall() == (
+                [("lens", 7, {"findings": [{"id": "finding"}]})] if populated else []
+            )
+            assert connection.execute('SELECT id, token_hash, data FROM "LiteLLM_LensWorker"').fetchall() == (
+                [("worker", "token-hash", {"analysis_key_id": "key"})] if populated else []
+            )
+            assert connection.execute('SELECT id, lens_id, data FROM "LiteLLM_LensRun"').fetchall() == (
+                [("batch", "lens", {"cost": 1.25})] if populated else []
+            )
         finally:
             connection.rollback()
