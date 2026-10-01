@@ -41,6 +41,11 @@ _STATS_SQL: Final = """
     WHERE relname = 'LiteLLM_SpendLogs'
 """
 
+_OTHER_BACKENDS_SQL: Final = """
+    SELECT count(*) FROM pg_stat_activity
+    WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'
+"""
+
 
 def _create_spend_logs_table(database_url: str) -> None:
     write_rows(_SPEND_LOGS_DDL, (), database_url=database_url)
@@ -61,7 +66,18 @@ def _spend_log_stats(database_url: str) -> dict[str, int]:
     }
 
 
+def _other_client_backends(database_url: str) -> int:
+    with psycopg.connect(database_url) as connection:
+        row: Final = connection.execute(_OTHER_BACKENDS_SQL).fetchone()
+    return 0 if row is None else int(row[0])
+
+
 def _settled_stats(database_url: str, seeded_rows: int | None = None) -> dict[str, int]:
+    eventually(
+        lambda: _other_client_backends(database_url),
+        lambda backends: backends == 0,
+        seconds=60,
+    )
     streak: dict[str, int] = {"count": 0}
     previous: dict[str, dict[str, int] | None] = {"value": None}
 

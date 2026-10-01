@@ -18,8 +18,6 @@ from tests.integration._support.database import write_rows
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_ROWS: Final = TypeAdapter(list[Mapping[str, object]])
 _URL: Final = "/cost_optimization/prompt_caching/requests"
-_START: Final = "2011-09-01T00:00:00Z"
-_END: Final = "2011-09-02T00:00:00Z"
 _MARKER: Final = "litellm_gateway_injected_cache"
 
 _EXPECTED: Final = {
@@ -80,11 +78,13 @@ _CASES: Final = (
 )
 
 
+def _window(prefix: str) -> tuple[datetime, datetime]:
+    day: Final = datetime(1900, 1, 1) + timedelta(days=int(prefix[2:14], 16) % 200000)
+    return day, day + timedelta(days=1)
+
+
 def _seed(prefix: str, cases: tuple[_Case, ...] = _CASES) -> None:
-    write_rows(
-        'DELETE FROM "LiteLLM_SpendLogs" WHERE "startTime" >= %s AND "startTime" <= %s',
-        ("2011-08-31 00:00:00", "2011-09-03 00:00:00"),
-    )
+    shift: Final = _window(prefix)[0] - datetime(2011, 9, 1)
     for case in cases:
         write_rows(
             'INSERT INTO "LiteLLM_SpendLogs" (request_id, call_type, api_key, "startTime", "endTime", model,'
@@ -93,8 +93,8 @@ def _seed(prefix: str, cases: tuple[_Case, ...] = _CASES) -> None:
             (
                 f"{prefix}{case.request_id}",
                 "test-key",
-                case.start_time.isoformat(),
-                "2011-09-01 12:00:01",
+                (case.start_time + shift).isoformat(),
+                (datetime(2011, 9, 1, 12, 0, 1) + shift).isoformat(),
                 "claude-sonnet-5",
                 "dep-a",
                 "anthropic",
@@ -114,12 +114,23 @@ def _strip(prefix: str, request_id: str) -> str:
     return request_id[len(prefix) :]
 
 
-def _run_filter_checks(gateway: Gateway, filter: PromptCachingRequestFilter, prefix: str, key: str | None) -> None:
+def _run_filter_checks(
+    gateway: Gateway,
+    filter: PromptCachingRequestFilter,
+    prefix: str,
+    key: str | None,
+    window: tuple[datetime, datetime],
+) -> None:
     expected: Final = _EXPECTED[filter]
     first: Final = gateway.request(
         "GET",
         _URL,
-        params={"start_date": _START, "end_date": _END, "filter": filter, "page_size": "2"},
+        params={
+            "start_date": window[0].isoformat(),
+            "end_date": window[1].isoformat(),
+            "filter": filter,
+            "page_size": "2",
+        },
         key=key,
     )
     assert first.status_code == 200, first.text
@@ -134,8 +145,8 @@ def _run_filter_checks(gateway: Gateway, filter: PromptCachingRequestFilter, pre
             "GET",
             _URL,
             params={
-                "start_date": _START,
-                "end_date": _END,
+                "start_date": window[0].isoformat(),
+                "end_date": window[1].isoformat(),
                 "filter": filter,
                 "page_size": "2",
                 "cursor_start_time": first_page.next_cursor.start_time.astimezone(
@@ -153,7 +164,12 @@ def _run_filter_checks(gateway: Gateway, filter: PromptCachingRequestFilter, pre
     second: Final = gateway.request(
         "GET",
         _URL,
-        params={"start_date": _START, "end_date": _END, "filter": filter, "page_size": "100"},
+        params={
+            "start_date": window[0].isoformat(),
+            "end_date": window[1].isoformat(),
+            "filter": filter,
+            "page_size": "100",
+        },
         key=key,
     )
     assert second.status_code == 200, second.text
@@ -194,11 +210,11 @@ async def test_request_filters_match_accounting_and_paginate_before_projection(
     _seed(prefix)
     try:
         if role == "admin":
-            _run_filter_checks(gateway, filter, prefix, None)
+            _run_filter_checks(gateway, filter, prefix, None, _window(prefix))
         else:
             with gateway.scenario() as scenario:
                 viewer: Final = scenario.user(user_role="proxy_admin_viewer")
-                _run_filter_checks(gateway, filter, prefix, scenario.key(user_id=viewer))
+                _run_filter_checks(gateway, filter, prefix, scenario.key(user_id=viewer), _window(prefix))
     finally:
         _clean(prefix)
 
@@ -219,8 +235,13 @@ async def test_cursor_keeps_remaining_requests_once_during_insertions_and_deleti
     )
     _seed(prefix, cases)
     try:
+        window: Final = _window(prefix)
         expected: Final = (*_EXPECTED["all"], "older-cache-read")
-        first: Final = gateway.request("GET", _URL, params={"start_date": _START, "end_date": _END, "page_size": "2"})
+        first: Final = gateway.request(
+            "GET",
+            _URL,
+            params={"start_date": window[0].isoformat(), "end_date": window[1].isoformat(), "page_size": "2"},
+        )
         assert first.status_code == 200, first.text
         first_page: Final = PromptCachingRequestsResponse.model_validate_json(first.content)
         assert tuple(_strip(prefix, row.request_id) for row in first_page.requests) == expected[:2]
@@ -230,14 +251,18 @@ async def test_cursor_keeps_remaining_requests_once_during_insertions_and_deleti
             " model_id, custom_llm_provider, spend, metadata, cache_hit)"
             ' SELECT %s, call_type, api_key, %s, "endTime", model, model_id, custom_llm_provider, spend,'
             ' metadata, cache_hit FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
-            (f"{prefix}newer-request", "2011-09-01 13:00:00", f"{prefix}{expected[0]}"),
+            (f"{prefix}newer-request", (window[0] + timedelta(hours=13)).isoformat(), f"{prefix}{expected[0]}"),
         )
         write_rows(
             'INSERT INTO "LiteLLM_SpendLogs" (request_id, call_type, api_key, "startTime", "endTime", model,'
             " model_id, custom_llm_provider, spend, metadata, cache_hit)"
             ' SELECT %s, call_type, api_key, %s, "endTime", model, model_id, custom_llm_provider, spend,'
             ' metadata, cache_hit FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
-            (f"{prefix}zz-higher-id", cases[0].start_time.isoformat(), f"{prefix}{expected[0]}"),
+            (
+                f"{prefix}zz-higher-id",
+                (cases[0].start_time + (window[0] - datetime(2011, 9, 1))).isoformat(),
+                f"{prefix}{expected[0]}",
+            ),
         )
         if delete_before_cursor:
             write_rows('DELETE FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (f"{prefix}{expected[0]}",))
@@ -245,8 +270,8 @@ async def test_cursor_keeps_remaining_requests_once_during_insertions_and_deleti
             "GET",
             _URL,
             params={
-                "start_date": _START,
-                "end_date": _END,
+                "start_date": window[0].isoformat(),
+                "end_date": window[1].isoformat(),
                 "page_size": "100",
                 "cursor_start_time": first_page.next_cursor.start_time.isoformat(),
                 "cursor_request_id": first_page.next_cursor.request_id,

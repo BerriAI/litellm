@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Sequence
+from datetime import datetime, timedelta
 from typing import Final
 
 import pytest
@@ -13,8 +14,11 @@ _URL: Final = "/user/daily/activity/aggregated"
 _RESULTS: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 
+def _unique_day() -> str:
+    return str((datetime(1900, 1, 1) + timedelta(days=uuid.uuid4().int % 200000)).date())
+
+
 def _seed(day: str, rows: Sequence[tuple[object, ...]]) -> None:
-    write_rows('DELETE FROM "LiteLLM_DailyUserSpend" WHERE date = %s', (day,))
     for row in rows:
         write_rows(
             'INSERT INTO "LiteLLM_DailyUserSpend" (id, user_id, date, api_key, model, model_group,'
@@ -41,7 +45,7 @@ def _row_id() -> str:
 
 @pytest.mark.asyncio
 async def test_get_daily_activity_aggregated_returns_every_api_key(gateway: Gateway) -> None:
-    day: Final = "2011-06-01"
+    day: Final = _unique_day()
     _seed(
         day,
         [
@@ -98,7 +102,7 @@ async def test_get_daily_activity_aggregated_returns_every_api_key(gateway: Gate
 async def test_get_daily_activity_aggregated_explicit_api_key_filter_scopes_results(
     gateway: Gateway,
 ) -> None:
-    day: Final = "2011-06-02"
+    day: Final = _unique_day()
     _seed(
         day,
         [
@@ -140,7 +144,7 @@ async def test_get_daily_activity_aggregated_explicit_api_key_filter_scopes_resu
 async def test_get_daily_activity_aggregated_model_group_rollups_fall_back_to_model_name(
     gateway: Gateway,
 ) -> None:
-    day: Final = "2011-06-03"
+    day: Final = _unique_day()
     _seed(
         day,
         [
