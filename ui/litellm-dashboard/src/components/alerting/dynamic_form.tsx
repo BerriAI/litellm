@@ -53,7 +53,10 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
     handleInputChange(setting.field_name, raw === "" ? null : Number(raw));
   };
 
-  const handleTextChange = (setting: AlertingSetting, event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleTextChange = (
+    setting: AlertingSetting,
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
     form.setValue(setting.field_name, event.target.value);
     handleInputChange(setting.field_name, event);
   };
@@ -62,7 +65,6 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
     form.setValue(setting.field_name, checked);
     handleInputChange(setting.field_name, checked);
   };
-
 
   const handleReset = (setting: AlertingSetting, index: number) => {
     form.setValue(setting.field_name, setting.field_default_value ?? "");
@@ -89,7 +91,12 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
         />
       );
     }
-    return <Input value={setting.field_value ?? ""} onChange={(event) => handleTextChange(setting, event)} />;
+    return (
+      <Input
+        value={setting.field_value ?? ""}
+        onChange={(event) => handleTextChange(setting, event)}
+      />
+    );
   };
 
   return (
@@ -98,7 +105,9 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
         <TableRow key={index}>
           <TableCell>
             <p className="text-sm">{value.field_name}</p>
-            <p className="mt-1 text-[0.65rem] italic text-muted-foreground">{value.field_description}</p>
+            <p className="mt-1 text-[0.65rem] italic text-muted-foreground">
+              {value.field_description}
+            </p>
           </TableCell>
           {value.premium_field && !premiumUser ? (
             <TableCell>
