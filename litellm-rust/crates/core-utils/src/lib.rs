@@ -9,4 +9,5 @@ pub mod prompt_templates;
 pub mod secret_redaction;
 pub mod serde_compat;
 pub mod settings;
+pub mod shared;
 pub mod url_utils;

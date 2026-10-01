@@ -1,3 +1,4 @@
+use litellm_core_utils::shared::Shared;
 use litellm_traces::decode_otlp;
 use rstest::rstest;
 
@@ -163,15 +164,10 @@ fn resource_fanout_shares_one_allocation(span: opentelemetry_proto::tonic::trace
     let body = request.encode_to_vec();
     let decoded = decode_otlp(&body, None).expect("shared resources do not expand with span count");
     assert_eq!(decoded.len(), 4096);
-    assert!(
-        decoded[..2048]
-            .iter()
-            .all(|span| litellm_traces::Shared::shares_storage_with(
-                &span.resource_attributes,
-                &decoded[0].resource_attributes
-            ))
-    );
-    assert!(!litellm_traces::Shared::shares_storage_with(
+    assert!(decoded[..2048].iter().all(|span| {
+        Shared::shares_storage_with(&span.resource_attributes, &decoded[0].resource_attributes)
+    }));
+    assert!(!Shared::shares_storage_with(
         &decoded[0].resource_attributes,
         &decoded[2048].resource_attributes
     ));
@@ -275,18 +271,13 @@ fn scope_fanout_shares_name_and_version(span: opentelemetry_proto::tonic::trace:
     assert!(
         decoded
             .iter()
-            .all(|span| litellm_traces::Shared::shares_storage_with(
-                &span.scope_name,
-                &decoded[0].scope_name
-            ))
+            .all(|span| Shared::shares_storage_with(&span.scope_name, &decoded[0].scope_name))
     );
     assert!(
-        decoded
-            .iter()
-            .all(|span| litellm_traces::Shared::shares_storage_with(
-                &span.scope_version,
-                &decoded[0].scope_version
-            ))
+        decoded.iter().all(|span| Shared::shares_storage_with(
+            &span.scope_version,
+            &decoded[0].scope_version
+        ))
     );
     assert_eq!(decoded[0].scope_name.len(), 16 * 1024);
     assert_eq!(decoded[0].scope_version.len(), 16 * 1024);

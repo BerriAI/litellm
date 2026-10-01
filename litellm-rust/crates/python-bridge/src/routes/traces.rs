@@ -1,7 +1,9 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
+use litellm_core_utils::shared::Shared;
+use litellm_host_python::{FromPythonCache, ToPythonCache};
 use litellm_http::ClientVariant;
-use litellm_traces::{Connection, Error, InsertTable, Parameter, ReadQuery, Shared};
+use litellm_traces::{Connection, Error, InsertTable, Parameter, ReadQuery};
 use prost::Message;
 use pyo3::{
     exceptions::{PyOverflowError, PyRuntimeError, PyValueError},
@@ -175,8 +177,7 @@ pub fn trace_decode_otlp<'py>(
 }
 
 fn insert_rows_from_py(value: &Bound<'_, PyAny>) -> PyResult<Vec<litellm_traces::InsertRow>> {
-    let mut resources: HashMap<usize, (Bound<'_, PyAny>, Shared<serde_json::Value>)> =
-        HashMap::new();
+    let mut resources = FromPythonCache::default();
     value
         .try_iter()?
         .map(|row| {
@@ -188,19 +189,12 @@ fn insert_rows_from_py(value: &Bound<'_, PyAny>) -> PyResult<Vec<litellm_traces:
                     key.as_str(),
                     "ResourceAttributes" | "ScopeName" | "ScopeVersion"
                 ) {
-                    let identity = value.as_ptr() as usize;
-                    match resources.entry(identity) {
-                        std::collections::hash_map::Entry::Occupied(entry) => {
-                            Shared::clone(&entry.get().1)
-                        }
-                        std::collections::hash_map::Entry::Vacant(entry) => {
-                            let converted = Shared::new(litellm_host_python::from_py_argument::<
-                                serde_json::Value,
-                            >(&value)?);
-                            entry.insert((value, Shared::clone(&converted)));
-                            converted
-                        }
-                    }
+                    resources
+                        .get_or_try_insert_with(&value, |value| {
+                            litellm_host_python::from_py_argument::<serde_json::Value>(value)
+                                .map(Shared::new)
+                        })?
+                        .clone()
                 } else {
                     Shared::new(litellm_host_python::from_py_argument(&value)?)
                 };
@@ -215,17 +209,14 @@ fn spans_to_py<'py>(
     py: Python<'py>,
     spans: &[litellm_traces::DecodedSpan],
 ) -> PyResult<Bound<'py, PyList>> {
-    let mut resources = HashMap::new();
-    let mut scopes = HashMap::new();
+    let mut resources = ToPythonCache::default();
+    let mut scopes = ToPythonCache::default();
     let result = PyList::empty(py);
     for span in spans {
-        let identity = span.resource_attributes.identity();
-        let resource = match resources.entry(identity) {
-            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-            std::collections::hash_map::Entry::Vacant(entry) => entry.insert(
-                litellm_host_python::Pythonized(&*span.resource_attributes).into_pyobject(py)?,
-            ),
-        };
+        let resource = resources
+            .get_or_try_insert_with(span.resource_attributes.as_ref(), |value| {
+                litellm_host_python::Pythonized(value).into_pyobject(py)
+            })?;
         let row = PyDict::new(py);
         row.set_item("trace_id", &span.trace_id)?;
         row.set_item("span_id", &span.span_id)?;
@@ -233,15 +224,15 @@ fn spans_to_py<'py>(
         row.set_item("trace_state", &span.trace_state)?;
         row.set_item("name", &span.name)?;
         row.set_item("kind", &span.kind)?;
-        row.set_item("resource_attributes", &*resource)?;
+        row.set_item("resource_attributes", resource)?;
         for (key, value) in [
             ("scope_name", &span.scope_name),
             ("scope_version", &span.scope_version),
         ] {
-            let value = scopes
-                .entry(value.identity())
-                .or_insert_with(|| PyString::new(py, value));
-            row.set_item(key, &*value)?;
+            let value = scopes.get_or_try_insert_with(value.as_ref(), |value| {
+                Ok(PyString::new(py, value).into_any())
+            })?;
+            row.set_item(key, value)?;
         }
         row.set_item("attributes", &span.attributes)?;
         row.set_item("start_ns", span.start_ns)?;

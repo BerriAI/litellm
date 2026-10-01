@@ -8,12 +8,13 @@ use std::{
 use serde::{Serialize, Serializer, ser::SerializeMap};
 
 use flate2::{Compression, write::GzEncoder};
+use litellm_core_utils::shared::Shared;
 use litellm_http::Client;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::{Connection, Error, Shared};
+use crate::{Connection, Error};
 
 const MAX_INSERT_BYTES: usize = 64 * 1024 * 1024;
 const INSERT_TIMEOUT: Duration = Duration::from_secs(30);
