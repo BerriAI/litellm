@@ -230,18 +230,21 @@ class _ChatToolCallDict(ChatCompletionToolCallChunk, total=False):
 def tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _ChatToolCallDict:
     """Convert a ``function_call`` or ``custom_tool_call`` output item dict to a chat
     completions tool_call dict. Custom (grammar/freeform) tool calls carry their raw
-    string payload in ``input`` rather than ``arguments``; both map to
-    ``function.arguments`` so chat clients (e.g. Cursor agent mode) receive them like
-    any other tool call. The single conversion rule shared by the non-streaming
-    accumulator and the streaming ``output_item.added`` branch."""
+    string payload in ``input`` rather than ``arguments``; client tool-search calls
+    carry an object in ``arguments``. Both map to ``function.arguments`` so chat
+    clients (e.g. Cursor agent mode) receive them like any other tool call. The
+    single conversion rule shared by the non-streaming accumulator and the streaming
+    ``output_item.added`` branch."""
     from litellm.responses.litellm_completion_transformation.transformation import (
         LiteLLMCompletionResponsesConfig,
     )
 
     item_type: Final[object] = item.get("type")
     is_custom: Final = item_type == "custom_tool_call"
-    arguments: Final = (item.get("input") if is_custom else item.get("arguments")) or ""
-    name: Final = item.get("name") or ("custom_tool" if is_custom else "")
+    is_tool_search: Final = item_type == "tool_search_call"
+    raw_arguments: Final = (item.get("input") if is_custom else item.get("arguments")) or ""
+    arguments: Final = json.dumps(raw_arguments) if is_tool_search and not isinstance(raw_arguments, str) else raw_arguments
+    name: Final = item.get("name") or ("custom_tool" if is_custom else "tool_search" if is_tool_search else "")
     function_chunk: Final = ChatCompletionToolCallFunctionChunk(name=name, arguments=arguments)
     tool_call_dict: Final = _ChatToolCallDict(
         id=LiteLLMCompletionResponsesConfig._tool_call_id_from_responses_item(item.get("id"), item.get("call_id")),

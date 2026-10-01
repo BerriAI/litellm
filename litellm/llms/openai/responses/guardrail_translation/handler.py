@@ -29,6 +29,7 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 """
 
 import copy
+import json
 import time
 import uuid
 from collections.abc import Mapping, Sequence
@@ -222,9 +223,9 @@ _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
 )
 
 
-_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
+_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call", "tool_search_call"})
 _TOOL_CALL_PAYLOAD_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
-    {"function_call": "arguments", "custom_tool_call": "input"}
+    {"function_call": "arguments", "custom_tool_call": "input", "tool_search_call": "arguments"}
 )
 _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES: Final = frozenset(
     {"response.function_call_arguments.delta", "response.custom_tool_call_input.delta"}
@@ -1103,7 +1104,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         guardrail_name: str,
     ) -> None:
         """Write ended-stream guardrail tool-call rewrites into the completed
-        envelope's ``function_call`` and ``custom_tool_call`` items and sync the
+        envelope's ``function_call``, ``custom_tool_call``, and
+        ``tool_search_call`` items and sync the
         earlier stream events, keyed by ``call_id``. The guardrail sees the
         envelope's tool calls in output order, which is how a rewritten call
         finds its ``call_id``; the stream events find their call through the
@@ -1193,9 +1195,18 @@ class OpenAIResponsesHandler(BaseTranslation):
         for output_item, rewrite in (
             (output_item, _tool_call_rewrite(before, after))
             for output_item, before, after in zip(tool_call_items, pre_guardrail_tool_calls, post_guardrail_tool_calls)
-            if after != before
+        if after != before
         ):
             self._write_tool_call_item(output_item, rewrite.name, rewrite.arguments)
+
+
+    @staticmethod
+    def _parsed_tool_search_arguments(arguments: str) -> object:
+        try:
+            parsed: Final = json.loads(arguments) if arguments else {}
+        except json.JSONDecodeError:
+            return arguments
+        return parsed if parsed is not None else {}
 
     @staticmethod
     def _tool_call_ids_by_item_id(stream_events: Sequence[object]) -> Mapping[str, str]:
@@ -1236,7 +1247,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             OpenAIResponsesHandler._write_event_field(item, "name", name)
         item_type: Final = stream_item_field(item, "type")
         if payload is not None and isinstance(item_type, str) and item_type in _TOOL_CALL_PAYLOAD_FIELDS:
-            OpenAIResponsesHandler._write_event_field(item, _TOOL_CALL_PAYLOAD_FIELDS[item_type], payload)
+            field_value: Final = (
+                OpenAIResponsesHandler._parsed_tool_search_arguments(payload)
+                if item_type == "tool_search_call"
+                else payload
+            )
+            OpenAIResponsesHandler._write_event_field(item, _TOOL_CALL_PAYLOAD_FIELDS[item_type], field_value)
 
     def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
         """

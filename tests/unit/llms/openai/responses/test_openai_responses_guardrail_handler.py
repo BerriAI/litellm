@@ -120,6 +120,15 @@ CUSTOM_TOOL_CALL_ITEM = {
     "status": "completed",
 }
 
+TOOL_SEARCH_CALL_ITEM = {
+    "type": "tool_search_call",
+    "id": "tsc_1",
+    "call_id": "call_search_1",
+    "arguments": {"query": "find persimmon tools"},
+    "execution": "client",
+    "status": "completed",
+}
+
 
 class TestOpenAIResponsesHandlerDiscovery:
     """Test that the handler is properly discovered by the guardrail system"""
@@ -774,6 +783,29 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
             "output": [item],
         }
 
+    @staticmethod
+    def _tool_search_stream_events() -> list[dict]:
+        search_call = dict(TOOL_SEARCH_CALL_ITEM)
+        return [
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {**search_call, "status": "in_progress", "arguments": {}},
+            },
+            {"type": "response.output_item.done", "output_index": 0, "item": search_call},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "created_at": 1,
+                    "model": "gpt-5.6",
+                    "object": "response",
+                    "status": "completed",
+                    "output": [search_call],
+                },
+            },
+        ]
+
     @pytest.mark.asyncio
     async def test_process_output_response_ignores_tool_call_rewrites_in_another_shape(self):
         handler = OpenAIResponsesHandler()
@@ -808,6 +840,30 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
 
         assert result["output"][0]["input"] == "echo [MASKED]"
         assert "name" not in result["output"][0]
+
+    @pytest.mark.asyncio
+    async def test_process_output_response_scans_and_rewrites_tool_search_arguments(self):
+        handler = OpenAIResponsesHandler()
+        response = self._custom_tool_call_response(dict(TOOL_SEARCH_CALL_ITEM))
+
+        result = await handler.process_output_response(response, PersimmonMaskingGuardrail(guardrail_name="mask"))
+
+        assert result["output"][0]["arguments"] == {"query": "find [MASKED] tools"}
+        assert "name" not in result["output"][0]
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_rewrites_tool_search_arguments(self):
+        handler = OpenAIResponsesHandler()
+        events = self._tool_search_stream_events()
+
+        result = await handler.process_output_streaming_response(
+            events,
+            PersimmonMaskingGuardrail(guardrail_name="mask"),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result[-1]["response"]["output"][0]["arguments"] == {"query": "find [MASKED] tools"}
+        assert result[-2]["item"]["arguments"] == {"query": "find [MASKED] tools"}
 
     @pytest.mark.asyncio
     async def test_process_output_response_with_tool_calls(self):
