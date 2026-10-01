@@ -23,6 +23,7 @@ from starlette.routing import Route
 pytest.importorskip("a2a.compat.v0_3.types")
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.agents import AgentResponse
 
 UPSTREAM_BASE = "http://testserver"
 
@@ -120,19 +121,17 @@ def _fake_get_async_httpx_client(
     return handler
 
 
-def _make_agent(*, protocol_version: str) -> MagicMock:
-    agent = MagicMock()
-    agent.agent_id = "test-agent"
-    agent.agent_name = "test-agent"
-    agent.agent_card_params = {
-        "url": f"{UPSTREAM_BASE}/",
-        "name": "Test Agent",
-        "protocolVersion": protocol_version,
-    }
-    agent.litellm_params = {}
-    agent.static_headers = None
-    agent.extra_headers = None
-    return agent
+def _make_agent(*, protocol_version: str) -> AgentResponse:
+    return AgentResponse(
+        agent_id="test-agent",
+        agent_name="test-agent",
+        agent_card_params={
+            "url": f"{UPSTREAM_BASE}/",
+            "name": "Test Agent",
+            "protocolVersion": protocol_version,
+        },
+        litellm_params={},
+    )
 
 
 def _make_request(
@@ -166,7 +165,7 @@ async def _add_proxy_data(data: Dict[str, Any], **_: Any) -> Dict[str, Any]:
     return data
 
 
-def _proxy_patches(agent: MagicMock) -> List[Any]:
+def _proxy_patches(agent: AgentResponse) -> List[Any]:
     from litellm.proxy.agent_endpoints import a2a_endpoints as a2a_endpoints_mod
 
     return [

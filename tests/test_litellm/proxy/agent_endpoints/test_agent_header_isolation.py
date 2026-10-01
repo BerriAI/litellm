@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.constants import DEFAULT_A2A_AGENT_TIMEOUT
+from litellm.types.agents import AgentResponse
 
 
 # ---------------------------------------------------------------------------
@@ -23,20 +24,20 @@ from litellm.constants import DEFAULT_A2A_AGENT_TIMEOUT
 
 
 def _make_agent(
-    agent_id,
-    agent_name,
-    static_headers=None,
-    extra_headers=None,
-    url="http://0.0.0.0:9999",
-):
-    a = MagicMock()
-    a.agent_id = agent_id
-    a.agent_name = agent_name
-    a.agent_card_params = {"url": url, "name": agent_name}
-    a.litellm_params = {}
-    a.static_headers = static_headers or {}
-    a.extra_headers = extra_headers or []
-    return a
+    agent_id: str,
+    agent_name: str,
+    static_headers: dict[str, str] | None = None,
+    extra_headers: list[str] | None = None,
+    url: str = "http://0.0.0.0:9999",
+) -> AgentResponse:
+    return AgentResponse(
+        agent_id=agent_id,
+        agent_name=agent_name,
+        agent_card_params={"url": url, "name": agent_name},
+        litellm_params={},
+        static_headers=static_headers or {},
+        extra_headers=extra_headers or [],
+    )
 
 
 def _make_request(method="message/send", extra_headers=None):
