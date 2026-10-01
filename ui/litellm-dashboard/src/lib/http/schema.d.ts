@@ -50303,6 +50303,7 @@ export interface operations {
                 response_type?: string | null;
                 scope?: string | null;
                 resource?: string | null;
+                team?: string | null;
             };
             header?: never;
             path?: never;
@@ -80562,6 +80563,7 @@ export interface operations {
                 response_type?: string | null;
                 scope?: string | null;
                 resource?: string | null;
+                team?: string | null;
             };
             header?: never;
             path: {

@@ -1,15 +1,21 @@
 import json
 import os
 import stat
+import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
+from threading import Event
 from unittest.mock import Mock, patch
 
 
 import pytest
 from click.testing import CliRunner
+from filelock import Timeout
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
+from litellm.litellm_core_utils.cli_credential_lock import _windows_mutex, credential_lock
 from litellm.litellm_core_utils.cli_keyring import (
     DISABLE_KEYRING_ENV_VAR,
     KeyringDisabled,
@@ -27,12 +33,19 @@ from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands import claude_settings as claude_settings_module
 from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner
 from litellm.proxy.client.cli.commands.auth import (
+    _replace_stored_token,
     get_stored_api_key,
+    load_token,
     login,
     logout,
     print_token,
     whoami,
 )
+from litellm.proxy.client.cli.commands.pkce_login import PkceFailure, RevocationUnavailable
+from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
+
+if sys.platform != "win32":
+    import fcntl
 
 
 @pytest.fixture
@@ -2044,3 +2057,634 @@ class TestGetStoredApiKeyRefresh:
         assert captured.out == ""
         assert captured.err == "Could not renew the key: token request failed with 503: temporarily_unavailable\n"
         save.assert_not_called()
+
+
+class TestRequestedTeamLoginOption:
+    """`lite login --team` (or LITELLM_PROXY_TEAM) pre-picks a team in both login flows."""
+
+    _TEAMS = [
+        {"team_id": "team-alpha", "team_alias": "Alpha Team"},
+        {"team_id": "team-beta", "team_alias": "Beta Team"},
+    ]
+
+    def setup_method(self):
+        self.runner = CliRunner()
+
+    def test_match_requested_team_resolves_ids_and_aliases(self):
+        from litellm.proxy.client.cli.commands.auth import match_requested_team
+
+        assert match_requested_team(self._TEAMS, "team-beta") == "team-beta"
+        assert match_requested_team(self._TEAMS, "Alpha Team") == "team-alpha"
+
+    def test_match_requested_team_returns_none_without_a_match_or_a_request(self):
+        from litellm.proxy.client.cli.commands.auth import match_requested_team
+
+        assert match_requested_team(self._TEAMS, "no-such-team") is None
+        assert match_requested_team(self._TEAMS, None) is None
+        assert match_requested_team([], "team-alpha") is None
+
+    def test_matching_requested_team_skips_the_prompt_and_polls_for_that_team(self):
+        from litellm.proxy.client.cli.commands import auth
+
+        ready = Mock()
+        ready.status_code = 200
+        ready.json.return_value = {"status": "ready", "key": "jwt-beta"}
+
+        def prompt_must_not_run(*args, **kwargs):
+            raise AssertionError("the interactive team pick ran despite a matching --team")
+
+        with (
+            patch("requests.get", return_value=ready) as get,
+            patch("click.prompt", side_effect=prompt_must_not_run),
+        ):
+            jwt = auth._handle_team_selection_during_polling(
+                "https://test.example.com", "sess-1", "poll-secret", self._TEAMS, requested_team="Beta Team"
+            )
+
+        assert jwt == "jwt-beta"
+        assert "team_id=team-beta" in get.call_args.args[0]
+
+    def test_unknown_requested_team_warns_and_falls_back_to_the_prompt(self, capsys):
+        from litellm.proxy.client.cli.commands import auth
+
+        ready = Mock()
+        ready.status_code = 200
+        ready.json.return_value = {"status": "ready", "key": "jwt-alpha"}
+
+        with (
+            patch("requests.get", return_value=ready) as get,
+            patch("click.prompt", return_value="1") as prompt,
+        ):
+            jwt = auth._handle_team_selection_during_polling(
+                "https://test.example.com", "sess-1", "poll-secret", self._TEAMS, requested_team="no-such-team"
+            )
+
+        assert jwt == "jwt-alpha"
+        prompt.assert_called_once()
+        assert "team_id=team-alpha" in get.call_args.args[0]
+        assert "Team 'no-such-team' was not found among your teams; select one below." in capsys.readouterr().out
+
+    def test_env_vars_select_the_pkce_flow_and_pass_the_requested_team(self):
+        with (
+            patch(  # test-quality-ok: the click command exposes no injection seam for its login-flow dispatch
+                "litellm.proxy.client.cli.commands.auth._pkce_login"
+            ) as pkce_login,
+            patch(  # test-quality-ok: same; proves the SSO path stayed untouched
+                "litellm.proxy.client.cli.commands.auth._start_cli_sso_flow"
+            ) as sso_start,
+        ):
+            result = self.runner.invoke(
+                login,
+                obj={"base_url": PKCE_BASE_URL},
+                env={"LITELLM_PROXY_LOGIN_PKCE": "true", "LITELLM_PROXY_TEAM": "Beta Team"},
+            )
+
+        assert result.exit_code == 0, result.output
+        sso_start.assert_not_called()
+        assert pkce_login.call_args.args[3] == "Beta Team"
+
+
+@pytest.mark.parametrize("pkce,refreshed", [(False, False), (True, False), (True, True)])
+def test_assign_key_replaces_saved_session_and_retains_login_protocol(isolated_home, monkeypatch, pkce, refreshed):
+    monkeypatch.setenv(DISABLE_KEYRING_ENV_VAR, "1")
+    record = (
+        _pkce_record(key="session-old", expires_at=time.time() + 3600, team_id="team-a")
+        if pkce
+        else {
+            "base_url": PKCE_BASE_URL,
+            "key": "session-old",
+            "user_id": "u1",
+            "user_role": "cli",
+            "timestamp": time.time(),
+        }
+    )
+    save_cli_token(CliTokenRecord(**record))
+    _FakeSession.instances.clear()
+    with (
+        patch(
+            "litellm.proxy.client.cli.main.get_stored_api_key",
+            return_value="session-refreshed" if refreshed else "session-old",
+        ),
+        patch("litellm.proxy.client.cli.commands.teams.Client") as client,
+        patch(
+            "litellm.proxy.client.cli.commands.auth.run_pkce_login",
+            return_value=replace(_pkce_credential(), access_token="session-new"),
+        ) as run_pkce,
+        patch(
+            "litellm.proxy.client.cli.commands.auth._start_cli_sso_flow",
+            return_value={
+                "login_id": "login-id",
+                "poll_secret": "poll-secret",
+                "user_code": "ABCD-EFGH",
+            },
+        ),
+        patch(
+            "litellm.proxy.client.cli.commands.auth._poll_for_authentication",
+            return_value={
+                "api_key": "session-new",
+                "user_id": "u1",
+                "teams": ["team-a", "team-b"],
+                "team_id": "team-b",
+            },
+        ) as poll,
+        patch("litellm.proxy.client.cli.commands.auth.webbrowser.open"),
+        patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+        patch("litellm.proxy.client.cli.interface.show_commands"),
+    ):
+        result = CliRunner().invoke(cli, ["--base-url", PKCE_BASE_URL, "teams", "assign-key", "--team-id", "team-b"])
+
+    assert result.exit_code == 0, result.output
+    saved = load_token()
+    assert saved is not None
+    assert (saved["key"], saved["team_id"], saved["user_id"]) == ("session-new", "team-b", "u1")
+    assert "Successfully assigned CLI session to team: team-b" in result.output
+    client.return_value.keys.update.assert_not_called()
+    if pkce:
+        assert saved["refresh_token"] == "llm_srefresh_fresh"
+        assert run_pkce.call_args.kwargs["team"] == "team-b"
+        poll.assert_not_called()
+        assert (
+            next(session for session in _FakeSession.instances if session.posts).posts[0][1]["token"]
+            == "llm_srefresh_old"
+        )
+    else:
+        assert "refresh_token" not in saved
+        assert poll.call_args.kwargs["team"] == "team-b"
+        run_pkce.assert_not_called()
+
+
+@pytest.mark.parametrize("outcome", ["denied", "wrong-team", "storage-failure"])
+def test_assign_key_does_not_replace_saved_session_when_login_cannot_be_used(isolated_home, monkeypatch, outcome):
+    monkeypatch.setenv(DISABLE_KEYRING_ENV_VAR, "1")
+    save_cli_token(CliTokenRecord(**_pkce_record(key="session-old", expires_at=time.time() + 3600, team_id="team-a")))
+    before = load_token()
+    _FakeSession.instances.clear()
+    credential = (
+        PkceFailure("access_denied")
+        if outcome == "denied"
+        else replace(
+            _pkce_credential(), access_token="session-new", team_id="team-c" if outcome == "wrong-team" else "team-b"
+        )
+    )
+    with (
+        patch("litellm.proxy.client.cli.commands.teams.Client"),
+        patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=credential),
+        patch(
+            "litellm.proxy.client.cli.commands.auth.save_token", return_value=CredentialNotSaved("read-only")
+        ) as save,
+        patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+        patch("litellm.proxy.client.cli.interface.show_commands"),
+    ):
+        result = CliRunner().invoke(cli, ["--base-url", PKCE_BASE_URL, "teams", "assign-key", "--team-id", "team-b"])
+
+    assert result.exit_code != 0, result.output
+    assert load_token() == before
+    assert "Successfully assigned" not in result.output
+    if outcome != "storage-failure":
+        save.assert_not_called()
+    posts = [post for session in _FakeSession.instances for post in session.posts]
+    assert posts == (
+        [
+            (
+                f"{PKCE_BASE_URL}/revoke",
+                {"token": "llm_srefresh_fresh", "token_type_hint": "refresh_token", "client_id": "llm_dcrc_abc"},
+            )
+        ]
+        if outcome == "wrong-team"
+        else []
+    )
+
+
+def test_assign_key_keeps_explicit_virtual_key_update_with_saved_session(isolated_home, monkeypatch):
+    monkeypatch.setenv(DISABLE_KEYRING_ENV_VAR, "1")
+    save_cli_token(CliTokenRecord(**_pkce_record(key="session-old", expires_at=time.time() + 3600)))
+    before = load_token()
+    with (
+        patch("litellm.proxy.client.cli.commands.teams.Client") as client,
+        patch("litellm.proxy.client.cli.commands.auth.run_pkce_login") as run_pkce,
+    ):
+        client.return_value.teams.list.return_value = []
+        result = CliRunner().invoke(
+            cli,
+            [
+                "--base-url",
+                PKCE_BASE_URL,
+                "--api-key",
+                "sk-virtual-key",
+                "teams",
+                "assign-key",
+                "--team-id",
+                "team-b",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    client.return_value.keys.update.assert_called_once_with(key="sk-virtual-key", team_id="team-b")
+    run_pkce.assert_not_called()
+    assert load_token() == before
+
+
+@pytest.mark.parametrize("restore_fails", [False, True])
+def test_assign_key_handles_keychain_update_without_metadata(isolated_home, secret_vault_factory, restore_fails):
+    vault = secret_vault_factory()
+    save_cli_token(
+        CliTokenRecord(
+            **_pkce_record(key="session-old", expires_at=time.time() + 3600, team_id="team-a", client_id="old-client")
+        ),
+        vault=vault,
+    )
+    before = load_token(vault=vault)
+    metadata_before = (isolated_home / ".litellm" / "token.json").read_bytes()
+    _FakeSession.instances.clear()
+
+    def refuse_metadata(*_):
+        if restore_fails:
+            vault.writable = False
+        raise OSError("read-only")
+
+    with (
+        patch("litellm.proxy.client.cli.commands.teams.Client"),
+        patch(
+            "litellm.proxy.client.cli.commands.auth.run_pkce_login",
+            return_value=replace(_pkce_credential(), access_token="session-new", team_id="team-b"),
+        ),
+        patch("litellm.litellm_core_utils.cli_token_utils.commit_staged_json", side_effect=refuse_metadata),
+        patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+    ):
+        result = CliRunner().invoke(
+            cli,
+            ["--base-url", PKCE_BASE_URL, "teams", "assign-key", "--team-id", "team-b"],
+            obj={"secret_vault": vault},
+        )
+
+    assert result.exit_code != 0, result.output
+    assert (isolated_home / ".litellm" / "token.json").read_bytes() == metadata_before
+    if restore_fails:
+        assert load_token(vault=vault)["key"] == "session-new"
+        assert "Could not restore the previous login" in result.output
+    else:
+        assert load_token(vault=vault) == before
+        assert "previous login was restored" in result.output
+    assert "Successfully assigned" not in result.output
+    assert [post for session in _FakeSession.instances for post in session.posts] == (
+        []
+        if restore_fails
+        else [
+            (
+                f"{PKCE_BASE_URL}/revoke",
+                {"token": "llm_srefresh_fresh", "token_type_hint": "refresh_token", "client_id": "llm_dcrc_abc"},
+            )
+        ]
+    )
+
+
+@pytest.mark.parametrize("reader", ["stored-key", "print-token"])
+def test_partial_replacement_preserves_a_concurrently_refreshed_login(isolated_home, secret_vault_factory, reader):
+    vault = secret_vault_factory()
+    save_cli_token(CliTokenRecord(**_pkce_record(team_id="team-a")), vault=vault)
+    refreshing = Event()
+    replacement_staged = Event()
+    rotation_saved = Event()
+    replace_file = os.replace
+    http = Mock()
+
+    def refresh_response(*_, **__):
+        refreshing.set()
+        replacement_staged.wait(1)
+        return _FakeHttpResponse(200, {**PKCE_TOKEN_RESPONSE, "team_id": "team-a"})
+
+    def commit_metadata(source, target):
+        if json.loads(Path(source).read_text())["team_id"] == "team-b":
+            replacement_staged.set()
+            assert rotation_saved.wait(5), "renewal did not persist its rotated credential"
+            raise OSError("cannot replace team metadata")
+        replace_file(source, target)
+        rotation_saved.set()
+
+    def read_key():
+        if reader == "stored-key":
+            return get_stored_api_key(PKCE_BASE_URL, vault=vault)
+        result = CliRunner().invoke(print_token, obj={"base_url": PKCE_BASE_URL, "secret_vault": vault})
+        assert result.exit_code == 0, result.output
+        return result.output.strip()
+
+    http.post.side_effect = refresh_response
+    with (
+        patch("litellm.proxy.client.cli.commands.auth.requests.Session", return_value=http),
+        patch("litellm.litellm_core_utils.private_json.os.replace", side_effect=commit_metadata),
+        ThreadPoolExecutor(max_workers=2) as executor,
+    ):
+        renewal = executor.submit(read_key)
+        assert refreshing.wait(5), "renewal did not reach the proxy"
+        replacement = executor.submit(
+            _replace_stored_token,
+            _pkce_record(key="session-new", refresh_token="llm_srefresh_new", team_id="team-b"),
+            _FakeSession(),
+            vault,
+            "team-b",
+        )
+        assert renewal.result(timeout=10) == "sk-cli-rotated"
+        assert isinstance(replacement.result(timeout=10), CredentialNotSaved)
+
+    saved = load_token(vault=vault)
+    assert (saved["key"], saved["refresh_token"], saved["team_id"]) == (
+        "sk-cli-rotated",
+        "llm_srefresh_rotated",
+        "team-a",
+    )
+
+
+@pytest.mark.parametrize("operation", ["logout", "renewal", "replacement"])
+def test_saved_login_works_with_read_only_home(isolated_home, secret_vault_factory, operation):
+    vault = secret_vault_factory()
+    save_cli_token(CliTokenRecord(**_pkce_record(team_id="team-a")), vault=vault)
+    http = _FakeSession()
+    isolated_home.chmod(0o500)
+    try:
+        with patch("litellm.proxy.client.cli.commands.auth.requests.Session") as session:
+            session.return_value.post.return_value = _FakeHttpResponse(200, PKCE_TOKEN_RESPONSE)
+            if operation == "logout":
+                result = CliRunner().invoke(logout, obj={"secret_vault": vault})
+                assert result.exit_code == 0, result.output
+                assert load_token(vault=vault) is None
+            elif operation == "renewal":
+                assert get_stored_api_key(PKCE_BASE_URL, vault=vault) == "sk-cli-rotated"
+                assert load_token(vault=vault)["refresh_token"] == "llm_srefresh_rotated"
+            else:
+                outcome = _replace_stored_token(_pkce_record(team_id="team-b"), http, vault, "team-b")
+                assert isinstance(outcome, SecretStored)
+                assert load_token(vault=vault)["team_id"] == "team-b"
+    finally:
+        isolated_home.chmod(0o700)
+
+
+def test_reading_a_fresh_login_does_not_need_a_writable_lock(isolated_home, secret_vault_factory, capsys):
+    vault = secret_vault_factory()
+    failing_boundary = "ctypes.WinDLL" if sys.platform == "win32" else "os.open"
+    with patch(failing_boundary, side_effect=PermissionError("lock unavailable")):
+        assert get_stored_api_key(PKCE_BASE_URL, vault=vault) is None
+    save_cli_token(CliTokenRecord(**_pkce_record(expires_at=time.time() + 3600)), vault=vault)
+
+    with patch(failing_boundary, side_effect=PermissionError("lock unavailable")):
+        assert get_stored_api_key(PKCE_BASE_URL, vault=vault) == "sk-cli-old"
+    assert capsys.readouterr().err == ""
+
+
+def test_lock_failure_leaves_saved_login_and_refresh_token_untouched(isolated_home, secret_vault_factory):
+    vault = secret_vault_factory()
+    save_cli_token(CliTokenRecord(**_pkce_record(team_id="team-a")), vault=vault)
+    before = load_token(vault=vault)
+    http = _FakeSession()
+
+    failing_boundary = "ctypes.WinDLL" if sys.platform == "win32" else "os.open"
+    with patch(failing_boundary, side_effect=PermissionError("lock unavailable")):
+        assert get_stored_api_key(PKCE_BASE_URL, vault=vault) is None
+        outcome = _replace_stored_token(_pkce_record(team_id="team-b"), http, vault, "team-b")
+        result = CliRunner().invoke(logout, obj={"secret_vault": vault})
+
+    assert isinstance(outcome, CredentialNotSaved)
+    assert "Could not lock the saved login" in outcome.detail
+    assert result.exit_code == 1, result.output
+    assert "Could not lock the saved login" in result.output
+    assert load_token(vault=vault) == before
+    assert http.posts == []
+
+
+@pytest.mark.parametrize("read_only", ["home", "config"])
+def test_credential_lock_serializes_processes_without_writable_directories(isolated_home, read_only):
+    config = isolated_home / ".litellm"
+    config.mkdir()
+    directory = isolated_home if read_only == "home" else config
+    directory.chmod(0o500)
+    child = """
+from pathlib import Path
+from filelock import Timeout
+from litellm.litellm_core_utils.cli_credential_lock import credential_lock
+try:
+    with credential_lock(Path.home(), timeout=0):
+        print('acquired')
+except Timeout:
+    print('blocked')
+"""
+    env = {**os.environ, "TMPDIR": str(isolated_home / "different-temporary-directory")}
+
+    def interrupted_writer():
+        with credential_lock(isolated_home):
+            blocked = run_child_interpreter(child, env=env, timeout=60)
+            assert blocked.returncode == 0, blocked.stderr
+            assert blocked.stdout.strip() == "blocked"
+            raise RuntimeError("release on error")
+
+    try:
+        with pytest.raises(RuntimeError, match="release on error"):
+            interrupted_writer()
+        released = run_child_interpreter(child, env=env, timeout=60)
+        assert released.returncode == 0, released.stderr
+        assert released.stdout.strip() == "acquired"
+    finally:
+        directory.chmod(0o700)
+
+
+@pytest.fixture
+def windows_mutex_api():
+    api = {
+        "CreateMutexW": Mock(return_value=123),
+        "WaitForSingleObject": Mock(return_value=0),
+        "ReleaseMutex": Mock(return_value=True),
+        "CloseHandle": Mock(return_value=True),
+    }
+    with (
+        patch("ctypes.WinDLL", create=True),
+        patch("ctypes.WINFUNCTYPE", return_value=lambda binding: api[binding[0]], create=True),
+        patch("ctypes.get_last_error", return_value=5, create=True),
+        patch("ctypes.WinError", side_effect=lambda code=0: OSError(code, "Win32 error"), create=True),
+    ):
+        yield api
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX filesystem locking")
+def test_saved_login_operations_do_not_lock_network_home_directories(isolated_home, secret_vault_factory):
+    vault = secret_vault_factory()
+    save_cli_token(CliTokenRecord(**_pkce_record(team_id="team-a")), vault=vault)
+    flock = fcntl.flock
+
+    def network_flock(fd, operation):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(9, "network filesystem requires a write-open regular file")
+        return flock(fd, operation)
+
+    with (
+        patch("fcntl.flock", side_effect=network_flock),
+        patch("litellm.proxy.client.cli.commands.auth.requests.Session") as session,
+    ):
+        session.return_value.post.return_value = _FakeHttpResponse(200, PKCE_TOKEN_RESPONSE)
+        assert get_stored_api_key(PKCE_BASE_URL, vault=vault) == "sk-cli-rotated"
+        outcome = _replace_stored_token(_pkce_record(team_id="team-b"), _FakeSession(), vault, "team-b")
+        assert isinstance(outcome, SecretStored)
+        assert load_token(vault=vault)["team_id"] == "team-b"
+        result = CliRunner().invoke(logout, obj={"secret_vault": vault})
+        assert result.exit_code == 0, result.output
+        assert load_token(vault=vault) is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX filesystem locking")
+@pytest.mark.parametrize("unsafe", ["directory-permissions", "directory-owner", "file-owner", "hardlink"])
+def test_credential_lock_refuses_unsafe_filesystem_state(isolated_home, unsafe):
+    fstat = os.fstat
+
+    def unsafe_stat(fd):
+        original = fstat(fd)
+        directory = stat.S_ISDIR(original.st_mode)
+        if unsafe == "directory-permissions" and directory:
+            return os.stat_result((original.st_mode | 0o020, *original[1:]))
+        if (unsafe == "directory-owner" and directory) or (unsafe == "file-owner" and not directory):
+            return os.stat_result((*original[:4], original.st_uid + 1, *original[5:]))
+        if unsafe == "hardlink" and not directory:
+            return os.stat_result((*original[:3], 2, *original[4:]))
+        return original
+
+    with patch("os.fstat", side_effect=unsafe_stat), pytest.raises(PermissionError, match="CLI lock"):
+        with credential_lock(isolated_home):
+            pytest.fail("unsafe lock entered the credential operation")
+
+
+@pytest.mark.parametrize("wait_result", [0, 0x80])
+@pytest.mark.parametrize("release_result", [True, False])
+def test_windows_mutex_preserves_body_errors_and_closes_handle(
+    tmp_path, windows_mutex_api, wait_result, release_result
+):
+    windows_mutex_api["WaitForSingleObject"].return_value = wait_result
+    windows_mutex_api["ReleaseMutex"].return_value = release_result
+
+    with pytest.raises(ValueError, match="body failed"), _windows_mutex(tmp_path, timeout=0):
+        raise ValueError("body failed")
+
+    windows_mutex_api["ReleaseMutex"].assert_called_once_with(123)
+    windows_mutex_api["CloseHandle"].assert_called_once_with(123)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX filesystem locking")
+def test_credential_lock_refuses_a_file_removed_while_waiting(isolated_home):
+    fstat = os.fstat
+    link_counts = iter((1, 0))
+
+    def removed_stat(fd):
+        original = fstat(fd)
+        if stat.S_ISREG(original.st_mode):
+            return os.stat_result((*original[:3], next(link_counts), *original[4:]))
+        return original
+
+    with patch("os.fstat", side_effect=removed_stat), patch("fcntl.flock", wraps=fcntl.flock) as flock:
+        with pytest.raises(OSError, match="removed while waiting"):
+            with credential_lock(isolated_home):
+                pytest.fail("removed lock entered the credential operation")
+
+    with pytest.raises(OSError, match="Bad file descriptor"):
+        os.fstat(flock.call_args.args[0])
+
+
+@pytest.mark.parametrize(
+    ("handle", "wait_result", "error_type", "error_code"),
+    [(None, 0, OSError, 5), (123, 0xFFFFFFFF, OSError, 5), (123, 0x102, Timeout, None)],
+)
+def test_windows_mutex_acquisition_failure_preserves_error_and_closes_handle(
+    tmp_path, windows_mutex_api, handle, wait_result, error_type, error_code
+):
+    windows_mutex_api["CreateMutexW"].return_value = handle
+    windows_mutex_api["WaitForSingleObject"].return_value = wait_result
+
+    with pytest.raises(error_type) as raised, _windows_mutex(tmp_path, timeout=0):
+        pytest.fail("failed acquisition entered the critical section")
+
+    assert raised.value.errno == error_code
+    windows_mutex_api["ReleaseMutex"].assert_not_called()
+    assert windows_mutex_api["CloseHandle"].call_count == (0 if handle is None else 1)
+
+
+def test_windows_mutex_release_failure_preserves_error_and_closes_handle(tmp_path, windows_mutex_api):
+    windows_mutex_api["ReleaseMutex"].return_value = False
+
+    with pytest.raises(OSError, match="Win32 error") as raised, _windows_mutex(tmp_path, timeout=0):
+        pass
+
+    assert raised.value.errno == 5
+    windows_mutex_api["CloseHandle"].assert_called_once_with(123)
+
+
+def test_assign_key_warns_when_a_rejected_login_cannot_be_revoked(isolated_home, monkeypatch):
+    monkeypatch.setenv(DISABLE_KEYRING_ENV_VAR, "1")
+    save_cli_token(CliTokenRecord(**_pkce_record(key="session-old", expires_at=time.time() + 3600)))
+    before = load_token()
+    with (
+        patch(
+            "litellm.proxy.client.cli.commands.auth.run_pkce_login",
+            return_value=replace(_pkce_credential(), team_id="team-c"),
+        ),
+        patch(
+            "litellm.proxy.client.cli.commands.auth.revoke_stored_credential",
+            return_value=RevocationUnavailable("connection unavailable"),
+        ) as revoke,
+    ):
+        result = CliRunner().invoke(cli, ["--base-url", PKCE_BASE_URL, "teams", "assign-key", "--team-id", "team-b"])
+
+    assert result.exit_code != 0
+    assert load_token() == before
+    assert "Could not revoke the rejected login's refresh token" in result.output
+    assert "connection unavailable" in result.output
+    assert "your saved login has not changed" in result.output
+    assert revoke.call_args.args[0]["refresh_token"] == "llm_srefresh_fresh"
+
+
+@pytest.mark.parametrize("multiple_teams", [False, True])
+def test_assign_key_refuses_unavailable_team_in_sso_poll(isolated_home, monkeypatch, multiple_teams):
+    monkeypatch.setenv(DISABLE_KEYRING_ENV_VAR, "1")
+    save_cli_token(CliTokenRecord(base_url=PKCE_BASE_URL, key="session-old", timestamp=time.time()))
+    before = load_token()
+    with (
+        patch(
+            "litellm.proxy.client.cli.commands.auth._start_cli_sso_flow",
+            return_value={"login_id": "login-id", "poll_secret": "poll-secret", "user_code": "ABCD-EFGH"},
+        ),
+        patch("litellm.proxy.client.cli.commands.auth.webbrowser.open"),
+        patch("litellm.proxy.client.cli.commands.auth.requests.get") as get,
+    ):
+        get.return_value.status_code = 200
+        get.return_value.json.return_value = {
+            "status": "ready",
+            "requires_team_selection": multiple_teams,
+            "teams": ["team-c", "team-d"] if multiple_teams else ["team-c"],
+            "key": "session-wrong-team",
+            "team_id": "team-c",
+            "user_id": "u1",
+        }
+        result = CliRunner().invoke(cli, ["--base-url", PKCE_BASE_URL, "teams", "assign-key", "--team-id", "team-b"])
+
+    assert result.exit_code != 0
+    assert "requested team" in result.output
+    assert load_token() == before
+    assert "Successfully assigned" not in result.output
+    assert get.call_count == 1
+
+
+@pytest.mark.parametrize("from_env", [False, True])
+def test_assign_key_refuses_an_explicit_saved_session_override(isolated_home, monkeypatch, from_env):
+    monkeypatch.setenv(DISABLE_KEYRING_ENV_VAR, "1")
+    save_cli_token(CliTokenRecord(**_pkce_record(key="session-old", expires_at=time.time() + 3600)))
+    before = load_token()
+    with (
+        patch("litellm.proxy.client.cli.commands.teams.Client") as client,
+        patch("litellm.proxy.client.cli.commands.auth.run_pkce_login") as run_pkce,
+    ):
+        result = CliRunner().invoke(
+            cli,
+            ["--base-url", PKCE_BASE_URL]
+            + ([] if from_env else ["--api-key", "session-old"])
+            + ["teams", "assign-key", "--team-id", "team-b"],
+            env={"LITELLM_PROXY_API_KEY": "session-old"} if from_env else {},
+        )
+
+    assert result.exit_code != 0
+    assert "Unset --api-key and LITELLM_PROXY_API_KEY" in result.output
+    assert load_token() == before
+    run_pkce.assert_not_called()
+    client.return_value.keys.update.assert_not_called()

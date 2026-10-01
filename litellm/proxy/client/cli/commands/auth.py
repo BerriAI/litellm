@@ -3,16 +3,20 @@ import sys
 import time
 import webbrowser
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager
+from pathlib import Path
 from typing import Any, Final, TypeVar
 from urllib.parse import urlencode
 
 import click
 import requests
+from filelock import Timeout
 from rich.console import Console
 from rich.table import Table
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
+from litellm.litellm_core_utils.cli_credential_lock import credential_lock
 from litellm.litellm_core_utils.cli_keyring import (
     DISABLE_KEYRING_ENV_VAR,
     SYSTEM_KEYRING,
@@ -239,6 +243,10 @@ def _renewal_reader(vault: SecretVault) -> Callable[[], Mapping[str, object] | N
     return reload
 
 
+def _credential_lock() -> AbstractContextManager[None]:
+    return credential_lock(Path.home())
+
+
 def get_stored_api_key(
     expected_base_url: str | None = None,
     *,
@@ -256,6 +264,26 @@ def get_stored_api_key(
         return None
     if expected_base_url is not None and token_data.get("base_url") != expected_base_url.rstrip("/"):
         return None
+    if is_cli_token_fresh(token_data) or not token_data.get("refresh_token"):
+        return _key_from_record({**token_data, "refresh_token": None}, vault)
+    try:
+        with _credential_lock():
+            return _get_stored_api_key(expected_base_url, vault)
+    except (OSError, Timeout) as error:
+        _warn(f"Could not lock the saved login: {error}")
+        return None
+
+
+def _get_stored_api_key(expected_base_url: str | None, vault: SecretVault) -> str | None:
+    token_data: Final = load_token(vault=vault)
+    if token_data is None:
+        return None
+    if expected_base_url is not None and token_data.get("base_url") != expected_base_url.rstrip("/"):
+        return None
+    return _key_from_record(token_data, vault)
+
+
+def _key_from_record(token_data: Mapping[str, object], vault: SecretVault) -> str | None:
     return fresh_api_key(
         token_data,
         _renewal_saver(vault),
@@ -619,7 +647,23 @@ def _get_cli_sso_poll_headers(poll_secret: str) -> dict[str, str]:
     return {"x-litellm-cli-poll-secret": poll_secret}
 
 
-def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> CliAuthResult | None:
+def match_requested_team(teams: Sequence[CliTeam], requested_team: str | None) -> str | None:
+    """The team_id of the first team whose id or alias equals ``requested_team``."""
+    if requested_team is None:
+        return None
+    return next(
+        (
+            team_id
+            for team in teams
+            if (team_id := team.get("team_id")) is not None and requested_team in (team_id, team.get("team_alias"))
+        ),
+        None,
+    )
+
+
+def _poll_for_authentication(
+    base_url: str, key_id: str, poll_secret: str, team: str | None = None, required_team_id: str | None = None
+) -> CliAuthResult | None:
     """
     Poll the server for authentication completion and handle team selection.
 
@@ -639,6 +683,11 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Cl
         team_details: Final = data.get("team_details")
         user_id = data.get("user_id")
         normalized_teams: Final[list[CliTeam]] = _normalize_teams(teams, team_details)
+        if (
+            required_team_id is not None
+            and match_requested_team(normalized_teams, required_team_id) != required_team_id
+        ):
+            raise click.ClickException("The requested team is not available for this login")
         if not normalized_teams:
             click.echo("Warning: No teams available for selection.")
             return None
@@ -649,6 +698,7 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Cl
             key_id=key_id,
             poll_secret=poll_secret,
             teams=normalized_teams,
+            requested_team=team,
         )
 
         # Use the team-specific JWT if selection succeeded
@@ -657,7 +707,7 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Cl
                 "api_key": jwt_with_team,
                 "user_id": user_id,
                 "teams": teams,
-                "team_id": None,  # Set by server in JWT
+                "team_id": match_requested_team(normalized_teams, team),
             }
 
         click.echo("Team selection cancelled or JWT generation failed.")
@@ -685,7 +735,11 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Cl
 
 
 def _handle_team_selection_during_polling(
-    base_url: str, key_id: str, poll_secret: str, teams: list[CliTeam]
+    base_url: str,
+    key_id: str,
+    poll_secret: str,
+    teams: list[CliTeam],
+    requested_team: str | None = None,
 ) -> str | None:
     """
     Handle team selection and re-poll with selected team_id.
@@ -703,7 +757,10 @@ def _handle_team_selection_during_polling(
     click.echo("\n" + "=" * 60)
     click.echo("Select a team for your CLI session...")
 
-    team_id: Final = _render_and_prompt_for_team_selection(teams)
+    matched_team_id: Final = match_requested_team(teams, requested_team)
+    if requested_team is not None and matched_team_id is None:
+        click.echo(f"Team '{requested_team}' was not found among your teams; select one below.")
+    team_id: Final = matched_team_id or _render_and_prompt_for_team_selection(teams)
 
     if not team_id:
         click.echo("No team selected.")
@@ -828,10 +885,43 @@ def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: Secr
     show_commands()
 
 
-def _replace_stored_token(record: CliTokenData, http: Http, vault: SecretVault) -> SecretSave:
+def _replace_stored_token(
+    record: CliTokenData, http: Http, vault: SecretVault, required_team_id: str | None = None
+) -> SecretSave:
+    if required_team_id is not None and record.get("team_id") != required_team_id:
+        refused_revocation: Final = revoke_stored_credential(record, http)
+        if refused_revocation is not None:
+            click.echo(
+                f"Could not revoke the rejected login's refresh token on the proxy ({refused_revocation.reason}); "
+                "it expires on its own."
+            )
+        raise click.ClickException("The login did not select the requested team; your saved login has not changed")
+    try:
+        with _credential_lock():
+            return _persist_replacement(record, http, vault)
+    except (OSError, Timeout) as error:
+        return CredentialNotSaved(f"Could not lock the saved login: {error}")
+
+
+def _persist_replacement(record: CliTokenData, http: Http, vault: SecretVault) -> SecretSave:
     previous: Final = load_token(vault=vault)
+    previous_secret: Final = vault.read()
     stored: Final = save_token(record, vault=vault)
-    if previous is None or isinstance(stored, CredentialNotSaved):
+    if previous is not None and isinstance(stored, CredentialNotRecorded):
+        restored: Final = (
+            vault.write(previous_secret.blob) if isinstance(previous_secret, SecretFound) else previous_secret
+        )
+        if isinstance(restored, SecretStored):
+            abandoned_revocation: Final = revoke_stored_credential(record, http)
+            if abandoned_revocation is not None:
+                click.echo(
+                    "Could not revoke the abandoned login's refresh token "
+                    f"on the proxy ({abandoned_revocation.reason}); "
+                    "it expires on its own."
+                )
+            return CredentialNotSaved("The replacement could not be recorded; your previous login was restored")
+        click.echo("Could not restore the previous login after the partial save; sign in again to repair it.")
+    if previous is None or isinstance(stored, (CredentialNotSaved, CredentialNotRecorded)):
         return stored
     revocation: Final = revoke_stored_credential(previous, http)
     if revocation is not None:
@@ -842,14 +932,17 @@ def _replace_stored_token(record: CliTokenData, http: Http, vault: SecretVault) 
     return stored
 
 
-def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
+def _pkce_login(
+    base_url: str, config_claude: bool, vault: SecretVault, team: str | None, required_team_id: str | None = None
+) -> bool:
     http: Final = requests.Session()
-    credential: Final = run_pkce_login(base_url, http, echo=click.echo)
+    credential: Final = run_pkce_login(base_url, http, echo=click.echo, team=team)
     if isinstance(credential, PkceFailure):
         click.echo(f"Authentication failed: {credential.reason}")
-        return
-    stored: Final = _replace_stored_token(pkce_token_record(base_url, credential), http, vault)
+        return False
+    stored: Final = _replace_stored_token(pkce_token_record(base_url, credential), http, vault, required_team_id)
     _finish_login(base_url, credential.access_token, config_claude, stored)
+    return not isinstance(stored, (CredentialNotSaved, CredentialNotRecorded))
 
 
 @click.command(name="login")
@@ -866,15 +959,33 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
     "--pkce",
     is_flag=True,
     default=False,
+    envvar="LITELLM_PROXY_LOGIN_PKCE",
+    show_envvar=True,
     help=(
         "Sign in with OAuth authorization code + PKCE through your system browser (loopback redirect), "
         "with a refresh token that renews the key automatically. Requires a proxy that serves "
         "/.well-known/litellm-cli-auth."
     ),
 )
+@click.option(
+    "--team",
+    envvar="LITELLM_PROXY_TEAM",
+    show_envvar=True,
+    default=None,
+    help=(
+        "Team id or alias to attribute this login to. Skips the team pick when it matches one of your "
+        "teams; otherwise you pick as usual."
+    ),
+)
 @click.pass_context
-def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
+def login(ctx: click.Context, config_claude: bool, pkce: bool, team: str | None) -> None:
     """Login to LiteLLM proxy using SSO authentication"""
+    login_to_proxy(ctx, config_claude, pkce, team)
+
+
+def login_to_proxy(
+    ctx: click.Context, config_claude: bool, pkce: bool, team: str | None, required_team_id: str | None = None
+) -> bool:
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
 
     ctx_obj: Final[CliContextObj] = ctx.obj
@@ -888,8 +999,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
 
     try:
         if pkce:
-            _pkce_login(base_url, config_claude, context_secret_vault(ctx))
-            return
+            return _pkce_login(base_url, config_claude, context_secret_vault(ctx), team, required_team_id)
         cli_sso_flow: Final = _start_cli_sso_flow(base_url=base_url)
         key_id: Final = cli_sso_flow["login_id"]
         poll_secret: Final = cli_sso_flow["poll_secret"]
@@ -919,7 +1029,13 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
         # Poll for authentication completion
         click.echo("Waiting for authentication...")
 
-        auth_result: Final = _poll_for_authentication(base_url=base_url, key_id=key_id, poll_secret=poll_secret)
+        auth_result: Final = (
+            _poll_for_authentication(
+                base_url=base_url, key_id=key_id, poll_secret=poll_secret, team=team, required_team_id=required_team_id
+            )
+            if required_team_id is not None
+            else _poll_for_authentication(base_url=base_url, key_id=key_id, poll_secret=poll_secret, team=team)
+        )
 
         if auth_result:
             api_key: Final = auth_result["api_key"]
@@ -937,31 +1053,33 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
                     "auth_header_name": "Authorization",
                     "jwt_token": "",
                     "timestamp": time.time(),
+                    "team_id": auth_result["team_id"],
                 },
                 requests.Session(),
                 context_secret_vault(ctx),
+                required_team_id,
             )
 
             _finish_login(base_url, api_key, config_claude, stored)
-            return
+            return not isinstance(stored, (CredentialNotSaved, CredentialNotRecorded))
         else:
             click.echo("Authentication timed out. Please try again.")
             click.echo(
                 "The proxy never reported the browser sign-in as finished. If you did complete it, "
                 "check the proxy logs for /sso/callback errors and confirm SSO is configured on the proxy."
             )
-            return
+            return False
 
     except KeyboardInterrupt:
         click.echo("\nAuthentication cancelled by user.")
-        return
+        return False
     except click.ClickException:
         # Login itself already succeeded; only the post-login step failed, so this
         # must not be relabelled as an authentication failure by the handler below.
         raise
     except Exception as e:
         click.echo(f"Authentication failed: {e}")
-        return
+        return False
 
 
 @click.command(name="logout")
@@ -969,6 +1087,14 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
 def logout(ctx: click.Context):
     """Logout and clear stored authentication"""
     vault: Final = context_secret_vault(ctx)
+    try:
+        with _credential_lock():
+            _logout(vault)
+    except (OSError, Timeout) as error:
+        raise click.ClickException(f"Could not lock the saved login: {error}") from error
+
+
+def _logout(vault: SecretVault) -> None:
     token_data: Final = load_token(vault=vault)
     revocation: Final = revoke_stored_credential(token_data, requests.Session()) if token_data is not None else None
     match revocation:
@@ -1042,15 +1168,13 @@ def print_token(ctx: click.Context):
         click.echo(keychain_unreadable_notice(vault), err=True)
         sys.exit(1)
 
+    saved_base_url: Final = token_data.get("base_url")
     api_key: Final = (
         ctx_obj.get("api_key")
         if issued_for_this_server and ctx_obj.get("api_key_from_token_file")
-        else fresh_api_key(
-            token_data,
-            _renewal_saver(vault),
-            requests.Session(),
-            reload=_renewal_reader(vault),
-            warn=_warn,
+        else get_stored_api_key(
+            saved_base_url if isinstance(saved_base_url, str) else None,
+            vault=vault,
         )
     )
     if not api_key:

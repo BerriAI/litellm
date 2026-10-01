@@ -276,6 +276,7 @@ async def test_poll_for_authentication_team_selection_success(
             {"team_id": "1", "team_alias": None},
             {"team_id": "2", "team_alias": None},
         ],
+        requested_team=None,
     )
     click_mock.assert_not_called()
 
@@ -310,6 +311,7 @@ async def test_poll_for_authentication_team_selection_cancelled(
         key_id="key-123",
         poll_secret="poll-secret",
         teams=[{"team_id": "team-1", "team_alias": None}],
+        requested_team=None,
     )
     click_mock.assert_called_once()
     assert "Team selection cancelled" in click_mock.call_args[0][0]

@@ -12,6 +12,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm.proxy.client import Client
 
 from ._cli_context import cli_context_values
+from .auth import context_secret_vault, load_token, login_to_proxy
 
 
 class _TeamRow(TypedDict):
@@ -140,6 +141,28 @@ def assign_key(ctx: click.Context, team_id: str | None):
     if not api_key:
         click.echo("No API key found. Please login first using 'litellm login'")
         raise click.Abort()
+
+    stored_token: Final = load_token(vault=context_secret_vault(ctx))
+    if (
+        stored_token is not None
+        and stored_token.get("base_url") == context["base_url"].rstrip("/")
+        and (context.get("api_key_from_token_file", False) or stored_token.get("key") == api_key)
+        and (stored_token.get("refresh_token") or not api_key.startswith("sk-"))
+    ):
+        if not context.get("api_key_from_token_file", False):
+            raise click.ClickException("Unset --api-key and LITELLM_PROXY_API_KEY to switch your saved CLI session")
+        click.echo("Signing in again to select the team for your CLI session")
+        saved: Final = login_to_proxy(
+            ctx,
+            config_claude=False,
+            pkce=bool(stored_token.get("refresh_token")),
+            team=team_id,
+            required_team_id=team_id,
+        )
+        if not saved:
+            raise click.ClickException("CLI session team assignment did not complete")
+        click.echo(f"Successfully assigned CLI session to team: {team_id}" if team_id else "CLI session team selected")
+        return
 
     try:
         # If no team_id provided, show teams and let user select
