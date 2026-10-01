@@ -134,8 +134,8 @@ class Approval:
 class Result:
     text: str
     output: BaseModel | None
-    files: list[FileChange]
-    events: list[Event]
+    files: list[FileChange]  # mutable-ok: public Result field; users index/iterate it as a list
+    events: list[Event]  # mutable-ok: public Result field; users index/iterate it as a list
     usage: Usage
     cost: float
     stop_reason: StopReason
@@ -186,7 +186,7 @@ class State:
 
     def dumps(self) -> bytes:
         return json.dumps(
-            {
+            {  # mutable-ok: JSON payload serialized immediately by json.dumps
                 "harness": self.harness.value,
                 "native_session_id": self.native_session_id,
                 "workdir": self.workdir,
