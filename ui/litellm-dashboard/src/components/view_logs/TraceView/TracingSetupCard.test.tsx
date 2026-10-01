@@ -8,6 +8,7 @@ import {
   codingAgentCommand,
   codingAgentPrompt,
   maskSecret,
+  TRACING_KEY_REQUEST,
   tracingEnvSnippet,
   TracingSetupCard,
 } from "./TracingSetupCard";
@@ -23,13 +24,16 @@ vi.mock("@/utils/dataUtils", () => ({ copyToClipboard: vi.fn().mockResolvedValue
 
 const SECRET = "sk-abcdefghijklmnopWXYZ";
 
-const renderCard = (props: { detail?: string | null; connected?: boolean; onCheck?: () => void } = {}) => {
+const renderCard = (
+  props: { detail?: string | null; connected?: boolean; onCheck?: () => void; readOnly?: boolean } = {},
+) => {
   const onOpenTrace = vi.fn();
   renderWithProviders(
     <TracingSetupCard
       detail={props.detail ?? null}
       connected={props.connected}
       onCheck={props.onCheck}
+      readOnly={props.readOnly}
       accessToken="sk-admin"
       onOpenTrace={onOpenTrace}
     />,
@@ -92,7 +96,7 @@ describe("TracingSetupCard", () => {
     );
   });
 
-  it("uses npm and a TypeScript entrypoint for the Vercel AI SDK", async () => {
+  it("uses npm and a CommonJS-safe TypeScript entrypoint for the Vercel AI SDK", async () => {
     const user = userEvent.setup();
     const { card } = renderCard();
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Your agent framework" }), "Vercel AI SDK");
@@ -100,6 +104,17 @@ describe("TracingSetupCard", () => {
     expect(card).toHaveTextContent("npm install ai @ai-sdk/openai-compatible @vercel/otel");
     expect(card).toHaveTextContent("my_agent.ts");
     expect(card).not.toHaveTextContent("opentelemetry-instrument python");
+    const quickstart = screen.getByText(/registerOTel\(\{/).textContent ?? "";
+    expect(quickstart).toContain("async function main()");
+    expect(quickstart.split("\n").filter((line) => /^(const|let) .*= await /.test(line))).toEqual([]);
+  });
+
+  it("hides the actions a read-only viewer cannot perform", () => {
+    const { card } = renderCard({ readOnly: true });
+    expect(screen.queryByRole("button", { name: "Send a test trace" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Generate tracing key" })).not.toBeInTheDocument();
+    expect(card).toHaveTextContent("Ask a proxy admin for a LiteLLM virtual key.");
+    expect(card).toHaveTextContent("OpenTelemetry (OTEL) endpoints");
   });
 
   it("generates a tracing key that stays masked on screen but copies in full", async () => {
@@ -110,7 +125,11 @@ describe("TracingSetupCard", () => {
     await user.click(screen.getByRole("button", { name: "Generate tracing key" }));
 
     expect(await screen.findByText("Your tracing key")).toBeVisible();
-    expect(apiClient.post).toHaveBeenCalledWith("/key/generate", expect.objectContaining({ accessToken: "sk-admin" }));
+    expect(apiClient.post).toHaveBeenCalledWith("/key/generate", {
+      accessToken: "sk-admin",
+      body: TRACING_KEY_REQUEST,
+    });
+    expect(TRACING_KEY_REQUEST.allowed_routes).toEqual(["/v1/traces"]);
     expect(card).not.toHaveTextContent(SECRET);
     expect(card).toHaveTextContent(maskSecret(SECRET));
     await user.click(screen.getAllByRole("button", { name: "Copy" })[0]);
@@ -166,7 +185,10 @@ describe("setup snippets", () => {
     expect(env).not.toContain("/v1/traces");
     expect(env).not.toContain("export LITELLM_API_KEY=");
     expect(env).toContain("Bearer $LITELLM_API_KEY");
-    expect(tracingEnvSnippet("http://proxy.test", SECRET)).toContain(`export LITELLM_API_KEY=${SECRET}\n`);
+    const withKey = tracingEnvSnippet("http://proxy.test", SECRET);
+    expect(withKey).toContain(`export LITELLM_TRACING_KEY=${SECRET}\n`);
+    expect(withKey).toContain('OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $LITELLM_TRACING_KEY"');
+    expect(withKey).not.toContain("LITELLM_API_KEY");
 
     const prompt = codingAgentPrompt("http://proxy.test", { label: "LangChain", packages: "langchain" });
     expect(prompt).toContain("base_url=http://proxy.test/v1");
