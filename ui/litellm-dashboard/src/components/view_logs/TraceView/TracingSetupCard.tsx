@@ -568,6 +568,8 @@ interface ConnectAgentProps {
   onCheck: () => void;
   readOnly: boolean;
   canMintTracingKey: boolean;
+  tracingKey: string | null;
+  onTracingKeyCreated: (key: string) => void;
 }
 
 function EnableTracing({ checked, checking, onCheck }: { checked: boolean; checking: boolean; onCheck: () => void }) {
@@ -610,12 +612,13 @@ function ConnectAgent({
   onCheck,
   readOnly,
   canMintTracingKey,
+  tracingKey,
+  onTracingKeyCreated,
 }: ConnectAgentProps) {
   const proxyUrl = getProxyBaseUrl().replace(/\/$/, "");
   const [framework, setFramework] = useState(FRAMEWORKS[0].id);
   const [installer, setInstaller] = useState<Installer>("pip");
   const [codingAgent, setCodingAgent] = useState<CodingAgent>("Claude Code");
-  const [tracingKey, setTracingKey] = useState<string | null>(null);
   const guide = FRAMEWORKS.find((f) => f.id === framework) ?? FRAMEWORKS[0];
   const packages = installPackages(guide);
   const install = guide.typescript ? `npm install ${packages}` : PY_INSTALL[installer](packages);
@@ -662,7 +665,7 @@ function ConnectAgent({
 
       <Step title="Get a LiteLLM key">
         {canMintTracingKey && !readOnly ? (
-          <TracingKey accessToken={accessToken} tracingKey={tracingKey} onCreated={setTracingKey} />
+          <TracingKey accessToken={accessToken} tracingKey={tracingKey} onCreated={onTracingKeyCreated} />
         ) : (
           <p className="text-sm text-muted-foreground">
             Use any LiteLLM virtual key you already have, or ask a proxy admin for one.
@@ -765,6 +768,7 @@ export function TracingSetupCard({
   canMintTracingKey?: boolean;
 }) {
   const [checked, setChecked] = useState(false);
+  const [tracingKey, setTracingKey] = useState<string | null>(null);
   const enabled = detail === null;
   const check = () => {
     setChecked(true);
@@ -803,6 +807,8 @@ export function TracingSetupCard({
           onCheck={check}
           readOnly={readOnly}
           canMintTracingKey={canMintTracingKey}
+          tracingKey={tracingKey}
+          onTracingKeyCreated={setTracingKey}
         />
       ) : (
         <EnableTracing checked={checked} checking={checking} onCheck={check} />
