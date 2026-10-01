@@ -2346,8 +2346,9 @@ async def test_user_max_budget_update_evicts_cached_user_on_every_worker(mocker:
     [("tpm_limit", 100), ("rpm_limit", 1)],
     ids=["tpm_limit", "rpm_limit"],
 )
+@pytest.mark.parametrize("all_users", [False, True], ids=["single-user", "bulk-all-users"])
 async def test_user_rate_limit_update_reaches_cached_user_on_every_worker(
-    mocker: MockerFixture, field: str, new_limit: int
+    mocker: MockerFixture, field: str, new_limit: int, all_users: bool
 ) -> None:
     from redis.asyncio import Redis
 
@@ -2355,7 +2356,8 @@ async def test_user_rate_limit_update_reaches_cached_user_on_every_worker(
     from litellm.proxy.auth.auth_checks import get_user_object
     from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+    from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update, user_update
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkUpdateUserRequest
 
     published: Final[list[tuple[str, str]]] = []  # mutable-ok: captures messages from the async Redis publisher
 
@@ -2381,6 +2383,8 @@ async def test_user_rate_limit_update_reaches_cached_user_on_every_worker(
     prisma_client: Final = mocker.MagicMock()
     prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_user)
     prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=updated_user)
+    prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=[saved_user])
+    prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(return_value=1)
     prisma_client.get_data = mocker.AsyncMock(return_value=saved_user)
     prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": saved_user.user_id, "data": updated_user})
     mocker.patch(  # test-quality-ok: substitute the database dependency
@@ -2424,10 +2428,20 @@ async def test_user_rate_limit_update_reaches_cached_user_on_every_worker(
     assert other_user_before is not None
     assert other_user_before.model_dump()[field] == old_limit
 
-    await user_update(
-        data=UpdateUserRequest(user_id=saved_user.user_id, **{field: new_limit}),
-        user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
-    )
+    admin: Final = UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN)
+    if all_users:
+        await bulk_user_update(
+            data=BulkUpdateUserRequest(all_users=True, user_updates={field: new_limit}),
+            user_api_key_dict=admin,
+            litellm_changed_by=None,
+        )
+        prisma_client.db.litellm_usertable.update_many.assert_awaited_once_with(where={}, data={field: new_limit})
+    else:
+        await user_update(
+            data=UpdateUserRequest(user_id=saved_user.user_id, **{field: new_limit}),
+            user_api_key_dict=admin,
+        )
+        assert prisma_client.update_data.call_args.kwargs["data"][field] == new_limit
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
@@ -2439,8 +2453,6 @@ async def test_user_rate_limit_update_reaches_cached_user_on_every_worker(
         remote_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler, not a public API
             {"type": "message", "data": message}
         )
-
-    assert prisma_client.update_data.call_args.kwargs["data"][field] == new_limit
 
     handling_user_after: Final = await get_user_object(
         user_id=saved_user.user_id,
