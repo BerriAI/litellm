@@ -981,3 +981,17 @@ def test_unmapped_openai_family_model_routes_to_converse():
     assert BedrockModelInfo.get_bedrock_route(unmapped) == "converse"
     imported: Final = "bedrock/openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123"
     assert BedrockModelInfo.get_bedrock_route(imported) == "openai"
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("converse/us.anthropic.claude-haiku-4-5-20251001-v1:0", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+        ("chat_completions/us.xai.grok-4.6", "us.xai.grok-4.6"),
+        ("global.openai.gpt-5.6-sol", "global.openai.gpt-5.6-sol"),
+    ],
+)
+def test_without_bedrock_route_prefix_hands_converse_the_bare_model_id(model, expected):
+    from litellm.llms.bedrock.common_utils import without_bedrock_route_prefix
+
+    assert without_bedrock_route_prefix(model) == expected

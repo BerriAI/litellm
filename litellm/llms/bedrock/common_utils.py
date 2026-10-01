@@ -810,6 +810,14 @@ def strip_bedrock_routing_prefix(model: str) -> str:
     return model
 
 
+BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX: Final = "chat_completions/"
+BEDROCK_CONVERSE_ROUTE_PREFIX: Final = "converse/"
+
+
+def without_bedrock_route_prefix(model: str) -> str:
+    return model.replace(BEDROCK_CONVERSE_ROUTE_PREFIX, "").replace(BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX, "")
+
+
 def split_bedrock_region_path(model: str) -> tuple[str | None, str]:
     """Split a ``<region>/<model-id>`` routing path into the region and the id AWS receives.
 

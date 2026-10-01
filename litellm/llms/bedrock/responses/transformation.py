@@ -50,6 +50,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import (
+    BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX,
     BedrockError,
     bedrock_supports_openai_responses,
 )
@@ -71,7 +72,6 @@ BEDROCK_RUNTIME_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
     {"function", "mcp", "custom", "apply_patch", "namespace", "tool_search", "computer"}
 )
 BEDROCK_RUNTIME_UNSUPPORTED_RESPONSE_PARAMS: Final = frozenset({"background"})
-BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX: Final = "chat_completions/"
 REMOTE_IMAGE_URL_SCHEMES: Final = ("http://", "https://")
 IMAGE_BLOCK_KEYS: Final = ("content", "output")
 IMAGE_BLOCK_TYPES: Final = frozenset({"input_image", "computer_screenshot"})
