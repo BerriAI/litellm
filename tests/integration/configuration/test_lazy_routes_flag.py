@@ -14,6 +14,8 @@ import re
 import uuid
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Final
@@ -23,10 +25,12 @@ import httpx
 import openai
 import psutil
 import pytest
+import yaml
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeature
 from tests.integration._support.client import Gateway, eventually, object_value, string_value
+from tests.integration._support.mcp import McpPeer, call_tool, echo_tool, scripted_peer, tool_calls, tool_names
 from tests.integration._support.process import OwnedProxy, owned_proxy_process
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
@@ -475,3 +479,127 @@ def test_disable_lazy_routes_flag_yields_the_same_route_table_after_a_restart(ga
     with owned_proxy_process(gateway, tmp_path, {FLAG: "true"}) as second:
         assert _paths(second.gateway) == table
         assert all(_routed_features(second.gateway).values()), "a feature is missing after restart"
+
+
+SELF_HOSTED_LANGFUSE: Final = "/self-hosted-langfuse"
+
+
+@dataclass(frozen=True, slots=True)
+class _ConfiguredFeatures:
+    alias: str
+    config: Path
+    policy: Wire
+    langfuse: Wire
+    peer: McpPeer
+
+
+def _allow(request: Request) -> Reply:
+    return Reply(body=json.dumps({"action": "NONE"}).encode())
+
+
+def _langfuse_health(request: Request) -> Reply:
+    return Reply(body=json.dumps({"status": "OK"}).encode())
+
+
+def _config_declaring(directory: Path, alias: str, policy: Wire, langfuse: Wire, peer: McpPeer) -> Path:
+    base: Final = object_value(
+        JSON.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    )
+    config: Final = {
+        **base,
+        "guardrails": [
+            {
+                "guardrail_name": alias,
+                "litellm_params": {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": "pre_call",
+                    "default_on": True,
+                    "api_base": policy.url,
+                    "api_key": "synthetic-guardrail-key",
+                },
+            }
+        ],
+        "mcp_servers": {alias: peer.registration()},
+        "general_settings": {
+            **object_value(base["general_settings"]),
+            "pass_through_endpoints": [
+                {
+                    "path": "/langfuse",
+                    "target": langfuse.url + SELF_HOSTED_LANGFUSE,
+                    "include_subpath": True,
+                    "auth": True,
+                }
+            ],
+        },
+    }
+    path: Final = directory / "configured-features.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+@contextmanager
+def _configured_features(directory: Path) -> Iterator[_ConfiguredFeatures]:
+    alias: Final = "lazyroutes" + uuid.uuid4().hex[:8]
+    with (
+        wire_server(_allow) as policy,
+        wire_server(_langfuse_health) as langfuse,
+        scripted_peer(echo_tool("add")) as peer,
+    ):
+        config: Final = _config_declaring(directory, alias, policy, langfuse, peer)
+        yield _ConfiguredFeatures(alias, config, policy, langfuse, peer)
+
+
+def _config_server_id(candidate: Gateway, alias: str) -> str:
+    servers: Final = JSON.validate_json(candidate.request("GET", "/v1/mcp/server").content)
+    assert isinstance(servers, list), servers
+    return next(
+        string_value(object_value(server)["server_id"])
+        for server in servers
+        if object_value(server)["server_name"] == alias
+    )
+
+
+def _assert_config_declared_features_serve(owned: OwnedProxy, features: _ConfiguredFeatures, provider: Wire) -> None:
+    marker: Final = _marker()
+    with owned.gateway.scenario() as scenario:
+        model: Final = scenario.model(api_base=provider.url + "/v1")
+        completion: Final = owned.gateway.request(
+            "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": marker}]}
+        )
+        assert completion.status_code == 200, completion.text
+        screened: Final = [request for request in features.policy.drain() if marker.encode() in request.body]
+        assert len(screened) == 1, "the config-declared guardrail did not screen the completion"
+        assert len([request for request in provider.drain() if marker.encode() in request.body]) == 1
+
+        identity: Final = _config_server_id(owned.gateway, features.alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        tool: Final = tool_names(owned.gateway, key, identity)["add"]
+        features.peer.drain()
+        called: Final = call_tool(owned.gateway, key, identity, tool, {"marker": marker})
+        assert called.status_code == 200, called.text
+        reached_peer: Final = [
+            object_value(object_value(call["body"])["params"]) for call in tool_calls(features.peer.drain())
+        ]
+        assert [(params["name"], params["arguments"]) for params in reached_peer] == [("add", {"marker": marker})]
+
+    forwarded: Final = owned.gateway.request("GET", "/langfuse/api/public/health")
+    assert forwarded.status_code == 200, forwarded.text
+    reached_langfuse: Final = tuple(request.target for request in features.langfuse.drain())
+    assert reached_langfuse == (SELF_HOSTED_LANGFUSE + "/api/public/health",), (
+        f"the config pass-through for /langfuse lost to the built-in Langfuse route: {reached_langfuse}"
+    )
+
+
+def test_disable_lazy_routes_flag_serves_config_declared_features_like_the_warmed_lazy_proxy(
+    gateway: Gateway, tmp_path: Path, provider: Wire
+) -> None:
+    with _configured_features(tmp_path) as features:
+        with owned_proxy_process(gateway, tmp_path, {}, config=features.config, remove_environment=(FLAG,)) as lazy:
+            _assert_config_declared_features_serve(lazy, features, provider)
+            _warm_every_feature(lazy.gateway)
+            warmed_paths: Final = tuple(path for path in _paths(lazy.gateway) if path != WARMUP_ROUTE)
+            warmed_openapi: Final = _openapi_paths(lazy.gateway)
+        with owned_proxy_process(gateway, tmp_path, {FLAG: "true"}, config=features.config) as eager:
+            _assert_config_declared_features_serve(eager, features, provider)
+            assert _paths(eager.gateway) == warmed_paths
+            assert _openapi_paths(eager.gateway) == warmed_openapi

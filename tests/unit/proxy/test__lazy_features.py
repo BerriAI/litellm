@@ -96,6 +96,50 @@ def test_flag_registers_before_the_inner_lifespan_and_after_late_routes(monkeypa
     assert seen_by_inner_lifespan == [_paths(app)], "startup hooks inside the proxy lifespan must see the full table"
 
 
+def test_flag_lets_a_route_added_during_startup_beat_an_overlapping_feature_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(FLAG, "true")
+    features: Final = (_feature_module(monkeypatch, "zeta", "/zeta/{endpoint:path}"),)
+
+    async def configured() -> dict[str, str]:
+        return {"feature": "configured"}
+
+    @asynccontextmanager
+    async def adds_a_pass_through(app_: FastAPI) -> AsyncGenerator[None]:
+        app_.add_api_route("/zeta/{subpath:path}", configured, methods=["GET"])
+        yield
+
+    app: Final = FastAPI(lifespan=adds_a_pass_through)
+    attach_lazy_features(app, features)
+
+    with TestClient(app) as client:
+        assert client.get("/zeta/health").json() == {"feature": "configured"}, (
+            "lazy mode routes this to startup's route"
+        )
+
+
+def test_flag_does_not_bring_back_a_feature_route_removed_during_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(FLAG, "true")
+    features: Final = (
+        _feature_module(monkeypatch, "eta", "/eta/list"),
+        _feature_module(monkeypatch, "theta", "/theta/list"),
+    )
+
+    @asynccontextmanager
+    async def drops_eta(app_: FastAPI) -> AsyncGenerator[None]:
+        app_.router.routes[:] = [route for route in app_.router.routes if getattr(route, "path", "") != "/eta/list"]
+        yield
+
+    app: Final = FastAPI(lifespan=drops_eta)
+    attach_lazy_features(app, features)
+
+    with TestClient(app) as client:
+        assert client.get("/eta/list").status_code == 404
+        assert client.get("/theta/list").json() == {"feature": "theta"}
+    assert "/eta/list" not in _paths(app)
+
+
 @pytest.mark.parametrize("value", (None, "", "0", "false", "off"))
 def test_without_the_flag_features_still_mount_on_first_request(
     monkeypatch: pytest.MonkeyPatch, value: str | None

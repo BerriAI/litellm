@@ -521,15 +521,31 @@ def _register_all_on_startup(inner: "Lifespan[FastAPI]", features: tuple[LazyFea
     """Registering at startup, once every route the app defines exists, lands the features
     where lazy mode splices them: after every eager route (so /mcp/proxy, defined after
     attach_lazy_features(), still beats the /mcp mount) and before LITELLM_WORKER_STARTUP_HOOKS
-    or an outer lifespan can filter the table."""
+    or an outer lifespan can filter the table. The inner lifespan then adds routes of its own
+    (config pass-through endpoints), so the table is put back in lazy mode's order once it is up."""
 
     @asynccontextmanager
     async def lifespan(app: "FastAPI") -> AsyncGenerator[None]:
         register_all_features(app, features)
         async with inner(app):
+            _restore_registry_order(app, features)
             yield
 
     return lifespan
+
+
+def _restore_registry_order(app: "FastAPI", features: tuple[LazyFeature, ...]) -> None:
+    present: Final = frozenset(id(route) for route in app.router.routes)
+    registered: Final[Mapping[str, tuple[BaseRoute, ...]]] = (
+        app.state.lazy_routes if hasattr(app.state, "lazy_routes") else MappingProxyType({})
+    )
+    still_routed: Final = MappingProxyType(
+        {module_path: tuple(r for r in routes if id(r) in present) for module_path, routes in registered.items()}
+    )
+    app.router.routes[:] = hot_routes_first(  # rebind-ok: the app owns its route table
+        _in_registry_order(app.router.routes, still_routed, features, _lazy_slots(app))
+    )
+    app.openapi_schema = None
 
 
 def _make_warmup_router(app: "FastAPI", features: tuple[LazyFeature, ...] = LAZY_FEATURES) -> "APIRouter":
