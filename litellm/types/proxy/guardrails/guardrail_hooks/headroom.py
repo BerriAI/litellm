@@ -30,6 +30,14 @@ class HeadroomGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
         default=True,
         description="Inject the Headroom retrieval tool for hashes declared by the compression service.",
     )
+    min_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Skip the compression round trip when the compressible messages total fewer than this many tokens. "
+            "Falls back to the HEADROOM_MIN_TOKENS env var; when neither is set, every request is compressed."
+        ),
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:
