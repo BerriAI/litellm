@@ -963,9 +963,11 @@ def test_killing_a_worker_mid_burst_leaves_no_duplicate_rows(
     assert {identity for identity, status in outcomes if status == 200} <= set(scans), (outcomes, scans)
     rows: Final = eventually(
         lambda: read_rows('SELECT request_id, metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)),
-        lambda values: len(values) >= 1,
-        seconds=70,
+        lambda values: len(values) >= len(survivors),
+        seconds=30,
+        return_last_on_timeout=True,
     )
+    assert rows, outcomes
     assert len(rows) <= len(survivors), (outcomes, rows)
     assert len({row["request_id"] for row in rows}) == len(rows), rows
     for row in rows:
