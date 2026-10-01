@@ -31,7 +31,7 @@ class DecodedSpan(TypedDict):
     events: ReadOnly[list[DecodedEvent]]
 
 
-ReadQueryName = Literal["list_traces", "trace_spans", "span_detail", "spend_by_response_ids"]
+ReadQueryName = Literal["list_traces", "trace_spans", "span_detail", "span_error", "spend_by_response_ids"]
 
 
 class NativeStore(Protocol):

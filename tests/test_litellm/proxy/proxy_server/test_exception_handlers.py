@@ -477,3 +477,32 @@ async def test_otel_unhandled_exception_handler_reraises_http_exception_invalid(
     request = _make_request()
     with pytest.raises(HTTPException):
         await otel_unhandled_exception_handler(request=request, exc=HTTPException(status_code=418, detail="teapot"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("media_type", ["application/json", "application/x-protobuf"])
+@pytest.mark.parametrize(
+    "error", [ProxyException("Access denied", "auth_error", None, 401), HTTPException(403, "Access denied")]
+)
+async def test_otlp_auth_errors_use_the_export_encoding(media_type, error):
+    from fastapi import Request
+    from google.rpc.status_pb2 import Status
+
+    from litellm.proxy.proxy_server import otlp_http_exception_handler
+
+    request = Request(
+        {"type": "http", "method": "POST", "path": "/v1/traces", "headers": [(b"content-type", media_type.encode())]}
+    )
+    response = (
+        await openai_exception_handler(request, error)
+        if isinstance(error, ProxyException)
+        else await otlp_http_exception_handler(request, error)
+    )
+    assert response.status_code == (401 if isinstance(error, ProxyException) else 403)
+    assert response.headers["content-type"].startswith(media_type)
+    message = (
+        json.loads(response.body)["message"]
+        if media_type == "application/json"
+        else Status.FromString(response.body).message
+    )
+    assert message == "Access denied"

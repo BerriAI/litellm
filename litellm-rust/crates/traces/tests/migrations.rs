@@ -835,3 +835,93 @@ async fn lens_content_keeps_output_visible_after_long_input(
     assert_eq!(recovered, original);
     Ok(())
 }
+
+#[rstest]
+#[case::ascii(10, format!("ParentCommand: {}", "x".repeat(460_000)))]
+#[case::multibyte(1_000, "\u{1f9ea}".repeat(1_024))]
+#[case::escaped(1_000, "\0\n\"\\".repeat(1_024))]
+#[tokio::test]
+async fn trace_error_previews_preserve_paginated_diagnostics(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] span_count: usize,
+    #[case] message: String,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let rows = (0..span_count)
+        .map(|index| {
+            serde_json::from_value(serde_json::json!({
+                "Timestamp": timestamp + index as i64, "TraceId": "diagnostic-trace",
+                "SpanId": format!("span-{index}"), "SpanName": "tool",
+                "StatusCode": "STATUS_CODE_ERROR", "StatusMessage": message,
+            }))
+        })
+        .collect::<Result<Vec<BTreeMap<String, serde_json::Value>>, _>>()?;
+    insert_rows(&database, "otel_traces", rows).await?;
+    let reader = Connection::reader(&database.url, "trace_test")?;
+    let mut parameters = BTreeMap::from([
+        (
+            "trace_id".into(),
+            Parameter::Text("diagnostic-trace".into()),
+        ),
+        ("team_ids".into(), Parameter::Strings(vec![])),
+        ("api_key_hash".into(), Parameter::Text(String::new())),
+        ("trace_ref".into(), Parameter::Text(String::new())),
+    ]);
+    let body = execute_named_read(
+        &database.client,
+        &reader,
+        ReadQuery::TraceSpans,
+        &parameters,
+    )
+    .await?;
+    let response: serde_json::Value = serde_json::from_str(&body)?;
+    let spans = response["data"].as_array().expect("trace spans");
+    assert_eq!(spans.len(), span_count);
+    let prefix: String = message.chars().take(128).collect();
+    assert!(!prefix.is_empty());
+    assert!(
+        spans
+            .iter()
+            .all(|span| span["status_message"] == prefix && span["error_truncated"] == 1)
+    );
+    parameters.insert("span_id".into(), Parameter::Text("span-0".into()));
+    parameters.insert("error_version".into(), Parameter::Text(String::new()));
+    let mut recovered = String::new();
+    loop {
+        parameters.insert(
+            "error_offset".into(),
+            Parameter::Integer(recovered.chars().count() as i64),
+        );
+        let body = execute_named_read(&database.client, &reader, ReadQuery::SpanError, &parameters)
+            .await?;
+        assert!(body.len() < 128 * 1024);
+        let response: serde_json::Value = serde_json::from_str(&body)?;
+        let chunk = response["data"][0]["message"]
+            .as_str()
+            .expect("diagnostic chunk");
+        assert!(!chunk.is_empty());
+        recovered.push_str(chunk);
+        let version = response["data"][0]["version"]
+            .as_str()
+            .expect("diagnostic version");
+        parameters.insert("error_version".into(), Parameter::Text(version.into()));
+        if recovered.chars().count() >= message.chars().count() {
+            break;
+        }
+    }
+    assert_eq!(recovered, message);
+    parameters.insert(
+        "api_key_hash".into(),
+        Parameter::Text("unrelated-key".into()),
+    );
+    let denied =
+        execute_named_read(&database.client, &reader, ReadQuery::SpanError, &parameters).await?;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&denied)?["data"],
+        serde_json::json!([])
+    );
+    Ok(())
+}

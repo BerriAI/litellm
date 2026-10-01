@@ -90,18 +90,6 @@ async def test_ingest_rejects_oversized_body():
 
 
 @pytest.mark.asyncio
-async def test_large_body_is_decoded_off_the_event_loop():
-    store = _fake_store()
-    with (
-        patch.object(receiver_module, "OTLP_OFFLOAD_DECODE_BYTES", 0),
-        patch.object(receiver_module.asyncio, "to_thread", wraps=receiver_module.asyncio.to_thread) as to_thread,
-    ):
-        count = await TraceReceiver(store).ingest(FIXTURE.read_bytes(), "application/json", None, TENANT)
-    assert count == 6
-    to_thread.assert_called_once()
-
-
-@pytest.mark.asyncio
 async def test_empty_export_writes_nothing():
     store = _fake_store()
     assert await TraceReceiver(store).ingest(b"", "application/x-protobuf", None, TENANT) == 0
@@ -115,3 +103,40 @@ async def test_reads_delegate_to_store():
     scope: TraceScope = {"team_ids": ("team-research",), "api_key_hash": ""}
     assert await tracing.get_trace("t1", scope) is None
     store.get_trace.assert_awaited_once_with("t1", scope, "")
+
+
+@pytest.mark.asyncio
+async def test_cancelled_request_keeps_its_worker_slot_until_decode_finishes():
+    import asyncio
+    import threading
+
+    from litellm.tracing.receiver import TracingOverloadedError
+
+    loop = asyncio.get_running_loop()
+    owner = threading.get_ident()
+    started = asyncio.Event()
+    stored = asyncio.Event()
+    release = threading.Event()
+
+    def decoder(body, content_type, content_encoding):
+        assert threading.get_ident() != owner
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(5)
+        return ()
+
+    store = _fake_store()
+    store.insert_spans.side_effect = lambda _: stored.set()
+    tracing = TraceReceiver(store, max_concurrent_ingests=1, decoder=decoder)
+    pending = asyncio.create_task(tracing.ingest(b"small gzip", None, "gzip", TENANT))
+    try:
+        await asyncio.wait_for(started.wait(), 5)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        with pytest.raises(TracingOverloadedError):
+            await tracing.ingest(b"", None, None, TENANT)
+    finally:
+        release.set()
+        await asyncio.wait_for(stored.wait(), 5)
+        await asyncio.sleep(0)
+    assert await tracing.ingest(b"", None, None, TENANT) == 0

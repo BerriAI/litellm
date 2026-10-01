@@ -5,14 +5,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import { DetailPane } from "./DetailPane";
 import type { GroupRowData, SpanRowData } from "./traceTree";
-import type { Span, SpanDetail, Trace } from "./traceTypes";
+import type { Span, SpanDetail, SpanErrorPage, Trace } from "./traceTypes";
 
 vi.mock("../../networking", () => ({
   agentTraceSpanCall: vi.fn(),
+  agentTraceSpanErrorCall: vi.fn(),
   getProxyBaseUrl: () => "http://proxy.test/",
 }));
 
-import { agentTraceSpanCall } from "../../networking";
+import { agentTraceSpanCall, agentTraceSpanErrorCall } from "../../networking";
 
 const span = (overrides: Partial<Span> & Pick<Span, "span_id">): Span => ({
   parent_span_id: "root",
@@ -188,4 +189,29 @@ describe("DetailPane", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalled());
     expect(writeText.mock.calls[0][0]).toContain("http://proxy.test/v1/traces/t1?format=md&span_id=llm1");
   });
+});
+
+it("retrieves the retained diagnostic one section at a time", async () => {
+  const firstPage: SpanErrorPage = {
+    span_id: "tool1",
+    message: "First diagnostic section",
+    total_chars: 100,
+    next_cursor: "next-section",
+  };
+  const lastPage: SpanErrorPage = {
+    span_id: "tool1",
+    message: "Last diagnostic section",
+    total_chars: 100,
+    next_cursor: null,
+  };
+  vi.mocked(agentTraceSpanErrorCall).mockResolvedValueOnce(firstPage).mockResolvedValueOnce(lastPage);
+  renderPane(spanRow({ ...failedTool, error_truncated: true }));
+  expect(screen.getByText("Error preview truncated")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "View stored diagnostic" }));
+  expect(await screen.findByText("First diagnostic section")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Next section" }));
+  expect(await screen.findByText("Last diagnostic section")).toBeInTheDocument();
+  expect(screen.queryByText("First diagnostic section")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Next section" })).not.toBeInTheDocument();
+  expect(agentTraceSpanErrorCall).toHaveBeenLastCalledWith("sk-test", "t1", "tool1", undefined, "next-section");
 });

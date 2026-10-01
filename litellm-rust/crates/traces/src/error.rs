@@ -32,6 +32,6 @@ pub enum Error {
 pub enum DecodeError {
     #[error("invalid OTLP trace payload")]
     InvalidPayload,
-    #[error("OTLP trace payload exceeds the decompressed size limit")]
+    #[error("OTLP trace payload exceeds the decoding budget")]
     TooLarge,
 }

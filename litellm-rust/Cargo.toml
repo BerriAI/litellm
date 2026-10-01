@@ -116,6 +116,8 @@ time = { version = "0.3.53", features = ["parsing"] }
 criterion = "0.8.2"
 fancy-regex = "0.19.2"
 veil = "0.3.0"
+prost = "0.14.4"
+opentelemetry-proto = "0.33"
 
 [profile.release]
 opt-level = 3

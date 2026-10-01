@@ -11,8 +11,8 @@ flate2.workspace = true
 litellm-traces.workspace = true
 
 [dev-dependencies]
-prost = "0.14.4"
-opentelemetry-proto = { version = "0.33.0", default-features = false, features = ["gen-tonic-messages", "trace", "with-serde"] }
+prost.workspace = true
+opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "trace", "with-serde"] }
 rstest.workspace = true
 tokio.workspace = true
 tower = { version = "0.5", features = ["util"] }

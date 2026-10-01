@@ -27,7 +27,8 @@ class Span(TypedDict):
     start_offset_ms: ReadOnly[float]  # relative to trace start
     duration_ms: ReadOnly[float]
     status: ReadOnly[SpanStatus]
-    error: ReadOnly[str | None]  # exception message when status == "error"
+    error: ReadOnly[str | None]
+    error_truncated: ReadOnly[bool]
     input_preview: ReadOnly[str]
     model: ReadOnly[str | None]
     input_tokens: ReadOnly[int]
@@ -87,6 +88,13 @@ class SpanDetail(TypedDict):
     attributes: ReadOnly[dict[str, str]]
 
 
+class SpanErrorPage(TypedDict):
+    span_id: ReadOnly[str]
+    message: ReadOnly[str]
+    total_chars: ReadOnly[int]
+    next_cursor: ReadOnly[str | None]
+
+
 class TraceScope(TypedDict):
     """Who is asking. Empty team_ids = all teams (admins only)."""
 
@@ -105,23 +113,23 @@ class SpanRow(TypedDict):
     SpanName: ReadOnly[str]
     SpanKind: ReadOnly[str]
     ServiceName: ReadOnly[str]
-    ResourceAttributes: dict[str, str]
+    ResourceAttributes: ReadOnly[dict[str, str]]
     ScopeName: ReadOnly[str]
     ScopeVersion: ReadOnly[str]
-    SpanAttributes: dict[str, str]
+    SpanAttributes: ReadOnly[dict[str, str]]
     Duration: ReadOnly[int]  # ns
     StatusCode: ReadOnly[str]
     StatusMessage: ReadOnly[str]
-    TeamId: str
-    ApiKeyHash: str
-    ObservationType: SpanType
-    AgentName: str
-    LiteLLMRequestId: str
-    Model: str
-    InputTokens: int
-    OutputTokens: int
-    Input: str
-    Output: str
+    TeamId: ReadOnly[str]
+    ApiKeyHash: ReadOnly[str]
+    ObservationType: ReadOnly[SpanType]
+    AgentName: ReadOnly[str]
+    LiteLLMRequestId: ReadOnly[str]
+    Model: ReadOnly[str]
+    InputTokens: ReadOnly[int]
+    OutputTokens: ReadOnly[int]
+    Input: ReadOnly[str]
+    Output: ReadOnly[str]
 
 
 class SpendLogRecord(TypedDict):

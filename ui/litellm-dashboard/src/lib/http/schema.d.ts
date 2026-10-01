@@ -21762,6 +21762,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/traces/{trace_id}/spans/{span_id}/error": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Trace Span Error */
+        get: operations["get_agent_trace_span_error_v1_traces__trace_id__spans__span_id__error_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/unified_access_group": {
         parameters: {
             query?: never;
@@ -44081,6 +44098,17 @@ export interface components {
             type: "skill_reference";
             /** Version */
             version?: string;
+        };
+        /** SpanErrorPage */
+        SpanErrorPage: {
+            /** Message */
+            message: string;
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Span Id */
+            span_id: string;
+            /** Total Chars */
+            total_chars: number;
         };
         /** SpendAnalyticsPaginatedResponse */
         SpendAnalyticsPaginatedResponse: {
@@ -77236,6 +77264,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_trace_span_error_v1_traces__trace_id__spans__span_id__error_get: {
+        parameters: {
+            query?: {
+                trace_ref?: string;
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                trace_id: string;
+                span_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpanErrorPage"];
                 };
             };
             /** @description Validation Error */

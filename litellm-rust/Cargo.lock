@@ -4818,6 +4818,7 @@ dependencies = [
  "js-sys",
  "pin-project-lite",
  "thiserror 2.0.19",
+ "tracing",
 ]
 
 [[package]]
@@ -4832,6 +4833,8 @@ dependencies = [
  "opentelemetry_sdk 0.33.0",
  "prost",
  "serde",
+ "tonic",
+ "tonic-prost",
 ]
 
 [[package]]

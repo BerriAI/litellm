@@ -1,11 +1,14 @@
 "use client";
 
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
+import { useState } from "react";
+
+import { Button } from "@/components/ui/button";
 import { AlertTriangle, Bot, CornerDownRight, Wrench } from "lucide-react";
 
-import { agentTraceSpanCall } from "../../networking";
+import { agentTraceSpanCall, agentTraceSpanErrorCall } from "../../networking";
 import type { ErrorSource } from "./traceTree";
-import type { Span, SpanDetail, TraceMessage } from "./traceTypes";
+import type { Span, SpanDetail, SpanErrorPage, TraceMessage } from "./traceTypes";
 import { errorSource, parseMessages, prettyPayload } from "./traceUtils";
 
 const ERROR_SOURCE_LABEL: Record<ErrorSource, string> = { tool: "Tool", model: "Model", litellm: "LiteLLM" };
@@ -103,6 +106,58 @@ export function ErrorBlock({ span }: { span: Span }) {
   );
 }
 
+function DiagnosticContent({ accessToken, traceId, traceRef, span }: DetailContentProps) {
+  const [opened, setOpened] = useState(false);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const queryOptions: UseQueryOptions<SpanErrorPage, Error> = {
+    queryKey: ["agentTraceSpanError", traceId, traceRef, span.span_id, accessToken, cursor],
+    queryFn: () => agentTraceSpanErrorCall(accessToken, traceId, span.span_id, traceRef, cursor),
+    enabled: opened,
+    staleTime: Infinity,
+    gcTime: 0,
+    retry: false,
+  };
+  const query = useQuery(queryOptions);
+  return (
+    <section aria-label="Stored diagnostic">
+      {span.error_truncated && <p className="text-xs text-muted-foreground">Error preview truncated</p>}
+      {!opened && (
+        <Button variant="outline" size="sm" onClick={() => setOpened(true)}>
+          View stored diagnostic
+        </Button>
+      )}
+      {opened && query.isPending && <p role="status">Loading diagnostic…</p>}
+      {opened && query.isError && (
+        <div role="alert">
+          Could not load diagnostic: {query.error.message}
+          <Button variant="outline" size="sm" onClick={() => query.refetch()}>
+            Retry
+          </Button>
+        </div>
+      )}
+      {opened && query.data && (
+        <>
+          <TextBlock label="Stored diagnostic" value={query.data.message} mono />
+          <p className="text-xs text-muted-foreground">
+            {cursor ? "Continuation" : "Beginning"} of stored diagnostic ({query.data.total_chars.toLocaleString()}{" "}
+            characters)
+          </p>
+          {query.data.next_cursor && (
+            <Button variant="outline" size="sm" onClick={() => setCursor(query.data.next_cursor)}>
+              Next section
+            </Button>
+          )}
+          {cursor && (
+            <Button variant="outline" size="sm" onClick={() => setCursor(null)}>
+              Back to beginning
+            </Button>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function Payload({ label, value, mono }: { label: string; value: string; mono: boolean }) {
   const messages = parseMessages(value);
   if (messages) {
@@ -135,6 +190,15 @@ export function DetailContent({ accessToken, traceId, traceRef, span }: DetailCo
   return (
     <div className="space-y-3 p-3">
       <ErrorBlock span={span} />
+      {span.error && (
+        <DiagnosticContent
+          key={`${traceId}:${traceRef}:${span.span_id}`}
+          accessToken={accessToken}
+          traceId={traceId}
+          traceRef={traceRef}
+          span={span}
+        />
+      )}
       {detailQuery.isLoading && <div className="font-mono text-[11px] text-muted-foreground">Loading span…</div>}
       {detailQuery.isError && (
         <div className="font-mono text-[11px] text-muted-foreground">

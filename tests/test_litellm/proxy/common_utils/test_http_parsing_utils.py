@@ -1273,3 +1273,32 @@ def test_shared_inference_model_selection_preserves_handler_precedence(
     from litellm.proxy.common_utils.http_parsing_utils import resolve_inference_model
 
     assert resolve_inference_model(body, settings, cli, path, kind=kind) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_type, encoding", [
+    ("application/json", ""), ("application/x-protobuf", ""), ("application/json", "gzip"),
+])
+async def test_otlp_auth_does_not_consume_chunked_bodies_before_the_receiver_limit(content_type, encoding):
+    from litellm.constants import OTLP_MAX_BODY_BYTES
+    from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
+
+    received = []
+    chunk = b"x" * (OTLP_MAX_BODY_BYTES // 2 + 1)
+
+    async def receive():
+        received.append(1)
+        assert len(received) <= 2, "receiver must reject without consuming subsequent chunks"
+        return {"type": "http.request", "body": chunk, "more_body": True}
+
+    request = Request({"type": "http", "method": "POST", "path": "/v1/traces", "headers": [
+        (b"content-type", content_type.encode()), (b"content-encoding", encoding.encode()),
+    ]}, receive)
+    assert await _read_request_body(request) == {}
+    assert received == []
+    store = MagicMock()
+    store.insert_spans = AsyncMock()
+    with pytest.raises(TracingPayloadTooLargeError):
+        await TraceReceiver(store).ingest(request.stream(), content_type, encoding, Tenant("team", "key"))
+    assert len(received) == 2
+    store.insert_spans.assert_not_awaited()

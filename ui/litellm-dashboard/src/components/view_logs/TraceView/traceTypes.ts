@@ -20,6 +20,7 @@ export interface Span {
   status: SpanStatus;
   /** Exception message when status is "error". */
   error?: string | null;
+  error_truncated?: boolean;
   input_preview: string;
   model: string | null;
   input_tokens: number;
@@ -90,4 +91,11 @@ export interface TraceMessage {
   content: string;
   name?: string;
   tool_calls?: TraceToolCall[];
+}
+
+export interface SpanErrorPage {
+  span_id: string;
+  message: string;
+  total_chars: number;
+  next_cursor: string | null;
 }

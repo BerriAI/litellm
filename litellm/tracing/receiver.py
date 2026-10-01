@@ -14,13 +14,16 @@ The proxy endpoints are thin wrappers: auth -> build tenant/scope -> call one me
 
 import asyncio
 import os
+from collections.abc import AsyncIterable, Callable
+from io import BytesIO
+from threading import BoundedSemaphore
 from typing import Final
 
 from litellm.constants import (
     AGENT_TRACING_RETENTION_DAYS,
     AGENT_TRACING_SPEND_LOG_RETENTION_DAYS,
     OTLP_MAX_BODY_BYTES,
-    OTLP_OFFLOAD_DECODE_BYTES,
+    OTLP_MAX_CONCURRENT_INGESTS,
 )
 from litellm.integrations.clickhouse.schema import ensure_schema
 from litellm.rust_bridge.traces import TraceStorage
@@ -28,6 +31,7 @@ from litellm.tracing.decode import OTLPPayloadTooLargeError, decode_otlp
 from litellm.tracing.store import ClickHouseTraceStore
 from litellm.tracing.types import (
     SpanDetail,
+    SpanErrorPage,
     SpanRow,
     Trace,
     TracePage,
@@ -36,6 +40,10 @@ from litellm.tracing.types import (
 
 
 class TracingPayloadTooLargeError(Exception):
+    pass
+
+
+class TracingOverloadedError(RuntimeError):
     pass
 
 
@@ -48,20 +56,31 @@ class Tenant:
         self.org_id = org_id
 
     def stamp(self, row: SpanRow) -> SpanRow:
-        row["TeamId"] = self.team_id
-        row["ApiKeyHash"] = self.api_key_hash
-        row["ResourceAttributes"] = {  # mutable-ok: the Rust JSON bridge requires a plain dict
-            **row["ResourceAttributes"],
-            "litellm.team_id": self.team_id,
-            "litellm.api_key_hash": self.api_key_hash,
-            "litellm.org_id": self.org_id,
+        return {
+            **row,
+            "TeamId": self.team_id,
+            "ApiKeyHash": self.api_key_hash,
+            "ResourceAttributes": {
+                **row["ResourceAttributes"],
+                "litellm.team_id": self.team_id,
+                "litellm.api_key_hash": self.api_key_hash,
+                "litellm.org_id": self.org_id,
+            },
         }
-        return row
 
 
 class TraceReceiver:
-    def __init__(self, store: ClickHouseTraceStore) -> None:
+    def __init__(
+        self,
+        store: ClickHouseTraceStore,
+        max_concurrent_ingests: int = OTLP_MAX_CONCURRENT_INGESTS,
+        decoder: Callable[[bytes, str | None, str | None], tuple[SpanRow, ...]] = decode_otlp,
+    ) -> None:
+        if max_concurrent_ingests < 1:
+            raise ValueError("OTLP ingestion concurrency must be positive")
         self.store = store
+        self._decoder: Final = decoder
+        self._ingest_slots: Final = BoundedSemaphore(max_concurrent_ingests)
 
     @classmethod
     def from_env(cls) -> "TraceReceiver":
@@ -84,24 +103,38 @@ class TraceReceiver:
 
     async def ingest(
         self,
-        body: bytes,
+        body: bytes | AsyncIterable[bytes],
         content_type: str | None,
         content_encoding: str | None,
         tenant: Tenant,
     ) -> int:
-        """Decode an OTLP trace export and store its authenticated spans."""
-        if len(body) > OTLP_MAX_BODY_BYTES:
+        if not self._ingest_slots.acquire(blocking=False):
+            raise TracingOverloadedError("OTLP ingestion is at capacity")
+        task: Final = asyncio.create_task(self._ingest(body, content_type, content_encoding, tenant))
+        task.add_done_callback(self._release_ingest)
+        return await asyncio.shield(task)
+
+    def _release_ingest(self, task: asyncio.Task[int]) -> None:
+        self._ingest_slots.release()
+        if not task.cancelled():
+            task.exception()
+
+    async def _ingest(
+        self,
+        body: bytes | AsyncIterable[bytes],
+        content_type: str | None,
+        content_encoding: str | None,
+        tenant: Tenant,
+    ) -> int:
+        payload: Final = body if isinstance(body, bytes) else await _read_body(body)
+        if len(payload) > OTLP_MAX_BODY_BYTES:
             raise TracingPayloadTooLargeError(f"OTLP body exceeds {OTLP_MAX_BODY_BYTES} bytes")
         try:
-            rows: Final = (
-                await asyncio.to_thread(decode_otlp, body, content_type, content_encoding)
-                if len(body) > OTLP_OFFLOAD_DECODE_BYTES
-                else decode_otlp(body, content_type, content_encoding)
-            )
+            rows: Final = await asyncio.to_thread(self._decoder, payload, content_type, content_encoding)
         except OTLPPayloadTooLargeError as error:
             raise TracingPayloadTooLargeError(str(error)) from error
         try:
-            await self.store.insert_spans(tuple(tenant.stamp(r) for r in rows))
+            await self.store.insert_spans(tuple(tenant.stamp(row) for row in rows))
         except OverflowError as error:
             raise TracingPayloadTooLargeError(str(error)) from error
         return len(rows)
@@ -114,3 +147,17 @@ class TraceReceiver:
 
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
         return await self.store.get_span(trace_id, span_id, scope, trace_ref)
+
+    async def get_span_error(
+        self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "", cursor: str | None = None
+    ) -> SpanErrorPage | None:
+        return await self.store.get_span_error(trace_id, span_id, scope, trace_ref, cursor)
+
+
+async def _read_body(chunks: AsyncIterable[bytes]) -> bytes:
+    with BytesIO() as body:
+        async for chunk in chunks:
+            if body.tell() + len(chunk) > OTLP_MAX_BODY_BYTES:
+                raise TracingPayloadTooLargeError(f"OTLP body exceeds {OTLP_MAX_BODY_BYTES} bytes")
+            body.write(chunk)
+        return body.getvalue()

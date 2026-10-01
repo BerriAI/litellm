@@ -8,8 +8,8 @@ repository.workspace = true
 [dependencies]
 base64.workspace = true
 flate2.workspace = true
-opentelemetry-proto = { version = "0.33.0", default-features = false, features = ["gen-tonic-messages", "trace", "with-serde"] }
-prost = "0.14.4"
+opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "trace", "with-serde"] }
+prost.workspace = true
 time = { workspace = true, features = ["formatting"] }
 litellm-http.workspace = true
 sha2.workspace = true
