@@ -48,7 +48,7 @@ pub struct ExecutionFacts {
     pub source: ResultSource,
 }
 
-pub trait Interceptors<E>: Send + Sync {
+pub trait ProviderInterceptors<E>: Send + Sync {
     fn result_ready(&self, _facts: ExecutionFacts) -> impl Future<Output = Result<(), E>> + Send {
         async { Ok(()) }
     }
@@ -65,7 +65,7 @@ pub trait Interceptors<E>: Send + Sync {
     ) -> impl Future<Output = Result<(), E>> + Send;
 }
 
-impl<E, T: Interceptors<E> + ?Sized> Interceptors<E> for &T {
+impl<E, T: ProviderInterceptors<E> + ?Sized> ProviderInterceptors<E> for &T {
     fn result_ready(&self, facts: ExecutionFacts) -> impl Future<Output = Result<(), E>> + Send {
         (**self).result_ready(facts)
     }
@@ -86,7 +86,38 @@ impl<E, T: Interceptors<E> + ?Sized> Interceptors<E> for &T {
     }
 }
 
-impl<E> Interceptors<E> for () {
+/// Composes two interceptor sets: provider-stage hooks run on both in order,
+/// and the pair itself satisfies the provider contract for a driver that can
+/// only hold one interceptor.
+impl<E, A, B> ProviderInterceptors<E> for (A, B)
+where
+    A: ProviderInterceptors<E>,
+    B: ProviderInterceptors<E>,
+{
+    async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), E> {
+        self.0.result_ready(facts.clone()).await?;
+        self.1.result_ready(facts).await
+    }
+
+    async fn before_provider_request(
+        &self,
+        wire: WireRequest,
+        context: RequestContext,
+    ) -> Result<WireRequest, E> {
+        let wire = self
+            .0
+            .before_provider_request(wire, context.clone())
+            .await?;
+        self.1.before_provider_request(wire, context).await
+    }
+
+    async fn after_provider_response(&self, raw: RawResponse) -> Result<(), E> {
+        self.0.after_provider_response(raw.clone()).await?;
+        self.1.after_provider_response(raw).await
+    }
+}
+
+impl<E> ProviderInterceptors<E> for () {
     async fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -99,6 +130,8 @@ impl<E> Interceptors<E> for () {
         Ok(())
     }
 }
+
+pub use ProviderInterceptors as Interceptors;
 
 #[cfg(test)]
 mod tests {
@@ -156,13 +189,13 @@ mod tests {
     async fn the_channel_yields_each_hook_as_its_op_and_returns_the_answer() {
         let mut machine = CallMachine::<Unit>::new(None, |channel| {
             Box::pin(async move {
-                let sent = Interceptors::before_provider_request(
+                let sent = ProviderInterceptors::before_provider_request(
                     &channel.interceptors,
                     wire("prepared"),
                     context(),
                 )
                 .await?;
-                Interceptors::after_provider_response(
+                ProviderInterceptors::after_provider_response(
                     &channel.interceptors,
                     RawResponse { body: "raw".into() },
                 )
@@ -201,9 +234,13 @@ mod tests {
     #[rstest::rstest]
     #[tokio::test]
     async fn no_hooks_pass_the_wire_request_through() {
-        let sent = Interceptors::<Fault>::before_provider_request(&(), wire("prepared"), context())
-            .await
-            .unwrap();
+        let sent = ProviderInterceptors::<Fault>::before_provider_request(
+            &(),
+            wire("prepared"),
+            context(),
+        )
+        .await
+        .unwrap();
         assert_eq!(sent.url, "prepared");
     }
 }

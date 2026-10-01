@@ -37,7 +37,7 @@ pub fn app_with_permissions(
     api_base: &str,
     permissions: litellm_gateway_auth::Permissions,
 ) -> Router {
-    configured_app(model, api_base, permissions, None, None)
+    configured_app(model, api_base, permissions, None, None, None)
 }
 
 pub fn app_with_cache(
@@ -50,6 +50,7 @@ pub fn app_with_cache(
         api_base,
         litellm_gateway_auth::Permissions::All,
         Some(cache),
+        None,
         None,
     )
 }
@@ -66,7 +67,17 @@ pub fn app_with_cache_for_principal(
         litellm_gateway_auth::Permissions::All,
         Some(cache),
         Some(principal),
+        None,
     )
+}
+
+pub fn app_with_accounting(
+    model: &str,
+    api_base: &str,
+    accounting: Option<litellm_gateway_inference::accounting::ResponsesAccounting>,
+    permissions: litellm_gateway_auth::Permissions,
+) -> Router {
+    configured_app(model, api_base, permissions, None, None, accounting)
 }
 
 fn configured_app(
@@ -75,6 +86,7 @@ fn configured_app(
     permissions: litellm_gateway_auth::Permissions,
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     principal: Option<litellm_gateway_auth::Principal>,
+    accounting: Option<litellm_gateway_inference::accounting::ResponsesAccounting>,
 ) -> Router {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let http = Resolution::from(&HttpSettings::default()).config;
@@ -100,6 +112,10 @@ fn configured_app(
     .unwrap();
     let gateway = match cache {
         Some(cache) => gateway.with_cache(cache),
+        None => gateway,
+    };
+    let gateway = match accounting {
+        Some(accounting) => gateway.with_responses_accounting(accounting),
         None => gateway,
     };
     router(Arc::new(gateway)).layer(axum::middleware::from_fn_with_state(

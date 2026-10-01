@@ -3,6 +3,7 @@
 //! Authentication, rate limiting and logging are the mounting server's layers; this crate
 //! maps a public model name to its deployment and runs the core route.
 
+pub mod accounting;
 mod audio_transcription;
 mod caching;
 mod chat_completions;
@@ -23,11 +24,12 @@ use litellm_http::{ClientVariant, HttpClientConfig, media::UrlPolicy};
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
 
-pub use error::Error;
+pub use error::{AccountingError, Error, PluginError};
 pub use litellm_router::{Deployment, Router as ModelRouter};
 pub use request::{JsonObject, RequestId};
 
 pub struct Gateway {
+    responses_accounting: Option<accounting::ResponsesAccounting>,
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     pub audio_transcription: AudioTranscriptionRoute,
     pub chat_completions: ChatCompletionsRoute,
@@ -57,6 +59,7 @@ impl Gateway {
         let provider = resources.pool.client(&http, ClientVariant::Provider)?;
         let auth = resources.auth.clone();
         Ok(Self {
+            responses_accounting: None,
             cache: None,
             audio_transcription: AudioTranscriptionRoute::new(
                 provider.clone(),
@@ -83,6 +86,13 @@ impl Gateway {
             resources,
             http,
         })
+    }
+    pub fn with_responses_accounting(
+        mut self,
+        accounting: accounting::ResponsesAccounting,
+    ) -> Self {
+        self.responses_accounting = Some(accounting);
+        self
     }
 }
 

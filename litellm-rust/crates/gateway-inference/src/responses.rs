@@ -16,6 +16,23 @@ pub(crate) async fn create(
     let deployment = request::resolve_deployment(&gateway, &body)?;
     request::authorize_model(&identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(&identity, body)?;
+    let accounting = match &gateway.responses_accounting {
+        Some(service) => Some(
+            service
+                .begin(crate::accounting::AdmissionRequest {
+                    caller: identity.caller().clone(),
+                    public_model: body
+                        .get("model")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    deployment_model: deployment.model.clone(),
+                    request: body.clone(),
+                })
+                .await?,
+        ),
+        None => None,
+    };
     let route = gateway.responses.clone();
     let route = match &gateway.cache {
         Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
@@ -47,6 +64,12 @@ pub(crate) async fn create(
         ))
     });
     let headers = crate::caching::CacheHeaders::default();
-    let response = litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?;
+    let response = match accounting {
+        Some(hooks) => {
+            litellm_host_http::serve_with_hooks(machine, (), (headers.clone(), hooks), stream, None)
+                .await?
+        }
+        None => litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?,
+    };
     Ok(headers.apply(response))
 }

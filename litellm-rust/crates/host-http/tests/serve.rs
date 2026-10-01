@@ -850,3 +850,357 @@ async fn unary_custom_operations_and_conversion_finish_before_terminal_observati
         ));
     }
 }
+
+#[derive(Clone, Debug, PartialEq)]
+enum ActiveEvent {
+    Prepared(String),
+    Response(Bytes),
+    Chunk(Bytes),
+    Terminal(litellm_host::hooks::CallOutcome),
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ActiveRejection {
+    None,
+    Response,
+    Chunk,
+    Terminal,
+}
+
+#[derive(Clone)]
+struct Awaited {
+    events: Arc<Mutex<Vec<ActiveEvent>>>,
+    gate: Option<Arc<tokio::sync::Semaphore>>,
+    entered: Arc<tokio::sync::Notify>,
+    rejection: ActiveRejection,
+}
+
+#[fixture]
+fn awaited() -> Awaited {
+    Awaited {
+        events: Arc::new(Mutex::new(Vec::new())),
+        gate: None,
+        entered: Arc::new(tokio::sync::Notify::new()),
+        rejection: ActiveRejection::None,
+    }
+}
+
+impl Interceptors<TestError> for Awaited {
+    async fn before_provider_request(
+        &self,
+        mut wire: WireRequest,
+        _: RequestContext,
+    ) -> Result<WireRequest, TestError> {
+        wire.url.push_str("/rewritten");
+        self.events
+            .lock()
+            .unwrap()
+            .push(ActiveEvent::Prepared(wire.url.clone()));
+        Ok(wire)
+    }
+    async fn after_provider_response(&self, _: RawResponse) -> Result<(), TestError> {
+        Ok(())
+    }
+}
+
+impl litellm_host::hooks::CallInterceptors<TestProtocol> for Awaited {
+    async fn transform_response(
+        &mut self,
+        response: Bytes,
+    ) -> Result<Bytes, litellm_host::HookError> {
+        self.events
+            .lock()
+            .unwrap()
+            .push(ActiveEvent::Response(response.clone()));
+        if self.rejection == ActiveRejection::Response {
+            return Err(litellm_host::HookError::new(std::io::Error::other(
+                "response rejection",
+            )));
+        }
+        Ok(response)
+    }
+    fn on_stream_chunk(
+        &mut self,
+        chunk: &Bytes,
+    ) -> impl std::future::Future<Output = Result<(), litellm_host::HookError>> + Send {
+        self.events
+            .lock()
+            .unwrap()
+            .push(ActiveEvent::Chunk(chunk.clone()));
+        std::future::ready(if self.rejection == ActiveRejection::Chunk {
+            Err(litellm_host::HookError::new(std::io::Error::other(
+                "chunk rejection",
+            )))
+        } else {
+            Ok(())
+        })
+    }
+    async fn on_terminal(
+        &mut self,
+        outcome: litellm_host::hooks::CallOutcome,
+    ) -> Result<(), litellm_host::HookError> {
+        self.events
+            .lock()
+            .unwrap()
+            .push(ActiveEvent::Terminal(outcome));
+        self.entered.notify_one();
+        if let Some(gate) = &self.gate {
+            gate.acquire().await.unwrap().forget();
+        }
+        if self.rejection == ActiveRejection::Terminal {
+            return Err(litellm_host::HookError::new(std::io::Error::other(
+                "terminal rejection",
+            )));
+        }
+        Ok(())
+    }
+    fn on_cancel(&mut self) {
+        self.events.lock().unwrap().push(ActiveEvent::Cancelled);
+    }
+}
+
+#[rstest]
+#[case::success(false)]
+#[case::terminal_rejection(true)]
+#[tokio::test]
+async fn required_terminal_hook_is_awaited_before_returning_a_response(
+    mut awaited: Awaited,
+    #[case] reject: bool,
+) {
+    awaited.rejection = if reject {
+        ActiveRejection::Terminal
+    } else {
+        ActiveRejection::None
+    };
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    awaited.gate = Some(gate.clone());
+    let inspected = awaited.clone();
+    let machine = hosted_call::<TestProtocol, _, _>("request", None, |_, _, hooks, _| async move {
+        let wire = hooks
+            .before_provider_request(
+                WireRequest {
+                    url: "request".into(),
+                    headers: Vec::new(),
+                    body: json!({}),
+                },
+                RequestContext {
+                    model: "m".into(),
+                    custom_llm_provider: "p".into(),
+                    optional_params: json!({}),
+                    secret_fields: Vec::new(),
+                    api_key: None,
+                },
+            )
+            .await?;
+        Ok(CallOutput::Complete(Bytes::from(wire.url)))
+    });
+    let call = tokio::spawn(litellm_host_http::serve_with_hooks(
+        machine,
+        Adapter(Rejection::None),
+        awaited,
+        Adapter(Rejection::None),
+        None,
+    ));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        inspected.entered.notified(),
+    )
+    .await
+    .unwrap();
+    assert!(!call.is_finished());
+    assert_eq!(
+        inspected.events.lock().unwrap().as_slice(),
+        [
+            ActiveEvent::Prepared("request/rewritten".into()),
+            ActiveEvent::Response(Bytes::from_static(b"request/rewritten")),
+            ActiveEvent::Terminal(litellm_host::hooks::CallOutcome::Succeeded)
+        ]
+    );
+    gate.add_permits(1);
+    let result = call.await.unwrap();
+    if reject {
+        assert!(matches!(result, Err(Error::Hook(_))));
+    } else {
+        assert_eq!(
+            to_bytes(result.unwrap().into_body(), 1024).await.unwrap(),
+            "request/rewritten"
+        );
+    }
+    assert_eq!(inspected.events.lock().unwrap().len(), 3);
+}
+
+#[rstest]
+#[case::exhausted(None, false)]
+#[case::partial_failure(None, true)]
+#[case::cancel_before_chunks(Some(0), false)]
+#[case::cancel_after_chunk(Some(1), false)]
+#[tokio::test]
+async fn awaited_stream_hooks_follow_demand_and_select_one_terminal(
+    awaited: Awaited,
+    #[case] drop_after: Option<usize>,
+    #[case] failed: bool,
+) {
+    let events = awaited.events.clone();
+    let machine =
+        hosted_call::<TestProtocol, _, _>("request", None, move |_, _, _, _| async move {
+            let last = if failed {
+                Err(TestError::Provider)
+            } else {
+                Ok(Bytes::from_static(b"last"))
+            };
+            Ok(CallOutput::Stream {
+                head: "text/event-stream",
+                chunks: stream::iter([Ok(Bytes::from_static(b"first")), last]).boxed(),
+            })
+        });
+    let response = litellm_host_http::serve_with_hooks(
+        machine,
+        Adapter(Rejection::None),
+        awaited,
+        Adapter(Rejection::None),
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(events.lock().unwrap().is_empty());
+    let mut body = response.into_body().into_data_stream();
+    if let Some(count) = drop_after {
+        for _ in 0..count {
+            assert_eq!(body.next().await.unwrap().unwrap(), "first");
+        }
+    } else {
+        assert_eq!(body.next().await.unwrap().unwrap(), "first");
+        let last = body.next().await.unwrap().unwrap();
+        if failed {
+            assert_eq!(last, "event: error\ndata: Call(Provider)\n\n");
+        } else {
+            assert_eq!(last, "last");
+        }
+        assert!(body.next().await.is_none());
+    }
+    drop(body);
+    let recorded = events.lock().unwrap();
+    let expected = if drop_after.is_some() {
+        ActiveEvent::Cancelled
+    } else {
+        ActiveEvent::Terminal(if failed {
+            litellm_host::hooks::CallOutcome::Failed
+        } else {
+            litellm_host::hooks::CallOutcome::Succeeded
+        })
+    };
+    assert_eq!(recorded.last(), Some(&expected));
+    assert_eq!(
+        recorded
+            .iter()
+            .filter(|event| matches!(event, ActiveEvent::Terminal(_) | ActiveEvent::Cancelled))
+            .count(),
+        1
+    );
+    assert_eq!(
+        recorded
+            .iter()
+            .filter(|event| matches!(event, ActiveEvent::Chunk(_)))
+            .count(),
+        drop_after.unwrap_or(if failed { 1 } else { 2 })
+    );
+}
+
+#[rstest]
+#[case::provider(Rejection::None)]
+#[case::encoding(Rejection::Complete)]
+#[tokio::test]
+async fn original_failure_survives_a_terminal_hook_failure(
+    mut awaited: Awaited,
+    #[case] rejection: Rejection,
+) {
+    awaited.rejection = ActiveRejection::Terminal;
+    let events = awaited.events.clone();
+    let machine =
+        hosted_call::<TestProtocol, _, _>("request", None, move |_, _, _, _| async move {
+            if rejection == Rejection::None {
+                return Err(TestError::Provider);
+            }
+            Ok(CallOutput::Complete(Bytes::new()))
+        });
+    let error = litellm_host_http::serve_with_hooks(
+        machine,
+        Adapter(rejection),
+        awaited,
+        Adapter(rejection),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error,
+        Error::Call(if rejection == Rejection::None {
+            TestError::Provider
+        } else {
+            TestError::Adapter
+        })
+    );
+    let recorded = events.lock().unwrap();
+    assert_eq!(
+        recorded.last(),
+        Some(&ActiveEvent::Terminal(
+            litellm_host::hooks::CallOutcome::Failed
+        ))
+    );
+    assert!(!recorded.contains(&ActiveEvent::Cancelled));
+}
+
+#[rstest]
+#[case::response(false)]
+#[case::stream_chunk(true)]
+#[tokio::test]
+async fn hook_failure_prevents_delivery_and_still_dispatches_failed_terminal(
+    mut awaited: Awaited,
+    #[case] streaming: bool,
+) {
+    awaited.rejection = if streaming {
+        ActiveRejection::Chunk
+    } else {
+        ActiveRejection::Response
+    };
+    let events = awaited.events.clone();
+    let machine =
+        hosted_call::<TestProtocol, _, _>("request", None, move |_, _, _, _| async move {
+            if streaming {
+                return Ok(CallOutput::Stream {
+                    head: "text/event-stream",
+                    chunks: stream::iter([Ok(Bytes::from_static(b"must not be delivered"))])
+                        .boxed(),
+                });
+            }
+            Ok(CallOutput::Complete(Bytes::from_static(
+                b"must not be delivered",
+            )))
+        });
+    let result = litellm_host_http::serve_with_hooks(
+        machine,
+        Adapter(Rejection::None),
+        awaited,
+        Adapter(Rejection::None),
+        None,
+    )
+    .await;
+    if streaming {
+        let body = to_bytes(result.unwrap().into_body(), 1024).await.unwrap();
+        let text = std::str::from_utf8(&body).unwrap();
+        assert!(text.starts_with("event: error\n"));
+        assert!(!text.contains("must not be delivered"));
+        assert_eq!(text.matches("event: error").count(), 1);
+    } else {
+        assert!(matches!(result, Err(Error::Hook(_))));
+    }
+    let recorded = events.lock().unwrap();
+    assert_eq!(recorded.len(), 2);
+    assert_eq!(
+        recorded.last(),
+        Some(&ActiveEvent::Terminal(
+            litellm_host::hooks::CallOutcome::Failed
+        ))
+    );
+}

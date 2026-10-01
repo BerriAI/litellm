@@ -4,4 +4,6 @@ pub enum Error<E> {
     Call(E),
     #[error("unexpected HTTP host operation")]
     Protocol,
+    #[error(transparent)]
+    Hook(#[from] litellm_host::HookError),
 }
