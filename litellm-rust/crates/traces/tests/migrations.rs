@@ -1160,7 +1160,8 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
     if populated {
         let metadata = serde_json::json!({
             "project": "example", "labels": {"priority": 3, "enabled": true},
-            "dotted.key": "literal", "quote'\\key": null, "items": [{"name": "first"}]
+            "dotted.key": "literal", "quote'\\key": null, "items": [{"name": "first"}],
+            "<custom>&{{key}}": {"nested.key": true}
         });
         insert_rows(
             &database,
@@ -1191,6 +1192,50 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
     }
     let help: serde_json::Value =
         serde_json::from_str(&litellm_traces::query_help(&database.client, &reader).await?)?;
+    let keys: std::collections::BTreeSet<_> = help
+        .as_object()
+        .ok_or("missing help object")?
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        std::collections::BTreeSet::from([
+            "access",
+            "attributes",
+            "dialect",
+            "examples",
+            "gotchas",
+            "guide",
+            "metadata",
+            "normalized_fields",
+            "relationships",
+            "response",
+            "tables",
+        ])
+    );
+    let guide = help["guide"].as_str().ok_or("missing rendered guide")?;
+    assert!(guide.starts_with("Trace SQL query guide"));
+    for table in ["otel_traces", "agent_traces_by_key", "spend_logs"] {
+        let described = read_json(&database, &format!("DESCRIBE TABLE {table}")).await?;
+        let schema = help["tables"]
+            .as_array()
+            .ok_or("missing tables")?
+            .iter()
+            .find(|schema| schema["name"] == table)
+            .ok_or("missing table")?;
+        assert_eq!(schema["columns"], described["data"]);
+        for column in described["data"].as_array().ok_or("missing live columns")? {
+            assert!(guide.contains(&format!(
+                "{}: {}",
+                column["name"].as_str().ok_or("column name")?,
+                column["type"].as_str().ok_or("column type")?
+            )));
+        }
+    }
+    for gotcha in help["gotchas"].as_array().ok_or("missing gotchas")? {
+        assert!(guide.contains(gotcha.as_str().ok_or("gotcha text")?));
+    }
     let tables = help["tables"].as_array().ok_or("missing tables")?;
     assert_eq!(tables.len(), 3);
     let columns = tables[0]["columns"].as_array().ok_or("missing columns")?;
@@ -1216,6 +1261,11 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
         .ok_or("missing metadata fields")?;
     assert_eq!(fields.is_empty(), !populated);
     assert_eq!(help["metadata"]["truncated"], false);
+    assert!(guide.contains(help["metadata"]["scope"].as_str().ok_or("missing scope")?));
+    assert_eq!(
+        guide.contains("No metadata paths found in the sampled rows"),
+        !populated
+    );
     if populated {
         assert!(
             columns
@@ -1230,10 +1280,18 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
                 .iter()
                 .any(|field| field["path"] == serde_json::json!(["items", 1, "name"]))
         );
+        assert!(guide.contains("CustomColumn: String"));
+        assert!(guide.contains("JSONExtractRaw(metadata, '<custom>&{{key}}', 'nested.key')"));
+        assert!(guide.contains("SpanAttributes['custom.tag']"));
+        assert!(guide.contains("ResourceAttributes['custom.resource']"));
         assert_eq!(help["attributes"][0]["fields"][0]["key"], "custom.tag");
         assert_eq!(help["attributes"][1]["fields"][0]["key"], "custom.resource");
         for field in fields {
             let expression = field["expression"].as_str().ok_or("missing expression")?;
+            assert!(
+                guide.contains(expression),
+                "missing plain-text expression: {expression}"
+            );
             let sql = format!("SELECT {expression} AS value FROM spend_logs");
             let body = litellm_traces::query_sql(&database.client, &reader, &sql).await?;
             let values: serde_json::Value = serde_json::from_str(&body)?;
@@ -1242,6 +1300,17 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
     }
     for example in help["examples"].as_array().ok_or("missing examples")? {
         let sql = example["sql"].as_str().ok_or("missing example SQL")?;
+        assert!(guide.contains(example["name"].as_str().ok_or("missing example name")?));
+        assert!(guide.contains(sql));
+        assert_eq!(
+            example
+                .as_object()
+                .ok_or("example object")?
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from(["name", "sql"])
+        );
         let body = litellm_traces::query_sql(&database.client, &reader, sql).await?;
         let values: serde_json::Value = serde_json::from_str(&body)?;
         assert_eq!(

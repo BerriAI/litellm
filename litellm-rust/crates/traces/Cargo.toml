@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+askama.workspace = true
 base64.workspace = true
 flate2.workspace = true
 indexmap = { version = "2", features = ["serde"] }

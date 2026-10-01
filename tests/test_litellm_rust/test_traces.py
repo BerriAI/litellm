@@ -271,6 +271,8 @@ def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(recording
         result: Final = client.get("/v1/traces/query/help")
     assert result.status_code == 200, result.text
     body: Final = result.json()
+    assert body["guide"].startswith("Trace SQL query guide")
+    assert "JSONExtractRaw(metadata, 'custom', 'label')" in body["guide"]
     assert body["tables"][0]["columns"] == [{"name": "Model", "type": "String"}]
     assert body["metadata"]["fields"][1] == {
         "path": ["custom", "label"],
