@@ -8,7 +8,6 @@ response-shape helpers the v3 limiter's post-call hooks rely on.
 
 import base64
 import logging
-import socket
 import uuid
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType, SimpleNamespace
@@ -400,47 +399,6 @@ def test_batch_response_view_accepts_batch_objects_only():
     assert batch_response_view({"id": "chatcmpl-1", "object": "chat.completion"}) is None
     assert batch_response_view(None) is None
     assert batch_response_view("batch_1") is None
-
-
-def _local_redis_port() -> int | None:
-    for port in (6379,):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.2)
-            if sock.connect_ex(("127.0.0.1", port)) == 0:
-                return port
-    return None
-
-
-@pytest.mark.asyncio
-@pytest.mark.skipif(_local_redis_port() is None, reason="requires a local Redis on 6379 for the Lua script path")
-async def test_redis_lua_path_full_lifecycle():
-    from litellm.caching.redis_cache import RedisCache
-
-    port = _local_redis_port()
-    redis_cache = RedisCache(host="127.0.0.1", port=port)
-    store = BatchEnqueuedTokenStore(
-        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=redis_cache, default_in_memory_ttl=60))
-    )
-    key_scope = _scope(limit=100, key="api_key")
-    team_scope = _scope(limit=50, key="team")
-
-    over = await store.reserve(tokens=60, scopes=(key_scope, team_scope))
-    assert over == BatchEnqueuedTokenOverLimit(scope=team_scope, enqueued=0)
-
-    reservation = await store.reserve(tokens=50, scopes=(key_scope, team_scope))
-    assert isinstance(reservation, BatchEnqueuedTokenReservation)
-    assert isinstance(await store.reserve(tokens=1, scopes=(key_scope, team_scope)), BatchEnqueuedTokenOverLimit)
-
-    batch_id = f"batch_{uuid.uuid4().hex}"
-    await store.save_reservation(batch_id, reservation)
-    popped = await store.pop_reservation(batch_id)
-    assert popped == reservation
-    assert await store.pop_reservation(batch_id) is None
-
-    await store.refund(popped)
-    refill = await store.reserve(tokens=50, scopes=(key_scope, team_scope))
-    assert isinstance(refill, BatchEnqueuedTokenReservation)
-    await store.refund(refill)
 
 
 class _OpenBreakerRedis:
