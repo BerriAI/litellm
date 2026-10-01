@@ -87,6 +87,7 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
         <PaginationStatusAlerts
           isFetchingMore={activity.isFetchingMore}
           cancelled={activity.cancelled}
+          failed={activity.failed}
           progress={activity.progress}
           cancel={activity.cancel}
         />

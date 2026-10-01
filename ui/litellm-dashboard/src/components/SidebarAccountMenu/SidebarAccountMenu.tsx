@@ -2,6 +2,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
 import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBouncingIcon";
+import { useDisableLiteAdmin } from "@/app/(dashboard)/hooks/useDisableLiteAdmin";
 import { useDisableShowNewBadge } from "@/app/(dashboard)/hooks/useDisableShowNewBadge";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { emitLocalStorageChange, removeLocalStorageItem, setLocalStorageItem } from "@/utils/localStorageUtils";
@@ -14,7 +15,10 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/cva.config";
-import { ChevronsUpDown, Crown, IdCard, LogOut, Mail, ShieldCheck } from "lucide-react";
+import { uiHref } from "@/utils/uiHref";
+import { isProxyAdminRole } from "@/utils/roles";
+import { ChevronsUpDown, Crown, IdCard, KeyRound, LogOut, Mail, ShieldCheck } from "lucide-react";
+import { useRouter } from "next/navigation";
 import React from "react";
 
 const RELEASE_NOTES_URL = "https://docs.litellm.ai/release_notes";
@@ -81,13 +85,26 @@ interface SidebarAccountMenuProps {
 }
 
 const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, collapsed = false }) => {
-  const { userId, userEmail, userRoleLabel: userRole, premiumUser, accessToken } = useAuthorized();
+  const {
+    userId,
+    userEmail,
+    userRole: role,
+    userRoleLabel: userRole,
+    isViewOnly,
+    premiumUser,
+    accessToken,
+    loginMethod,
+  } = useAuthorized();
+  const router = useRouter();
+  const [open, setOpen] = React.useState(false);
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const version = healthData?.litellm_version;
   const disableShowPrompts = useDisableShowPrompts();
   const disableBlogPosts = useDisableBlogPosts();
   const disableBouncingIcon = useDisableBouncingIcon();
   const disableShowNewBadge = useDisableShowNewBadge();
+  const [disableLiteAdmin, setDisableLiteAdmin] = useDisableLiteAdmin(userId);
+  const canUseLiteAdmin = userId && !isViewOnly && isProxyAdminRole(role);
 
   const setFlag = (key: string, checked: boolean) => {
     if (checked) {
@@ -136,7 +153,7 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
   const triggerLabel = `Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`;
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         className={cn(
           "flex w-full items-center rounded-lg border border-transparent transition-colors hover:bg-sidebar-accent",
@@ -231,9 +248,34 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
               />
             </div>
           ))}
+          {canUseLiteAdmin && (
+            <div className="flex h-[38px] items-center justify-between gap-3 px-3">
+              <span className="text-[13px] text-foreground">Hide LiteAdmin</span>
+              <Switch
+                size="sm"
+                checked={disableLiteAdmin}
+                onCheckedChange={setDisableLiteAdmin}
+                aria-label="Toggle hide LiteAdmin"
+              />
+            </div>
+          )}
         </div>
 
         <Separator />
+
+        {loginMethod === "username_password" && (
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setOpen(false);
+              router.push(uiHref("change-password"));
+            }}
+            className="h-[42px] w-full justify-start gap-2.5 rounded-none px-3 text-sm font-medium text-foreground"
+          >
+            <KeyRound className="size-[19px] text-muted-foreground" />
+            Change Password
+          </Button>
+        )}
 
         <Button
           variant="ghost"

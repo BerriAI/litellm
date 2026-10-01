@@ -51,17 +51,16 @@ def reset_callbacks():
     litellm.callbacks = []
 
 
-def test_completion_bedrock_claude_completion_auth():
+def test_completion_bedrock_claude_completion_auth(monkeypatch):
     print("calling bedrock claude completion params auth")
-    import os
 
     aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
     aws_region_name = os.environ["AWS_REGION_NAME"]
 
-    os.environ.pop("AWS_ACCESS_KEY_ID", None)
-    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
-    os.environ.pop("AWS_REGION_NAME", None)
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
+    monkeypatch.delenv("AWS_REGION_NAME")
 
     try:
         response = completion(
@@ -73,12 +72,7 @@ def test_completion_bedrock_claude_completion_auth():
             aws_secret_access_key=aws_secret_access_key,
             aws_region_name=aws_region_name,
         )
-        # Add any assertions here to check the response
         print(response)
-
-        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
-        os.environ["AWS_REGION_NAME"] = aws_region_name
     except RateLimitError:
         pass
     except Exception as e:
@@ -165,17 +159,16 @@ def test_completion_bedrock_guardrails(streaming):
 # test_completion_bedrock_claude_2_1_completion_auth()
 
 
-def test_completion_bedrock_claude_external_client_auth():
+def test_completion_bedrock_claude_external_client_auth(monkeypatch):
     print("\ncalling bedrock claude external client auth")
-    import os
 
     aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
     aws_region_name = os.environ["AWS_REGION_NAME"]
 
-    os.environ.pop("AWS_ACCESS_KEY_ID", None)
-    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
-    os.environ.pop("AWS_REGION_NAME", None)
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
+    monkeypatch.delenv("AWS_REGION_NAME")
 
     try:
         import boto3
@@ -197,12 +190,7 @@ def test_completion_bedrock_claude_external_client_auth():
             temperature=0.1,
             aws_bedrock_client=bedrock,
         )
-        # Add any assertions here to check the response
         print(response)
-
-        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
-        os.environ["AWS_REGION_NAME"] = aws_region_name
     except RateLimitError:
         pass
     except Exception as e:
@@ -874,16 +862,15 @@ async def test_bedrock_custom_prompt_template():
         mock_client_post.assert_called_once()
 
 
-def test_completion_bedrock_external_client_region():
+def test_completion_bedrock_external_client_region(monkeypatch):
     print("\ncalling bedrock claude external client auth")
-    import os
 
     aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
     aws_region_name = "us-east-1"
 
-    os.environ.pop("AWS_ACCESS_KEY_ID", None)
-    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
 
     client = HTTPHandler()
 
@@ -918,9 +905,6 @@ def test_completion_bedrock_external_client_region():
             assert "us-east-1" in mock_client_post.call_args.kwargs["url"]
 
             mock_client_post.assert_called_once()
-
-        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
     except RateLimitError:
         pass
     except Exception as e:

@@ -25,6 +25,7 @@ import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import { UsageExportHeader } from "@/components/EntityUsageExport";
+import { getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
 import type { EntityType } from "@/components/EntityUsageExport/types";
 import {
   agentDailyActivityCall,
@@ -148,6 +149,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     isFetchingMore,
     progress,
     cancelled,
+    failed,
+    coversRange,
     cancel,
   } = usePaginatedDailyActivity({
     fetchFn,
@@ -163,6 +166,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     isFetchingMore: agentIsFetchingMore,
     progress: agentProgress,
     cancelled: agentCancelled,
+    failed: agentFailed,
     cancel: agentCancel,
   } = usePaginatedDailyActivity({
     fetchFn: agentDailyActivityCall,
@@ -660,11 +664,14 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     { key: "endpoints", label: "Endpoint Activity", content: <EndpointUsage userSpendData={spendData} /> },
   ];
 
+  const spendFetchState = { coversRange, cancelled, failed };
+
   return (
     <div style={{ width: "100%" }} className="relative">
       <PaginationStatusAlerts
         isFetchingMore={isFetchingMore}
         cancelled={cancelled}
+        failed={failed}
         progress={progress}
         cancel={cancel}
       />
@@ -672,6 +679,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         <PaginationStatusAlerts
           isFetchingMore={agentIsFetchingMore}
           cancelled={agentCancelled}
+          failed={agentFailed}
           progress={agentProgress}
           cancel={agentCancel}
           subject="agent data"
@@ -689,6 +697,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         onFiltersChange={setSelectedTags}
         filterOptions={getAllTags() || undefined}
         teams={teams || []}
+        exportBlockedReason={getExportBlockedReason(spendFetchState)}
       />
       <Tabs defaultValue={tabs[0].key}>
         <TabsList className="mt-1">

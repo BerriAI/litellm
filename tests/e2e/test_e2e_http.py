@@ -12,6 +12,7 @@ monkeypatches anything.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -29,7 +30,9 @@ from e2e_http import (
     request_with_retry,
     streaming_outcome,
     wire_body,
+    without_retries,
 )
+from models import SpendLogs, SpendLogsPage
 from pydantic import BaseModel, TypeAdapter
 
 
@@ -56,6 +59,15 @@ def _issue_from(responses: Sequence[FakeResponse]) -> Callable[[], FakeResponse]
 
 
 class TestTransientRetryPolicy:
+    def test_qualification_disables_retries_and_restores_the_default(self) -> None:
+        responses: Final = (FakeResponse(529), FakeResponse(200))
+        sleep: Final = SleepRecorder()
+        with without_retries():
+            assert request_with_retry(_issue_from(responses), sleep=sleep) is responses[0]
+        assert sleep.delays == ()
+        assert request_with_retry(_issue_from(responses), sleep=sleep) is responses[1]
+        assert sleep.delays == (0.5,)
+
     def test_transient_set_is_only_statuses_the_proxy_cannot_emit(self) -> None:
         assert TRANSIENT_STATUSES == frozenset({529})
         assert 429 not in TRANSIENT_STATUSES
@@ -207,3 +219,55 @@ class TestClassifyEmptyBody:
     def test_body_that_is_not_json_is_still_a_validation_failure(self) -> None:
         result: Final = classify(FakeJsonResponse(status_code=200, content=b"<html/>"), NoBody)
         assert isinstance(result, ValidationError)
+
+
+class TestSpendLogDecoding:
+    @pytest.mark.parametrize("paginated", [False, True])
+    @pytest.mark.parametrize(
+        "mode",
+        [
+            None,
+            "post_call",
+            ["post_call"],
+            ["pre_call", "post_call"],
+            {"tags": {"audit": ["post_call"]}, "default": "pre_call"},
+        ],
+    )
+    def test_supported_guardrail_modes_preserve_neighbor_attribution_and_masked_response(
+        self, mode: object, paginated: bool
+    ) -> None:
+        rows: Final = [
+            {
+                "request_id": "guarded-call",
+                "api_key": "scoped-key-hash",
+                "metadata": {"guardrail_information": [{"guardrail_mode": mode, "guardrail_status": "success"}]},
+                "response": {"content": "<CREDIT_CARD>"},
+            },
+            {"request_id": "health-call", "api_key": "litellm-health-check", "request_tags": ["litellm-health-check"]},
+        ]
+        payload: Final = (
+            {"data": rows, "total": 2, "page": 1, "page_size": 100, "total_pages": 1} if paginated else rows
+        )
+        response: Final = FakeJsonResponse(status_code=200, content=json.dumps(payload).encode())
+        result: Final = classify(response, SpendLogsPage) if paginated else classify(response, SpendLogs)
+
+        assert isinstance(result, Success), result
+        decoded: Final = result.data.data if isinstance(result.data, SpendLogsPage) else result.data.root
+        assert [(row.request_id, row.api_key) for row in decoded] == [
+            ("guarded-call", "scoped-key-hash"),
+            ("health-call", "litellm-health-check"),
+        ]
+        assert decoded[1].request_tags == ["litellm-health-check"]
+        assert decoded[0].response == {"content": "<CREDIT_CARD>"}
+        metadata: Final = decoded[0].metadata
+        assert metadata is not None and metadata.guardrail_information is not None
+        record: Final = metadata.guardrail_information[0]
+        assert record.model_dump(exclude_unset=True) == {"guardrail_mode": mode, "guardrail_status": "success"}
+
+    @pytest.mark.parametrize("mode", [5, [5], {"tags": {"audit": 5}}])
+    def test_malformed_guardrail_mode_remains_a_validation_failure(self, mode: object) -> None:
+        payload: Final = [{"metadata": {"guardrail_information": [{"guardrail_mode": mode}]}}]
+        result: Final = classify(FakeJsonResponse(status_code=200, content=json.dumps(payload).encode()), SpendLogs)
+
+        assert isinstance(result, ValidationError)
+        assert "guardrail_mode" in result.message
