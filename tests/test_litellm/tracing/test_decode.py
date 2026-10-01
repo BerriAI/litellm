@@ -125,6 +125,49 @@ def test_incomplete_langsmith_completion_preserves_the_export(completion):
     assert rows[0]["Output"] == completion
 
 
+def test_llm_block_list_content_keeps_only_text():
+    reasoning = {"type": "reasoning", "summary": [], "encrypted_content": "gAAAAB-opaque"}
+    history = [reasoning, {"type": "text", "text": "Earlier answer", "annotations": []}]
+    answer = [reasoning, {"type": "text", "text": "Part one"}, {"type": "text", "text": "Part two"}]
+    prompt = {
+        "messages": [
+            [
+                {"kwargs": {"type": "human", "content": "refund please"}},
+                {"kwargs": {"type": "ai", "content": history}},
+                {"kwargs": {"type": "ai", "content": [reasoning]}},
+            ]
+        ]
+    }
+    completion = {"generations": [[{"message": {"kwargs": {"type": "ai", "content": answer}}}]]}
+    span = _span(
+        "ChatOpenAI",
+        b"\x03" * 8,
+        b"\x02" * 8,
+        langsmith__span__kind="llm",
+        gen_ai__prompt=json.dumps(prompt),
+        gen_ai__completion=json.dumps(completion),
+    )
+    rows = decode_otlp(_export(span, scope="langsmith"), "application/x-protobuf")
+    assert [m["content"] for m in json.loads(rows[0]["Input"])] == ["refund please", "Earlier answer", ""]
+    assert json.loads(rows[0]["Output"])["content"] == "Part one\n\nPart two"
+    assert "encrypted_content" not in rows[0]["Input"] + rows[0]["Output"]
+
+
+def test_llm_unrecognized_list_content_is_kept_as_json():
+    content = [{"type": "image_url", "image_url": {"url": "https://x.test/a.png"}}]
+    completion = {"generations": [[{"message": {"kwargs": {"type": "ai", "content": content}}}]]}
+    span = _span(
+        "ChatOpenAI",
+        b"\x03" * 8,
+        b"\x02" * 8,
+        langsmith__span__kind="llm",
+        gen_ai__prompt='{"messages": [[{"kwargs": {"type": "human", "content": "hi"}}]]}',
+        gen_ai__completion=json.dumps(completion),
+    )
+    rows = decode_otlp(_export(span, scope="langsmith"), "application/x-protobuf")
+    assert json.loads(json.loads(rows[0]["Output"])["content"]) == content
+
+
 def test_task_tool_output_is_subagent_final_message_text(rows_by_name):
     task = rows_by_name["task"]
     assert json.loads(task["Input"])["subagent_type"] == "researcher"
@@ -187,6 +230,64 @@ def test_long_values_are_truncated_with_marker():
     assert "…[truncated " in task["Input"]
     assert task["Input"].encode().startswith(task["Input"].split("…")[0].encode())
     assert len(task["Input"].split("…")[0].encode()) <= 100
+
+
+def test_long_message_history_drops_middle_messages_and_stays_valid_json():
+    history = [{"kwargs": {"type": "human", "content": f"turn {i} " + "x" * 60}} for i in range(12)]
+    prompt = json.dumps({"messages": [[{"kwargs": {"type": "system", "content": "be brief"}}, *history]]})
+    completion = json.dumps({"generations": [[{"message": {"kwargs": {"type": "ai", "content": "ok"}}}]]})
+    span = _span(
+        "ChatOpenAI",
+        b"\x03" * 8,
+        b"\x02" * 8,
+        langsmith__span__kind="llm",
+        gen_ai__prompt=prompt,
+        gen_ai__completion=completion,
+    )
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 400):
+        rows = decode_otlp(_export(span, scope="langsmith"), "application/x-protobuf")
+    messages = json.loads(rows[0]["Input"])
+    assert len(rows[0]["Input"].encode()) <= 400
+    assert messages[0]["content"] == "be brief"
+    assert "earlier messages truncated" in messages[1]["content"]
+    assert messages[-1]["content"].startswith("turn 11 ")
+    kept = int(messages[1]["content"].split("[")[1].split()[0])
+    assert kept + len(messages) - 2 == 12
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [{"role": "system", "content": "s" * 2000}, {"role": "user", "content": "short question"}],
+        [{"role": "user", "content": "a" * 900}, {"role": "assistant", "content": "b" * 900}],
+        [
+            {"role": "system", "content": "s" * 900},
+            {"role": "user", "content": "middle"},
+            {"role": "user", "content": "q" * 900},
+        ],
+    ],
+    ids=["huge-first-message", "two-messages", "huge-first-and-last"],
+)
+def test_oversized_message_arrays_are_shortened_not_cut(messages):
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 400):
+        out = decode._truncate_payload(json.dumps(messages))
+    assert len(out.encode()) <= 400
+    kept = json.loads(out)
+    assert kept[0]["role"] == messages[0]["role"]
+    assert kept[-1]["role"] == messages[-1]["role"]
+    assert all(isinstance(m["content"], str) for m in kept)
+
+
+def test_oversized_non_content_fields_still_fit_the_limit():
+    heavy = {"role": "assistant", "content": "x", "tool_calls": [{"name": "t", "args": {"blob": "z" * 3000}}]}
+    messages = [heavy, {"role": "user", "content": "—" * 900}]
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 400):
+        out = decode._truncate_payload(json.dumps(messages))
+    kept = json.loads(out)
+    assert len(out.encode()) <= 400
+    assert [m["role"] for m in kept] == ["assistant", "user"]
+    assert kept[0]["content"].startswith("x")
+    assert kept[1]["content"].startswith("\u2014")
 
 
 # ---------------------------------------------------------------- status / exceptions

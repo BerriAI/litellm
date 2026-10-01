@@ -28,6 +28,7 @@ from litellm.tracing.types import (
     TraceScope,
     TraceSummary,
 )
+from litellm.tracing.ui_format import to_ui_content
 
 NANOS_PER_MS: Final = 1_000_000
 SPEND_WINDOW_MS: Final = 30 * 60 * 1000
@@ -344,5 +345,7 @@ class ClickHouseTraceStore:
             span_id=rows[0]["span_id"],
             input=rows[0]["input"],
             output=rows[0]["output"],
+            input_ui=to_ui_content(rows[0]["input"]),
+            output_ui=to_ui_content(rows[0]["output"]),
             attributes=rows[0]["attributes"],
         )

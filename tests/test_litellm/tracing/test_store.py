@@ -306,11 +306,16 @@ async def test_get_span_not_found_and_found():
     store = ClickHouseTraceStore(client)
     scope: TraceScope = {"team_ids": (), "api_key_hash": ""}
     assert await store.get_span("t", "s", scope) is None
-    client.query = AsyncMock(return_value=[{"span_id": "s", "input": "i", "output": "o", "attributes": {"k": "v"}}])
+    stored_input = '[{"role": "user", "content": "hi"}]'
+    client.query = AsyncMock(
+        return_value=[{"span_id": "s", "input": stored_input, "output": '{"ok": true}', "attributes": {"k": "v"}}]
+    )
     assert await store.get_span("t", "s", scope) == {
         "span_id": "s",
-        "input": "i",
-        "output": "o",
+        "input": stored_input,
+        "output": '{"ok": true}',
+        "input_ui": {"kind": "messages", "messages": ({"role": "user", "content": "hi"},)},
+        "output_ui": {"kind": "fields", "fields": ({"key": "ok", "value": "true"},)},
         "attributes": {"k": "v"},
     }
 

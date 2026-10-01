@@ -11,7 +11,8 @@ from fastapi.testclient import TestClient
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.tracing import TracingPayloadTooLargeError
+from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
+from litellm.tracing.store import ClickHouseTraceStore
 
 TEAM_KEY = UserAPIKeyAuth(
     token="hashed-key", team_id="team-research", org_id="org-1", user_role=LitellmUserRoles.INTERNAL_USER
@@ -146,6 +147,24 @@ def test_get_span_404_and_200(client, receiver):
     assert response.status_code == 200
     assert response.json()["span_id"] == "s1"
     receiver.get_span.assert_awaited_with("t1", "s1", {"team_ids": ("team-research",), "api_key_hash": ""}, "")
+
+
+def test_get_span_serves_ui_content_from_stored_payloads(client, monkeypatch):
+    storage = MagicMock()
+    stored_output = '{"role": "ai", "content": "", "tool_calls": [{"name": "lookup", "args": {"id": 7}}]}'
+    storage.query = AsyncMock(
+        return_value=[{"span_id": "s1", "input": '{"city": "Paris"}', "output": stored_output, "attributes": {}}]
+    )
+    monkeypatch.setattr(tracing_endpoints, "receiver", TraceReceiver(ClickHouseTraceStore(storage)))
+    body = client.get("/v1/traces/t1/spans/s1").json()
+    assert body["output"] == stored_output
+    assert body["input_ui"] == {"kind": "fields", "fields": [{"key": "city", "value": "Paris"}]}
+    assert body["output_ui"] == {
+        "kind": "messages",
+        "messages": [
+            {"role": "assistant", "content": "", "tool_calls": [{"name": "lookup", "arguments": '{"id": 7}'}]}
+        ],
+    }
 
 
 def test_trace_detail_passes_scoped_reference(client, receiver):

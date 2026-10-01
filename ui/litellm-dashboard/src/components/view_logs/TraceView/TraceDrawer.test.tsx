@@ -83,6 +83,22 @@ describe("RunView", () => {
     expect(await screen.findByTestId("detail-pane")).toHaveAttribute("data-row-id", rootSpanId(research));
   });
 
+  it("inside the drawer moves spans with the arrow keys and leaves J / K to switch runs", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentTraceCall).mockResolvedValue(research);
+    renderWithProviders(
+      <RunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} embedded />,
+    );
+
+    const root = rootSpanId(research);
+    expect(await screen.findByTestId("detail-pane")).toHaveAttribute("data-row-id", root);
+    await user.keyboard("j");
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", root);
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByTestId("detail-pane").getAttribute("data-row-id")).not.toBe(root);
+    expect(screen.queryByRole("button", { name: "Back to runs" })).not.toBeInTheDocument();
+  });
+
   it("moves the selection with J / K and closes the detail pane with Esc", async () => {
     const user = userEvent.setup();
     renderRun(research);

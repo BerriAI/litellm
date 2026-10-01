@@ -3,6 +3,7 @@
 import { ArrowDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cva.config";
 
 import { StatusMark } from "./StatusMark";
 import type { TraceSummary } from "./traceTypes";
@@ -15,6 +16,7 @@ interface AgentTracesTableProps {
   hasMore: boolean;
   onLoadMore: () => void;
   onOpenTrace: (trace: TraceSummary) => void;
+  selectedKey?: string | null;
 }
 
 const SECOND_MS = 1000;
@@ -53,6 +55,7 @@ export function AgentTracesTable({
   hasMore,
   onLoadMore,
   onOpenTrace,
+  selectedKey = null,
 }: AgentTracesTableProps) {
   const isEmpty = !isLoading && !error && traces.length === 0;
   return (
@@ -81,7 +84,13 @@ export function AgentTracesTable({
               key={run.trace_ref || run.trace_id}
               data-testid="agent-trace-row"
               onClick={() => onOpenTrace(run)}
-              className="h-9 cursor-pointer border-b border-border/60 text-[12px] hover:bg-accent/50"
+              aria-selected={selectedKey === (run.trace_ref || run.trace_id)}
+              className={cn(
+                "h-9 cursor-pointer border-b border-border/60 text-[12px] transition-colors duration-150 motion-reduce:transition-none",
+                selectedKey === (run.trace_ref || run.trace_id)
+                  ? "bg-trace-row-selected shadow-[inset_2px_0_0_var(--trace-brand)]"
+                  : "hover:bg-trace-row-hover",
+              )}
             >
               <td
                 className="px-3 font-mono text-[11px] tabular-nums text-muted-foreground"
