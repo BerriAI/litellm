@@ -45,8 +45,12 @@ export const asText = (value: unknown): string => {
   return "";
 };
 
+const LOGGING_ONLY_SCOPE_CHOICES: ReadonlySet<string> = new Set(
+  getLoggingOnlyScopeOptions(true).map(({ value }) => value),
+);
+
 const isLoggingOnlyScopeChoice = (value: unknown): value is LoggingOnlyScopeChoice =>
-  value === "default" || value === "input" || value === "output" || value === "both";
+  typeof value === "string" && LOGGING_ONLY_SCOPE_CHOICES.has(value);
 
 export const asStringArray = (value: unknown): string[] => {
   if (Array.isArray(value)) return value.filter((entry): entry is string => typeof entry === "string");

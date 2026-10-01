@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union,
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -1221,11 +1221,13 @@ async def patch_guardrail(
             existing_litellm_params,
             existing_guardrail.get("guardrail_name") or "Unknown",
         )
-        requested_litellm_params: Final = (
-            request.litellm_params.model_dump(exclude_unset=True) if request.litellm_params is not None else {}
+        requested_litellm_params: Final[Mapping[str, object]] = (
+            MappingProxyType(request.litellm_params.model_dump(exclude_unset=True))
+            if request.litellm_params is not None
+            else MappingProxyType({})
         )
         merged_litellm_params: Final = _as_str_object_mapping(
-            {**current_litellm_params.model_dump(exclude_unset=True), **requested_litellm_params}
+            MappingProxyType({**current_litellm_params.model_dump(exclude_unset=True), **requested_litellm_params})
         )
         try:
             parsed_litellm_params: Final = LitellmParams(**merged_litellm_params)
@@ -1240,7 +1242,7 @@ async def patch_guardrail(
             and GuardrailEventHooks.logging_only.value not in _configured_event_hooks(parsed_litellm_params.mode)
         )
         litellm_params: Final = (
-            LitellmParams(**{**merged_litellm_params, "logging_only_scope": None})
+            LitellmParams(**MappingProxyType({**merged_litellm_params, "logging_only_scope": None}))
             if clear_stored_scope
             else parsed_litellm_params
         )
@@ -1443,11 +1445,13 @@ async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
         # above; it only runs on pre_call.
         {SupportedGuardrailIntegrations.HIDE_SECRETS.value: [GuardrailEventHooks.pre_call.value]}
     )
-    providers_without_directional_logging_only_scope: Final = [
-        provider
-        for provider, guardrail_class in guardrail_class_registry.items()
-        if not guardrail_class.supports_logging_only_scope()
-    ]
+    providers_without_directional_logging_only_scope: Final = TypeAdapter(list[str]).validate_python(
+        tuple(
+            provider
+            for provider, guardrail_class in guardrail_class_registry.items()
+            if not guardrail_class.supports_logging_only_scope()
+        )
+    )
 
     return GuardrailUIAddGuardrailSettings(
         supported_entities=[entity.value for entity in PiiEntityType],

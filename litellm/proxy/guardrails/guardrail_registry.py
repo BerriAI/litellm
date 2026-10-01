@@ -6,6 +6,7 @@ import os
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import chain, count
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, cast
 
 from pydantic import ValidationError
@@ -514,7 +515,7 @@ def parse_tolerant_litellm_params(
             guardrail_name.replace("\r", "").replace("\n", ""),
             str(litellm_params_data.get("logging_only_scope")).replace("\r", "").replace("\n", "")[:100],
         )
-        return LitellmParams(**{**litellm_params_data, "logging_only_scope": None})
+        return LitellmParams(**MappingProxyType({**litellm_params_data, "logging_only_scope": None}))
 
 
 class InMemoryGuardrailHandler:
