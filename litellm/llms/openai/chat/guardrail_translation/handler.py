@@ -843,9 +843,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         if released_key is None or not released_key.tool_calls_in_flight:
             return tuple(responses_so_far)
         terminator: Final = ModelResponseStream(
-            choices=[  # mutable-ok: ModelResponseStream drops choices passed as anything but a list
-                StreamingChoices(index=0, delta=Delta(), finish_reason="tool_calls")
-            ]
+            choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="tool_calls")]
         )
         return (*responses_so_far, terminator)
 

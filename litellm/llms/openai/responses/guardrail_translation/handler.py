@@ -316,12 +316,12 @@ def _released_tool_call_payload(responses_so_far: Sequence[object], item_id: obj
 def _with_released_payload(item: Mapping[str, object], responses_so_far: Sequence[object]) -> Mapping[str, object]:
     field: Final = _TOOL_CALL_PAYLOAD_FIELDS[str(item.get("type"))]
     payload: Final = _released_tool_call_payload(responses_so_far, item.get("id"))
-    return item if payload is None else {**item, field: payload}  # mutable-ok: readers need dict events
+    return item if payload is None else {**item, field: payload}
 
 
 def _released_message_item(text: str) -> Mapping[str, object]:
-    content: Final = [{"type": "output_text", "text": text}]  # mutable-ok: readers need dict events
-    return {"type": "message", "role": "assistant", "content": content}  # mutable-ok: readers need dict events
+    content: Final = [{"type": "output_text", "text": text}]
+    return {"type": "message", "role": "assistant", "content": content}
 
 
 def _released_tool_call_items(responses_so_far: Sequence[object]) -> tuple[Mapping[str, object], ...]:
@@ -1379,10 +1379,10 @@ class OpenAIResponsesHandler(BaseTranslation):
         released_text: Final = self.get_streaming_string_so_far(text_events)
         message_items: Final = (_released_message_item(released_text),) if released_text else ()
         tool_items: Final = _released_tool_call_items(responses_so_far)
-        output: Final = [*message_items, *tool_items]  # mutable-ok: readers need dict events
-        response: Final = {"status": "incomplete", "output": output}  # mutable-ok: readers need dict events
+        output: Final = [*message_items, *tool_items]
+        response: Final = {"status": "incomplete", "output": output}
         incomplete: Final = ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE.value
-        envelope: Final = {"type": incomplete, "response": response}  # mutable-ok: readers need dict events
+        envelope: Final = {"type": incomplete, "response": response}
         return (*responses_so_far, envelope)
 
     @staticmethod
