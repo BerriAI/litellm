@@ -9,9 +9,11 @@ streams it, answers approvals and counts usage.
 
 from __future__ import annotations
 
+import itertools
 import json
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm.harness.options import DeepAgentsOptions
@@ -39,13 +41,15 @@ _MODEL_NODE: Final = "model"
 # Only these graph nodes produce new messages; middleware hooks may re-emit history.
 _EVENT_NODES: Final = frozenset({"model", "tools"})
 
-NORMALIZED_TO_NATIVE: Final[Mapping[str, str]] = {
-    "read": "read_file",
-    "write": "write_file",
-    "edit": "edit_file",
-    "bash": "execute",
-}
-NATIVE_TO_NORMALIZED: Final[Mapping[str, str]] = {v: k for k, v in NORMALIZED_TO_NATIVE.items()}
+NORMALIZED_TO_NATIVE: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "read": "read_file",
+        "write": "write_file",
+        "edit": "edit_file",
+        "bash": "execute",
+    }
+)
+NATIVE_TO_NORMALIZED: Final[Mapping[str, str]] = MappingProxyType({v: k for k, v in NORMALIZED_TO_NATIVE.items()})
 BUILTIN_TOOLS: Final = frozenset(
     {
         "ls",
@@ -63,7 +67,7 @@ BUILTIN_TOOLS: Final = frozenset(
 WRITE_TOOLS: Final = frozenset({"write_file", "edit_file", "delete"})
 EXECUTE_TOOLS: Final = frozenset({"execute"})
 APPROVAL_TOOLS: Final = WRITE_TOOLS | EXECUTE_TOOLS
-_APPROVAL_DECISIONS: Final = ["approve", "reject"]
+_APPROVAL_DECISIONS: Final = ("approve", "reject")
 
 
 # ---------------------------------------------------------------------------
@@ -71,26 +75,32 @@ _APPROVAL_DECISIONS: Final = ["approve", "reject"]
 # ---------------------------------------------------------------------------
 
 
-def gateway_headers(ctx: SessionContext) -> dict[str, str]:
+def gateway_headers(
+    ctx: SessionContext,
+) -> dict[str, str]:  # mutable-ok: ChatLiteLLM.extra_headers is a pydantic dict field
     """Same attribution headers the session endpoint adds for CLI harnesses."""
-    headers = {"x-litellm-tags": f"harness,{ctx.harness.value}"}
-    if ctx.metadata:
-        headers["x-litellm-spend-logs-metadata"] = json.dumps(dict(ctx.metadata), default=str)
-    return headers
+    metadata = ctx.metadata
+    metadata_json = json.dumps(dict(metadata), default=str) if metadata else None  # mutable-ok: for json.dumps
+    metadata_header = (("x-litellm-spend-logs-metadata", metadata_json),) if metadata_json is not None else ()
+    return dict(  # mutable-ok: ChatLiteLLM.extra_headers is a pydantic dict field
+        (("x-litellm-tags", f"harness,{ctx.harness.value}"), *metadata_header)
+    )
 
 
-def chat_model_kwargs(ctx: SessionContext) -> dict[str, Any]:
+def chat_model_kwargs(
+    ctx: SessionContext,
+) -> dict[str, Any]:  # mutable-ok: ChatLiteLLM constructor kwargs, splatted as **kwargs
     """ChatLiteLLM constructor kwargs for gateway or SDK mode."""
     if not ctx.model:
         raise ValueError("Harness.DEEPAGENTS needs model=")
     if ctx.gateway is not None:
-        return {
+        return {  # mutable-ok: ChatLiteLLM constructor kwargs, splatted as **kwargs
             "model": f"litellm_proxy/{ctx.model}",
             "api_base": ctx.gateway.api_base,
             "api_key": ctx.gateway.api_key,
             "extra_headers": gateway_headers(ctx),
         }
-    return {"model": ctx.model, "api_key": ctx.api_key, "api_base": ctx.api_base}
+    return {"model": ctx.model, "api_key": ctx.api_key, "api_base": ctx.api_base}  # mutable-ok: ChatLiteLLM kwargs
 
 
 def native_tool_name(name: str) -> str:
@@ -103,19 +113,24 @@ def normalized_tool_name(native: str) -> str:
 
 def blocked_tools(permissions: str, disable_tools: Sequence[str]) -> frozenset[str]:
     """Native tool names the model must not see or call."""
-    blocked = {native_tool_name(name) for name in disable_tools}
+    disabled = frozenset(native_tool_name(name) for name in disable_tools)
     if permissions == "read-only":
-        blocked |= WRITE_TOOLS | EXECUTE_TOOLS
-    elif permissions == "edit":
-        blocked |= EXECUTE_TOOLS
-    return frozenset(blocked)
+        return disabled | WRITE_TOOLS | EXECUTE_TOOLS
+    if permissions == "edit":
+        return disabled | EXECUTE_TOOLS
+    return disabled
 
 
-def interrupt_config(permissions: str, blocked: frozenset[str]) -> dict[str, Any] | None:
+def interrupt_config(
+    permissions: str, blocked: frozenset[str]
+) -> dict[str, Any] | None:  # mutable-ok: deepagents create_deep_agent(interrupt_on=) takes a dict
     """interrupt_on for permissions='ask': approve/reject every mutating built-in."""
     if permissions != "ask":
         return None
-    return {name: {"allowed_decisions": list(_APPROVAL_DECISIONS)} for name in sorted(APPROVAL_TOOLS - blocked)}
+    return {  # mutable-ok: deepagents interrupt_on config (dict of InterruptOnConfig with list allowed_decisions)
+        name: {"allowed_decisions": list(_APPROVAL_DECISIONS)}  # mutable-ok: deepagents InterruptOnConfig shape
+        for name in sorted(APPROVAL_TOOLS - blocked)
+    }
 
 
 def recursion_limit(ctx: SessionContext) -> int:
@@ -133,8 +148,9 @@ def content_text(content: object) -> str:
         return content
     if not isinstance(content, list):
         return ""
-    parts = [block if isinstance(block, str) else block.get("text", "") for block in content if _is_text_block(block)]
-    return "".join(parts)
+    return "".join(
+        block if isinstance(block, str) else block.get("text", "") for block in content if _is_text_block(block)
+    )
 
 
 def _is_text_block(block: object) -> bool:
@@ -143,7 +159,7 @@ def _is_text_block(block: object) -> bool:
 
 def reasoning_text(message: object) -> str:
     """Reasoning deltas from additional_kwargs or reasoning/thinking content blocks."""
-    extra = getattr(message, "additional_kwargs", None) or {}
+    extra = getattr(message, "additional_kwargs", None) or MappingProxyType({})
     reasoning = extra.get("reasoning_content")
     if isinstance(reasoning, str) and reasoning:
         return reasoning
@@ -157,18 +173,20 @@ def reasoning_text(message: object) -> str:
     )
 
 
-def stream_events(message: object) -> list[Event]:
+def stream_events(
+    message: object,
+) -> list[Event]:  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     """Text / Reasoning deltas for one streamed message chunk."""
     if getattr(message, "type", None) not in ("AIMessageChunk", "ai"):
-        return []
-    events: list[Event] = []
+        return []  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     reasoning = reasoning_text(message)
-    if reasoning:
-        events.append(Reasoning(delta=reasoning))
     text = content_text(getattr(message, "content", ""))
-    if text:
-        events.append(Text(delta=text))
-    return events
+    reasoning_events: tuple[Event, ...] = (Reasoning(delta=reasoning),) if reasoning else ()
+    text_events: tuple[Event, ...] = (Text(delta=text),) if text else ()
+    return [  # mutable-ok: returns a list; existing callers/tests compare it to list literals
+        *reasoning_events,
+        *text_events,
+    ]
 
 
 def tool_call_event(call: Mapping[str, Any]) -> ToolCall:
@@ -178,48 +196,55 @@ def tool_call_event(call: Mapping[str, Any]) -> ToolCall:
         id=str(call.get("id") or ""),
         name=normalized_tool_name(native),
         native_name=native,
-        input=dict(args) if isinstance(args, Mapping) else {"args": args},
+        input=dict(args) if isinstance(args, Mapping) else {"args": args},  # mutable-ok: ToolCall.input is a dict
         builtin=native in BUILTIN_TOOLS,
     )
 
 
-def update_events(update: object, skip_tools: frozenset[str]) -> list[Event]:
-    """ToolCall / ToolResult events from one `updates` stream chunk (node -> state delta)."""
-    if not isinstance(update, Mapping):
-        return []
-    events: list[Event] = []
+def _node_messages(update: Mapping[Any, Any]) -> Iterator[object]:
     for node, delta in update.items():
         if node not in _EVENT_NODES or not isinstance(delta, Mapping):
             continue
         messages = delta.get("messages")
-        if not isinstance(messages, list):
-            continue
-        for message in messages:
-            events += _message_events(message, skip_tools)
-    return events
+        if isinstance(messages, list):
+            yield from messages
 
 
-def _message_events(message: object, skip_tools: frozenset[str]) -> list[Event]:
+def update_events(
+    update: object, skip_tools: frozenset[str]
+) -> list[Event]:  # mutable-ok: returns a list; existing callers/tests compare it to list literals
+    """ToolCall / ToolResult events from one `updates` stream chunk (node -> state delta)."""
+    if not isinstance(update, Mapping):
+        return []  # mutable-ok: returns a list; existing callers/tests compare it to list literals
+    return list(  # mutable-ok: returns a list; existing callers/tests compare it to list literals
+        itertools.chain.from_iterable(_message_events(message, skip_tools) for message in _node_messages(update))
+    )
+
+
+def _message_events(message: object, skip_tools: frozenset[str]) -> tuple[Event, ...]:
     kind = getattr(message, "type", None)
     if kind == "ai":
-        calls = getattr(message, "tool_calls", None) or []
-        return [tool_call_event(call) for call in calls if call.get("name") not in skip_tools]
+        calls = getattr(message, "tool_calls", None) or ()
+        return tuple(tool_call_event(call) for call in calls if call.get("name") not in skip_tools)
     if kind == "tool" and getattr(message, "name", None) not in skip_tools:
-        return [
+        return (
             ToolResult(
                 id=str(getattr(message, "tool_call_id", "") or ""),
                 output=content_text(getattr(message, "content", "")),
                 is_error=getattr(message, "status", None) == "error",
-            )
-        ]
-    return []
+            ),
+        )
+    return ()
 
 
-def interrupts_in(update: object) -> list[Any]:
+def interrupts_in(
+    update: object,
+) -> list[Any]:  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     if not isinstance(update, Mapping):
-        return []
+        return []  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     found = update.get("__interrupt__")
-    return list(found) if isinstance(found, (list, tuple)) else []
+    items = tuple(found) if isinstance(found, (list, tuple)) else ()
+    return list(items)  # mutable-ok: list return; callers/tests compare to lists
 
 
 def final_ai_text(messages: Sequence[Any]) -> str:
@@ -240,25 +265,31 @@ def structured_json(value: object) -> str | None:
     return json.dumps(value, default=str)
 
 
-def approval_requests(interrupt_value: object) -> list[Mapping[str, Any]]:
+def approval_requests(
+    interrupt_value: object,
+) -> list[Mapping[str, Any]]:  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     """action_requests of a HumanInTheLoopMiddleware interrupt payload."""
     if not isinstance(interrupt_value, Mapping):
-        return []
+        return []  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     requests = interrupt_value.get("action_requests")
-    return [r for r in requests if isinstance(r, Mapping)] if isinstance(requests, list) else []
+    kept = tuple(r for r in requests if isinstance(r, Mapping)) if isinstance(requests, list) else ()
+    return list(kept)  # mutable-ok: list return; callers/tests compare to lists
 
 
-def decision(allowed: bool, reason: str) -> dict[str, Any]:
+def decision(allowed: bool, reason: str) -> dict[str, Any]:  # mutable-ok: LangGraph resume payload (HITL decision dict)
     if allowed:
-        return {"type": "approve"}
-    return {"type": "reject", "message": reason or "The user denied this tool call."}
+        return {"type": "approve"}  # mutable-ok: LangGraph resume payload (HITL decision dict)
+    return {  # mutable-ok: LangGraph HITL decision
+        "type": "reject",
+        "message": reason or "The user denied this tool call.",
+    }
 
 
 @dataclass
 class TurnState:
     """Mutable state across the stream passes of one turn."""
 
-    interrupts: list[Any] = field(default_factory=list)
+    interrupts: tuple[Any, ...] = ()
 
 
 class DeepAgentsHarnessConfig(BaseHarnessConfig):
