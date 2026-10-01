@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
 
 from litellm import harness
+from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 from litellm.utils import ProviderConfigManager
 
 PUBLIC_NAMES = [
@@ -76,12 +75,7 @@ def test_errors_share_base_class():
 
 
 def test_litellm_harness_attribute_is_lazy():
-    out = subprocess.run(
-        [sys.executable, "-c", LAZY_IMPORT_CHECK],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    out = run_child_interpreter(LAZY_IMPORT_CHECK, timeout=120)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "ok"
 
@@ -97,4 +91,5 @@ def test_litellm_agent_is_top_level_and_lazy():
         "import sys, litellm; assert 'litellm.harness' not in sys.modules; "
         "assert litellm.agent is litellm.harness.agent; assert litellm.Harness.CODEX.value == 'codex'"
     )
-    subprocess.run([sys.executable, "-c", code], check=True)
+    out = run_child_interpreter(code, timeout=120)
+    assert out.returncode == 0, out.stderr
