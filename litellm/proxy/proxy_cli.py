@@ -682,6 +682,7 @@ class ProxyInitializationHelpers:
         with prometheus configured as a callback in config.yaml, or the separate metrics server (always, since
         callbacks may also be enabled from the DB after startup).
         """
+        import shutil
         import tempfile
 
         if prometheus_metrics_port is None and (
@@ -689,15 +690,31 @@ class ProxyInitializationHelpers:
         ):
             return None
 
-        from litellm.proxy.prometheus_cleanup import wipe_directory
-
         configured_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get("prometheus_multiproc_dir")
-        multiproc_dir: Final = configured_dir or os.path.join(tempfile.gettempdir(), "litellm_prometheus_multiproc")
-        os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
+        if configured_dir:
+            # An operator-set directory is theirs to manage; keep the historical wipe-on-boot.
+            from litellm.proxy.prometheus_cleanup import wipe_directory
 
-        os.makedirs(multiproc_dir, exist_ok=True)
-        wipe_directory(multiproc_dir)
-        action: Final = "Using existing" if configured_dir else "Auto-created"
+            os.makedirs(configured_dir, exist_ok=True)
+            wipe_directory(configured_dir)
+            multiproc_dir, action = configured_dir, "Using existing"
+        else:
+            # Unique per boot: a fixed shared name lets a second proxy on this host wipe the first one's counters.
+            import atexit
+
+            multiproc_dir, action = tempfile.mkdtemp(prefix="litellm_prometheus_multiproc_"), "Auto-created"
+
+            # Only the creating process removes the dir on exit. Forked workers share it and
+            # must not delete samples their siblings are still writing.
+            creator_pid = os.getpid()
+
+            def _cleanup_auto_created_dir() -> None:
+                if os.getpid() == creator_pid:
+                    shutil.rmtree(multiproc_dir, ignore_errors=True)
+
+            atexit.register(_cleanup_auto_created_dir)
+
+        os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
         print(f"LiteLLM: {action} PROMETHEUS_MULTIPROC_DIR={multiproc_dir}")
         return multiproc_dir
 
