@@ -68358,6 +68358,8 @@ export interface operations {
                 status_filter?: string | null;
                 /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
                 cache_hit_filter?: string | null;
+                /** @description Filter logs by the credential the upstream call used: true for a client-forwarded Anthropic OAuth token, false for the deployment's configured key. Rows written before this flag existed match neither */
+                used_client_oauth_token?: boolean | null;
                 /** @description Filter logs by span type: llm, agent, mcp, or batch */
                 span_type?: string | null;
                 /** @description Filter logs by model */
@@ -68478,6 +68480,8 @@ export interface operations {
                 status_filter?: string | null;
                 /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
                 cache_hit_filter?: string | null;
+                /** @description Filter logs by the credential the upstream call used: true for a client-forwarded Anthropic OAuth token, false for the deployment's configured key. Rows written before this flag existed match neither */
+                used_client_oauth_token?: boolean | null;
                 /** @description Filter logs by span type: llm, agent, mcp, or batch */
                 span_type?: string | null;
                 /** @description Filter logs by model */
