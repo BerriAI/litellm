@@ -82,9 +82,11 @@ async def route_a2a_agent_request(
         raise ProxyModelNotFoundError(route=route_name, model_name=model_name, retryable_with_model_read_through=False)
 
     # Inject API base and route to litellm
-    data.pop("litellm_params", None)
-    data["api_base"] = agent.agent_card_params["url"]
-    verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, data["api_base"])
+    api_base: Final = agent.agent_card_params["url"]
+    verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, api_base)
 
     invocation_fee: Final = user_api_key_dict.agent_invocation_cost if user_api_key_dict is not None else None
-    return getattr(litellm, f"{route_type}")(**MappingProxyType({**data, "cost_per_query": invocation_fee}))
+    provider_data: Final = MappingProxyType({key: value for key, value in data.items() if key != "litellm_params"})
+    return getattr(litellm, f"{route_type}")(
+        **MappingProxyType({**provider_data, "api_base": api_base, "cost_per_query": invocation_fee})
+    )

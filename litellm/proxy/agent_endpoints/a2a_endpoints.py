@@ -738,7 +738,9 @@ async def invoke_agent_a2a(
             str, object
         ] = {  # mutable-ok: A2A SDK and completion bridge accept provider parameters as a dict
             **(agent.litellm_params or MappingProxyType({})),
-            "cost_per_query": user_api_key_dict.agent_invocation_cost,
+            "cost_per_query": user_api_key_dict.agent_invocation_cost
+            if (agent.litellm_params or MappingProxyType({})).get("cost_per_query") is not None
+            else None,
         }
         custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
 

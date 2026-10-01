@@ -3313,7 +3313,7 @@ async def _authorize_authenticated_request(
             general_settings,
             user_model,
             request.path_params.get("model") or request.path_params.get("model_name"),
-            request.query_params.get("model"),
+            _safe_get_request_query_params(request).get("model"),
             model_group_alias=router_settings.get("model_group_alias")
             if isinstance(router_settings, Mapping)
             else None,
