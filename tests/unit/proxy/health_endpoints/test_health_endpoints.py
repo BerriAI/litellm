@@ -35,7 +35,7 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 )
 
 # Import shared proxy test helpers from conftest
-from tests.test_litellm.proxy.conftest import create_proxy_test_client
+from tests.unit.proxy.conftest import create_proxy_test_client
 
 
 @pytest.mark.asyncio
