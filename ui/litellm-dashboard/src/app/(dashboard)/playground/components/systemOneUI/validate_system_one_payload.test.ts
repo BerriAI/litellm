@@ -98,7 +98,7 @@ describe("validateSystemOnePayload", () => {
     );
     expect(result.isValid).toBe(false);
     expect(result.issues).toContainEqual(
-      expect.objectContaining({ path: "questions.category.criteria", severity: "error" }),
+      expect.objectContaining({ path: "questions.category.criteria.support", severity: "error" }),
     );
   });
 
@@ -158,7 +158,7 @@ describe("validateSystemOnePayload", () => {
     );
     expect(result.isValid).toBe(false);
     expect(result.issues).toContainEqual(
-      expect.objectContaining({ path: "questions.urgency.criteria", severity: "error" }),
+      expect.objectContaining({ path: "questions.urgency.criteria.1", severity: "error" }),
     );
   });
 
@@ -224,6 +224,16 @@ describe("validateSystemOnePayload", () => {
         expect.objectContaining({ path: "questions.escalation.criteria.false", severity: "error" }),
       ]),
     );
+  });
+
+  it("keeps fields outside the known schema so they reach the upstream model", () => {
+    const result = validateSystemOnePayload(
+      requestWith({
+        temperature: 0,
+        questions: { category: { type: "choice", instructions: "Route", criteria: { support: "Help" }, weight: 2 } },
+      }),
+    );
+    expect(result.payload).toMatchObject({ temperature: 0, questions: { category: { weight: 2 } } });
   });
 
   it.each(SYSTEM_ONE_PRESETS)("validates the $name preset", ({ payload }) => {

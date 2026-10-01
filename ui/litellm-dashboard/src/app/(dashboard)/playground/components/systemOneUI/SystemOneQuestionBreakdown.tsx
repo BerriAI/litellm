@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import type { SystemOneQuestion, SystemOneRequest } from "./system_one_types";
+import type { SystemOneQuestion, SystemOneRequest } from "./system_one_schemas";
 
 function formatState(state: unknown): string {
   if (typeof state === "string") {

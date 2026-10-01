@@ -1,8 +1,10 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SystemOneUI from "./SystemOneUI";
-import type { SystemOneResponse } from "./system_one_types";
+import type { SystemOneResponse } from "./system_one_schemas";
 
 const responseBody: SystemOneResponse = {
   model: "jev-1.13.0",
@@ -15,6 +17,13 @@ const responseBody: SystemOneResponse = {
     },
   },
 };
+
+const render = (ui: ReactElement) =>
+  rtlRender(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { mutations: { retry: false } } })}>
+      {ui}
+    </QueryClientProvider>,
+  );
 
 const createResponse = (body: SystemOneResponse, status = 200, errorText = "") =>
   ({

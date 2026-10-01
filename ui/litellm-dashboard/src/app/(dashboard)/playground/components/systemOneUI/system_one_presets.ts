@@ -1,4 +1,4 @@
-import type { SystemOneRequest } from "./system_one_types";
+import type { SystemOneRequest } from "./system_one_schemas";
 
 export interface SystemOnePreset {
   id: string;

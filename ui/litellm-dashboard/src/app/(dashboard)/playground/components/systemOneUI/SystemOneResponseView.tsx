@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronDown, LoaderCircle } from "lucide-react";
 import { useState } from "react";
-import type { SystemOneAnswer, SystemOneResponse } from "./system_one_types";
+import type { SystemOneAnswer, SystemOneResponse } from "./system_one_schemas";
 
 interface SystemOneResponseViewProps {
   response?: SystemOneResponse;

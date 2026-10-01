@@ -6,6 +6,7 @@ import ChatUI from "@/app/(dashboard)/playground/components/chat_ui/ChatUI";
 import CompareUI from "@/app/(dashboard)/playground/components/compareUI/CompareUI";
 import ComplianceUI from "@/app/(dashboard)/playground/components/complianceUI/ComplianceUI";
 import SystemOneUI from "@/app/(dashboard)/playground/components/systemOneUI/SystemOneUI";
+import BetaBadge from "@/components/BetaBadge";
 import { DeprecationBanner } from "@/components/DeprecationBanner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchProxySettings } from "@/utils/proxyUtils";
@@ -69,7 +70,7 @@ export default function PlaygroundPage() {
             Compliance
           </TabsTrigger>
           <TabsTrigger value="system-one" className="flex-none">
-            System One
+            <BetaBadge>System One</BetaBadge>
           </TabsTrigger>
           <TabsTrigger value="agent-builder" className="flex-none">
             Agent Builder (Experimental)

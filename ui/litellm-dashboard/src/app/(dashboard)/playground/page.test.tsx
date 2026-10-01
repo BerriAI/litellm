@@ -90,7 +90,9 @@ describe("PlaygroundPage ?tab= deep link", () => {
   it("activates System One from ?tab=system-one", () => {
     renderWithProviders(<PlaygroundPage />, { searchParams: { tab: "system-one" } });
 
-    expect(screen.getByRole("tab", { name: "System One" })).toHaveAttribute("aria-selected", "true");
+    const tab = screen.getByRole("tab", { name: /^System One/ });
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(tab).toHaveTextContent("Beta");
     expect(screen.getByTestId("system-one-ui")).toBeInTheDocument();
   });
 

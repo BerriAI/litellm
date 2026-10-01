@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import SystemOneResponseView from "./SystemOneResponseView";
-import type { SystemOneResponse } from "./system_one_types";
+import type { SystemOneResponse } from "./system_one_schemas";
 
 const sampleResponse: SystemOneResponse = {
   model: "jev-1.13.0",

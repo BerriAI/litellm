@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeSystemOneRequest } from "./system_one";
-import type { SystemOneRequest, SystemOneResponse } from "../components/systemOneUI/system_one_types";
+import type { SystemOneRequest, SystemOneResponse } from "../components/systemOneUI/system_one_schemas";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "https://proxy.example.com"),
@@ -74,11 +74,8 @@ describe("makeSystemOneRequest", () => {
       "https://custom.example.com/typesafe/v1/systemone",
       expect.objectContaining(expectedRequest),
     );
-    expect(result.type).toBe("success");
-    if (result.type === "success") {
-      expect(result.response).toEqual(responseBody);
-      expect(result.latencyMs).toBeGreaterThanOrEqual(0);
-    }
+    expect(result.response).toEqual(responseBody);
+    expect(result.latencyMs).toBeGreaterThanOrEqual(0);
   });
 
   it("uses the proxy base URL when no custom base is provided", async () => {
@@ -103,9 +100,8 @@ describe("makeSystemOneRequest", () => {
       text: async () => JSON.stringify(body) ?? "",
     } as Response);
 
-    await expect(makeSystemOneRequest(payload, "session-key")).resolves.toEqual({
-      type: "error",
-      message: "System One response has an invalid shape.",
-    });
+    await expect(makeSystemOneRequest(payload, "session-key")).rejects.toThrow(
+      "System One response has an invalid shape.",
+    );
   });
 });

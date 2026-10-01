@@ -5,14 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { useMutation } from "@tanstack/react-query";
 import { Code, LoaderCircle, Send } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { makeSystemOneRequest } from "../../llm_calls/system_one";
 import { SYSTEM_ONE_PRESETS } from "./system_one_presets";
+import type { SystemOneRequest } from "./system_one_schemas";
 import SystemOneQuestionBreakdown from "./SystemOneQuestionBreakdown";
 import SystemOneResponseView from "./SystemOneResponseView";
 import { validateSystemOnePayload } from "./validate_system_one_payload";
-import type { SystemOneResponse } from "./system_one_types";
 
 interface SystemOneUIProps {
   accessToken: string | null;
@@ -20,6 +21,12 @@ interface SystemOneUIProps {
 }
 
 type ApiKeySource = "session" | "custom";
+
+interface SystemOneSendVariables {
+  payload: SystemOneRequest;
+  apiKey: string;
+  signal: AbortSignal;
+}
 
 const INITIAL_PRESET = SYSTEM_ONE_PRESETS[0];
 
@@ -32,44 +39,23 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
   const [customApiKey, setCustomApiKey] = useState("");
   const [selectedPresetId, setSelectedPresetId] = useState(INITIAL_PRESET.id);
   const [rawPayload, setRawPayload] = useState(() => JSON.stringify(INITIAL_PRESET.payload, null, 2));
-  const [response, setResponse] = useState<SystemOneResponse>();
-  const [latencyMs, setLatencyMs] = useState<number>();
-  const [error, setError] = useState<string>();
-  const [isLoading, setIsLoading] = useState(false);
   const activeController = useRef<AbortController | null>(null);
   const validation = useMemo(() => validateSystemOnePayload(rawPayload), [rawPayload]);
   const effectiveApiKey = apiKeySource === "session" ? accessToken || "" : customApiKey.trim();
-  const effectiveApiKeyRef = useRef(effectiveApiKey);
   const hasSyntaxError = validation.issues.some((issue) => issue.path === "syntax");
 
-  useEffect(() => {
-    if (effectiveApiKeyRef.current === effectiveApiKey) {
-      return;
-    }
-    effectiveApiKeyRef.current = effectiveApiKey;
-    activeController.current?.abort();
-    activeController.current = null;
-    setResponse(undefined);
-    setLatencyMs(undefined);
-    setError(undefined);
-    setIsLoading(false);
-  }, [effectiveApiKey]);
+  const systemOne = useMutation({
+    mutationFn: ({ payload, apiKey, signal }: SystemOneSendVariables) =>
+      makeSystemOneRequest(payload, apiKey, getCustomProxyBaseUrl(), signal),
+  });
+  const isLoading = systemOne.isPending;
 
-  useEffect(
-    () => () => {
-      activeController.current?.abort();
-      activeController.current = null;
-    },
-    [],
-  );
+  useEffect(() => () => activeController.current?.abort(), []);
 
   function clearRequestState() {
     activeController.current?.abort();
     activeController.current = null;
-    setResponse(undefined);
-    setLatencyMs(undefined);
-    setError(undefined);
-    setIsLoading(false);
+    systemOne.reset();
   }
 
   function handlePayloadChange(value: string) {
@@ -89,56 +75,19 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
   }
 
   function handleFormatJson() {
-    if (!rawPayload.trim() || hasSyntaxError) {
-      return;
-    }
-    const parsed: unknown = JSON.parse(rawPayload);
-    const formatted = JSON.stringify(parsed, null, 2);
-    if (formatted) {
-      handlePayloadChange(formatted);
+    if (rawPayload.trim() && !hasSyntaxError) {
+      handlePayloadChange(JSON.stringify(JSON.parse(rawPayload), null, 2));
     }
   }
 
-  function handleAbort() {
+  function handleSend() {
+    if (!validation.payload || !effectiveApiKey) {
+      return;
+    }
     clearRequestState();
-  }
-
-  async function handleSend() {
-    const payload = validation.payload;
-    if (!payload || !effectiveApiKey) {
-      return;
-    }
-
-    activeController.current?.abort();
     const controller = new AbortController();
     activeController.current = controller;
-    setResponse(undefined);
-    setLatencyMs(undefined);
-    setError(undefined);
-    setIsLoading(true);
-
-    try {
-      const result = await makeSystemOneRequest(payload, effectiveApiKey, getCustomProxyBaseUrl(), controller.signal);
-      if (activeController.current !== controller) {
-        return;
-      }
-      if (result.type === "error") {
-        setError(result.message);
-        return;
-      }
-      setResponse(result.response);
-      setLatencyMs(result.latencyMs);
-    } catch (requestError: unknown) {
-      if (controller.signal.aborted || activeController.current !== controller) {
-        return;
-      }
-      setError(requestError instanceof Error ? requestError.message : String(requestError));
-    } finally {
-      if (activeController.current === controller) {
-        activeController.current = null;
-        setIsLoading(false);
-      }
-    }
+    systemOne.mutate({ payload: validation.payload, apiKey: effectiveApiKey, signal: controller.signal });
   }
 
   return (
@@ -202,11 +151,11 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
               Format JSON
             </Button>
             {isLoading && (
-              <Button variant="outline" onClick={handleAbort}>
+              <Button variant="outline" onClick={clearRequestState}>
                 Cancel request
               </Button>
             )}
-            <Button onClick={() => void handleSend()} disabled={!validation.isValid || isLoading || !effectiveApiKey}>
+            <Button onClick={handleSend} disabled={!validation.isValid || isLoading || !effectiveApiKey}>
               {isLoading ? <LoaderCircle className="animate-spin" /> : <Send />}
               Send
             </Button>
@@ -243,10 +192,10 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
         <section className="grid content-start gap-4" aria-label="System One results">
           <SystemOneQuestionBreakdown payload={validation.payload} />
           <SystemOneResponseView
-            response={response}
+            response={systemOne.data?.response}
             fallbackModel={validation.payload?.model}
-            latencyMs={latencyMs}
-            error={error}
+            latencyMs={systemOne.data?.latencyMs}
+            error={systemOne.error?.message}
             isLoading={isLoading}
           />
         </section>
