@@ -1715,11 +1715,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
         pii_tokens: Final = metadata.get("pii_tokens", {})
 
-        new_texts: Final = []
-        if input_type == "response" and (
+        restore_from_tokens: Final = input_type == "response" and (
             self._callback_role == "restore"
-            or (self._callback_role is None and not self.apply_to_output and pii_tokens)
-        ):
+            or (self._callback_role is None and not self.apply_to_output and bool(pii_tokens))
+        )
+
+        new_texts: Final = []
+        if restore_from_tokens:
             for text in texts:
                 new_texts.append(self._unmask_pii_text(text, pii_tokens))
         else:
@@ -1741,7 +1743,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 if args is None:
                     new_tool_calls.append(tool_call)
                     continue
-                if input_type == "response" and pii_tokens:
+                if restore_from_tokens:
                     new_args = self._unmask_pii_text(args, pii_tokens)
                 else:
                     new_args = await self.check_pii(

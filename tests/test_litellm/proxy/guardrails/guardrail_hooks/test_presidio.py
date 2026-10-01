@@ -4369,6 +4369,29 @@ async def test_apply_guardrail_masks_tool_call_arguments_on_request():
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_output_scan_rescans_tool_call_arguments():
+    """The output-masking callback must scan tool call arguments, not restore them from pii_tokens."""
+    from unittest.mock import AsyncMock
+
+    pii_masking = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True, _callback_role="scan")
+    pii_masking.check_pii = AsyncMock(return_value=MASKED_TOOL_ARGUMENTS)
+    tool_call = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "lookup_reservation", "arguments": UNMASKED_TOOL_ARGUMENTS},
+    }
+
+    result = await pii_masking.apply_guardrail(
+        inputs={"texts": [], "tool_calls": [tool_call]},
+        request_data={"metadata": {"pii_tokens": TOOL_CALL_PII_TOKENS}},
+        input_type="response",
+    )
+
+    pii_masking.check_pii.assert_awaited_once()
+    assert result["tool_calls"][0]["function"]["arguments"] == MASKED_TOOL_ARGUMENTS
+
+
+@pytest.mark.asyncio
 async def test_unified_post_call_unmasks_tool_call_arguments_end_to_end():
     """
     End-to-end repro of issue #31950: a /chat/completions response whose only
