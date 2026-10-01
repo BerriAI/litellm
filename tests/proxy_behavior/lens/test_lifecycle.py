@@ -67,7 +67,7 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         )
         assert stored_worker is not None and stored_worker.id == worker.id
         assert worker.id == registration.worker.id
-        listing: Final = await endpoints.list_engines(admin)
+        listing: Final = await endpoints.list_engines(admin, tracing=None)
         assert engine.id in tuple(e.id for e in listing.engines)
         assert worker.id in tuple(w.id for w in listing.workers)
         claimed: Final = await endpoints.claim_candidate(engine, worker, datetime.now(timezone.utc))
@@ -94,13 +94,16 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         assert charged.spent == pytest.approx(response.cost)
         assert charged.jobs[0].cost == pytest.approx(response.cost)
         finished: Final = await endpoints.result(
-            engine.id, claimed.job.id, Result(coverage=Coverage(screened=2)), worker
+            engine.id, claimed.job.id, Result(coverage=Coverage(screened=2)), worker, tracing=None
         )
         assert finished.jobs[0].status == "completed"
         assert finished.jobs[0].coverage.screened == 2
         assert finished.last_scan_at == claimed.job.end
         assert finished.next_run_at > finished.jobs[0].finished_at
-        assert await endpoints.result(engine.id, claimed.job.id, Result(coverage=Coverage()), worker) == finished
+        assert (
+            await endpoints.result(engine.id, claimed.job.id, Result(coverage=Coverage()), worker, tracing=None)
+            == finished
+        )
         with pytest.raises(HTTPException) as stale:
             await endpoints.heartbeat(engine.id, claimed.job.id, worker)
         assert stale.value.status_code == 409
