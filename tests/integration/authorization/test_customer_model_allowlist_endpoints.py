@@ -98,7 +98,6 @@ def test_chat_completions_non_stream_is_enforced_with_openai_sync_sdk(gateway: G
 
 
 def test_chat_completions_non_stream_is_enforced_with_openai_async_sdk(gateway: Gateway) -> None:
-    pytest.skip("BUG: async chat completions can serve a model outside the customer allowlist")
     with _endpoint_scenario(gateway) as scenario:
 
         async def exercise() -> None:
@@ -132,7 +131,6 @@ def test_chat_completions_non_stream_is_enforced_with_openai_async_sdk(gateway: 
 
 
 def test_chat_completions_stream_is_enforced_with_openai_sync_and_async_sdks(gateway: Gateway) -> None:
-    pytest.skip("BUG: streaming chat completions can serve a model outside the customer allowlist")
     with _endpoint_scenario(gateway) as scenario:
         with openai.OpenAI(
             api_key=scenario.key,
@@ -171,14 +169,18 @@ def test_chat_completions_stream_is_enforced_with_openai_sync_and_async_sdks(gat
                 http_client=httpx.AsyncClient(timeout=15, trust_env=False),
             ) as client:
                 denied_marker: Final = uuid.uuid4().hex
-                with pytest.raises(openai.PermissionDeniedError) as denied:
-                    stream = await client.chat.completions.create(
+
+                async def create_and_drain_denied_stream() -> None:
+                    stream: Final = await client.chat.completions.create(
                         model=scenario.m2,
                         messages=[{"role": "user", "content": denied_marker}],
                         user=scenario.customer,
                         stream=True,
                     )
                     tuple([chunk async for chunk in stream])
+
+                with pytest.raises(openai.PermissionDeniedError) as denied:
+                    await create_and_drain_denied_stream()
                 _assert_denial(denied.value.response.status_code, denied.value.response.text, scenario.m2)
                 _assert_upstream(scenario.wire, denied_marker, 0)
 
@@ -444,14 +446,18 @@ def test_responses_stream_is_enforced_with_openai_sync_and_async_sdks(gateway: G
                 http_client=httpx.AsyncClient(timeout=15, trust_env=False),
             ) as client:
                 denied_marker: Final = uuid.uuid4().hex
-                with pytest.raises(openai.PermissionDeniedError) as denied:
-                    stream = await client.responses.create(
+
+                async def create_and_drain_denied_stream() -> None:
+                    stream: Final = await client.responses.create(
                         model=scenario.m2,
                         input=denied_marker,
                         user=scenario.customer,
                         stream=True,
                     )
                     tuple([event async for event in stream])
+
+                with pytest.raises(openai.PermissionDeniedError) as denied:
+                    await create_and_drain_denied_stream()
                 _assert_denial(denied.value.response.status_code, denied.value.response.text, scenario.m2)
                 _assert_upstream(scenario.wire, denied_marker, 0)
 

@@ -547,8 +547,7 @@ def test_cached_end_user_without_models_decodes_as_unrestricted(gateway: Gateway
         updated: Final = gateway.request("POST", "/customer/update", {"user_id": customer, "models": [allowed]})
         assert updated.status_code == 200, updated.text
         updated_info: Final = gateway.get("/customer/info", {"end_user_id": customer})
-        expected_models: Final = [allowed] if _models_column_exists(os.environ["DATABASE_URL"]) else None
-        assert updated_info.get("models") == expected_models, updated_info
+        assert updated_info.get("models") == [allowed], updated_info
 
         cache_key: Final = end_user_cache_key(customer)
         legacy: Final = {
