@@ -384,7 +384,7 @@ def metadata_from_request_data(data: object) -> Mapping[str, object] | None:
 
 def flatten_metadata(raw: Mapping[str, object]) -> Iterator[tuple[str, str]]:
     """Scalar leaves of a nested metadata mapping, keyed by their dotted path."""
-    stack: Final = list(tuple(raw.items())[::-1])  # mutable-ok: iterative worklist keeps the walk off the call stack
+    stack: Final = list(tuple(raw.items())[::-1])
     while stack:
         key, value = stack.pop()
         if (nested := as_str_mapping(value)) is not None:

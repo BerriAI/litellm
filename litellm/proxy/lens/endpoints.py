@@ -46,7 +46,7 @@ from litellm.proxy.lens.state import (
     snapshot_finding,
 )
 
-router: Final = APIRouter(prefix="/lens", tags=["Lens"])  # mutable-ok: FastAPI requires list
+router: Final = APIRouter(prefix="/lens", tags=["Lens"])
 _bearer: Final = HTTPBearer()
 Auth: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 

@@ -153,7 +153,7 @@ async def _handle_completed_batch_with_files(
             BatchCostUsageResult(
                 cost=0.0,
                 usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
-                models=[],  # mutable-ok: same contract as _handle_completed_batch above
+                models=[],
                 successful_requests=0,
                 failed_requests=error_file_failed_requests,
             ),
