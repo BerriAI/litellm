@@ -5,7 +5,9 @@ Tests for AiPolicySuggester class.
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 
@@ -283,13 +285,30 @@ class TestSuggesterToleratesAModelThatRefusesItsSamplingParams:
     """
 
     @pytest.mark.asyncio
-    async def test_a_reasoning_model_gets_past_param_mapping(self, monkeypatch, local_model_cost_map):
+    @respx.mock
+    async def test_a_reasoning_model_gets_past_param_mapping(
+        self, monkeypatch, local_model_cost_map, httpx_transport
+    ):
         """Drives the real entry point with no patching and no network. Which exception escapes is
         the discriminator: param mapping runs before any credential check, so UnsupportedParamsError
         means the call died on the pinned temperature, while AuthenticationError means it survived
         that and got as far as needing a key. Asserting the latter is what the caller observes.
         """
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        respx.post(url__regex=r".*/responses.*").mock(
+            return_value=httpx.Response(
+                401,
+                json={
+                    "error": {
+                        "message": "Incorrect API key provided.",
+                        "type": "invalid_request_error",
+                        "param": None,
+                        "code": "invalid_api_key",
+                    }
+                },
+            )
+        )
 
         with pytest.raises(litellm.AuthenticationError):
             await AiPolicySuggester().suggest(
