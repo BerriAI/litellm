@@ -36,7 +36,18 @@ def _merge_token_tags(normalized: pl.DataFrame, source: pl.DataFrame) -> pl.Data
     """Zip transformed rows with the row-aligned source and add token keys to each row's Tags; degrades to unchanged on any mismatch."""
     import polars as pl
 
-    if "Tags" not in normalized.columns or normalized.height != source.height:
+    if "Tags" not in normalized.columns:
+        verbose_logger.warning(
+            "Ternary export: transformed data has no `Tags` column; token counts not merged into %d row(s)",
+            normalized.height,
+        )
+        return normalized
+    if normalized.height != source.height:
+        verbose_logger.warning(
+            "Ternary export: row-count mismatch (normalized=%d, source=%d); token counts not merged",
+            normalized.height,
+            source.height,
+        )
         return normalized
     token_cols: Final = tuple(c for c in _TOKEN_TAG_KEYS if c in source.columns)
     if not token_cols:
