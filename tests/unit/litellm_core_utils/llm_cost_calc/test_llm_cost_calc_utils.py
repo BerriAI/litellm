@@ -3074,14 +3074,13 @@ def test_token_type_cost_breakdown_applies_anthropic_fast_multiplier(
         prompt_tokens=10_000,
         completion_tokens=500,
         total_tokens=10_500,
+        speed=speed,
         prompt_tokens_details=PromptTokensDetailsWrapper(
             cached_tokens=2_000,
             cache_creation_tokens=6_000,
         ),
         completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=200, text_tokens=300),
     )
-    if speed is not None:
-        usage.speed = speed
 
     breakdown: Final = get_token_type_cost_breakdown(model=model, custom_llm_provider="anthropic", usage=usage)
 
