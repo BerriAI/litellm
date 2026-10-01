@@ -3870,6 +3870,7 @@ class MCPServerManager:
                     server=server,
                     mcp_auth_header=server_auth_header,
                     user_api_key_auth=user_api_key_auth,
+                    record_listing=True,
                 )
                 return tools
             except Exception as e:
@@ -4482,6 +4483,7 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging | None = None,
         *,
         catalog_auth_header: str | dict[str, str] | None | EllipsisType = ...,
+        record_listing: bool = False,
     ) -> Sequence[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -4491,6 +4493,8 @@ class MCPServerManager:
             mcp_auth_header: Optional auth header for MCP server
             catalog_auth_header: The header the client supplied, keying the caller's catalog slot;
                 defaults to ``mcp_auth_header``
+            record_listing: Record the served catalog into the caller's listed-tools slot; only a
+                listing actually served to the caller sets it
 
         Returns:
             List[MCPTool]: List of tools available on the server with prefixed names
@@ -4608,7 +4612,8 @@ class MCPServerManager:
                 # through _create_prefixed_tools — that would add the prefix a second
                 # time producing "test_petstore-test_petstore-getinventory".
                 unprefixed_tools: Final = guarded_openapi
-                self._record_listed_tools(server, unprefixed_tools, listed_caller, listed_generation)
+                if record_listing:
+                    self._record_listed_tools(server, unprefixed_tools, listed_caller, listed_generation)
                 if not add_prefix:
                     return unprefixed_tools
                 return [t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi]
@@ -4624,8 +4629,10 @@ class MCPServerManager:
                 raw_headers=raw_headers,
             )
             prefixed_or_original_tools: Final = self._create_prefixed_tools(
-                guarded_tools, server, add_prefix=add_prefix, caller=listed_caller, generation=listed_generation
+                guarded_tools, server, add_prefix=add_prefix
             )
+            if record_listing:
+                self._record_listed_tools(server, guarded_tools, listed_caller, listed_generation)
 
             return prefixed_or_original_tools
 
@@ -5655,8 +5662,6 @@ class MCPServerManager:
         tools: Sequence[MCPTool],
         server: MCPServer,
         add_prefix: bool = True,
-        caller: ListedToolsCaller | None = None,
-        generation: int | None = None,
     ) -> list[MCPTool]:
         """
         Create prefixed tools and update tool mapping.
@@ -5682,7 +5687,6 @@ class MCPServerManager:
             for spelling in iter_known_tool_name_spellings(original_name, server):
                 self.tool_name_to_mcp_server_name_mapping[spelling] = prefix
 
-        self._record_listed_tools(server, tools, caller, generation)
         verbose_logger.info("Successfully fetched %s tools from server %s", len(prefixed_tools), server.name)
         return prefixed_tools
 

@@ -37,7 +37,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.mcp import MCPAuth
-from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
+from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer, PinnedMCPTool
 
 
 def test_mcp_available_on_sdk2():
@@ -8330,6 +8330,85 @@ async def test_execute_mcp_tool_hands_hooks_nothing_for_a_never_listed_operation
 
     assert pre_call_tool_check.call_args.kwargs["tool"] is None
     assert result.content[0].text == "long"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_implicit_listing_before_the_first_call_hands_hooks_no_description():
+    """The listing tools/call runs on its own when this worker does not yet expose the tool is never served
+    to the caller, so it leaves the caller's listed slot empty and the pre-call hooks still get name and
+    arguments only, as on main."""
+    manager = mcp_operations.global_mcp_server_manager
+    server = _never_listed_passthrough_server()
+    manager.registry[server.server_id] = server
+    manager._listed_tools_by_server_id.pop(server.server_id, None)
+    upstream = AsyncMock()
+    upstream.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+    proxy_logging = _mock_mcp_proxy_logging()
+    proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
+    proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
+    proxy_logging.pre_call_hook = AsyncMock(return_value={})
+    proxy_logging.during_call_hook = AsyncMock(return_value=None)
+    fetch_tools = AsyncMock(
+        return_value=[MCPTool(name="add", description="Adds. FLAGWORD", inputSchema={"type": "object"})]
+    )
+
+    with (
+        patch.object(manager, "_create_mcp_client", new=AsyncMock(return_value=upstream)),
+        patch.object(manager, "_fetch_tools_with_timeout", new=fetch_tools),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+    ):
+        result = await mcp_operations.execute_mcp_tool(
+            name="lazy_map-add",
+            arguments={"a": 1, "b": 2},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(),
+            mcp_auth_header="Bearer caller-token",
+            raw_headers={"authorization": "Bearer caller-token"},
+        )
+
+    assert fetch_tools.await_count == 1
+    assert upstream.call_tool.await_count == 1
+    assert result.content[0].text == "ok"
+    hook_kwargs = proxy_logging._create_mcp_request_object_from_kwargs.call_args.args[0]
+    assert (hook_kwargs["tool_description"], hook_kwargs["tool_input_schema"]) == (None, None)
+    assert server.server_id not in manager._listed_tools_by_server_id
+
+
+@pytest.mark.asyncio
+async def test_fetch_pinnable_tool_catalog_records_no_listed_catalog_for_the_admin():
+    """The pin snapshot lists the raw upstream catalog, without the catalog guard or the admin's description
+    overrides, so it must not become what the admin's own later tools/call is evaluated against."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import fetch_pinnable_tool_catalog
+    from litellm.proxy.utils import ProxyLogging
+
+    manager = mcp_operations.global_mcp_server_manager
+    server = MCPServer(
+        server_id="pin-srv",
+        name="pin_srv",
+        transport=MCPTransport.http,
+        url="https://up.example.com/mcp",
+        tool_name_to_description={"add": "Admin wording"},
+    )
+    manager._listed_tools_by_server_id.pop(server.server_id, None)
+    admin = UserAPIKeyAuth(api_key="sk-admin", user_id="admin")
+    request = MagicMock()
+    request.client.host = "10.1.2.3"
+    request.headers = {"x-litellm-api-key": "sk-admin"}
+    fetch_tools = AsyncMock(
+        return_value=[MCPTool(name="add", description="Upstream wording", inputSchema={"type": "object"})]
+    )
+
+    with (
+        patch.object(manager, "_create_mcp_client", new=AsyncMock(return_value=MagicMock())),
+        patch.object(manager, "_fetch_tools_with_timeout", new=fetch_tools),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())),
+    ):
+        snapshot = await fetch_pinnable_tool_catalog(server, request, admin)
+
+    assert snapshot == {"add": PinnedMCPTool(description="Upstream wording", input_schema={"type": "object"})}
+    assert server.server_id not in manager._listed_tools_by_server_id
+    assert manager.get_listed_tool(server, "add", ListedToolsCaller(user_api_key_auth=admin)) is None
 
 
 @pytest.mark.asyncio

@@ -957,6 +957,8 @@ async def _get_tools_from_mcp_servers(
     request_tags: list[str] | None = None,
     client_ip: str | None = None,
     mcp_proxy_mode: bool = False,
+    *,
+    record_listing: bool = True,
 ) -> AggregateToolListing:
     """
     Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -967,6 +969,8 @@ async def _get_tools_from_mcp_servers(
         mcp_servers: Optional list of server names/aliases to filter by
         mcp_server_auth_headers: Optional dict of server-specific auth headers
         oauth2_headers: Optional dict of oauth2 headers
+        record_listing: Record each served catalog into the caller's listed-tools slot; only a
+            listing actually served to the caller sets it
 
     Returns:
         AggregateToolListing: Combined tools from filtered servers plus each server's
@@ -1132,6 +1136,7 @@ async def _get_tools_from_mcp_servers(
                     oauth2_headers=oauth2_headers,
                     proxy_logging_obj=proxy_logging_obj,
                     catalog_auth_header=catalog_auth_header,
+                    record_listing=record_listing,
                 )
                 filtered_tools = filter_tools_by_allowed_tools(tools, server)
 
@@ -1805,6 +1810,7 @@ async def _list_tools_before_first_call(
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             client_ip=client_ip,
+            record_listing=False,
         )
     except Exception as e:  # noqa: BLE001  # best effort: resolution below answers as it did before
         verbose_logger.debug("MCP tools/call: listing %s before its first call failed: %s", server.name, e)
