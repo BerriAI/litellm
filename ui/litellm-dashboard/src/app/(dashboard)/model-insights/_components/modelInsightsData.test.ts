@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildSeries, DailyMetric, formatMetric, modelOrder, rankModels } from "./modelInsightsData";
+import { buildBucketTotals, buildSeries, DailyMetric, formatMetric, modelOrder, rankModels } from "./modelInsightsData";
 
 const row = (over: Partial<DailyMetric>): DailyMetric => ({
   model_group: "a",
@@ -56,6 +56,36 @@ describe("buildSeries", () => {
       { date: "2026-01-02", a: 0 },
       { date: "2026-01-03", a: 10 },
     ]);
+  });
+});
+
+describe("buildBucketTotals", () => {
+  const total = (date: string, prompt_tokens: number) => ({
+    date,
+    spend: 0,
+    prompt_tokens,
+    completion_tokens: 1,
+    requests: 0,
+  });
+  const totals = [total("2026-01-01", 9), total("2026-01-03", 4), total("2026-01-08", 99)];
+
+  it("keys each day's gateway-wide total by its own date", () => {
+    const daily = buildBucketTotals(totals, "tokens", { start: "2026-01-01", end: "2026-01-08", granularity: "day" });
+    expect([...daily]).toEqual([
+      ["2026-01-01", 10],
+      ["2026-01-03", 5],
+      ["2026-01-08", 100],
+    ]);
+  });
+
+  it("sums days into the same week start used by the chart's x-axis", () => {
+    const window = { start: "2026-01-01", end: "2026-01-08", granularity: "week" } as const;
+    const weekly = buildBucketTotals(totals, "tokens", window);
+    expect([...weekly]).toEqual([
+      ["2026-01-01", 15],
+      ["2026-01-08", 100],
+    ]);
+    expect([...weekly.keys()]).toEqual(buildSeries([], [], "tokens", window).map((bucket) => bucket.date));
   });
 });
 

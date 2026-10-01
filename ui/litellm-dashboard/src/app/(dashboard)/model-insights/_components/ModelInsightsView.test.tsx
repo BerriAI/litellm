@@ -42,6 +42,7 @@ const response = {
   end_date: "2026-09-28",
   top_models: [metrics],
   daily: [{ ...metrics, date: "2026-09-28" }],
+  daily_totals: [{ date: "2026-09-28", spend: 2.5, prompt_tokens: 1000, completion_tokens: 2000, requests: 12 }],
 };
 
 const taskResponse = {
