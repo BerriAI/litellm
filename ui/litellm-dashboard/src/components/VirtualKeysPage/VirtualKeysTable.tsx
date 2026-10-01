@@ -5,6 +5,7 @@ import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import {
   DataTable,
@@ -18,16 +19,28 @@ import {
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnFiltersState, functionalUpdate, OnChangeFn } from "@tanstack/react-table";
 import { KeyRound } from "lucide-react";
-import { parseAsString, useQueryState } from "nuqs";
+import { parseAsBoolean, parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useMemo, useState } from "react";
 
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../templates/key_info_view";
 import { getKeyTableColumns, KEY_TABLE_HIDDEN_COLUMNS, KEY_TABLE_SORT_FIELDS } from "./keyTableColumns";
+import {
+  isMyKeysEnabled,
+  MY_KEYS_FILTER_ID,
+  MY_KEYS_TOOLTIP,
+  MY_KEYS_URL_KEY,
+  myKeysQueryParam,
+  splitMyKeysFilter,
+  withMyKeysFilter,
+} from "./myKeysFilter";
 
 interface VirtualKeysTableProps {
   headerActions?: React.ReactNode;
@@ -36,12 +49,13 @@ interface VirtualKeysTableProps {
 const FILTER_COLUMNS = ["team_id", "org_id", "user_id", "key_hash", "status"] as const;
 type FilterColumn = (typeof FILTER_COLUMNS)[number];
 
-const FILTER_LABELS: Record<FilterColumn, string> = {
+const FILTER_LABELS: Record<FilterColumn | typeof MY_KEYS_FILTER_ID, string> = {
   team_id: "Team",
   org_id: "Organization",
   user_id: "User ID",
   key_hash: "Key ID",
   status: "Status",
+  my_keys: "My Keys",
 };
 
 const KEY_STATUS_VALUES = ["active", "expired", "revoked", "deleted"] as const;
@@ -87,12 +101,14 @@ const appliedFilter = (filters: ColumnFiltersState, column: FilterColumn): strin
 };
 
 export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
+  const { userId, userRole } = useAuthorized();
   const { data: fetchedOrganizations } = useOrganizations();
   const organizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const { data: fetchedTeams } = useAllTeams();
   const allTeams = useMemo<Team[]>(() => fetchedTeams ?? [], [fetchedTeams]);
 
   const [selectedKeyId, setSelectedKeyId] = useQueryState("key", parseAsString.withOptions({ history: "push" }));
+  const [myKeysParam, setMyKeysParam] = useQueryState(MY_KEYS_URL_KEY, parseAsBoolean);
   const {
     search: searchInput,
     setSearch,
@@ -103,10 +119,18 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     columnFilters: urlColumnFilters,
     onColumnFiltersChange: setUrlColumnFilters,
   } = useUrlTableState(TABLE_STATE_OPTIONS);
-  const columnFilters = useMemo(() => urlColumnFilters.filter(isUsableFilter), [urlColumnFilters]);
+  const myKeysEnabled = isMyKeysEnabled(myKeysParam, userRole, userId);
+  const columnFilters = useMemo(
+    () => withMyKeysFilter(urlColumnFilters.filter(isUsableFilter), myKeysEnabled),
+    [urlColumnFilters, myKeysEnabled],
+  );
   const onColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>(
-    (updaterOrValue) => setUrlColumnFilters(functionalUpdate(updaterOrValue, columnFilters)),
-    [columnFilters, setUrlColumnFilters],
+    (updaterOrValue) => {
+      const { myKeys, rest } = splitMyKeysFilter(functionalUpdate(updaterOrValue, columnFilters));
+      void setMyKeysParam(myKeysQueryParam(myKeys, userRole, userId));
+      setUrlColumnFilters(rest);
+    },
+    [columnFilters, setUrlColumnFilters, setMyKeysParam, userRole, userId],
   );
   const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility(
     "virtual-keys",
@@ -120,12 +144,15 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     teamID: appliedFilter(columnFilters, "team_id"),
     organizationID: appliedFilter(columnFilters, "org_id"),
     search: searchQuery.trim() || undefined,
-    userID: appliedFilter(columnFilters, "user_id"),
+    userID: myKeysEnabled ? userId : appliedFilter(columnFilters, "user_id"),
     keyHash: appliedFilter(columnFilters, "key_hash"),
     status: appliedFilter(columnFilters, "status"),
     sortBy: activeSort.id,
     sortOrder: activeSort.desc ? "desc" : "asc",
     expand: "user",
+    includeTeamKeys: !myKeysEnabled,
+    includeCreatedByKeys: !myKeysEnabled,
+    substringMatching: !myKeysEnabled,
   };
 
   const {
@@ -205,6 +232,9 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
       if (columnId === "status" && isKeyStatusFilter(raw)) {
         return KEY_STATUS_LABELS[raw];
       }
+      if (columnId === MY_KEYS_FILTER_ID) {
+        return "On";
+      }
       return raw;
     },
     [allTeams, organizations],
@@ -282,6 +312,24 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
             >
               {({ get, set }) => (
                 <>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1">
+                      <Label>My Keys</Label>
+                      <SimpleTooltip content={MY_KEYS_TOOLTIP} />
+                    </div>
+                    <Switch
+                      checked={get(MY_KEYS_FILTER_ID) === true}
+                      onCheckedChange={(checked) => {
+                        set(MY_KEYS_FILTER_ID, checked);
+                        if (checked) {
+                          set("user_id", undefined);
+                        }
+                      }}
+                      disabled={!userId}
+                      aria-label="My Keys"
+                      data-testid="my-keys-switch"
+                    />
+                  </div>
                   <DataTableFilterField label="Team">
                     <SearchSelect
                       options={teamOptions}
@@ -302,9 +350,10 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
                   </DataTableFilterField>
                   <DataTableFilterField label="User ID">
                     <Input
-                      value={(get("user_id") as string) ?? ""}
+                      value={get(MY_KEYS_FILTER_ID) === true ? userId ?? "" : (get("user_id") as string) ?? ""}
                       onChange={(event) => set("user_id", event.target.value)}
                       placeholder="Enter User ID…"
+                      disabled={get(MY_KEYS_FILTER_ID) === true}
                     />
                   </DataTableFilterField>
                   <DataTableFilterField label="Key ID">
