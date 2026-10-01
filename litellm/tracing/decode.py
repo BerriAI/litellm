@@ -25,6 +25,7 @@ from litellm.tracing.normalizers.base import to_int
 from litellm.tracing.types import SpanRow
 
 _MESSAGE_LIST: Final = TypeAdapter(tuple[dict[str, JsonValue], ...])
+_MAX_JSON_ESCAPE_BYTES: Final = 6
 
 # attributes whose content we lift into Input/Output and drop from SpanAttributes
 _HEAVY_ATTRIBUTES: Final = frozenset(
@@ -78,11 +79,25 @@ def _with_content(message: Mapping[str, JsonValue], content: str) -> str:
 
 
 def _shrunk_message(message: Mapping[str, JsonValue], budget: int) -> str:
-    """One message cut to `budget` bytes by shortening its text content, so the array stays valid JSON."""
+    """One message cut to `budget` bytes, as valid JSON.
+
+    Shortens `content` first; if other fields (e.g. huge tool_calls) still don't fit, keeps only role + content.
+    """
     content: Final = message.get("content")
     text: Final = content if isinstance(content, str) else json.dumps(content)
+    role_only: Final = MappingProxyType({"role": message.get("role", "user")})
+    attempts: Final = (
+        _cut_content(message, text, budget, 1),
+        _cut_content(role_only, text, budget, 1),
+        _cut_content(role_only, text, budget, _MAX_JSON_ESCAPE_BYTES),
+    )
+    return next((attempt for attempt in attempts if _size(attempt) <= budget), attempts[-1])
+
+
+def _cut_content(message: Mapping[str, JsonValue], text: str, budget: int, escape_factor: int) -> str:
     overhead: Final = _size(_with_content(message, ""))
-    kept: Final = text.encode("utf-8")[: max(0, budget - overhead - 64)].decode("utf-8", "ignore")
+    room: Final = max(0, budget - overhead - 48) // escape_factor
+    kept: Final = text.encode("utf-8")[:room].decode("utf-8", "ignore")
     return _with_content(message, f"{kept}…[truncated {_size(text) - _size(kept)} bytes]")
 
 

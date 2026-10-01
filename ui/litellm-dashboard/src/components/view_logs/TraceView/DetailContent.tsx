@@ -107,7 +107,14 @@ function ToolResult({ value, span }: Omit<PayloadProps, "role">) {
   return <ToolResultCard name={span.name} result={value} failed={span.status === "error"} />;
 }
 
+const singleText = (content: UIContent): string | null =>
+  content.kind === "messages" && content.messages.length === 1 && !content.messages[0].tool_calls?.length
+    ? content.messages[0].content
+    : null;
+
 function UIPayload({ content, ...props }: PayloadProps & { content: UIContent }) {
+  const toolText = isToolResult(props) ? singleText(content) : null;
+  if (toolText !== null) return <ToolResult {...props} value={toolText} />;
   if (content.kind === "messages") {
     return <Messages messages={content.messages.map(toTraceMessage)} model={props.span.model} />;
   }

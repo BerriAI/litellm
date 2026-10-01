@@ -130,6 +130,14 @@ const textDetail: SpanDetail = {
   attributes: {},
 };
 
+const failedToolMessageDetail: SpanDetail = {
+  span_id: "tool1",
+  input: '{"customer_id":"acme-404"}',
+  output: "raw tool output",
+  output_ui: { kind: "messages", messages: [{ role: "tool", content: "permission denied: /etc/shadow" }] },
+  attributes: {},
+};
+
 const spanRow = (s: Span): SpanRowData => ({
   kind: "span",
   id: s.span_id,
@@ -263,6 +271,15 @@ describe("DetailPane", () => {
     expect(output).toHaveTextContent("issue_refund");
     expect(output).toHaveTextContent("amount_usd");
     expect(output).not.toHaveTextContent("raw output left unparsed");
+  });
+
+  it("keeps the failed-tool styling when a tool's output arrives as a single message", async () => {
+    vi.mocked(agentTraceSpanCall).mockResolvedValue(failedToolMessageDetail);
+    renderPane(spanRow(failedTool));
+    const output = await screen.findByRole("region", { name: "Output" });
+    const result = within(output).getByText("permission denied: /etc/shadow");
+    expect(result).toHaveClass("text-destructive");
+    expect(output).not.toHaveTextContent("AI");
   });
 
   it("shows a text output_ui as its plain text", async () => {

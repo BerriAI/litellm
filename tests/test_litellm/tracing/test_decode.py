@@ -283,8 +283,11 @@ def test_oversized_non_content_fields_still_fit_the_limit():
     messages = [heavy, {"role": "user", "content": "—" * 900}]
     with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 400):
         out = decode._truncate_payload(json.dumps(messages))
+    kept = json.loads(out)
     assert len(out.encode()) <= 400
-    assert "earlier messages truncated" in json.loads(out)[0]["content"]
+    assert [m["role"] for m in kept] == ["assistant", "user"]
+    assert kept[0]["content"].startswith("x")
+    assert kept[1]["content"].startswith("\u2014")
 
 
 # ---------------------------------------------------------------- status / exceptions
