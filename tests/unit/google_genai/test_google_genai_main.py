@@ -282,11 +282,7 @@ def test_vertex_location_recorded_for_cost_calculation(configured_location):
     """
     Regression for https://github.com/BerriAI/litellm/issues/40692
 
-    The Vertex location decides the regional pricing uplift. The completion and
-    anthropic_messages paths record it on the logging object so the cost
-    calculator can price against the configured region. generate_content did
-    not, so a model configured `vertex_location: global` was priced as
-    us-central1 and cost 10% more than the same model over /v1/chat/completions.
+    generate_content must record vertex_location so `global` is not priced as us-central1.
     """
     from litellm.google_genai.main import GenerateContentHelper
 

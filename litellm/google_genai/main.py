@@ -193,10 +193,8 @@ class GenerateContentHelper:
         if litellm_logging_obj is None:
             raise ValueError("litellm_logging_obj is required, but got None")
 
-        # The configured Vertex location decides the regional pricing uplift. The
-        # completion and anthropic_messages paths both record it here; without it
-        # the cost calculator falls back to a default region and prices a `global`
-        # model as us-central1, so the same model costs 10% more on this route.
+        # Record the configured location so a `global` model is not priced as
+        # us-central1 (+10%), matching the completion path.
         from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
         explicit_vertex_location: Final = VertexBase.explicit_vertex_ai_location(
