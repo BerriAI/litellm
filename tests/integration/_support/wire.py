@@ -30,6 +30,8 @@ class Reply:
     gate_after_first: threading.Event | None = None
     pause_between_chunks: float = 0
     headers: Mapping[str, str] = MappingProxyType({})
+    headers_sent: threading.Event | None = None
+    wait_for_disconnect_after: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +70,18 @@ def wire_server(
             super().setup()
             connected.put(f"{self.client_address[0]}:{self.client_address[1]}")
 
+        def wait_for_disconnect(self) -> None:
+            self.close_connection = True
+            try:
+                trailing: Final = self.connection.recv(1)
+            except ConnectionResetError:
+                disconnected.put(self.path)
+                return
+            except TimeoutError:
+                return
+            assert trailing == b"", f"Unexpected bytes after request body: {trailing!r}"
+            disconnected.put(self.path)
+
         def respond(self) -> None:
             request: Final = Request(
                 self.command,
@@ -92,7 +106,14 @@ def wire_server(
             if not keep_alive:
                 self.send_header("connection", "close")
             self.end_headers()
+            self.close_connection = not keep_alive
             try:
+                self.wfile.flush()
+                if reply.headers_sent is not None:
+                    reply.headers_sent.set()
+                if reply.wait_for_disconnect_after == 0:
+                    self.wait_for_disconnect()
+                    return
                 if self.command == "HEAD":
                     self.wfile.flush()
                 elif reply.chunks is None:
@@ -103,6 +124,9 @@ def wire_server(
                             break
                         self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                         self.wfile.flush()
+                        if reply.wait_for_disconnect_after == index + 1:
+                            self.wait_for_disconnect()
+                            return
                         if index == 0 and reply.gate_after_first is not None:
                             assert reply.gate_after_first.wait(timeout=5), "Stream barrier was never released"
                         if reply.pause_between_chunks and index + 1 < len(reply.chunks):
@@ -114,7 +138,6 @@ def wire_server(
                 disconnected.put(request.target)
             except Exception as error:
                 errors.put(error)
-            self.close_connection = not keep_alive
 
         do_POST = respond
         do_PUT = respond

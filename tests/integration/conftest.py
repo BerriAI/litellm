@@ -85,7 +85,9 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     collected: Final = session.config.stash.get(COLLECTED, ())
     reports: Final = tuple(report for report in session.config.stash[REPORTS] if report.nodeid in collected)
     passed: Final = tuple(
-        report.nodeid for report in reports if report.when == "call" and report.passed and not hasattr(report, "wasxfail")
+        report.nodeid
+        for report in reports
+        if report.when == "call" and report.passed and not hasattr(report, "wasxfail")
     )
     skipped: Final = tuple(report.nodeid for report in reports if report.skipped and not hasattr(report, "wasxfail"))
     xfailed: Final = {
@@ -117,6 +119,8 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
                 "complete": complete,
                 "all_passed": complete and not skipped and not xfailed,
                 "exitstatus": exitstatus,
+                "pytest_args": session.config.invocation_params.args,
+                "runxfail": session.config.getoption("runxfail"),
                 "hypothesis_version": version("hypothesis"),
                 "hypothesis_seed": session.config.getoption("hypothesis_seed"),
                 "order_seed": session.config.getoption("integration_order_seed"),
