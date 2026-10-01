@@ -72,10 +72,9 @@ def hoist_additional_tools(
     }
     for item in items:
         for tool in _tools_of_item(item):
-            tool_key: Final = _tool_key(tool)
-            if tool_key in seen_tool_keys:
+            if _tool_key(tool) in seen_tool_keys:
                 continue
-            seen_tool_keys.add(tool_key)
+            seen_tool_keys.add(_tool_key(tool))
             hoisted.append(tool)
     hoisted_tools: Final = tuple(hoisted)
     verbose_logger.debug(
