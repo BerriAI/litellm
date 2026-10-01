@@ -14,6 +14,8 @@ from typing import Literal
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.tracing.ui_format import UIContent
+
 SpanType = Literal["agent", "llm", "tool", "chain", "framework"]
 SpanStatus = Literal["ok", "error", "unset"]
 
@@ -84,6 +86,8 @@ class SpanDetail(TypedDict):
     span_id: ReadOnly[str]
     input: ReadOnly[str]
     output: ReadOnly[str]
+    input_ui: ReadOnly[UIContent]
+    output_ui: ReadOnly[UIContent]
     attributes: ReadOnly[dict[str, str]]
 
 

@@ -85,8 +85,6 @@ class SingulrGuardrail(CustomGuardrail):
         else:
             self.block_on_error = block_on_error
 
-        self.timeout = _DEFAULT_TIMEOUT if timeout is None else timeout
-
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
@@ -101,6 +99,7 @@ class SingulrGuardrail(CustomGuardrail):
             ]
 
         super().__init__(**kwargs)
+        self.timeout = _DEFAULT_TIMEOUT if timeout is None else timeout
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
