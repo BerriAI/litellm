@@ -6,12 +6,14 @@ Covers the git-subdir and archive source types added alongside the existing gith
 
 import json
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from unittest.mock import AsyncMock, MagicMock
 
 import litellm
-from litellm.proxy._types import LiteLLM_ObjectPermissionTable, ProxyException, UserAPIKeyAuth
+from litellm.caching.caching import DualCache
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, ProxyException, UserAPIKeyAuth, hash_token
 from litellm.proxy.proxy_server import LitellmUserRoles
 from litellm.types.proxy.claude_code_endpoints import (
     RegisterPluginRequest,
@@ -108,6 +110,8 @@ def _patch_proxy_globals(monkeypatch):
     """Scope prisma_client/master_key mutations to each test via monkeypatch."""
     monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma())
     monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", DualCache())
 
 
 @pytest.mark.asyncio
@@ -361,6 +365,207 @@ async def test_get_marketplace_key_query_param_adds_granted_disabled_plugins(mon
     with pytest.raises(ProxyException) as exc_info:
         await get_marketplace(request=MagicMock(), key="sk-bogus")
     assert exc_info.value.code == "401"
+
+
+async def _marketplace_response(headers: dict[str, str], key: str | None = None) -> httpx.Response:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=litellm.proxy.proxy_server.app), base_url="http://test"
+    ) as client:
+        return await client.get("/claude-code/marketplace.json", headers=headers, params={"key": key} if key else {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {"Authorization": ""},
+        {"Authorization": "sk-1234"},
+        {"Authorization": "Basic sk-1234"},
+        {"Authorization": "Bearer "},
+        {"Authorization": "Bearer sk-1234 extra"},
+        {"x-api-key": "sk-1234"},
+        {"x-litellm-api-key": "Bearer sk-1234"},
+    ],
+)
+async def test_strict_marketplace_rejects_missing_or_malformed_bearer_even_with_query_key(monkeypatch, headers):
+    monkeypatch.setitem(litellm.proxy.proxy_server.general_settings, "claude_code_marketplace_auth_required", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", None)
+
+    response = await _marketplace_response(headers, key="sk-1234")
+
+    assert response.status_code == 401, response.text
+    assert response.headers["www-authenticate"] == "Bearer"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scheme", ["Bearer", "bearer", "BEARER"])
+async def test_strict_marketplace_master_key_sees_private_skills_and_ignores_query_key(monkeypatch, scheme):
+    monkeypatch.setitem(litellm.proxy.proxy_server.general_settings, "claude_code_marketplace_auth_required", True)
+    await _register_public_and_private_plugins()
+
+    response = await _marketplace_response({"Authorization": f"{scheme} sk-1234"}, key="sk-invalid")
+
+    assert response.status_code == 200, response.text
+    assert sorted(plugin["name"] for plugin in response.json()["plugins"]) == ["private-skill", "public-skill"]
+
+
+@pytest.mark.asyncio
+async def test_strict_marketplace_rejects_arbitrary_key_when_master_key_is_unset(monkeypatch):
+    monkeypatch.setitem(litellm.proxy.proxy_server.general_settings, "claude_code_marketplace_auth_required", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", None)
+
+    response = await _marketplace_response({"Authorization": "Bearer sk-arbitrary"})
+
+    assert response.status_code == 401, response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("public_route", [False, True])
+@pytest.mark.parametrize(
+    "skills, allowed_routes, expected_status, expected_plugins",
+    [
+        ([], None, 200, ["public-skill"]),
+        (["private-skill"], None, 200, ["private-skill", "public-skill"]),
+        (["private-skill"], ["/v1/chat/completions"], 403, None),
+    ],
+)
+async def test_strict_marketplace_enforces_virtual_key_visibility_and_route_permissions(
+    monkeypatch, public_route, skills, allowed_routes, expected_status, expected_plugins
+):
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {
+            "claude_code_marketplace_auth_required": True,
+            "public_routes": ["/claude-code/*"] if public_route else [],
+        },
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    await _register_public_and_private_plugins()
+    hashed_token = hash_token("sk-marketplace-reader")
+    await litellm.proxy.proxy_server.user_api_key_cache.async_set_cache(
+        key=hashed_token,
+        value=UserAPIKeyAuth(
+            token=hashed_token,
+            api_key=hashed_token,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            allowed_routes=allowed_routes,
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="reader-skills", skills=skills),
+        ),
+    )
+
+    response = await _marketplace_response({"Authorization": "Bearer sk-marketplace-reader"})
+
+    assert response.status_code == expected_status, response.text
+    if expected_plugins is not None:
+        assert sorted(plugin["name"] for plugin in response.json()["plugins"]) == expected_plugins
+    else:
+        assert "not allowed to call this route" in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("public_route", [False, True])
+async def test_strict_marketplace_rejects_invalid_authorization_despite_other_valid_credentials(
+    monkeypatch, public_route
+):
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {
+            "claude_code_marketplace_auth_required": True,
+            "litellm_key_header_name": "X-Company-Key",
+            "public_routes": ["/claude-code/*"] if public_route else [],
+        },
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    litellm.proxy.proxy_server.prisma_client.get_data = AsyncMock(return_value=None)
+    await _register_public_and_private_plugins()
+
+    response = await _marketplace_response(
+        {
+            "Authorization": "Bearer sk-invalid",
+            "X-Company-Key": "Bearer sk-1234",
+            "x-litellm-api-key": "Bearer sk-1234",
+        },
+        key="sk-1234",
+    )
+
+    assert response.status_code == 401, response.text
+    assert response.json()["error"]["type"] == "token_not_found_in_db"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bearer_key, skills, allowed_routes, expected_status, expected_plugins",
+    [
+        ("external-reader", [], None, 200, ["public-skill"]),
+        ("external-reader", ["private-skill"], None, 200, ["private-skill", "public-skill"]),
+        ("external-reader", ["private-skill"], ["/v1/chat/completions"], 403, None),
+        ("invalid-reader", ["private-skill"], None, 401, None),
+    ],
+)
+async def test_strict_marketplace_honors_verified_custom_auth_and_permissions(
+    monkeypatch, bearer_key, skills, allowed_routes, expected_status, expected_plugins
+):
+    async def authenticate(request, api_key):
+        if api_key != "external-reader":
+            raise HTTPException(status_code=401, detail="Invalid external credential")
+        return UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            allowed_routes=allowed_routes,
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="external-skills", skills=skills),
+        )
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_custom_auth", authenticate)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {"claude_code_marketplace_auth_required": True, "custom_auth_run_common_checks": True},
+    )
+    await _register_public_and_private_plugins()
+
+    response = await _marketplace_response({"Authorization": f"Bearer {bearer_key}"})
+
+    assert response.status_code == expected_status, response.text
+    if expected_plugins is not None:
+        assert sorted(plugin["name"] for plugin in response.json()["plugins"]) == expected_plugins
+    else:
+        assert "plugins" not in response.json()
+
+
+@pytest.mark.asyncio
+async def test_strict_marketplace_rejects_database_outage_fallback_identity(monkeypatch):
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {"claude_code_marketplace_auth_required": True, "allow_requests_on_db_unavailable": True},
+    )
+    litellm.proxy.proxy_server.prisma_client.get_data = AsyncMock(
+        side_effect=httpx.ConnectError("database unavailable")
+    )
+    litellm.proxy.proxy_server.prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
+    await _register_public_and_private_plugins()
+
+    response = await _marketplace_response({"Authorization": "Bearer sk-unverified"})
+
+    assert response.status_code == 401, response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", [None, False])
+async def test_public_marketplace_keeps_anonymous_discovery_when_strict_auth_is_disabled(monkeypatch, setting):
+    if setting is not None:
+        monkeypatch.setitem(
+            litellm.proxy.proxy_server.general_settings, "claude_code_marketplace_auth_required", setting
+        )
+    await _register_public_and_private_plugins()
+
+    response = await _marketplace_response({"Authorization": "Bearer sk-invalid"})
+
+    assert response.status_code == 200, response.text
+    assert [plugin["name"] for plugin in response.json()["plugins"]] == ["public-skill"]
 
 
 @pytest.mark.asyncio
