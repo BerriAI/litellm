@@ -13,6 +13,7 @@ const coverage: Job["coverage"] = {
   selected: 0,
   screened: 0,
   investigated: 0,
+  inconclusive: 0,
   grouping_batches: 0,
   grouped_batches: 0,
   candidates: 0,

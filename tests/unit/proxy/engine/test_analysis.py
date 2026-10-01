@@ -901,6 +901,34 @@ async def test_final_registry_reconciles_patterns_split_across_pages() -> None:
 
 
 @pytest.mark.asyncio
+async def test_distinct_patterns_are_consolidated_in_batches_without_losing_runs() -> None:
+    from litellm.proxy.engine.analysis import Observation, cluster_batches, observation_batches
+
+    observations: Final = tuple(
+        Observation(
+            check_id="retries",
+            summary=f"Distinct problem {i}: " + "details " * 40,
+            evidence=(Evidence(execution_id=f"run{i}", span_id="s", quote="timeout"),),
+        )
+        for i in range(100)
+    )
+    requests: Final = SimpleQueue[int]()
+
+    async def model(request: ModelRequest) -> ModelResult:
+        requests.put(1)
+        payload: Final = json.loads(request.prompt)
+        return ModelResult(content=json.dumps({"candidates": payload["candidates"]}), cost=0)
+
+    async def progress(_stage: str, _coverage: Coverage) -> None:
+        pass
+
+    result: Final = await cluster_batches(observation_batches(observations), model, progress, Coverage())
+    assert len(result.candidates) == 100
+    assert frozenset(c.execution_ids[0] for c in result.candidates) == frozenset(f"run{i}" for i in range(100))
+    assert requests.qsize() < len(observations)
+
+
+@pytest.mark.asyncio
 async def test_invalid_candidate_response_preserves_other_findings_and_reports_inconclusive() -> None:
     from litellm.proxy.engine.analysis import investigate_candidates
 
