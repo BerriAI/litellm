@@ -1011,3 +1011,66 @@ def test_prepare_ollama_images_downloads_urls_and_passes_through_base64(monkeypa
     )
 
     assert result == ["alreadybase64data", "downloaded"]
+
+
+_REMOTE_IMAGE_MESSAGES = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What's in this image?"},
+            {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+        ],
+    }
+]
+
+
+@pytest.mark.asyncio
+async def test_async_transform_request_downloads_remote_images_without_blocking(monkeypatch):
+    """acompletion fetches remote images with async_convert_url_to_base64
+    instead of the blocking convert_url_to_base64."""
+
+    async def fake_async_convert_url_to_base64(url):
+        return "data:image/png;base64,downloaded"
+
+    def blocking_fetch(url):
+        raise AssertionError("the async path must not use the blocking fetch")
+
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.prompt_templates.image_handling.async_convert_url_to_base64",
+        fake_async_convert_url_to_base64,
+    )
+    monkeypatch.setattr("litellm.llms.ollama.common_utils.convert_url_to_base64", blocking_fetch)
+    config = OllamaChatConfig()
+
+    result = await config.async_transform_request(
+        model="llava",
+        messages=_REMOTE_IMAGE_MESSAGES,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert config.uses_async_transform_request is True
+    assert result["messages"][0]["images"] == ["downloaded"]
+
+
+@pytest.mark.asyncio
+async def test_remote_image_download_respects_max_image_url_download_size_gate(monkeypatch):
+    """MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0 turns remote image downloads off on both
+    the sync and async ollama_chat paths, before any request goes out."""
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.prompt_templates.image_handling.MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 0
+    )
+    config = OllamaChatConfig()
+    request = {
+        "model": "llava",
+        "messages": _REMOTE_IMAGE_MESSAGES,
+        "optional_params": {},
+        "litellm_params": {},
+        "headers": {},
+    }
+
+    with pytest.raises(litellm.ImageFetchError, match="download is disabled"):
+        config.transform_request(**request)
+    with pytest.raises(litellm.ImageFetchError, match="download is disabled"):
+        await config.async_transform_request(**request)
