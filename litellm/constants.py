@@ -2199,3 +2199,8 @@ EMPTY_MAPPING: Final = MappingProxyType({})
 
 # API endpoint for breached password k-anonymity search
 HIBP_RANGE_API_BASE: Final = "https://api.pwnedpasswords.com/range"
+
+# Lens: the stored failure reason on an analysis, and how much of a server's own
+# error detail the worker may append to it before the suggested fix.
+LENS_RESULT_ERROR_MAX_CHARS: Final = 1000
+LENS_FAILURE_DETAIL_MAX_CHARS: Final = 300

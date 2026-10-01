@@ -10,6 +10,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import { apiClient } from "@/components/networking";
+import { AnalysisFailure } from "./AnalysisFailure";
 import { TracePanel } from "./TracePanel";
 import { LensSetup } from "./LensSetup";
 import { LensRuns } from "./LensRuns";
@@ -317,11 +318,7 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
                 }
               />
             )}
-            {job?.error && (
-              <p role="alert" className="text-sm text-destructive">
-                {job.error}
-              </p>
-            )}
+            {job?.error && <AnalysisFailure error={job.error} />}
             <Tabs value={tab} onValueChange={setTab} key={lens.id}>
               <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b">
                 <TabsList variant="line">
@@ -590,7 +587,11 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
                     <Button size="sm" variant="outline" className="mt-3" onClick={() => openBatch(j.id)}>
                       View results
                     </Button>
-                    {j.error && <p className="mt-2 text-sm text-destructive">{j.error}</p>}
+                    {j.error && (
+                      <div className="mt-3">
+                        <AnalysisFailure error={j.error} />
+                      </div>
+                    )}
                   </div>
                 ))}
               </TabsContent>

@@ -15,8 +15,67 @@ from litellm.proxy.lens.models import (
     TracePart,
 )
 from litellm.proxy.lens.state import queue_job
-from litellm.proxy.lens.worker import LensWorker
+from litellm.proxy.lens.worker import LensWorker, failure_reason
 from tests.unit.proxy.lens.test_state import NOW, lens
+
+
+def status_error(method: str, path: str, status: int, body: object) -> httpx.HTTPStatusError:
+    request: Final = httpx.Request(method, "https://proxy.test" + path)
+    response: Final = (
+        httpx.Response(status, content=body, request=request)
+        if isinstance(body, str)
+        else httpx.Response(status, json=body, request=request)
+    )
+    return httpx.HTTPStatusError("failed", request=request, response=response)
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    (
+        (
+            status_error("POST", "/lens/worker/l/j/model", 400, {"detail": "model 'gpt-x' not found"}),
+            "POST model returned HTTP 400: model 'gpt-x' not found. "
+            "Fix: check that the analysis model is configured and reachable from the proxy.",
+        ),
+        (
+            status_error(
+                "POST", "/lens/worker/l/j/model", 401, {"error": {"message": "Invalid API key", "type": "auth"}}
+            ),
+            "POST model returned HTTP 401: Invalid API key. "
+            "Fix: check that the analysis model is configured and reachable from the proxy.",
+        ),
+        (
+            status_error("GET", "/lens/worker/l/j/sample", 500, {"detail": "ClickHouse unavailable"}),
+            "GET sample returned HTTP 500: ClickHouse unavailable. Fix: check the proxy logs for this request.",
+        ),
+        (
+            status_error("GET", "/lens/worker/l/j/content", 502, "not json {"),
+            "GET content returned HTTP 502. Fix: check the proxy logs for this request.",
+        ),
+        (
+            httpx.ConnectError("refused"),
+            "Could not reach LiteLLM from the worker (ConnectError). Fix: check LITELLM_URL and network access from the worker.",
+        ),
+        (
+            OSError(28, "No space left on device"),
+            "Worker temporary storage failed (OSError: [Errno 28] No space left on device). "
+            "Fix: increase its capacity or reduce analysis parallelism.",
+        ),
+    ),
+    ids=("model-not-found", "model-auth", "sample-500", "non-json-body", "unreachable", "disk-full"),
+)
+def test_failure_reason_names_the_step_status_and_fix(exc: Exception, expected: str) -> None:
+    assert failure_reason(exc) == expected
+
+
+def test_failure_reason_bounds_a_long_server_detail() -> None:
+    reason: Final = failure_reason(status_error("POST", "/lens/worker/l/j/model", 500, {"detail": "x" * 5000}))
+    assert (
+        reason
+        == "POST model returned HTTP 500: "
+        + "x" * 300
+        + ". Fix: check that the analysis model is configured and reachable from the proxy."
+    )
 
 
 @pytest.mark.asyncio
@@ -126,6 +185,8 @@ async def test_worker_reads_claimed_activity_and_reports_analysis_or_failure(mod
         assert result.coverage.screened == 1
         assert result.coverage.unassessable == 0
     elif model_status == 402:
-        assert result.error == "Monthly budget reached"
+        assert result.error == "Monthly budget reached. Fix: raise this lens's monthly budget in Settings."
     else:
-        assert result.error.startswith("Analysis interrupted.")
+        assert result.error == (
+            "POST model returned HTTP 503. Fix: check that the analysis model is configured and reachable from the proxy."
+        )

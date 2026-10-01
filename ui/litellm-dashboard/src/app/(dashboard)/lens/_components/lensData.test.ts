@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   analysisElapsed,
   analysisProgress,
+  failureParts,
   normalizeFilters,
   sortedFindings,
   type Finding,
@@ -53,6 +54,19 @@ const job: Job = {
     checks: [{ enabled: true, id: "failures", instruction: "Find failed outcomes" }],
   },
 };
+
+describe("Analysis failure message", () => {
+  it.each([
+    [
+      "POST model returned HTTP 401: Invalid API key. Fix: check that the analysis model is configured.",
+      { reason: "POST model returned HTTP 401: Invalid API key.", fix: "check that the analysis model is configured." },
+    ],
+    ["Worker disconnected repeatedly", { reason: "Worker disconnected repeatedly", fix: null }],
+    ["Monthly budget reached", { reason: "Monthly budget reached", fix: null }],
+  ])("splits %j into its reason and suggested fix", (error, expected) => {
+    expect(failureParts(error)).toEqual(expected);
+  });
+});
 
 describe("Analysis progress", () => {
   it("measures review progress against the sample, not all eligible runs", () => {

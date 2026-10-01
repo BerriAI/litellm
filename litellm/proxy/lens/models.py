@@ -3,6 +3,8 @@ from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from litellm.constants import LENS_RESULT_ERROR_MAX_CHARS
+
 
 class Record(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -237,7 +239,7 @@ class Result(Record):
     assessments: tuple[RunAssessment, ...] = ()
     findings: tuple[FindingDraft, ...] = ()
     coverage: Coverage
-    error: str = Field(default="", max_length=1000)
+    error: str = Field(default="", max_length=LENS_RESULT_ERROR_MAX_CHARS)
 
 
 class ModelRequest(Record):

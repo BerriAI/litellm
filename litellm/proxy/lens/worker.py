@@ -2,17 +2,64 @@ import asyncio
 import logging
 import os
 import sqlite3
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
 import httpx
+
+from litellm.constants import LENS_FAILURE_DETAIL_MAX_CHARS, LENS_RESULT_ERROR_MAX_CHARS
 
 from .analysis import analyze_sample
 from .models import Claim, Coverage, ExecutionContent, ModelRequest, ModelResult, Progress, Result, Sample
 
 logger: Final = logging.getLogger("litellm.lens.worker")
+
+
+def message_text(value: object) -> str:
+    """A string from either a plain error string or an OpenAI-style {"message": ...} object."""
+    if isinstance(value, Mapping):
+        fields: Final = cast(Mapping[str, object], value)
+        return message_text(fields.get("message") or fields.get("error") or fields.get("detail"))
+    return value if isinstance(value, str) else ""
+
+
+def server_detail(response: httpx.Response) -> str:
+    """The server's own error text, if it sent a short one."""
+    try:
+        body: Final[object] = response.json()
+    except ValueError:
+        return ""
+    return " ".join(message_text(body).split())[:LENS_FAILURE_DETAIL_MAX_CHARS]
+
+
+def failure_reason(exc: Exception) -> str:
+    """Why an analysis stopped, what the worker was doing, and what to try next."""
+    if isinstance(exc, (OSError, sqlite3.Error)):
+        return (
+            f"Worker temporary storage failed ({type(exc).__name__}: {exc}). "
+            "Fix: increase its capacity or reduce analysis parallelism."
+        )
+    if isinstance(exc, httpx.HTTPStatusError):
+        response: Final = exc.response
+        status: Final = response.status_code
+        step: Final = f"{exc.request.method} {response.url.path.rsplit('/', 1)[-1]}"
+        if status == 402:
+            return "Monthly budget reached. Fix: raise this lens's monthly budget in Settings."
+        detail: Final = server_detail(response)
+        fix: Final = (
+            "check that the analysis model is configured and reachable from the proxy."
+            if step.endswith("model")
+            else "check the proxy logs for this request."
+        )
+        return f"{step} returned HTTP {status}" + (f": {detail}" if detail else "") + f". Fix: {fix}"
+    if isinstance(exc, httpx.TransportError):
+        return (
+            f"Could not reach LiteLLM from the worker ({type(exc).__name__}). "
+            "Fix: check LITELLM_URL and network access from the worker."
+        )
+    return f"Analysis stopped on unexpected data ({type(exc).__name__}: {exc}). Fix: check the proxy and worker versions match."
 
 
 class LensWorker:
@@ -82,15 +129,8 @@ class LensWorker:
             saved: Final = await self.client.post(prefix + "/result", json=result.model_dump(mode="json"))
             saved.raise_for_status()
         except (httpx.HTTPError, ValueError, OSError, sqlite3.Error) as exc:
-            status: Final = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-            message: Final = (
-                "Worker temporary storage failed. Increase its capacity or reduce analysis parallelism."
-                if isinstance(exc, (OSError, sqlite3.Error))
-                else "Monthly budget reached"
-                if status == 402
-                else "Analysis interrupted. Check worker connectivity, model configuration, and trace storage."
-            )
-            logger.warning("Analysis %s interrupted (%s)", claim.job.id, type(exc).__name__)
+            message: Final = failure_reason(exc)[:LENS_RESULT_ERROR_MAX_CHARS]
+            logger.warning("Analysis %s interrupted: %s", claim.job.id, message)
             failed: Final = await self.client.post(
                 prefix + "/result", json=Result(coverage=Coverage(), error=message).model_dump()
             )
