@@ -513,3 +513,52 @@ def test_nested_documents_are_scanned_and_deep_nesting_is_refused():
 
     assert found.document_texts == ("inner", "deeper")
     assert found.unscannable == ("document (nested too deep)",)
+
+
+def _png_bytes(width: int, height: int) -> bytes:
+    return b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big") + b"\x08\x02"
+
+
+def _jpeg_bytes(width: int, height: int) -> bytes:
+    app0 = b"\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+    sof0 = b"\xff\xc0\x00\x11\x08" + height.to_bytes(2, "big") + width.to_bytes(2, "big") + b"\x03"
+    return b"\xff\xd8" + app0 + b"\xff" + sof0
+
+
+def _image_url(mime: str, raw: bytes) -> dict:
+    return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{base64.b64encode(raw).decode()}"}}
+
+
+@pytest.mark.parametrize(
+    "mime, raw, sent_format",
+    [
+        pytest.param("image/png", _jpeg_bytes(256, 256), "jpeg", id="jpeg-labeled-png"),
+        pytest.param("image/jpeg", _png_bytes(256, 256), "png", id="png-labeled-jpeg"),
+        pytest.param("image/png", _png_bytes(8000, 8000), "png", id="png-at-pixel-limit"),
+        pytest.param("image/jpeg", _jpeg_bytes(8000, 10), "jpeg", id="jpeg-at-pixel-limit"),
+    ],
+)
+def test_image_format_is_taken_from_the_bytes(mime, raw, sent_format):
+    found = find_request_attachments(_chat(_image_url(mime, raw)), CallTypes.acompletion.value, False, False)
+
+    assert [item["image"]["format"] for item in found.images] == [sent_format]
+    assert found.unscannable == ()
+
+
+@pytest.mark.parametrize(
+    "mime, raw, label",
+    [
+        pytest.param("image/png", _png_bytes(8001, 10), "image_url (over 8000 pixels)", id="png-too-wide"),
+        pytest.param("image/png", _png_bytes(10, 9000), "image_url (over 8000 pixels)", id="png-too-tall"),
+        pytest.param("image/jpeg", _jpeg_bytes(9000, 10), "image_url (over 8000 pixels)", id="jpeg-too-wide"),
+        pytest.param("image/jpeg", _jpeg_bytes(10, 8001), "image_url (over 8000 pixels)", id="jpeg-too-tall"),
+        pytest.param("image/png", b"GIF89a\x01\x00\x01\x00", "image_url (not PNG or JPEG data)", id="gif-labeled-png"),
+    ],
+)
+def test_images_bedrock_cannot_scan_are_unscannable(mime, raw, label):
+    data = _chat(_image_url("image/png", _png_bytes(16, 16)), _image_url(mime, raw))
+
+    found = find_request_attachments(data, CallTypes.acompletion.value, False, False)
+
+    assert len(found.images) == 1
+    assert found.unscannable == (label,)

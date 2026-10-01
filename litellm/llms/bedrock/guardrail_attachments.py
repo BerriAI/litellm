@@ -78,6 +78,11 @@ _CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
 _TOOL_OUTPUT_ITEM_TYPES: Final = frozenset({"function_call_output", "custom_tool_call_output", "computer_call_output"})
 _MAX_LABEL_MIME_CHARS: Final = 40
+_MAX_IMAGE_SIDE_PIXELS: Final = 8000
+_PNG_SIGNATURE: Final = b"\x89PNG\r\n\x1a\n"
+_JPEG_SIGNATURE: Final = b"\xff\xd8\xff"
+_JPEG_STANDALONE_MARKERS: Final = frozenset({0x01, *range(0xD0, 0xD9)})
+_JPEG_FRAME_MARKERS: Final = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
 
 
 def find_request_attachments(
@@ -314,14 +319,52 @@ def _classify_base64(mime: object, encoded: object, label: str) -> _Classified:
     standard: Final = _standard_base64(encoded)
     if len(standard) > _MAX_IMAGE_BASE64_CHARS:
         return _Unscannable(f"{label} (over 4 MB)")
-    decoded_size: Final = _decoded_size(standard)
-    if decoded_size is None:
+    decoded: Final = _decoded(standard)
+    if decoded is None:
         return _Unscannable(f"{label} (invalid base64)")
-    if decoded_size > _MAX_IMAGE_BYTES:
+    if len(decoded) > _MAX_IMAGE_BYTES:
         return _Unscannable(f"{label} (over 4 MB)")
+    actual_format: Final = _sniffed_format(decoded)
+    if actual_format is None:
+        return _Unscannable(f"{label} (not PNG or JPEG data)")
+    if max(_pixel_size(decoded, actual_format), default=0) > _MAX_IMAGE_SIDE_PIXELS:
+        return _Unscannable(f"{label} (over {_MAX_IMAGE_SIDE_PIXELS} pixels)")
     return _Image(
-        BedrockContentItem(image=BedrockImageContent(format=image_format, source=BedrockImageSource(bytes=standard)))
+        BedrockContentItem(image=BedrockImageContent(format=actual_format, source=BedrockImageSource(bytes=standard)))
     )
+
+
+def _sniffed_format(data: bytes) -> BedrockImageFormat | None:
+    if data.startswith(_PNG_SIGNATURE):
+        return "png"
+    if data.startswith(_JPEG_SIGNATURE):
+        return "jpeg"
+    return None
+
+
+def _pixel_size(data: bytes, image_format: BedrockImageFormat) -> tuple[int, ...]:
+    """Width and height from the PNG IHDR chunk or the JPEG frame header, or () when the header is unreadable."""
+    if image_format == "png":
+        return (
+            (int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")) if data[12:16] == b"IHDR" else ()
+        )
+    offset = 2
+    while offset + 4 <= len(data) and data[offset] == 0xFF:
+        marker = data[offset + 1]
+        if marker == 0xFF or marker in _JPEG_STANDALONE_MARKERS:
+            offset += 1 if marker == 0xFF else 2
+            continue
+        if marker in _JPEG_FRAME_MARKERS:
+            return (
+                (
+                    int.from_bytes(data[offset + 7 : offset + 9], "big"),
+                    int.from_bytes(data[offset + 5 : offset + 7], "big"),
+                )
+                if offset + 9 <= len(data)
+                else ()
+            )
+        offset += 2 + int.from_bytes(data[offset + 2 : offset + 4], "big")
+    return ()
 
 
 def _standard_base64(encoded: object) -> str:
@@ -332,10 +375,10 @@ def _standard_base64(encoded: object) -> str:
     return compact + "=" * (-len(compact) % 4)
 
 
-def _decoded_size(standard: str) -> int | None:
+def _decoded(standard: str) -> bytes | None:
     if not standard:
         return None
     try:
-        return len(base64.b64decode(standard, validate=True))
+        return base64.b64decode(standard, validate=True)
     except (binascii.Error, ValueError):
         return None
