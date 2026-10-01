@@ -8,7 +8,6 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import ast
-import asyncio
 import hashlib
 import json
 import logging
@@ -19,7 +18,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -31,11 +30,10 @@ from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
 from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
 from .disk_cache import DiskCache
-from .dual_cache import DualCache
+from .dual_cache import DualCache  # noqa: F401  # re-exported, callers import DualCache from litellm.caching.caching
 from .gcs_cache import GCSCache
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
-from .redis_batch import active_post_call_redis_batch
 from .redis_cache import RedisCache, log_redis_failure
 from .redis_cluster_cache import RedisClusterCache
 from .redis_semantic_cache import RedisSemanticCache
@@ -61,6 +59,9 @@ def _native_response(result: object) -> object:
     return result
 
 
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
 def print_verbose(print_statement):
     try:
         verbose_logger.debug(print_statement)
@@ -68,15 +69,6 @@ def print_verbose(print_statement):
             print(print_statement)  # noqa: T201
     except Exception:
         pass
-
-
-def _ttl_seconds(raw: object) -> int | None:
-    if not isinstance(raw, (int, float, str)):
-        return None
-    try:
-        return int(raw)
-    except ValueError:
-        return None
 
 
 class CacheMode(str, Enum):
@@ -401,7 +393,9 @@ class Cache:
                     param_value = kwargs[param]
                     cache_key += f"{param}: {param_value}"
 
-        nested_litellm_params: Final = kwargs.get("litellm_params") or MappingProxyType({})
+        nested_litellm_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(
+            kwargs.get("litellm_params") or MappingProxyType({})
+        )
         forward_reasoning_content: Final = kwargs.get(
             "forward_reasoning_content", nested_litellm_params.get("forward_reasoning_content")
         )
@@ -782,47 +776,12 @@ class Cache:
                 await self.batch_cache_write(result, **kwargs)
             else:
                 cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
-                if await self._defer_set_to_post_call_batch(cache_key, cached_data, kwargs, dynamic_cache_object):
-                    return
                 if dynamic_cache_object is not None:
                     await dynamic_cache_object.async_set_cache(cache_key, cached_data, **kwargs)
                 else:
                     await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             self._log_add_cache_failure(e)
-
-    async def _defer_set_to_post_call_batch(
-        self,
-        cache_key: str,
-        cached_data: object,
-        kwargs: Mapping[str, object],
-        dynamic_cache_object: BaseCache | None,
-    ) -> bool:
-        """A plain SET on the Redis response cache rides the request's post-call pipeline with the counters,
-        instead of its own round trip. Anything with SET options keeps the direct path."""
-        if kwargs.get("nx"):
-            return False
-        ttl: Final = _ttl_seconds(kwargs.get("ttl"))
-        if isinstance(dynamic_cache_object, DualCache):
-            deferred: Final = await dynamic_cache_object.async_set_cache_post_call(cache_key, cached_data, ttl)
-            if deferred is None:
-                return False
-            deferred.on_settled(self._log_deferred_add_cache_failure)
-            return True
-        if dynamic_cache_object is not None or not isinstance(self.cache, RedisCache):
-            return False
-        batch: Final = active_post_call_redis_batch(self.cache)
-        if batch is None:
-            return False
-        batch.set(cache_key, cached_data, ttl).on_settled(self._log_deferred_add_cache_failure)
-        return True
-
-    def _log_deferred_add_cache_failure(self, future: asyncio.Future[None]) -> None:
-        if future.cancelled():
-            return
-        failure: Final = future.exception()
-        if isinstance(failure, Exception):
-            self._log_add_cache_failure(failure)
 
     def _convert_to_cached_embedding(
         self,

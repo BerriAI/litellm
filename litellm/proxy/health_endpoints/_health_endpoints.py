@@ -2197,7 +2197,7 @@ async def test_model_connection(
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=Deployment(
                 model_name="test_model",
-                litellm_params=LiteLLM_Params(**litellm_params),
+                litellm_params=LiteLLM_Params.model_validate(litellm_params),
                 model_info=resolved_model_info,
             ),
             user_api_key_dict=user_api_key_dict,

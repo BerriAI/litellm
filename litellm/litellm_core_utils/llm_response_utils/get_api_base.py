@@ -1,4 +1,8 @@
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import verbose_logger
@@ -8,6 +12,8 @@ from ...litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
 )
 from ...types.router import LiteLLM_Params
+
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def _api_base_without_login(provider: str) -> str | None:
@@ -50,9 +56,11 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
         if isinstance(optional_params, LiteLLM_Params):
             _optional_params = optional_params
         elif "model" in optional_params:
-            _optional_params = LiteLLM_Params(**optional_params)
+            _optional_params = LiteLLM_Params.model_validate(optional_params)
         else:  # prevent needing to copy and pop the dict
-            _optional_params = LiteLLM_Params(model=model, **optional_params)  # convert to pydantic object
+            _optional_params = LiteLLM_Params.model_validate(
+                _LITELLM_PARAMS_ADAPTER.validate_python(MappingProxyType({"model": model, **optional_params}))
+            )  # convert to pydantic object
     except Exception:
         return None
     # get llm provider

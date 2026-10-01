@@ -3959,7 +3959,7 @@ class Router:
         model_info["original_model_id"] = original_model_id
         deployment_pydantic_obj: Final = Deployment(
             model_name=model_group,
-            litellm_params=LiteLLM_Params(**dynamic_litellm_params),
+            litellm_params=LiteLLM_Params.model_validate(dynamic_litellm_params),
             model_info=model_info,
         )
         Router._register_deployment_pricing(deployment=deployment_pydantic_obj)
@@ -9329,7 +9329,7 @@ class Router:
                 continue
             deployment = Deployment(
                 model_name=model_name,
-                litellm_params=(lp if not isinstance(lp, dict) else LiteLLM_Params(**lp)),
+                litellm_params=(lp if not isinstance(lp, dict) else LiteLLM_Params.model_validate(lp)),
                 model_info=(entry.get("model_info") if isinstance(entry, dict) else entry.model_info),
             )
             if self._has_registered_strategy(self.adaptive_routers, model_name, self._deployment_tags(deployment)):
@@ -10703,7 +10703,7 @@ class Router:
         if isinstance(litellm_params_data, LiteLLM_Params):
             litellm_params = litellm_params_data
         elif isinstance(litellm_params_data, dict) and "model" in litellm_params_data:
-            litellm_params = LiteLLM_Params(**litellm_params_data)
+            litellm_params = LiteLLM_Params.model_validate(litellm_params_data)
         else:
             raise ValueError(
                 f"Deployment missing valid litellm_params. "
@@ -12546,7 +12546,7 @@ class Router:
 
                 if allowed_model_region is not None:
                     if not is_region_allowed(
-                        litellm_params=LiteLLM_Params(**_litellm_params),
+                        litellm_params=LiteLLM_Params.model_validate(_litellm_params),
                         allowed_model_region=allowed_model_region,
                     ):
                         invalid_model_indices.add(idx)
@@ -12564,7 +12564,7 @@ class Router:
                         _,
                     ) = litellm.get_llm_provider(
                         model=_dep_model_for_params,
-                        litellm_params=LiteLLM_Params(**_litellm_params),
+                        litellm_params=LiteLLM_Params.model_validate(_litellm_params),
                     )
                 except Exception as e:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not fail the request
                     verbose_router_logger.debug(
