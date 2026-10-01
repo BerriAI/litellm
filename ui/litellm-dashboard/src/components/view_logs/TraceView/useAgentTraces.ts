@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import moment from "moment";
 import { useMemo } from "react";
 
@@ -91,12 +91,14 @@ export function useAgentTraces({
 }
 
 export function useTraceAvailability(accessToken: string, enabled: boolean) {
-  const options = {
+  const options: UseQueryOptions<TracePage, Error, boolean> = {
     queryKey: ["trace-availability", accessToken],
     queryFn: () => apiClient.get<TracePage>("/v1/traces", { accessToken, query: { start_ms: 0 } }),
     select: (page: TracePage) => page.data.length > 0,
     enabled,
     retry: false,
+    refetchInterval: (query) => (query.state.data?.data.length ? false : LIVE_TAIL_INTERVAL_MS),
+    refetchIntervalInBackground: false,
   };
   return useQuery(options);
 }

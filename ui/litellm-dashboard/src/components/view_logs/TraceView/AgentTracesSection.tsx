@@ -65,7 +65,8 @@ function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChan
   const [setupResult, setSetupResult] = useState<{ detail: string | null } | null>(null);
   const waitingForFirstTrace = traces.traces.length === 0 && !rangeChanged;
   const settledResponse = isActive && !traces.isFetching && !traces.error;
-  if (settledResponse && waitingForFirstTrace && setupResult?.detail !== traces.notEnabledDetail) {
+  const rememberSetup = waitingForFirstTrace || setupResult !== null;
+  if (settledResponse && rememberSetup && setupResult?.detail !== traces.notEnabledDetail) {
     setSetupResult({ detail: traces.notEnabledDetail });
   }
 
@@ -73,6 +74,18 @@ function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChan
   const loadingFirstPage = traces.isLoading && setupResult === null;
   const isEmpty = !loadingFirstPage && !traces.error && traces.traces.length === 0;
   return { disabledDetail, isEmpty, received: setupResult !== null && traces.traces.length > 0 };
+}
+
+function TraceHistoryError({ history }: { history: ReturnType<typeof useTraceAvailability> }) {
+  if (!history.error) return null;
+  return (
+    <div role="alert" className="flex items-center justify-between gap-4 border-b px-3 py-3 text-sm">
+      <p>Could not check earlier traces. {history.error.message}</p>
+      <Button variant="outline" size="sm" disabled={history.isFetching} onClick={() => void history.refetch()}>
+        Retry trace check
+      </Button>
+    </div>
+  );
 }
 
 /** The Runs view: filters, the runs table and footer — or one run, in place, once a row is clicked. */
@@ -131,7 +144,7 @@ export function AgentTracesSection({
   if (setup.disabledDetail != null)
     return <TracingSetupCard detail={setup.disabledDetail} onCheck={checkTraces} checking={traces.isFetching} />;
   // Onboarding only on the first, default view; an empty range the user picked keeps its controls.
-  if (checkHistory && history.data === false)
+  if (checkHistory && !history.error && history.data === false)
     return <TracingSetupCard detail={null} onCheck={checkTraces} checking={traces.isFetching} />;
   if (showSetup) {
     return (
@@ -153,6 +166,7 @@ export function AgentTracesSection({
 
   return (
     <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-card">
+      {checkHistory && <TraceHistoryError history={history} />}
       {setup.received && (
         <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
           Traces received. Select a run to inspect it.
@@ -187,8 +201,8 @@ export function AgentTracesSection({
       <TracesTimeline runs={filtered} range={range} selection={zoom} onSelect={setZoom} />
       <AgentTracesTable
         traces={runs}
-        isLoading={traces.isLoading || history.isLoading}
-        error={traces.error ?? history.error}
+        isLoading={traces.isLoading || (checkHistory && history.isLoading)}
+        error={traces.error}
         hasMore={traces.hasMore}
         onLoadMore={traces.loadMore}
         onOpenTrace={toggleRun}

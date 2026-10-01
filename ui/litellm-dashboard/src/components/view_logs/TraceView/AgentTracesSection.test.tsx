@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/http/client";
@@ -147,6 +147,48 @@ describe("AgentTracesSection", () => {
     await act(async () => rejectCheck(failure));
     expect(await screen.findByText(/Tracing is still unavailable/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Check setup" })).toBeEnabled();
+  });
+
+  it("keeps received traces and the open drawer visible during subsequent fetches", async () => {
+    vi.mocked(agentTraceListCall).mockRejectedValue(new ApiError("Tracing is not enabled", 501, {}));
+    renderSection();
+    const checkSetup = await screen.findByRole("button", { name: "Check setup" });
+    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
+    fireEvent.click(checkSetup);
+    const rows = await screen.findAllByTestId("agent-trace-row");
+    fireEvent.click(rows[0]);
+    const drawer = screen.getByRole("complementary", { name: "Trace details" });
+
+    let finishRefresh: (page: TracePage) => void = () => {};
+    vi.mocked(agentTraceListCall).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+    await act(async () => {
+      void testQueryClient.invalidateQueries({ queryKey: ["agentTraces"] });
+    });
+    expect(await screen.findByText("Updating…")).toBeVisible();
+    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
+    expect(screen.getByRole("complementary", { name: "Trace details" })).toBe(drawer);
+    expect(screen.queryByTestId("tracing-setup-card")).not.toBeInTheDocument();
+    await act(async () => finishRefresh(traceList as TracePage));
+  });
+
+  it("separates a failed history check from the empty list and retries that check", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue({ ...(traceList as TracePage), data: [] });
+    vi.mocked(apiClient.get).mockRejectedValue(new ApiError("History unavailable", 503, {}));
+    renderSection();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not check earlier traces. History unavailable");
+    expect(screen.getByText("No runs match these filters.")).toBeVisible();
+    expect(screen.queryByText(/Could not load runs/)).not.toBeInTheDocument();
+
+    vi.mocked(apiClient.get).mockResolvedValue(traceList);
+    fireEvent.click(screen.getByRole("button", { name: "Retry trace check" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.getByText("No runs match these filters.")).toBeVisible();
+    expect(agentTraceListCall).toHaveBeenCalledTimes(1);
   });
 
   it("treats a proxy without the trace routes (404) like tracing being off", async () => {

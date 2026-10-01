@@ -1,9 +1,10 @@
-import { screen, within } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { ApiError } from "@/lib/http/client";
 import { apiClient } from "@/components/networking";
+import { LIVE_TAIL_INTERVAL_MS } from "@/components/view_logs/log_filter_logic";
 import { LensView } from "./LensView";
 import { nextCheckStatus, type Lens, type Finding } from "./lensData";
 
@@ -321,6 +322,32 @@ it.each([false, true])(
     expect(screen.queryByRole("button", { name: "Set up analysis" })).not.toBeInTheDocument();
   },
 );
+
+it("enables first-lens setup when a trace arrives without leaving Investigations", async () => {
+  testQueryClient.clear();
+  const traceCheck = vi.fn().mockResolvedValue({ data: [] });
+  vi.mocked(apiClient.get).mockImplementation(async (path) =>
+    path === "/lens" ? { lenses: [], workers: [], tracing_enabled: true } : traceCheck(),
+  );
+  vi.useFakeTimers();
+  try {
+    const view = renderWithProviders(<LensView accessToken="test" />);
+    await act(async () => vi.advanceTimersByTimeAsync(50));
+    expect(screen.getByRole("link", { name: "Set up traces" })).toBeVisible();
+
+    traceCheck.mockResolvedValue({ data: [{ trace_id: "first-trace" }] });
+    await act(async () => vi.advanceTimersByTimeAsync(LIVE_TAIL_INTERVAL_MS));
+    expect(screen.getByRole("button", { name: "Set up your first lens" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Set up traces" })).not.toBeInTheDocument();
+
+    const completedChecks = traceCheck.mock.calls.length;
+    await act(async () => vi.advanceTimersByTimeAsync(LIVE_TAIL_INTERVAL_MS * 2));
+    expect(traceCheck).toHaveBeenCalledTimes(completedChecks);
+    view.unmount();
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 it("allows retrying a failed trace readiness check without treating it as an empty account", async () => {
   testQueryClient.clear();
