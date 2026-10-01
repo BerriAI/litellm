@@ -34,7 +34,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
-    bedrock_model_supports_sampling_params,
+    bedrock_model_is_openai_gpt,
     split_bedrock_region_path,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
@@ -50,37 +50,42 @@ if TYPE_CHECKING:
 REASONING_OPEN_TAG: Final = "<reasoning>"
 REASONING_CLOSE_TAG: Final = "</reasoning>"
 
-GPT_CHAT_COMPLETIONS_REFUSED_PARAMS: Final = frozenset(
-    ("frequency_penalty", "presence_penalty", "logprobs", "top_logprobs")
-)
 CHAT_COMPLETIONS_REFUSED_PARAMS_BY_FAMILY: Final = MappingProxyType(
     {
-        "openai.gpt-5": GPT_CHAT_COMPLETIONS_REFUSED_PARAMS,
-        "openai.gpt-6": GPT_CHAT_COMPLETIONS_REFUSED_PARAMS,
         "openai.gpt-oss": frozenset(("logit_bias",)),
         "xai.": frozenset(("frequency_penalty", "presence_penalty")),
     }
 )
-
-
-CHAT_COMPLETIONS_SAMPLING_PARAMS: Final = frozenset(("temperature", "top_p"))
+GPT_CHAT_COMPLETIONS_PARAMS_REFUSED_WHILE_REASONING: Final = frozenset(
+    ("temperature", "top_p", "frequency_penalty", "presence_penalty", "logprobs", "top_logprobs")
+)
 
 
 def chat_completions_params_refused_for(model: str) -> frozenset[str]:
     """The OpenAI params AWS's Chat Completions endpoint rejects for this model whatever else the request says.
 
-    Each family answers them with a 400 (GPT 5.6 and newer, gpt-oss) or a 503 (Grok), and a model whose price-map row
-    says ``supports_sampling_params: false`` answers ``temperature`` and ``top_p`` with a 400 too, where
-    Converse dropped the same params under ``drop_params``, so the native config leaves them out of its
-    supported list and the usual drop-or-raise handling applies before the request reaches AWS.
+    GPT-OSS answers ``logit_bias`` with a 400 and Grok answers the penalties with a 503, so the native config leaves
+    them out of its supported params and litellm refuses them, or drops them under ``drop_params``, before sending.
     """
     model_id: Final = split_bedrock_region_path(model)[1]
-    family_refused: Final = frozenset().union(
+    return frozenset().union(
         *(refused for family, refused in CHAT_COMPLETIONS_REFUSED_PARAMS_BY_FAMILY.items() if family in model_id)
     )
-    if bedrock_model_supports_sampling_params(model):
-        return family_refused
-    return family_refused | CHAT_COMPLETIONS_SAMPLING_PARAMS
+
+
+def chat_completions_params_refused_while_reasoning(model: str, params: Mapping[str, object]) -> frozenset[str]:
+    """The params of this request that AWS ties to ``reasoning_effort: "none"`` on the GPT-5.x and GPT-6.x families.
+
+    AWS answers ``temperature``, ``top_p``, the penalties, and logprobs with a 400 while the model reasons, which
+    is every effort but ``"none"`` and the default when none is set, and accepts all of them under ``"none"``.
+    """
+    if params.get("reasoning_effort") == "none" or not bedrock_model_is_openai_gpt(model):
+        return frozenset()
+    return GPT_CHAT_COMPLETIONS_PARAMS_REFUSED_WHILE_REASONING & frozenset(params)
+
+
+def _without_params(params: Mapping[str, object], dropped: frozenset[str]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in params.items() if key not in dropped})
 
 
 CHAT_COMPLETIONS_REFUSED_REASONING_EFFORTS_BY_FAMILY: Final = MappingProxyType({"xai.": frozenset(("none",))})
@@ -105,7 +110,7 @@ def chat_completions_reasoning_efforts_refused_for(model: str) -> frozenset[str]
 def without_refused_reasoning_effort(model: str, params: Mapping[str, object]) -> Mapping[str, object]:
     if params.get("reasoning_effort") not in chat_completions_reasoning_efforts_refused_for(model):
         return params
-    return MappingProxyType({key: value for key, value in params.items() if key != "reasoning_effort"})
+    return _without_params(params, frozenset(("reasoning_effort",)))
 
 
 def _held_close_tag_prefix(text: str) -> int:
@@ -329,8 +334,20 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             drop_params=drop_params,
             replace_max_completion_tokens_with_max_tokens=replace_max_completion_tokens_with_max_tokens,
         )
+        refused_while_reasoning: Final = chat_completions_params_refused_while_reasoning(model, non_default_params)
+        if refused_while_reasoning and not (litellm.drop_params or drop_params):
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} doesn't support {sorted(refused_while_reasoning)} while reasoning is active on "
+                    "Bedrock's Chat Completions endpoint. Set reasoning_effort to 'none' to send them, or set "
+                    "`litellm.drop_params = True` to drop them"
+                ),
+                status_code=400,
+            )
         return dict(  # mutable-ok: get_optional_params keeps filling this dict
-            without_refused_reasoning_effort(model, with_max_completion_tokens(mapped))
+            without_refused_reasoning_effort(
+                model, with_max_completion_tokens(_without_params(mapped, refused_while_reasoning))
+            )
         )
 
     def _inference_params(

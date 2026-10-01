@@ -599,13 +599,13 @@ def test_supported_params_include_reasoning_effort_for_gpt56(local_cost_map):
     [
         (
             "bedrock/global.openai.gpt-5.6-sol",
-            ("frequency_penalty", "presence_penalty", "logprobs", "top_logprobs", "temperature", "top_p", "n"),
-            ("logit_bias", "reasoning_effort", "tools", "functions", "stop"),
+            ("n",),
+            ("temperature", "top_p", "frequency_penalty", "logprobs", "logit_bias", "reasoning_effort", "stop"),
         ),
         (
             "bedrock/us.openai.gpt-6.1-sol",
-            ("frequency_penalty", "presence_penalty", "logprobs", "top_logprobs", "temperature", "top_p", "n"),
-            ("logit_bias", "reasoning_effort", "tools", "functions", "stop"),
+            ("n",),
+            ("temperature", "top_p", "presence_penalty", "top_logprobs", "reasoning_effort", "tools", "functions"),
         ),
         (
             "us.xai.grok-4.6",
@@ -628,11 +628,6 @@ def test_supported_params_leave_out_what_each_family_refuses(local_cost_map, mod
 @pytest.mark.parametrize(
     "model, param",
     [
-        ("bedrock/chat_completions/global.openai.gpt-5.6-sol", {"frequency_penalty": 0.5}),
-        ("bedrock/chat_completions/global.openai.gpt-5.6-sol", {"logprobs": True, "top_logprobs": 2}),
-        ("bedrock/chat_completions/global.openai.gpt-5.6-sol", {"temperature": 0.2}),
-        ("bedrock/chat_completions/global.openai.gpt-6-sol", {"top_p": 0.9}),
-        ("bedrock/chat_completions/global.openai.gpt-6-sol", {"presence_penalty": 0.5}),
         ("bedrock/chat_completions/us.xai.grok-4.6", {"presence_penalty": 0.5}),
         ("bedrock/chat_completions/openai.gpt-oss-20b-1:0", {"logit_bias": {"1": 1}}),
     ],
@@ -648,6 +643,51 @@ def test_refused_params_are_dropped_or_refused_before_reaching_aws(local_cost_ma
 
     assert str(requests[0].url).endswith("/openai/v1/chat/completions")
     assert param.keys().isdisjoint(json.loads(requests[0].content))
+
+
+GPT_PARAMS_TIED_TO_REASONING_OFF = {
+    "temperature": 0.2,
+    "top_p": 0.9,
+    "frequency_penalty": 0.5,
+    "presence_penalty": 0.5,
+    "logprobs": True,
+    "top_logprobs": 2,
+}
+
+
+@pytest.mark.parametrize("model", ["bedrock/global.openai.gpt-5.6-sol", "bedrock/us.openai.gpt-6-sol"])
+@pytest.mark.parametrize("reasoning", [{}, {"reasoning_effort": "low"}], ids=["effort_unset", "effort_low"])
+@pytest.mark.parametrize("param", list(GPT_PARAMS_TIED_TO_REASONING_OFF))
+def test_gpt_sampling_params_are_refused_or_dropped_while_reasoning(
+    local_cost_map, fake_aws_env, model, reasoning, param
+):
+    requests, client = _recording_client(json=_chat_completion_json("ok", model.removeprefix("bedrock/")))
+    request = {"model": model, "messages": [{"role": "user", "content": "hello"}], "client": client, **reasoning}
+    with pytest.raises(litellm.UnsupportedParamsError, match=param):
+        litellm.completion(**request, **{param: GPT_PARAMS_TIED_TO_REASONING_OFF[param]})
+    litellm.completion(**request, drop_params=True, **{param: GPT_PARAMS_TIED_TO_REASONING_OFF[param]})
+
+    body = json.loads(requests[0].content)
+    assert str(requests[0].url).endswith("/openai/v1/chat/completions")
+    assert param not in body
+    assert body.get("reasoning_effort") == reasoning.get("reasoning_effort")
+
+
+@pytest.mark.parametrize("model", ["bedrock/global.openai.gpt-5.6-sol", "bedrock/us.openai.gpt-6-sol"])
+def test_gpt_sampling_params_reach_aws_with_reasoning_effort_none(local_cost_map, fake_aws_env, model):
+    requests, client = _recording_client(json=_chat_completion_json("ok", model.removeprefix("bedrock/")))
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort="none",
+        client=client,
+        **GPT_PARAMS_TIED_TO_REASONING_OFF,
+    )
+
+    body = json.loads(requests[0].content)
+    assert str(requests[0].url).endswith("/openai/v1/chat/completions")
+    assert body["reasoning_effort"] == "none"
+    assert {key: body[key] for key in GPT_PARAMS_TIED_TO_REASONING_OFF} == GPT_PARAMS_TIED_TO_REASONING_OFF
 
 
 def test_split_reasoning_tag_splits_leading_tag():
