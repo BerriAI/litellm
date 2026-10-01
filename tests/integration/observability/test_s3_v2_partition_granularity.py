@@ -963,6 +963,7 @@ def test_s3_v2_hour_postgres_outage_mid_mixed_burst_lands_every_id_exactly_once_
         answered: Final = mixed_burst(owned.gateway, openai_model, anthropic_model, key, marker, per_surface=5)
         assert relay.tripped.wait(90), "no spend log write reached the database during the burst"
         eventually(lambda: relay.refused, lambda count: count >= 1, seconds=30)
+        assert relay.reconnected.wait(60), "the proxy never reconnected to the database after the outage"
         burst_payloads: Final = eventually(
             lambda: tuple(payload for payload in sink.payloads() if _prompt(payload) in sent),
             lambda landed: frozenset(_prompt(payload) for payload in landed) == frozenset(sent),
