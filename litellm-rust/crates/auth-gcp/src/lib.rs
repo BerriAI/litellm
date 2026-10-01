@@ -131,7 +131,7 @@ impl Default for VertexAuth {
 }
 
 impl VertexAuth {
-    fn new(loader: Arc<dyn VertexProviderLoader>) -> Self {
+    pub fn new(loader: Arc<dyn VertexProviderLoader>) -> Self {
         Self {
             providers: Cache::builder().max_capacity(64).build(),
             loader,
@@ -220,16 +220,16 @@ impl VertexAuth {
     }
 }
 
-trait VertexTokenSource: Send + Sync {
+pub trait VertexTokenSource: Send + Sync {
     fn project_id(&self) -> VertexAuthFuture<'_, String>;
     fn token(&self) -> VertexAuthFuture<'_, String>;
 }
 
-trait VertexProviderLoader: Send + Sync {
+pub trait VertexProviderLoader: Send + Sync {
     fn load(&self, source: CredentialSource) -> VertexAuthFuture<'_, Arc<dyn VertexTokenSource>>;
 }
 
-type VertexAuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
+pub type VertexAuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 
 struct GcpTokenSource(Arc<dyn TokenProvider>);
 
@@ -299,13 +299,13 @@ fn validate_request_credentials(configured: &str) -> Result<&str, Error> {
                 .map(str::to_string)
         });
     if token_uri.as_deref() != Some(GOOGLE_OAUTH_TOKEN_ENDPOINT) {
-        return Err(Error::RequestVertexTokenEndpoint);
+        return Err(Error::InvalidConfiguration("request-controlled Vertex credentials must use the canonical Google OAuth token endpoint".into()));
     }
     Ok(configured)
 }
 
 #[derive(Clone, Debug)]
-enum CredentialSource {
+pub enum CredentialSource {
     Inline(SecretValue),
     Trusted(SecretValue),
     ApplicationCredentials(String),
@@ -376,10 +376,20 @@ fn optional_credentials(
                     .map(SecretValue::new)
                     .map(|value| Sourced::new(value, source))
                     .map(Some)
-                    .map_err(|error| Error::InvalidFieldType(format!("{}: {error}", names[0])));
+                    .map_err(|error| {
+                        Error::InvalidConfiguration(litellm_auth_types::ErrorDetail::failed(
+                            "credential serialization",
+                            error,
+                        ))
+                    });
             }
             Some(_) => {
-                return Err(Error::InvalidFieldType(names[0].to_string()));
+                return Err(Error::InvalidConfiguration(
+                    litellm_auth_types::ErrorDetail::InvalidType {
+                        field: names[0].into(),
+                        expected: "a string or null",
+                    },
+                ));
             }
         }
     }
@@ -397,7 +407,12 @@ fn optional_string(params: &Map<String, Value>, names: &[&str]) -> Result<Option
             Some(Value::String(value)) if value.trim().is_empty() => continue,
             Some(Value::String(value)) => return Ok(Some(value.clone())),
             Some(_) => {
-                return Err(Error::InvalidFieldType(names[0].to_string()));
+                return Err(Error::InvalidConfiguration(
+                    litellm_auth_types::ErrorDetail::InvalidType {
+                        field: names[0].into(),
+                        expected: "a string or null",
+                    },
+                ));
             }
         }
     }
@@ -411,7 +426,10 @@ fn non_empty_env(env_lookup: &dyn Fn(&str) -> Option<String>, name: &str) -> Opt
 }
 
 fn auth_acquisition_error(error: gcp_auth::Error) -> Error {
-    Error::VertexTokenAcquisition(error.to_string())
+    Error::CredentialAcquisition(litellm_auth_types::ErrorDetail::failed(
+        "Vertex AI credentials",
+        error,
+    ))
 }
 
 #[cfg(test)]
@@ -612,20 +630,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn request_credentials_require_canonical_token_endpoint() {
-        assert!(
-            validate_request_credentials(r#"{"token_uri":"https://oauth2.googleapis.com/token"}"#)
-                .is_ok()
-        );
-        assert!(matches!(
-            validate_request_credentials(r#"{"token_uri":"http://127.0.0.1/token"}"#),
-            Err(Error::RequestVertexTokenEndpoint)
-        ));
-        assert!(matches!(
-            validate_request_credentials("{}"),
-            Err(Error::RequestVertexTokenEndpoint)
-        ));
+    #[rstest::rstest]
+    #[case::canonical_endpoint(r#"{"token_uri":"https://oauth2.googleapis.com/token"}"#, true)]
+    #[case::noncanonical_endpoint(r#"{"token_uri":"http://127.0.0.1/token"}"#, false)]
+    #[case::missing_endpoint("{}", false)]
+    fn request_credentials_require_canonical_token_endpoint(
+        #[case] credentials: &str,
+        #[case] accepted: bool,
+    ) {
+        assert_eq!(validate_request_credentials(credentials).is_ok(), accepted);
     }
 
     #[tokio::test]

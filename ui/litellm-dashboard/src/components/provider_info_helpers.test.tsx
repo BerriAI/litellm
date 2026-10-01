@@ -194,6 +194,7 @@ describe("provider_info_helpers", () => {
         Providers.PETALS,
         Providers.PG_VECTOR,
         Providers.PREDIBASE,
+        Providers.Sail,
         Providers.WANDB,
         Providers.ZAI,
       ];
@@ -401,6 +402,14 @@ describe("provider_info_helpers", () => {
       expect(result).toContain("vertex_ai/text-bison");
       expect(result).toContain("vertex_ai_beta/something");
       expect(result).not.toContain("anthropic-native");
+    });
+
+    it("should list sail models when called with the 'Sail' provider key", () => {
+      const modelMap = {
+        "sail/openai/gpt-oss-120b": { litellm_provider: "sail" },
+        "sagemaker-model": { litellm_provider: "sagemaker" },
+      };
+      expect(getProviderModels("Sail" as Providers, modelMap)).toEqual(["sail/openai/gpt-oss-120b"]);
     });
 
     it("should include bedrock converse but exclude standalone bedrock_mantle when called with 'Bedrock' provider key", () => {

@@ -119,24 +119,24 @@ def _inline_block(block: object, inlined: "Mapping[str, str]") -> object:
     url: Final = _remote_image_url(block)
     if url is None or not isinstance(block, dict):
         return block
-    return {**block, "image_url": inlined[url]}  # mutable-ok: outgoing JSON request item
+    return {**block, "image_url": inlined[url]}
 
 
 def _inline_value(value: object, inlined: "Mapping[str, str]") -> object:
     if isinstance(value, list):
-        return [_inline_block(block, inlined) for block in value]  # mutable-ok: outgoing JSON request item
+        return [_inline_block(block, inlined) for block in value]
     return _inline_block(value, inlined)
 
 
 def _inline_item(item: object, inlined: "Mapping[str, str]") -> object:
     if not isinstance(item, dict):
         return item
-    inlined_fields: Final = {  # mutable-ok: outgoing JSON request item
+    inlined_fields: Final = {
         key: _inline_value(item[key], inlined) for key in IMAGE_BLOCK_KEYS if isinstance(item.get(key), (list, dict))
     }
     if not inlined_fields:
         return item
-    return {**item, **inlined_fields}  # mutable-ok: same
+    return {**item, **inlined_fields}
 
 
 def inline_remote_image_urls(
@@ -145,7 +145,7 @@ def inline_remote_image_urls(
     """``input`` with every http(s) image URL replaced by its entry in ``inlined``."""
     if not isinstance(input, list) or not inlined:
         return input
-    items: Final = [_inline_item(item, inlined) for item in input]  # mutable-ok: downstream narrows on isinstance(list)
+    items: Final = [_inline_item(item, inlined) for item in input]
     return items  # pyright: ignore[reportReturnType]  # items keep the caller's input union
 
 
@@ -219,7 +219,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         bearer: Final = resolve_bedrock_bearer_token(api_key)
         if not bearer:
             return headers
-        return {**headers, "Authorization": f"Bearer {bearer}"}  # mutable-ok: dict return per the contract
+        return {**headers, "Authorization": f"Bearer {bearer}"}
 
     def sign_request(
         self,
@@ -261,9 +261,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
                 "Bedrock Runtime Responses API: dropping unsupported parameter(s) %s that the endpoint rejects.",
                 unsupported,
             )
-        params: Final = {  # mutable-ok: outgoing JSON request params
-            key: value for key, value in mapped.items() if key not in unsupported
-        }
+        params: Final = {key: value for key, value in mapped.items() if key not in unsupported}
         tools: Final = params.get("tools")
         if not isinstance(tools, list):
             return params

@@ -14,7 +14,6 @@ on:
       - "litellm/ocr/**"
       - "litellm/llms/base_llm/ocr/**"
       - "litellm/llms/custom_httpx/llm_http_handler.py"
-      - "tests/test_litellm/ocr/**"
       - "tests/test_litellm/conftest.py"
       - "Makefile"
       - ".cargo/**"
@@ -42,7 +41,6 @@ on:
       - "litellm/ocr/**"
       - "litellm/llms/base_llm/ocr/**"
       - "litellm/llms/custom_httpx/llm_http_handler.py"
-      - "tests/test_litellm/ocr/**"
       - "tests/test_litellm/conftest.py"
       - "Makefile"
       - ".cargo/**"
@@ -85,6 +83,7 @@ jobs:
         with:
           workspaces: litellm-rust
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
@@ -123,6 +122,7 @@ jobs:
         with:
           workspaces: litellm-rust
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: cargo nextest run --workspace --locked
 
@@ -164,6 +164,7 @@ jobs:
         with:
           workspaces: litellm-rust
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: uv build --wheel --out-dir dist
 

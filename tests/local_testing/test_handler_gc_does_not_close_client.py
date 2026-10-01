@@ -23,10 +23,7 @@ test here may keep the client in a local: that inflates the very refcount under
 test, and the test then passes on a broken handler. They hold weak references
 instead, which the refcount does not count.
 
-These live here rather than under ``tests/test_litellm/`` because they need a
-real connection pool: a mocked transport goes on yielding chunks after its
-client is closed, so the very teardown under test is what a mock cannot
-reproduce. The server is a hermetic, credential-free ``ThreadingHTTPServer`` on
+The server is a hermetic, credential-free ``ThreadingHTTPServer`` on
 an ephemeral loopback port, and needs no network access beyond it.
 
 Related: https://github.com/BerriAI/litellm/issues/24929

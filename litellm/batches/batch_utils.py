@@ -43,7 +43,7 @@ def _uses_native_vertex_output(
 ) -> bool:
     if custom_llm_provider != "vertex_ai":
         return False
-    if model_name and getattr(litellm, "disable_vertex_batch_output_transformation", False):
+    if model_name and litellm.disable_vertex_batch_output_transformation:
         return True
     return first_row is not None and is_native_vertex_batch_output_row(first_row)
 
@@ -127,7 +127,7 @@ async def _handle_completed_batch(
         return BatchCostUsageResult(
             cost=0.0,
             usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
-            models=[],  # mutable-ok: no output file means no model was ever priced; BatchCostUsageResult.models requires list[str]
+            models=[],
             successful_requests=0,
             failed_requests=await count_error_file_failed_requests(
                 batch, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params

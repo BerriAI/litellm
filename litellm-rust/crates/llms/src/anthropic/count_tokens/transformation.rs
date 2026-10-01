@@ -1,8 +1,8 @@
-use litellm_types::llms::anthropic_messages::anthropic_request::{AnthropicMessage, SystemPrompt};
+use litellm_llms_types::formats::messages::{Message, SystemPrompt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX, base_llm::chat::transformation::Error};
+use crate::{Error, anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX};
 
 const COUNT_TOKENS_ENDPOINT: &str = "https://api.anthropic.com/v1/messages/count_tokens";
 const TOKEN_COUNTING_BETA: &str = "token-counting-2024-11-01";
@@ -10,7 +10,7 @@ const TOKEN_COUNTING_BETA: &str = "token-counting-2024-11-01";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AnthropicCountTokensRequest {
     pub model: String,
-    pub messages: Vec<AnthropicMessage>,
+    pub messages: Vec<Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -25,12 +25,12 @@ pub struct AnthropicCountTokensResponse {
 pub trait AnthropicCountTokensConfig {
     fn endpoint(&self) -> &'static str;
 
-    fn validate_request(&self, model: &str, messages: &[AnthropicMessage]) -> Result<(), Error>;
+    fn validate_request(&self, model: &str, messages: &[Message]) -> Result<(), Error>;
 
     fn transform_request(
         &self,
         model: &str,
-        messages: Vec<AnthropicMessage>,
+        messages: Vec<Message>,
         tools: Option<Vec<Value>>,
         system: Option<SystemPrompt>,
     ) -> Result<AnthropicCountTokensRequest, Error>;
@@ -51,7 +51,7 @@ impl AnthropicCountTokensConfig for AnthropicCountTokensTransformation {
     fn transform_request(
         &self,
         model: &str,
-        messages: Vec<AnthropicMessage>,
+        messages: Vec<Message>,
         tools: Option<Vec<Value>>,
         system: Option<SystemPrompt>,
     ) -> Result<AnthropicCountTokensRequest, Error> {
@@ -65,7 +65,7 @@ impl AnthropicCountTokensConfig for AnthropicCountTokensTransformation {
         })
     }
 
-    fn validate_request(&self, model: &str, messages: &[AnthropicMessage]) -> Result<(), Error> {
+    fn validate_request(&self, model: &str, messages: &[Message]) -> Result<(), Error> {
         if model.is_empty() {
             return Err(Error::MissingField("model"));
         }
@@ -92,13 +92,13 @@ impl AnthropicCountTokensConfig for AnthropicCountTokensTransformation {
 
 #[cfg(test)]
 mod tests {
-    use litellm_types::llms::anthropic_messages::anthropic_request::MessageContent;
+    use litellm_llms_types::formats::messages::MessageContent;
     use serde_json::{Map, json};
 
     use super::*;
 
-    fn message() -> AnthropicMessage {
-        AnthropicMessage {
+    fn message() -> Message {
+        Message {
             role: "user".into(),
             content: MessageContent::Text("hello".into()),
             extra: Map::new(),

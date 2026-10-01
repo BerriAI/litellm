@@ -2,7 +2,7 @@
 CRUD ENDPOINTS FOR GUARDRAILS
 """
 
-import concurrent.futures
+import asyncio
 import inspect
 import json
 import os
@@ -21,7 +21,14 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.path_utils import safe_join
+from litellm.proxy.common_utils.path_utils import is_within, safe_join
+from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_ROOTS, category_dirs, find_category_file
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution import (
+    ExecutionTimeoutError,
+    await_with_timeout,
+    call_off_loop_with_timeout,
+)
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeCompilationError
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
     build_sandbox_globals,
     compile_sandboxed,
@@ -401,7 +408,7 @@ async def create_guardrail(
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully initialized guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
-        except (ValueError, TypeError) as init_error:
+        except (ValueError, TypeError, CustomCodeCompilationError) as init_error:
             # Configuration error — roll back the DB write so the guardrail isn't orphaned
             if prisma_client is not None:
                 try:
@@ -421,6 +428,8 @@ async def create_guardrail(
             )
 
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error adding guardrail to db: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -1257,7 +1266,7 @@ async def patch_guardrail(
                     litellm_params=LitellmParams(**existing_litellm_params),
                     guardrail_info=existing_guardrail.get(
                         "guardrail_info",
-                        {},  # mutable-ok: Guardrail's own constructor takes a plain dict
+                        {},
                     ),
                 ),
                 prisma_client=prisma_client,
@@ -1432,12 +1441,16 @@ async def get_guardrail_ui_settings():
     )
 
 
+def content_filter_data_roots() -> tuple[str, ...]:
+    return DATA_ROOTS
+
+
 @router.get(
     "/guardrails/ui/category_yaml/{category_name}",
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_category_yaml(category_name: str):
+async def get_category_yaml(category_name: str, roots: tuple[str, ...] = Depends(content_filter_data_roots)):
     """
     Get the YAML or JSON content for a specific content filter category.
 
@@ -1447,35 +1460,20 @@ async def get_category_yaml(category_name: str):
     Returns:
         The raw YAML or JSON content of the category file with file type indicator
     """
-    # Get the categories directory path
-    categories_dir: Final = os.path.join(
-        os.path.dirname(__file__),
-        "guardrail_hooks",
-        "litellm_content_filter",
-        "categories",
-    )
-
-    # Try to find the file with either .yaml or .json extension
     try:
-        yaml_path: Final = safe_join(categories_dir, f"{category_name}.yaml")
-        json_path: Final = safe_join(categories_dir, f"{category_name}.json")
+        safe_join(CATEGORIES_DIR, f"{category_name}.yaml")
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid category name")
 
-    category_file_path = None
-    file_type = None
-
-    if os.path.exists(yaml_path):
-        category_file_path = yaml_path
-        file_type = "yaml"
-    elif os.path.exists(json_path):
-        category_file_path = json_path
-        file_type = "json"
-    else:
+    category_file_path: Final = find_category_file(category_name, roots)
+    if category_file_path is None:
         raise HTTPException(
             status_code=404,
             detail=f"Category file not found: {category_name} (tried .yaml and .json)",
         )
+    if not any(is_within(category_file_path, category_dir) for category_dir in category_dirs(roots)):
+        raise HTTPException(status_code=400, detail="Invalid category name")
+    file_type: Final = "yaml" if category_file_path.endswith(".yaml") else "json"
 
     try:
         # Read and return the raw content
@@ -2124,15 +2122,20 @@ async def test_custom_code_guardrail(
     try:
         exec_globals: Final = build_sandbox_globals()
 
-        try:
+        def load_module() -> None:
             compiled: Final[CodeType] = compile_sandboxed(request.custom_code)
             exec(compiled, exec_globals)  # noqa: S102
+
+        try:
+            await call_off_loop_with_timeout(load_module, EXECUTION_TIMEOUT_SECONDS, label="test:load")
         except SyntaxError as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,
                 error=f"Syntax error in custom code: {e}",
                 error_type="compilation",
             )
+        except ExecutionTimeoutError:
+            return _execution_timeout_response(EXECUTION_TIMEOUT_SECONDS)
         except Exception as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,
@@ -2178,16 +2181,9 @@ async def test_custom_code_guardrail(
             return apply_fn(test_inputs, safe_request_data, request.input_type)
 
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future: Final = executor.submit(execute_guardrail)
-                try:
-                    result: Final = future.result(timeout=EXECUTION_TIMEOUT_SECONDS)
-                except concurrent.futures.TimeoutError:
-                    return TestCustomCodeGuardrailResponse(
-                        success=False,
-                        error=f"Execution timeout: code took longer than {EXECUTION_TIMEOUT_SECONDS} seconds",
-                        error_type="execution",
-                    )
+            result: Final = await _run_test_guardrail(execute_guardrail, EXECUTION_TIMEOUT_SECONDS)
+        except ExecutionTimeoutError:
+            return _execution_timeout_response(EXECUTION_TIMEOUT_SECONDS)
         except Exception as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,
@@ -2217,6 +2213,23 @@ async def test_custom_code_guardrail(
             error=f"Unexpected error: {e}",
             error_type="execution",
         )
+
+
+def _execution_timeout_response(timeout: float) -> TestCustomCodeGuardrailResponse:
+    return TestCustomCodeGuardrailResponse(
+        success=False,
+        error=f"Execution timeout: code took longer than {timeout:g} seconds",
+        error_type="execution",
+    )
+
+
+async def _run_test_guardrail(execute_guardrail: Callable[[], object], timeout: float) -> object:
+    deadline: Final = asyncio.get_running_loop().time() + timeout
+    raw_result: Final = await call_off_loop_with_timeout(execute_guardrail, timeout, label="test")
+    if not inspect.iscoroutine(raw_result):
+        return raw_result
+    remaining: Final = max(deadline - asyncio.get_running_loop().time(), 0.0)
+    return await await_with_timeout(raw_result, remaining, label="test")
 
 
 def _resolve_guardrail_input_type(active_guardrail: CustomGuardrail, input_type: str) -> Literal["request", "response"]:
