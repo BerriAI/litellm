@@ -12,10 +12,10 @@ from tests.integration._support.process import owned_proxy
 from tests.integration.pricing.test_off_peak_pricing import off_peak_window
 
 
-def delete_lens(engine_id: str) -> None:
-    write_rows('DELETE FROM "LiteLLM_EngineRun" WHERE engine_id=%s', (engine_id,))
-    write_rows('DELETE FROM "LiteLLM_Engine" WHERE id=%s', (engine_id,))
-    assert read_rows('SELECT id FROM "LiteLLM_Engine" WHERE id=%s', (engine_id,)) == []
+def delete_lens(lens_id: str) -> None:
+    write_rows('DELETE FROM "LiteLLM_LensRun" WHERE lens_id=%s', (lens_id,))
+    write_rows('DELETE FROM "LiteLLM_Lens" WHERE id=%s', (lens_id,))
+    assert read_rows('SELECT id FROM "LiteLLM_Lens" WHERE id=%s', (lens_id,)) == []
 
 
 @pytest.mark.parametrize("off_peak", (False, True))
@@ -37,12 +37,12 @@ def test_lens_bills_selected_key_and_rechecks_its_permissions(gateway: Gateway, 
         key: Final = scenario.key(models=[model], max_budget=1)
         key_id: Final = sha256(key.encode()).hexdigest()
         worker: Final = gateway.post(
-            "/engine/workers/register", {"name": "Billing regression", "analysis_key_id": key_id}
+            "/lens/workers/register", {"name": "Billing regression", "analysis_key_id": key_id}
         )
         worker_id: Final = string_value(object_value(worker["worker"])["id"])
-        scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_EngineWorker" WHERE id=%s', (worker_id,))
-        engine: Final = gateway.post(
-            "/engine",
+        scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_LensWorker" WHERE id=%s', (worker_id,))
+        lens: Final = gateway.post(
+            "/lens",
             {
                 "name": "Billing regression",
                 "model": model,
@@ -51,17 +51,17 @@ def test_lens_bills_selected_key_and_rechecks_its_permissions(gateway: Gateway, 
                 "source": "requests",
             },
         )
-        engine_id: Final = string_value(engine["id"])
-        scenario.cleanups.callback(delete_lens, engine_id)
+        lens_id: Final = string_value(lens["id"])
+        scenario.cleanups.callback(delete_lens, lens_id)
         worker_key: Final = string_value(worker["token"])
         unauthorized: Final = gateway.request(
-            "POST", "/engine/workers/register", {"name": "Denied", "analysis_key_id": key_id}, key=key
+            "POST", "/lens/workers/register", {"name": "Denied", "analysis_key_id": key_id}, key=key
         )
         assert unauthorized.status_code == 403, unauthorized.text
         with ThreadPoolExecutor(max_workers=8) as pool:
             claims: Final = tuple(
                 pool.map(
-                    lambda _: gateway.request("POST", "/engine/worker/claim?protocol_version=2", {}, key=worker_key),
+                    lambda _: gateway.request("POST", "/lens/worker/claim?protocol_version=2", {}, key=worker_key),
                     range(8),
                 )
             )
@@ -69,9 +69,9 @@ def test_lens_bills_selected_key_and_rechecks_its_permissions(gateway: Gateway, 
         winners: Final = tuple(response.json() for response in claims if response.json() is not None)
         assert len(winners) == 1
         claim: Final = object_value(winners[0])
-        assert claim["engine_id"] == engine_id
+        assert claim["lens_id"] == lens_id
         job_id: Final = string_value(object_value(claim["job"])["id"])
-        path: Final = f"/engine/worker/{engine_id}/{job_id}/model"
+        path: Final = f"/lens/worker/{lens_id}/{job_id}/model"
         result: Final = gateway.post(path, {"prompt": "Inspect this run", "purpose": "extract"}, key=worker_key)
         expected: Final = (20 * 0.000001 + 20 * 0.000002) * (0.5 if off_peak else 1)
         assert result["cost"] == pytest.approx(expected)
@@ -81,7 +81,7 @@ def test_lens_bills_selected_key_and_rechecks_its_permissions(gateway: Gateway, 
             seconds=70,
         )
         assert rows[0]["spend"] == pytest.approx(expected)
-        assert gateway.get(f"/engine/{engine_id}")["spent"] == pytest.approx(expected)
+        assert gateway.get(f"/lens/{lens_id}")["spent"] == pytest.approx(expected)
         raw_hash: Final = gateway.request(
             "POST",
             "/v1/chat/completions",
@@ -105,11 +105,11 @@ def test_lens_bills_selected_key_and_rechecks_its_permissions(gateway: Gateway, 
         gateway.post("/key/block", {"key": key})
         blocked: Final = gateway.request("POST", path, {"prompt": "Must not run", "purpose": "extract"}, key=worker_key)
         assert blocked.status_code == 400, blocked.text
-        assert gateway.get(f"/engine/{engine_id}")["spent"] == pytest.approx(expected)
+        assert gateway.get(f"/lens/{lens_id}")["spent"] == pytest.approx(expected)
         replacement: Final = scenario.key(models=[model], rpm_limit=1)
         replacement_id: Final = sha256(replacement.encode()).hexdigest()
         changed: Final = gateway.request(
-            "PUT", f"/engine/workers/{worker_id}/billing-key", {"analysis_key_id": replacement_id}
+            "PUT", f"/lens/workers/{worker_id}/billing-key", {"analysis_key_id": replacement_id}
         )
         assert changed.status_code == 200, changed.text
         billed_replacement: Final = gateway.post(
@@ -124,17 +124,17 @@ def test_lens_bills_selected_key_and_rechecks_its_permissions(gateway: Gateway, 
             seconds=70,
         )
         assert second_rows[0]["spend"] == pytest.approx(expected)
-        revoked: Final = gateway.request("DELETE", f"/engine/workers/{worker_id}")
+        revoked: Final = gateway.request("DELETE", f"/lens/workers/{worker_id}")
         assert revoked.status_code == 200, revoked.text
         denied_worker: Final = gateway.request(
             "POST", path, {"prompt": "Must not run", "purpose": "extract"}, key=worker_key
         )
         assert denied_worker.status_code == 401, denied_worker.text
         forbidden_change: Final = gateway.request(
-            "PUT", f"/engine/workers/{worker_id}/billing-key", {"analysis_key_id": replacement_id}
+            "PUT", f"/lens/workers/{worker_id}/billing-key", {"analysis_key_id": replacement_id}
         )
         assert forbidden_change.status_code == 409, forbidden_change.text
-        gateway.post(f"/engine/{engine_id}/cancel", {})
+        gateway.post(f"/lens/{lens_id}/cancel", {})
 
 
 @pytest.mark.parametrize("cancel_on_disconnect", (False, True))
@@ -174,19 +174,19 @@ def test_worker_spend_logs_do_not_expose_investigation_content(
             seconds=70,
         )
         assert marker in str(retained[0]), "Control must prove this proxy retains ordinary prompts"
-        worker: Final = isolated.post("/engine/workers/register", {"analysis_key_id": key_id})
+        worker: Final = isolated.post("/lens/workers/register", {"analysis_key_id": key_id})
         worker_id: Final = string_value(object_value(worker["worker"])["id"])
-        scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_EngineWorker" WHERE id=%s', (worker_id,))
-        engine: Final = isolated.post(
-            "/engine", {"name": "Log privacy", "model": model, "enabled": False, "context": "Find problems"}
+        scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_LensWorker" WHERE id=%s', (worker_id,))
+        lens: Final = isolated.post(
+            "/lens", {"name": "Log privacy", "model": model, "enabled": False, "context": "Find problems"}
         )
-        engine_id: Final = string_value(engine["id"])
-        scenario.cleanups.callback(delete_lens, engine_id)
+        lens_id: Final = string_value(lens["id"])
+        scenario.cleanups.callback(delete_lens, lens_id)
         worker_token: Final = string_value(worker["token"])
-        claim: Final = isolated.post("/engine/worker/claim?protocol_version=2", {}, key=worker_token)
+        claim: Final = isolated.post("/lens/worker/claim?protocol_version=2", {}, key=worker_token)
         job_id: Final = string_value(object_value(claim["job"])["id"])
         result: Final = isolated.post(
-            f"/engine/worker/{engine_id}/{job_id}/model", {"prompt": marker, "purpose": "extract"}, key=worker_token
+            f"/lens/worker/{lens_id}/{job_id}/model", {"prompt": marker, "purpose": "extract"}, key=worker_token
         )
         assert result["content"], "The worker must still receive model output"
         rows: Final = eventually(
@@ -200,4 +200,4 @@ def test_worker_spend_logs_do_not_expose_investigation_content(
         assert float(rows[0]["spend"]) == pytest.approx(result["cost"])
         assert marker not in str(rows[0])
         assert result["content"] not in str(rows[0]["response"])
-        isolated.post(f"/engine/{engine_id}/cancel", {})
+        isolated.post(f"/lens/{lens_id}/cancel", {})

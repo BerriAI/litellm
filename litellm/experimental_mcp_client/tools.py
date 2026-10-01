@@ -171,9 +171,7 @@ async def load_mcp_tools(
     """
     tools: Final = await list_tools_with_pagination(session)
     if format == "openai":
-        return [  # mutable-ok: public API returns a list
-            transform_mcp_tool_to_openai_tool(mcp_tool=tool) for tool in tools
-        ]
+        return [transform_mcp_tool_to_openai_tool(mcp_tool=tool) for tool in tools]
     return tools
 
 

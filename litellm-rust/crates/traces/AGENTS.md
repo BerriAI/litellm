@@ -1,4 +1,4 @@
-- Rust owns OTLP wire decoding, ClickHouse schema, row encoding, named reads, connection validation and transport
+- Keep OTLP decoding, trace schema, row encoding and named query selection here. Generic ClickHouse connections and HTTP execution belong in `litellm-storage-clickhouse`
 - Keep this crate independent of Python; PyO3 conversion and public Python exceptions belong in `python-bridge`
 - Keep the SQL migrations here as the only ClickHouse schema definition
 - Use typed query parameters and a dedicated SELECT-only reader with server-side limits

@@ -346,9 +346,7 @@ _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body
 def _embedding_request_without_sdk_defaults(
     data: Mapping[str, object], timeout: float | httpx.Timeout
 ) -> tuple[Mapping[str, object], RequestOptions]:
-    body: Final = {  # mutable-ok: the SDK json-encodes the body and needs a plain dict
-        k: v for k, v in data.items() if k not in _SDK_OPTION_KEYS
-    }
+    body: Final = {k: v for k, v in data.items() if k not in _SDK_OPTION_KEYS}
     extra_headers: Final = _EXTRA_HEADERS_ADAPTER.validate_python(data.get("extra_headers")) or _NO_EXTRA_HEADERS
     options: Final = make_request_options(
         extra_headers=types.MappingProxyType({**extra_headers, RAW_RESPONSE_HEADER: "true"}),
@@ -1426,8 +1424,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.pre_call(
                 input=prompt,
                 api_key=openai_aclient.api_key,
-                additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
-                    "headers": {"Authorization": f"Bearer {openai_aclient.api_key}"},  # mutable-ok: logged header map
+                additional_args={
+                    "headers": {"Authorization": f"Bearer {openai_aclient.api_key}"},
                     "api_base": str(openai_aclient.base_url),
                     "acompletion": True,
                     "complete_input_dict": data,
@@ -1610,7 +1608,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+            additional_args={
                 "complete_input_dict": speech_request_body(model, voice, optional_params),
                 "api_base": str(sync_client.base_url),
             },
@@ -1658,7 +1656,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+            additional_args={
                 "complete_input_dict": speech_request_body(model, voice, optional_params),
                 "api_base": str(openai_client.base_url),
             },
