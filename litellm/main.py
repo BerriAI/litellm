@@ -8948,7 +8948,9 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
     if isinstance(getattr(usage, "cost", None), (int, float)):
         return
     computed_cost: Final = logging_obj._response_cost_calculator(result=response)
-    if isinstance(computed_cost, (int, float)) and computed_cost > 0:
+    if isinstance(computed_cost, (int, float)) and (
+        computed_cost > 0 or (computed_cost == 0 and logging_obj.prices_usage_as_free(response))
+    ):
         setattr(usage, "cost", computed_cost)
 
 

@@ -6,6 +6,7 @@ import pytest
 from litellm.litellm_core_utils.llm_cost_calc.zero_cost_diagnostic import (
     ZERO_COST_COUNTER_NAME,
     diagnose_zero_cost,
+    is_free_usage,
     used_pricing_keys,
     zero_cost_warning,
 )
@@ -15,6 +16,21 @@ PER_SECOND_ENTRY: Final = {"cost_per_second": 0.00042}
 FREE_ENTRY: Final = {"input_cost_per_token": 0, "output_cost_per_token": 0, "cache_read_input_token_cost": 2e-08}
 PRICED_ENTRY: Final = {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}
 TEXT_USAGE: Final = Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+
+
+@pytest.mark.parametrize(
+    ("usage", "pricing_entry", "expected"),
+    [
+        (TEXT_USAGE, {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}, True),
+        (TEXT_USAGE, {"input_cost_per_token": 0.0}, False),
+        (TEXT_USAGE, {"input_cost_per_token": 0.0, "output_cost_per_token": 1e-06}, False),
+        (Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0), {}, False),
+    ],
+)
+def test_is_free_usage_requires_explicit_zero_rates_for_used_units(
+    usage: Usage, pricing_entry: Mapping[str, object], expected: bool
+) -> None:
+    assert is_free_usage(usage, pricing_entry) is expected
 
 
 def test_missing_pricing_key_names_every_rate_the_usage_needs() -> None:
