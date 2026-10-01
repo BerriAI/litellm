@@ -536,6 +536,108 @@ describe("useKeys", () => {
     expect(callUrl.searchParams.has("key_alias")).toBe(false);
     expect(callUrl.searchParams.has("key_hash")).toBe(false);
   });
+
+  describe("My Keys scoping options", () => {
+    const fetchUrl = () => new URL(mockFetch.mock.calls[0][0], "http://localhost");
+
+    it("keeps team, created-by and substring matching on by default", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockKeysResponse,
+      });
+
+      const { result } = renderHook(() => useKeys(1, 10), { wrapper });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      const callUrl = fetchUrl();
+      expect(callUrl.searchParams.get("include_team_keys")).toBe("true");
+      expect(callUrl.searchParams.get("include_created_by_keys")).toBe("true");
+      expect(callUrl.searchParams.get("substring_matching")).toBe("true");
+    });
+
+    it("sends the scoped flags as explicit false values, not absent params", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockKeysResponse,
+      });
+
+      const { result } = renderHook(
+        () =>
+          useKeys(1, 10, {
+            userID: "user-1",
+            includeTeamKeys: false,
+            includeCreatedByKeys: false,
+            substringMatching: false,
+          }),
+        { wrapper },
+      );
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      const callUrl = fetchUrl();
+      expect(callUrl.searchParams.get("user_id")).toBe("user-1");
+      expect(callUrl.searchParams.get("include_team_keys")).toBe("false");
+      expect(callUrl.searchParams.get("include_created_by_keys")).toBe("false");
+      expect(callUrl.searchParams.get("substring_matching")).toBe("false");
+    });
+
+    it("keeps the search param while user matching is exact", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockKeysResponse,
+      });
+
+      const { result } = renderHook(
+        () => useKeys(1, 10, { userID: "user-1", substringMatching: false, search: "prod" }),
+        { wrapper },
+      );
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      const callUrl = fetchUrl();
+      expect(callUrl.searchParams.get("user_id")).toBe("user-1");
+      expect(callUrl.searchParams.get("search")).toBe("prod");
+      expect(callUrl.searchParams.get("substring_matching")).toBe("false");
+    });
+
+    it("refetches under a separate cache key when the scope options differ", async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => mockKeysResponse,
+      });
+
+      const { result, rerender } = renderHook(
+        ({ scoped }: { scoped: boolean }) =>
+          useKeys(1, 10, {
+            userID: scoped ? "user-1" : undefined,
+            includeTeamKeys: !scoped,
+            includeCreatedByKeys: !scoped,
+            substringMatching: !scoped,
+          }),
+        { wrapper, initialProps: { scoped: true } },
+      );
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch.mock.calls[0][0]).toContain("include_team_keys=false");
+
+      rerender({ scoped: false });
+
+      await waitFor(() => {
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+      });
+      expect(mockFetch.mock.calls[1][0]).toContain("include_team_keys=true");
+    });
+  });
 });
 
 describe("useDeletedKeys", () => {
