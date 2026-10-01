@@ -676,6 +676,7 @@ class TestAutoRouterBenchmarks:
         saved_spend=30.0,
         savings_estimated_turns=40,
         savings_estimated_actual_spend=10.0,
+        savings_estimated_classifier_cost=0.4,
         savings_estimated_saved_spend=30.0,
         classifier_cost=0.4,
         classifier_cost_recorded_turns=40,
@@ -701,6 +702,7 @@ class TestAutoRouterBenchmarks:
         assert totals.avg_tokens_per_session == 1000.0
         assert totals.baseline_spend == 40.0
         assert totals.saved_pct == 75.0
+        assert totals.savings_estimated_classifier_cost == 0.4
         assert totals.saved_per_session == 7.5
         assert totals.cache.coverage_pct == 95.0
         assert totals.cache.hit_rate_pct == pytest.approx(73.7)
@@ -720,7 +722,7 @@ class TestAutoRouterBenchmarks:
         assert totals.classifier_cost == 0.4
 
     @pytest.mark.parametrize("estimated_turns", [0, 4])
-    def test_savings_compare_only_the_current_estimated_cohort(self, estimated_turns: int) -> None:
+    def test_recorded_savings_survive_when_historical_comparison_costs_are_missing(self, estimated_turns: int) -> None:
         from litellm.proxy.management_endpoints.auto_router_endpoints import _benchmark_totals
 
         row: Final = self.ROW.model_copy(
@@ -733,10 +735,11 @@ class TestAutoRouterBenchmarks:
         totals: Final = _benchmark_totals(row)
         assert totals.spend == 10.0
         assert totals.savings_estimated_turns == estimated_turns
-        assert totals.saved_spend == (-0.5 if estimated_turns else None)
-        assert totals.baseline_spend == (1.5 if estimated_turns else None)
-        assert totals.saved_pct == (pytest.approx(-33.3) if estimated_turns else None)
-        assert totals.saved_per_session is None
+        assert totals.saved_spend == 30.0
+        assert totals.baseline_spend is None
+        assert totals.savings_estimated_classifier_cost is None
+        assert totals.saved_pct is None
+        assert totals.saved_per_session == 7.5
 
     def test_an_empty_window_folds_to_zeros(self):
         from litellm.proxy.management_endpoints.auto_router_endpoints import (
@@ -765,6 +768,7 @@ class TestAutoRouterBenchmarks:
                 "spend": 0.0,
                 "savings_estimated_turns": 10,
                 "savings_estimated_actual_spend": 0.0,
+                "savings_estimated_classifier_cost": 0.0,
             }
         )
         summed = _summed_agg_row([self.ROW, other])
@@ -773,6 +777,9 @@ class TestAutoRouterBenchmarks:
         assert summed.turns == 50
         assert totals.avg_turns_per_session == 10.0
         assert totals.spend == 10.0
+        assert totals.savings_estimated_classifier_cost == 0.4
+        unknown_cost = other.model_copy(update={"savings_estimated_classifier_cost": None})
+        assert _benchmark_totals(_summed_agg_row([self.ROW, unknown_cost])).savings_estimated_classifier_cost is None
 
     def test_tier_names_stay_scoped_to_the_router_type_that_recorded_them(self):
         quality = self.ROW.model_copy(
@@ -1128,13 +1135,13 @@ class TestAutoRouterSession:
             "turns": turns,
             "last_model": "anthropic/claude-sonnet-5",
             "spend": spend,
-            "saved_spend": (0.24 if turns == 3 else -0.04) if estimated else None,
+            "saved_spend": 0.24,
             "savings_estimated_turns": 3 if estimated else 0,
             "savings_estimated_actual_spend": 0.14 if estimated else 0.0,
             "baseline_spend": pytest.approx(0.38) if turns == 3 else None,
-            "savings_estimated_baseline_spend": pytest.approx(0.38 if turns == 3 else 0.1) if estimated else None,
-            "baseline_model": "anthropic/claude-opus-5" if estimated else None,
-            "baseline_models": {"anthropic/claude-opus-5": 3} if estimated else {},
+            "savings_estimated_baseline_spend": pytest.approx(0.38) if turns == 3 else None,
+            "baseline_model": "anthropic/claude-opus-5",
+            "baseline_models": {"anthropic/claude-opus-5": 3},
         }
 
     @pytest.mark.asyncio
@@ -1168,11 +1175,10 @@ class TestAutoRouterSession:
         assert response.router_name == "new-auto"
 
     @pytest.mark.asyncio
-    async def test_a_reconfigured_router_keeps_the_label_the_money_was_priced_against(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("mixed", [False, True])
+    async def test_session_preserves_historical_baseline_labels(
+        self, monkeypatch: pytest.MonkeyPatch, mixed: bool
     ):
-        # The proxy's router now prices against a different baseline, but the row's money was priced
-        # against opus for two of three turns, and the label says so; the full split is on the response.
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_session
 
         priced = {"anthropic/claude-opus-5": 2, "anthropic/claude-sonnet-5": 1}
@@ -1183,14 +1189,15 @@ class TestAutoRouterSession:
                     **self.ROW,
                     "api_key": ADMIN.api_key,
                     "session_id": "s",
-                    "baseline_models": {"old-baseline": 100},
+                    "baseline_models": {"old-baseline": 100, **({"unknown-baseline": 200} if mixed else {})},
+                    "savings_estimated_turns": 1,
                     "savings_estimated_baseline_models": priced,
                 }
             ],
         )
         response = await get_auto_router_session(user_api_key_dict=ADMIN, session_id="s")
-        assert response.baseline_model == "anthropic/claude-opus-5"
-        assert response.baseline_models == priced
+        assert response.baseline_model == (None if mixed else "old-baseline")
+        assert response.baseline_models == {"old-baseline": 100, **({"unknown-baseline": 200} if mixed else {})}
 
     @pytest.mark.asyncio
     async def test_an_oversized_client_session_id_is_bounded_like_the_writer_bounded_it(

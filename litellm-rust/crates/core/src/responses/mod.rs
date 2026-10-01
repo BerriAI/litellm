@@ -71,7 +71,7 @@ impl ResponsesRoute {
     async fn run(
         &self,
         call: ResponsesCall,
-        cache_options: Option<litellm_cache_response::CacheOptions>,
+        cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
@@ -85,7 +85,7 @@ impl ResponsesRoute {
     async fn run_provider(
         &self,
         call: ResponsesCall,
-        cache_options: Option<litellm_cache_response::CacheOptions>,
+        cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {

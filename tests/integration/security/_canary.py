@@ -83,6 +83,7 @@ SLOTS: Final = MappingProxyType(
         "A1": Slot("A1", "Virtual key raw value, set as a custom key through /key/generate", prefix="sk-"),
         "A2": Slot("A2", "Proxy master key from the LITELLM_MASTER_KEY environment variable", prefix="sk-"),
         "B1": Slot("B1", "Deployment api_key declared in the proxy config.yaml model_list"),
+        "G1d": Slot("G1d", "Logging sink credential read from the proxy environment (DD_API_KEY)"),
         "C1": Slot(
             "C1", "Team callback langfuse_secret_key (team callback API, config team settings, callback_settings)"
         ),

@@ -35,6 +35,7 @@ from litellm._uuid import uuid
 from litellm.batches.batch_utils import _handle_completed_batch, batch_cost_is_final
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import LLMCachingHandler
+from litellm.caching.redis_batch import flush_post_call_redis_batches
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
@@ -180,6 +181,7 @@ from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.azure_sentinel.azure_sentinel import AzureSentinelLogger
 from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
+from ..integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
 from ..integrations.custom_prompt_management import CustomPromptManagement
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
@@ -1885,7 +1887,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
                 "litellm_logging_obj": self,
-                "service_tier": (self.optional_params.get("service_tier") if self.optional_params else None),
                 "data_residency": (
                     self.litellm_params.get("data_residency")
                     if hasattr(self, "litellm_params") and self.litellm_params
@@ -3554,6 +3555,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     traceback.format_exc(),
                 )
                 self._handle_callback_failure(callback=callback)
+        await flush_post_call_redis_batches()
 
     def _handle_callback_failure(self, callback: object):
         """
@@ -3939,6 +3941,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 # Track callback logging failures in Prometheus
                 self._handle_callback_failure(callback=callback)
+        await flush_post_call_redis_batches()
 
     def _get_trace_id(self, service_name: Literal["langfuse"]) -> str | None:
         """
@@ -4637,6 +4640,14 @@ def _init_custom_logger_compatible_class(
             _s3_v2_logger: Final = S3V2Logger()
             _in_memory_loggers.append(_s3_v2_logger)
             return _s3_v2_logger
+        elif logging_integration == "clickhouse":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, ClickHouseSpendLogger):
+                    return callback
+
+            _clickhouse_spend_logger: Final = ClickHouseSpendLogger()
+            _in_memory_loggers.append(_clickhouse_spend_logger)
+            return _clickhouse_spend_logger
         elif logging_integration == "pointfive":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PointFiveLogger):
@@ -5372,6 +5383,10 @@ def get_custom_logger_compatible_class(
         elif logging_integration == "s3_v2":
             for callback in _in_memory_loggers:
                 if isinstance(callback, S3V2Logger):
+                    return callback
+        elif logging_integration == "clickhouse":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, ClickHouseSpendLogger):
                     return callback
         elif logging_integration == "pointfive":
             for callback in _in_memory_loggers:
