@@ -1121,6 +1121,7 @@ def _responses_input_as_token_count_messages(
     transformed: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
         input=input_value,
         responses_api_request=request_params,
+        replay_reasoning=True,
     )
     return tuple(
         message if isinstance(message, dict) else message.model_dump(exclude_none=True) for message in transformed

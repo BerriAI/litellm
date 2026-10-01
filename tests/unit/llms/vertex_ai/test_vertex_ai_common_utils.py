@@ -1755,3 +1755,44 @@ def test_get_vertex_ai_lyria_model_info_is_none_for_non_lyria_speech_models(mode
     assert get_vertex_ai_lyria_model_info(model=model) is None
 
 
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_keeps_deployment_tools_out_of_the_count_body(monkeypatch):
+    import json
+
+    import httpx
+    import respx
+
+    import litellm
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    async def _fake_access_token(self, credentials, project_id, custom_llm_provider):
+        return "fake-token", project_id
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(VertexBase, "_ensure_access_token_async", _fake_access_token)
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post(url__regex=r".*aiplatform\.googleapis\.com.*:countTokens").mock(
+            return_value=httpx.Response(200, json={"totalTokens": 7})
+        )
+        result = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                    "tools": [{"type": "function", "function": {"name": "deployment_default_tool"}}],
+                    "system_instruction": {"parts": [{"text": "deployment default"}]},
+                    "client": object(),
+                }
+            },
+            request_model="vertex_ai/gemini-2.5-flash",
+        )
+
+    assert result is not None and result.total_tokens == 7
+    assert json.loads(route.calls.last.request.content) == {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}]
+    }

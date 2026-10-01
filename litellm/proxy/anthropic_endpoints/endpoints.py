@@ -315,7 +315,7 @@ async def count_tokens(
     
     Returns: {"input_tokens": <number>}
     """
-    from litellm.proxy.proxy_server import token_counter as internal_token_counter
+    from litellm.proxy.proxy_server import count_request_tokens
 
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
@@ -343,9 +343,10 @@ async def count_tokens(
         )
 
         # Call the internal token counter function with direct request flag set to False
-        token_response: Final = await internal_token_counter(
+        token_response: Final = await count_request_tokens(
             request=token_request,
             call_endpoint=True,
+            message_format="anthropic",
         )
         _token_response_dict: dict = {}
         if isinstance(token_response, TokenCountResponse):
@@ -367,6 +368,11 @@ async def count_tokens(
         raise HTTPException(
             status_code=status_code,
             detail=detail,
+        )
+    except litellm.BadRequestError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=AnthropicExceptionMapping.transform_to_anthropic_error(status_code=400, raw_message=e.message),
         )
     except Exception as e:
         log_llm_api_exception(e, litellm_call_id)

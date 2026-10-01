@@ -1,58 +1,93 @@
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Sequence
+from typing import Any, Final, cast
+from urllib.parse import quote
 
 import httpx
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.types.llms.gemini import GeminiCountTokensRequest
+from litellm.types.llms.vertex_ai import ContentType, SystemInstructions, Tools
 from litellm.types.utils import LlmProviders
 
-if TYPE_CHECKING:
-    from litellm.types.google_genai.main import GenerateContentContentListUnionDict
-else:
-    GenerateContentContentListUnionDict = Any
+# acount_tokens binds these itself, so forwarding a deployment's copy would raise a duplicate-keyword TypeError
+ACOUNT_TOKENS_DEPLOYMENT_RESERVED_KEYS: Final = frozenset({"self", "system_instruction", "tools", "client"})
+
+
+def build_count_tokens_request(
+    model: str,
+    contents: Sequence[ContentType],
+    system_instruction: SystemInstructions | None,
+    tools: Sequence[Tools] | None,
+) -> GeminiCountTokensRequest:
+    model_name: Final = f"models/{model}"
+    if tools is None:
+        if system_instruction is None:
+            bare: Final[GeminiCountTokensRequest] = {"contents": contents}
+            return bare
+        with_system: Final[GeminiCountTokensRequest] = {
+            "generateContentRequest": {
+                "model": model_name,
+                "contents": contents,
+                "systemInstruction": system_instruction,
+            }
+        }
+        return with_system
+    if system_instruction is None:
+        with_tools: Final[GeminiCountTokensRequest] = {
+            "generateContentRequest": {"model": model_name, "contents": contents, "tools": tools}
+        }
+        return with_tools
+    with_both: Final[GeminiCountTokensRequest] = {
+        "generateContentRequest": {
+            "model": model_name,
+            "contents": contents,
+            "systemInstruction": system_instruction,
+            "tools": tools,
+        }
+    }
+    return with_both
+
+
+def _part_without_function_response_id(part: object) -> object:
+    if not isinstance(part, dict):
+        return part
+    part_fields: Final = cast(dict[str, object], part)  # cast-ok: request JSON, keys are strings
+    function_response: Final = part_fields.get("functionResponse")
+    if not isinstance(function_response, dict):
+        return part_fields
+    response_fields: Final = cast(dict[str, object], function_response)  # cast-ok: request JSON, keys are strings
+    return part_fields | {
+        "functionResponse": {key: value for key, value in response_fields.items() if key != "id" and value is not None}
+    }
+
+
+def _content_without_function_response_ids(content: object) -> object:
+    if not isinstance(content, dict):
+        return content
+    content_fields: Final = cast(dict[str, object], content)  # cast-ok: request JSON, keys are strings
+    parts: Final = content_fields.get("parts")
+    if not isinstance(parts, list):
+        return content_fields
+    part_list: Final = cast(list[object], parts)  # cast-ok: isinstance already proved a list
+    return content_fields | {"parts": [_part_without_function_response_id(part) for part in part_list]}
 
 
 class GoogleAIStudioTokenCounter:
     def _clean_contents_for_gemini_api(self, contents: Any) -> Any:
         """
-        Clean up contents to remove unsupported fields for the Gemini API.
-
-        The Google Gemini API doesn't recognize the 'id' field in function responses,
-        so we need to remove it to prevent 400 Bad Request errors.
-
-        Args:
-            contents: The contents to clean up
-
-        Returns:
-            Cleaned contents with unsupported fields removed
+        The Gemini API rejects an 'id' field in function responses with a 400, so drop it.
         """
-        import copy
-
-        from google.genai.types import FunctionResponse
-
-        # Handle None or empty contents
         if not contents:
             return contents
-
-        cleaned_contents: Final = copy.deepcopy(contents)
-
-        for content in cleaned_contents:
-            parts = content["parts"]
-            for part in parts:
-                if "functionResponse" in part:
-                    function_response_data = part["functionResponse"]
-                    function_response_part = FunctionResponse(**function_response_data)
-                    function_response_part.id = None
-                    part["functionResponse"] = function_response_part.model_dump(exclude_none=True)
-
-        return cleaned_contents
+        return [_content_without_function_response_ids(content) for content in contents]
 
     def _construct_url(self, model: str, api_base: str | None = None) -> str:
         """
         Construct the URL for the Google Gen AI Studio countTokens endpoint.
         """
         base_url: Final = api_base or "https://generativelanguage.googleapis.com"
-        return f"{base_url}/v1beta/models/{model}:countTokens"
+        return f"{base_url}/v1beta/models/{quote(model, safe='')}:countTokens"
 
     async def validate_environment(
         self,
@@ -84,6 +119,9 @@ class GoogleAIStudioTokenCounter:
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
+        system_instruction: SystemInstructions | None = None,
+        tools: Sequence[Tools] | None = None,
+        client: httpx.AsyncClient | AsyncHTTPHandler | None = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         """
@@ -96,6 +134,9 @@ class GoogleAIStudioTokenCounter:
             api_key: Optional Google API key (will fall back to environment)
             api_base: Optional API base URL (defaults to Google Gen AI Studio)
             timeout: Optional timeout for the request
+            system_instruction: Optional system instruction to count with the contents
+            tools: Optional Gemini tools to count with the contents
+            client: Optional HTTP client to send the request with
             **kwargs: Additional parameters
 
         Returns:
@@ -118,28 +159,28 @@ class GoogleAIStudioTokenCounter:
             litellm.APIConnectionError: If the connection fails
             Exception: For any other unexpected errors
         """
-
-        # Prepare headers
         headers, url = await self.validate_environment(
             api_key=api_key,
             api_base=api_base,
-            headers={},
+            headers=None,
             model=model,
             litellm_params=kwargs,
         )
-
-        # Prepare request body - clean up contents to remove unsupported fields
-        cleaned_contents: Final = self._clean_contents_for_gemini_api(contents)
-        request_body: Final = {"contents": cleaned_contents}
-
-        async_httpx_client: Final = get_async_httpx_client(
-            llm_provider=LlmProviders.GEMINI,
+        request_body: Final = build_count_tokens_request(
+            model=model,
+            contents=self._clean_contents_for_gemini_api(contents),
+            system_instruction=system_instruction,
+            tools=tools,
         )
+        async_httpx_client: Final = client or get_async_httpx_client(llm_provider=LlmProviders.GEMINI)
 
         try:
-            response: Final = await async_httpx_client.post(url=url, headers=headers, json=request_body)
-
-            # Check for HTTP errors
+            response: Final = await async_httpx_client.post(
+                url=url,
+                headers=headers,
+                json=request_body,  # pyright: ignore[reportArgumentType]  # post() takes a bare dict; a TypedDict is one at runtime
+                timeout=timeout,
+            )
             response.raise_for_status()
 
             # Parse response

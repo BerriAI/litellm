@@ -2385,6 +2385,24 @@ class TestResponsesInputTokens:
         ]
         assert token_request.tools == tools
 
+    def test_replayed_reasoning_stays_on_the_assistant_turn_like_v1_responses(self):
+        response, counter = self._post_input_tokens(
+            {
+                "model": "gpt-4o",
+                "input": [
+                    {"role": "user", "content": "hi"},
+                    {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "User greets."}]},
+                    {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hello"}]},
+                    {"role": "user", "content": "again"},
+                ],
+            }
+        )
+
+        assert response.status_code == 200, response.text
+        messages = counter.call_args.kwargs["request"].messages
+        assert [message["role"] for message in messages] == ["user", "assistant", "user"]
+        assert messages[1]["reasoning_content"] == "User greets."
+
     def test_missing_model_returns_openai_400(self):
         response, counter = self._post_input_tokens({"input": "Hello"})
 

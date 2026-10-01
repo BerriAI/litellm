@@ -2,6 +2,7 @@
 # 1. Generate a Key, and use it to make a call
 
 
+import json
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -174,10 +175,11 @@ async def test_anthropic_messages_count_tokens_endpoint():
     anthropic_endpoints._read_request_body = mock_read_request_body
 
     # Mock the internal token_counter function to return a controlled response
-    async def mock_token_counter(request, call_endpoint=False):
+    async def mock_token_counter(request, call_endpoint, message_format):
         assert (
             call_endpoint == True
         ), "Should be called with call_endpoint=True for Anthropic endpoint"
+        assert message_format == "anthropic"
         assert request.model == "claude-3-sonnet-20240229"
         assert request.messages == [{"role": "user", "content": "Hello Claude!"}]
 
@@ -193,8 +195,8 @@ async def test_anthropic_messages_count_tokens_endpoint():
     # Patch the imported token_counter function from proxy_server
     import litellm.proxy.proxy_server as proxy_server
 
-    original_token_counter = proxy_server.token_counter
-    proxy_server.token_counter = mock_token_counter
+    original_count_request_tokens = proxy_server.count_request_tokens
+    proxy_server.count_request_tokens = mock_token_counter
 
     try:
         # Call the endpoint
@@ -211,7 +213,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
     finally:
         # Restore original functions
         anthropic_endpoints._read_request_body = original_read_request_body
-        proxy_server.token_counter = original_token_counter
+        proxy_server.count_request_tokens = original_count_request_tokens
 
 
 @pytest.mark.asyncio
@@ -248,10 +250,11 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
     anthropic_endpoints._read_request_body = mock_read_request_body
 
     # Mock the internal token_counter function to return a controlled response
-    async def mock_token_counter(request, call_endpoint=True):
+    async def mock_token_counter(request, call_endpoint, message_format):
         assert (
             call_endpoint == True
         ), "Should be called with call_endpoint=True for Anthropic endpoint"
+        assert message_format == "anthropic"
         assert request.model == "gpt-4"
         assert request.messages == [{"role": "user", "content": "Hello GPT!"}]
 
@@ -267,8 +270,8 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
     # Patch the imported token_counter function from proxy_server
     import litellm.proxy.proxy_server as proxy_server
 
-    original_token_counter = proxy_server.token_counter
-    proxy_server.token_counter = mock_token_counter
+    original_count_request_tokens = proxy_server.count_request_tokens
+    proxy_server.count_request_tokens = mock_token_counter
 
     try:
         # Call the endpoint
@@ -285,7 +288,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
     finally:
         # Restore original functions
         anthropic_endpoints._read_request_body = original_read_request_body
-        proxy_server.token_counter = original_token_counter
+        proxy_server.count_request_tokens = original_count_request_tokens
 
 
 @pytest.mark.asyncio
@@ -1117,10 +1120,10 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
     original_read_request_body = anthropic_endpoints._read_request_body
     anthropic_endpoints._read_request_body = mock_read_request_body
 
-    original_token_counter = proxy_server.token_counter
+    original_count_request_tokens = proxy_server.count_request_tokens
 
     # Mock token_counter to raise ProxyException with Bedrock-style error
-    async def mock_token_counter_error(request, call_endpoint=False):
+    async def mock_token_counter_error(request, call_endpoint, message_format):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
             type="token_counting_error",
@@ -1128,7 +1131,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
             code=400,
         )
 
-    proxy_server.token_counter = mock_token_counter_error
+    proxy_server.count_request_tokens = mock_token_counter_error
 
     try:
         with pytest.raises(HTTPException) as exc_info:
@@ -1144,7 +1147,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         assert detail["error"]["message"] == "Input is too long for requested model."
     finally:
         anthropic_endpoints._read_request_body = original_read_request_body
-        proxy_server.token_counter = original_token_counter
+        proxy_server.count_request_tokens = original_count_request_tokens
 
 
 @pytest.mark.asyncio
@@ -1169,10 +1172,10 @@ async def test_anthropic_endpoint_403_permission_error_format():
     original_read_request_body = anthropic_endpoints._read_request_body
     anthropic_endpoints._read_request_body = mock_read_request_body
 
-    original_token_counter = proxy_server.token_counter
+    original_count_request_tokens = proxy_server.count_request_tokens
 
     # Mock token_counter to raise ProxyException with 403 error
-    async def mock_token_counter_error(request, call_endpoint=False):
+    async def mock_token_counter_error(request, call_endpoint, message_format):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
             type="token_counting_error",
@@ -1180,7 +1183,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
             code=403,
         )
 
-    proxy_server.token_counter = mock_token_counter_error
+    proxy_server.count_request_tokens = mock_token_counter_error
 
     try:
         with pytest.raises(HTTPException) as exc_info:
@@ -1194,7 +1197,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
         assert detail["error"]["message"] == "Bearer Token has expired"
     finally:
         anthropic_endpoints._read_request_body = original_read_request_body
-        proxy_server.token_counter = original_token_counter
+        proxy_server.count_request_tokens = original_count_request_tokens
 
 
 @pytest.mark.asyncio
@@ -1219,10 +1222,10 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     original_read_request_body = anthropic_endpoints._read_request_body
     anthropic_endpoints._read_request_body = mock_read_request_body
 
-    original_token_counter = proxy_server.token_counter
+    original_count_request_tokens = proxy_server.count_request_tokens
 
     # Mock token_counter to raise ProxyException with 429 error
-    async def mock_token_counter_error(request, call_endpoint=False):
+    async def mock_token_counter_error(request, call_endpoint, message_format):
         raise ProxyException(
             message="Rate limit exceeded",
             type="token_counting_error",
@@ -1230,7 +1233,7 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
             code=429,
         )
 
-    proxy_server.token_counter = mock_token_counter_error
+    proxy_server.count_request_tokens = mock_token_counter_error
 
     try:
         with pytest.raises(HTTPException) as exc_info:
@@ -1244,4 +1247,141 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         assert detail["error"]["message"] == "Rate limit exceeded"
     finally:
         anthropic_endpoints._read_request_body = original_read_request_body
-        proxy_server.token_counter = original_token_counter
+        proxy_server.count_request_tokens = original_count_request_tokens
+
+
+_GEMINI_COUNT_TOKENS_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:countTokens"
+_WEATHER_TOOL = {
+    "name": "get_weather",
+    "description": "Weather for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}
+
+
+def _gemini_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gemini-count",
+                "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "fake-gemini-key"},
+            }
+        ]
+    )
+
+
+async def _count_through_anthropic_route(monkeypatch, body: dict[str, object]) -> dict:
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+
+    async def read_body(request):
+        return body
+
+    monkeypatch.setattr(anthropic_endpoints, "_read_request_body", read_body)
+    return await anthropic_count_tokens(MagicMock(spec=Request), MagicMock())
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_route_sends_system_and_tools_to_gemini(monkeypatch, respx_mock):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    count_route = respx_mock.post(_GEMINI_COUNT_TOKENS_URL).mock(
+        return_value=httpx.Response(200, json={"totalTokens": 41})
+    )
+
+    response = await _count_through_anthropic_route(
+        monkeypatch,
+        {
+            "model": "gemini-count",
+            "system": "You are terse.",
+            "tools": [_WEATHER_TOOL],
+            "messages": [{"role": "user", "content": "weather in Paris?"}],
+        },
+    )
+
+    assert response == {"input_tokens": 41}
+    sent = json.loads(count_route.calls.last.request.content)["generateContentRequest"]
+    assert sent["systemInstruction"] == {"parts": [{"text": "You are terse."}]}
+    assert [declaration["name"] for declaration in sent["tools"][0]["function_declarations"]] == ["get_weather"]
+
+
+def _mock_gemini_count(monkeypatch, respx_mock):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    return respx_mock.post(_GEMINI_COUNT_TOKENS_URL).mock(return_value=httpx.Response(200, json={"totalTokens": 58}))
+
+
+_TOOL_ROUND_TRIP_CONTENTS = [
+    {"role": "user", "parts": [{"text": "weather in Paris?"}]},
+    {"role": "model", "parts": [{"function_call": {"name": "get_weather", "args": {"city": "Paris"}}}]},
+    {"role": "user", "parts": [{"function_response": {"name": "get_weather", "response": {"content": "18C"}}}]},
+]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_route_sends_tool_round_trip_to_gemini(monkeypatch, respx_mock):
+    count_route = _mock_gemini_count(monkeypatch, respx_mock)
+
+    response = await _count_through_anthropic_route(
+        monkeypatch,
+        {
+            "model": "gemini-count",
+            "tools": [_WEATHER_TOOL],
+            "messages": [
+                {"role": "user", "content": "weather in Paris?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}}
+                    ],
+                },
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "18C"}]},
+            ],
+        },
+    )
+
+    assert response == {"input_tokens": 58}
+    sent = json.loads(count_route.calls.last.request.content)["generateContentRequest"]
+    assert sent["contents"] == _TOOL_ROUND_TRIP_CONTENTS
+    assert [declaration["name"] for declaration in sent["tools"][0]["function_declarations"]] == ["get_weather"]
+
+
+@pytest.mark.asyncio
+async def test_utils_token_counter_sends_openai_tool_round_trip_to_gemini(monkeypatch, respx_mock):
+    count_route = _mock_gemini_count(monkeypatch, respx_mock)
+
+    response = await token_counter(
+        request=TokenCountRequest(
+            model="gemini-count",
+            messages=[
+                {"role": "system", "content": "You are terse."},
+                {"role": "user", "content": "weather in Paris?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "18C"},
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "parameters": _WEATHER_TOOL["input_schema"],
+                    },
+                }
+            ],
+        ),
+        call_endpoint=True,
+    )
+
+    assert response.total_tokens == 58
+    sent = json.loads(count_route.calls.last.request.content)["generateContentRequest"]
+    assert sent["systemInstruction"] == {"parts": [{"text": "You are terse."}]}
+    assert sent["contents"] == _TOOL_ROUND_TRIP_CONTENTS
+    assert [declaration["name"] for declaration in sent["tools"][0]["function_declarations"]] == ["get_weather"]
