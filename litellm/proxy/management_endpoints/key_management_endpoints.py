@@ -5297,7 +5297,6 @@ async def _rotate_master_key(
                     data={"param_value": prisma.Json(encrypted_env_vars)},
                 )
 
-    # 3b. process guardrails table
     try:
         from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 

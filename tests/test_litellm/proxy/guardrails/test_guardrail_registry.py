@@ -1091,14 +1091,14 @@ def test_sync_guardrail_from_db_applies_db_dict_params_to_live_instance():
 _ENCRYPTED_PREFIX = "litellm_enc::"
 
 
-class _Row(dict):
+class _Row(dict[str, object]):
     """Prisma-row stand-in: dict(row) yields the columns and attributes read like a model."""
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> object:
         return self[name]
 
 
-def _stored_params(create_or_update_mock: AsyncMock) -> dict:
+def _stored_params(create_or_update_mock: AsyncMock) -> dict[str, object]:
     import json
 
     return json.loads(create_or_update_mock.call_args.kwargs["data"]["litellm_params"])
