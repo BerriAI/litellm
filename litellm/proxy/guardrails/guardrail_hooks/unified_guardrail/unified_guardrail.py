@@ -11,7 +11,7 @@ import contextlib
 import copy
 import json
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast
 
 import anyio
 from fastapi import HTTPException
@@ -49,6 +49,8 @@ if TYPE_CHECKING:
 A2A_CALL_TYPES: Final = (CallTypes.asend_message, CallTypes.send_message)
 
 GUARDRAIL_NAME: Final = "unified_llm_guardrails"
+
+_RequestData: TypeAlias = dict[str, object]
 
 
 class _EndpointTranslation(Protocol):
@@ -117,7 +119,7 @@ def _held_choices(held_chars_per_choice: Mapping[int, int]) -> frozenset[int]:
     return frozenset(idx for idx, held in held_chars_per_choice.items() if held > 0)
 
 
-def _recorded_guardrail_information(request_data: dict) -> tuple[StandardLoggingGuardrailInformation, ...]:
+def _recorded_guardrail_information(request_data: _RequestData) -> tuple[StandardLoggingGuardrailInformation, ...]:
     _metadata_key, metadata_bucket = get_or_create_metadata_bucket(request_data)
     entries: Final = metadata_bucket.get("standard_logging_guardrail_information")
     if not isinstance(entries, list):
@@ -684,7 +686,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         *,
         guardrail_to_apply: CustomGuardrail,
         response: AsyncIterable[object],
-        request_data: dict,
+        request_data: _RequestData,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: str,
         sampling_rate: int,
@@ -844,7 +846,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         responses_so_far: Sequence[object],
         guardrail_to_apply: CustomGuardrail,
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict,
+        request_data: _RequestData,
     ) -> None:
         if not uninspected:
             return
@@ -1032,7 +1034,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         last_scan_key: "StreamingScanKey | None",
         guardrail_to_apply: CustomGuardrail,
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict,
+        request_data: _RequestData,
     ) -> None:
         scanned: Final = endpoint_translation.released_stream_as_ended(responses_so_far)
         if _is_redundant_scan(endpoint_translation.get_streaming_scan_key(scanned), last_scan_key):
@@ -1090,6 +1092,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         if guardrail_to_apply is None:
             guardrail_to_apply = request_data.pop("guardrail_to_apply", None)
+        typed_request_data: Final[_RequestData] = request_data
 
         def _streaming_flag(name: str, default: object) -> Any:
             return self.resolve_streaming_flag(guardrail_to_apply, name, default)
@@ -1160,7 +1163,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                     self._run_incremental_transform_stream(
                         guardrail_to_apply=guardrail_to_apply,
                         response=response,
-                        request_data=request_data,
+                        request_data=typed_request_data,
                         user_api_key_dict=user_api_key_dict,
                         call_type=transform_call_type,
                         sampling_rate=sampling_rate,
@@ -1423,6 +1426,6 @@ class UnifiedLLMGuardrails(CustomLogger):
                     last_scan_key=last_scan_key,
                     guardrail_to_apply=guardrail_to_apply,
                     user_api_key_dict=user_api_key_dict,
-                    request_data=request_data,
+                    request_data=typed_request_data,
                 )
             raise
