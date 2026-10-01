@@ -271,7 +271,7 @@ def _generate_content_logging_obj(call_id: str):
         messages=[],
         stream=False,
         call_type="generate_content",
-        start_time=datetime.now(),
+        start_time=datetime(2025, 1, 1),
         litellm_call_id=call_id,
         function_id=call_id,
     )
