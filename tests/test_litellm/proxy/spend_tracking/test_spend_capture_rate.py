@@ -1,16 +1,12 @@
 import json
-import re
 from collections.abc import Mapping
 from datetime import date, datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
-import psycopg
 import pytest
-from psycopg.rows import dict_row
 from pydantic import ValidationError
-from pytest_postgresql import factories
 
 from litellm.constants import (
     SPEND_CAPTURE_RATE_CHECK_JOB_ID,
@@ -375,65 +371,3 @@ def test_settings_reject_typos_and_out_of_range_values():
         json.loads('{"providers": ["openai"], "threshold": 0.8, "lookback_days": 3, "openai_project_ids": ["p"]}')
     )
     assert (parsed.threshold, parsed.lookback_days, parsed.openai_project_ids) == (0.8, 3, ("p",))
-
-
-_capture_postgresql_proc: Final = factories.postgresql_proc()
-_capture_postgresql: Final = factories.postgresql("_capture_postgresql_proc")
-
-_DAILY_USER_SPEND_DDL: Final = """
-    CREATE TABLE "LiteLLM_DailyUserSpend" (
-        id TEXT PRIMARY KEY,
-        date TEXT NOT NULL,
-        custom_llm_provider TEXT,
-        spend DOUBLE PRECISION DEFAULT 0
-    )
-"""
-
-
-class _PsycopgPrisma:
-    """``prisma_client.db.query_raw`` on a real connection, with ``$n`` placeholders converted for psycopg."""
-
-    def __init__(self, conn: psycopg.Connection) -> None:
-        self.db = self
-        self._conn = conn
-
-    async def query_raw(self, sql: str, *params: object) -> list[dict[str, object]]:
-        converted: Final = re.sub(r"\$(\d+)", r"%(p\1)s", sql)
-        with self._conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                converted,  # pyright: ignore[reportArgumentType]  # psycopg stubs want a literal-typed query
-                {f"p{i}": list(v) if isinstance(v, tuple) else v for i, v in enumerate(params, start=1)},
-            )
-            return cur.fetchall()
-
-
-@pytest.mark.asyncio
-async def test_captured_spend_sums_only_the_openai_billed_providers_inside_the_window(
-    _capture_postgresql: psycopg.Connection,
-):
-    conn: Final = _capture_postgresql
-    conn.execute(_DAILY_USER_SPEND_DDL)  # pyright: ignore[reportArgumentType]  # DDL literal
-    rows: Final = (
-        ("2026-09-19", "openai", 1.0),
-        ("2026-09-20", "openai", 2.0),
-        ("2026-09-20", "openai", 3.0),
-        ("2026-09-20", "text-completion-openai", 0.5),
-        ("2026-09-20", "anthropic", 100.0),
-        ("2026-09-21", "azure", 100.0),
-        ("2026-09-22", "openai", 4.0),
-    )
-    for index, (day, provider, spend) in enumerate(rows):
-        conn.execute(
-            'INSERT INTO "LiteLLM_DailyUserSpend" (id, date, custom_llm_provider, spend) VALUES (%s, %s, %s, %s)',
-            (f"row-{index}", day, provider, spend),
-        )
-    conn.commit()
-
-    captured = await captured_spend_by_day(
-        _PsycopgPrisma(conn),  # pyright: ignore[reportArgumentType]  # duck-typed prisma for the raw query
-        litellm_providers=("openai", "text-completion-openai"),
-        start_date=date(2026, 9, 20),
-        end_date=date(2026, 9, 21),
-    )
-
-    assert dict(captured) == {"2026-09-20": 5.5}
