@@ -153,12 +153,16 @@ def test_usage_anthropic_cache_creation_maps_to_cache_write_tokens():
     assert usage.prompt_tokens_details.cached_tokens == 120
 
 
-def test_prompt_tokens_details_no_cache_write_tokens_when_absent():
-    """A read-only cache hit (no cache write) must not surface cache-write fields."""
+def test_prompt_tokens_details_unset_cache_fields_read_none():
+    """Regression: unset cache-write fields must read as None, never raise.
+
+    Proxy spend-tracking reads details.cache_creation_tokens directly, so a
+    first-turn response with no cache activity used to raise AttributeError.
+    """
     details = PromptTokensDetailsWrapper(cached_tokens=800)
     assert details.cached_tokens == 800
-    assert not hasattr(details, "cache_write_tokens")
-    assert not hasattr(details, "cache_creation_tokens")
+    assert details.cache_write_tokens is None
+    assert details.cache_creation_tokens is None
 
 
 def test_prompt_tokens_details_cache_write_creation_stay_in_sync_on_assignment():
