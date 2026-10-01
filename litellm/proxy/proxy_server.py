@@ -5264,6 +5264,14 @@ def _with_config_file_pass_through_endpoints(
     )
 
 
+def _reload_settings_store(section: Section, store: SettingsStore, section_config: object) -> None:
+    serving_pass_throughs: Final = store.get("pass_through_endpoints")
+    store.load_yaml(_as_settings_mapping(section_config))
+    store.apply_db_row(section, _EMPTY_SETTINGS_MAPPING)
+    if is_resource_list(section, "pass_through_endpoints") and serving_pass_throughs is not None:
+        store["pass_through_endpoints"] = serving_pass_throughs
+
+
 def _bind_general_settings_store(settings: SettingsStore) -> None:
     global general_settings
     general_settings = settings  # pyright: ignore[reportAssignmentType]  # legacy global accepts mappings
@@ -5397,11 +5405,7 @@ class ProxyConfig:
 
     def _load_yaml_settings_stores(self, config: Mapping[str, object]) -> None:
         for section, store in self._settings_stores.items():
-            serving_pass_throughs: Final = store.get("pass_through_endpoints")
-            store.load_yaml(_as_settings_mapping(config.get(section)))
-            store.apply_db_row(section, _EMPTY_SETTINGS_MAPPING)
-            if is_resource_list(section, "pass_through_endpoints") and serving_pass_throughs is not None:
-                store["pass_through_endpoints"] = serving_pass_throughs
+            _reload_settings_store(section, store, config.get(section))
 
     def _config_with_resolved_settings(self, config: Mapping[str, object]) -> dict[str, object]:
         return {  # mutable-ok: get_config preserves the mutable mapping contract used by existing loaders
