@@ -305,18 +305,20 @@ async def extract(claim: Claim, execution: Execution, read: ReadContent, model: 
             reads = (*reads, *requested)
             additional = (*additional, *chain.from_iterable(fetched))
         evidence: Final = (*page.parts, *additional)
+        observations: Final = tuple(
+            o
+            for o in response.observations
+            if o.check_id in frozenset(c.id for c in claim.job.settings.analysis_checks)
+            and o.evidence
+            and all(evidence_valid(e, evidence) for e in o.evidence)
+        )
+        invalid_observations: Final = len(observations) != len(response.observations)
         return Examined(
             execution=execution,
-            observations=tuple(
-                o
-                for o in response.observations
-                if o.check_id in frozenset(c.id for c in claim.job.settings.analysis_checks)
-                and o.evidence
-                and all(evidence_valid(e, evidence) for e in o.evidence)
-            ),
+            observations=observations,
             parts=evidence,
-            partial=page.partial or page.next_cursor is not None or bool(response.reads),
-            cannot_assess=not page.parts or response.cannot_assess or bool(response.reads),
+            partial=page.partial or page.next_cursor is not None or bool(response.reads) or invalid_observations,
+            cannot_assess=not page.parts or response.cannot_assess or bool(response.reads) or invalid_observations,
         )
 
     catalogs: Final = partition_items(overview, lambda row: len(json.dumps(row)), 24000)

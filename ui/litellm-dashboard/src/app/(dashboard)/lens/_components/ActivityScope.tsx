@@ -66,12 +66,10 @@ export function ActivityScope({
   const validWindow = Number.isInteger(historyHours) && historyHours >= 1 && historyHours <= 720;
   const percent = scope.sample_percent ?? 100;
   const cap = scope.sample_size;
-  const valid =
-    validWindow &&
-    percent > 0 &&
-    percent <= 100 &&
-    (cap == null || (Number.isInteger(cap) && cap > 0)) &&
-    (scope.filters ?? []).every((f) => f.key.trim() && f.value.trim());
+  const validCap = cap == null || (Number.isInteger(cap) && cap > 0);
+  const validSampling = percent > 0 && percent <= 100 && validCap;
+  const validFilters = (scope.filters ?? []).every((f) => f.key.trim() && f.value.trim());
+  const valid = validWindow && validSampling && validFilters;
   const load = (selection: ActivitySelection, pageOffset = 0) => {
     const { lookback_hours, ...selectionSettings } = selection;
     return apiClient.post<Sample>("/engine/preview/sample", {

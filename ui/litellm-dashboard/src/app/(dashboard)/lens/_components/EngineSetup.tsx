@@ -128,12 +128,15 @@ export function EngineSetup({
     setSampleSize(selection.sample_size ?? null);
     setSamplePercent(selection.sample_percent ?? 100);
     setTeam(selection.team_id ?? "");
-    const poolChanged =
-      selection.source !== source ||
-      (selection.service ?? "") !== service ||
-      (selection.lookback_hours ?? 24) !== lookback ||
-      (selection.team_id ?? "") !== team ||
-      JSON.stringify(selection.filters ?? []) !== JSON.stringify(filters);
+    const previousPool = [source, service, lookback, team, filters];
+    const nextPool = [
+      selection.source,
+      selection.service ?? "",
+      selection.lookback_hours ?? 24,
+      selection.team_id ?? "",
+      selection.filters ?? [],
+    ];
+    const poolChanged = JSON.stringify(previousPool) !== JSON.stringify(nextPool);
     setExecutionIds(poolChanged ? [] : selection.execution_ids ?? []);
     setSource(selection.source);
     setLookback(selection.lookback_hours ?? 24);
@@ -145,6 +148,12 @@ export function EngineSetup({
     if (mode === "edit") return "Save changes";
     return enabled ? "Start monitoring" : "Run analysis";
   };
+  const validConcurrency = Number.isInteger(concurrency) && concurrency >= 1;
+  const validInterval = Number.isInteger(interval) && interval >= 1 && interval <= 10080;
+  const validSchedule = !enabled || validInterval;
+  const validBudget = Number.isFinite(budget) && budget > 0;
+  const unsupportedModel = modelDetails.some((item) => item.model_group === model && item.mode && item.mode !== "chat");
+  const validAnalysis = validBudget && validConcurrency && !!model;
   return (
     <Dialog
       open
@@ -342,15 +351,7 @@ export function EngineSetup({
             <Button onClick={next}>Continue</Button>
           ) : (
             <Button
-              disabled={
-                busy ||
-                !model ||
-                budget <= 0 ||
-                !Number.isInteger(concurrency) ||
-                concurrency < 1 ||
-                (enabled && (!Number.isInteger(interval) || interval < 1 || interval > 10080)) ||
-                modelDetails.some((item) => item.model_group === model && item.mode && item.mode !== "chat")
-              }
+              disabled={busy || unsupportedModel || !(validAnalysis && validSchedule)}
               onClick={() => execute(() => onSave(settings()))}
             >
               {saveLabel()}

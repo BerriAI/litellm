@@ -424,6 +424,7 @@ async def test_oversized_model_evidence_is_retried_and_quotes_still_verified(
     claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
     result: Final = await extract(claim, execution, read, model)
     assert len(result.observations) == int(accepted)
+    assert result.cannot_assess is not accepted
     assert next(attempts, None) is None
 
 

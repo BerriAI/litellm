@@ -84,19 +84,22 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
   const engine = engines.find((e) => e.id === selected) ?? engines[0];
   const connected =
     query.data?.workers?.some((w) => !w.revoked && query.dataUpdatedAt - Date.parse(w.last_seen) < 120000) ?? false;
-  const history = useQuery({
+  const historyQuery = {
     queryKey: ["lens-history", engine?.id, historyOffset, accessToken],
     enabled: !!engine,
     queryFn: () =>
       apiClient.get<Job[]>(`/engine/${engine?.id}/runs`, { accessToken, query: { offset: historyOffset } }),
     refetchInterval: 10000,
-  });
+  };
+  const history = useQuery(historyQuery);
   const historical = useQuery({
     queryKey: ["lens-batch", engine?.id, batchId, accessToken],
     enabled: !!engine && !["latest", "all"].includes(batchId),
     queryFn: () => apiClient.get<Job>(`/engine/${engine?.id}/runs/${batchId}`, { accessToken }),
   });
   const job = ["latest", "all"].includes(batchId) ? engine?.jobs?.[0] : historical.data;
+  const missingSnapshot = job?.status === "completed" && job.findings == null && batchId !== "all";
+  const selectedOutsideHistory = !["latest", "all"].includes(batchId) && !history.data?.some((j) => j.id === batchId);
   const batchSettings = job?.settings ?? engine?.settings;
   const batchFindings = (batchId === "all" ? engine?.findings ?? [] : job?.findings ?? []).map((f) => {
     const feedback = engine?.findings?.find((current) => current.id === f.id);
@@ -339,7 +342,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                 }}
               >
                 <option value="latest">Latest batch</option>
-                {job && !["latest", "all"].includes(batchId) && !history.data?.some((j) => j.id === batchId) && (
+                {job && selectedOutsideHistory && (
                   <option value={batchId}>
                     {when(job.created_at)} · {job.status}
                   </option>
@@ -358,7 +361,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                 selected runs reviewed · {money(job.cost ?? 0)}
               </p>
             )}
-            {job?.findings == null && batchId !== "all" && !["queued", "running"].includes(job?.status ?? "") && (
+            {missingSnapshot && (
               <p className="text-sm text-muted-foreground">
                 This older batch predates saved result snapshots. Its findings remain available under All accumulated
                 findings.
