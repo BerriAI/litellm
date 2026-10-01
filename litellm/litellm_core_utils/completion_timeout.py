@@ -6,12 +6,19 @@ from collections.abc import Callable
 from typing import Final
 
 import httpx
+from openai import Timeout as SDKTimeout
 
 from litellm.constants import COMPLETION_HTTP_FALLBACK_SECONDS
 
 
 class CompletionTimeout:
     """Resolves HTTP timeout for ``completion()`` from model vs global settings."""
+
+    @staticmethod
+    def normalize(timeout: httpx.Timeout | SDKTimeout) -> httpx.Timeout:
+        if isinstance(timeout, httpx.Timeout):  # pyright: ignore[reportUnnecessaryIsInstance]  # SDK 2 aliases both classes.
+            return timeout
+        return httpx.Timeout(connect=timeout.connect, read=timeout.read, write=timeout.write, pool=timeout.pool)
 
     @staticmethod
     def _fallback_when_no_explicit_timeout(
@@ -31,7 +38,7 @@ class CompletionTimeout:
 
     @staticmethod
     def resolve(
-        model_timeout: float | str | httpx.Timeout | None,
+        model_timeout: float | str | httpx.Timeout | SDKTimeout | None,
         kwargs: dict,
         custom_llm_provider: str,
         *,
@@ -49,7 +56,7 @@ class CompletionTimeout:
 
         Coerce :class:`httpx.Timeout` when the provider does not support it.
         """
-        resolved: float | str | httpx.Timeout
+        resolved: float | str | httpx.Timeout | SDKTimeout
         if model_timeout is not None:
             resolved = model_timeout
         elif kwargs.get("timeout") is not None:
@@ -59,12 +66,12 @@ class CompletionTimeout:
         else:
             resolved = CompletionTimeout._fallback_when_no_explicit_timeout(global_timeout)
 
-        if isinstance(resolved, httpx.Timeout) and not supports_httpx_timeout(custom_llm_provider):
-            read_timeout: Final = resolved.read
-            resolved = (
+        if isinstance(resolved, (httpx.Timeout, SDKTimeout)):
+            normalized: Final = CompletionTimeout.normalize(resolved)
+            if supports_httpx_timeout(custom_llm_provider):
+                return normalized
+            read_timeout: Final = normalized.read
+            return (
                 float(read_timeout) if read_timeout is not None else COMPLETION_HTTP_FALLBACK_SECONDS
             )  # default 10 min timeout
-        elif not isinstance(resolved, httpx.Timeout):
-            resolved = float(resolved)
-
-        return resolved
+        return float(resolved)

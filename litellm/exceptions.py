@@ -235,14 +235,7 @@ class BadRequestError(openai.BadRequestError):
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        # Use response if it's a valid httpx.Response with a request, otherwise use minimal error response
-        # Note: We check _request (not .request property) to avoid RuntimeError when _request is None
-        if (
-            response is not None
-            and isinstance(response, httpx.Response)
-            and hasattr(response, "_request")
-            and getattr(response, "_request", None) is not None
-        ):
+        if response is not None and getattr(response, "_request", None) is not None:
             self.response = response
         else:
             self.response = _get_minimal_error_response()
@@ -354,6 +347,8 @@ class UnprocessableEntityError(openai.UnprocessableEntityError):
 
 
 class Timeout(openai.APITimeoutError):
+    request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
+
     def __init__(
         self,
         message,
@@ -452,6 +447,9 @@ class RateLimitError(openai.RateLimitError):
     :class:`RateLimitErrorCategory` for the available values.
     """
 
+    response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
+    request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
+
     def __init__(
         self,
         message,
@@ -509,7 +507,9 @@ class RateLimitError(openai.RateLimitError):
             ),
         )
         super().__init__(
-            self.message, response=self.response, body=body
+            self.message,
+            response=self.response,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
+            body=body,
         )  # Call the base class constructor with the parameters it needs
         self.code = "429"
         self.type = "throttling_error"
@@ -710,6 +710,9 @@ class ServiceUnavailableError(openai.APIStatusError):
 
 
 class BadGatewayError(openai.APIStatusError):
+    response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
+    request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
+
     def __init__(
         self,
         message,
@@ -737,7 +740,9 @@ class BadGatewayError(openai.APIStatusError):
             ),
         )
         super().__init__(
-            self.message, response=self.response, body=None
+            self.message,
+            response=self.response,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
+            body=None,
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
@@ -758,6 +763,9 @@ class BadGatewayError(openai.APIStatusError):
 
 
 class InternalServerError(openai.InternalServerError):
+    response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
+    request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
+
     def __init__(
         self,
         message,
@@ -786,7 +794,9 @@ class InternalServerError(openai.InternalServerError):
             ),
         )
         super().__init__(
-            self.message, response=self.response, body=body
+            self.message,
+            response=self.response,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
+            body=body,
         )  # Call the base class constructor with the parameters it needs
         self.type = "internal_server_error"
 
@@ -851,6 +861,8 @@ class APIError(openai.APIError):
 
 # raised if an invalid request (not get, delete, put, post) is made
 class APIConnectionError(openai.APIConnectionError):
+    request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
+
     def __init__(
         self,
         message,
@@ -869,7 +881,10 @@ class APIConnectionError(openai.APIConnectionError):
         self.request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         self.max_retries = max_retries
         self.num_retries = num_retries
-        super().__init__(message=self.message, request=self.request)
+        super().__init__(
+            message=self.message,
+            request=self.request,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
+        )
 
     def __str__(self):
         _message = self.message
@@ -890,6 +905,9 @@ class APIConnectionError(openai.APIConnectionError):
 
 # raised if an invalid request (not get, delete, put, post) is made
 class APIResponseValidationError(openai.APIResponseValidationError):
+    response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
+    request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
+
     def __init__(
         self,
         message,
@@ -907,7 +925,11 @@ class APIResponseValidationError(openai.APIResponseValidationError):
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        super().__init__(response=response, body=None, message=message)
+        super().__init__(
+            response=response,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
+            body=None,
+            message=message,
+        )
 
     def __str__(self):
         _message = self.message
@@ -1026,6 +1048,9 @@ class BudgetExceededError(Exception):
 
 ## DEPRECATED ##
 class InvalidRequestError(openai.BadRequestError):
+    response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
+    request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
+
     def __init__(self, message, model, llm_provider):
         self.status_code = 400
         self.message = message
@@ -1036,7 +1061,9 @@ class InvalidRequestError(openai.BadRequestError):
             request=httpx.Request(method="GET", url="https://litellm.ai"),  # mock request object
         )
         super().__init__(
-            message=self.message, response=self.response, body=None
+            message=self.message,
+            response=self.response,  # pyright: ignore[reportArgumentType]  # SDK accepts HTTPX at runtime
+            body=None,
         )  # Call the base class constructor with the parameters it needs
 
 

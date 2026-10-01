@@ -1,5 +1,6 @@
 import json
 import sys
+from functools import partial
 from pathlib import Path
 from typing import Final
 
@@ -37,6 +38,20 @@ def wif_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> OpenAIWorkloadId
     monkeypatch.setenv("OPENAI_IDENTITY_TOKEN_FILE", str(token_file))
     _workload_identity_auth.cache_clear()
     litellm.in_memory_llm_clients_cache.flush_cache()
+    native_client_factory: Final = getattr(sys.modules.get("openai.auth._workload"), "DefaultHttpx2Client", None)
+    if native_client_factory is not None:
+        import httpx2
+
+        def handle_exchange(request: httpx2.Request) -> httpx2.Response:
+            response: Final = respx.mock.handler(
+                httpx.Request(request.method, str(request.url), headers=dict(request.headers), content=request.content)
+            )
+            return httpx2.Response(response.status_code, headers=dict(response.headers), content=response.content)
+
+        monkeypatch.setattr(
+            "openai.auth._workload.DefaultHttpx2Client",
+            partial(native_client_factory, transport=httpx2.MockTransport(handle_exchange), trust_env=False),
+        )
     return OpenAIWorkloadIdentityConfig(
         identity_provider_id="idp_test123",
         service_account_id="user-test456",
