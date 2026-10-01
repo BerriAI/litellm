@@ -2,7 +2,8 @@
 
 `/v1/messages` streams reach a guardrail's `async_post_call_streaming_iterator_hook` as raw SSE
 frames rather than chunk objects, which `stream_chunk_builder` cannot assemble. These helpers let a
-hook scan such a stream, and re-emit it when the guardrail rewrote the response.
+hook scan such a stream, and re-emit it when the guardrail rewrote the response. The raw SSE
+parsing (`joined_sse_stream`, `parsed_sse_events`) is shared with the Gemini sibling module.
 """
 
 from __future__ import annotations
@@ -11,6 +12,8 @@ import codecs
 import json
 from collections.abc import Mapping, Sequence
 from typing import Final
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.types.utils import Choices, ModelResponse
 
@@ -26,25 +29,29 @@ _ANTHROPIC_EVENT_TYPES: Final = frozenset(
         "error",
     }
 )
+_CONTENT_FREE_PAYLOADS: Final = frozenset({"", "[DONE]"})
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 
 
 def is_raw_sse_stream(all_chunks: Sequence[object]) -> bool:
     return any(isinstance(chunk, (str, bytes)) for chunk in all_chunks)
 
 
-def _joined_sse_stream(all_chunks: Sequence[object]) -> str | None:
+def joined_sse_stream(all_chunks: Sequence[object]) -> str | None:
+    """The raw frames decoded as one text, with every SSE line ending (CRLF, LF, CR) folded to LF."""
     raw: Final = b"".join(
         chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
         for chunk in all_chunks
         if isinstance(chunk, (str, bytes))
     )
     try:
-        return codecs.getincrementaldecoder("utf-8")().decode(raw, final=False)
+        decoded: Final = codecs.getincrementaldecoder("utf-8")().decode(raw, final=False)
     except UnicodeDecodeError:
         return None
+    return decoded.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _parsed_sse_events(sse_stream: str) -> tuple[Mapping[str, object], ...]:
+def parsed_sse_events(sse_stream: str) -> tuple[Mapping[str, object], ...]:
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
         AnthropicPassthroughLoggingHandler,
     )
@@ -52,15 +59,49 @@ def _parsed_sse_events(sse_stream: str) -> tuple[Mapping[str, object], ...]:
     return tuple(
         event_data
         for event in AnthropicPassthroughLoggingHandler._split_sse_chunk_into_events(sse_stream)  # pyright: ignore[reportPrivateUsage]  # same parser the assembler uses
-        if (event_data := AnthropicPassthroughLoggingHandler._extract_sse_data(event)) is not None  # pyright: ignore[reportPrivateUsage]  # same parser the assembler uses; a private import beats forking SSE parsing
+        if isinstance(event_data := AnthropicPassthroughLoggingHandler._extract_sse_data(event), Mapping)  # pyright: ignore[reportPrivateUsage]  # same parser the assembler uses; a private import beats forking SSE parsing
     )
+
+
+def _data_payload(event: str) -> str | None:
+    lines: Final = tuple(line.strip() for line in event.splitlines())
+    return next((line[len("data:") :].strip() for line in lines if line.startswith("data:")), None)
+
+
+def _is_unreadable_payload(payload: str) -> bool:
+    if payload in _CONTENT_FREE_PAYLOADS:
+        return False
+    try:
+        _JSON_OBJECT.validate_json(payload)
+    except ValidationError:
+        return True
+    return False
+
+
+def has_unreadable_sse_frames(all_chunks: Sequence[object]) -> bool:
+    """Whether a ``data:`` payload is neither blank, ``[DONE]``, nor a JSON object.
+
+    ``parsed_sse_events`` drops such a frame silently, which suits the assemblers and not a
+    masking hook: a frame it cannot read is one it cannot scan, so the hook withholds the stream
+    instead of replaying it.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+        AnthropicPassthroughLoggingHandler,
+    )
+
+    sse_stream: Final = joined_sse_stream(all_chunks)
+    if sse_stream is None:
+        return True
+    events: Final = AnthropicPassthroughLoggingHandler._split_sse_chunk_into_events(sse_stream)  # pyright: ignore[reportPrivateUsage]  # same splitter the assembler uses
+    payloads: Final = tuple(_data_payload(event) for event in events)
+    return any(_is_unreadable_payload(payload) for payload in payloads if payload is not None)
 
 
 def _anthropic_message_start(sse_stream: str) -> Mapping[str, object] | None:
     return next(
         (
             message
-            for event_data in _parsed_sse_events(sse_stream)
+            for event_data in parsed_sse_events(sse_stream)
             if event_data.get("type") == "message_start" and isinstance(message := event_data.get("message"), dict)
         ),
         None,
@@ -75,10 +116,10 @@ def is_anthropic_sse_stream(all_chunks: Sequence[object]) -> bool:
     stream raw too. Reading its frames as Anthropic ones would refuse the response in a wire format
     its client cannot parse, so the surface is decided on the event types actually present.
     """
-    sse_stream: Final = _joined_sse_stream(all_chunks)
+    sse_stream: Final = joined_sse_stream(all_chunks)
     if sse_stream is None:
         return False
-    return any(event.get("type") in _ANTHROPIC_EVENT_TYPES for event in _parsed_sse_events(sse_stream))
+    return any(event.get("type") in _ANTHROPIC_EVENT_TYPES for event in parsed_sse_events(sse_stream))
 
 
 def assemble_anthropic_sse_stream(
@@ -95,7 +136,7 @@ def assemble_anthropic_sse_stream(
         AnthropicPassthroughLoggingHandler,
     )
 
-    sse_stream: Final = _joined_sse_stream(all_chunks)
+    sse_stream: Final = joined_sse_stream(all_chunks)
     if sse_stream is None:
         return None
     message_start: Final = _anthropic_message_start(sse_stream)
@@ -157,10 +198,10 @@ def is_sse_error_stream(all_chunks: Sequence[object]) -> bool:
         # A stream mixing typed chunks with an error frame still carries content to scan, and the
         # frames-only join below would drop exactly the part that has to be scanned
         return False
-    sse_stream: Final = _joined_sse_stream(all_chunks)
+    sse_stream: Final = joined_sse_stream(all_chunks)
     if sse_stream is None:
         return False
-    events: Final = _parsed_sse_events(sse_stream)
+    events: Final = parsed_sse_events(sse_stream)
     return len(events) > 0 and all(
         event.get("type") == "error" or isinstance(event.get("error"), Mapping) for event in events
     )
