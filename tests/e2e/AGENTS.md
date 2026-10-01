@@ -131,6 +131,45 @@ Current limits: Bedrock cannot be mounted in record or replay (SigV4 signs the H
 
 The harness is fully typed with no error budget: `make lint-e2e-basedpyright` must report zero basedpyright errors, and CI enforces that on any PR touching `tests/e2e/**/*.py`. When a response field is untyped, model it in `models.py` (just the fields you read) and let pydantic validate it, rather than threading a `dict` or `Any` through the test
 
+## Recorded test steps
+
+`@step` from `e2e_metadata.py` goes on harness helpers (client methods and poll loops), never on a test. Each call adds one plain-English sentence to the running test's list of steps, in call order, so the list reads as what the test did. The step is recorded before the helper runs, so when a test fails, its last step is where it failed. Nobody writes steps by hand. They come from the calls the test actually made, so they can't drift from what happened
+
+Steps are being added one harness at a time, and today `ProxyClient` and the rate-limit suite's `QuotaClient` have them. In a harness that has steps, every new public method that does something (an HTTP call, a poll, a login, a CLI run) gets a `@step`. Pure builders, parsers and `_private` helpers don't
+
+### Writing a label
+
+Write the label for someone who will never open the code, and fill it in from the helper's own parameters:
+
+```python
+@step("Generate a virtual key with {body}")
+def generate_key(self, body: KeyGenerateBody) -> str: ...
+
+@step('Send a /chat/completions request to {model} with the prompt "{content}"')
+def chat(self, key: str, model: str, content: str, *, max_tokens: int = 16) -> StreamingResponse: ...
+```
+
+A test that generates a key with an RPM limit and then sends one request shows:
+
+```
+Generate a virtual key with models: claude-haiku-4-5 and rpm limit: 3
+Send a /chat/completions request to claude-haiku-4-5 with the prompt "reply with one word d3940a1c4288"
+```
+
+A request model prints only the fields the test set, and a dotted placeholder like `{body.litellm_params.model}` prints just one field. A field marked `Field(repr=False)` never prints, so mark every secret field that way, and never put a key, token or credential in a label. As a backstop, the recorder replaces the value of every secret-named environment variable (`*_KEY`, `*_SECRET`, `*_TOKEN`, `*_PASSWORD`, `*_CREDENTIALS`) with `***` wherever it shows up in a label. That only covers secrets the environment holds, so a key the proxy hands back during the test is still never named in a label. A placeholder that isn't one of the helper's parameters fails at import, and a literal brace is written `{{id}}`. A filled-in label is squashed onto one line and cut at 200 characters
+
+### Nesting and the step log
+
+Only the outermost step records. `ProxyClient.create_model` calls `register_model`, and domain clients call into `ProxyClient`, so each layer can carry its own label and the test still shows one step per action, worded at the level the test called
+
+On a `@contextmanager` helper, put `@step` above `@contextmanager`. The setup and cleanup around the `yield` count as that one step, and the test's own code inside the `with` records its steps as usual. A plain generator function is rejected at import because its body runs interleaved with the caller's. A decorated helper that warns about its caller uses `stacklevel=2 + STEP_FRAMES`, since the wrapper adds a frame. Nesting is tracked per thread, so a helper that hands work to worker threads still records their steps
+
+Back-to-back identical steps collapse into one, so a poll loop shows up once. The log keeps the latest 50 steps and notes how many earlier ones it dropped, since the end is where a failure happened. It is cleared when each test starts and saved after setup and again after the test body, so a test that errors in a fixture keeps what it recorded. Teardown steps are left out so cleanup never shows up after the step a test failed on
+
+### Where steps end up
+
+Each step is its own `<property name="step">` in the JUnit XML (`junit_properties.py`), because free text has no separator that is safe to join on. project-releaser gathers them into a `steps` array in the results JSON. The tests for all of this sit outside the suite, in `tests/code_coverage_tests/test_e2e_metadata.py` and `test_e2e_junit_report.py`. The second one runs real pytest with `--junitxml` under `-n 2` and checks what lands in the XML
+
 ## Coverage registry
 
 The set of tests we want is a registry checked into this repo, one row per behavior; that file is the definition of done and the denominator. Each e2e test declares what it covers with `@pytest.mark.covers("...")`, and a small collector diffs the registry against the tests and ships coverage to the existing Grafana. No Allure, no new dependencies
