@@ -188,10 +188,16 @@ def provider_block(
 
     Real contextWindow/maxTokens matter: pi otherwise assumes 128k/16384, which
     breaks compaction thresholds and over-asks models with smaller output caps.
+    pi sniffs compat from the base URL, and one gateway URL fronts models with
+    different capabilities, so both flags are pinned off.
     """
     return {  # mutable-ok: JSON serialization requires a mutable object
         "baseUrl": base_url.rstrip("/") + "/v1",
         "api": "openai-completions",
+        "compat": {  # mutable-ok: JSON serialization requires a nested mutable object
+            "supportsStore": False,
+            "supportsLongCacheRetention": False,
+        },
         "apiKey": f"${LITELLM_PROXY_API_KEY_ENV}",
         "models": [_model_entry(model_id, limits) for model_id in model_ids],  # mutable-ok: JSON array
     }
