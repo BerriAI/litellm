@@ -30,8 +30,10 @@ export type TaskSummary = {
 export type ModelInsightTasksResponse = { start_date: string; end_date: string; tasks: TaskSummary[] };
 
 export type RankedModel = { model_group: string; provider: string; share: number; delta: number };
+export type Granularity = "day" | "week";
+
 const DAY_MS = 86_400_000;
-const WEEK_DAYS = 7;
+const BUCKET_DAYS: Record<Granularity, number> = { day: 1, week: 7 };
 
 export const metricValue = (row: ModelMetric, metric: Metric) => {
   if (metric === "requests") return row.requests;
@@ -66,16 +68,18 @@ export const modelOrder = (rows: DailyMetric[], metric: Metric) => {
   return [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([model]) => model);
 };
 
-export const buildWeeklySeries = (rows: DailyMetric[], models: string[], metric: Metric, range: DateRange) => {
-  const weekMs = WEEK_DAYS * DAY_MS;
-  const origin = toDay(range.start);
-  const weekCount = Math.floor((toDay(range.end) - origin) / weekMs) + 1;
-  const buckets = Array.from({ length: weekCount }, (_, week) => ({
-    date: isoDay(origin + week * weekMs),
+export type SeriesWindow = DateRange & { granularity: Granularity };
+
+export const buildSeries = (rows: DailyMetric[], models: string[], metric: Metric, window: SeriesWindow) => {
+  const bucketMs = BUCKET_DAYS[window.granularity] * DAY_MS;
+  const origin = toDay(window.start);
+  const bucketCount = Math.floor((toDay(window.end) - origin) / bucketMs) + 1;
+  const buckets = Array.from({ length: bucketCount }, (_, index) => ({
+    date: isoDay(origin + index * bucketMs),
     ...Object.fromEntries(models.map((model) => [model, 0])),
   })) as Record<string, number | string>[];
   for (const row of rows) {
-    const bucket = buckets[Math.floor((toDay(row.date) - origin) / weekMs)];
+    const bucket = buckets[Math.floor((toDay(row.date) - origin) / bucketMs)];
     if (bucket) bucket[row.model_group] = Number(bucket[row.model_group] ?? 0) + metricValue(row, metric);
   }
   return buckets;
