@@ -793,7 +793,6 @@ def test_explicit_api_version_v1_overrides_key_prefix(rig: Rig) -> None:
     assert calls[0].headers["x-straiker-webhook-format"] == "litellm"
 
 
-# E: stray api_version with a v3 key follows the key prefix and still blocks
 def test_stray_api_version_with_v3_key_still_enforces_on_v3(rig: Rig) -> None:
     allowed_marker: Final = rig.marker()
     allowed: Final = _chat(rig, "stray version " + allowed_marker, guardrails=["straiker-v3-stray-version"])
@@ -809,7 +808,6 @@ def test_stray_api_version_with_v3_key_still_enforces_on_v3(rig: Rig) -> None:
     assert rig.provider_calls(blocked_marker, rig.provider_drain()) == ()
 
 
-# E: empty api_version with a v1 key follows the key prefix and still blocks
 def test_empty_api_version_with_v1_key_still_enforces_on_v1(rig: Rig) -> None:
     allowed_marker: Final = rig.marker()
     allowed: Final = _chat(rig, "empty version " + allowed_marker, guardrails=["straiker-v1-empty-version"])
