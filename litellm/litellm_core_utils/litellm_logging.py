@@ -6437,7 +6437,9 @@ def _extract_response_obj_and_hidden_params(
     if original_exception is not None and hidden_params is None:
         exception_hidden_params: Final = getattr(original_exception, "_hidden_params", None)
         if isinstance(exception_hidden_params, dict) and exception_hidden_params:
-            hidden_params = dict(cast("dict[str, object]", exception_hidden_params))  # cast-ok: isinstance(dict) leaves the value type unparameterized; mutable-ok: hidden_params downstream expects a plain dict
+            # cast-ok: isinstance(dict) leaves the value type unparameterized
+            # mutable-ok: hidden_params downstream expects a plain dict
+            hidden_params = dict(cast("dict[str, object]", exception_hidden_params))
         elif (response_headers := _get_response_headers(original_exception)) is not None:
             hidden_params = dict(
                 StandardLoggingHiddenParams(
