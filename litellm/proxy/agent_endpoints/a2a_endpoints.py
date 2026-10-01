@@ -172,6 +172,18 @@ async def _resolve_backend_auth_header(
     return await resolve_a2a_hop_auth_header(litellm_params, custom_llm_provider)
 
 
+# Identity / hop headers LiteLLM mints itself. Drop client-supplied copies (any
+# casing) so they cannot sit beside the authenticated values. Other x-litellm-*
+# names, including an admin-allowlisted x-litellm-api-key, still pass through.
+_RESERVED_X_LITELLM_HEADERS: Final = frozenset(
+    {
+        "x-litellm-user-id",
+        "x-litellm-team-id",
+        "x-litellm-trace-id",
+    }
+)
+
+
 def _forwarding_headers(
     caller_identity: Mapping[str, str],
     request_data: Mapping[str, object],
@@ -180,10 +192,11 @@ def _forwarding_headers(
 ) -> dict[str, str] | None:
     backend_auth: Final = tuple(backend_auth_header.items()) if backend_auth_header else ()
     minted_names: Final = frozenset(name.lower() for name, _ in backend_auth)
+    blocked: Final = _RESERVED_X_LITELLM_HEADERS | minted_names
     passthrough: Final = tuple(
         (name, value)
         for name, value in (agent_extra_headers.items() if agent_extra_headers else ())
-        if not name.lower().startswith("x-litellm-") and name.lower() not in minted_names
+        if name.lower() not in blocked
     )
     trace_id: Final = request_data.get("litellm_trace_id")
     trace: Final = (("X-LiteLLM-Trace-Id", str(trace_id)),) if trace_id else ()
