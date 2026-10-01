@@ -97,6 +97,7 @@ class TeamNewBody(BaseModel):
     max_budget: float | None = None
     budget_duration: str | None = None
     organization_id: str | None = None
+    team_member_budget: float | None = None
     budget_limits: list[BudgetWindow] | None = None
 
 
@@ -416,6 +417,7 @@ class BudgetClient:
         max_budget: float | None = None,
         budget_duration: str | None = None,
         organization_id: str | None = None,
+        team_member_budget: float | None = None,
         budget_limits: list[BudgetWindow] | None = None,
     ) -> str:
         team_id = unwrap(
@@ -427,6 +429,7 @@ class BudgetClient:
                     max_budget=max_budget,
                     budget_duration=budget_duration,
                     organization_id=organization_id,
+                    team_member_budget=team_member_budget,
                     budget_limits=budget_limits,
                 ),
                 response_type=TeamNewResponse,
