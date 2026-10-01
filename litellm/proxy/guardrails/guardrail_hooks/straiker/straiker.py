@@ -73,6 +73,7 @@ V3_DERIVED_SESSION_PREFIX: Final = "litellm-"
 V3_AGENT_HEADER: Final = "x-s6r-agent"
 V3_RESPONSE_PHASE: Final = "response-sync"
 V3_BLOCK_DECISIONS: Final = frozenset({"block", "deny"})
+V3_UNDECIDED: Final = frozenset({"ask"})
 V3_BLOCKED_TURN_MEMORY: Final = 10_000
 V3_BLOCKED_TURN_TTL_SECONDS: Final = 24 * 60 * 60
 # An allowlist: the hook's request dict merges the client body with proxy state (`deployment`
@@ -420,13 +421,14 @@ def _v3_identity_metadata(request_data: Mapping[str, object]) -> Mapping[str, st
     )
 
 
-def _v3_request_body(request_data: Mapping[str, object]) -> Mapping[str, object]:
+def _v3_request_body(request_data: Mapping[str, object], request_texts: Iterable[object] = ()) -> Mapping[str, object]:
     """The provider body LiteLLM received, stripped of everything the proxy added.
 
     The hook sees the client's request merged with proxy bookkeeping: logging objects,
     the resolved key, the inbound headers. Only the provider body is Straiker's to read,
     and the client's Authorization header must not travel. Identity survives as the
-    metadata subset the Straiker LiteLLM adapter reads.
+    metadata subset the Straiker LiteLLM adapter reads. A call with no provider body, such
+    as /guardrails/apply_guardrail with only `text`, relays `request_texts` as user turns.
     """
     identity: Final = _v3_identity_metadata(request_data)
     turns: Final = (
@@ -434,12 +436,18 @@ def _v3_request_body(request_data: Mapping[str, object]) -> Mapping[str, object]
         if _v3_text_completion_route(request_data) and "messages" not in request_data
         else None
     )
-    provider: Final = (
+    provider: Final = tuple(
         (key, _v3_without_credentials(value) if key in _V3_REDACTED_KEYS else value)
         for key, value in request_data.items()
         if key in _V3_PROVIDER_BODY_KEYS and not (turns is not None and key == "prompt")
     )
-    prompt_turns: Final = (("messages", turns),) if turns is not None else ()
+    texts: Final = tuple(text for text in request_texts if isinstance(text, str) and text)
+    text_turns: Final = tuple(_frozen((("role", "user"), ("content", text))) for text in texts)
+    prompt_turns: Final = (
+        (("messages", turns),)
+        if turns is not None
+        else ((("messages", text_turns),) if text_turns and not provider else ())
+    )
     return _frozen((*provider, *prompt_turns, *((("metadata", identity),) if identity else ())))
 
 
@@ -599,6 +607,7 @@ def _v3_payload(
     inputs: GenericGuardrailAPIInputs,
     request_data: Mapping[str, object],
     input_type: Literal["request", "response"],
+    request_body: Mapping[str, object],
 ) -> Mapping[str, object]:
     """The /api/v3/detect body for one phase of a turn, the unified Kong plugin's contract.
 
@@ -609,7 +618,6 @@ def _v3_payload(
     on both phases the way Kong sends them.
     """
     context: Final = envelope.context
-    request_body: Final = _v3_request_body(request_data)
     answer_json: Final = _v3_answer_json(inputs, request_data, context.model) if input_type == "response" else None
     phase: Final = (
         tuple(request_body.items())
@@ -820,6 +828,13 @@ def _v3_decision(body: Mapping[str, object]) -> tuple[str | None, Mapping[str, o
     return (action.lower() if isinstance(action, str) and action else None), verdict
 
 
+def _v3_has_decision(body: Mapping[str, object]) -> bool:
+    """Whether Straiker stated a verdict. A missing decision or `ask` takes the failure policy: a
+    gateway has no one to ask. Other actions, such as a detect-mode `detect`, are not blocks."""
+    decision, verdict = _v3_decision(body)
+    return (decision is not None and decision not in V3_UNDECIDED) or bool(verdict.get("blocked_by"))
+
+
 def _v3_response(body: Mapping[str, object]) -> StraikerWebhookResponse:
     """Map a v3 verdict onto the action the guardrail already acts on.
 
@@ -886,16 +901,19 @@ class StraikerGuardrail(CustomGuardrail):
             raise ValueError("api_key must be non-empty")
         if unreachable_fallback not in ("fail_open", "fail_closed"):
             raise ValueError(f"unreachable_fallback must be 'fail_open' or 'fail_closed'; got {unreachable_fallback!r}")
-        if api_version is None:
-            # The key names the platform: a v3 integration key cannot call v1 and a v1
-            # collection key cannot call v3, so an unset version follows the key.
-            api_version = "v3" if api_key.startswith(V3_KEY_PREFIX) else "v1"
-        if api_version not in ("v1", "v3"):
+        if api_version not in (None, "v1", "v3"):
             raise ValueError(f"api_version must be 'v1' or 'v3'; got {api_version!r}")
+        # The v1 webhook rejects an sk_agt_ key, so an sk_agt_ key always means v3. Guardrails
+        # saved on 1.101.3 or older carry api_version 'v1' from the old shared default.
+        is_v3_key: Final = api_key.startswith(V3_KEY_PREFIX)
+        if is_v3_key and api_version == "v1":
+            verbose_proxy_logger.warning(
+                "Straiker guardrail: api_version 'v1' cannot use an sk_agt_ key, routing to /api/v3/detect"
+            )
 
         self.api_key = api_key
         self.api_base = api_base.rstrip("/")
-        self.api_version = api_version
+        self.api_version: Literal["v1", "v3"] = "v3" if is_v3_key else (api_version or "v1")
         self.agent_ref = _as_optional_str(agent_ref)
         self.client = _as_optional_str(client)
         if format_hint is not None and format_hint not in ("anthropic.messages", "openai.chat"):
@@ -1087,6 +1105,10 @@ class StraikerGuardrail(CustomGuardrail):
                 return None, _WebhookFailure(
                     f"invalid response schema: expected an object, got {type(body).__name__}", is_unreachable=False
                 )
+            if self.api_version == "v3" and not _v3_has_decision(body):
+                return None, _WebhookFailure(
+                    "invalid response schema: no allow or block decision", is_unreachable=False
+                )
             parsed: Final = (
                 _v3_response(body) if self.api_version == "v3" else StraikerWebhookResponse.model_validate(body)
             )
@@ -1196,12 +1218,16 @@ class StraikerGuardrail(CustomGuardrail):
                 input_type=input_type,
                 logging_obj=logging_obj,
             )
-            payload: Final = _v3_payload(envelope, inputs, request_data, input_type)
+            request_body: Final = _v3_request_body(
+                request_data, (inputs.get("texts") or ()) if input_type == "request" else ()
+            )
+            payload: Final = _v3_payload(envelope, inputs, request_data, input_type, request_body)
             headers: Final = _v3_headers(request_data, self.agent_ref, self.client, self.format_hint)
-            request_body: Final = _v3_request_body(request_data)
-            # The memory is scoped by the session, else by the principal; a request that has
-            # neither is never remembered, so no two callers can share a block.
-            scope: Final = _v3_session_id(envelope, request_data, request_body) or _v3_user(envelope) or ""
+            # The memory is scoped by the principal and the session together; a request that has
+            # neither is never remembered, so two principals never share a block.
+            session: Final = _v3_session_id(envelope, request_data, request_body)
+            principal: Final = _v3_user(envelope)
+            scope: Final = f"{principal or ''}\0{session or ''}" if session or principal else ""
             prefixes: Final = _v3_conversation_prefixes(request_body) if scope else ()
         except (ValidationError, TypeError, ValueError) as error:
             return self._fail(
@@ -1231,8 +1257,9 @@ class StraikerGuardrail(CustomGuardrail):
             # Only a block that names a control is remembered. The same words are the same
             # attack tomorrow, but a block that comes from state -- an engaged kill switch,
             # a governance action -- is lifted by an administrator, and a remembered copy
-            # would keep refusing a conversation the platform now allows.
-            if prefixes and parsed.blocked_by:
+            # would keep refusing a conversation the platform now allows. A blocked answer is
+            # not remembered: the question that produced it may be harmless.
+            if input_type == "request" and prefixes and parsed.blocked_by:
                 self._v3_blocked_turns.set_cache(f"{scope}\0{prefixes[-1]}", message)
             self._block(request_data=request_data, input_type=input_type, message=message, blocked_content=True)
         return inputs
