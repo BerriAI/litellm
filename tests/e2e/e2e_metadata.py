@@ -1,29 +1,4 @@
-"""Typed per-test metadata for the e2e suite: what a test drives, and what it did.
-
-Two halves, deliberately separated.
-
-The DECLARED half is `Subject`: one frozen dataclass passed as the single
-positional argument of `@meta(...)`. Every field is a closed enum (or free
-strings for `models`), so a typo is a basedpyright error at the call site rather
-than a silently dropped property. `dataclasses.asdict()` turns the whole thing
-into <property> pairs with no per-field plumbing -- adding a scalar field later
-needs zero serializer changes.
-
-The RECORDED half is `steps`, and it is NOT a field of `Subject`. Steps are
-appended at runtime by `@step`-decorated harness helpers, in call order, so the
-list IS the test's user story and its last element is where a failing test died.
-Putting it on the declarable dataclass would invite hand-writing it, which is
-exactly what it replaces.
-
-No litellm import on purpose, and that includes the call sites. tests/e2e is a
-black-box HTTP suite that imports litellm in zero files and is shipped to the
-runner image as tests/e2e alone; a `from litellm...` at the top of a test module
-would make the litellm package a COLLECTION-time dependency of the whole suite,
-so an image without it would fail collection rather than run tests. `Provider`
-below therefore mirrors litellm's `LlmProviders` values here instead of
-importing them, and `TestProviderMirrorsLitellm` in test_e2e_metadata.py
-fails wherever litellm IS importable if the two ever drift.
-"""
+"""Typed per-test metadata for the e2e suite: what a test drives (`Subject`) and what it did (`steps`). See AGENTS.md"""
 
 from __future__ import annotations
 
@@ -47,11 +22,7 @@ from pydantic import BaseModel
 
 
 class Domain(str, Enum):
-    """The OSS issue-label taxonomy, verbatim.
-
-    Shared with GitHub issue labels so an issue and a test join on one string.
-    Exactly one per test; `UNKNOWN` is the honest answer, not an omission.
-    """
+    """The OSS issue-label taxonomy, so an issue and a test join on one string"""
 
     LLM_TRANSLATION = "llm-translation"
     SPEND_BUDGETS = "spend-budgets"
@@ -74,22 +45,7 @@ class Domain(str, Enum):
 
 
 class Route(str, Enum):
-    """The endpoint the test is checking.
-
-    Set it only when the endpoint is what the test is about: `/team/update` for
-    a team-update test, `/v1/messages` for a messages spend test. A budget or
-    rate-limit test whose chat call only triggers the block leaves it unset.
-
-    "route" here means endpoint, matching litellm's own `LiteLLMRoutes`
-    (litellm/proxy/_types.py). The coverage registry's `LlmCell.route` uses the
-    same word for PROVIDER; that is a different namespace and is left alone.
-
-    Deliberately collapsed against the registry's `LlmEndpoint`:
-    images_generations + images_edits -> IMAGES, audio_speech +
-    audio_transcriptions -> AUDIO, bedrock_native + google_native ->
-    PASSTHROUGH. Those splits are wire detail, not a customer-facing surface,
-    and `models` + `capabilities` already carry them.
-    """
+    """The endpoint the test is checking; unset when the call only triggers the behavior under test"""
 
     CHAT_COMPLETIONS = "chat_completions"
     MESSAGES = "messages"
@@ -124,21 +80,7 @@ class Route(str, Enum):
 
 
 class Provider(str, Enum):
-    """The upstream LLM provider the test drives, spelled exactly as litellm's
-    own `LlmProviders` (litellm/types/utils.py) spells it.
-
-    A deliberate mirror, not an import. Importing `LlmProviders` at the top of a
-    test module pulls `litellm/__init__` (measured: 1.44s, 2474 modules) and,
-    worse, makes the litellm package a hard dependency of COLLECTING tests/e2e --
-    which is shipped to the e2e runner image on its own, so a missing package
-    would not slow the suite down, it would error every test out at collection.
-    The suite has zero runtime litellm imports and this keeps it that way.
-
-    The mirror cannot drift silently: `TestProviderMirrorsLitellm` in
-    test_e2e_metadata.py asserts every value here is a real `LlmProviders`
-    value, and runs wherever litellm is importable (dev checkouts, the repo's own
-    CI) while skipping where it is not. Adding a provider is one line here.
-    """
+    """Mirrors litellm's `LlmProviders` without importing litellm; `TestProviderMirrorsLitellm` catches drift"""
 
     OPENAI = "openai"
     OPENAI_LIKE = "openai_like"
@@ -176,22 +118,7 @@ class Provider(str, Enum):
 
 
 class Capability(str, Enum):
-    """A MODEL feature the test depends on, anchored 1:1 to a `supports_*` key
-    in model_prices_and_context_window.json.
-
-    Not to be confused with the coverage registry's `LlmCell.capability`, which
-    means the endpoint feature under test (`basic`, `multi_turn`, ...) and half
-    of whose values have no `supports_*` key at all.
-
-    Plural by necessity, never a single enum: `thinking_with_tool_use` and
-    `tool_search_history` only exist in the registry because a single-enum field
-    had nowhere to put a conjunction. Here they are
-    (REASONING, FUNCTION_CALLING) and (TOOL_SEARCH,).
-
-    `audio_output` is deliberately absent: litellm/utils.py reads
-    `supports_audio_input` for it, so the value would silently alias
-    AUDIO_INPUT. Add it once that bug is fixed upstream.
-    """
+    """A model feature, 1:1 with a `supports_*` key in model_prices_and_context_window.json"""
 
     FUNCTION_CALLING = "function_calling"
     PARALLEL_FUNCTION_CALLING = "parallel_function_calling"
@@ -208,8 +135,7 @@ class Capability(str, Enum):
 
 
 class Mode(str, Enum):
-    """How the route was driven. The registry's cell ids already carry this
-    axis as a segment (221 `.nonstream.`, 37 `.stream.`)."""
+    """How the route was driven"""
 
     NONSTREAM = "nonstream"
     STREAM = "stream"
@@ -221,36 +147,18 @@ _M = TypeVar("_M")
 
 
 def _scalar(value: object) -> str:
-    """`str(member)` on a (str, Enum) gives 'Route.RESPONSES', not 'responses'
-    -- StrEnum would not, but it is 3.11+ and this repo floors at 3.10. So the
-    value is read explicitly, once, for every enum field."""
+    """`str()` on a (str, Enum) gives `Route.RESPONSES`, and StrEnum needs 3.11"""
     if isinstance(value, Enum):
         return str(value.value)  # pyright: ignore[reportAny]  # Enum.value is Any for every enum
     return str(value)
 
 
 def _members(value: object) -> tuple[object, ...] | None:
-    """The elements of a plural field, or None for anything that is not a tuple.
-
-    Both callers hold the value as a plain object: `_canonical` because a call
-    site can pass anything at runtime, the serializer because `asdict` hands the
-    tuple back inside an untyped dict. The elements are re-declared as plain
-    objects here and converted by `_scalar` like any other value.
-    """
     return cast("tuple[object, ...]", value) if isinstance(value, tuple) else None
 
 
 def _canonical(name: str, value: object, member_type: type[_M]) -> tuple[_M, ...]:
-    """A plural field's members: validated, deduped, and sorted by the value
-    they serialize to.
-
-    `models=("gpt-5.5")` is a str, not a tuple, and iterating it would declare
-    one model per character. Anything that is not a tuple is refused here, which
-    runs where the decorator does: at import, so pytest reports a collection
-    error naming the file instead of shipping garbage properties. An empty
-    string member is dropped rather than refused, because `models` is fed from
-    env-overridable constants and a blank override must not break collection.
-    """
+    """Validated, deduped and sorted; a bare str like `("gpt-5.5")` raises at import"""
     members = _members(value)
     if members is None:
         raise TypeError(
@@ -265,20 +173,7 @@ def _canonical(name: str, value: object, member_type: type[_M]) -> tuple[_M, ...
 
 @dataclass(frozen=True, slots=True)
 class Subject:
-    """What a test is about.
-
-    Every field is optional in this first phase -- nothing is enforced, and the
-    backfill of the existing ~908 tests comes later. Named `Subject` rather than
-    `TestMeta` because pytest tries to collect any imported class named `Test*`
-    and would warn in every one of the ~570 modules that import it.
-
-    `providers`, `models` and `capabilities` are plural because one test node
-    routinely drives several: the claude_code matrix runs haiku, sonnet and opus
-    in a single body, and a spend test calls two providers on one key. Each is
-    an independent set. No positional pairing is implied between `providers` and
-    `models` (one provider x three models is the common case), and none could
-    survive anyway, since each tuple is deduped and sorted on its own.
-    """
+    """What a test is about. Not named `Test*` so pytest does not try to collect it"""
 
     domain: Domain | None = None
     route: Route | None = None
@@ -288,26 +183,13 @@ class Subject:
     mode: Mode | None = None
 
     def __post_init__(self) -> None:
-        """Canonicalize every plural field at declaration, so the committed run
-        files diff cleanly however a test spelled the tuple, and the serializer
-        stays field-agnostic."""
         object.__setattr__(self, "providers", _canonical("providers", self.providers, Provider))
         object.__setattr__(self, "models", _canonical("models", self.models, str))
         object.__setattr__(self, "capabilities", _canonical("capabilities", self.capabilities, Capability))
 
 
 def meta(subject: Subject) -> pytest.MarkDecorator:
-    """Attach a `Subject` to a test: `@meta(Subject(route=Route.RESPONSES, ...))`.
-
-    A typed wrapper around `pytest.mark.meta` (registered in conftest.py's
-    `pytest_configure`, like `covers`) so passing the wrong thing is a type
-    error rather than a property that silently never appears.
-
-    Separate from `@pytest.mark.covers` on purpose: `covers` args are flattened
-    by `dedupe_covers`, which drops non-strings silently, and by
-    tests/integration/conftest.py, which has no such filter and would hard-fail
-    collection. `covers` is untouched by this change.
-    """
+    """Attach a `Subject` to a test: `@meta(Subject(route=Route.RESPONSES, ...))`"""
     return pytest.mark.meta(subject)
 
 
@@ -567,25 +449,12 @@ _REPEATED: Final = MappingProxyType({"providers": "provider", "models": "model",
 
 
 def _declared_subject(args: tuple[object, ...]) -> Subject | None:
-    """The `Subject` a `meta` marker carries, or None for anything else.
-
-    `Mark.args` is `tuple[Any, ...]`; taking it as `tuple[object, ...]` is what
-    keeps the Any from leaking past this line. A bare `@pytest.mark.meta` (no
-    args) and a `@pytest.mark.meta("spend-budgets")` (wrong type) both land here,
-    and neither may produce a property whose value is a repr.
-    """
     first = args[0] if args else None
     return first if isinstance(first, Subject) else None
 
 
 def subject_properties(item: pytest.Item) -> tuple[tuple[str, str], ...]:
-    """The declared half, in dataclass field order.
-
-    `_REPEATED` is the only field-specific knowledge here: which fields are
-    plural, and the SINGULAR name their repeated <property> goes out under. A new
-    scalar field needs no edit. Empty fields emit nothing; the emitter is what
-    guarantees every key exists in the JSON, with `providers` and `models` as
-    `[]` when nothing was declared."""
+    """The declared fields as <property> pairs, plural fields repeated under their singular name"""
     marker: Final = item.get_closest_marker("meta")
     if marker is None:
         return ()

@@ -367,8 +367,6 @@ def test_a_failed_phase_s_own_report_carries_the_steps(tmp_path: Path) -> None:
 
 class TestDeclaredPropertiesReachTheReport:
     def test_repeated_provider_model_and_capability_round_trip(self, report: Mapping[str, Properties]) -> None:
-        """One <property> per member under the SINGULAR name, deduped and sorted,
-        with no pairing between the two providers and the three models."""
         declared: Final = tuple(
             (prop, value)
             for prop, value in report["test_declares_two_providers_and_three_models"]
@@ -390,9 +388,6 @@ class TestDeclaredPropertiesReachTheReport:
 
 class TestBareStrIsACollectionError:
     def test_a_str_where_a_tuple_belongs_fails_collection_and_names_the_fix(self, tmp_path: Path) -> None:
-        """`models=("gpt-5.5")` raises where the decorator runs, which is import, so
-        pytest stops at collection and points at the file. Nothing is run and no
-        one-letter `model` properties are ever shipped."""
         write_suite(tmp_path, {"test_bare_str.py": BARE_STR_SUITE})
         child: Final = run_child_pytest(tmp_path)
         assert child.returncode == pytest.ExitCode.INTERRUPTED, child.stdout

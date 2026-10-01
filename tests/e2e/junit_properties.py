@@ -89,16 +89,9 @@ def covers_from_item(item: pytest.Item) -> tuple[str, ...]:
 
 
 def result_properties(item: pytest.Item) -> tuple[tuple[str, str], ...]:
-    """The custom signals a standard reporter cannot derive: the normalized suite
-    package, the comma-joined coverage-registry cell ids this test covers, the
-    repo-relative `path:line` its source sits at, and the typed `@meta(Subject(...))`
-    fields.
+    """The custom signals a standard reporter cannot derive.
 
-    The fixed three-tuple prefix is load-bearing and stays byte-identical: Loki,
-    Grafana, the status page and tests/integration/conftest.py all read
-    `package`/`covers`/`source` today. `subject_properties` only ever appends, and
-    appends nothing at all for a test with no `meta` marker -- which is every test
-    in the suite until the backfill lands.
+    Loki, Grafana and tests/integration/conftest.py read the `package`/`covers`/`source` prefix, so it never moves
     """
     fixed = (
         ("package", package_from_nodeid(item.nodeid)),
