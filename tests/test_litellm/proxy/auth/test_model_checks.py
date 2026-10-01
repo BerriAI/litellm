@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -483,6 +484,36 @@ def test_wildcard_custom_prefix_keeps_org_segment_for_non_provider_first_segment
     )
 
     assert result == ["my_hf/meta-llama/Llama-3-8B"]
+
+
+def test_partial_prefix_wildcard_expands_against_stripped_provider_ids(monkeypatch):
+    import litellm
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    provider_ids: Final = list(litellm.models_by_provider["databricks"])
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: provider_ids,
+    )
+
+    result: Final = get_known_models_from_wildcard(
+        wildcard_model="databricks/system.ai.*",
+        litellm_params=LiteLLM_Params(
+            model="databricks/system.ai.*",
+            api_key="x",
+            api_base="https://example.invalid",
+        ),
+    )
+
+    expected: Final = [f"databricks/system.ai.{model_id.partition('/')[-1]}" for model_id in provider_ids]
+    assert result == expected
+    assert all(
+        model_id.startswith("databricks/system.ai.") and "/" not in model_id.removeprefix("databricks/system.ai.")
+        for model_id in result
+    )
 
 
 def test_wildcard_credential_hydration_preserves_missing_credential_name(

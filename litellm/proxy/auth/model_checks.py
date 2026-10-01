@@ -262,6 +262,24 @@ def _hydrate_litellm_credential_name(
     return litellm_params
 
 
+def _strip_known_provider_prefix(model: str, known_providers: frozenset[str]) -> str:
+    leading, sep, model_suffix = model.partition("/")
+    return model_suffix if sep and leading in known_providers else model
+
+
+def _apply_partial_wildcard_prefix(
+    provider_models: list[str], model_prefix: str, known_providers: frozenset[str]
+) -> list[str]:
+    prefix_filtered: Final = [
+        model
+        for model in provider_models
+        if _strip_known_provider_prefix(model, known_providers).startswith(model_prefix)
+    ]
+    if prefix_filtered:
+        return prefix_filtered
+    return [f"{model_prefix}{_strip_known_provider_prefix(model, known_providers)}" for model in provider_models]
+
+
 def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_Params | None = None) -> list[str]:
     wildcard_model_to_expand: Final = (
         litellm_params.model
@@ -288,23 +306,24 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
 
     litellm_params = _hydrate_litellm_credential_name(litellm_params)
 
-    wildcard_models = get_provider_models(provider=provider, litellm_params=litellm_params)
+    provider_models: Final = get_provider_models(provider=provider, litellm_params=litellm_params)
 
-    if wildcard_models is None:
+    if provider_models is None:
         return []
-    if wildcard_suffix != "*":
-        ## CHECK IF PARTIAL FILTER e.g. `gemini-*`
-        model_prefix: Final = wildcard_suffix.replace("*", "")
 
-        is_partial_filter: Final = any(wc_model.startswith(model_prefix) for wc_model in wildcard_models)
-        if is_partial_filter:
-            filtered_wildcard_models = [wc_model for wc_model in wildcard_models if wc_model.startswith(model_prefix)]
-            wildcard_models = filtered_wildcard_models
-        else:
-            # add model prefix to wildcard models
-            wildcard_models = [f"{model_prefix}{model}" for model in wildcard_models]
+    known_providers: Final = frozenset(provider.value for provider in LlmProviders)
 
-    known_providers: Final = {provider.value for provider in LlmProviders}
+    ## CHECK IF PARTIAL FILTER e.g. `gemini-*`
+    wildcard_models: Final = (
+        provider_models
+        if wildcard_suffix == "*"
+        else _apply_partial_wildcard_prefix(
+            provider_models=provider_models,
+            model_prefix=wildcard_suffix.replace("*", ""),
+            known_providers=known_providers,
+        )
+    )
+
     suffix_appended_wildcard_models: Final = []
     for model in wildcard_models:
         if not model.startswith(wildcard_provider_prefix):
@@ -314,11 +333,7 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
             # both, which would otherwise yield an uncallable "ollama_server1/ollama/gemma3:1b".
             # Only strip the leading segment when it is a known provider, so ids whose first
             # segment is an org rather than a provider (e.g. "meta-llama/Llama-3-8B") keep it.
-            leading, sep, model_suffix = model.partition("/")
-            if sep and leading in known_providers:
-                model = f"{wildcard_provider_prefix}/{model_suffix}"
-            else:
-                model = f"{wildcard_provider_prefix}/{model}"
+            model = f"{wildcard_provider_prefix}/{_strip_known_provider_prefix(model, known_providers)}"
         suffix_appended_wildcard_models.append(model)
     return suffix_appended_wildcard_models or []
 
