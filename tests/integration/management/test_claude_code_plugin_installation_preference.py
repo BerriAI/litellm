@@ -465,6 +465,7 @@ def test_repeated_identical_reads_are_stable(gateway: Gateway, peer: Gateway) ->
         assert len(stored_rows(name)) == 1
 
 
+@pytest.mark.timeout(240)
 def test_registration_burst_survives_a_worker_kill(gateway: Gateway, tmp_path: Path) -> None:
     names: Final = tuple(plugin_name() for _ in range(20))
     preferences: Final = tuple(PREFERENCES[index % len(PREFERENCES)] for index in range(len(names)))
