@@ -6,9 +6,9 @@ from queue import SimpleQueue
 from typing import Final
 
 import httpx
-from engine.models import (
+from lens.models import (
     Claim,
-    EngineSettings,
+    LensSettings,
     Execution,
     ExecutionContent,
     Job,
@@ -17,7 +17,7 @@ from engine.models import (
     Sample,
     TracePart,
 )
-from engine.worker import EngineWorker
+from lens.worker import LensWorker
 
 
 async def main() -> None:
@@ -25,7 +25,7 @@ async def main() -> None:
     claims: Final = iter(("full", "healthy"))
     saved: Final = SimpleQueue[Result]()
     pages: Final = SimpleQueue[str]()
-    settings: Final = EngineSettings(name="Storage recovery", model="unused", context="Finish the task", concurrency=1)
+    settings: Final = LensSettings(name="Storage recovery", model="unused", context="Finish the task", concurrency=1)
     execution: Final = Execution(
         id="run", source="traces", trace_id="trace", team_id="", name="Task", start_time="", span_count=10000
     )
@@ -34,7 +34,7 @@ async def main() -> None:
         path: Final = request.url.path
         if path.endswith("/claim"):
             claim: Final = Claim(
-                engine_id="lens",
+                lens_id="lens",
                 job=Job(id=next(claims), created_at=now, start=now, end=now, settings=settings, revision=1),
                 findings=(),
             )
@@ -71,7 +71,7 @@ async def main() -> None:
         return httpx.Response(200, json=True)
 
     async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
-        worker: Final = EngineWorker(client)
+        worker: Final = LensWorker(client)
         assert await worker.run_once()
         failed: Final = saved.get_nowait()
         assert failed.error.startswith("Worker temporary storage failed.")
