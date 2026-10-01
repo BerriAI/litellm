@@ -147,7 +147,7 @@ jobs:
         env:
           TEST_PATH: ${{ matrix.test-path }}
           WORKERS: ${{ matrix.workers }}
-          PYTEST_ADDOPTS: ${{ matrix.shard == 'proxy-behavior' && '--cov=litellm/proxy/engine --cov-report=xml:coverage-lens-postgres.xml' || '' }}
+          PYTEST_ADDOPTS: ${{ matrix.shard == 'proxy-behavior' && '--cov=./litellm --cov-report=xml:coverage-lens-postgres.xml' || '' }}
         run: |
           if [ "${WORKERS}" = "0" ]; then
             uv run --no-sync pytest ${TEST_PATH:?} -vv --tb=short --durations=10
@@ -157,9 +157,11 @@ jobs:
 
       - name: Upload Lens database coverage
         if: steps.changes.outputs.decision != 'skip' && matrix.shard == 'proxy-behavior' && !cancelled()
-        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           use_oidc: true
+          version: v11.3.1
+          root_dir: ${{ github.workspace }}
           files: coverage-lens-postgres.xml
           flags: lens-postgres
           fail_ci_if_error: true

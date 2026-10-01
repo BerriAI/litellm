@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import sqlite3
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from types import MappingProxyType
@@ -82,10 +83,12 @@ class EngineWorker:
             result: Final = await analyze_sample(claim, sample, read, model, progress)
             saved: Final = await self.client.post(prefix + "/result", json=result.model_dump(mode="json"))
             saved.raise_for_status()
-        except (httpx.HTTPError, ValueError) as exc:
+        except (httpx.HTTPError, ValueError, OSError, sqlite3.Error) as exc:
             status: Final = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
             message: Final = (
-                "Monthly budget reached"
+                "Worker temporary storage failed. Increase its capacity or reduce analysis parallelism."
+                if isinstance(exc, (OSError, sqlite3.Error))
+                else "Monthly budget reached"
                 if status == 402
                 else "Analysis interrupted. Check worker connectivity, model configuration, and trace storage."
             )
