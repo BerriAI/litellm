@@ -16,12 +16,11 @@ from litellm.rust_bridge import _native
 from litellm.types.caching import LiteLLMCacheType
 from tests.test_litellm_rust.support.cache import (
     CacheLookup,
-    CacheTestHandle,
     CacheTestResolver,
+    activate_native,
     assert_native_runtime,
     completion_kwargs,
     request,
-    require_rust,
 )
 from tests.test_litellm_rust.support.isolation import rebound
 
@@ -49,26 +48,11 @@ def azure_blob_facade() -> Generator[Cache]:
         asyncio.run(backend.disconnect())
 
 
-def azure_blob_handle(facade: Cache) -> _native._CacheTestHandle:
-    backend: Final = facade.cache
-    assert isinstance(backend, AzureBlobCache)
-    return CacheTestHandle.azure_blob(
-        backend.container_client.url.removesuffix(f"/{backend.container_client.container_name}"),
-        backend.container_client.container_name,
-    )
-
-
 def test_azure_blob_facade_serves_natively_and_python_reads_the_same_blobs(azure_blob_facade: Cache) -> None:
     backend: Final = azure_blob_facade.cache
     assert isinstance(backend, AzureBlobCache)
-    handle: Final = azure_blob_handle(azure_blob_facade)
-    assert handle.backend == "azure-blob"
+    activate_native(azure_blob_facade)
     account_url: Final = backend.container_client.url.removesuffix(f"/{backend.container_client.container_name}")
-    with pytest.raises(TypeError, match="containers must match"):
-        CacheTestHandle.azure_blob(account_url, f"{backend.container_client.container_name}-other")._bind_facade(
-            azure_blob_facade
-        )
-    handle._bind_facade(azure_blob_facade)
     resolver: Final = CacheTestResolver(SimpleNamespace(cache=azure_blob_facade))
     native: Final = resolver.resolve()
     assert native.kind == "native"
@@ -86,44 +70,50 @@ def test_azure_blob_facade_serves_natively_and_python_reads_the_same_blobs(azure
     assert stored["response"] == response
     assert isinstance(stored["timestamp"], float)
     assert native.lookup(request("sync")) == response
-    assert cast(CacheLookup, azure_blob_facade).get_cache(cache_key="sync") == response
+    with rebound(azure_blob_facade, "_native_cache", None):
+        assert cast(CacheLookup, azure_blob_facade).get_cache(cache_key="sync") == response
 
     backend.set_cache("python", {"timestamp": time.time(), "response": response})
     backend.set_cache("legacy", "bare legacy value")
     backend.container_client.upload_blob("invalid", b"{not json", overwrite=True)
     assert native.lookup(request("python")) == response
-    assert native.lookup(request("legacy")) == cast(CacheLookup, azure_blob_facade).get_cache(cache_key="legacy")
+    with rebound(azure_blob_facade, "_native_cache", None):
+        assert native.lookup(request("legacy")) == cast(CacheLookup, azure_blob_facade).get_cache(cache_key="legacy")
     assert native.lookup_batch([request("python"), request("missing"), request("invalid"), request("sync")]) == {
         "values": [response, None, None, response],
         "missing_indices": [1, 2],
     }
 
     with rebound(azure_blob_facade, "ttl", 12):
-        assert resolver.resolve().kind == "python_callback"
+        with pytest.raises(_native.RustBridgeDeclined):
+            resolver.resolve()
     with rebound(backend, "container_client", ContainerClient.from_container_url(backend.container_client.url)):
-        assert resolver.resolve().kind == "python_callback"
+        with pytest.raises(_native.RustBridgeDeclined):
+            resolver.resolve()
 
     def custom_get(*_args: object, **_kwargs: object) -> None:
         return None
 
     with rebound(backend, "get_cache", custom_get):
-        assert resolver.resolve().kind == "python_callback"
-    assert resolver.resolve().kind == "python_callback"
-    assert cast(CacheLookup, azure_blob_facade).get_cache(cache_key="sync") == response
+        with pytest.raises(_native.RustBridgeDeclined):
+            resolver.resolve()
+    with pytest.raises(_native.RustBridgeDeclined):
+        resolver.resolve()
+    with rebound(azure_blob_facade, "_native_cache", None):
+        assert cast(CacheLookup, azure_blob_facade).get_cache(cache_key="sync") == response
 
     class CustomBlobCache(AzureBlobCache):
         pass
 
     with rebound(azure_blob_facade, "cache", CustomBlobCache(account_url, backend.container_client.container_name)):
-        assert resolver.resolve().kind == "python_callback"
-        with pytest.raises(TypeError):
-            azure_blob_handle(azure_blob_facade)._bind_facade(azure_blob_facade)
+        with pytest.raises(_native.RustBridgeDeclined):
+            resolver.resolve()
 
 
 async def test_azure_blob_native_async_writes_overwrite_batch_and_flush_like_python(azure_blob_facade: Cache) -> None:
     backend: Final = azure_blob_facade.cache
     assert isinstance(backend, AzureBlobCache)
-    azure_blob_handle(azure_blob_facade)._bind_facade(azure_blob_facade)
+    activate_native(azure_blob_facade)
     binding: Final = CacheTestResolver(SimpleNamespace(cache=azure_blob_facade)).resolve()
     assert binding.kind == "native"
     ping: Final = cast(dict[str, object], await binding.ping())
@@ -136,7 +126,8 @@ async def test_azure_blob_native_async_writes_overwrite_batch_and_flush_like_pyt
     assert await backend.async_get_cache("async") == json.loads(
         backend.container_client.download_blob("async").readall()
     )
-    assert cast(CacheLookup, azure_blob_facade).get_cache(cache_key="async") == {"value": 2}
+    with rebound(azure_blob_facade, "_native_cache", None):
+        assert cast(CacheLookup, azure_blob_facade).get_cache(cache_key="async") == {"value": 2}
 
     await binding.async_store_batch([request("first"), request("second")], [{"value": 3}, {"value": 4}])
     assert await binding.async_lookup_batch([request("second"), request("missing"), request("first")]) == {
@@ -148,17 +139,18 @@ async def test_azure_blob_native_async_writes_overwrite_batch_and_flush_like_pyt
     assert await binding.async_lookup(request("async")) is None
 
 
-async def test_azure_blob_rust_required_rule_activates_natively(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_azure_blob_explicit_selection_activates_natively(monkeypatch: pytest.MonkeyPatch) -> None:
     account_url: Final = os.environ.get("AZURE_BLOB_CACHE_ACCOUNT_URL")
     if account_url is None:
         pytest.skip(
             "live Azure Blob parity needs AZURE_BLOB_CACHE_ACCOUNT_URL plus DefaultAzureCredential inputs in the environment"
         )
-    require_rust(monkeypatch, LiteLLMCacheType.AZURE_BLOB)
-    facade: Final = Cache(
-        type=LiteLLMCacheType.AZURE_BLOB,
-        azure_account_url=account_url,
-        azure_blob_container=f"litellm-parity-{uuid.uuid4().hex[:12]}",
+    facade: Final = activate_native(
+        Cache(
+            type=LiteLLMCacheType.AZURE_BLOB,
+            azure_account_url=account_url,
+            azure_blob_container=f"litellm-parity-{uuid.uuid4().hex[:12]}",
+        )
     )
     backend: Final = facade.cache
     assert isinstance(backend, AzureBlobCache)

@@ -6,6 +6,7 @@ import {
   CHAT_MODEL_A,
   MOCK_RESPONSE_TEXT,
   sendChatCompletion,
+  sendChatCompletionWithCallId,
   waitForSpendLog,
   waitForSpendLogByPrompt,
 } from "../../helpers/traffic";
@@ -93,6 +94,50 @@ test.describe("Logs page", () => {
       timeout: 20_000,
     });
     await expect(drawer.getByText(MOCK_RESPONSE_TEXT, { exact: false }).first()).toBeVisible({ timeout: 20_000 });
+  });
+
+  test("a served request's Logs row and drawer show its x-litellm-call-id", async ({ page, request }) => {
+    const prompt = `logs-call-id-prompt-${uniqueSuffix()}`;
+    const { requestId, callId } = await sendChatCompletionWithCallId(request, {
+      model: CHAT_MODEL_A,
+      prompt,
+    });
+    expect(callId, "call id must differ from the provider response id for this check to mean anything").not.toBe(
+      requestId,
+    );
+    await waitForSpendLog(request, requestId);
+
+    await navigateToPage(page, Page.Logs);
+    await dismissFeedbackPopup(page);
+    const search = visibleTestId(page, "datatable-search");
+    await expect(search).toBeVisible({ timeout: 20_000 });
+    await search.fill(callId);
+
+    const row = requestLogsRows(page).filter({ hasText: requestId });
+    await expect(row, `no logs row for call id ${callId}`).toHaveCount(1, { timeout: 30_000 });
+    await expect(row, "the row itself shows only the request id").not.toContainText(callId);
+
+    await row.getByText(requestId).hover();
+    const tooltip = page.locator("[data-slot='tooltip-content']");
+    await expect(tooltip, "hovering the Request ID cell does not list the x-litellm-call-id").toContainText(
+      `x-litellm-call-id: ${callId}`,
+      { timeout: 10_000 },
+    );
+    await tooltip.getByRole("button", { name: "Copy x-litellm-call-id" }).click();
+    if (await page.evaluate(() => window.isSecureContext)) {
+      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(callId);
+    }
+
+    await row.click();
+    const drawer = page.getByRole("dialog").first();
+    await expect(drawer.getByText("Request & Response")).toBeVisible({ timeout: 20_000 });
+    await expect(drawer.getByText("x-litellm-call-id:"), "drawer header lacks the x-litellm-call-id line").toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(
+      drawer.getByText(callId, { exact: false }).first(),
+      `drawer does not show x-litellm-call-id ${callId}`,
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   // Split out because only the copy path needs a secure context; folding it in would
