@@ -9,7 +9,6 @@ from pydantic import JsonValue, TypeAdapter
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 ANTHROPIC_API_KEY: Final = "synthetic-anthropic-key"
-SONNET: Final = "claude-sonnet-4-5"
 FABLE: Final = "claude-fable-5-1"
 OPUS: Final = "claude-opus-5-5"
 CLI_BETA: Final = (
