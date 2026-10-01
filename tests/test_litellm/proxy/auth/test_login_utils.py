@@ -2343,3 +2343,67 @@ class TestScreenLoginPasswordForBreach:
             )
             is True
         )
+
+
+class TestRehashPasswordIfNeeded:
+    """A successful login rewrites legacy hash rows to pbkdf2 in place."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("legacy_kind", ("scrypt", "sha256"))
+    async def test_legacy_row_is_rewritten_to_a_verifying_pbkdf2_row(self, legacy_kind):
+        import base64
+
+        from litellm.proxy.auth.login_utils import _rehash_password_if_needed
+        from litellm.proxy.utils import verify_password
+
+        password = "rehash-me-1"
+        if legacy_kind == "scrypt":
+            salt = os.urandom(16)
+            derived = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
+            stored = "scrypt:" + base64.b64encode(salt + derived).decode()
+        else:
+            stored = hashlib.sha256(password.encode()).hexdigest()
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_usertable.update_many = AsyncMock()
+        with patch(  # test-quality-ok: the rehash writes to the database; faked so no DB is needed
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+        ):
+            await _rehash_password_if_needed("u-1", password, stored)
+
+        update_kwargs = mock_prisma_client.db.litellm_usertable.update_many.await_args.kwargs
+        assert update_kwargs["where"] == {"user_id": "u-1", "password": stored}
+        written = update_kwargs["data"]["password"]
+        assert written.startswith("pbkdf2:sha256:")
+        assert verify_password(password, written)
+
+    @pytest.mark.asyncio
+    async def test_pbkdf2_row_triggers_no_update(self):
+        from litellm.proxy.auth.login_utils import _rehash_password_if_needed
+        from litellm.proxy.utils import hash_password
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_usertable.update_many = AsyncMock()
+        with patch(  # test-quality-ok: the rehash writes to the database; faked so no DB is needed
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+        ):
+            await _rehash_password_if_needed("u-1", "rehash-me-1", hash_password("rehash-me-1"))
+
+        mock_prisma_client.db.litellm_usertable.update_many.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_rehash_logs_a_warning_and_never_raises(self, caplog):
+        import logging
+
+        from litellm._logging import verbose_proxy_logger
+        from litellm.proxy.auth.login_utils import _rehash_password_if_needed
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(side_effect=RuntimeError("db down"))
+        with patch(  # test-quality-ok: the rehash writes to the database; faked so no DB is needed
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+        ):
+            with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+                await _rehash_password_if_needed("u-1", "rehash-me-1", "scrypt:stored")
+
+        assert "Login-time password rehash could not update user u-1" in caplog.text
