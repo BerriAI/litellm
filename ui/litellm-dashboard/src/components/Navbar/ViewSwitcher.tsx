@@ -1,3 +1,4 @@
+import { useTranslation } from "@/i18n/useTranslation";
 import React from "react";
 import { usePathname } from "next/navigation";
 import {
@@ -22,6 +23,7 @@ interface ViewSwitcherItem {
 }
 
 export default function ViewSwitcher() {
+  const { t } = useTranslation();
   const { mode, setMode, plugins } = usePluginMode();
   const { data: uiSettings } = useUISettings();
   const pathname = usePathname();
@@ -32,10 +34,10 @@ export default function ViewSwitcher() {
   const normalizedPathname = (pathname ?? "").replace(/\/+$/, "");
   const isChatRoute = chatEnabled && (normalizedPathname === chatHref || normalizedPathname.startsWith(`${chatHref}/`));
 
-  const activeLabel = isChatRoute ? "Chat" : plugins.find((p) => p.name === mode)?.display_name ?? "AI Gateway";
+  const activeLabel = isChatRoute ? t("Chat") : plugins.find((p) => p.name === mode)?.display_name ?? t("AI Gateway");
 
   const modeEntries = [
-    { key: GATEWAY, label: "AI Gateway" },
+    { key: GATEWAY, label: t("AI Gateway") },
     ...plugins.map((p) => ({ key: p.name, label: p.display_name })),
   ];
 
@@ -53,7 +55,7 @@ export default function ViewSwitcher() {
         key: CHAT,
         label: (
           <div className="flex items-center justify-between gap-6 py-0.5">
-            <span className="font-medium">Chat</span>
+            <span className="font-medium">{t("Chat")}</span>
             {isChatRoute && <Check className="size-4 text-info" />}
           </div>
         ),
@@ -64,9 +66,9 @@ export default function ViewSwitcher() {
         disabled: true,
         label: (
           <div className="flex max-w-[220px] flex-col py-0.5">
-            <span className="font-medium">Chat</span>
+            <span className="font-medium">{t("Chat")}</span>
             <span className="whitespace-normal text-xs leading-snug text-muted-foreground">
-              Admins can enable in Settings
+              {t("Admins can enable in Settings")}
             </span>
           </div>
         ),

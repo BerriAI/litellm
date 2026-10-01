@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@/i18n/useTranslation";
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import React from "react";
@@ -7,9 +8,10 @@ import React from "react";
 import { Button } from "@/components/ui/button";
 
 const ThemeToggle: React.FC = () => {
+  const { t } = useTranslation();
   const { setTheme, resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
-  const label = isDark ? "Switch to light mode" : "Switch to dark mode (beta)";
+  const label = isDark ? t("Switch to light mode") : t("Switch to dark mode (beta)");
 
   return (
     <Button
