@@ -13,7 +13,9 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
 from litellm.types.llms.openai import REASONING_EFFORT
 
 if TYPE_CHECKING:
-    from openai.types.responses import ResponseOutputItem
+    from collections.abc import Sequence
+
+    from openai.types.responses import ResponseFunctionToolCall, ResponseOutputItem, ResponseOutputMessage
     from openai.types.responses.response_reasoning_item import ResponseReasoningItem
 
     from litellm.types.llms.openai import ResponsesAPIResponse
@@ -3052,9 +3054,9 @@ def test_streaming_function_call_tool_id_for_degenerate_call_id():
 
 
 def _build_message_plus_tool_call_response(
-    output_items,
-    model="gpt-4o",
-):
+    output_items: "Sequence[ResponseOutputItem]",
+    model: str = "gpt-4o",
+) -> "ModelResponse":
     from unittest.mock import Mock
 
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -3126,26 +3128,15 @@ def _build_message_plus_tool_call_response(
     )
 
 
-def _make_output_message(text, message_id="msg_bug18401", extra_texts=()):
+def _make_output_message(
+    text: str, message_id: str = "msg_bug18401", extra_texts: "Sequence[str]" = ()
+) -> "ResponseOutputMessage":
     from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
-    content = [
-        ResponseOutputText(
-            annotations=[],
-            text=text,
-            type="output_text",
-            logprobs=[],
-        )
+    content: Final = [
+        ResponseOutputText(annotations=[], text=block_text, type="output_text", logprobs=[])
+        for block_text in (text, *extra_texts)
     ]
-    for extra_text in extra_texts:
-        content.append(
-            ResponseOutputText(
-                annotations=[],
-                text=extra_text,
-                type="output_text",
-                logprobs=[],
-            )
-        )
 
     return ResponseOutputMessage(
         id=message_id,
@@ -3156,7 +3147,9 @@ def _make_output_message(text, message_id="msg_bug18401", extra_texts=()):
     )
 
 
-def _make_function_tool_call(call_id, name, arguments, tc_id="fc_bug18401"):
+def _make_function_tool_call(
+    call_id: str, name: str, arguments: str, tc_id: str = "fc_bug18401"
+) -> "ResponseFunctionToolCall":
     from openai.types.responses import ResponseFunctionToolCall
 
     return ResponseFunctionToolCall(
@@ -3305,7 +3298,7 @@ def test_multiblock_message_plus_function_call_merged_into_choice_zero():
     assert tool_calls[0]["id"] == "call_paris"
 
 
-def _make_output_message_with_no_blocks(message_id="msg_no_blocks"):
+def _make_output_message_with_no_blocks(message_id: str = "msg_no_blocks") -> "ResponseOutputMessage":
     from openai.types.responses import ResponseOutputMessage
 
     return ResponseOutputMessage(
