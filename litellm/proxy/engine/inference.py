@@ -114,18 +114,18 @@ async def analyze(repo: EngineRepository, engine: Engine, job: Job, worker_id: s
     with lens_analysis():
         response: Final = await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router forwards provider-specific keyword arguments
             model=job.settings.model,
-            messages=[  # mutable-ok: Router requires OpenAI message dictionaries in a list
-                {"role": "system", "content": _SYSTEM},  # mutable-ok: provider message dictionary
-                {"role": "user", "content": body.prompt},  # mutable-ok: provider message dictionary
+            messages=[
+                {"role": "system", "content": _SYSTEM},
+                {"role": "user", "content": body.prompt},
             ],
             max_tokens=4096,
             stream=False,
             timeout=120,
             num_retries=0,
             disable_fallbacks=True,
-            response_format={"type": "json_object"},  # mutable-ok: provider response-format JSON object
-            metadata={  # mutable-ok: Router mutates metadata
-                "tags": ["litellm-engine"],  # mutable-ok: logging callbacks require a tag list
+            response_format={"type": "json_object"},
+            metadata={
+                "tags": ["litellm-engine"],
                 "user_api_key_team_id": engine.scope.team_id,
             },
         )
