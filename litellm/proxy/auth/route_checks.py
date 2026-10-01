@@ -64,6 +64,17 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
 # paths directly because the request route carries the resolved key id.
 _PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES: Final = ("/regenerate", "/reset_spend")
 
+# Per-user MCP writes PROXY_ADMIN_VIEW_ONLY may make. Each handler scopes the write to the caller and
+# requires PROXY_ADMIN to act on another user's row, so these carry no admin write.
+_PROXY_ADMIN_VIEW_ONLY_SELF_SERVICE_MCP_ROUTES: Final = frozenset(
+    (
+        "/v1/mcp/server/oauth/{server_id}/register",
+        "/v1/mcp/server/{server_id}/oauth-user-credential",
+        "/v1/mcp/server/{server_id}/user-credential",
+        "/v1/mcp/server/{server_id}/user-env-vars",
+    )
+)
+
 _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS: Final = frozenset(("openai_routes", "llm_api_routes"))
 
 
@@ -855,6 +866,8 @@ class RouteChecks:
           3. Unsafe HTTP method (POST/PUT/PATCH/DELETE):
              - Allow `/user/update` only when restricted to user_email.
              - Allow `/user/password/change` (endpoint only writes the caller's own row).
+             - Allow POST/DELETE on the caller's own MCP credentials
+               (`_PROXY_ADMIN_VIEW_ONLY_SELF_SERVICE_MCP_ROUTES`).
              - Block all explicit writes in `_ADMIN_VIEWER_BLOCKED_WRITE_ROUTES`.
              - Otherwise allow only if the route is in admin_viewer_routes /
                global_spend_tracking_routes (legacy explicit-allow set).
@@ -917,6 +930,11 @@ class RouteChecks:
 
         # Self-service logout; the endpoint only revokes the caller's own session key.
         if route == "/session/logout":
+            return
+
+        if method in ("POST", "DELETE") and RouteChecks.check_route_access(
+            route=route, allowed_routes=_PROXY_ADMIN_VIEW_ONLY_SELF_SERVICE_MCP_ROUTES
+        ):
             return
 
         # Hard-block known write routes regardless of HTTP method (defensive
