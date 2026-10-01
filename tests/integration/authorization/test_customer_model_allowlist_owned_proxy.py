@@ -504,7 +504,7 @@ def test_head_migration_adds_empty_allowlist_without_rewriting_customers(
             )
 
         entrypoint: Final = subprocess.run(
-            [sys.executable, "-m", "litellm.proxy.prisma_migration"],
+            [sys.executable, "-P", "-m", "litellm.proxy.prisma_migration"],
             check=False,
             capture_output=True,
             text=True,
