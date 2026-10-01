@@ -63,6 +63,7 @@ legacy_paths() {
     llm-vertex-ai) echo tests/unit/llms/vertex_ai ;;
     mcp-integration)
       echo tests/unit/experimental_mcp_client
+      echo tests/unit/proxy/test_admin_mcp.py
       echo tests/unit/proxy/_experimental/mcp_server
       echo tests/unit/responses/mcp
       echo tests/mcp_tests/test_proxy_mcp_e2e.py ;;

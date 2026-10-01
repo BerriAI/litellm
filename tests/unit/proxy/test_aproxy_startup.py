@@ -45,7 +45,7 @@ async def test_proxy_gunicorn_startup_direct_config(monkeypatch):
         filepath = os.path.dirname(os.path.abspath(__file__))
         # test with worker_config = config yaml
         config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
-        os.environ["WORKER_CONFIG"] = config_fp
+        monkeypatch.setenv("WORKER_CONFIG", config_fp)
         async with proxy_startup_event(app=None) as _:
             pass
     except Exception as e:
@@ -78,7 +78,7 @@ async def test_proxy_gunicorn_startup_config_dict(monkeypatch):
         config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
         # test with worker_config = dict
         worker_config = {"config": config_fp}
-        os.environ["WORKER_CONFIG"] = json.dumps(worker_config)
+        monkeypatch.setenv("WORKER_CONFIG", json.dumps(worker_config))
         async with proxy_startup_event(app=None) as _:
             pass
     except Exception as e:

@@ -18,6 +18,80 @@ This guide provides instructions for building and running the LiteLLM applicatio
 - Docker
 - Docker Compose
 
+## Enable the built-in admin MCP
+
+The images built from `Dockerfile` and `docker/Dockerfile.non_root` include the
+[LiteLLM Admin MCP](https://github.com/BerriAI/liteadmin-mcp). Hosting it requires
+a valid base LiteLLM Enterprise license. It is disabled by default. Set the
+license and enable flag on the existing service, then restart the container:
+
+```yaml
+environment:
+  LITELLM_LICENSE: "<your-enterprise-license>"
+  LITELLM_ENABLE_ADMIN_MCP: "true"
+  PROXY_BASE_URL: "https://litellm.example.com"
+```
+
+An enabled connector without a valid enterprise license prevents startup with
+the standard enterprise-license error. Each MCP request also checks the proxy's
+current enterprise status. A base license is sufficient; no additional feature
+entitlement is required. The flag being off does not require a license
+
+Keep your existing database, authentication, configuration mount and HTTPS reverse
+proxy. The MCP endpoint is `https://litellm.example.com/admin/mcp`, on the same
+port as LiteLLM. If the gateway is served under a URL prefix, include that prefix
+in the endpoint, for example `https://litellm.example.com/gateway/admin/mcp`
+
+Connect an MCP client that supports Streamable HTTP and bearer headers:
+
+```json
+{
+  "mcpServers": {
+    "litellm-admin": {
+      "url": "https://litellm.example.com/admin/mcp",
+      "headers": {
+        "Authorization": "Bearer <your-personal-proxy-admin-key>"
+      }
+    }
+  }
+}
+```
+
+Each caller needs a current `proxy_admin` identity, including for read operations.
+The connector calls this gateway's management API in process with the caller's
+credential. It does not use `LITELLM_BASE_URL` or a shared `LITELLM_API_KEY`
+
+The integration mounts the connector's own ASGI application and uses the standard
+`httpx2.ASGITransport` for calls back into the gateway. LiteLLM's outbound HTTP
+handler uses `httpx`, while the connector requires `httpx2`. A small ASGI adapter
+preserves the original caller's address, scheme and policy headers, which a direct
+transport mount would replace with loopback defaults. It retains the complete
+gateway middleware and authentication stack; it does not implement HTTP requests
+or MCP protocol handling. The adapter explicitly links internal calls to their
+parent's admission slot; unrelated requests still acquire their own slots. The
+proxy pauses scheduled jobs, drains active requests, closes the connector, and
+then cleans up shared resources, including when startup or shutdown fails
+
+`PROXY_BASE_URL` supplies the trusted public origin for Host and Origin validation.
+Set `LITELLM_MCP_PUBLIC_URL` to an HTTPS origin if the admin MCP uses a different
+public hostname. Without either setting, only the connector's loopback hosts are
+accepted. Keep the existing `/mcp` endpoint for the MCP gateway; enabling admin MCP
+reserves the `/admin` prefix, including any existing MCP server alias named `admin`
+
+Set `LITELLM_ADMIN_READ_ONLY=true` to disable writes, or
+`LITELLM_ADMIN_TOOLS=list_keys,list_teams` to restrict the available operations.
+These restrictions apply in addition to the gateway's authorization checks
+
+Embedded deployments return complete results by default, so requests can reach
+different workers or replicas. `LITELLM_ADMIN_RESPONSE_VIEW=compact` enables the
+connector's paged results. Compact results, including explicit per-call requests
+for them, require subsequent `read_admin_result` calls to reach the same worker
+
+The connector source is pinned to a commit and archive checksum in the
+`admin-mcp` dependency group and `uv.lock`. Updates ship with the LiteLLM image;
+starting the server does not download code. For source development with Python
+3.12 or later, install it with `uv sync --extra proxy --group admin-mcp`
+
 ## Building and Running the Application
 
 To build and run the application, you will use the `docker-compose.yml` file located in the root of the project. This file is configured to use the `Dockerfile.non_root` for a secure, non-root container environment.

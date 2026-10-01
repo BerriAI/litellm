@@ -11,12 +11,12 @@ PyPI HTTP responses are mocked — these tests never hit the network.
 import os
 import sys
 from pathlib import Path
+from typing import Final
 
+import pytest
 import requests
 
-_CODE_COVERAGE_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "code_coverage_tests"
-)
+_CODE_COVERAGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "code_coverage_tests")
 sys.path.insert(0, _CODE_COVERAGE_DIR)
 
 import check_licenses  # noqa: E402
@@ -97,10 +97,7 @@ def test_get_license_falls_back_to_classifiers(monkeypatch):
         },
     )
     checker = _make_checker()
-    assert (
-        checker.get_package_license_from_pypi("pkg", "1.0.0")
-        == "Apache Software License"
-    )
+    assert checker.get_package_license_from_pypi("pkg", "1.0.0") == "Apache Software License"
 
 
 def test_get_license_returns_none_when_unset(monkeypatch):
@@ -215,9 +212,7 @@ def test_spdx_compound_or_expression_is_authorized():
 def test_spdx_with_exception_in_compound_is_authorized():
     """The 'WITH <exception>' suffix is stripped; the base license is checked."""
     checker = _make_checker()
-    is_ok, reason = checker.is_license_acceptable(
-        "Apache-2.0 WITH LLVM-exception OR MIT"
-    )
+    is_ok, reason = checker.is_license_acceptable("Apache-2.0 WITH LLVM-exception OR MIT")
     assert is_ok is True, reason
 
 
@@ -238,9 +233,7 @@ def test_spdx_compound_with_copyleft_component_is_rejected():
 
 def test_or_later_identifier_is_not_split_as_operator():
     """The lowercase '-or-later' inside an identifier is not the SPDX OR operator."""
-    assert (
-        check_licenses.LicenseChecker._split_spdx_expression("GPL-2.0-or-later") is None
-    )
+    assert check_licenses.LicenseChecker._split_spdx_expression("GPL-2.0-or-later") is None
 
 
 def test_free_text_license_is_not_treated_as_spdx():
@@ -280,3 +273,69 @@ def test_check_package_rejects_package_without_license(monkeypatch):
     )
     checker = _make_checker()
     assert checker.check_package("mystery-pkg", "1.0.0") is False
+
+
+def test_load_requirements_checks_every_dependency_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _ = (tmp_path / "pyproject.toml").write_text(
+        '[project]\ndependencies = ["runtime==1.0"]\n'
+        "[dependency-groups]\n"
+        'connector = ["connector==2.0"]\n'
+        'proxy = [{include-group = "connector"}, "server==3.0"]\n'
+        'dev = [{include-group = "proxy"}, "server==3.0"]\n'
+    )
+    _ = (tmp_path / "uv.lock").write_text("package = []\n")
+    checker: Final = _make_checker()
+
+    assert tuple(str(req) for req in checker._load_requirements()) == (
+        "runtime==1.0",
+        "connector==2.0",
+        "server==3.0",
+    )
+
+
+@pytest.mark.parametrize("entry", ('{include-group = "missing"}', '{include-group = "dev", unknown = "value"}', "123"))
+def test_load_requirements_rejects_invalid_group_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _ = (tmp_path / "pyproject.toml").write_text(
+        f"[project]\ndependencies = []\n[dependency-groups]\ndev = [{entry}]\n"
+    )
+    _ = (tmp_path / "uv.lock").write_text("package = []\n")
+    checker: Final = _make_checker()
+
+    with pytest.raises(RuntimeError, match="Invalid dependency group entry"):
+        checker._load_requirements()
+
+
+def test_load_requirements_preserves_url_hash_and_python_marker(tmp_path: Path) -> None:
+    requirements: Final = tmp_path / "requirements.txt"
+    _ = requirements.write_text(
+        "# pinned connector\n"
+        'connector @ https://example.test/connector.tar.gz#sha256=abcd ; python_version >= "3.12"\n'
+        "requests==2.0 # ordinary comment\n"
+    )
+    checker: Final = _make_checker()
+    connector, registry = checker._load_requirements(requirements)
+
+    assert connector.url == "https://example.test/connector.tar.gz#sha256=abcd"
+    assert str(connector.marker) == 'python_version >= "3.12"'
+    assert str(registry) == "requests==2.0"
+
+
+def test_license_cli_fails_when_requirements_cannot_be_parsed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config: Final = tmp_path / "tests/code_coverage_tests/liccheck.ini"
+    config.parent.mkdir(parents=True)
+    _ = config.write_text(_LICCHECK_INI.read_text())
+    _ = (tmp_path / "requirements.txt").write_text("not a valid requirement\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["check_licenses.py", "requirements.txt"])
+
+    with pytest.raises(SystemExit) as result:
+        check_licenses.main()
+
+    assert result.value.code == 1
+    assert "Error parsing requirements" in capsys.readouterr().out

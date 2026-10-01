@@ -10,6 +10,7 @@ import pytest
 
 import litellm
 import litellm.proxy.proxy_server
+from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
 
 # Top-level assignments of these types are the ones importlib.reload(litellm)
@@ -125,12 +126,14 @@ def setup_and_teardown():
     _restore_mutable_state(litellm, _LITELLM_STATE)
     _restore_mutable_state(litellm.proxy.proxy_server, _PROXY_SERVER_STATE)
     _flush_caches(_FLUSHABLE_CACHES)
+    GracefulShutdownManager.reset()
 
     loop = asyncio.get_event_loop_policy().new_event_loop()
     asyncio.set_event_loop(loop)
     try:
         yield
     finally:
+        GracefulShutdownManager.reset()
         loop.close()
         asyncio.set_event_loop(None)
 
