@@ -374,7 +374,7 @@ def endpoint_ids(gateway: Gateway, paths: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(string_value(object_value(ep)["id"]) for ep in endpoints if object_value(ep)["path"] in paths)
 
 
-def test_a_config_file_pass_through_is_listed_once_and_owns_its_key(gateway: Gateway, tmp_path: Path) -> None:
+def test_a_config_file_pass_through_is_listed_once_beside_database_rows(gateway: Gateway, tmp_path: Path) -> None:
     display_name: Final = f"Config NLP {uuid.uuid4().hex[:6]}"
     path: Final = f"/integration-config-nlp-{uuid.uuid4().hex[:8]}"
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
@@ -390,17 +390,18 @@ def test_a_config_file_pass_through_is_listed_once_and_owns_its_key(gateway: Gat
         assert hub_row(rows, display_name)["pass_through_path"] == path
         assert "Hidden config NLP" not in names_of(rows), rows
         assert hub_row(legacy_hub_rows(owned), display_name)["pass_through_path"] == path
-        rejected: Final = owned.request(
-            "POST",
-            "/config/pass_through_endpoint",
-            {"path": f"{path}-db", "target": gateway.upstream_url, "show_in_model_hub": True},
-        )
-        assert rejected.status_code == 400, rejected.text
-        assert "set in the config file" in rejected.text, rejected.text
-        assert hub_rows(owned) == rows, "a rejected write changed the hub"
-        listed: Final = owned.request("GET", "/config/pass_through_endpoint")
-        assert listed.status_code == 200, listed.text
-        assert f"{path}-db" not in listed.text, "a rejected write registered an endpoint"
+        with pass_through(owned, show_in_model_hub=True, display_name=f"{display_name} DB", path=f"{path}-db"):
+            beside: Final = eventually(lambda: hub_rows(owned), lambda listed: f"{display_name} DB" in names_of(listed))
+            assert names_of(beside).count(display_name) == 1, beside
+            assert hub_row(beside, f"{display_name} DB")["pass_through_path"] == f"{path}-db"
+        with pass_through(owned, show_in_model_hub=True, display_name=f"{display_name} DB", path=path):
+            replaced: Final = eventually(lambda: hub_rows(owned), lambda listed: display_name not in names_of(listed))
+            assert [string_value(row["pass_through_path"]) for row in replaced if row["pass_through_path"] == path] == [
+                path
+            ], replaced
+            assert hub_row(replaced, f"{display_name} DB")["pass_through_path"] == path
+        restored: Final = eventually(lambda: hub_rows(owned), lambda listed: display_name in names_of(listed))
+        assert hub_row(restored, display_name)["pass_through_path"] == path
     assert display_name not in names_of(hub_rows(gateway)), "the config row leaked into the shared proxy"
 
 
