@@ -500,10 +500,7 @@ class TestMetadataExtraction:
             assert req_headers.get("Cookie") == _HEADER_PRESENT_PLACEHOLDER
             assert req_headers.get("X-Request-Id") == _HEADER_PRESENT_PLACEHOLDER
 
-            # Credential header matched by x-litellm-* allowlist glob: value still redacted
             assert req_headers.get("x-litellm-api-key") == _HEADER_PRESENT_PLACEHOLDER
-
-            # Non-credential x-litellm-* header: value forwarded
             assert req_headers.get("x-litellm-model") == "gpt-4o-mini"
 
 
