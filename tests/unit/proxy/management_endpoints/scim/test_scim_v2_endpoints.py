@@ -6170,15 +6170,13 @@ async def test_merge_placeholder_refuses_rows_that_are_not_a_lone_placeholder(
 
 
 @pytest.mark.asyncio
-async def test_patch_group_pathless_replace_applies_attributes_and_drops_empty_key(mocker):
+async def test_patch_group_pathless_replace_applies_attributes_and_drops_empty_key(mocker, monkeypatch):
     """Okta Push Groups renames a group with a path-less ``replace`` whose value is a
     partial Group resource. Each attribute must apply as if sent with its own path and
     the resource must land in the ``scim_data`` snapshot, never whole under an empty
     metadata key, and an empty key an earlier push left behind must be dropped so the
     team saves from the Admin UI again."""
-    from litellm.proxy.management_endpoints.scim.scim_transformations import (
-        ScimTransformations,
-    )
+    from litellm.proxy import proxy_server
 
     group_id = "team-1"
     existing_team = LiteLLM_TeamTable(
@@ -6211,26 +6209,13 @@ async def test_patch_group_pathless_replace_applies_attributes_and_drops_empty_k
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock())
     mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
 
-    mocker.patch(
-        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
-        AsyncMock(return_value=mock_prisma_client),
-    )
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership", AsyncMock())
     mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles", AsyncMock())
-    mocker.patch.object(
-        ScimTransformations,
-        "transform_litellm_team_to_scim_group",
-        AsyncMock(
-            return_value=SCIMGroup(
-                schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
-                id=group_id,
-                displayName="okta-push-group-renamed",
-            )
-        ),
-    )
 
-    await patch_group(group_id=group_id, patch_ops=patch_ops)
+    response = await patch_group(group_id=group_id, patch_ops=patch_ops)
 
+    assert response.id == group_id
     written = mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs["data"]
     assert written["team_alias"] == "okta-push-group-renamed"
     written_metadata = json.loads(written["metadata"])
