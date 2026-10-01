@@ -4727,6 +4727,103 @@ async def test_centralized_checks_skip_end_user_lookup_without_a_token_budget():
     mock_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
 
 
+def _proxy_admin_world(user_row: LiteLLM_UserTable):
+    """Same shape as _proxy_attrs_for_centralized_checks, with user_row in the cache."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    key_cache = UserApiKeyCache()
+    key_cache.set_cache(key=user_row.user_id, value=user_row)
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": key_cache,
+        "spend_counter_cache": DualCache(),
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=key_cache),
+    }
+
+    @contextmanager
+    def _world():
+        originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+        try:
+            for k, v in attrs.items():
+                setattr(_proxy_server_mod, k, v)
+            yield
+        finally:
+            for k, v in originals.items():
+                setattr(_proxy_server_mod, k, v)
+
+    return _world()
+
+
+@pytest.mark.asyncio
+async def test_centralized_checks_enforce_personal_budget_for_proxy_admin_token():
+    """GH#41226: a proxy admin stays subject to their own personal budget."""
+    admin_row = LiteLLM_UserTable(
+        user_id="admin-user",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        spend=25.0,
+        max_budget=10.0,
+    )
+    token = UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with _proxy_admin_world(admin_row):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=_chat_request(),
+                request_data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+                route="/chat/completions",
+            )
+
+    assert exc_info.value.max_budget == 10.0
+    assert exc_info.value.current_cost == 25.0
+
+
+@pytest.mark.asyncio
+def _route_request(route: str):
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url=route)
+    return request
+
+
+@pytest.mark.asyncio
+async def test_centralized_checks_keep_admin_route_access_when_the_db_row_is_not_admin():
+    """GH#41226: an admin token still reaches an admin-only route when its row is not admin."""
+    demoted_row = LiteLLM_UserTable(
+        user_id="admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        spend=1.0,
+        max_budget=500.0,
+    )
+    token = UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with _proxy_admin_world(demoted_row):
+        await _run_centralized_common_checks(
+            user_api_key_auth_obj=token,
+            request=_route_request("/user/new"),
+            request_data={},
+            route="/user/new",
+        )
+
+        non_admin_token = UserAPIKeyAuth(
+            user_id="admin-user", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+        with pytest.raises(Exception, match="Only proxy admin can be used") as exc_info:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=non_admin_token,
+                request=_route_request("/user/new"),
+                request_data={},
+                route="/user/new",
+            )
+
+    assert "internal_user" in str(exc_info.value)
+
+
 @pytest.mark.asyncio
 async def test_centralized_common_checks_runs_for_custom_auth_with_flag():
     """Custom-auth deployments that opt in via custom_auth_run_common_checks
