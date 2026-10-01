@@ -16625,6 +16625,45 @@ def _nested_setting_source(
     return "db" if field_name in db_values else unset_source
 
 
+def _alerting_field_response(
+    *,
+    settings: SettingsStore,
+    db_values: Mapping[str, JsonValue],
+    config_values: Mapping[str, JsonValue],
+    allowed_args: Mapping[str, str],
+    field_name: str,
+    field_info: FieldInfo,
+) -> ConfigList:
+    field_default: Final[JsonValue] = _get_field_default(field_info)
+    field_source: Final[FieldSource] = _nested_setting_source(
+        settings,
+        db_values,
+        "alerting_args",
+        field_name,
+        field_default,
+    )
+    field_value: Final[JsonValue | None] = (
+        config_values.get(field_name)
+        if field_source == "config"
+        else db_values.get(field_name)
+        if field_source == "db"
+        else None
+    )
+    stored_in_db: Final[bool | None] = (
+        True if field_source == "db" else False if field_source == "config" else None
+    )
+    return ConfigList(
+        field_name=field_name,
+        field_type=allowed_args[field_name],
+        field_description=field_info.description or "",
+        field_value=field_value,
+        stored_in_db=stored_in_db,
+        source=field_source,
+        field_default_value=field_default,
+        premium_field=field_name == "region_outage_alert_ttl",
+    )
+
+
 @router.get(
     "/alerting/settings",
     description="Return the configurable alerting param, description, and current value",
@@ -16724,36 +16763,16 @@ async def alerting_settings(
 
     for field_name, field_info in SlackAlertingArgs.model_fields.items():
         if field_name in allowed_args:
-            field_default: JsonValue = _get_field_default(field_info)
-            field_source: Final = _nested_setting_source(
-                settings,
-                alerting_args_dict,
-                "alerting_args",
-                field_name,
-                field_default,
+            return_val.append(
+                _alerting_field_response(
+                    settings=settings,
+                    db_values=alerting_args_dict,
+                    config_values=config_alerting_args,
+                    allowed_args=allowed_args,
+                    field_name=field_name,
+                    field_info=field_info,
+                )
             )
-            field_value: Final[JsonValue | None]
-            if field_source == "config":
-                field_value = config_alerting_args.get(field_name)
-            elif field_source == "db":
-                field_value = alerting_args_dict.get(field_name)
-            else:
-                field_value = None
-            _stored_in_db: Final[bool | None] = (
-                True if field_source == "db" else False if field_source == "config" else None
-            )
-
-            _response_obj: Final = ConfigList(
-                field_name=field_name,
-                field_type=allowed_args[field_name],
-                field_description=field_info.description or "",
-                field_value=field_value,
-                stored_in_db=_stored_in_db,
-                source=field_source,
-                field_default_value=field_default,
-                premium_field=(True if field_name == "region_outage_alert_ttl" else False),
-            )
-            return_val.append(_response_obj)
     return return_val
 
 
