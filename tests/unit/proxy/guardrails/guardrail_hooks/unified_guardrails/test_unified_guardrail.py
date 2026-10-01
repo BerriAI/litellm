@@ -2115,13 +2115,19 @@ class _ScanCountingGuardrail(CustomGuardrail):
 class _GatedScanGuardrail(_ScanCountingGuardrail):
     """End-of-stream scan that holds until released, recording scans that finished."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(end_of_stream_only=True)
         self.scan_started = anyio.Event()
         self.scan_released = anyio.Event()
         self.finished_scans = 0
 
-    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
         self.scan_started.set()
         await self.scan_released.wait()
         recorded = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
@@ -2132,11 +2138,17 @@ class _GatedScanGuardrail(_ScanCountingGuardrail):
 class _FinishReasonRecordingGuardrail(_ScanCountingGuardrail):
     """Records the finish reasons of the stream handed to each response-side scan"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(end_of_stream_only=True)
         self.finish_reasons: tuple[str | None, ...] = ()
 
-    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
         rebuilt = request_data.get("response")
         choices = [
             *(rebuilt.choices if rebuilt is not None else ()),
@@ -2149,12 +2161,18 @@ class _FinishReasonRecordingGuardrail(_ScanCountingGuardrail):
 class _GatedToolCallGuardrail(_StreamingTextGuardrail):
     """Tool-call inspection that holds until released"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.inspection_started = anyio.Event()
         self.inspection_released = anyio.Event()
 
-    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
         if input_type == "response" and inputs.get("tool_calls"):
             self.inspection_started.set()
             await self.inspection_released.wait()
@@ -2164,7 +2182,7 @@ class _GatedToolCallGuardrail(_StreamingTextGuardrail):
 class _RecordedScanGuardrail(CustomGuardrail):
     """End-of-stream scan recorded through log_guardrail_information, returning ``reply`` or raising ``error``"""
 
-    def __init__(self, *, reply=None, error=None):
+    def __init__(self, *, reply: GenericGuardrailAPIInputs | None = None, error: Exception | None = None) -> None:
         super().__init__(guardrail_name="recorded-scan")
         self.streaming_end_of_stream_only = True
         self.streaming_buffer_until_moderated = False
@@ -2172,17 +2190,23 @@ class _RecordedScanGuardrail(CustomGuardrail):
         self._reply = reply
         self._error = error
 
-    def should_run_guardrail(self, data, event_type):  # type: ignore[override]
+    def should_run_guardrail(self, data: dict, event_type: GuardrailEventHooks) -> bool:
         return True
 
     @log_guardrail_information
-    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
         if self._error is not None:
             raise self._error
         return inputs if self._reply is None else self._reply
 
 
-def _recorded_guardrail_statuses(request_data):
+def _recorded_guardrail_statuses(request_data: dict) -> list[str]:
     return [
         entry["guardrail_status"]
         for entry in request_data["metadata"].get("standard_logging_guardrail_information", [])

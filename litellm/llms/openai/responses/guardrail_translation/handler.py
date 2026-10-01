@@ -1370,8 +1370,13 @@ class OpenAIResponsesHandler(BaseTranslation):
         )
 
     def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
-        released_key: Final = self.get_streaming_scan_key(responses_so_far)
-        if released_key is None or not released_key.tool_calls_in_flight:
+        if self._check_streaming_has_ended(responses_so_far):
+            return tuple(responses_so_far)
+        ends_on_finished_item: Final = (
+            bool(responses_so_far)
+            and stream_item_field(responses_so_far[-1], "type") == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE.value
+        )
+        if not ends_on_finished_item and not self._has_streamed_tool_call_events(responses_so_far):
             return tuple(responses_so_far)
         text_events: Final = tuple(
             event for event in responses_so_far if stream_item_field(event, "type") in _OUTPUT_TEXT_EVENT_TYPES

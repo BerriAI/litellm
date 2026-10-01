@@ -2336,3 +2336,18 @@ class TestStreamingScanKey:
         handler = OpenAIChatCompletionsHandler()
         key = handler.get_streaming_scan_key([self._chunk("hi"), b"data: [DONE]"])
         assert key.texts == ("hi",)
+
+    def test_released_stream_as_ended_finishes_only_the_choice_whose_tool_call_was_in_flight(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        tool_call = {"index": 0, "id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+        released = (
+            self._chunk("hi", index=0),
+            ModelResponseStream(choices=[StreamingChoices(index=1, delta=Delta(tool_calls=[tool_call]))]),
+        )
+        handler = OpenAIChatCompletionsHandler()
+        ended = handler.released_stream_as_ended(released)
+        assert all(a is b for a, b in zip(ended[:-1], released, strict=True))
+        assert [(choice.index, choice.finish_reason) for choice in ended[-1].choices] == [(1, "tool_calls")]
+        ended_key = handler.get_streaming_scan_key(ended)
+        assert ended_key.stream_ended is True and len(ended_key.tool_calls) == 1, ended_key

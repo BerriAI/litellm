@@ -1866,30 +1866,49 @@ def _chat_completion_body(secret: str) -> bytes:
     ).encode()
 
 
-def _responses_tool_call_frames(secret: str) -> tuple[bytes, ...]:
+def _responses_tool_call_frames(secret: str, *, with_text: bool) -> tuple[bytes, ...]:
     identity: Final = "resp_" + uuid.uuid4().hex
     arguments: Final = json.dumps({"query": secret})
     pending: Final = {"type": "function_call", "id": "fc_" + identity, "call_id": "call_" + identity, "name": "lookup"}
     finished: Final = {**pending, "arguments": arguments, "status": "completed"}
     envelope: Final = {"id": identity, "object": "response", "created_at": 1, "model": "gpt-4o-mini", "output": []}
+    message: Final = {
+        "type": "message",
+        "id": "msg_" + identity,
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": secret, "annotations": []}],
+    }
+    text_delta: Final = {
+        "type": "response.output_text.delta",
+        "item_id": "msg_" + identity,
+        "output_index": 0,
+        "content_index": 0,
+        "delta": secret,
+    }
+    text_events: Final = (text_delta,) if with_text else ()
+    tool_index: Final = len(text_events)
+    output: Final = [*((message,) if with_text else ()), finished]
     events: Final = (
         {"type": "response.created", "response": {**envelope, "status": "in_progress"}},
+        *text_events,
         {
             "type": "response.output_item.added",
-            "output_index": 0,
+            "output_index": tool_index,
             "item": {**pending, "arguments": "", "status": "in_progress"},
         },
         {
             "type": "response.function_call_arguments.delta",
             "item_id": "fc_" + identity,
-            "output_index": 0,
+            "output_index": tool_index,
             "delta": arguments,
         },
-        {"type": "response.output_item.done", "output_index": 0, "item": finished},
-        {"type": "response.completed", "response": {**envelope, "status": "completed", "output": [finished]}},
+        {"type": "response.output_item.done", "output_index": tool_index, "item": finished},
+        {"type": "response.completed", "response": {**envelope, "status": "completed", "output": output}},
     )
     encoded: Final = tuple(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events)
-    return (b"".join(encoded[:3]), b"".join(encoded[3:]))
+    released_through: Final = len(events) - 1 if with_text else 3
+    return (b"".join(encoded[:released_through]), b"".join(encoded[released_through:]))
 
 
 def _responses_stream_frames(secret: str) -> tuple[bytes, ...]:
@@ -1958,7 +1977,11 @@ def _scripted_provider(gate: threading.Event | None, pause: float, shape: str) -
         frames: Final = (
             _gemini_stream_frames(secret)
             if "streamGenerateContent" in path
-            else (_responses_tool_call_frames(secret) if shape == "tool_call" else _responses_stream_frames(secret))
+            else (
+                _responses_tool_call_frames(secret, with_text=shape == "text_then_tool_call")
+                if shape in ("tool_call", "text_then_tool_call")
+                else _responses_stream_frames(secret)
+            )
             if path.endswith("/responses")
             else _chat_stream_frames(secret, shape)
         )
@@ -2388,6 +2411,26 @@ def test_client_disconnect_mid_tool_call_scans_the_tool_call_it_already_received
             )
         finally:
             rig.gate.set()
+        assert rig.secret() in json.dumps(scans[-1].get("tool_calls")), scans
+
+
+def test_client_disconnect_after_a_finished_responses_tool_call_scans_the_text_and_tool_call_it_received(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with _disconnect_rig(gateway, tmp_path, shape="text_then_tool_call") as rig:
+        try:
+            received: Final = _stream_and_close(
+                rig, "/v1/responses", _tool_call_request(rig, "/v1/responses"), "response.output_item.done"
+            )
+            assert rig.token() in received, received
+            scans: Final = eventually(
+                lambda: tuple(scan for scan in rig.scans.response_scans(rig.secret()) if scan.get("texts")),
+                lambda values: len(values) >= 1,
+                seconds=4,
+            )
+        finally:
+            rig.gate.set()
+        assert rig.secret() in json.dumps(scans[-1].get("texts")), scans
         assert rig.secret() in json.dumps(scans[-1].get("tool_calls")), scans
 
 
