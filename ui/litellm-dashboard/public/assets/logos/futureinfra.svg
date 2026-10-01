@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="FutureInfra">
+  <rect width="32" height="32" rx="7.5" fill="#E11D48"/>
+  <g fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10 11.5 14.5 16 10 20.5"/>
+    <path d="M17.5 21.5h5"/>
+  </g>
+</svg>
