@@ -958,7 +958,11 @@ def message_reply(
 
 
 def message_stream(
-    identity: str, model: str, content: tuple[dict[str, JsonValue], ...], usage: dict[str, JsonValue]
+    identity: str,
+    model: str,
+    content: tuple[dict[str, JsonValue], ...],
+    usage: dict[str, JsonValue],
+    final_usage: Mapping[str, JsonValue] | None = None,
 ) -> tuple[bytes, ...]:
     start: Final = sse_frame(
         "message_start",
@@ -981,7 +985,7 @@ def message_stream(
         {
             "type": "message_delta",
             "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-            "usage": _delta_usage(usage),
+            "usage": _delta_usage(usage) if final_usage is None else dict(final_usage),
         },
     )
     blocks: Final = chain.from_iterable(_block_frames(index, block) for index, block in enumerate(content))

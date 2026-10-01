@@ -24,7 +24,11 @@ def test_streamed_cache_read_and_write_tokens_reach_the_client_unchanged(gateway
     def respond(request: Request) -> Reply:
         return Reply(
             chunks=cc.message_stream(
-                f"msg_{uuid.uuid4().hex}", _MODEL, ({"type": "text", "text": "PONG"},), _ANTHROPIC_USAGE
+                f"msg_{uuid.uuid4().hex}",
+                _MODEL,
+                ({"type": "text", "text": "PONG"},),
+                _ANTHROPIC_USAGE,
+                final_usage=_ANTHROPIC_USAGE,
             ),
             content_type="text/event-stream",
         )
@@ -36,6 +40,13 @@ def test_streamed_cache_read_and_write_tokens_reach_the_client_unchanged(gateway
         assert len(wire.drain()) == 1
     assert cc.streamed_start_usage(response.text) == {
         "input_tokens": 100,
+        "cache_read_input_tokens": 400,
+        "cache_creation_input_tokens": 300,
+        "cache_creation": {"ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 200},
+    }, response.text
+    assert cc.streamed_usage(response.text) == {
+        "input_tokens": 100,
+        "output_tokens": 50,
         "cache_read_input_tokens": 400,
         "cache_creation_input_tokens": 300,
         "cache_creation": {"ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 200},

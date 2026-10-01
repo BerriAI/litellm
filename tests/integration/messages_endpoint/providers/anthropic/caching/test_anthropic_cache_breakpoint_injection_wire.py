@@ -80,10 +80,14 @@ def test_prompt_caching_key_adds_breakpoints_to_the_system_prompt_and_last_messa
 
 def test_prompt_caching_key_turns_a_string_system_prompt_into_a_cached_block(gateway: Gateway) -> None:
     sent: Final = {**_unmarked_claude_code_turn(), "system": "Synthetic agent identity system prompt."}
-    _, body, _ = _forward(gateway, sent, {"enable_prompt_caching": True}, {})
-    assert body["system"] == [
-        {"type": "text", "text": "Synthetic agent identity system prompt.", "cache_control": _FIVE_MINUTES}
-    ]
+    forwarded, _, _ = _forward(gateway, sent, {"enable_prompt_caching": True}, {})
+    assert forwarded.breakpoints == {"system[0]": _FIVE_MINUTES, "messages[0].content[7]": _FIVE_MINUTES}
+    assert forwarded.other_changes == {
+        "system": {
+            "expected": "Synthetic agent identity system prompt.",
+            "upstream": [{"type": "text", "text": "Synthetic agent identity system prompt."}],
+        }
+    }
 
 
 def test_key_without_prompt_caching_adds_no_breakpoints(gateway: Gateway) -> None:
