@@ -9,16 +9,6 @@ ignoreUntil = 2026-10-14
 reason = "mlflow has no fixed release published (3.16.0, 2026-09-04, and master still store gateway secret api_base unvalidated); remove this entry once one exists"
 
 [[IgnoredVulns]]
-id = "GHSA-hj66-6f7g-4r5v"
-ignoreUntil = 2026-10-02
-reason = "oauthlib 4.0.0 (the only fixed release, 2026-09-28) is inside the 3-day uv exclude-newer cooldown; bump oauthlib and remove this entry once it clears"
-
-[[IgnoredVulns]]
-id = "GHSA-xpv3-w29h-x7cv"
-ignoreUntil = 2026-10-02
-reason = "oauthlib 4.0.0 (the only fixed release, 2026-09-28) is inside the 3-day uv exclude-newer cooldown; bump oauthlib and remove this entry once it clears"
-
-[[IgnoredVulns]]
 id = "GHSA-42vr-xj54-vc7v"
 ignoreUntil = 2026-10-03
 reason = "pyjwt 2.15.0 fixes this but breaks decoding of base64url-padded tokens (e.g. AWS ALB); 2.15.1 (2026-09-28) restores padding and is inside the 3-day uv exclude-newer cooldown until 2026-10-01; bump pyjwt to 2.15.1 and remove this entry once it clears"
