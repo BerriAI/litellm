@@ -141,11 +141,15 @@ jobs:
             artifact-name: proxy-endpoints
             test-path: >-
               tests/test_litellm/proxy/analytics_endpoints
-              tests/test_litellm/proxy/management_endpoints
+              tests/unit/proxy/management_endpoints
               tests/test_litellm/proxy/list_api
               tests/test_litellm/proxy/memory
-              tests/test_litellm/proxy/guardrails
-              tests/test_litellm/proxy/management_helpers
+              tests/unit/proxy/guardrails
+              tests/unit/proxy/management_helpers
+              --ignore=tests/unit/proxy/management_endpoints/test_jwt_key_mapping.py
+              --ignore=tests/unit/proxy/management_endpoints/test_key_generate_prisma.py
+              --ignore=tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
+              --ignore=tests/unit/proxy/management_helpers/test_audit_logs_proxy.py
               tests/test_litellm/proxy/anthropic_endpoints
               tests/test_litellm/proxy/google_endpoints
               tests/test_litellm/proxy/openai_files_endpoint

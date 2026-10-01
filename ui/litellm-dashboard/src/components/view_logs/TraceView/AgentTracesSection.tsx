@@ -1,11 +1,14 @@
 "use client";
 
+import { Plug } from "lucide-react";
 import moment from "moment";
 import { useMemo, useState } from "react";
 
+import { Button } from "@/components/ui/button";
+
 import { AgentTracesTable } from "./AgentTracesTable";
+import { RunDrawer } from "./RunDrawer";
 import { ALL_SERVICES, RunsToolbar, type RunStatusFilter } from "./RunsToolbar";
-import { RunView } from "./TraceDrawer";
 import type { TraceSummary } from "./traceTypes";
 import { previewText } from "./traceUtils";
 import { TimeRangeControls } from "./TimeRangeControls";
@@ -30,6 +33,8 @@ export function filterRuns(
     return matchesQuery && matchesService && matchesStatus;
   });
 }
+
+const runKey = (run: TraceSummary): string => run.trace_ref || run.trace_id;
 
 const filterByWindow = (runs: TraceSummary[], range: TimeWindow): TraceSummary[] =>
   runs.filter((run) => {
@@ -120,19 +125,12 @@ export function AgentTracesSection({
     );
   }
 
-  if (openTrace !== null) {
-    return (
-      <RunView
-        traceId={openTrace.trace_id}
-        traceRef={openTrace.trace_ref}
-        accessToken={accessToken}
-        onBack={() => openRun(null)}
-      />
-    );
-  }
+  const toggleRun = (trace: TraceSummary | null) =>
+    openRun(trace !== null && openTrace !== null && runKey(trace) === runKey(openTrace) ? null : trace);
 
   return (
     <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-card">
+      <RunDrawer trace={openTrace} runs={runs} accessToken={accessToken} onSelect={openRun} />
       <RunsToolbar
         query={query}
         service={service}
@@ -142,13 +140,10 @@ export function AgentTracesSection({
         onServiceChange={setService}
         onStatusChange={setStatus}
       >
-        <button
-          type="button"
-          onClick={() => setShowSetup(true)}
-          className="shrink-0 px-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-info hover:underline"
-        >
+        <Button variant="outline" size="sm" onClick={() => setShowSetup(true)} className="shrink-0 gap-1.5">
+          <Plug className="size-3.5" />
           Set up tracing
-        </button>
+        </Button>
         {timeControls && (
           <TimeRangeControls
             range={zoom ?? range}
@@ -168,7 +163,8 @@ export function AgentTracesSection({
         error={traces.error}
         hasMore={traces.hasMore}
         onLoadMore={traces.loadMore}
-        onOpenTrace={openRun}
+        onOpenTrace={toggleRun}
+        selectedKey={openTrace === null ? null : runKey(openTrace)}
       />
       <footer
         data-testid="runs-footer"
