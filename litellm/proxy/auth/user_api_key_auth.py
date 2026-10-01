@@ -51,6 +51,7 @@ from litellm.proxy.auth.auth_checks import (
     _is_model_cost_zero,
     _is_user_proxy_admin,
     _team_member_max_budget_alert_check,
+    _typed_request_body,
     _virtual_key_max_budget_alert_check,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
@@ -3744,7 +3745,7 @@ async def _enforce_key_and_fallback_model_access(
                 llm_router=llm_router,
             )
 
-        for _name in request_fallback_model_names(request_data):
+        for _name in request_fallback_model_names(_typed_request_body(request_data)):
             await can_key_call_model(
                 model=_name,
                 llm_model_list=llm_model_list,
