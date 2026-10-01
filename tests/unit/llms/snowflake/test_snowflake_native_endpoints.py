@@ -11,7 +11,7 @@ Run:
 """
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -20,8 +20,8 @@ from litellm.llms.snowflake.chat.transformation import (
     SnowflakeConfig,
     _is_claude_model,
 )
-from litellm.types.utils import ModelResponse
-
+from litellm.llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
+from litellm.types.utils import EmbeddingResponse, ModelResponse
 
 # ─── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -68,6 +68,7 @@ def _make_anthropic_response(content: str = "Hello!") -> httpx.Response:
 
 
 # ─── SnowflakeConfig (OpenAI-compatible) ───────────────────────────────────
+
 
 class TestSnowflakeConfigURL:
     def setup_method(self):
@@ -265,6 +266,7 @@ class TestSnowflakeConfigResponse:
 
 
 # ─── SnowflakeConfig ────────────────────────────────────────
+
 
 class TestAnthropicConfigURL:
     def setup_method(self):
@@ -533,6 +535,7 @@ class TestAnthropicConfigResponse:
 
 # ─── Model detection helper ────────────────────────────────────────────────
 
+
 class TestIsClaudeModel:
     def test_claude_model_detected(self):
         assert _is_claude_model("snowflake/claude-sonnet-4-5") is True
@@ -547,6 +550,7 @@ class TestIsClaudeModel:
 
 
 # ─── Anthropic Tool Transformation Tests ──────────────────────────────────
+
 
 class TestAnthropicToolTransformation:
     def setup_method(self):
@@ -774,3 +778,84 @@ class TestAnthropicMultiTurnToolMessages:
         tool_result = body["messages"][2]["content"][0]
         assert tool_result["type"] == "tool_result"
         assert json.loads(tool_result["content"]) == {"result_key": "result_value"}
+
+
+# ─── SnowflakeEmbeddingConfig ──────────────────────────────────────────────
+
+
+class TestSnowflakeEmbeddingConfig:
+    def setup_method(self):
+        self.cfg = SnowflakeEmbeddingConfig()
+
+    def test_embedding_url(self):
+        url = self.cfg.get_complete_url(
+            api_base=API_BASE,
+            api_key=PAT_TOKEN,
+            model="snowflake/snowflake-arctic-embed-m",
+            optional_params={},
+            litellm_params={},
+        )
+        assert url == f"{API_BASE}/api/v2/cortex/inference:embed"
+
+    def test_embedding_request_transformation(self):
+        data = self.cfg.transform_embedding_request(
+            model="snowflake-arctic-embed-m",
+            input=["Hello world"],
+            optional_params={},
+            headers={},
+        )
+        assert data == {"text": ["Hello world"], "model": "snowflake-arctic-embed-m"}
+
+    def test_embedding_response_with_1d_vectors(self):
+        """Standard 1D embedding vectors should remain 1D and not be indexed to a float scalar."""
+        raw_response = httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"embedding": [0.1, 0.2, 0.3], "index": 0, "object": "embedding"},
+                    {"embedding": [0.4, 0.5, 0.6], "index": 1, "object": "embedding"},
+                ],
+                "model": "snowflake-arctic-embed-m",
+                "usage": {"prompt_tokens": 5, "total_tokens": 5},
+            },
+        )
+        result = self.cfg.transform_embedding_response(
+            model="snowflake/snowflake-arctic-embed-m",
+            raw_response=raw_response,
+            model_response=EmbeddingResponse(),
+            logging_obj=_mock_logging(),
+            api_key=PAT_TOKEN,
+            request_data={},
+            optional_params={},
+            litellm_params={},
+        )
+        assert isinstance(result, EmbeddingResponse)
+        assert result.data[0]["embedding"] == [0.1, 0.2, 0.3]
+        assert result.data[1]["embedding"] == [0.4, 0.5, 0.6]
+        assert result.model == "snowflake/snowflake-arctic-embed-m"
+
+    def test_embedding_response_with_nested_2d_vectors(self):
+        """Nested 2D embedding vectors ([[0.1, 0.2, 0.3]]) should be unwrapped to 1D."""
+        raw_response = httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"embedding": [[0.1, 0.2, 0.3]], "index": 0, "object": "embedding"},
+                ],
+                "model": "snowflake-arctic-embed-m",
+                "usage": {"prompt_tokens": 5, "total_tokens": 5},
+            },
+        )
+        result = self.cfg.transform_embedding_response(
+            model="snowflake/snowflake-arctic-embed-m",
+            raw_response=raw_response,
+            model_response=EmbeddingResponse(),
+            logging_obj=_mock_logging(),
+            api_key=PAT_TOKEN,
+            request_data={},
+            optional_params={},
+            litellm_params={},
+        )
+        assert isinstance(result, EmbeddingResponse)
+        assert result.data[0]["embedding"] == [0.1, 0.2, 0.3]
+        assert result.model == "snowflake/snowflake-arctic-embed-m"
