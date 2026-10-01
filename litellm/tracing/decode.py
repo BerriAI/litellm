@@ -1,5 +1,8 @@
+import gzip
 import json
+import zlib
 from collections.abc import Mapping
+from io import BytesIO
 from itertools import accumulate
 from types import MappingProxyType
 from typing import Final
@@ -10,23 +13,11 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm.constants import OTLP_MAX_ATTRIBUTE_VALUE_BYTES, OTLP_MAX_BODY_BYTES
 from litellm.rust_bridge.traces import DecodedSpan
 from litellm.rust_bridge.traces import decode_otlp as native_decode_otlp
+from litellm.rust_bridge.traces import encode_error as native_encode_error
 from litellm.tracing.types import SpanRow
 
 _MESSAGE_LIST: Final = TypeAdapter(tuple[dict[str, JsonValue], ...])
 _MAX_JSON_ESCAPE_BYTES: Final = 6
-
-# attributes whose content we lift into Input/Output and drop from SpanAttributes
-_HEAVY_ATTRIBUTES: Final = frozenset(
-    {
-        "gen_ai.prompt",
-        "gen_ai.completion",
-        "gen_ai.tool.definitions",
-        "gen_ai.input.messages",
-        "gen_ai.output.messages",
-        "input.value",
-        "output.value",
-    }
-)
 
 
 class InvalidOTLPPayloadError(ValueError):
@@ -37,12 +28,16 @@ class OTLPPayloadTooLargeError(OverflowError):
     pass
 
 
+class OTLPError(TypedDict):
+    message: ReadOnly[str]
+
+
 def _truncate(value: str) -> str:
-    size = len(value.encode("utf-8"))
-    if size <= OTLP_MAX_ATTRIBUTE_VALUE_BYTES:
+    encoded: Final = value.encode("utf-8")
+    if len(encoded) <= OTLP_MAX_ATTRIBUTE_VALUE_BYTES:
         return value
-    kept = value.encode("utf-8")[:OTLP_MAX_ATTRIBUTE_VALUE_BYTES].decode("utf-8", "ignore")
-    return f"{kept}…[truncated {size - OTLP_MAX_ATTRIBUTE_VALUE_BYTES} bytes]"
+    kept: Final = encoded[:OTLP_MAX_ATTRIBUTE_VALUE_BYTES].decode("utf-8", "ignore")
+    return f"{kept}…[truncated {len(encoded) - len(kept.encode('utf-8'))} bytes]"
 
 
 def _size(value: str) -> int:
@@ -60,7 +55,7 @@ def _elided(count: int) -> str:
 
 
 def _with_content(message: Mapping[str, JsonValue], content: str) -> str:
-    return json.dumps({**message, "content": content})
+    return json.dumps(MappingProxyType({**message, "content": content}), default=lambda proxy: proxy.copy())
 
 
 def _shrunk_message(message: Mapping[str, JsonValue], budget: int) -> str:
@@ -125,9 +120,9 @@ def _truncate_payload(value: str) -> str:
 def decode_otlp(
     body: bytes, content_type: str | None = None, content_encoding: str | None = None
 ) -> tuple[SpanRow, ...]:
-    """Decode an OTLP trace export and normalize every span."""
+    payload: Final = _decode_content_encoding(body, content_encoding)
     try:
-        spans: Final = native_decode_otlp(body, content_type, content_encoding, OTLP_MAX_BODY_BYTES)
+        spans: Final = native_decode_otlp(payload, content_type)
     except OverflowError as error:
         raise OTLPPayloadTooLargeError(str(error)) from error
     except ValueError as error:
@@ -135,20 +130,34 @@ def decode_otlp(
     return tuple(_span_row(span) for span in spans)
 
 
+def _decode_content_encoding(body: bytes, content_encoding: str | None) -> bytes:
+    if len(body) > OTLP_MAX_BODY_BYTES:
+        raise OTLPPayloadTooLargeError(f"OTLP body exceeds {OTLP_MAX_BODY_BYTES} bytes")
+    if content_encoding is None or content_encoding.lower() == "identity":
+        return body
+    if content_encoding.lower() != "gzip":
+        raise InvalidOTLPPayloadError("Unsupported OTLP content encoding")
+    try:
+        with gzip.GzipFile(fileobj=BytesIO(body)) as stream:
+            payload: Final = stream.read(OTLP_MAX_BODY_BYTES + 1)
+    except (EOFError, OSError, zlib.error) as error:
+        raise InvalidOTLPPayloadError("Invalid OTLP gzip body") from error
+    if len(payload) > OTLP_MAX_BODY_BYTES:
+        raise OTLPPayloadTooLargeError(f"OTLP body exceeds {OTLP_MAX_BODY_BYTES} bytes")
+    return payload
+
+
 def _exception_message(span: DecodedSpan) -> str:
-    """`span.record_exception()` writes an `exception` event; surface it when status.message is empty."""
     for event in span["events"]:
         if event["name"] == "exception":
-            attributes = event["attributes"]
-            return attributes.get("exception.message") or attributes.get("exception.type", "")
+            return event["attributes"].get("exception.message") or event["attributes"].get("exception.type", "")
     return ""
 
 
 def _span_row(span: DecodedSpan) -> SpanRow:
-    attributes = span["attributes"]
-    resource = span["resource_attributes"]
-    normalized = span["normalized"]
-    row = SpanRow(
+    attributes: Final = span["attributes"]
+    normalized: Final = span["normalized"]
+    return SpanRow(
         Timestamp=span["start_ns"],
         TraceId=span["trace_id"],
         SpanId=span["span_id"],
@@ -156,32 +165,34 @@ def _span_row(span: DecodedSpan) -> SpanRow:
         TraceState=span["trace_state"],
         SpanName=span["name"],
         SpanKind=span["kind"],
-        ServiceName=resource.get("service.name", ""),
-        ResourceAttributes=resource,
+        ServiceName=span["resource_attributes"].get("service.name", ""),
+        ResourceAttributes=span["resource_attributes"],
         ScopeName=span["scope_name"],
         ScopeVersion=span["scope_version"],
-        SpanAttributes=attributes,
-        Duration=max(span["end_ns"] - span["start_ns"], 0),
+        SpanAttributes=MappingProxyType(
+            {key: _truncate(value) for key, value in attributes.items() if key not in span["consumed_attributes"]}
+        ),
+        Duration=span["end_ns"] - span["start_ns"],
         StatusCode=span["status_code"],
         StatusMessage=span["status_message"] or _exception_message(span),
         TeamId="",
         ApiKeyHash="",
         ObservationType=normalized.observation_type,
         AgentName=normalized.agent_name,
-        LiteLLMRequestId=normalized.litellm_request_id,
         Model=normalized.model,
+        LiteLLMRequestId=attributes.get("gen_ai.response.id") or normalized.litellm_request_id,
         InputTokens=normalized.input_tokens,
         OutputTokens=normalized.output_tokens,
-        Input=normalized.input,
-        Output=normalized.output,
+        Input=_truncate_payload(normalized.input),
+        Output=_truncate(normalized.output),
     )
-    row["SpanAttributes"] = {k: _truncate(v) for k, v in attributes.items() if k not in _HEAVY_ATTRIBUTES}
-    row["Input"], row["Output"] = _truncate_payload(row["Input"]), _truncate(row["Output"])
-    return row
 
 
-def encode_otlp_response(content_type: str | None) -> tuple[bytes, str]:
-    """Empty ExportTraceServiceResponse in the caller's encoding."""
-    if content_type and "json" in content_type:
-        return b"{}", "application/json"
-    return b"", "application/x-protobuf"
+def encode_otlp_response(content_type: str | None, error: str | None = None) -> tuple[bytes, str]:
+    media_type: Final = (content_type or "application/x-protobuf").split(";", 1)[0].strip().lower()
+    if media_type == "application/json":
+        response: Final[OTLPError] = {"message": error or ""}
+        return (json.dumps(response).encode() if error else b"{}"), "application/json"
+    if error is None:
+        return b"", "application/x-protobuf"
+    return native_encode_error(error), "application/x-protobuf"

@@ -1,9 +1,10 @@
 use std::{collections::BTreeMap, io};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Value, ser::Formatter};
 
-use super::{NormalizedSpan, ObservationType, SpanNormalizer, attr};
+use super::{NormalizedSpan, ObservationType, SpanNormalizer, attr, usage_tokens};
+use crate::DecodeError;
 
 pub(super) struct LangSmithNormalizer;
 
@@ -126,11 +127,42 @@ struct NormalizedMessage<'a> {
     name: Option<&'a Value>,
 }
 
-#[derive(Deserialize)]
-#[serde(untagged)]
 enum MessageBatch {
     Flat(Vec<RawMessage>),
     Nested(Vec<Vec<RawMessage>>),
+}
+
+impl<'de> Deserialize<'de> for MessageBatch {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        let Value::Array(items) = value else {
+            return Err(serde::de::Error::custom("messages must be an array"));
+        };
+        let parse = |items: Vec<Value>| {
+            items
+                .into_iter()
+                .filter_map(|item| serde_json::from_value(item).ok())
+                .collect()
+        };
+        Ok(if items.first().is_some_and(Value::is_array) {
+            Self::Nested(
+                items
+                    .into_iter()
+                    .filter_map(|item| item.as_array().cloned())
+                    .map(parse)
+                    .collect(),
+            )
+        } else {
+            Self::Flat(parse(items))
+        })
+    }
+}
+
+fn lenient<'de, D: Deserializer<'de>, T: DeserializeOwned>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
 }
 
 impl MessageBatch {
@@ -161,9 +193,10 @@ struct Generation {
 
 #[derive(Default, Deserialize)]
 struct Payload {
+    #[serde(default, deserialize_with = "lenient")]
     messages: Option<MessageBatch>,
+    #[serde(default, deserialize_with = "lenient")]
     generations: Option<Vec<Vec<Generation>>>,
-    output: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -242,12 +275,14 @@ fn span_type(
     parent_span_id: &str,
     attributes: &BTreeMap<String, String>,
 ) -> ObservationType {
-    if parent_span_id.is_empty() || name == attr(attributes, "langsmith.metadata.lc_agent_name") {
-        return ObservationType::Agent;
-    }
     match attr(attributes, "langsmith.span.kind") {
         "llm" => ObservationType::Llm,
         "tool" => ObservationType::Tool,
+        _ if parent_span_id.is_empty()
+            || name == attr(attributes, "langsmith.metadata.lc_agent_name") =>
+        {
+            ObservationType::Agent
+        }
         _ if [
             ".wrap_model_call",
             ".wrap_tool_call",
@@ -265,9 +300,9 @@ fn span_type(
     }
 }
 
-fn tool_output(payload: Payload, raw_completion: &str) -> String {
+fn tool_output(raw_completion: &str) -> String {
     let completion = serde_json::from_str::<Value>(raw_completion).unwrap_or(Value::Null);
-    let raw = payload.output.unwrap_or(completion);
+    let raw = completion.get("output").cloned().unwrap_or(completion);
     let selected = serde_json::from_value::<Command>(raw.clone())
         .ok()
         .and_then(|command| command.update.messages.into_iter().last())
@@ -289,12 +324,10 @@ fn span_io(kind: ObservationType, attributes: &BTreeMap<String, String>) -> Span
     if kind == ObservationType::Llm
         && serde_json::from_str::<Value>(raw_completion).is_ok_and(|value| value.is_object())
     {
-        let input = prompt
-            .messages
-            .as_ref()
-            .map_or_else(String::new, |messages| {
-                normalized_messages(messages.first_batch())
-            });
+        let input = prompt.messages.as_ref().map_or_else(
+            || "[]".to_owned(),
+            |messages| normalized_messages(messages.first_batch()),
+        );
         let generation = completion
             .generations
             .as_ref()
@@ -324,7 +357,7 @@ fn span_io(kind: ObservationType, attributes: &BTreeMap<String, String>) -> Span
     if kind == ObservationType::Tool {
         return SpanIo {
             input: raw_prompt.to_owned(),
-            output: tool_output(completion, raw_completion),
+            output: tool_output(raw_completion),
             request_id: String::new(),
         };
     }
@@ -363,23 +396,74 @@ impl SpanNormalizer for LangSmithNormalizer {
         scope_name == "langsmith" || attributes.contains_key("langsmith.span.kind")
     }
 
+    fn consumed_attributes(&self, _attributes: &BTreeMap<String, String>) -> [&'static str; 2] {
+        ["gen_ai.prompt", "gen_ai.completion"]
+    }
+
     fn normalize(
         &self,
         name: &str,
         parent_span_id: &str,
         attributes: &BTreeMap<String, String>,
-    ) -> NormalizedSpan {
+    ) -> Result<NormalizedSpan, DecodeError> {
+        let (input_tokens, output_tokens) = usage_tokens(attributes)?;
         let observation_type = span_type(name, parent_span_id, attributes);
         let io = span_io(observation_type, attributes);
-        NormalizedSpan {
+        Ok(NormalizedSpan {
             observation_type,
             agent_name: attr(attributes, "langsmith.metadata.lc_agent_name").to_owned(),
             litellm_request_id: io.request_id,
             model: attr(attributes, "gen_ai.request.model").to_owned(),
-            input_tokens: 0,
-            output_tokens: 0,
+            input_tokens,
+            output_tokens,
             input: io.input,
             output: io.output,
-        }
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use rstest::rstest;
+    use serde_json::Value;
+
+    use super::{ObservationType, span_io};
+
+    #[rstest]
+    fn malformed_messages_preserve_valid_input_and_response_id() {
+        let attributes = BTreeMap::from([
+            (
+                "gen_ai.prompt".to_owned(),
+                r#"{"messages":[[{"kwargs":{"type":"human","content":"hello"}},null]]}"#.to_owned(),
+            ),
+            (
+                "gen_ai.completion".to_owned(),
+                r#"{"messages":"unexpected","generations":[[{"message":{"kwargs":{"type":"ai","content":"hi","response_metadata":{"id":"response-1"}}}}]]}"#.to_owned(),
+            ),
+        ]);
+        let io = span_io(ObservationType::Llm, &attributes);
+        let input: Value = serde_json::from_str(&io.input).expect("normalized input");
+        assert_eq!(input.as_array().expect("messages").len(), 1);
+        assert_eq!(input[0]["content"], "hello");
+        assert_eq!(io.request_id, "response-1");
+    }
+
+    #[rstest]
+    fn explicit_null_tool_output_is_preserved() {
+        let attributes = BTreeMap::from([(
+            "gen_ai.completion".to_owned(),
+            r#"{"output":null}"#.to_owned(),
+        )]);
+        let io = span_io(ObservationType::Tool, &attributes);
+        assert_eq!(io.output, "null");
+    }
+
+    #[rstest]
+    fn absent_llm_messages_render_as_an_empty_list() {
+        let attributes = BTreeMap::from([("gen_ai.completion".to_owned(), "{}".to_owned())]);
+        let io = span_io(ObservationType::Llm, &attributes);
+        assert_eq!(io.input, "[]");
     }
 }
