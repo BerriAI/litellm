@@ -460,7 +460,7 @@ def test_adls_safe_file_name_rewrites_only_responses_ids():
     }, "caller-chosen ids must keep their own names so none overwrites another, while resp_ ids are rewritten"
 
 
-def test_adls_safe_file_name_keeps_parent_segments_inside_the_log_directory():
+def test_adls_safe_file_name_rewrites_ids_with_dot_or_empty_path_segments():
     ids = (
         "../other-filesystem/x",
         "../2026-09-30/x",
@@ -469,6 +469,11 @@ def test_adls_safe_file_name_keeps_parent_segments_inside_the_log_directory():
         ".%2E/x",
         "a..b/c",
         "../",
+        "svc/./x",
+        "./x",
+        "svc//x",
+        "/x",
+        "x/",
     )
     names = {payload_id: adls_safe_file_name(payload_id) for payload_id in ids}
     assert names == {
@@ -479,7 +484,12 @@ def test_adls_safe_file_name_keeps_parent_segments_inside_the_log_directory():
         ".%2E/x": ".%2E_x.json",
         "a..b/c": "a..b/c.json",
         "../": ".._.json",
-    }, "a `..` segment must never reach the Data Lake path, while ids without one keep their own names"
+        "svc/./x": "svc_._x.json",
+        "./x": "._x.json",
+        "svc//x": "svc__x.json",
+        "/x": "_x.json",
+        "x/": "x_.json",
+    }, "a dot or empty segment must never reach the Data Lake path, while ids without one keep their own names"
 
 
 def test_adls_safe_file_name_is_deterministic_and_distinct_per_id():

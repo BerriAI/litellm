@@ -140,3 +140,15 @@ def test_client_call_ids_with_parent_segments_stay_inside_the_log_directory(gate
         f".._2026-09-30_{marker}.json": call_ids[1],
         f"%2e%2e_other-filesystem_{marker}.json": call_ids[2],
     }
+
+
+def test_client_call_ids_with_dot_or_empty_segments_keep_their_own_files(gateway: Gateway, tmp_path: Path) -> None:
+    """A `.` or empty segment in a caller's `x-litellm-call-id` collapses on the Data Lake path, so `svc/./x` would
+    overwrite the log of `svc/x` and `svc//x` would fail to upload. Each id must still leave its own log"""
+    marker: Final = uuid.uuid4().hex[:8]
+    call_ids: Final = (f"{marker}/x", f"{marker}/./x", f"{marker}//x")
+    assert _log_names_by_call_id(gateway, tmp_path, call_ids) == {
+        f"{marker}/x.json": call_ids[0],
+        f"{marker}_._x.json": call_ids[1],
+        f"{marker}__x.json": call_ids[2],
+    }
