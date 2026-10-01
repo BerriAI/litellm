@@ -142,6 +142,12 @@ from litellm.proxy._experimental.mcp_server.result_conversion import (
 from litellm.proxy._experimental.mcp_server.sampling_handler import (
     MCP_SAMPLING_AVAILABLE,
 )
+from litellm.proxy._experimental.mcp_server.stdio_gate import (
+    MCP_STDIO_DISABLED_MESSAGE,
+    is_mcp_stdio_blocked,
+    is_mcp_stdio_enabled,
+    warn_if_mcp_stdio_blocked,
+)
 from litellm.proxy._experimental.mcp_server.tool_catalog_guard import (
     CatalogAlert,
     apply_description_overrides,
@@ -2466,6 +2472,7 @@ class MCPServerManager:
                 alias=alias,
                 server_name=server_name,
             )
+            warn_if_mcp_stdio_blocked(server_name, server_config.get("transport"))
 
             auth_type = server_config.get("auth_type", None)
             manual_issuer = _blank_to_none(server_config.get("issuer"))
@@ -3024,6 +3031,7 @@ class MCPServerManager:
         credentials_are_encrypted: bool = True,
         env_vars_are_encrypted: bool | None = None,
     ) -> MCPServer:
+        warn_if_mcp_stdio_blocked(mcp_server.alias or mcp_server.server_name, mcp_server.transport)
         _mcp_info: Final[MCPInfo] = mcp_server.mcp_info or {}
         env_dict: Final = _deserialize_json_dict(getattr(mcp_server, "env", None))
         static_headers_dict: Final = _deserialize_json_dict(getattr(mcp_server, "static_headers", None))
@@ -4282,6 +4290,8 @@ class MCPServerManager:
 
         # Handle stdio transport
         if transport == MCPTransport.stdio:
+            if not is_mcp_stdio_enabled():
+                raise HTTPException(status_code=403, detail=MCP_STDIO_DISABLED_MESSAGE)
             resolved_env: Final = (
                 stdio_env
                 if stdio_env is not None
@@ -4440,6 +4450,10 @@ class MCPServerManager:
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,
         )
+
+        if is_mcp_stdio_blocked(server.transport):
+            verbose_logger.debug("Skipping tool listing for MCP server %s: %s", server.name, MCP_STDIO_DISABLED_MESSAGE)
+            return []
 
         verbose_logger.debug("Connecting to url: %s", server.url)
         verbose_logger.info("_get_tools_from_server for %s...", server.name)
@@ -6326,6 +6340,8 @@ class MCPServerManager:
                 mcp_server = fallback
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
+        if is_mcp_stdio_blocked(mcp_server.transport):
+            raise HTTPException(status_code=403, detail=MCP_STDIO_DISABLED_MESSAGE)
 
         if resolved_by_server_name_only and not self.server_exposes_tool(mcp_server, name):
             raise ValueError(f"Tool {name} not found")

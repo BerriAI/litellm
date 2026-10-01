@@ -314,8 +314,9 @@ class TestMCPServerManager:
         with patch.object(manager, "_get_general_settings", return_value={}):
             assert manager.get_mcp_server_by_id(server.server_id, client_ip="8.8.8.8") is None
 
-    async def test_create_mcp_client_stdio(self):
+    async def test_create_mcp_client_stdio(self, monkeypatch):
         """Test creating MCP client for stdio transport"""
+        monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
         manager = MCPServerManager()
 
         stdio_server = MCPServer(
@@ -458,11 +459,12 @@ class TestMCPServerManager:
         assert exc_info.value.status_code == 500
         assert "oauth2_id_jag" in str(exc_info.value.detail)
 
-    async def test_create_mcp_client_stdio_injects_npm_config_cache(self):
+    async def test_create_mcp_client_stdio_injects_npm_config_cache(self, monkeypatch):
         """Test that _create_mcp_client injects NPM_CONFIG_CACHE when not already set,
         and preserves user-provided NPM_CONFIG_CACHE when present."""
         from litellm.constants import MCP_NPM_CACHE_DIR
 
+        monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
         manager = MCPServerManager()
 
         # Case 1: NPM_CONFIG_CACHE not set -> should be injected
@@ -490,6 +492,140 @@ class TestMCPServerManager:
         )
         client2 = await manager._create_mcp_client(server_with_cache)
         assert client2.stdio_config["env"]["NPM_CONFIG_CACHE"] == "/custom/cache"
+
+    async def test_create_mcp_client_refuses_to_start_a_stdio_server_while_stdio_is_not_enabled(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="stdio-off",
+            name="stdio_off",
+            transport=MCPTransport.stdio,
+            command="python",
+            args=["server.py"],
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager._create_mcp_client(server)
+
+        assert exc_info.value.status_code == 403
+        assert "LITELLM_ENABLE_MCP_STDIO=true" in str(exc_info.value.detail)
+
+    async def test_listing_tools_skips_a_stdio_server_quietly_while_stdio_is_not_enabled(self, monkeypatch, caplog):
+        monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="stdio-quiet",
+            name="stdio_quiet",
+            transport=MCPTransport.stdio,
+            command="python",
+            args=["server.py"],
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+            tools = await manager._get_tools_from_server(server)
+
+        assert tools == []
+        assert any("stdio_quiet" in r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG)
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    async def test_calling_a_tool_on_a_stdio_server_names_the_flag_while_stdio_is_not_enabled(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="stdio-call",
+            name="stdio_call",
+            alias="stdio_call",
+            transport=MCPTransport.stdio,
+            command="python",
+            args=["server.py"],
+        )
+        manager.registry[server.server_id] = server
+
+        with pytest.raises(HTTPException) as exc_info:
+            manager._resolve_mcp_server_for_tool_call(server_name="stdio_call", name="echo")
+
+        assert exc_info.value.status_code == 403
+        assert "LITELLM_ENABLE_MCP_STDIO=true" in str(exc_info.value.detail)
+
+    async def test_calling_an_unknown_tool_on_an_enabled_stdio_server_is_still_not_found(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="stdio-call",
+            name="stdio_call",
+            alias="stdio_call",
+            transport=MCPTransport.stdio,
+            command="python",
+            args=["server.py"],
+        )
+        manager.registry[server.server_id] = server
+
+        with pytest.raises(ValueError, match="Tool echo not found"):
+            manager._resolve_mcp_server_for_tool_call(server_name="stdio_call", name="echo")
+
+    async def test_health_check_reports_a_stdio_server_unhealthy_with_the_flag_to_set(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="stdio-health",
+            name="stdio_health",
+            transport=MCPTransport.stdio,
+            command="python",
+            args=["server.py"],
+        )
+        manager.registry[server.server_id] = server
+
+        result = await manager.health_check_server(server.server_id)
+
+        assert result.status == "unhealthy"
+        assert "LITELLM_ENABLE_MCP_STDIO=true" in (result.health_check_error or "")
+
+    async def test_a_config_stdio_server_stays_registered_and_warns_while_stdio_is_not_enabled(
+        self, monkeypatch, config_only_mcp_manager_factory, caplog
+    ):
+        monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+        manager = config_only_mcp_manager_factory()
+        config = {"local_tools": {"transport": MCPTransport.stdio, "command": "python", "args": ["server.py"]}}
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+
+        assert [s.server_name for s in manager.config_mcp_servers.values()] == ["local_tools"]
+        warnings = [m for m in caplog.messages if "local_tools" in m]
+        assert len(warnings) == 1
+        assert "LITELLM_ENABLE_MCP_STDIO=true" in warnings[0]
+
+    async def test_a_config_stdio_server_loads_without_a_warning_once_stdio_is_enabled(
+        self, monkeypatch, config_only_mcp_manager_factory, caplog
+    ):
+        monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
+        manager = config_only_mcp_manager_factory()
+        config = {"local_tools": {"transport": MCPTransport.stdio, "command": "python", "args": ["server.py"]}}
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+
+        assert [s.server_name for s in manager.config_mcp_servers.values()] == ["local_tools"]
+        assert not [m for m in caplog.messages if "LITELLM_ENABLE_MCP_STDIO" in m]
+
+    async def test_a_db_stdio_server_stays_registered_and_warns_while_stdio_is_not_enabled(self, monkeypatch, caplog):
+        monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="db-stdio",
+            alias="db_stdio",
+            transport=MCPTransport.stdio,
+            command="python",
+            args=["server.py"],
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.add_server(row)
+
+        assert "db-stdio" in manager.registry
+        assert any("db_stdio" in m and "LITELLM_ENABLE_MCP_STDIO=true" in m for m in caplog.messages)
 
     def test_build_stdio_env_only_accepts_x_prefixed_placeholders(self):
         """Ensure only ${X-*} placeholders are substituted from headers."""
@@ -9876,7 +10012,8 @@ class TestCreateMcpClientV2Graft:
         assert exc.value.status_code == 500
         assert "credential" in str(exc.value.detail)
 
-    async def test_stdio_migrated_auth_type_still_defers_to_v1(self):
+    async def test_stdio_migrated_auth_type_still_defers_to_v1(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
         client = await MCPServerManager()._create_mcp_client(
             MCPServer(
                 server_id="stdio-graft",
@@ -13563,7 +13700,10 @@ async def test_debug_resolution_matches_final_header_conflict_winner(_mcp_reques
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transport", ["http", "stdio"])
-async def test_debug_reports_legacy_signing_and_non_http_transport(_mcp_request_ctx, transport: Literal["http", "stdio"]) -> None:
+async def test_debug_reports_legacy_signing_and_non_http_transport(
+    _mcp_request_ctx, monkeypatch, transport: Literal["http", "stdio"]
+) -> None:
+    monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
     from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
     from starlette.requests import Request
 

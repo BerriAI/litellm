@@ -31,6 +31,7 @@ interface MCPServerViewProps {
   availableAccessGroups: string[];
   existingServers?: MCPServer[];
   initialTabIndex?: number;
+  stdioEnabled?: boolean;
 }
 
 // True when this render is the return from the edit-settings OAuth redirect for this
@@ -63,6 +64,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   availableAccessGroups,
   existingServers,
   initialTabIndex = 0,
+  stdioEnabled = true,
 }) => {
   // Open the editing Settings tab on first render when returning from the edit OAuth
   // redirect, so the "token fetched" feedback shows where the user left off (Settings=2).
@@ -253,6 +255,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                 onSuccess={handleSuccess}
                 availableAccessGroups={availableAccessGroups}
                 existingServers={existingServers}
+                stdioEnabled={stdioEnabled}
               />
             ) : (
               <div className="divide-y divide-border">
