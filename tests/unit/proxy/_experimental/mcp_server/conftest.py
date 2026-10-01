@@ -89,6 +89,10 @@ def _hermetic_mcp_server_registry():
     saved_config_servers = dict(global_mcp_server_manager.config_mcp_servers)
     saved_tool_mapping = dict(global_mcp_server_manager.tool_name_to_mcp_server_name_mapping)
     saved_oauth_slots = global_mcp_server_manager._oauth_discovery_slots
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.config_mcp_servers.clear()
+    global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
+    global_mcp_server_manager._oauth_discovery_slots = ()
     try:
         yield
     finally:
