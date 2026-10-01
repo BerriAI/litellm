@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -82,6 +84,47 @@ def test_tool_search_call_output_round_trips_to_chat_messages() -> None:
         "content": json.dumps(tools),
         "tool_call_id": "call_tool_search",
     }
+
+
+def test_tool_search_call_merges_with_adjacent_function_calls() -> None:
+    messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        [
+            {
+                "type": "function_call",
+                "call_id": "call_get_weather",
+                "name": "get_weather",
+                "arguments": {"city": "San Francisco"},
+            },
+            {
+                "type": "tool_search_call",
+                "call_id": "call_tool_search",
+                "arguments": {"query": "weather"},
+            },
+            {"type": "function_call_output", "call_id": "call_get_weather", "output": "sunny"},
+            {
+                "type": "tool_search_output",
+                "call_id": "call_tool_search",
+                "tools": [{"type": "function", "name": "get_forecast"}],
+            },
+        ],
+        responses_api_request={"tools": [{"type": "tool_search", "execution": "client"}]},
+    )
+
+    assert [message.get("role") for message in messages] == ["assistant", "tool", "tool"]
+    assert [tool_call["id"] for tool_call in messages[0]["tool_calls"]] == [
+        "call_get_weather",
+        "call_tool_search",
+    ]
+
+
+def test_client_tool_search_rejects_colliding_function_name() -> None:
+    with pytest.raises(ValueError, match="cannot be named 'tool_search'"):
+        LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[
+                {"type": "tool_search", "execution": "client"},
+                {"type": "function", "name": "tool_search"},
+            ]
+        )
 
 
 def test_tool_search_output_falls_back_to_output_field() -> None:

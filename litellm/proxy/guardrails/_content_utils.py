@@ -57,7 +57,10 @@ TEXT_PART_TYPES: Final[frozenset[str]] = frozenset(
 # that guardrails should inspect.  ``function_call_output`` is the
 # built-in shape; ``custom_tool_call_output`` is the custom-tool
 # counterpart (see ``ChatCompletionCustomToolCallOutput``).
-_OUTPUT_ITEM_TYPES: Final[frozenset[str]] = frozenset({"function_call_output", "custom_tool_call_output"})
+_OUTPUT_ITEM_TYPES: Final[frozenset[str]] = frozenset(
+    {"function_call_output", "custom_tool_call_output", "tool_search_output"}
+)
+_TOOL_SEARCH_TOOL_TEXT_KEYS: Final[tuple[str, ...]] = ("description",)
 
 
 def _part_text(part: Mapping[str, object]) -> str | None:
@@ -89,6 +92,12 @@ def _iter_text_parts_in_content(content: object) -> Iterator[str]:
             text = _part_text(part)
             if text is not None:
                 yield text
+
+
+def _tool_search_tool_text(tool: Mapping[str, object]) -> str:
+    return "\n".join(
+        str(value) for key in _TOOL_SEARCH_TOOL_TEXT_KEYS if isinstance(value := tool.get(key), str) and value
+    )
 
 
 def _coerce_input_to_messages(input_value: object) -> list[dict[str, object]]:
@@ -123,6 +132,16 @@ def _coerce_input_to_messages(input_value: object) -> list[dict[str, object]]:
                 messages.append({"role": item.get("role") or "user", "content": item["content"]})
             elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
                 messages.append({"role": item.get("role") or "tool", "content": item["output"]})
+            elif item.get("type") == "tool_search_output" and isinstance(item.get("tools"), list):
+                for tool_idx, tool in enumerate(item["tools"]):
+                    if isinstance(tool, Mapping):
+                        messages.append(
+                            {  # mutable-ok: inspection snapshot with a write-back index
+                                "role": "tool",
+                                "content": _tool_search_tool_text(tool),
+                                "_tool_index": tool_idx,
+                            }
+                        )
     return messages
 
 
@@ -176,6 +195,16 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
             return new_parts
         return content
 
+    def _rewrite_tool_search_tool(tool: Mapping[str, object]) -> dict[str, object]:
+        rewritten: Final = dict(tool)  # mutable-ok: fresh copy so guardrail rewrites do not mutate the original
+        for key in _TOOL_SEARCH_TOOL_TEXT_KEYS:
+            value = rewritten.get(key)
+            if isinstance(value, str) and value:
+                nonlocal visited
+                visited += 1
+                rewritten[key] = visit(value)
+        return rewritten
+
     messages: Final = data.get("messages")
     if isinstance(messages, list):
         for message in messages:
@@ -207,6 +236,10 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
                     item["content"] = _rewrite_content(item["content"])
                 elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
                     item["output"] = _rewrite_content(item["output"])
+                elif item.get("type") == "tool_search_output" and isinstance(item.get("tools"), list):
+                    item["tools"] = [  # mutable-ok: rewrites forwarded tool-search results in place
+                        _rewrite_tool_search_tool(tool) if isinstance(tool, Mapping) else tool for tool in item["tools"]
+                    ]
         return visited
 
     return visited
@@ -300,6 +333,9 @@ def build_inspection_messages(data: dict[str, Any]) -> list[dict[str, str]]:
     flattened: Final[list[dict[str, str]]] = []
     for message in _iter_inspection_messages(data):
         if not isinstance(message, dict):
+            continue
+        if "_tool_index" in message:
+            flattened.append({"role": message.get("role") or "tool", "content": message["content"]})
             continue
         text = "\n".join(_iter_text_parts_in_content(message.get("content")))
         if not text:

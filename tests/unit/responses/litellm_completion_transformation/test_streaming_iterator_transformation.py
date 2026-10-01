@@ -32,6 +32,7 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
+from litellm.types.utils import Choices, Message
 
 CHAT_COMPLETION_ID = "chatcmpl-77d33d09-effa-4cd2-9c0d-c742d4358256"
 RESPONSE_ID_EVENT_TYPES = frozenset(
@@ -181,6 +182,72 @@ def test_client_tool_search_delta_is_emitted_as_tool_search_call():
     assert added.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     assert added.item.type == "tool_search_call"
     assert added.item.arguments == {}
+
+
+def test_client_tool_search_stream_does_not_emit_function_argument_events():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Find a weather tool",
+        responses_api_request={"tools": [{"type": "tool_search", "execution": "client"}]},
+    )
+    chunk = ModelResponseStream(
+        id="chunk-1",
+        created=123,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_tool_search",
+                            "type": "function",
+                            "function": {"name": "tool_search", "arguments": '{"query":"weather"}'},
+                        }
+                    ],
+                ),
+            )
+        ],
+    )
+
+    added = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
+    delta = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
+    done = iterator._queue_final_tool_call_done_events(
+        ModelResponse(
+            id="complete-1",
+            created=123,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": "call_tool_search",
+                                "type": "function",
+                                "function": {"name": "tool_search", "arguments": '{"query":"weather"}'},
+                            }
+                        ],
+                    ),
+                )
+            ],
+        )
+    )
+
+    assert added is not None
+    assert delta is None
+    assert done is None
+    event_types = [event.type for event in iterator._pending_tool_events if event is not added]
+    assert event_types == [ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
 
 
 @pytest.mark.asyncio

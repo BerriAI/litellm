@@ -710,6 +710,42 @@ def test_build_inspection_messages_custom_tool_call_output():
     assert any("custom-tool-leak" in m["content"] for m in msgs)
 
 
+# -------------------------------------------------------------------
+# client tool_search guardrail coverage
+# -------------------------------------------------------------------
+
+def test_guardrails_inspect_and_redact_tool_search_output_tool_descriptions():
+    data = {
+        "input": [
+            {
+                "type": "tool_search_output",
+                "call_id": "call_tool_search",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "get_weather",
+                        "description": "tool-secret",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            }
+        ]
+    }
+
+    assert list(iter_message_text(data)) == ["tool-secret"]
+    visited = walk_user_text(data, lambda text: text.replace("secret", "[REDACTED]"))
+
+    assert visited == 1
+    assert data["input"][0]["tools"][0]["description"] == "tool-[REDACTED]"
+    assert build_inspection_messages(data) == [{"role": "tool", "content": "tool-[REDACTED]"}]
+
+
+def test_guardrails_inspect_tool_search_output_fallback_output():
+    data = {"input": [{"type": "tool_search_output", "call_id": "call_tool_search", "output": "tool-secret"}]}
+
+    assert list(iter_message_text(data)) == ["tool-secret"]
+
+
 # ── is_non_conversational_call_type ──────────────────────────────────────────────
 
 

@@ -10,6 +10,7 @@ from litellm.responses.litellm_completion_transformation.custom_tools import cus
 from litellm.responses.litellm_completion_transformation.transformation import (
     NAMESPACE_DESCRIPTION_SEPARATOR,
     NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS,
+    TOOL_SEARCH_FUNCTION_NAME,
     LiteLLMCompletionResponsesConfig,
 )
 
@@ -146,6 +147,12 @@ def _merged_original(
     group_keys: Sequence[IndexedKey],
     guardrailed_by_key: Mapping[IndexedKey, Tool],
 ) -> tuple[Tool, ...]:
+    if (
+        original.get("type") == TOOL_SEARCH_FUNCTION_NAME
+        and original.get("execution") == "client"
+        and _chat_tool_key(next(iter(flattened_group), MappingProxyType({}))) == f"function:{TOOL_SEARCH_FUNCTION_NAME}"
+    ):
+        return (original,)
     if not group_keys:
         return (original,)
     guardrailed_group: Final = tuple(guardrailed_by_key[key] for key in group_keys if key in guardrailed_by_key)

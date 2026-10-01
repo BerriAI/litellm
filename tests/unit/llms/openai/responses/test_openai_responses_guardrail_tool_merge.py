@@ -85,6 +85,17 @@ def test_edited_mcp_tool_is_rewritten():
     assert list(merged) == edited
 
 
+def test_edited_client_tool_search_keeps_responses_semantics():
+    original = [{"type": "tool_search", "execution": "client", "description": "Search tools"}]
+    groups = _groups(original)
+    edited = copy.deepcopy(_flat(groups))
+    edited[0]["function"]["description"] = "guarded tool search"
+
+    merged = merge_guardrailed_tools(original, groups, edited)
+
+    assert list(merged) == original
+
+
 def test_injected_tool_lands_after_the_request_tools_when_request_had_none():
     injected = {"type": "function", "function": {"name": "b", "description": "d", "parameters": {"type": "object"}}}
 

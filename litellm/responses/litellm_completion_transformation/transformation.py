@@ -120,6 +120,14 @@ def _is_tool_search_tool(tool: Mapping[str, object]) -> bool:
     return tool.get("type") == TOOL_SEARCH_FUNCTION_NAME and tool.get("execution") == "client"
 
 
+def _has_tool_search_function_name_collision(tools: ResponseTools) -> bool:
+    return any(
+        tool.get("type") == "function" and tool.get("name") == TOOL_SEARCH_FUNCTION_NAME
+        for tool in tools or ()
+        if isinstance(tool, Mapping)
+    ) and any(_is_tool_search_tool(tool) for tool in tools or () if isinstance(tool, Mapping))
+
+
 def _tool_search_function_tool(tool: Mapping[str, object]) -> ChatCompletionToolParam:
     raw_parameters: Final[object] = tool.get("parameters")
     parameters: Final[dict[str, object]] = (
@@ -1632,7 +1640,7 @@ class LiteLLMCompletionResponsesConfig:
         Both need to be reconstructed as assistant tool_calls for Chat
         Completions providers.
         """
-        return input_item.get("type") in ("function_call", "custom_tool_call")
+        return input_item.get("type") in ("function_call", "custom_tool_call", "tool_search_call")
 
     @staticmethod
     def _transform_responses_api_tool_call_output_to_chat_completion_message(
@@ -2039,6 +2047,11 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _validate_namespace_name_collisions(tools: ResponseTools) -> None:
+        if _has_tool_search_function_name_collision(tools):
+            raise ValueError(
+                f"A top-level function cannot be named {TOOL_SEARCH_FUNCTION_NAME!r} when "
+                "client-executed tool_search is enabled."
+            )
         top_level_function_names: Final = frozenset(
             str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
         )
