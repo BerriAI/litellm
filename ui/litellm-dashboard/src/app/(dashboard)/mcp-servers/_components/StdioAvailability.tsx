@@ -10,7 +10,7 @@ export const STDIO_DISABLED_MESSAGE =
   "stdio MCP servers are disabled on this proxy. Set LITELLM_ENABLE_MCP_STDIO=true on the proxy and restart to enable them";
 
 export const useMcpStdioEnabled = (): boolean =>
-  $api.useQuery("get", "/.well-known/litellm-ui-config").data?.mcp_stdio_enabled === true;
+  $api.useQuery("get", "/.well-known/litellm-ui-config").data?.mcp_stdio_enabled !== false;
 
 export const TransportSelectItems: FC<{ stdioEnabled: boolean }> = ({ stdioEnabled }) => (
   <>

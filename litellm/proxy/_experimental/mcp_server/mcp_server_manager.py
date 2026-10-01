@@ -4449,8 +4449,7 @@ class MCPServerManager:
             global_mcp_tool_registry,
         )
 
-        if is_mcp_stdio_blocked(server.transport):
-            verbose_logger.debug("Skipping tool listing for MCP server %s: %s", server.name, MCP_STDIO_DISABLED_MESSAGE)
+        if self._skip_blocked_stdio_listing(server, "tool"):
             return []
 
         verbose_logger.debug("Connecting to url: %s", server.url)
@@ -4652,6 +4651,14 @@ class MCPServerManager:
         )
         return server.server_id, hashlib.sha256(material.encode()).hexdigest()
 
+    def _skip_blocked_stdio_listing(self, server: MCPServer, listing: str) -> bool:
+        if not is_mcp_stdio_blocked(server.transport):
+            return False
+        verbose_logger.debug(
+            "Skipping %s listing for MCP server %s: %s", listing, server.name, MCP_STDIO_DISABLED_MESSAGE
+        )
+        return True
+
     async def get_prompts_from_server(
         self,
         server: MCPServer,
@@ -4662,6 +4669,8 @@ class MCPServerManager:
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
     ) -> list[Prompt]:
+        if self._skip_blocked_stdio_listing(server, "prompt"):
+            return []
         try:
             headers: Final = (
                 dict(
@@ -4708,6 +4717,8 @@ class MCPServerManager:
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
     ) -> list[Resource]:
+        if self._skip_blocked_stdio_listing(server, "resource"):
+            return []
         try:
             headers: Final = (
                 dict(
@@ -4754,6 +4765,8 @@ class MCPServerManager:
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
     ) -> list[ResourceTemplate]:
+        if self._skip_blocked_stdio_listing(server, "resource template"):
+            return []
         try:
             headers: Final = (
                 dict(

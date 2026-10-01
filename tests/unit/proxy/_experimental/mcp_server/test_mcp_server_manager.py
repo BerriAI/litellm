@@ -510,7 +510,17 @@ class TestMCPServerManager:
         assert exc_info.value.status_code == 403
         assert "LITELLM_ENABLE_MCP_STDIO=true" in str(exc_info.value.detail)
 
-    async def test_listing_tools_skips_a_stdio_server_quietly_while_stdio_is_not_enabled(self, monkeypatch, caplog):
+    @pytest.mark.parametrize(
+        "listing",
+        [
+            lambda manager, server: manager._get_tools_from_server(server),
+            lambda manager, server: manager.get_prompts_from_server(server, user_api_key_auth=None),
+            lambda manager, server: manager.get_resources_from_server(server, user_api_key_auth=None),
+            lambda manager, server: manager.get_resource_templates_from_server(server, user_api_key_auth=None),
+        ],
+        ids=["tools", "prompts", "resources", "resource_templates"],
+    )
+    async def test_listing_skips_a_stdio_server_quietly_while_stdio_is_not_enabled(self, monkeypatch, caplog, listing):
         monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
         manager = MCPServerManager()
         server = MCPServer(
@@ -522,9 +532,9 @@ class TestMCPServerManager:
         )
 
         with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
-            tools = await manager._get_tools_from_server(server)
+            items = await listing(manager, server)
 
-        assert tools == []
+        assert items == []
         assert any("stdio_quiet" in r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG)
         assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 

@@ -75,19 +75,36 @@ describe("useMcpStdioEnabled", () => {
 
   it("reads the flag from the worker the dashboard is managing", async () => {
     switchToWorkerUrl("http://worker-b.example:4000");
-    const { result, fetchSpy, settled } = renderWithConfig({ mcp_stdio_enabled: true });
+    const { result, fetchSpy, settled } = renderWithConfig({ mcp_stdio_enabled: false });
 
     await settled();
-    expect(result.current).toBe(true);
+    expect(result.current).toBe(false);
     expect(fetchSpy.mock.calls.map(([request]) => (request as Request).url)).toEqual([
       "http://worker-b.example:4000/.well-known/litellm-ui-config",
     ]);
   });
 
-  it.each([{ mcp_stdio_enabled: false }, {}])("treats %o as stdio disabled", async (config) => {
+  it.each([
+    [{ mcp_stdio_enabled: false }, false],
+    [{ mcp_stdio_enabled: true }, true],
+    [{}, true],
+  ])("treats %o as stdio enabled=%s", async (config, enabled) => {
     const { result, settled } = renderWithConfig(config);
 
     await settled();
-    expect(result.current).toBe(false);
+    expect(result.current).toBe(enabled);
+  });
+
+  it("keeps stdio available while the proxy has not answered yet", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise<Response>(() => {}));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useMcpStdioEnabled(), {
+      wrapper: ({ children }: { children: React.ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    });
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(result.current).toBe(true);
   });
 });
