@@ -117,7 +117,13 @@ def _held_choices(held_chars_per_choice: Mapping[int, int]) -> frozenset[int]:
 def _recorded_guardrail_information(request_data: dict) -> tuple[StandardLoggingGuardrailInformation, ...]:
     _metadata_key, metadata_bucket = get_or_create_metadata_bucket(request_data)
     entries: Final = metadata_bucket.get("standard_logging_guardrail_information")
-    return tuple(cast("list[StandardLoggingGuardrailInformation]", entries)) if isinstance(entries, list) else ()
+    if not isinstance(entries, list):
+        return ()
+    return tuple(
+        cast(  # cast-ok: only the guardrail logging helpers write this metadata key
+            "list[StandardLoggingGuardrailInformation]", entries
+        )
+    )
 
 
 def _is_redundant_scan(scan_key: "StreamingScanKey | None", last_scan_key: "StreamingScanKey | None") -> bool:
