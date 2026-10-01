@@ -2816,7 +2816,7 @@ def anthropic_message_to_model_response(result: Mapping[str, object], speed: str
         completion_response=pydantic_result.model_dump(),
         raw_response=httpx.Response(
             status_code=200,
-            headers={},  # mutable-ok: httpx.Response wants a plain dict of headers
+            headers={},
         ),
         model_response=ModelResponse(id=result_id if isinstance(result_id, str) and result_id else None),
         json_mode=None,

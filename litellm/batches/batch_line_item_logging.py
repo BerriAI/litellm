@@ -110,7 +110,7 @@ def _json_fallback(value: object) -> dict[str, object] | str:
     mapping: Final = _as_object_mapping(value)
     if mapping is None:
         return str(value)
-    return dict(mapping)  # mutable-ok: json.dumps default hook must return a plain dict
+    return dict(mapping)
 
 
 class _BatchLineFailure(Exception):
@@ -285,7 +285,7 @@ def _new_child_logging(
         dynamic_async_success_callbacks=parent.dynamic_async_success_callbacks,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # same as above
         dynamic_failure_callbacks=parent.dynamic_failure_callbacks,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # same as above
         dynamic_async_failure_callbacks=parent.dynamic_async_failure_callbacks,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # same as above
-        kwargs={"litellm_session_id": parent.litellm_session_id},  # mutable-ok: kwargs takes a plain dict
+        kwargs={"litellm_session_id": parent.litellm_session_id},
     )
 
 
@@ -295,7 +295,7 @@ def _line_hidden_params(
     status_code: int | None,
     response_cost: float | None = None,
 ) -> dict[str, object]:  # mutable-ok: response objects declare _hidden_params as a plain dict
-    return {  # mutable-ok: same contract
+    return {
         "batch_id": batch.id,
         "batch_custom_id": custom_id,
         "batch_line_status_code": status_code,
@@ -306,14 +306,12 @@ def _line_hidden_params(
 def _optional_params_for_body(
     request_body: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: update_environment_variables takes a plain dict
-    return {  # mutable-ok: same contract
-        key: value for key, value in request_body.items() if key not in ("model", "messages", "input")
-    }
+    return {key: value for key, value in request_body.items() if key not in ("model", "messages", "input")}
 
 
 def _metadata_copy(params: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: dict out for litellm_params
     metadata: Final = _as_object_mapping(params.get("metadata")) or _EMPTY_BODY
-    return {**metadata}  # mutable-ok: plain-dict copy
+    return {**metadata}
 
 
 async def _emit_line_event(
@@ -355,7 +353,7 @@ async def _emit_line_event(
         start_time=start_time,
     )
     child.update_environment_variables(  # pyright: ignore[reportUnknownMemberType]  # Logging.update_environment_variables is untyped upstream
-        litellm_params={  # mutable-ok: update_environment_variables takes a plain dict
+        litellm_params={
             **parent_params,
             "batch_parent_id": batch.id,
             "metadata": _metadata_copy(parent_params),
@@ -466,9 +464,7 @@ async def log_batch_line_items(
         internal_credentials: Final = parent._litellm_internal_model_credentials  # pyright: ignore[reportPrivateUsage]  # declared transport attribute on Logging
         internal_mapping: Final = _as_object_mapping(internal_credentials)
         fetch_params: Final[dict[str, object] | None] = (  # mutable-ok: file fetcher requires a plain dict
-            dict(internal_mapping)  # mutable-ok: the file fetcher reads credential kwargs off a plain dict
-            if internal_mapping is not None
-            else litellm_params
+            dict(internal_mapping) if internal_mapping is not None else litellm_params
         )
 
         input_file_content: Final = await _fetch_managed_file_or_empty(batch.input_file_id, line_provider, fetch_params)

@@ -6445,7 +6445,7 @@ def _extract_response_obj_and_hidden_params(
             original_exception, "_hidden_params", None
         )
         if isinstance(exception_hidden_params, dict) and exception_hidden_params:
-            hidden_params = dict(exception_hidden_params)  # mutable-ok: hidden_params downstream expects a plain dict
+            hidden_params = dict(exception_hidden_params)
         elif (response_headers := _get_response_headers(original_exception)) is not None:
             hidden_params = dict(
                 StandardLoggingHiddenParams(
