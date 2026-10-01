@@ -6,10 +6,10 @@ import { AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/cva.config";
 
 import { agentTraceSpanCall } from "../../networking";
-import { KeyValueRows, objectEntries } from "./KeyValueRows";
+import { type KeyValue, KeyValueRows, objectEntries } from "./KeyValueRows";
 import { Card, MessageCard, Section, ToolResultCard } from "./MessageCard";
 import type { ErrorSource } from "./traceTree";
-import type { Span, SpanDetail } from "./traceTypes";
+import type { Span, SpanDetail, TraceMessage, UIContent, UIMessage } from "./traceTypes";
 import { errorSource, parseJson, parseMessages, prettyPayload } from "./traceUtils";
 
 const ERROR_SOURCE_LABEL: Record<ErrorSource, string> = { tool: "Tool", model: "Model", litellm: "LiteLLM" };
@@ -54,37 +54,79 @@ export function ErrorBlock({ span }: { span: Span }) {
   );
 }
 
-function PlainPayload({ value }: { value: string }) {
-  const entries = objectEntries(parseJson(value));
-  if (entries && entries.length > 0) {
-    return (
-      <Card className="px-3 py-2.5">
-        <KeyValueRows entries={entries} />
-      </Card>
-    );
-  }
+function FieldsCard({ entries }: { entries: readonly KeyValue[] }) {
   return (
     <Card className="px-3 py-2.5">
-      <pre className={cn("max-h-96 overflow-auto", PAYLOAD_PRE)}>{prettyPayload(value)}</pre>
+      <KeyValueRows entries={entries} />
     </Card>
   );
 }
 
-function Payload({ value, span, role }: { value: string; span: Span; role: "input" | "output" }) {
-  const messages = parseMessages(value);
-  if (messages) {
-    return (
-      <>
-        {messages.map((message, i) => (
-          <MessageCard key={`${message.role}-${i}`} message={message} model={span.model} />
-        ))}
-      </>
-    );
+function TextCard({ text }: { text: string }) {
+  return (
+    <Card className="px-3 py-2.5">
+      <pre className={cn("max-h-96 overflow-auto", PAYLOAD_PRE)}>{text}</pre>
+    </Card>
+  );
+}
+
+function PlainPayload({ value }: { value: string }) {
+  const entries = objectEntries(parseJson(value));
+  if (entries && entries.length > 0) return <FieldsCard entries={entries} />;
+  return <TextCard text={prettyPayload(value)} />;
+}
+
+function Messages({ messages, model }: { messages: TraceMessage[]; model: string | null }) {
+  return (
+    <>
+      {messages.map((message, i) => (
+        <MessageCard key={`${message.role}-${i}`} message={message} model={model} />
+      ))}
+    </>
+  );
+}
+
+const toTraceMessage = (message: UIMessage): TraceMessage => ({
+  ...message,
+  tool_calls: message.tool_calls?.map((call) => ({
+    name: call.name,
+    args: parseJson(call.arguments) ?? call.arguments,
+  })),
+});
+
+interface PayloadProps {
+  value: string;
+  span: Span;
+  role: "input" | "output";
+}
+
+const isToolResult = ({ span, role }: Omit<PayloadProps, "value">): boolean =>
+  span.type === "tool" && role === "output";
+
+function ToolResult({ value, span }: Omit<PayloadProps, "role">) {
+  return <ToolResultCard name={span.name} result={value} failed={span.status === "error"} />;
+}
+
+function UIPayload({ content, ...props }: PayloadProps & { content: UIContent }) {
+  if (content.kind === "messages") {
+    return <Messages messages={content.messages.map(toTraceMessage)} model={props.span.model} />;
   }
-  if (span.type === "tool" && role === "output") {
-    return <ToolResultCard name={span.name} result={value} failed={span.status === "error"} />;
+  if (isToolResult(props)) return <ToolResult {...props} />;
+  if (content.kind === "fields" && content.fields.length > 0) {
+    return <FieldsCard entries={content.fields.map((field): KeyValue => [field.key, field.value])} />;
   }
-  return <PlainPayload value={value} />;
+  return <TextCard text={content.kind === "text" ? content.text : props.value} />;
+}
+
+function Payload(props: PayloadProps) {
+  const messages = parseMessages(props.value);
+  if (messages) return <Messages messages={messages} model={props.span.model} />;
+  if (isToolResult(props)) return <ToolResult {...props} />;
+  return <PlainPayload value={props.value} />;
+}
+
+function SpanPayload({ content, ...props }: PayloadProps & { content: UIContent | undefined }) {
+  return content ? <UIPayload content={content} {...props} /> : <Payload {...props} />;
 }
 
 interface DetailContentProps {
@@ -107,12 +149,12 @@ export function DetailContent({ accessToken, traceId, traceRef, span }: DetailCo
       {detailQuery.isError && <div className={STATUS_TEXT}>Could not load span: {detailQuery.error.message}</div>}
       {detail?.input ? (
         <Section title="Input">
-          <Payload value={detail.input} span={span} role="input" />
+          <SpanPayload value={detail.input} content={detail.input_ui} span={span} role="input" />
         </Section>
       ) : null}
       {detail?.output ? (
         <Section title="Output">
-          <Payload value={detail.output} span={span} role="output" />
+          <SpanPayload value={detail.output} content={detail.output_ui} span={span} role="output" />
         </Section>
       ) : null}
       {empty && span.status !== "error" && (

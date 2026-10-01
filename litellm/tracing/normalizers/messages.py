@@ -1,11 +1,15 @@
 import json
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
-_LC_ROLES: Final = MappingProxyType({"human": "user", "ai": "assistant", "system": "system", "tool": "tool"})
+ChatRole: TypeAlias = Literal["system", "user", "assistant", "tool"]
+
+MESSAGE_ROLES: Final[Mapping[str, ChatRole]] = MappingProxyType(
+    {"human": "user", "user": "user", "ai": "assistant", "assistant": "assistant", "system": "system", "tool": "tool"}
+)
 
 
 class _ContentBlock(BaseModel):
@@ -15,11 +19,15 @@ class _ContentBlock(BaseModel):
 
 
 _CONTENT_BLOCKS: Final = TypeAdapter(tuple[_ContentBlock, ...])
-_NON_TEXT_BLOCKS: Final = frozenset({"reasoning", "function_call", "tool_use", "tool_call"})
+_NON_TEXT_BLOCKS: Final = frozenset(
+    {"reasoning", "thinking", "redacted_thinking", "function_call", "tool_use", "tool_call"}
+)
 
 
 def content_text(content: object) -> str:
     """Message content as display text: Responses-style block lists keep only their text blocks."""
+    if content is None:
+        return ""
     if isinstance(content, str):
         return content
     try:
@@ -34,7 +42,7 @@ def content_text(content: object) -> str:
 def lc_message(message: Mapping[str, Any]) -> dict[str, Any]:
     """LangChain serialized message (or plain {role, content}) -> {role, content, tool_calls?}."""
     kwargs: Final = message.get("kwargs", message)
-    role: Final = _LC_ROLES.get(
+    role: Final = MESSAGE_ROLES.get(
         kwargs.get("type") or kwargs.get("role"), kwargs.get("role") or kwargs.get("type") or ""
     )
     out: Final[dict[str, Any]] = {  # mutable-ok: the framework message is built for JSON serialization
