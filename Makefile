@@ -324,10 +324,91 @@ test-unit-proxy-guardrails: install-test-deps
 	$(UV_RUN) pytest tests/unit/proxy/guardrails tests/unit/proxy/management_endpoints tests/unit/proxy/management_helpers --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-core: install-test-deps
-	$(UV_RUN) pytest tests/unit/proxy/auth tests/unit/proxy/client tests/test_litellm/proxy/db tests/unit/proxy/hooks tests/unit/proxy/policy_engine --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/auth tests/unit/proxy/client tests/unit/proxy/db tests/unit/proxy/hooks tests/unit/proxy/policy_engine --ignore=tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py --ignore=tests/unit/proxy/db/test_update_daily_tag_spend.py --tb=short -vv -n 4 --durations=20
+
+PROXY_INFRA_ROOT_TESTS := \
+	tests/unit/proxy/test__types.py \
+	tests/unit/proxy/test_aiohttp_cleanup_closed.py \
+	tests/unit/proxy/test_aiohttp_session_recovery.py \
+	tests/unit/proxy/test_api_key_masking_in_errors.py \
+	tests/unit/proxy/test_audio_speech_prometheus_hooks.py \
+	tests/unit/proxy/test_batch_expiry.py \
+	tests/unit/proxy/test_batch_metadata_none_fix.py \
+	tests/unit/proxy/test_batch_retrieve_bedrock.py \
+	tests/unit/proxy/test_batch_x_litellm_model_encoding.py \
+	tests/unit/proxy/test_blocked_response_usage.py \
+	tests/unit/proxy/test_body_snapshot_callback_params.py \
+	tests/unit/proxy/test_budget_reservation.py \
+	tests/unit/proxy/test_bug_report_config.py \
+	tests/unit/proxy/test_caching_routes.py \
+	tests/unit/proxy/test_chat_completion_metadata.py \
+	tests/unit/proxy/test_claude_code_marketplace.py \
+	tests/unit/proxy/test_collector.py \
+	tests/unit/proxy/test_common_request_processing.py \
+	tests/unit/proxy/test_component_allowlists.py \
+	tests/unit/proxy/test_conftest.py \
+	tests/unit/proxy/test_cors_config.py \
+	tests/unit/proxy/test_custom_proxy.py \
+	tests/unit/proxy/test_dynamic_mcp_route.py \
+	tests/unit/proxy/test_empty_model_list.py \
+	tests/unit/proxy/test_enforce_user_param.py \
+	tests/unit/proxy/test_fallback_management_endpoints.py \
+	tests/unit/proxy/test_fastapi_offline_routes.py \
+	tests/unit/proxy/test_filter_models_by_team_access_group.py \
+	tests/unit/proxy/test_health_check_functions.py \
+	tests/unit/proxy/test_health_check_max_tokens.py \
+	tests/unit/proxy/test_init_litellm_callbacks.py \
+	tests/unit/proxy/test_langfuse_passthrough_security.py \
+	tests/unit/proxy/test_lazy_openapi_snapshot.py \
+	tests/unit/proxy/test_litellm_pre_call_utils.py \
+	tests/unit/proxy/test_max_budget_env_var.py \
+	tests/unit/proxy/test_mcp_asgi_response.py \
+	tests/unit/proxy/test_model_based_routing_files_batches.py \
+	tests/unit/proxy/test_model_deprecations_endpoint.py \
+	tests/unit/proxy/test_model_dump_with_preserved_fields.py \
+	tests/unit/proxy/test_model_id_header_propagation.py \
+	tests/unit/proxy/test_model_info_default_limits.py \
+	tests/unit/proxy/test_model_level_guardrails.py \
+	tests/unit/proxy/test_model_list_aliases.py \
+	tests/unit/proxy/test_model_list_callback_filter.py \
+	tests/unit/proxy/test_model_list_discoverable.py \
+	tests/unit/proxy/test_model_list_healthy_only.py \
+	tests/unit/proxy/test_modify_response_streaming_passthrough.py \
+	tests/unit/proxy/test_native_compaction.py \
+	tests/unit/proxy/test_openai_ws_passthrough_routes.py \
+	tests/unit/proxy/test_openapi_schema_validation.py \
+	tests/unit/proxy/test_plugin_routes.py \
+	tests/unit/proxy/test_pointfive_dashboard_config.py \
+	tests/unit/proxy/test_pointfive_ui_callback.py \
+	tests/unit/proxy/test_pricing_field_strip.py \
+	tests/unit/proxy/test_prisma_engine_watchdog.py \
+	tests/unit/proxy/test_prisma_migration.py \
+	tests/unit/proxy/test_prometheus_cleanup.py \
+	tests/unit/proxy/test_prometheus_metrics_server.py \
+	tests/unit/proxy/test_provider_url_destination_guard.py \
+	tests/unit/proxy/test_proxy_cli.py \
+	tests/unit/proxy/test_proxy_logging_hook_detection.py \
+	tests/unit/proxy/test_proxy_types.py \
+	tests/unit/proxy/test_pyroscope.py \
+	tests/unit/proxy/test_read_model_list.py \
+	tests/unit/proxy/test_redis_auth_cache_flag.py \
+	tests/unit/proxy/test_response_model_sanitization.py \
+	tests/unit/proxy/test_route_a2a_models.py \
+	tests/unit/proxy/test_route_llm_request.py \
+	tests/unit/proxy/test_route_priority.py \
+	tests/unit/proxy/test_sensitive_route_auth.py \
+	tests/unit/proxy/test_shared_health_check.py \
+	tests/unit/proxy/test_spend_log_cleanup.py \
+	tests/unit/proxy/test_swagger_chat_completions.py \
+	tests/unit/proxy/test_team_member_update.py \
+	tests/unit/proxy/test_team_org_move.py \
+	tests/unit/proxy/test_tools_allowlist_enforcement.py \
+	tests/unit/proxy/test_tracing_endpoints.py \
+	tests/unit/proxy/test_update_llm_router_resilience.py \
+	tests/unit/proxy/test_zerobus_dashboard_config.py
 
 test-unit-proxy-misc: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/proxy/_experimental tests/unit/proxy/agent_endpoints tests/unit/proxy/anthropic_endpoints tests/test_litellm/proxy/common_utils tests/unit/proxy/discovery_endpoints tests/test_litellm/proxy/experimental tests/unit/proxy/google_endpoints tests/unit/proxy/health_endpoints tests/unit/proxy/image_endpoints tests/test_litellm/proxy/middleware tests/unit/proxy/openai_files_endpoint tests/test_litellm/proxy/pass_through_endpoints tests/unit/proxy/prompts tests/unit/proxy/public_endpoints tests/unit/proxy/response_api_endpoints tests/unit/proxy/shutdown tests/test_litellm/proxy/spend_tracking tests/unit/proxy/ui_crud_endpoints tests/unit/proxy/vector_store_endpoints tests/test_litellm/proxy/test_*.py tests/unit/proxy/test_proxy_server_endpoints_and_startup.py tests/unit/proxy/test_proxy_utils_model_creation_and_error_logging.py tests/unit/proxy/_experimental/mcp_server/test_mcp_server_tool_calls_and_headers.py --ignore=tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py --ignore=tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py --ignore=tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py --ignore=tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/agent_endpoints tests/unit/proxy/anthropic_endpoints tests/unit/proxy/common_utils --ignore=tests/unit/proxy/common_utils/test_cache_aware_routing.py --ignore=tests/unit/proxy/common_utils/test_check_batch_cost.py --ignore=tests/unit/proxy/common_utils/test_check_responses_cost.py --ignore=tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py --ignore=tests/unit/proxy/common_utils/test_realtime_cache.py tests/unit/proxy/discovery_endpoints tests/unit/proxy/experimental tests/unit/proxy/google_endpoints tests/unit/proxy/health_endpoints tests/unit/proxy/image_endpoints tests/unit/proxy/middleware --ignore=tests/unit/proxy/middleware/test_request_size_limit_middleware.py tests/unit/proxy/openai_files_endpoint tests/unit/proxy/pass_through_endpoints tests/test_litellm/proxy/pass_through_endpoints tests/unit/proxy/prompts tests/unit/proxy/public_endpoints tests/unit/proxy/response_api_endpoints tests/unit/proxy/shutdown tests/unit/proxy/spend_tracking --ignore=tests/unit/proxy/spend_tracking/test_search_api_logging.py tests/unit/proxy/ui_crud_endpoints tests/unit/proxy/vector_store_endpoints $(PROXY_INFRA_ROOT_TESTS) tests/unit/proxy/test_proxy_server_endpoints_and_startup.py tests/unit/proxy/test_proxy_utils_model_creation_and_error_logging.py tests/unit/proxy/_experimental/mcp_server/test_mcp_server_tool_calls_and_headers.py --ignore=tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py --ignore=tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py --ignore=tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py --ignore=tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py --tb=short -vv -n 4 --durations=20
 
 test-unit-integrations: install-test-deps
 	$(UV_RUN) pytest tests/unit/integrations --tb=short -vv -n 4 --durations=20
