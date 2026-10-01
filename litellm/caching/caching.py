@@ -18,7 +18,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -57,6 +57,9 @@ def _native_response(result: object) -> object:
         except ValueError:
             return result
     return result
+
+
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def print_verbose(print_statement):
@@ -389,6 +392,20 @@ class Cache:
                         continue  # ignore None params
                     param_value = kwargs[param]
                     cache_key += f"{param}: {param_value}"
+
+        nested_litellm_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(
+            kwargs.get("litellm_params") or MappingProxyType({})
+        )
+        forward_reasoning_content: Final = kwargs.get(
+            "forward_reasoning_content", nested_litellm_params.get("forward_reasoning_content")
+        )
+        if forward_reasoning_content is False:
+            cache_key += "forward_reasoning_content: False"
+        reasoning_content_field: Final = kwargs.get(
+            "reasoning_content_field", nested_litellm_params.get("reasoning_content_field")
+        )
+        if reasoning_content_field == "reasoning":
+            cache_key += "reasoning_content_field: reasoning"
 
         if is_semantic_cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)

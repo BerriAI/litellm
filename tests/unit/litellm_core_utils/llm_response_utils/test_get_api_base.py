@@ -1,4 +1,5 @@
 import json
+from typing import Final
 
 import pytest
 
@@ -35,6 +36,21 @@ class TestDeclaredAuthenticatingProvider:
     runs on every response's hidden params and on every mapped exception, so it must answer from
     the declaration without resolving. The recorder appends before raising, and get_api_base
     swallows resolver errors, so an empty list proves the lookup never ran."""
+
+    @pytest.mark.parametrize("include_model", [False, True])
+    def test_invalid_retry_text_does_not_resolve_provider(self, include_model, resolution_lookups):
+        params: Final = {
+            "max_retries": "2.0",
+            "self": "reserved-placeholder",
+            **({"model": "openai/demo"} if include_model else {}),
+        }
+        original: Final = dict(params)
+
+        api_base: Final = litellm.get_api_base(model="openai/demo", optional_params=params)
+
+        assert api_base is None
+        assert resolution_lookups == []
+        assert params == original
 
     @pytest.mark.parametrize(
         "model, custom_llm_provider, expected",
@@ -82,7 +98,10 @@ class TestDeclaredAuthenticatingProvider:
 @pytest.mark.parametrize(
     "model, expected",
     [
-        ("gemini/gemini-2.5-pro", "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"),
+        (
+            "gemini/gemini-2.5-pro",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+        ),
         ("openai/gpt-4o", "https://api.openai.com"),
     ],
 )

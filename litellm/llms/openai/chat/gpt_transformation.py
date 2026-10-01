@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
@@ -31,6 +32,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
+)
+from litellm.litellm_core_utils.reasoning_content_utils import (
+    normalize_reasoning_content,
+    should_normalize_reasoning_content,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
@@ -71,6 +76,7 @@ else:
 
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
@@ -487,8 +493,17 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
+        transport_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(litellm_params)
+        request_messages: Final = (
+            normalize_reasoning_content(messages)
+            if transport_params.get("custom_llm_provider") == "openai"
+            and should_normalize_reasoning_content(
+                transport_params.get("reasoning_content_field"), model=model, provider="openai"
+            )
+            else messages
+        )
         messages = self._transform_messages(
-            messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model
+            messages=self._prompt_cache_ordered_messages(request_messages, transport_params), model=model
         )
         if not self._should_preserve_cache_control_for_endpoint(
             litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
@@ -518,8 +533,17 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        transport_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(litellm_params)
+        request_messages: Final = (
+            normalize_reasoning_content(messages)
+            if transport_params.get("custom_llm_provider") == "openai"
+            and should_normalize_reasoning_content(
+                transport_params.get("reasoning_content_field"), model=model, provider="openai"
+            )
+            else messages
+        )
         transformed_messages = await self._transform_messages(
-            messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model, is_async=True
+            messages=self._prompt_cache_ordered_messages(request_messages, transport_params), model=model, is_async=True
         )
         if not self._should_preserve_cache_control_for_endpoint(
             litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")

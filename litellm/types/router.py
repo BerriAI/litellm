@@ -526,6 +526,11 @@ class LiteLLM_Params(GenericLiteLLMParams):
 
     model: str
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+    forward_reasoning_content: bool | None = None
+    reasoning_content_field: str | None = Field(
+        default=None,
+        description="Historical assistant reasoning field: reasoning_content (default) or reasoning.",
+    )
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -548,6 +553,11 @@ class updateLiteLLMParams(GenericLiteLLMParams):
     # This class is used to update the LiteLLM_Params
     # only differece is model is optional
     model: str | None = None
+    forward_reasoning_content: bool | None = None
+    reasoning_content_field: str | None = Field(
+        default=None,
+        description="Historical assistant reasoning field: reasoning_content (default) or reasoning.",
+    )
 
 
 class updateDeployment(BaseModel):
