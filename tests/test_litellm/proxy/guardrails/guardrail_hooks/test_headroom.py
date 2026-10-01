@@ -2172,6 +2172,25 @@ async def test_pre_call_deployment_hook_converts_stream_only_for_ccr_chat_comple
 
 
 @pytest.mark.asyncio
+async def test_pre_call_deployment_hook_drops_stream_options_when_converting(guardrail: HeadroomGuardrail):
+    """stream_options is only valid with stream=true. When the CCR conversion flips stream to
+    False it must also drop stream_options, or strict providers (e.g. DeepSeek) 400 with
+    'stream_options should be set along with stream = true'."""
+    kwargs = {
+        "model": "gpt-4o",
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "tools": [_retrieve_tool_definition()],
+    }
+
+    result = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.acompletion)
+
+    assert result is not None
+    assert result["stream"] is False
+    assert "stream_options" not in result
+
+
+@pytest.mark.asyncio
 async def test_pre_call_deployment_hook_leaves_background_streams_alone(guardrail: HeadroomGuardrail):
     kwargs = {
         "model": "gpt-4o",
