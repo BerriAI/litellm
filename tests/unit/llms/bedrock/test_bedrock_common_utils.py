@@ -981,3 +981,39 @@ def test_unmapped_openai_family_model_routes_to_converse():
     assert BedrockModelInfo.get_bedrock_route(unmapped) == "converse"
     imported: Final = "bedrock/openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123"
     assert BedrockModelInfo.get_bedrock_route(imported) == "openai"
+
+
+@pytest.mark.parametrize(
+    "unmapped",
+    [
+        "bedrock/minimax.minimax-m99-unmapped",
+        "bedrock/us.nvidia.nemotron-99b-unmapped",
+        "bedrock/writer.palmyra-x99-unmapped",
+        "bedrock/zai.glm-99-unmapped",
+        "bedrock/google.gemma-99-unmapped",
+        "bedrock/global.xai.grok-99-unmapped",
+    ],
+)
+def test_unmapped_converse_only_family_model_routes_to_converse(unmapped: str):
+    """Same rule as the OpenAI family, for the other Bedrock-native families with no invoke handler.
+
+    minimax, nvidia, writer, zai, google and xai have no transformation under
+    ``litellm/llms/bedrock/chat/invoke_transformations``; every id of theirs is served by Converse.
+    An id newer than the cost map used to fall to the invoke route, where
+    ``get_bedrock_invoke_provider`` returns ``None`` and the request fails, instead of Converse.
+    """
+    import litellm
+
+    assert BedrockModelInfo.get_base_model(unmapped) not in litellm.bedrock_converse_models
+    assert BedrockModelInfo.get_bedrock_route(unmapped) == "converse"
+
+
+def test_unmapped_model_of_family_with_invoke_handler_still_routes_to_invoke():
+    """The converse-only default is scoped to families without an invoke handler; ``meta`` has one."""
+    from typing import Final
+
+    import litellm
+
+    unmapped: Final = "bedrock/meta.llama99-unmapped-v1:0"
+    assert BedrockModelInfo.get_base_model(unmapped) not in litellm.bedrock_converse_models
+    assert BedrockModelInfo.get_bedrock_route(unmapped) == "invoke"
