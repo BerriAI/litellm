@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.harness.errors import HarnessError, OptionsMismatch
 from litellm.harness.options import CodexOptions
 from litellm.harness.types import (
@@ -138,8 +139,10 @@ def _item_events(event_type: str, item: Mapping[str, Any], state: CodexStreamSta
     return events
 
 
-def toml_value(value: object) -> str:
+def toml_value(value: object, depth: int = 0) -> str:
     """Encode a Python value as a TOML value for `codex -c key=value`."""
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise OptionsMismatch(f"CodexOptions.config is nested deeper than {DEFAULT_MAX_RECURSE_DEPTH} levels")
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (int, float)):
@@ -147,10 +150,10 @@ def toml_value(value: object) -> str:
     if isinstance(value, str):
         return json.dumps(value)
     if isinstance(value, Mapping):
-        pairs = ", ".join(f"{toml_key(k)} = {toml_value(v)}" for k, v in value.items())
+        pairs = ", ".join(f"{toml_key(k)} = {toml_value(v, depth + 1)}" for k, v in value.items())
         return "{" + pairs + "}"
     if isinstance(value, (list, tuple)):
-        return "[" + ", ".join(toml_value(v) for v in value) + "]"
+        return "[" + ", ".join(toml_value(v, depth + 1) for v in value) + "]"
     raise OptionsMismatch(f"CodexOptions.config value of type {type(value).__name__} cannot be passed to codex")
 
 
