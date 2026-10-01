@@ -122,3 +122,21 @@ async def test_close_wakes_idle_worker_and_drains_queued_rows() -> None:
     assert logger.log_queue == []
     assert logger._flush_task is not None and logger._flush_task.done()
     assert not logger._flush_task.cancelled()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recovers", [True, False])
+async def test_close_retries_every_batch_and_accounts_for_exhausted_rows(recovers: bool) -> None:
+    failure: Final = RuntimeError("ClickHouse unavailable")
+    insert: Final = AsyncMock(side_effect=[failure, None, None] if recovers else failure)
+    logger: Final = _logger(insert)
+    logger.batch_size = 1
+    logger.log_queue.extend([{"request_id": "a"}, {"request_id": "b"}])
+
+    await logger.aclose()
+
+    assert logger.log_queue == []
+    assert logger.rows_written == (2 if recovers else 0)
+    assert logger.rows_dropped == (0 if recovers else 2)
+    assert insert.await_count == (3 if recovers else 2 * module.CLICKHOUSE_MAX_RETRIES)
+    assert {call.args[1][0]["request_id"] for call in insert.await_args_list} == {"a", "b"}
