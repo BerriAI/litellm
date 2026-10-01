@@ -8853,7 +8853,6 @@ class Router:
 
     @staticmethod
     def _deployment_rates_preferred_over_tier_threshold_rate(field: str) -> tuple[str, ...]:
-        """Rates that outrank ``<rate>_above_<n>_tokens_<tier>`` when the deployment sets them itself."""
         tier_suffix: Final = next(suffix for suffix in SERVICE_TIER_COST_KEY_SUFFIXES if field.endswith(suffix))
         untiered_field: Final = field.removesuffix(tier_suffix)
         rate, separator, threshold = untiered_field.rpartition("_above_")
