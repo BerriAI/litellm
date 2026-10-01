@@ -1,4 +1,4 @@
-from tests.test_litellm.proxy.guardrails.guardrail_hooks._cisco_ai_defense_test_utils import (
+from tests.unit.proxy.guardrails.guardrail_hooks._cisco_ai_defense_test_utils import (
     Any,
     AsyncMock,
     CHAT_URL,
