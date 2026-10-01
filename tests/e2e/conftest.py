@@ -337,7 +337,8 @@ def pytest_runtest_makereport(
     test most often dies (proxy not ready, key creation failing). The second
     attach replaces the first, so nothing is doubled. JUnit writes properties
     from the teardown report, which pytest builds from `item.user_properties`
-    after both of these have run.
+    after both of these have run. The setup and call reports carry them as well,
+    so a reader of a failed phase's own report sees where it died too.
 
     Teardown deliberately does not attach. Steps recorded by fixture finalizers
     are cleanup, and appending them would put "delete virtual key" after the step
@@ -345,17 +346,17 @@ def pytest_runtest_makereport(
     finalizer that raises is still reported by JUnit with its own traceback.
     """
     report = yield
+    if report.when in ("setup", "call"):
+        attach_step_properties(item)
     if item.get_closest_marker("mcp_oauth_live") is not None and call.excinfo is not None:
         # Publish code locations only, never exception messages, source text or locals.
         item.user_properties.append(("oauth_failure_phase", report.when))
         item.user_properties.append(("oauth_exception_type", call.excinfo.type.__name__))
         for entry in call.excinfo.traceback:
             item.user_properties.append(("oauth_frame", f"{Path(entry.path).name}:{entry.lineno + 1}:{entry.name}"))
-        report.user_properties = list(item.user_properties)
     if report.when == "call":
         item.stash[_CALL_PASSED] = report.passed
-    if report.when in ("setup", "call"):
-        attach_step_properties(item)
+    report.user_properties = list(item.user_properties)
     return report
 
 

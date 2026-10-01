@@ -28,6 +28,7 @@ from typing import Final
 from xml.etree import ElementTree
 
 import pytest
+from pydantic import TypeAdapter
 
 SUITE_DIR: Final = Path(__file__).resolve().parents[1] / "e2e"
 CHILD_TIMEOUT_SECONDS: Final = 180
@@ -147,22 +148,61 @@ def test_dies_in_a_module_scoped_fixture(identity: None) -> None:
     assert identity is None
 """
 
+FAILED_PHASE_SUITE: Final = """
+import pytest
+from e2e_metadata import step
+
+
+@step("open the consent page")
+def open_consent() -> None:
+    raise RuntimeError("consent page timed out")
+
+
+@pytest.mark.mcp_oauth_live
+def test_oauth_dies_on_consent() -> None:
+    open_consent()
+
+
+def test_plain_dies_on_consent() -> None:
+    open_consent()
+"""
+
+REPORT_SPY_PLUGIN: Final = """
+import json
+from pathlib import Path
+
+import pytest
+
+SEEN = Path(__file__).with_name("failed-reports.jsonl")
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    if report.failed:
+        steps = [value for name, value in report.user_properties if name == "step"]
+        with SEEN.open("a") as out:
+            out.write(json.dumps([report.nodeid.split("::")[-1], steps]) + "\\n")
+"""
+
 Properties = tuple[tuple[str, str], ...]
+FailedReport: Final = TypeAdapter(tuple[str, tuple[str, ...]])
 
 
 def write_suite(directory: Path, modules: Mapping[str, str]) -> None:
     """Lay a child suite out in ``directory``, with an ini file of its own.
 
     The ini pins the child's rootdir to the tmp dir wherever that lives, and its
-    ``pythonpath`` is what makes tests/e2e's conftest.py, and the harness
-    modules the child suite imports, importable under ``-I``.
+    ``pythonpath`` is what makes tests/e2e's conftest.py, the harness modules
+    the child suite imports, and any plugin laid out beside it importable under ``-I``.
     """
-    _ = (directory / "pytest.ini").write_text(f"[pytest]\npythonpath = {shlex.quote(str(SUITE_DIR))}\n")
+    paths: Final = " ".join(shlex.quote(str(path)) for path in (SUITE_DIR, directory))
+    _ = (directory / "pytest.ini").write_text(f"[pytest]\npythonpath = {paths}\n")
     for name, source in modules.items():
         _ = (directory / name).write_text(source)
 
 
-def run_child_pytest(suite: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def run_child_pytest(
+    suite: Path, *args: str, env: Mapping[str, str] = MappingProxyType({})
+) -> subprocess.CompletedProcess[str]:
     """Run pytest over ``suite`` in a fresh interpreter, hooked up like the live suite.
 
     ``-p conftest`` registers tests/e2e's conftest.py as a plugin, since a
@@ -178,7 +218,7 @@ def run_child_pytest(suite: Path, *args: str) -> subprocess.CompletedProcess[str
     return subprocess.run(
         [sys.executable, "-I", "-m", "pytest", "-p", "conftest", "-p", "no:cacheprovider", *args, str(suite)],
         cwd=suite,
-        env=inherited,
+        env={**inherited, **env},
         capture_output=True,
         text=True,
         timeout=CHILD_TIMEOUT_SECONDS,
@@ -286,3 +326,17 @@ class TestStepsReachTheReport:
         already read, on every outcome including a setup error."""
         for name in ("test_passes", "test_fails", "test_errors_in_setup"):
             assert tuple(prop for prop, _ in report[name])[:4] == ("package", "covers", "source", "step"), name
+
+
+def test_a_failed_phase_s_own_report_carries_the_steps(tmp_path: Path) -> None:
+    """Plugins that read the failed setup or call report, not the teardown one
+    junitxml writes from, see where the test died too, oauth-live or not."""
+    write_suite(tmp_path, {"test_consent.py": FAILED_PHASE_SUITE, "report_spy.py": REPORT_SPY_PLUGIN})
+    child: Final = run_child_pytest(tmp_path, "-p", "report_spy", env={"E2E_MCP_OAUTH_LIVE": "1"})
+    seen_path: Final = tmp_path / "failed-reports.jsonl"
+    assert seen_path.exists(), f"no failed report reached the spy:\n{child.stdout}\n{child.stderr}"
+    seen: Final = dict(map(FailedReport.validate_json, seen_path.read_text().splitlines()))
+    assert seen == {
+        "test_oauth_dies_on_consent": ("open the consent page",),
+        "test_plain_dies_on_consent": ("open the consent page",),
+    }, child.stdout
