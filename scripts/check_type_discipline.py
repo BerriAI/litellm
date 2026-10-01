@@ -81,8 +81,7 @@ LIT012  TypedDict field without a `ReadOnly[...]` qualifier. A writable key lets
 LIT013  A `# <token>-ok: <reason>` suppression on a line where none of the rules
         that token suppresses fires. Like ruff's RUF100: a marker that suppresses
         nothing rots in place and hides real violations that land on the line
-        later. Delete it. `# mutable-ok` is exempt while the markers left over
-        from the retired mutable-construction rule are still in the tree.
+        later. Delete it.
 LIT014  Comprehension with more than one `for` clause or more than one `if` clause,
         in any of the four forms (list, set, dict, generator expression). Stacked
         `for`s and `if`s read as nested loops and guards squashed onto one line;
@@ -175,13 +174,11 @@ class _OkToken:
     token: str
     pattern: re.Pattern[str]
     codes: frozenset[str]
-    flags_unused: bool = True
 
 
 # Suppression tokens that must each carry a reason (LIT005).
 OK_SUPPRESSIONS: Final[tuple[_OkToken, ...]] = (
-    # TODO: drop flags_unused=False once the ~1.4k markers left over from the retired mutable-construction rule are stripped
-    _OkToken("mutable-ok", MUTABLE_OK_RE, frozenset(("LIT001",)), flags_unused=False),
+    _OkToken("mutable-ok", MUTABLE_OK_RE, frozenset(("LIT001",))),
     _OkToken("cast-ok", CAST_OK_RE, frozenset(("LIT006",))),
     _OkToken("guard-ok", GUARD_OK_RE, frozenset(("LIT007",))),
     _OkToken("kwargs-ok", KWARGS_OK_RE, frozenset(("LIT008",))),
@@ -941,7 +938,6 @@ def apply_suppressions(
             f"{'/'.join(sorted(ok.codes))} violation on this line, so delete it",
         )
         for ok in OK_SUPPRESSIONS
-        if ok.flags_unused
         for line in sorted(suppressions.get(ok.token, frozenset()))
         if not any(v.line == line and v.code in ok.codes for v in raw)
     )

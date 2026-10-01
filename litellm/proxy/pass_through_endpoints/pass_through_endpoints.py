@@ -843,16 +843,16 @@ def _resolve_team_callback_wiring(
     logging_kwargs: Final = (
         None
         if not callback_vars
-        else {  # mutable-ok: Logging arg
+        else {
             **callback_vars,
             TRUSTED_CALLBACK_VARS_FIELD: callback_vars,
-            "metadata": {},  # mutable-ok: Logging arg
-            "model_info": {},  # mutable-ok: Logging arg
+            "metadata": {},
+            "model_info": {},
         }
     )
     return _TeamCallbackWiring(
-        success_callbacks=None if success_callbacks is None else [*success_callbacks],  # mutable-ok: Logging arg
-        failure_callbacks=None if failure_callbacks is None else [*failure_callbacks],  # mutable-ok: Logging arg
+        success_callbacks=None if success_callbacks is None else [*success_callbacks],
+        failure_callbacks=None if failure_callbacks is None else [*failure_callbacks],
         logging_kwargs=logging_kwargs,
     )
 
@@ -2221,7 +2221,7 @@ def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Calla
     rewritten_model: Final = setup_model_rewriter(setup_model)
     if rewritten_model == setup_model:
         return text_data
-    return json.dumps({**message, "setup": {**setup, "model": rewritten_model}})  # mutable-ok: one-shot json payload
+    return json.dumps({**message, "setup": {**setup, "model": rewritten_model}})
 
 
 def _resolved_vertex_live_setup(
@@ -2297,7 +2297,7 @@ def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict
     try:
         from litellm.integrations.otel.plumbing.context import inject_trace_context
     except ImportError:
-        return dict(headers)  # mutable-ok: matches inject_trace_context's carrier return type
+        return dict(headers)
     return inject_trace_context(headers, parent_span=parent_span)
 
 
@@ -2343,7 +2343,7 @@ async def websocket_passthrough_request(
         await websocket.accept()
         verbose_proxy_logger.debug("WebSocket passthrough (%s): WebSocket connection accepted", endpoint)
 
-    forwarded_headers: Final = {  # mutable-ok: one-shot upstream header dict, read as a Mapping
+    forwarded_headers: Final = {
         **custom_headers,
         **{
             header_name: header_value

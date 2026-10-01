@@ -37,7 +37,7 @@ from litellm.proxy.engine.repository import EngineRepository, WriterDatabase
 from litellm.proxy.engine.sources import SourceReader, parse_execution
 from litellm.proxy.engine.state import can_access, claim_job, current_job, merge_finding, queue_job, replace_job
 
-router: Final = APIRouter(prefix="/engine", tags=["Lens"])  # mutable-ok: FastAPI requires list
+router: Final = APIRouter(prefix="/engine", tags=["Lens"])
 _bearer: Final = HTTPBearer()
 Auth: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 
