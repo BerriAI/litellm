@@ -603,3 +603,19 @@ def test_capabilities_uses_registry(monkeypatch):
 
 def test_fake_adapter_is_a_harness_adapter():
     assert issubclass(FakeAdapter, runtime.BaseHarnessHandler)
+
+
+async def test_turn_keeps_every_event_when_queue_overflows(monkeypatch, sandbox):
+    """A turn that emits more events than the queue holds must not drop any of them."""
+    total = 40
+    monkeypatch.setattr(runtime, "HARNESS_EVENT_QUEUE_MAX_SIZE", 4)
+
+    async def burst(adapter, ctx, prompt):
+        for i in range(total):
+            yield Text(f"{i},")
+
+    install_adapter(monkeypatch, script=burst)
+    result = await runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox)
+    texts = [e.delta for e in result.events if isinstance(e, Text)]
+    assert texts == [f"{i}," for i in range(total)]
+    assert result.stop_reason == "done"
