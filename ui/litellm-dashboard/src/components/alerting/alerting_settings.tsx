@@ -32,6 +32,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
       return;
     }
     alertingSettingsCall(accessToken).then((data) => {
+      setResetFields(new Set());
       setAlertingSettings(data);
     });
   }, [accessToken]);
@@ -129,6 +130,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
 
   return (
     <DynamicForm
+      key={accessToken ?? "no-access-token"}
       alertingSettings={alertingSettings}
       handleInputChange={handleInputChange}
       handleResetField={handleResetField}
