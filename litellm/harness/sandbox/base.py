@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -32,7 +32,7 @@ class Sandbox(Protocol):
 
     async def exec(
         self,
-        cmd: list[str],
+        cmd: Sequence[str],
         *,
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
@@ -40,7 +40,7 @@ class Sandbox(Protocol):
 
     async def run(
         self,
-        cmd: list[str],
+        cmd: Sequence[str],
         *,
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
@@ -55,7 +55,7 @@ class Sandbox(Protocol):
 
     async def which(self, binary: str) -> str | None: ...
 
-    async def snapshot(self) -> dict[str, str]: ...
+    async def snapshot(self) -> Mapping[str, str]: ...
 
     async def tempdir(self) -> str: ...
 
