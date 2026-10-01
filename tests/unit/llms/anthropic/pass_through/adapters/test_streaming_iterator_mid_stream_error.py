@@ -159,7 +159,9 @@ def test_error_event_keeps_status_of_mapped_litellm_exception():
 @pytest.mark.parametrize(
     "exc",
     [
-        litellm.BadRequestError(message="temperature must be in the range [0.0, 2.0]", model="m", llm_provider="gemini"),
+        litellm.BadRequestError(
+            message="temperature must be in the range [0.0, 2.0]", model="m", llm_provider="gemini"
+        ),
         litellm.AuthenticationError(message="API key not valid", llm_provider="gemini", model="m"),
         litellm.NotFoundError(message="model is not found", model="m", llm_provider="gemini"),
     ],
