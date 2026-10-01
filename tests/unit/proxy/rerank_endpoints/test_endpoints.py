@@ -261,12 +261,14 @@ async def test_rerank__missing_required_param_is_400():
             proxy_server_mod, "version", "1.2.3"
         ),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
     ):
+        call_id = "rerank-missing-query-call"
         with pytest.raises(ProxyException) as exc_info:
             await rerank(
-                request=_build_request(),
+                request=_build_request(headers=((b"x-litellm-call-id", call_id.encode()),)),
                 fastapi_response=fastapi_response,
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
             )
 
     assert exc_info.value.code == "400"
     assert exc_info.value.param == "query"
+    assert exc_info.value.headers["x-litellm-call-id"] == call_id

@@ -176,15 +176,20 @@ def _expected_error(route: str, parameter: str) -> dict[str, JsonValue]:
     }
 
 
-def _post(gateway: Gateway, path: str, body: dict[str, JsonValue]) -> httpx.Response:
-    return gateway.client.post(path, json=body, headers={"Authorization": f"Bearer {gateway.key}"})
+def _post(gateway: Gateway, path: str, body: dict[str, JsonValue], call_id: str | None = None) -> httpx.Response:
+    headers: Final = {} if call_id is None else {"x-litellm-call-id": call_id}
+    return gateway.request("POST", path, body, headers=headers)
 
 
 def _ready_missing(
-    gateway: Gateway, path: str, body: dict[str, JsonValue], expected: dict[str, JsonValue]
+    gateway: Gateway,
+    path: str,
+    body: dict[str, JsonValue],
+    expected: dict[str, JsonValue],
+    call_id: str | None = None,
 ) -> httpx.Response:
     return eventually(
-        lambda: _post(gateway, path, body),
+        lambda: _post(gateway, path, body, call_id),
         lambda response: response.status_code == 400 and response.json() == expected,
         seconds=30,
     )
@@ -199,6 +204,29 @@ def test_missing_required_body_field_returns_exact_400(gateway: Gateway, case: _
         response: Final = _ready_missing(gateway, case.path, body, expected)
         assert response.status_code == 400, response.text
         assert response.json() == expected, response.text
+        observations: Final = _Observations(gateway.upstream_url)
+        observations.read()
+        assert observations.for_scenario(identity) == ()
+
+
+@pytest.mark.parametrize(
+    ("case", "parameter"),
+    (
+        pytest.param(_IMAGE, "prompt", id="images"),
+        pytest.param(_RERANK, "query", id="rerank-query"),
+        pytest.param(_RERANK, "documents", id="rerank-documents"),
+    ),
+)
+def test_image_and_rerank_missing_fields_echo_call_id(gateway: Gateway, case: _Case, parameter: str) -> None:
+    call_id: Final = f"audit-call-{case.name}-{parameter}"
+    with gateway.scenario() as scenario:
+        alias, identity = _model(scenario, case, _response())
+        body: Final = {key: value for key, value in {**case.body, "model": alias}.items() if key != parameter}
+        expected: Final = _expected_error(case.route, parameter)
+        response: Final = _ready_missing(gateway, case.path, body, expected, call_id=call_id)
+        assert response.status_code == 400, response.text
+        assert response.json() == expected, response.text
+        assert response.headers.get("x-litellm-call-id") == call_id, response.headers
         observations: Final = _Observations(gateway.upstream_url)
         observations.read()
         assert observations.for_scenario(identity) == ()

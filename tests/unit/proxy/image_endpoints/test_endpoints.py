@@ -143,11 +143,12 @@ async def test_image_generation__missing_required_param_is_400(monkeypatch):
         post_call_failure_hook=fake_post_call_failure_hook,
     )
 
+    call_id = "images-missing-prompt-call"
     scope = {
         "type": "http",
         "method": "POST",
         "path": "/v1/images/generations",
-        "headers": [],
+        "headers": [(b"x-litellm-call-id", call_id.encode())],
     }
     body = orjson.dumps({"model": "dall-e-3"})
 
@@ -179,6 +180,7 @@ async def test_image_generation__missing_required_param_is_400(monkeypatch):
 
     assert exc_info.value.code == "400"
     assert exc_info.value.param == "prompt"
+    assert exc_info.value.headers["x-litellm-call-id"] == call_id
 
 
 def _image_edit_client(monkeypatch, captured: Dict[str, Any]) -> TestClient:
