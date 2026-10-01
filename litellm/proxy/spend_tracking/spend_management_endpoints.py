@@ -1198,7 +1198,7 @@ async def get_global_activity_exceptions(
 
 @router.get(
     "/spend/capture_rate",
-    tags=["Budget & Spend Tracking"],
+    tags=["Budget & Spend Tracking"],  # mutable-ok: FastAPI tags kwarg is list-typed
     dependencies=(Depends(user_api_key_auth),),
     response_model=CaptureRateReport,
 )
@@ -3102,13 +3102,13 @@ async def _fetch_session_representatives(
         prisma_client,
         rep_query,
         *sql_params,
-        [session_key for session_key, _ in session_keys],
-        [api_key for _, api_key in session_keys],
+        [session_key for session_key, _ in session_keys],  # mutable-ok: prisma serializes array params from a list
+        [api_key for _, api_key in session_keys],  # mutable-ok: prisma serializes array params from a list
     )
     rep_by_key: Final[Mapping[tuple[str, str], dict[str, object]]] = MappingProxyType(  # mutable-ok: same rows
         {(str(row["session_id"] or row["request_id"]), str(row["api_key"])): row for row in rep_rows}
     )
-    return [rep_by_key[key] for key in session_keys if key in rep_by_key]
+    return [rep_by_key[key] for key in session_keys if key in rep_by_key]  # mutable-ok: rows are enriched in place
 
 
 async def _count_grouped_sessions(
@@ -3231,7 +3231,7 @@ async def _ui_session_grouped_spend_logs(
             session_keys=session_keys,
         )
         if session_keys
-        else []
+        else []  # mutable-ok: downstream enrichment mutates rows in place
     )
     _hydrate_spend_log_metadata(data)
 
@@ -3246,7 +3246,7 @@ async def _ui_session_grouped_spend_logs(
         enrich_session_counts=True,
         total_is_capped=total_is_capped,
     )
-    return {**response, "next_session_cursor": next_cursor, "has_more": has_more}
+    return {**response, "next_session_cursor": next_cursor, "has_more": has_more}  # mutable-ok: FastAPI response body
 
 
 class RequestResponsePayload(NamedTuple):
@@ -3568,7 +3568,9 @@ async def view_spend_logs(
             start_date_iso: Final = start_date_obj.isoformat()
             end_date_iso: Final = end_date_obj.isoformat()
 
-            filter_query: Final[dict[str, object]] = {
+            filter_query: Final[
+                dict[str, object]
+            ] = {  # mutable-ok: legacy filters are extended for optional parameters
                 "startTime": {
                     "gte": start_date_iso,  # Greater than or equal to Start Date
                     "lte": end_date_iso,  # Less than or equal to End Date

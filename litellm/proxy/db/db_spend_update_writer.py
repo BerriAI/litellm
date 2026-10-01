@@ -636,12 +636,14 @@ class DBSpendUpdateWriter:
         spend_logs: Final = SpendLogsRepository(prisma_client).table
         try:
             claimed: Final = await spend_logs.create_many(
-                data=[prisma_client.jsonify_object(row)],
+                data=[prisma_client.jsonify_object(row)],  # mutable-ok: prisma create_many takes a list
                 skip_duplicates=True,
             )
             if claimed == 1:
                 return True
-            existing: Final = await spend_logs.find_unique(where={"request_id": request_id})
+            existing: Final = await spend_logs.find_unique(
+                where={"request_id": request_id}  # mutable-ok: prisma where clause
+            )
         except Exception as e:  # noqa: BLE001  # prisma raises its own hierarchy; an unreachable DB queues the row like any other spend log
             verbose_proxy_logger.warning(
                 "Could not claim spend row %s for a batch's cost, queueing it: %s", request_id, e
@@ -683,7 +685,7 @@ class DBSpendUpdateWriter:
                 data=prisma_client.jsonify_object(
                     MappingProxyType({field: value for field, value in row.items() if field != "request_id"})
                 ),
-                where={
+                where={  # mutable-ok: prisma where clause
                     "request_id": request_id,
                     "call_type": CallTypes.aretrieve_batch.value,
                     "status": "success",
@@ -1569,7 +1571,7 @@ class DBSpendUpdateWriter:
                     window_spend_update_transactions,
                 ) = await self.redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
 
-                uncommitted = {
+                uncommitted = {  # mutable-ok: drives which popped categories still need re-queuing
                     "db_spend_update_transactions": db_spend_update_transactions,
                     "daily_spend_update_transactions": daily_spend_update_transactions,
                     "daily_team_spend_update_transactions": daily_team_spend_update_transactions,
@@ -1681,7 +1683,9 @@ class DBSpendUpdateWriter:
                     exc=e,
                 )
             finally:
-                to_restore = {name: txns for name, txns in uncommitted.items() if txns is not None}
+                to_restore = {  # mutable-ok: transient kwargs payload consumed immediately below
+                    name: txns for name, txns in uncommitted.items() if txns is not None
+                }
                 if to_restore:
                     await self.redis_update_buffer.restore_transactions_to_redis(**to_restore)
                 await self.pod_lock_manager.release_lock(

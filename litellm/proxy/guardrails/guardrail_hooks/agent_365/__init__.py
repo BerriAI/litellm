@@ -71,10 +71,10 @@ def initialize_guardrail(
     return agent_365_guardrail
 
 
-guardrail_initializer_registry: Final = {
+guardrail_initializer_registry: Final = {  # mutable-ok: registry auto-discovery requires a dict instance
     SupportedGuardrailIntegrations.AGENT_365.value: initialize_guardrail,
 }
 
-guardrail_class_registry: Final = {
+guardrail_class_registry: Final = {  # mutable-ok: registry auto-discovery requires a dict instance
     SupportedGuardrailIntegrations.AGENT_365.value: Agent365Guardrail,
 }

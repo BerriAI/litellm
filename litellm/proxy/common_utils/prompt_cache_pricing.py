@@ -74,7 +74,7 @@ def price_cache_tokens(
         )
         logging_obj: Final = Logging(
             model=model,
-            messages=[],
+            messages=[],  # mutable-ok: Logging requires a list
             stream=False,
             call_type="completion",
             start_time=datetime.now(timezone.utc),

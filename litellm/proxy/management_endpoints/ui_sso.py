@@ -1526,7 +1526,9 @@ async def get_generic_sso_response(
             if generic_include_token_claims
             else response
         )
-        received_response = {key: value for key, value in claims.items() if key not in _OAUTH_TOKEN_FIELDS}
+        received_response = {  # mutable-ok: preserve the existing dict return contract
+            key: value for key, value in claims.items() if key not in _OAUTH_TOKEN_FIELDS
+        }
         return generic_response_convertor(
             response=claims,
             jwt_handler=jwt_handler,
@@ -1667,7 +1669,7 @@ async def get_generic_sso_response(
     return result or {}, received_response, access_token_payload, sso_assertion
 
 
-RetentionCheck: TypeAlias = Callable[[], Awaitable[bool]]
+RetentionCheck: TypeAlias = Callable[[], Awaitable[bool]]  # mutable-ok: Callable parameter syntax
 
 
 async def warn_if_id_jag_assertion_uncaptured(

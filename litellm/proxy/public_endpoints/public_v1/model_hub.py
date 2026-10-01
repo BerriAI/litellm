@@ -225,7 +225,7 @@ def _executor(
 
 @router.get(
     "/model_hub",
-    tags=["public", "model management"],
+    tags=["public", "model management"],  # mutable-ok: fastapi types tags as list[str | Enum]
     dependencies=(Depends(user_api_key_auth),),
     response_model=ListResponse[ModelGroupInfoProxy],
 )
@@ -275,7 +275,7 @@ async def public_model_hub_list(
 
 @router.get(
     "/model_hub/{facet}",
-    tags=["public", "model management"],
+    tags=["public", "model management"],  # mutable-ok: fastapi types tags as list[str | Enum]
     dependencies=(Depends(user_api_key_auth),),
     response_model=FacetListResponse,
 )

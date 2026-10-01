@@ -295,7 +295,9 @@ async def _dispatch_virtual_mcp_tool(
 
     if mcp_proxy_mode and name not in MCP_PROXY_TOOL_NAMES:
         return CallToolResult(
-            content=[TextContent(type="text", text=f"Tool {name} is unavailable on /mcp/proxy")],
+            content=[  # mutable-ok: MCP result content
+                TextContent(type="text", text=f"Tool {name} is unavailable on /mcp/proxy")
+            ],
             is_error=True,
         )
 
@@ -305,7 +307,7 @@ async def _dispatch_virtual_mcp_tool(
         proxy_logging_obj: Final = (
             await _build_virtual_call_logging_obj(
                 name=name,
-                arguments=arguments or {},
+                arguments=arguments or {},  # mutable-ok: logging pipeline payload
                 user_api_key_auth=user_api_key_auth,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
@@ -316,7 +318,7 @@ async def _dispatch_virtual_mcp_tool(
         try:
             proxy_result: Final = await handle_mcp_proxy_tool(
                 name=name,
-                arguments=arguments or {},
+                arguments=arguments or {},  # mutable-ok: proxy handler payload
                 user_api_key_dict=user_api_key_auth,
                 client_ip=client_ip,
                 mcp_servers=mcp_servers,
@@ -337,7 +339,7 @@ async def _dispatch_virtual_mcp_tool(
                     await proxy_logging_obj.async_failure_handler(exc, failure_traceback, proxy_call_start, failure_end)
                     if not isinstance(exc, MCPUpstreamAuthError):
                         await request_logging_obj.post_call_failure_hook(
-                            request_data={
+                            request_data={  # mutable-ok: failure hook mutates its request payload
                                 "name": name,
                                 "arguments": arguments,
                                 "litellm_logging_obj": proxy_logging_obj,
@@ -1139,7 +1141,9 @@ async def _get_tools_from_mcp_servers(
                 if mcp_proxy_mode:
                     from litellm.proxy._experimental.mcp_server.tool_search import with_mcp_proxy_identity
 
-                    filtered_tools = [with_mcp_proxy_identity(tool, server.server_id) for tool in filtered_tools]
+                    filtered_tools = [  # mutable-ok: MCP tool pipeline
+                        with_mcp_proxy_identity(tool, server.server_id) for tool in filtered_tools
+                    ]
                 else:
                     filtered_tools = apply_display_name_overrides(filtered_tools, server)
 
@@ -2640,7 +2644,7 @@ async def _handle_local_mcp_tool(
     except Exception as e:
         verbose_logger.exception("Error executing local tool %s: %s", name, e)
         return CallToolResult(
-            content=[TextContent(text=f"Error: {e}", type="text")],
+            content=[TextContent(text=f"Error: {e}", type="text")],  # mutable-ok: MCP result content
             is_error=True,
         )
     return complete_call_tool_result(handler_outcome(result), wire_compat)
@@ -2729,7 +2733,7 @@ async def _execute_handle_list_tools(
         verbose_logger.exception("Error in list_tools endpoint: %s", e)
         # Return empty list instead of failing completely
         # This prevents the HTTP stream from failing and allows the client to get a response
-        return ListToolsResult(tools=[])
+        return ListToolsResult(tools=[])  # mutable-ok: MCP result payload
 
 
 async def _execute_mcp_server_tool_call(
@@ -2777,7 +2781,7 @@ async def _execute_mcp_server_tool_call(
             return virtual_tool_result
 
         # Create a body date for logging
-        body_data: Final = {"name": params.name, "arguments": params.arguments}
+        body_data: Final = {"name": params.name, "arguments": params.arguments}  # mutable-ok: logging payload
         # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
         chain_id: Final = get_chain_id_from_headers(raw_headers)
         if chain_id:
@@ -2918,7 +2922,7 @@ async def _execute_list_prompts(
         verbose_logger.exception("Error in list_prompts endpoint: %s", e)
         # Return empty list instead of failing completely
         # This prevents the HTTP stream from failing and allows the client to get a response
-        return ListPromptsResult(prompts=[])
+        return ListPromptsResult(prompts=[])  # mutable-ok: MCP result payload
 
 
 async def _execute_get_prompt(
@@ -2985,7 +2989,7 @@ async def _execute_list_resources(
         return ListResourcesResult(resources=resources)
     except Exception as e:
         verbose_logger.exception("Error in list_resources endpoint: %s", e)
-        return ListResourcesResult(resources=[])
+        return ListResourcesResult(resources=[])  # mutable-ok: MCP result payload
 
 
 async def _execute_list_resource_templates(
@@ -3025,7 +3029,7 @@ async def _execute_list_resource_templates(
         return ListResourceTemplatesResult(resource_templates=resource_templates)
     except Exception as e:
         verbose_logger.exception("Error in list_resource_templates endpoint: %s", e)
-        return ListResourceTemplatesResult(resource_templates=[])
+        return ListResourceTemplatesResult(resource_templates=[])  # mutable-ok: MCP result payload
 
 
 async def _execute_read_resource(
@@ -3202,7 +3206,7 @@ class GatewayOperations:
                 auth, token, _servers, server_headers, oauth_headers, headers, _client_ip = context.legacy_auth()
                 return await _execute_mcp_tool(
                     name=operation.name,
-                    arguments=dict(operation.arguments),
+                    arguments=dict(operation.arguments),  # mutable-ok: existing tool hooks own mutable argument data
                     allowed_mcp_servers=list(operation.allowed_mcp_servers),
                     start_time=operation.start_time,
                     user_api_key_auth=auth,

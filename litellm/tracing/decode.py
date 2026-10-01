@@ -116,7 +116,9 @@ def _span_row(span: DecodedSpan) -> SpanRow:
         Output="",
     )
     normalize(row, attributes)
-    row["SpanAttributes"] = {k: _truncate(v) for k, v in attributes.items() if k not in _HEAVY_ATTRIBUTES}
+    row["SpanAttributes"] = {  # mutable-ok: the Rust JSON bridge requires a plain dict for span attributes
+        k: _truncate(v) for k, v in attributes.items() if k not in _HEAVY_ATTRIBUTES
+    }
     row["Input"], row["Output"] = _truncate(row["Input"]), _truncate(row["Output"])
     return row
 
@@ -141,7 +143,10 @@ def _lc_message(message: Mapping[str, Any]) -> dict[str, Any]:
         "content": content if isinstance(content, str) else json.dumps(content),
     }
     if kwargs.get("tool_calls"):
-        out["tool_calls"] = tuple({"name": t.get("name"), "args": t.get("args")} for t in kwargs["tool_calls"])
+        out["tool_calls"] = tuple(
+            {"name": t.get("name"), "args": t.get("args")}  # mutable-ok: JSON tool calls need object payloads
+            for t in kwargs["tool_calls"]
+        )
     if role == "tool" and kwargs.get("name"):
         out["name"] = kwargs["name"]
     return out

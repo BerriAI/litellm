@@ -26,7 +26,7 @@ _SUPPORTED_PARAMS: Final = ("dimensions", "encoding_format", "user")
 
 class EdenAIEmbeddingConfig(BaseEmbeddingConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: inherited contract
-        return list(_SUPPORTED_PARAMS)
+        return list(_SUPPORTED_PARAMS)  # mutable-ok: inherited contract
 
     def map_openai_params(
         self,
@@ -35,7 +35,7 @@ class EdenAIEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: inherited contract
-        return {**optional_params, **pick(non_default_params, _SUPPORTED_PARAMS)}
+        return {**optional_params, **pick(non_default_params, _SUPPORTED_PARAMS)}  # mutable-ok: inherited contract
 
     def validate_environment(
         self,
@@ -67,7 +67,7 @@ class EdenAIEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict[str, object],  # mutable-ok: inherited contract
         headers: dict[str, object],  # mutable-ok: inherited contract
     ) -> dict[str, object]:  # mutable-ok: inherited contract
-        return {"model": model, "input": input, **optional_params}
+        return {"model": model, "input": input, **optional_params}  # mutable-ok: inherited contract
 
     def transform_embedding_response(
         self,

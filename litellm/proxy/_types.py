@@ -4059,7 +4059,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     pointfive: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="pointfive",
         ui_callback_name="PointFive",
-        litellm_callback_params=[
+        litellm_callback_params=[  # mutable-ok: the registry field is typed list
             "POINTFIVE_API_KEY",
             "POINTFIVE_API_URL",
         ],
@@ -4074,7 +4074,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     zerobus: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="zerobus",
         ui_callback_name="Databricks Zerobus",
-        litellm_callback_params=[
+        litellm_callback_params=[  # mutable-ok: the registry field is typed list
             "ZEROBUS_WORKSPACE_URL",
             "ZEROBUS_SERVER_ENDPOINT",
             "ZEROBUS_CLIENT_ID",

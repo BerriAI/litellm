@@ -160,7 +160,7 @@ async def _relay_elicitation_to_downstream(
             verbose_logger.info("MCP elicitation: relaying generic elicitation to downstream")
             result = await downstream_session.elicit(
                 message=getattr(params, "message", ""),
-                requested_schema=getattr(params, "requested_schema", {}),
+                requested_schema=getattr(params, "requested_schema", {}),  # mutable-ok: elicitation default schema
             )
         verbose_logger.info(
             "MCP elicitation: downstream responded with action=%s",

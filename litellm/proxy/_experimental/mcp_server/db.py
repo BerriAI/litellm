@@ -514,11 +514,15 @@ def _db_transaction_manager(prisma_client: PrismaClient) -> _UserEnvVarsTransact
 
 
 def _identifier_where(value: str, exclude_server_id: str | None) -> "prisma_db_types.LiteLLM_MCPServerTableWhereInput":
-    own_row_guard: Final = ({"NOT": [{"server_id": exclude_server_id}]},) if exclude_server_id is not None else ()
+    own_row_guard: Final = (
+        ({"NOT": [{"server_id": exclude_server_id}]},)  # mutable-ok: prisma where-inputs must be plain dicts
+        if exclude_server_id is not None
+        else ()
+    )
     where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {
-        "AND": [
+        "AND": [  # mutable-ok: prisma where-inputs must be plain dicts
             {
-                "OR": [
+                "OR": [  # mutable-ok: prisma where-inputs must be plain dicts
                     {"server_name": {"equals": value, "mode": "insensitive"}},
                     {"alias": {"equals": value, "mode": "insensitive"}},
                 ]
@@ -1114,7 +1118,7 @@ async def _update_mcp_server_row(
         table: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]",
     ) -> "prisma_db_models.LiteLLM_MCPServerTable | None":
         return await table.update(
-            where={"server_id": server_id},
+            where={"server_id": server_id},  # mutable-ok: prisma where-inputs must be plain dicts
             data=data_dict,
         )
 
@@ -1711,7 +1715,7 @@ async def list_server_user_credentials(
     """Every user's stored credential for one server, typed but without the secret, for admins."""
     rows: Final = await _db_find_user_credential_rows(
         prisma_client,
-        {"server_id": server_id},
+        {"server_id": server_id},  # mutable-ok: prisma where-inputs must be plain dicts
     )
     return tuple(_server_user_credential_item(row) for row in rows)
 

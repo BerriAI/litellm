@@ -142,7 +142,7 @@ PEM_CERT_HEADER: Final = b"-----BEGIN CERTIFICATE-----"
 PG_SSL_REQUEST: Final = struct.pack("!ii", 8, 80877103)
 TLS_PROBE_TIMEOUT_SECONDS: Final = 10.0
 
-RootCertResolver: TypeAlias = Callable[[str, str, int], str]
+RootCertResolver: TypeAlias = Callable[[str, str, int], str]  # mutable-ok: Callable parameter syntax
 
 
 class _VerifiedChainSource(Protocol):

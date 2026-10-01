@@ -157,7 +157,9 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         mcp_tool: Final = MCPTool(
             name=mcp_tool_name,
             description=mcp_tool_description or "",
-            input_schema=dict(mcp_input_schema) if isinstance(mcp_input_schema, Mapping) else {},
+            input_schema=dict(mcp_input_schema)
+            if isinstance(mcp_input_schema, Mapping)
+            else {},  # mutable-ok: SDK dict field
         )
         openai_tool: Final = transform_mcp_tool_to_openai_tool(mcp_tool)
         fn: Final = openai_tool["function"]

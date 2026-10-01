@@ -157,11 +157,11 @@ class SingulrGuardrail(CustomGuardrail):
         )
         if not any(value for _, value in resolved):
             return None
-        return {key: value for key, value in resolved if value}
+        return {key: value for key, value in resolved if value}  # mutable-ok: short-lived JSON payload dict
 
     @staticmethod
     def _build_user_message(text: str) -> Mapping[str, str]:
-        return {"role": "user", "content": text}
+        return {"role": "user", "content": text}  # mutable-ok: short-lived JSON payload dict
 
     def _build_headers(self) -> Mapping[str, str]:
         all_headers: Final = MappingProxyType(

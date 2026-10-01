@@ -115,7 +115,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             )
             raw_title: Final = block.get("title")
             filename: Final = raw_title if isinstance(raw_title, str) and raw_title else "document.pdf"
-            return {
+            return {  # mutable-ok: API message payload
                 "type": "input_file",
                 "filename": filename,
                 "file_data": f"data:{media_type};base64,{data}",
@@ -124,7 +124,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             url: Final = source.get("url")
             if not isinstance(url, str) or not url:
                 return None
-            return {"type": "input_file", "file_url": url}
+            return {"type": "input_file", "file_url": url}  # mutable-ok: API message payload
         return None
 
     @staticmethod
@@ -135,8 +135,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         """Plain string output, or a part list when document file parts are present."""
         if not file_parts:
             return output_text
-        text_parts: Final = [{"type": "input_text", "text": output_text}] if output_text else []
-        return [*text_parts, *file_parts]
+        text_parts: Final = (
+            [{"type": "input_text", "text": output_text}] if output_text else []  # mutable-ok: API message payload
+        )
+        return [*text_parts, *file_parts]  # mutable-ok: API message payload
 
     @staticmethod
     def _translate_midturn_system_content_to_responses(
@@ -144,10 +146,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     ) -> list[dict[str, object]]:  # mutable-ok: API message payload
         """Convert in-sequence system content to Responses input-text parts."""
         if isinstance(content, str):
-            return [{"type": "input_text", "text": content}] if content else []
+            return (
+                [{"type": "input_text", "text": content}] if content else []  # mutable-ok: API message payload
+            )
         if not isinstance(content, list):
-            return []
-        return [
+            return []  # mutable-ok: API message payload
+        return [  # mutable-ok: API message payload
             with_prompt_cache_breakpoint({"type": "input_text", "text": text}, block.get("prompt_cache_breakpoint"))
             for block in content
             if isinstance(block, dict) and block.get("type") == "text" and (text := block.get("text"))  # pyright: ignore[reportUnnecessaryIsInstance]  # untrusted client payload
@@ -199,14 +203,14 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         btype: Final = first.get("type")
         if btype in ("thinking", "redacted_thinking"):
             replayed: Final = responses_reasoning_items_from_thinking_blocks(group)
-            return tuple(dict(item) for item in replayed)
+            return tuple(dict(item) for item in replayed)  # mutable-ok: API message payload
         if btype == "tool_use":
             return (
-                {
+                {  # mutable-ok: API message payload
                     "type": "function_call",
                     "call_id": first.get("id", ""),
                     "name": first.get("name", ""),
-                    "arguments": json.dumps(first.get("input", {})),
+                    "arguments": json.dumps(first.get("input", {})),  # mutable-ok: API message payload
                 },
             )
         return ()
@@ -235,7 +239,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 system_parts = self._translate_midturn_system_content_to_responses(m.get("content"))
                 if system_parts:
                     input_items.append(
-                        {
+                        {  # mutable-ok: API message payload
                             "type": "message",
                             "role": "system",
                             "content": system_parts,
@@ -318,7 +322,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                         else TOOL_RESULT_IMAGE_PLACEHOLDER
                                     )
                                     tool_image_parts.extend(
-                                        {"type": "input_image", "image_url": url} for url in image_urls
+                                        {"type": "input_image", "image_url": url}  # mutable-ok: json content part
+                                        for url in image_urls
                                     )
                             else:
                                 output_text = str(inner)
@@ -331,15 +336,15 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 }
                             )
                     if tool_image_parts:
-                        boundary_part = {
+                        boundary_part = {  # mutable-ok: json content part
                             "type": "input_text",
                             "text": TOOL_RESULT_IMAGE_BOUNDARY,
                         }
                         input_items.append(
-                            {
+                            {  # mutable-ok: json input item
                                 "type": "message",
                                 "role": "user",
-                                "content": [boundary_part, *tool_image_parts],
+                                "content": [boundary_part, *tool_image_parts],  # mutable-ok: json content list
                             }
                         )
                     if user_parts:
@@ -368,7 +373,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         for item in self._assistant_group_to_input_items(tuple(block for _, block in group))
                     )
                     asst_parts: list[dict[str, Any]] = [  # mutable-ok: API message payload
-                        {"type": "output_text", "text": block.get("text", "")}
+                        {"type": "output_text", "text": block.get("text", "")}  # mutable-ok: API message payload
                         for block in blocks
                         if block.get("type") == "text"
                     ]
@@ -526,7 +531,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if developer_parts:
             input_items.insert(
                 0,
-                {
+                {  # mutable-ok: API message payload
                     "type": "message",
                     "role": "developer",
                     "content": developer_parts,
@@ -538,7 +543,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             "input": input_items,
         }
         if include_encrypted_reasoning:
-            responses_kwargs["include"] = [RESPONSES_INCLUDE_ENCRYPTED_REASONING]
+            responses_kwargs["include"] = [RESPONSES_INCLUDE_ENCRYPTED_REASONING]  # mutable-ok: API request payload
 
         if system and not developer_parts:
             if isinstance(system, str):

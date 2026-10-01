@@ -363,7 +363,7 @@ class CustomGuardrail(CustomLogger):
             land and degrade to blocking instead of silently letting the
             flagged request through unmodified.
         """
-        advisory_message: Final = {"role": "system", "content": message}
+        advisory_message: Final = {"role": "system", "content": message}  # mutable-ok: plain dict for live request
         existing_messages: Final = data.get("messages")
         existing_input: Final = data.get("input")
         existing_instructions: Final = data.get("instructions")
@@ -374,7 +374,7 @@ class CustomGuardrail(CustomLogger):
             # model to disregard a trailing warning. Prefer it over "input"
             # whenever present.
             if isinstance(existing_messages, list):
-                messages_with_instructions_note: Final = [
+                messages_with_instructions_note: Final = [  # mutable-ok: fresh list
                     *existing_messages,
                     advisory_message,
                 ]
@@ -386,7 +386,7 @@ class CustomGuardrail(CustomLogger):
             # real, read field (e.g. a chat-completions call carrying a stray
             # "input"), so write to both when both are present.
             if isinstance(existing_messages, list):
-                messages_with_input_note: Final = [*existing_messages, advisory_message]
+                messages_with_input_note: Final = [*existing_messages, advisory_message]  # mutable-ok: fresh list
                 data["messages"] = messages_with_input_note  # rebind-ok: mutates caller's dict by design
             # The Responses API reads "input", not "messages" -- appending only to
             # "messages" would leave the advisory unreachable for that endpoint.
@@ -400,10 +400,10 @@ class CustomGuardrail(CustomLogger):
             # non-delivery so the caller degrades to blocking.
             return False
         if isinstance(existing_messages, list):
-            messages_without_input_note: Final = [*existing_messages, advisory_message]
+            messages_without_input_note: Final = [*existing_messages, advisory_message]  # mutable-ok: fresh list
             data["messages"] = messages_without_input_note  # rebind-ok: mutates caller's dict by design
             return True
-        sole_message: Final = [advisory_message]
+        sole_message: Final = [advisory_message]  # mutable-ok: plain list for the live JSON request
         data["messages"] = sole_message  # rebind-ok: mutates caller's dict by design
         return True
 

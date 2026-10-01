@@ -88,7 +88,7 @@ def _rewrite_advertised_id(
     if not isinstance(payload_id, str):
         return event
 
-    rewritten: Final = {**payload, "id": rewrite(payload_id)}
+    rewritten: Final = {**payload, "id": rewrite(payload_id)}  # mutable-ok: pydantic cannot serialize a frozen map
     setattr(event, "response", rewritten)
     return event
 

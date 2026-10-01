@@ -115,7 +115,7 @@ def _stream(logging_obj: Logging) -> bool:
 
 def _sse(completed: bool = True, model: str = "claude-sonnet-5") -> tuple[bytes, ...]:
     events: Final = (
-        {
+        {  # mutable-ok: json.dumps needs a concrete event dictionary
             "type": "message_start",
             "message": _message(False, model),
         },

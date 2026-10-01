@@ -1978,7 +1978,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # system message stays in the conversation: hoisting it rewrites the cached
         # prefix and re-bills the whole history at cache-write pricing (#36559).
         leading_system_run, later_messages = split_leading_system_run(messages)
-        anthropic_system_message_list: Final = self.translate_system_message(messages=list(leading_system_run))
+        anthropic_system_message_list: Final = self.translate_system_message(
+            messages=list(leading_system_run)  # mutable-ok: translate_system_message pops from the list it is given
+        )
         # Handling anthropic API Prompt Caching
         if len(anthropic_system_message_list) > 0:
             optional_params["system"] = anthropic_system_message_list
@@ -1992,7 +1994,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         try:
             anthropic_messages = anthropic_messages_pt(
                 model=model,
-                messages=list(conversation),
+                messages=list(conversation),  # mutable-ok: anthropic_messages_pt rewrites entries in place
                 llm_provider=self._resolved_provider,
             )
         except Exception as e:
@@ -2106,7 +2108,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params.pop("output_config", None)
                 data.pop("output_config", None)
                 return
-            format_only: Final = {"format": preserved_format}
+            format_only: Final = {"format": preserved_format}  # mutable-ok: json body
             optional_params["output_config"] = format_only  # rebind-ok: out-param store
             data["output_config"] = format_only  # rebind-ok: out-param store
             return
@@ -2513,7 +2515,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ) -> list[object]:
         content: Final = completion_response.get("content")
         blocks: Final = content if isinstance(content, Sequence) else ()
-        inputs: Final = {
+        inputs: Final = {  # mutable-ok: indexes provider server inputs
             call_id: tool_input
             for block in blocks
             if isinstance(block, Mapping)
@@ -2522,10 +2524,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and isinstance((call_id := block.get("id")), str)
             and isinstance((tool_input := block.get("input")), Mapping)
         }
-        return [
+        return [  # mutable-ok: provider-neutral response items
             build_web_search_call(
                 tool_id=tool_use_id,
-                tool_input=inputs.get(tool_use_id, {}),
+                tool_input=inputs.get(tool_use_id, {}),  # mutable-ok: empty provider input
                 result=result,
             )
             for result in web_search_results

@@ -66,7 +66,7 @@ async def _search_skills(
     to_response: Final = LiteLLMSkillsTransformationHandler().db_skill_to_response
     match outcome:
         case SkillSearchHits(hits):
-            skills: Final = [
+            skills: Final = [  # mutable-ok: ListSkillsResponse.data requires list[Skill]; never mutated after
                 to_response(hit.skill).model_copy(update=MappingProxyType({"search_score": hit.score})) for hit in hits
             ]
             return ListSkillsResponse(data=skills, has_more=False, next_page=None)

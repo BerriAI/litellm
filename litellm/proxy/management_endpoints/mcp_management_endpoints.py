@@ -303,7 +303,9 @@ if MCP_AVAILABLE:
     def raise_mcp_identifier_conflict(conflict: McpIdentifierConflict) -> NoReturn:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": mcp_identifier_conflict_message(conflict)},
+            detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
+                "error": mcp_identifier_conflict_message(conflict)
+            },
         )
 
     def warn_if_id_jag_server_outruns_sso(server_id: str | None, auth_type: MCPAuth | str | None) -> None:
@@ -690,7 +692,7 @@ if MCP_AVAILABLE:
             if scopes_as_objects and all(isinstance(scope, str) and scope for scope in scopes_as_objects)
             else {}
         )
-        preserved: Final = {
+        preserved: Final = {  # mutable-ok: API response payload
             **{
                 key: value
                 for key in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS
@@ -725,7 +727,7 @@ if MCP_AVAILABLE:
             if not _user_is_full_admin(user_api_key_dict):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail={
+                    detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
                         "error": "Proxy admin access required to revoke another user's MCP credential.",
                     },
                 )
@@ -1461,7 +1463,9 @@ if MCP_AVAILABLE:
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": "Admin access required to view MCP gateway sessions."},
+                detail={  # mutable-ok: HTTPException detail must be a plain mapping to keep this route's {"error": ...} response shape
+                    "error": "Admin access required to view MCP gateway sessions."
+                },
             )
         from litellm.proxy._experimental.mcp_server.server import (
             get_mcp_gateway_sessions_report,
@@ -1487,14 +1491,14 @@ if MCP_AVAILABLE:
         if not _user_is_full_admin(user_api_key_dict):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={
+                detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
                     "error": "Proxy admin access required to terminate MCP gateway sessions.",
                 },
             )
         if session_id_prefix is None and user_id is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
+                detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
                     "error": "Provide session_id_prefix and/or user_id to select the sessions to terminate.",
                 },
             )
@@ -1919,7 +1923,7 @@ if MCP_AVAILABLE:
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={
+                detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
                     "error": "User does not have permission to import mcp servers. You can only import mcp servers if you are a PROXY_ADMIN."
                 },
             )
@@ -2510,7 +2514,7 @@ if MCP_AVAILABLE:
         if binding is not None and binding.mode == "enforce":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={
+                detail={  # mutable-ok: FastAPI exception detail requires a JSON-serializable dictionary
                     "error": "oauth_identity_binding_enforced",
                     "error_description": (
                         "Direct credential storage is disabled for this server: its OAuth identity "
@@ -2715,7 +2719,7 @@ if MCP_AVAILABLE:
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={
+                detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
                     "error": "Admin access required to view MCP server user credentials.",
                 },
             )
@@ -3013,7 +3017,7 @@ if MCP_AVAILABLE:
             if not relay_eligible:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
+                    detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
                         "error": (
                             "per_server_oauth_discovery is only supported for auth_type oauth2 with oauth2_flow "
                             "authorization_code and without delegate_auth_to_upstream."

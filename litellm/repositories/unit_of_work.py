@@ -25,8 +25,8 @@ from litellm.repositories.prisma_protocols import BatchTable, PrismaBatch
 
 
 def _spend_reset_data(budget_reset_at: datetime | None, spend_decrement: float) -> Mapping[str, object]:
-    spend: Final[object] = {"decrement": spend_decrement}
-    return {"spend": spend, "budget_reset_at": budget_reset_at}
+    spend: Final[object] = {"decrement": spend_decrement}  # mutable-ok: prisma update payload must be a dict
+    return {"spend": spend, "budget_reset_at": budget_reset_at}  # mutable-ok: prisma update payload must be a dict
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +35,7 @@ class KeySpendResetWrites:
 
     def queue_spend_reset(self, token: str, budget_reset_at: datetime | None, spend_decrement: float) -> None:
         self.table.update(
-            where={"token": token},
+            where={"token": token},  # mutable-ok: prisma where filter must be a dict
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
 
@@ -46,7 +46,7 @@ class UserSpendResetWrites:
 
     def queue_spend_reset(self, user_id: str, budget_reset_at: datetime | None, spend_decrement: float) -> None:
         self.table.update(
-            where={"user_id": user_id},
+            where={"user_id": user_id},  # mutable-ok: prisma where filter must be a dict
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
 
@@ -57,7 +57,7 @@ class TeamSpendResetWrites:
 
     def queue_spend_reset(self, team_id: str, budget_reset_at: datetime | None, spend_decrement: float) -> None:
         self.table.update(
-            where={"team_id": team_id},
+            where={"team_id": team_id},  # mutable-ok: prisma where filter must be a dict
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
 
@@ -74,7 +74,7 @@ class LinkedSpendResetWrites:
         cascade's read and its commit survives the reset instead of being erased."""
         self.table.update_many(
             where=where,
-            data={"spend": {"decrement": amount}},
+            data={"spend": {"decrement": amount}},  # mutable-ok: prisma update payload must be a dict
         )
 
 

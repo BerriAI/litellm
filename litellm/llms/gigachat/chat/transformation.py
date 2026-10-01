@@ -136,7 +136,7 @@ class GigaChatConfig(BaseConfig):
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base class contract returns list
         """Return list of supported OpenAI parameters."""
-        return [
+        return [  # mutable-ok: base class contract returns list
             "stream",
             "temperature",
             "top_p",
@@ -195,7 +195,7 @@ class GigaChatConfig(BaseConfig):
                     schema_name = json_schema.get("name", "structured_output")
                     schema = json_schema.get("schema", {})
 
-                    function_def = {
+                    function_def = {  # mutable-ok: request payload for httpx
                         "name": schema_name,
                         "description": f"Output structured response: {schema_name}",
                         "parameters": schema,
@@ -210,7 +210,7 @@ class GigaChatConfig(BaseConfig):
                         ),
                         function_def,
                     ]
-                    optional_params["function_call"] = {"name": schema_name}
+                    optional_params["function_call"] = {"name": schema_name}  # mutable-ok: request payload
                     optional_params["_structured_output"] = True
 
         return optional_params

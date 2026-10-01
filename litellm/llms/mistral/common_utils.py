@@ -28,12 +28,14 @@ def get_mistral_auth_headers(
         raise ValueError(
             "Missing Mistral API Key - A call is being made to Mistral but no key is set either in the environment variables or via params"
         )
-    return dict(headers, Authorization=f"Bearer {resolved_key}")
+    return dict(headers, Authorization=f"Bearer {resolved_key}")  # mutable-ok: BaseConfig contract returns dict
 
 
 def mistral_error(error_message: str, status_code: int, headers: Mapping[str, str] | httpx.Headers) -> MistralError:
     return MistralError(
         status_code=status_code,
         message=error_message,
-        headers=headers if isinstance(headers, httpx.Headers) else httpx.Headers(dict(headers)),
+        headers=headers
+        if isinstance(headers, httpx.Headers)
+        else httpx.Headers(dict(headers)),  # mutable-ok: httpx.Headers takes a dict
     )

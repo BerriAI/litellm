@@ -108,7 +108,7 @@ class NimbleSearchConfig(BaseSearchConfig):
         )
         if not resolved_api_key:
             raise ValueError("NIMBLE_API_KEY is not set. Set `NIMBLE_API_KEY` environment variable.")
-        return {
+        return {  # mutable-ok: httpx requires a plain dict of headers
             **headers,
             "Authorization": f"Bearer {resolved_api_key}",
             "Content-Type": "application/json",
@@ -156,7 +156,7 @@ class NimbleSearchConfig(BaseSearchConfig):
             {param: value for param, value in optional_params.items() if param not in unified_params}
         )
 
-        return {
+        return {  # mutable-ok: httpx requires a plain dict for the JSON body
             **_domain_filters(optional_params.get("search_domain_filter")),
             **passthrough,
             "query": " ".join(query) if isinstance(query, list) else query,
@@ -188,11 +188,11 @@ class NimbleSearchConfig(BaseSearchConfig):
             raise self.get_error_class(
                 error_message=f"response does not match the documented /v2/search schema: {e}",
                 status_code=raw_response.status_code,
-                headers=dict(raw_response.headers),
+                headers=dict(raw_response.headers),  # mutable-ok: BaseSearchConfig.get_error_class signature
             )
 
         return SearchResponse(
-            results=[
+            results=[  # mutable-ok: SearchResponse.results is declared list[SearchResult]
                 SearchResult(
                     title=result.title or "",
                     url=result.url or "",

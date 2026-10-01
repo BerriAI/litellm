@@ -490,7 +490,9 @@ class ChunkProcessor:
     def get_combined_tool_content(
         self, tool_call_chunks: Sequence["_ToolCallChunk"]
     ) -> list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall]:
-        tool_calls_list: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] = []
+        tool_calls_list: list[
+            ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
+        ] = []  # mutable-ok: see return type
         tool_call_map: Final[dict[_ToolCallKey, dict[str, Any]]] = {}
 
         for chunk in tool_call_chunks:

@@ -112,7 +112,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
             "input": ["text1", "text2", ...]
         }
         """
-        normalized_input: Final = [input] if isinstance(input, str) else input
+        normalized_input: Final = [input] if isinstance(input, str) else input  # mutable-ok: preserve list API
         return {
             "model": model.removeprefix("gigachat/"),
             "input": normalized_input,

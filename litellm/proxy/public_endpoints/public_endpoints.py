@@ -557,7 +557,7 @@ async def get_autorouter_presets(
 
 @router.get(
     "/public/autorouter_presets",
-    tags=["public", "auto router"],
+    tags=["public", "auto router"],  # mutable-ok: FastAPI route tags take a list
     response_model=dict[str, AutoRouterPresetRecord],
 )
 async def get_public_autorouter_presets() -> Mapping[str, AutoRouterPresetRecord]:

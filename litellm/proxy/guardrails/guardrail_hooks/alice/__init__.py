@@ -24,11 +24,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _alice_guardrail_callback
 
 
-guardrail_initializer_registry: Final = {
+guardrail_initializer_registry: Final = {  # mutable-ok: module-level registry, built once and never mutated
     SupportedGuardrailIntegrations.ALICE.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry: Final = {
+guardrail_class_registry: Final = {  # mutable-ok: module-level registry, built once and never mutated
     SupportedGuardrailIntegrations.ALICE.value: AliceGuardrail,
 }

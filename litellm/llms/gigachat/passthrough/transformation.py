@@ -93,14 +93,16 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
             raw_messages: Final = request_data.get("messages")
             litellm_model_response: Final = provider_chat_config.transform_response(
                 model=model,
-                messages=list(raw_messages) if isinstance(raw_messages, list) else [],
+                messages=list(raw_messages)
+                if isinstance(raw_messages, list)
+                else [],  # mutable-ok: transform_response wants a list
                 raw_response=httpx_response,
                 model_response=ModelResponse(),
                 logging_obj=logging_obj,
-                optional_params={},
-                litellm_params={},
+                optional_params={},  # mutable-ok: empty dict kwarg for transform_response
+                litellm_params={},  # mutable-ok: empty dict kwarg for transform_response
                 api_key="",
-                request_data=dict(request_data),
+                request_data=dict(request_data),  # mutable-ok: transform_response wants a dict
                 encoding=encoding,
             )
 
@@ -121,10 +123,10 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
                     raw_response=httpx_response,
                     model_response=EmbeddingResponse(),
                     logging_obj=logging_obj,
-                    optional_params={},
+                    optional_params={},  # mutable-ok: empty dict kwarg for transform_embedding_response
                     api_key="",
-                    request_data=dict(request_data),
-                    litellm_params={},
+                    request_data=dict(request_data),  # mutable-ok: transform_embedding_response wants a dict
+                    litellm_params={},  # mutable-ok: empty dict kwarg for transform_embedding_response
                 )
             )
 

@@ -316,10 +316,10 @@ _MODELS: Final = ("gpt-4o", "gpt-5.5", "claude-opus-4-1")
 
 def _policy_forest(draw: st.DrawFn) -> dict[str, Policy]:  # mutable-ok: PolicyResolver takes dict[str, Policy]
     names: Final = tuple(f"p{i}" for i in range(draw(st.integers(min_value=1, max_value=6))))
-    return {
+    return {  # mutable-ok: PolicyResolver takes dict[str, Policy]
         name: Policy(
             inherit=draw(st.sampled_from((None, *names[:i]))),
-            guardrails=PolicyGuardrails(add=[f"g-{name}"]),
+            guardrails=PolicyGuardrails(add=[f"g-{name}"]),  # mutable-ok: pydantic list field
             condition=draw(st.sampled_from((None, *(PolicyCondition(model=m) for m in _MODELS)))),
         )
         for i, name in enumerate(names)
@@ -380,11 +380,11 @@ class TestChainMatchingProperties:
 class TestAncestorAdmissionLogging:
     @staticmethod
     def _chain() -> dict[str, Policy]:  # mutable-ok: PolicyResolver takes dict[str, Policy]
-        return {
-            "parent": Policy(guardrails=PolicyGuardrails(add=["g-parent"])),
+        return {  # mutable-ok: PolicyResolver takes dict[str, Policy]
+            "parent": Policy(guardrails=PolicyGuardrails(add=["g-parent"])),  # mutable-ok: pydantic list field
             "child": Policy(
                 inherit="parent",
-                guardrails=PolicyGuardrails(add=["g-child"]),
+                guardrails=PolicyGuardrails(add=["g-child"]),  # mutable-ok: pydantic list field
                 condition=PolicyCondition(model="gpt-5.5"),
             ),
         }
@@ -407,14 +407,14 @@ class TestAncestorAdmissionLogging:
         assert not [r for r in caplog.records if "applied through ancestor" in r.getMessage()]
 
     def test_no_log_when_no_chain_member_applies(self, caplog):
-        policies: Final = {
+        policies: Final = {  # mutable-ok: PolicyResolver takes dict[str, Policy]
             "parent": Policy(
-                guardrails=PolicyGuardrails(add=["g-parent"]),
+                guardrails=PolicyGuardrails(add=["g-parent"]),  # mutable-ok: pydantic list field
                 condition=PolicyCondition(model="claude-opus-4-1"),
             ),
             "child": Policy(
                 inherit="parent",
-                guardrails=PolicyGuardrails(add=["g-child"]),
+                guardrails=PolicyGuardrails(add=["g-child"]),  # mutable-ok: pydantic list field
                 condition=PolicyCondition(model="gpt-5.5"),
             ),
         }

@@ -185,7 +185,9 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
 
     @staticmethod
     def _to_result(doc: "Document", text_field: str) -> VectorStoreSearchResult:
-        content: Final = [VectorStoreResultContent(text=str(getattr(doc, text_field, "")), type="text")]
+        content: Final = [  # mutable-ok: VectorStoreSearchResult declares a list of content parts
+            VectorStoreResultContent(text=str(getattr(doc, text_field, "")), type="text")
+        ]
         return VectorStoreSearchResult(
             score=1.0 - float(getattr(doc, DISTANCE_FIELD_NAME)),
             content=content,
@@ -233,11 +235,11 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             if embedding_executor is not None
             else self.embedding_fn(
                 model=params.require_embedding_model(),
-                input=[query_text],
+                input=[query_text],  # mutable-ok: the injected embedding callable requires list input
                 **(params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG),
             )
         )
-        vec_params: Final = {"vec": pack_vector(embedding_response.data[0]["embedding"])}
+        vec_params: Final = {"vec": pack_vector(embedding_response.data[0]["embedding"])}  # mutable-ok: redis-py API
 
         if self.sync_client is not None:
             raw: Final = self.sync_client.ft(vector_store_id).search(knn, query_params=vec_params)
@@ -281,11 +283,11 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             if embedding_executor is not None
             else await self.aembedding_fn(
                 model=params.require_embedding_model(),
-                input=[query_text],
+                input=[query_text],  # mutable-ok: the injected embedding callable requires list input
                 **(params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG),
             )
         )
-        vec_params: Final = {"vec": pack_vector(embedding_response.data[0]["embedding"])}
+        vec_params: Final = {"vec": pack_vector(embedding_response.data[0]["embedding"])}  # mutable-ok: redis-py API
 
         if self.async_client is not None:
             raw: Final = await self.async_client.ft(vector_store_id).search(  # pyright: ignore[reportGeneralTypeIssues]  # types-redis 4.6 stubs shadow redis 5.3.1 and type the async client's ft() as the sync Search, so search() returns a non-awaitable Result; it is a coroutine at runtime

@@ -14,7 +14,7 @@ def copy_caller(auth: UserAPIKeyAuth | None) -> UserAPIKeyAuth | None:
     if auth is None:
         return None
     span: Final = auth.parent_otel_span
-    return deepcopy(auth, {id(span): span} if span is not None else None)
+    return deepcopy(auth, {id(span): span} if span is not None else None)  # mutable-ok: deepcopy mutates its memo
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,12 +69,12 @@ class OperationContext:
         return (
             self.user_api_key_auth,
             self.mcp_auth_header,
-            list(self.mcp_servers) if self.mcp_servers is not None else None,
+            list(self.mcp_servers) if self.mcp_servers is not None else None,  # mutable-ok: legacy policy list input
             {key: dict(value) for key, value in self.mcp_server_auth_headers.items()}
             if self.mcp_server_auth_headers is not None
             else None,
             dict(self.oauth2_headers) if self.oauth2_headers is not None else None,
-            dict(self.raw_headers) if self.raw_headers is not None else None,
+            dict(self.raw_headers) if self.raw_headers is not None else None,  # mutable-ok: legacy request header input
             self.client_ip,
         )
 

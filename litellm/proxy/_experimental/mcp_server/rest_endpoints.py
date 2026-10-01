@@ -1756,7 +1756,7 @@ if MCP_AVAILABLE:
                     "MCP tools/list preview timed out after %s seconds while paginating upstream tools",
                     listing_deadline,
                 )
-                return {
+                return {  # mutable-ok: error response payload
                     "status": "error",
                     "error": True,
                     "message": f"Timed out listing tools after {listing_deadline} seconds. "

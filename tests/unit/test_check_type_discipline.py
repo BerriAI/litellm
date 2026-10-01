@@ -113,24 +113,23 @@ def test_mutable_ok_on_a_real_violation_suppresses_and_is_not_lit013(tmp_path):
     assert "LIT013" not in codes
 
 
-def test_mutable_ok_on_a_clean_line_is_lit013(tmp_path):
+def test_mutable_ok_on_a_line_without_lit001_is_not_lit013(tmp_path):
     f = tmp_path / "snippet.py"
-    f.write_text("x: Final = (1, 2)  # mutable-ok: stale\n", encoding="utf-8")
+    f.write_text("x: Final = []  # mutable-ok: seed\ny: Final = (1, 2)  # mutable-ok: stale\n", encoding="utf-8")
+    assert checker.check_file(f) == ()
+
+
+def test_cast_ok_on_a_clean_line_is_lit013(tmp_path):
+    f = tmp_path / "snippet.py"
+    f.write_text("x: Final = 1  # cast-ok: stale\n", encoding="utf-8")
     found = checker.check_file(f)
     assert [v.code for v in found] == ["LIT013"]
-    assert "mutable-ok" in found[0].message
-
-
-def test_mutable_ok_on_a_construction_only_line_is_lit013(tmp_path):
-    f = tmp_path / "snippet.py"
-    f.write_text("x: Final = []  # mutable-ok: seed\n", encoding="utf-8")
-    assert [v.code for v in checker.check_file(f)] == ["LIT013"]
+    assert "cast-ok" in found[0].message
 
 
 def test_mutable_ok_does_not_suppress_rebind_codes(tmp_path):
     codes = _codes(tmp_path, "x = 1  # mutable-ok: wrong token\n")
     assert "LIT010" in codes
-    assert "LIT013" in codes
 
 
 def test_rebind_ok_on_a_real_param_rebind_is_not_lit013(tmp_path):

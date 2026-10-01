@@ -299,7 +299,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
     def _record_billing_usage(self, usage: Mapping[str, int]) -> None:
         """Stash this invocation's usage counters for the ``_process_*`` call the
         decorator runs next in the same asyncio task; overwrites any leftover."""
-        _billing_usage_stash.set(dict(usage) if usage else None)
+        _billing_usage_stash.set(dict(usage) if usage else None)  # mutable-ok: fresh snapshot, popped by _process_*
 
     def _pop_billing_tracing_detail(self) -> GuardrailTracingDetail | None:
         """Build the billing tracing detail from the stashed usage counters, priced

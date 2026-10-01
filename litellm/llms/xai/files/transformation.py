@@ -126,7 +126,7 @@ class XAIFilesConfig(BaseFilesConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> list[OpenAICreateFileRequestOptionalParams]:  # mutable-ok: BaseFilesConfig signature
-        return ["purpose"]
+        return ["purpose"]  # mutable-ok: BaseFilesConfig signature
 
     def map_openai_params(
         self,
@@ -153,7 +153,7 @@ class XAIFilesConfig(BaseFilesConfig):
             file=(filename, extracted["content"], content_type),
             purpose=(None, create_file_data.get("purpose") or _DEFAULT_PURPOSE),
         )
-        return dict(upload)
+        return dict(upload)  # mutable-ok: BaseFilesConfig signature
 
     def transform_create_file_response(
         self,
@@ -222,7 +222,7 @@ class XAIFilesConfig(BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
     ) -> list[OpenAIFileObject]:  # mutable-ok: BaseFilesConfig signature
-        return [
+        return [  # mutable-ok: BaseFilesConfig signature
             _to_openai_file_object(f)
             for f in XAIFileList.model_validate(raise_for_xai_status(raw_response).json()).data
         ]

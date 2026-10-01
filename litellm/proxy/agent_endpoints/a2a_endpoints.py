@@ -762,7 +762,9 @@ async def invoke_agent_a2a(
             body["metadata"] = {}
         body["metadata"]["agent_id"] = agent.agent_id
         body["metadata"]["model_group"] = f"a2a_agent/{agent_name}"
-        body["metadata"]["model_info"] = {"id": agent.agent_id}
+        body["metadata"]["model_info"] = {  # mutable-ok: request hooks mutate metadata before JSON logging
+            "id": agent.agent_id
+        }
         body["agent_id"] = agent.agent_id
 
         body.update(

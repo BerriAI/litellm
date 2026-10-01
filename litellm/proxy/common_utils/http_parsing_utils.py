@@ -164,7 +164,7 @@ def _parse_binary_body(body: bytes) -> dict:
             return parsed
     except orjson.JSONDecodeError:
         pass
-    return {}
+    return {}  # mutable-ok: auth parser returns a fresh dict per request
 
 
 async def _read_request_body(request: Request | None) -> dict:

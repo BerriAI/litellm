@@ -16,7 +16,9 @@ def _form_field_value(value: object) -> str:
 def _flatten_form_field(key: str, value: object) -> tuple[tuple[str, str], ...]:
     pending_fields: Final[  # mutable-ok: depth-capped stack walks nested JSON into multipart names
         list[tuple[str, object, int]]
-    ] = [(key, value, 0)]
+    ] = [  # mutable-ok: depth-capped stack walks nested JSON into multipart names
+        (key, value, 0)
+    ]
     flat_fields: Final[list[tuple[str, str]]] = []  # mutable-ok: local accumulator
     while pending_fields:
         current_key, current_value, depth = pending_fields.pop()
@@ -46,7 +48,9 @@ def _is_form_scalar(value: object) -> bool:
 def _flatten_form_data_field(key: str, value: object) -> tuple[tuple[str, str | tuple[str, ...]], ...]:
     pending_fields: Final[  # mutable-ok: depth-capped stack walks nested JSON into multipart names
         list[tuple[str, object, int]]
-    ] = [(key, value, 0)]
+    ] = [  # mutable-ok: depth-capped stack walks nested JSON into multipart names
+        (key, value, 0)
+    ]
     flat_fields: Final[list[tuple[str, str | tuple[str, ...]]]] = []  # mutable-ok: local accumulator
     while pending_fields:
         current_key, current_value, depth = pending_fields.pop()

@@ -222,7 +222,9 @@ def _has_targets(chosen: Sequence[object]) -> bool:
 
 
 def pick_targets(defaults: tuple[Target, ...] = ("claude", "codex"), *, edit: bool = False) -> tuple[Target, ...]:
-    choices: Final = [Choice(value, name=label, enabled=value in defaults) for value, label in _TARGETS]
+    choices: Final = [  # mutable-ok: InquirerPy requires a list
+        Choice(value, name=label, enabled=value in defaults) for value, label in _TARGETS
+    ]
     picked: Final = _TARGET_SELECTION.validate_python(
         inquirer.checkbox(
             message="Which agents should be edited? Unselected agents keep their current setup"
@@ -237,7 +239,7 @@ def pick_targets(defaults: tuple[Target, ...] = ("claude", "codex"), *, edit: bo
 
 
 def _pick_model(listed: Sequence[str], default: str | None = None) -> str | None:
-    choices: Final = [_KEEP_DEFAULT_MODEL, *listed]
+    choices: Final = [_KEEP_DEFAULT_MODEL, *listed]  # mutable-ok: InquirerPy requires a list
     picked: Final = _MODEL_SELECTION.validate_python(
         inquirer.fuzzy(
             message="Model Claude Code starts on (type to filter; /model switches any time):",
@@ -249,7 +251,7 @@ def _pick_model(listed: Sequence[str], default: str | None = None) -> str | None
 
 
 def _pick_codex_model(listed: Sequence[str], default: str | None = None) -> str:
-    choices: Final = list(listed)
+    choices: Final = list(listed)  # mutable-ok: InquirerPy's choices parameter requires a list
     return _MODEL_SELECTION.validate_python(
         inquirer.fuzzy(
             message="Model Codex starts on (type to filter):",

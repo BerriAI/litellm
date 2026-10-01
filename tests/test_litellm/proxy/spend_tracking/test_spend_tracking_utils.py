@@ -5389,13 +5389,13 @@ def test_baseline_estimate_metadata_comes_from_the_logging_stamp() -> None:
     supplied: Final = MappingProxyType({"version": 1, "status": "estimated", "reason": "caller_supplied"})
     recorded: Final = MappingProxyType({"version": 1, "status": "unknown", "reason": "history_unavailable"})
     result: Final = _get_spend_logs_metadata(
-        {"autorouter_savings": 999.0, "autorouter_savings_estimate": supplied},
+        {"autorouter_savings": 999.0, "autorouter_savings_estimate": supplied},  # mutable-ok: legacy metadata helper accepts dicts
         autorouter_savings=None,
         autorouter_savings_estimate=recorded,
     )
     assert result["autorouter_savings"] is None
     assert result["autorouter_savings_estimate"] == recorded
-    absent: Final = _get_spend_logs_metadata({"autorouter_savings_estimate": supplied})
+    absent: Final = _get_spend_logs_metadata({"autorouter_savings_estimate": supplied})  # mutable-ok: legacy metadata helper accepts dicts
     assert absent["autorouter_savings_estimate"] is None
 
 

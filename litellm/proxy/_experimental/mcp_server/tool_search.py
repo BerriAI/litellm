@@ -121,7 +121,11 @@ _MCP_PROXY_IDENTITY_META_KEY: Final[str] = "litellm.ai/proxy_tool_identity"
 
 def with_mcp_proxy_identity(tool: Tool, server_id: str) -> Tool:
     identity: Final[MCPProxyToolIdentity] = {"server_id": server_id, "tool_name": tool.name}
-    return tool.model_copy(update={"meta": {**(tool.meta or {}), _MCP_PROXY_IDENTITY_META_KEY: identity}})
+    return tool.model_copy(
+        update={  # mutable-ok: Pydantic update payload
+            "meta": {**(tool.meta or {}), _MCP_PROXY_IDENTITY_META_KEY: identity}  # mutable-ok: metadata mapping
+        }
+    )
 
 
 def _mcp_proxy_identity(tool: Tool) -> MCPProxyToolIdentity:
@@ -147,7 +151,7 @@ def _proxy_search_result(hit: MCPToolSearchHit) -> MCPProxySearchResult:
         "name": hit.tool.name,
         "description": hit.tool.description or "",
     }
-    return {**base, "score": hit.score} if hit.score is not None else base
+    return {**base, "score": hit.score} if hit.score is not None else base  # mutable-ok: wire result payload
 
 
 def _proxy_schema_result(tool: Tool) -> MCPProxySchemaResult:
@@ -159,7 +163,7 @@ def _proxy_schema_result(tool: Tool) -> MCPProxySchemaResult:
     }
     if tool.output_schema is None:
         return base
-    return {**base, "outputSchema": tool.output_schema}
+    return {**base, "outputSchema": tool.output_schema}  # mutable-ok: wire schema payload
 
 
 def _tool_text(tool: Tool) -> str:
@@ -259,7 +263,7 @@ class VirtualToolDefinition(TypedDict):
 
 
 def _json_array(*items: str) -> Sequence[str]:
-    return list(items)
+    return list(items)  # mutable-ok: jsonschema's metaschema only accepts a JSON array for required
 
 
 _MCP_TOOL_SEARCH_DEFINITION: Final[VirtualToolDefinition] = {
@@ -378,7 +382,7 @@ def _text_tool_result(text: str, is_error: bool) -> CallToolResult:
     from mcp.types import CallToolResult, TextContent
 
     return CallToolResult(
-        content=[TextContent(type="text", text=text)],
+        content=[TextContent(type="text", text=text)],  # mutable-ok: CallToolResult accepts only list content
         is_error=is_error,
     )
 
@@ -531,7 +535,7 @@ async def handle_mcp_proxy_tool(
         raw_headers=raw_headers,
         mcp_proxy_mode=True,
     )
-    tools_by_id: Final = {mcp_proxy_tool_id(tool): tool for tool in listing.tools}
+    tools_by_id: Final = {mcp_proxy_tool_id(tool): tool for tool in listing.tools}  # mutable-ok: lookup index
 
     if name == MCP_PROXY_SEARCH_TOOL_NAME:
         llm_router: Final = proxy_server.llm_router
@@ -568,7 +572,7 @@ async def handle_mcp_proxy_tool(
     if name != MCP_PROXY_CALL_TOOL_NAME:
         raise HTTPException(status_code=400, detail=f"Unknown MCP proxy tool: {name}")
 
-    tool_arguments: Final = arguments.get("arguments", {})
+    tool_arguments: Final = arguments.get("arguments", {})  # mutable-ok: JSON Schema validator consumes mapping
     if not isinstance(tool_arguments, dict):
         return _text_tool_result("arguments must be an object", is_error=True)
     try:

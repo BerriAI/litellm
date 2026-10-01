@@ -171,7 +171,9 @@ def _redact_agent_litellm_params_dict(
     """Type-narrowing wrapper: a dict in always yields a dict back from
     ``redact_sensitive_agent_litellm_params``, which the function's general
     (possible-JSON-string, possibly-None) signature can't express."""
-    return dict(parse_agent_litellm_params(redact_sensitive_agent_litellm_params(litellm_params)))
+    return dict(  # mutable-ok: AgentResponse.litellm_params is declared as a plain dict, not Mapping
+        parse_agent_litellm_params(redact_sensitive_agent_litellm_params(litellm_params))
+    )
 
 
 def _redact_sensitive_agent_fields(
@@ -985,7 +987,7 @@ async def delete_agent(
 
 @router.post(
     "/v1/agents/{agent_id}/kill_switch",
-    tags=["[beta] A2A Agents"],
+    tags=["[beta] A2A Agents"],  # mutable-ok: fastapi types tags as list[str | Enum]
     dependencies=(Depends(user_api_key_auth),),
     response_model=AgentKillSwitchResult,
 )
