@@ -632,7 +632,7 @@ async def test_claim_token_rejects_short_password_before_consuming_invite():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_claim_token_rejects_breached_password_before_consuming_invite():
+async def test_claim_token_rejects_breached_password_before_consuming_invite(httpx_transport):
     """A password found in the HIBP corpus must be rejected and never stored."""
     from litellm.proxy.proxy_server import claim_onboarding_link
 
@@ -666,7 +666,7 @@ async def test_claim_token_rejects_breached_password_before_consuming_invite():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_claim_token_fails_open_when_hibp_unreachable():
+async def test_claim_token_fails_open_when_hibp_unreachable(httpx_transport):
     """An HIBP outage must never block onboarding: the claim proceeds."""
     from litellm.proxy.proxy_server import claim_onboarding_link
 
