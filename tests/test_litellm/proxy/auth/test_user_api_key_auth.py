@@ -6543,6 +6543,44 @@ async def test_user_api_key_auth_malformed_body_with_rejected_key_still_returns_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("raw_body", [b"[]", b"123", b"null"], ids=["array", "number", "null"])
+async def test_user_api_key_auth_rejects_a_non_object_json_body_with_400(raw_body: bytes):
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [(b"content-type", b"application/json")],
+            "method": "POST",
+        }
+    )
+    request._url = URL(url="/chat/completions")
+    request._body = raw_body
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+            new_callable=AsyncMock,
+            return_value=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await user_api_key_auth(request=request, api_key="Bearer sk-test")
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+    assert exc_info.value.message == "Invalid JSON request body: expected an object"
+
+
+@pytest.mark.asyncio
 async def test_user_api_key_auth_does_not_double_log_a_malformed_body_from_a_rejected_key():
     """The auth failure this caller also earns is already logged by the handler that
     rejected the key, so the unparsable-body hook must stay out of that path and leave
