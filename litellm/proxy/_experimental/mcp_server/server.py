@@ -630,7 +630,7 @@ if MCP_AVAILABLE:
     _stateful_session_active_request_counts: Final[dict[str, int]] = {}
     _stateful_session_client_info: Final[dict[str, Implementation]] = {}  # mutable-ok: cleared on session teardown
     _terminated_session_ids: Final[dict[str, float]] = {}  # mutable-ok: explicitly closed id -> last replay
-    _client_terminated_session_owners: Final[dict[str, str]] = {}
+    _client_terminated_session_owners: Final[dict[str, str]] = {}  # mutable-ok: reserve and expire session owners
 
     class _TerminableTransport(Protocol):
         async def terminate(self) -> None: ...
@@ -2275,7 +2275,7 @@ if MCP_AVAILABLE:
                     ):
                         delete_capacity_response: Final = JSONResponse(
                             status_code=429,
-                            content={
+                            content={  # mutable-ok: JSONResponse content must be a plain dict
                                 "error": "Too Many Requests",
                                 "details": "Too many recently terminated MCP sessions. Retry after idle records expire.",
                             },
