@@ -312,6 +312,18 @@ def test_settings_store_leaves_pass_through_endpoints_to_the_database() -> None:
     assert store.rejected_writes({"pass_through_endpoints": [{"path": "/ui"}]}) == ()
 
 
+def test_settings_store_keeps_serving_pass_through_endpoints_while_the_config_file_reloads() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"pass_through_endpoints": [{"path": "/config"}], "max_parallel_requests": 1})
+    store["pass_through_endpoints"] = [{"path": "/config", "auth": False}]
+    store["allowed_ips"] = ["1.2.3.4"]
+
+    store.load_yaml({"pass_through_endpoints": [{"path": "/config"}], "max_parallel_requests": 1})
+
+    assert store["pass_through_endpoints"] == [{"path": "/config", "auth": False}]
+    assert "allowed_ips" not in store
+
+
 def test_settings_store_starts_with_an_unset_source() -> None:
     store: Final = SettingsStore("general_settings")
 

@@ -53,7 +53,10 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         self._yaml_values = MappingProxyType(
             {key: value for key, value in mapping.items() if not is_resource_list(self._section, key)}
         )
-        self._clear_runtime()
+        self._runtime_values = MappingProxyType(
+            {key: value for key, value in self._runtime_values.items() if is_resource_list(self._section, key)}
+        )
+        self._deleted_runtime_keys = frozenset()
 
     def config_value(self, key: str) -> JsonValue:
         return self._yaml_values.get(key)
@@ -138,10 +141,6 @@ class SettingsStore(MutableMapping[str, JsonValue]):
 
     def __bool__(self) -> bool:
         return any(True for _ in self)
-
-    def _clear_runtime(self) -> None:
-        self._runtime_values = _EMPTY_VALUES
-        self._deleted_runtime_keys = frozenset()
 
     def _clear_runtime_keys(self, keys: frozenset[str]) -> None:
         stale: Final = frozenset(key for key in keys if not self.owned_by_config(key))
