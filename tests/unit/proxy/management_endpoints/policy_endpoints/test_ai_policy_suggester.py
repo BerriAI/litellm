@@ -284,16 +284,11 @@ class TestSuggesterToleratesAModelThatRefusesItsSamplingParams:
     already opts in through judge_acompletion; this one was the exception.
     """
 
-    @pytest.fixture
-    def llm_httpx_transport(self, monkeypatch):
-        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-        litellm.in_memory_llm_clients_cache.flush_cache()
-        yield
-        litellm.in_memory_llm_clients_cache.flush_cache()
-
     @pytest.mark.asyncio
     @respx.mock
-    async def test_a_reasoning_model_gets_past_param_mapping(self, monkeypatch, local_model_cost_map, llm_httpx_transport):
+    async def test_a_reasoning_model_gets_past_param_mapping(
+        self, monkeypatch, local_model_cost_map, httpx_transport
+    ):
         """Drives the real entry point with no patching and no network. Which exception escapes is
         the discriminator: param mapping runs before any credential check, so UnsupportedParamsError
         means the call died on the pinned temperature, while AuthenticationError means it survived

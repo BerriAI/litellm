@@ -206,15 +206,7 @@ def test_microsoft_sso_handler_openid_from_response_with_custom_attributes():
 
 
 @pytest.fixture
-def microsoft_httpx_transport(monkeypatch):
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    litellm.in_memory_llm_clients_cache.flush_cache()
-    yield
-    litellm.in_memory_llm_clients_cache.flush_cache()
-
-
-@pytest.fixture
-def stubbed_graph_api(microsoft_httpx_transport):
+def stubbed_graph_api(httpx_transport):
     with respx.mock:
         respx.get(url__regex=r".*graph\.microsoft\.com.*").mock(
             return_value=httpx.Response(200, json={"value": []})
