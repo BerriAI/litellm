@@ -2,7 +2,6 @@ import hashlib
 import json
 from typing import Final
 
-from litellm.proxy.roi_calculator.estimator import cache_context
 from litellm.proxy.roi_calculator.github import GitHubPullListItem
 from litellm.types.roi_calculator import ROISettings
 
@@ -46,7 +45,3 @@ def settings_fingerprint(settings: ROISettings) -> str:
         ensure_ascii=False,
     )
     return hashlib.sha256(value.encode()).hexdigest()
-
-
-def current_cache_context(settings: ROISettings) -> str:
-    return cache_context(settings)

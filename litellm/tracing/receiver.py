@@ -82,8 +82,6 @@ class TraceReceiver:
             spend_log_retention_days=AGENT_TRACING_SPEND_LOG_RETENTION_DAYS,
         )
 
-    # ------------------------------------------------------------ write
-
     async def ingest(
         self,
         body: bytes,
@@ -107,8 +105,6 @@ class TraceReceiver:
         except OverflowError as error:
             raise TracingPayloadTooLargeError(str(error)) from error
         return len(rows)
-
-    # ------------------------------------------------------------ read
 
     async def list_traces(self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None = None) -> TracePage:
         return await self.store.list_traces(scope, start_ms, end_ms, cursor)

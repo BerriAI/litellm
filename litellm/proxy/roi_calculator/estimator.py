@@ -92,32 +92,6 @@ def cache_context(settings: ROISettings, models: tuple[EstimatorModel, ...] | No
     return hashlib.sha256(context.encode()).hexdigest()
 
 
-def pull_cache_key(
-    settings: ROISettings,
-    pull: ROIPullEvidence,
-    models: tuple[EstimatorModel, ...] | None = None,
-) -> str:
-    evidence: Final = json.dumps(
-        metadata_evidence(pull).model_dump(exclude_unset=True),
-        ensure_ascii=False,
-    )
-    key: Final = json.dumps(
-        (
-            ESTIMATE_VERSION,
-            settings.estimator_model,
-            settings.estimator_prompt,
-            RESPONSE_CONTRACT,
-            estimator_options(_configured_models(settings, models)),
-            pull["repo"],
-            pull["number"],
-            pull["head_sha"],
-            evidence,
-        ),
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(key.encode()).hexdigest()
-
-
 class Estimator:
     def __init__(
         self,
