@@ -252,6 +252,7 @@ def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(recording
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.tracing_endpoints import provide_receiver, router
 
+    recording_server.expected_requests = 6
     for response in (
         {"data": [{"name": "Model", "type": "String"}]},
         {"data": []},
