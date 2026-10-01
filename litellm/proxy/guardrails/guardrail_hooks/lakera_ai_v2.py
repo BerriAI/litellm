@@ -402,6 +402,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                 url=f"{self.api_base}/v2/guard",
                 headers={"Authorization": f"Bearer {self.lakera_api_key}"},
                 json=request,
+                timeout=self.timeout,
             )
             verbose_proxy_logger.debug("Lakera AI v2 guard response: %s", response.json())
             lakera_response = LakeraAIResponse(**response.json())

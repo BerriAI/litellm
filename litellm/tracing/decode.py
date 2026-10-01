@@ -52,9 +52,6 @@ class OTLPPayloadTooLargeError(OverflowError):
     pass
 
 
-# ---------------------------------------------------------------- decode
-
-
 def _truncate(value: str) -> str:
     size = len(value.encode("utf-8"))
     if size <= OTLP_MAX_ATTRIBUTE_VALUE_BYTES:
@@ -121,9 +118,6 @@ def _span_row(span: DecodedSpan) -> SpanRow:
     }
     row["Input"], row["Output"] = _truncate(row["Input"]), _truncate(row["Output"])
     return row
-
-
-# ---------------------------------------------------------------- normalize
 
 
 def _loads(value: str) -> object:

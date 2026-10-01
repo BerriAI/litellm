@@ -70,6 +70,7 @@ import { cn } from "@/lib/cva.config";
 import { rolesWithCapability } from "../utils/capabilities";
 import {
   all_admin_roles,
+  proxyAdminTierRoles,
   internalUserRoles,
   isAdminRole,
   isUserTeamAdminForAnyTeam,
@@ -254,7 +255,7 @@ const menuGroups: MenuGroup[] = [
           </span>
         ),
         icon: <Aperture {...ICON} />,
-        roles: all_admin_roles,
+        roles: proxyAdminTierRoles,
       },
       {
         key: "guardrails-monitor",

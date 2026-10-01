@@ -4984,7 +4984,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/engine/{engine_id}": {
+    "/engine/workers/{worker_id}/billing-key": {
         parameters: {
             query?: never;
             header?: never;
@@ -4992,6 +4992,24 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
+        /** Set Worker Billing */
+        put: operations["set_worker_billing_engine_workers__worker_id__billing_key_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/{engine_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Engine */
+        get: operations["read_engine_engine__engine_id__get"];
         /** Update Engine */
         put: operations["update_engine_engine__engine_id__put"];
         post?: never;
@@ -5059,10 +5077,28 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List Runs */
+        get: operations["list_runs_engine__engine_id__runs_get"];
         put?: never;
         /** Run Engine */
         post: operations["run_engine_engine__engine_id__runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/{engine_id}/runs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Run */
+        get: operations["read_run_engine__engine_id__runs__job_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -29864,6 +29900,11 @@ export interface components {
              */
             grouping_batches: number;
             /**
+             * Inconclusive
+             * @default 0
+             */
+            inconclusive: number;
+            /**
              * Investigated
              * @default 0
              */
@@ -30779,8 +30820,16 @@ export interface components {
         };
         /** EngineSettings */
         EngineSettings: {
-            /** Checks */
+            /**
+             * Checks
+             * @default []
+             */
             checks: components["schemas"]["Check"][];
+            /**
+             * Concurrency
+             * @default 8
+             */
+            concurrency: number;
             /**
              * Context
              * @default
@@ -30791,6 +30840,11 @@ export interface components {
              * @default true
              */
             enabled: boolean;
+            /**
+             * Execution Ids
+             * @default []
+             */
+            execution_ids: string[];
             /**
              * Filters
              * @default []
@@ -30816,10 +30870,12 @@ export interface components {
             /** Name */
             name: string;
             /**
-             * Sample Size
+             * Sample Percent
              * @default 100
              */
-            sample_size: number;
+            sample_percent: number;
+            /** Sample Size */
+            sample_size?: number | null;
             /**
              * Service
              * @default
@@ -30831,6 +30887,11 @@ export interface components {
              * @enum {string}
              */
             source: "traces" | "requests" | "both";
+            /**
+             * Team Id
+             * @default
+             */
+            team_id: string;
         };
         /** EnrichTemplateRequest */
         EnrichTemplateRequest: {
@@ -30950,6 +31011,12 @@ export interface components {
             execution_id: string;
             /** Quote */
             quote: string;
+            /**
+             * Role
+             * @default support
+             * @enum {string}
+             */
+            role: "support" | "counterexample";
             /** Span Id */
             span_id: string;
         };
@@ -32517,6 +32584,11 @@ export interface components {
         /** Job */
         Job: {
             /**
+             * Assessments
+             * @default []
+             */
+            assessments: components["schemas"]["RunAssessment"][];
+            /**
              * Attempts
              * @default 0
              */
@@ -32532,6 +32604,7 @@ export interface components {
              *       "eligible": 0,
              *       "grouped_batches": 0,
              *       "grouping_batches": 0,
+             *       "inconclusive": 0,
              *       "investigated": 0,
              *       "partial": 0,
              *       "screened": 0,
@@ -32555,6 +32628,8 @@ export interface components {
              * @default
              */
             error: string;
+            /** Findings */
+            findings?: components["schemas"]["Finding"][] | null;
             /** Finished At */
             finished_at?: string | null;
             /** Id */
@@ -39801,11 +39876,18 @@ export interface components {
         };
         /** Preview */
         Preview: {
+            /** As Of */
+            as_of?: string | null;
             /**
              * Lookback Hours
              * @default 24
              */
             lookback_hours: number;
+            /**
+             * Offset
+             * @default 0
+             */
+            offset: number;
             settings: components["schemas"]["EngineSettings"];
         };
         /** Progress */
@@ -39816,6 +39898,7 @@ export interface components {
              *       "eligible": 0,
              *       "grouped_batches": 0,
              *       "grouping_batches": 0,
+             *       "inconclusive": 0,
              *       "investigated": 0,
              *       "partial": 0,
              *       "screened": 0,
@@ -42783,6 +42866,11 @@ export interface components {
         };
         /** Result */
         "Result-Input": {
+            /**
+             * Assessments
+             * @default []
+             */
+            assessments: components["schemas"]["RunAssessment"][];
             coverage: components["schemas"]["Coverage"];
             /**
              * Error
@@ -43040,6 +43128,26 @@ export interface components {
              */
             status: "queued" | "running" | "completed" | "failed" | "cancelled";
         };
+        /** RunAssessment */
+        RunAssessment: {
+            /**
+             * Cannot Assess
+             * @default false
+             */
+            cannot_assess: boolean;
+            /** Execution Id */
+            execution_id: string;
+            /**
+             * Issue Checks
+             * @default []
+             */
+            issue_checks: string[];
+            /**
+             * Pattern Checks
+             * @default []
+             */
+            pattern_checks: string[];
+        };
         /**
          * RunDeleteResponse
          * @description Response from deleting a run
@@ -43062,6 +43170,7 @@ export interface components {
         RunRequest: {
             /** Lookback Hours */
             lookback_hours?: number | null;
+            settings?: components["schemas"]["EngineSettings"] | null;
         };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
@@ -43454,6 +43563,15 @@ export interface components {
             eligible: number;
             /** Executions */
             executions: components["schemas"]["Execution"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /** Next Offset */
+            next_offset?: number | null;
+            /**
+             * Selected
+             * @default 0
+             */
+            selected: number;
         };
         /**
          * ScheduledJobStaggerSettings
@@ -47895,6 +48013,8 @@ export interface components {
         };
         /** Worker */
         Worker: {
+            /** Analysis Key Id */
+            analysis_key_id?: string | null;
             /** Id */
             id: string;
             /**
@@ -47911,6 +48031,11 @@ export interface components {
             revoked: boolean;
             scope: components["schemas"]["Scope"];
         };
+        /** WorkerBilling */
+        WorkerBilling: {
+            /** Analysis Key Id */
+            analysis_key_id: string;
+        };
         /** WorkerCreated */
         WorkerCreated: {
             /** Token */
@@ -47919,6 +48044,8 @@ export interface components {
         };
         /** WorkerName */
         WorkerName: {
+            /** Analysis Key Id */
+            analysis_key_id: string;
             /**
              * Name
              * @default Lens worker
@@ -55439,7 +55566,9 @@ export interface operations {
     };
     claim_engine_worker_claim_post: {
         parameters: {
-            query?: never;
+            query?: {
+                protocol_version?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -55453,6 +55582,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Claim"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -55729,6 +55867,72 @@ export interface operations {
             };
         };
     };
+    set_worker_billing_engine_workers__worker_id__billing_key_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerBilling"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Worker"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_engine_engine__engine_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Engine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     update_engine_engine__engine_id__put: {
         parameters: {
             query?: never;
@@ -55866,6 +56070,39 @@ export interface operations {
             };
         };
     };
+    list_runs_engine__engine_id__runs_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                engine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     run_engine_engine__engine_id__runs_post: {
         parameters: {
             query?: never;
@@ -55888,6 +56125,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Engine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_run_engine__engine_id__runs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
                 };
             };
             /** @description Validation Error */
@@ -68320,6 +68589,8 @@ export interface operations {
                 status_filter?: string | null;
                 /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
                 cache_hit_filter?: string | null;
+                /** @description Filter logs by the credential the upstream call used: true for a client-forwarded Anthropic OAuth token, false for the deployment's configured key. Rows written before this flag existed match neither */
+                used_client_oauth_token?: boolean | null;
                 /** @description Filter logs by span type: llm, agent, mcp, or batch */
                 span_type?: string | null;
                 /** @description Filter logs by model */
@@ -68440,6 +68711,8 @@ export interface operations {
                 status_filter?: string | null;
                 /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
                 cache_hit_filter?: string | null;
+                /** @description Filter logs by the credential the upstream call used: true for a client-forwarded Anthropic OAuth token, false for the deployment's configured key. Rows written before this flag existed match neither */
+                used_client_oauth_token?: boolean | null;
                 /** @description Filter logs by span type: llm, agent, mcp, or batch */
                 span_type?: string | null;
                 /** @description Filter logs by model */
