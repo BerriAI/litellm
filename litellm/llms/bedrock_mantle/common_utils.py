@@ -164,6 +164,19 @@ _WEB_SEARCH_TOOL_TYPE_PREFIX: Final = "web_search"
 _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS: Final = frozenset({"search_content_types"})
 
 
+def _strip_one_web_search_tool(tool: object) -> object:
+    if not isinstance(tool, dict):
+        return tool
+    tool_type = tool.get("type")
+    if not isinstance(tool_type, str) or not tool_type.startswith(_WEB_SEARCH_TOOL_TYPE_PREFIX):
+        return tool
+    if not _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS.intersection(tool):
+        return tool
+    return {  # mutable-ok: OpenAI tool JSON object after dropping Mantle-rejected keys
+        key: value for key, value in tool.items() if key not in _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS
+    }
+
+
 def strip_unsupported_web_search_tool_fields(tools: object) -> object:
     """Drop Mantle-rejected nested fields from web-search tool definitions.
 
@@ -173,22 +186,9 @@ def strip_unsupported_web_search_tool_fields(tools: object) -> object:
     Non-dict tools and non-web-search tool types are left unchanged. Returns the
     original object when nothing needs rewriting so callers can keep identity.
     """
-    if not isinstance(tools, list):
+    if not isinstance(tools, (list, tuple)):
         return tools
-
-    rewritten = False
-    cleaned: list[object] = []  # mutable-ok: build a fresh tools list only when stripping
-    for tool in tools:
-        if not isinstance(tool, dict):
-            cleaned.append(tool)
-            continue
-        tool_type = tool.get("type")
-        if not isinstance(tool_type, str) or not tool_type.startswith(_WEB_SEARCH_TOOL_TYPE_PREFIX):
-            cleaned.append(tool)
-            continue
-        if not _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS.intersection(tool):
-            cleaned.append(tool)
-            continue
-        rewritten = True
-        cleaned.append({key: value for key, value in tool.items() if key not in _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS})
-    return cleaned if rewritten else tools
+    rewritten: Final = tuple(_strip_one_web_search_tool(tool) for tool in tools)
+    if all(new is old for new, old in zip(rewritten, tools, strict=True)):
+        return tools
+    return list(rewritten)  # mutable-ok: chat/Responses tools param is a JSON list

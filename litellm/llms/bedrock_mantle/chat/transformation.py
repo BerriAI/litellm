@@ -145,10 +145,10 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         tools: Final = mapped_params.get("tools")
         if tools is None:
             return mapped_params
-        return {
+        return {  # mutable-ok: map_openai_params contract returns a plain dict
             **mapped_params,
             "tools": strip_unsupported_web_search_tool_fields(tools),
-        }  # mutable-ok: map_openai_params contract returns a plain dict
+        }
 
     def get_model_response_iterator(
         self,
