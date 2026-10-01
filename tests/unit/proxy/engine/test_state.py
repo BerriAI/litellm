@@ -110,10 +110,26 @@ def test_lease_prevents_double_claim_and_expires_with_bounded_retries() -> None:
 
 
 def test_replaying_evidence_does_not_reopen_but_new_occurrence_does() -> None:
+    from litellm.proxy.engine.state import snapshot_finding
+
     original: Final = engine()
     resolved: Final = merge_finding(original, finding("run1"), 1, NOW).model_copy(update={"status": "resolved"})
     reviewed: Final = original.model_copy(update={"findings": (resolved,)})
     assert merge_finding(reviewed, finding("run1"), 1, NOW).status == "resolved"
+    comparison: Final = finding("run1").model_copy(
+        update={
+            "evidence": (
+                *finding("run1").evidence,
+                Evidence(execution_id="recovered", span_id="step", quote="Recovered", role="counterexample"),
+            )
+        }
+    )
+    compared: Final = merge_finding(reviewed, comparison, 1, NOW + timedelta(days=1))
+    assert compared.status == "resolved"
+    assert compared.occurrences == ("run1",)
+    assert compared.last_seen == resolved.last_seen
+    assert compared.evidence[-1].role == "counterexample"
+    assert snapshot_finding(reviewed, comparison, 1, NOW).occurrences == ("run1",)
     recurring: Final = merge_finding(reviewed, finding("run2"), 1, NOW + timedelta(days=1))
     assert recurring.status == "open"
     assert recurring.occurrences == ("run1", "run2")
