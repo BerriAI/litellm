@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -93,7 +93,7 @@ describe("ToolPoliciesTable search", () => {
     const user = userEvent.setup();
     renderTable();
 
-    await user.type(screen.getByTestId("datatable-search"), "weather");
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "weather" } });
 
     await waitFor(() => expect(rowIds()).toEqual(["tool-1"]));
   });
@@ -102,7 +102,7 @@ describe("ToolPoliciesTable search", () => {
     const user = userEvent.setup();
     renderTable();
 
-    await user.type(screen.getByTestId("datatable-search"), "hash-bbb");
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "hash-bbb" } });
 
     await waitFor(() => expect(rowIds()).toEqual(["tool-2"]));
   });
@@ -111,7 +111,7 @@ describe("ToolPoliciesTable search", () => {
     const user = userEvent.setup();
     renderTable();
 
-    await user.type(screen.getByTestId("datatable-search"), "curl");
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "curl" } });
 
     await waitFor(() => expect(rowIds()).toEqual([]));
     expect(screen.getByText("No matching tools")).toBeInTheDocument();
@@ -140,6 +140,20 @@ describe("ToolPoliciesTable filters", () => {
 
     await waitFor(() => expect(rowIds()).toEqual(["tool-1"]));
     expect(screen.getByTestId("filter-chip-team_id")).toHaveTextContent("Team Name:");
+  });
+
+  it.each([
+    ["filter-input-policy", "All Input Policies"],
+    ["filter-output-policy", "All Output Policies"],
+    ["filter-team", "All Teams"],
+    ["filter-key-alias", "All Keys"],
+  ])("should show the human label on the %s trigger while unfiltered", async (testId, label) => {
+    const user = userEvent.setup();
+    renderTable();
+
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+
+    expect(await screen.findByTestId(testId)).toHaveTextContent(label);
   });
 
   it("should offer only the teams and keys present in the loaded rows", async () => {

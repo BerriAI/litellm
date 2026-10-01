@@ -1,47 +1,92 @@
 #### OCR Endpoints #####
 
+import io
 import json
-from typing import Any, Final, cast
+from collections.abc import Mapping
+from typing import Final, cast
 
 import orjson
-from fastapi import APIRouter, Depends, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
 
 from litellm._logging import verbose_proxy_logger
-from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
+from litellm.llms.base_llm.ocr.transformation import (
+    OCR_REQUEST_FORMAT_HEADER,
+    OCR_REQUEST_FORMAT_PARAM,
+    OCRResponse,
+    parse_ocr_request_format,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
 router: Final = APIRouter()
+_MAX_FILE_BYTES: Final = 50 * 1024 * 1024
+
+
+class _NamedUpload(io.BytesIO):
+    name: str | None
+
+    def __init__(self, content: bytes, name: str | None) -> None:
+        super().__init__(content)
+        self.name = name
 
 
 def _build_document_from_upload(
     file_content: bytes,
     filename: str | None,
     content_type: str | None,
-) -> dict[str, str]:
-    """
-    Convert uploaded file bytes into a Mistral-format document dict with base64 data URI.
+) -> dict[str, object]:
+    supplied_mime: Final = content_type.split(";")[0].strip() if content_type else None
+    upload: Final = _NamedUpload(file_content, filename)
+    if supplied_mime and supplied_mime != "application/octet-stream":
+        return {"type": "file", "file": upload, "mime_type": supplied_mime}
+    return {"type": "file", "file": upload}
 
-    Delegates to convert_file_document_to_url_document after resolving MIME type
-    from the upload's content_type header or filename.
-    """
-    mime_type = content_type.split(";")[0].strip() if content_type else None
-    if not mime_type or mime_type == "application/octet-stream":
-        if filename:
-            mime_type = get_mime_type(filename)
 
-    return convert_file_document_to_url_document(
-        {
-            "type": "file",
-            "file": file_content,
-            "mime_type": mime_type or "application/octet-stream",
-        }
+def _with_request_format(data: Mapping[str, object], request: Request) -> Mapping[str, object]:
+    """
+    Resolve the requested response format from the body or the `x-req-format` header.
+
+    An explicit `req_format` in the body wins over the header.
+    """
+    body_value: Final = data.get(OCR_REQUEST_FORMAT_PARAM)
+    header_value: Final = request.headers.get(OCR_REQUEST_FORMAT_HEADER)
+    raw_value: Final = body_value if body_value is not None else header_value
+    if raw_value is None:
+        return data
+    try:
+        request_format: Final = parse_ocr_request_format(
+            raw_value.strip().lower() if isinstance(raw_value, str) else raw_value
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": f"{e}"})
+    return {**data, OCR_REQUEST_FORMAT_PARAM: request_format}
+
+
+def _native_response(response: object, fastapi_response: Response) -> Response | None:
+    """
+    Return the provider's native payload when the caller asked for
+    `req_format=native` and the provider config captured it, carrying over the
+    LiteLLM response headers (cost, call id, etc.) built for the normalized response.
+    """
+    if not isinstance(response, OCRResponse):
+        return None
+    native_payload: Final = response.get_provider_native_response()
+    if native_payload is None:
+        return None
+    return Response(
+        content=orjson.dumps(native_payload),
+        media_type="application/json",
+        headers={
+            key: value
+            for key, value in fastapi_response.headers.items()
+            if key.lower() not in ("content-length", "content-type")
+        },
     )
 
 
-async def _parse_multipart_form(request: Request) -> dict[str, Any]:
+async def _parse_multipart_form(request: Request) -> dict[str, object]:
     """
     Extract OCR data from a multipart form request.
 
@@ -71,9 +116,11 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
 
     # Seek to start in case the file was already partially read by middleware
     await uploaded_file.seek(0)
-    file_content: Final = await uploaded_file.read()
+    file_content: Final = await uploaded_file.read(_MAX_FILE_BYTES + 1)
     if not file_content:
         raise ValueError("Uploaded file is empty")
+    if len(file_content) > _MAX_FILE_BYTES:
+        raise ValueError("OCR file exceeds the size limit")
 
     document: Final = _build_document_from_upload(
         file_content=file_content,
@@ -81,7 +128,7 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
         content_type=uploaded_file.content_type,
     )
 
-    data: Final[dict[str, Any]] = {"document": document}
+    data: Final[dict[str, object]] = {"document": document}
 
     for field_name, field_value in form.items():
         if field_name in ("file", "document"):
@@ -105,7 +152,12 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
     return data
 
 
-async def _parse_ocr_request(request: Request) -> dict[str, Any]:
+async def _parse_ocr_request(request: Request) -> Mapping[str, object]:
+    """Parse an OCR request and apply the `x-req-format` header, if any."""
+    return _with_request_format(await _parse_ocr_request_body(request), request)
+
+
+async def _parse_ocr_request_body(request: Request) -> dict[str, object]:
     """
     Parse an OCR request, supporting both JSON and multipart form data.
 
@@ -238,6 +290,11 @@ async def ocr(
         -F "model=mistral-ocr" \
         -F "file=@document.pdf"
     ```
+
+    Response format is normalized to the LiteLLM OCR schema by default. Providers
+    that support it (Azure Document Intelligence) can return their own payload
+    instead, with cost tracking unchanged, via `x-req-format: native` (or
+    `"req_format": "native"` in the body).
     """
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -256,12 +313,12 @@ async def ocr(
     data: dict = {}
     try:
         # Parse request body (JSON or multipart form)
-        data = await _parse_ocr_request(request)
+        data = dict(await _parse_ocr_request(request))
 
         # Process request using ProxyBaseLLMRequestProcessing
         processor = ProxyBaseLLMRequestProcessing(data=data)
 
-        return await processor.base_process_llm_request(
+        response: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -279,6 +336,8 @@ async def ocr(
             user_api_base=user_api_base,
             version=version,
         )
+
+        return _native_response(response, fastapi_response) or response
     except Exception as e:
         processor = ProxyBaseLLMRequestProcessing(data=data)
         raise await processor._handle_llm_api_exception(

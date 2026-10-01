@@ -24,6 +24,12 @@ def get_native_bridge() -> ModuleType | None:
     return _native
 
 
+def reset_native_bridge_cache() -> None:
+    """Forget the cached extension so the next lookup reimports it from disk."""
+    global _cached_bridge
+    _cached_bridge = _BRIDGE_SENTINEL
+
+
 def native_bridge_available() -> bool:
     """Whether the packaged Rust extension is importable."""
     return get_native_bridge() is not None

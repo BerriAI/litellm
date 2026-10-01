@@ -1,7 +1,7 @@
 "use client";
 
 import { SortingState } from "@tanstack/react-table";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { DataTable } from "@/components/shared/DataTable";
 import { AutoRouterIcon } from "@/components/shared/table_cells";
@@ -18,6 +18,11 @@ interface AutoRoutersTableProps {
 }
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
+
+const DEFAULT_SORTING: SortingState = [
+  { id: "createdAt", desc: true },
+  { id: "name", desc: false },
+];
 
 function EmptyState({ canModify }: { canModify: boolean }) {
   return (
@@ -42,8 +47,6 @@ export function AutoRoutersTable({
   onRouterClick,
   onDeleteClick,
 }: AutoRoutersTableProps) {
-  const [sorting, setSorting] = useState<SortingState>([]);
-
   const columns = useMemo(
     () => getAutoRoutersTableColumns({ canModify, onRouterClick, onDeleteClick }),
     [canModify, onRouterClick, onDeleteClick],
@@ -55,8 +58,7 @@ export function AutoRoutersTable({
       columns={columns}
       getRowId={(router) => router.id}
       sortingMode="client"
-      sorting={sorting}
-      onSortingChange={setSorting}
+      defaultSorting={DEFAULT_SORTING}
       paginationMode="client"
       pageSizeOptions={PAGE_SIZE_OPTIONS}
       isLoading={isLoading}

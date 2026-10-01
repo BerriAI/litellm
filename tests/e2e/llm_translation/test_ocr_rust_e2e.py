@@ -11,19 +11,31 @@ well-formed OCR document comes back. Per the e2e hard-fail contract, a case
 fails when no proxy answers and also fails once a request reaches it: the proxy
 fetches each provider's referenced secrets, so a
 missing credential surfaces as a live provider error rather than silent green.
+
+The provider keys are shared with other pipelines, so a provider's rate limit can
+hold across the bounded retries. The case then accepts the gateway's faithful relay
+of that 429 (throttling_error, code 429) as its second expected outcome; any other
+non-success still fails at once.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Final, Protocol
 
 import pytest
 from e2e_config import unique_marker
-from e2e_http import assert_client_error, unwrap
-from endpoints_client import EndpointsClient
+from e2e_http import (
+    PROVIDER_RATE_LIMIT_ATTEMPTS,
+    RateLimitedError,
+    Success,
+    assert_client_error,
+    relayed_provider_rate_limit,
+    tolerate_provider_rate_limit,
+)
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody, OcrBody, OcrDocument, OcrResponse
+from proxy_client import ProxyClient
 from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
@@ -146,32 +158,43 @@ def _assert_ocr_document(response: OcrResponse) -> None:
     assert response.pages[0].markdown is not None, "first page has no markdown"
 
 
+def _assert_provider_rate_limit_relayed(model: str, outcome: RateLimitedError) -> None:
+    detail: Final = relayed_provider_rate_limit(outcome)
+    assert detail is not None, f"{model}: the 429 is the gateway's own, not the provider's: {outcome.body}"
+    assert (detail.type, detail.code) == ("throttling_error", "429"), f"{model}: provider 429 relayed as {detail!r}"
+    print(
+        f"{model}: the provider's rate limit held across {PROVIDER_RATE_LIMIT_ATTEMPTS} attempts; "
+        f"the gateway relayed it as {detail.type} {detail.code}",
+        flush=True,
+    )
+
+
 class TestRustOcrGateway:
     @pytest.mark.parametrize("case", RUST_OCR_CASES, ids=_CASE_IDS)
-    def test_rust_ocr_response(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager, case: _OcrCase
-    ) -> None:
+    def test_rust_ocr_response(self, proxy: ProxyClient, resources: ResourceManager, case: _OcrCase) -> None:
         model = f"rust-ocr-{case.suffix}-{unique_marker()}"
-        model_id = endpoints_client.create_model(model, case.provider.litellm_params())
-        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        model_id = proxy.create_model(model, case.provider.litellm_params())
+        resources.defer(lambda: proxy.delete_model(model_id))
         key = resources.key()
 
-        response = unwrap(endpoints_client.proxy.ocr(key, OcrBody(model=model, document=case.document)))
-        _assert_ocr_document(response)
+        match tolerate_provider_rate_limit(lambda: proxy.ocr(key, OcrBody(model=model, document=case.document))):
+            case Success(data=response):
+                _assert_ocr_document(response)
+            case RateLimitedError() as outcome:
+                _assert_provider_rate_limit_relayed(model, outcome)
+            case outcome:
+                pytest.fail(f"{model}: {outcome!r}")
 
     @pytest.mark.skip(reason="stage red: product gap, /v1/ocr 500s (aocr TypeError) on missing document instead of 400")
     @pytest.mark.covers("llm.ocr.openai.input_validation.nonstream.works")
-    def test_missing_document_returns_error(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> None:
+    def test_missing_document_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model = f"rust-ocr-val-{unique_marker()}"
-        model_id = endpoints_client.create_model(model, MistralOcr().litellm_params())
-        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        model_id = proxy.create_model(model, MistralOcr().litellm_params())
+        resources.defer(lambda: proxy.delete_model(model_id))
         key = resources.key()
-        result = endpoints_client.proxy.transport.send(
+        result = proxy.transport.send(
             "/v1/ocr",
-            headers=endpoints_client.proxy.transport.bearer(key),
+            headers=proxy.transport.bearer(key),
             json=_OptionalOcrBody(model=model),
         )
         assert_client_error(result, "ocr missing document")
-

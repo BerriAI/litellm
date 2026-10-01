@@ -9,6 +9,9 @@ import { DeprecationBanner } from "@/components/DeprecationBanner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchProxySettings } from "@/utils/proxyUtils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useUrlTab } from "@/hooks/useUrlTab";
+
+const PLAYGROUND_TABS = ["chat", "compare", "compliance", "agent-builder"] as const;
 
 interface ProxySettings {
   PROXY_BASE_URL?: string;
@@ -18,6 +21,7 @@ interface ProxySettings {
 export default function PlaygroundPage() {
   const { accessToken, userRole, userId, disabledPersonalKeyCreation, token, isViewOnly } = useAuthorized();
   const [proxySettings, setProxySettings] = useState<ProxySettings | undefined>(undefined);
+  const [activeTab, setActiveTab] = useUrlTab(PLAYGROUND_TABS, "chat");
 
   useEffect(() => {
     const initializeProxySettings = async () => {
@@ -48,25 +52,30 @@ export default function PlaygroundPage() {
 
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
-      <Tabs defaultValue="chat" className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 overflow-hidden">
-        <TabsList
-          variant="line"
-          className="mb-0 h-auto w-full shrink-0 justify-start overflow-x-auto rounded-none border-b border-border bg-transparent p-0"
-        >
-          <TabsTrigger value="chat" className="flex-none rounded-none px-4 py-2">
+      <Tabs
+        value={activeTab}
+        onValueChange={setActiveTab}
+        className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 overflow-hidden"
+      >
+        <TabsList variant="line" className="w-full shrink-0 justify-start overflow-x-auto pb-1">
+          <TabsTrigger value="chat" className="flex-none">
             Chat
           </TabsTrigger>
-          <TabsTrigger value="compare" className="flex-none rounded-none px-4 py-2">
+          <TabsTrigger value="compare" className="flex-none">
             Compare
           </TabsTrigger>
-          <TabsTrigger value="compliance" className="flex-none rounded-none px-4 py-2">
+          <TabsTrigger value="compliance" className="flex-none">
             Compliance
           </TabsTrigger>
-          <TabsTrigger value="agent-builder" className="flex-none rounded-none px-4 py-2">
+          <TabsTrigger value="agent-builder" className="flex-none">
             Agent Builder (Experimental)
           </TabsTrigger>
         </TabsList>
-        <TabsContent value="chat" className="mt-0 h-full min-h-0 min-w-0 overflow-hidden data-hidden:hidden">
+        <TabsContent
+          value="chat"
+          className="mt-0 h-full min-h-0 min-w-0 overflow-hidden data-hidden:hidden"
+          keepMounted
+        >
           <ChatUI
             accessToken={accessToken}
             token={token}
@@ -76,13 +85,13 @@ export default function PlaygroundPage() {
             proxySettings={proxySettings}
           />
         </TabsContent>
-        <TabsContent value="compare" className="mt-0 h-full data-hidden:hidden">
+        <TabsContent value="compare" className="mt-0 h-full data-hidden:hidden" keepMounted>
           <CompareUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
         </TabsContent>
-        <TabsContent value="compliance" className="mt-0 h-full data-hidden:hidden">
+        <TabsContent value="compliance" className="mt-0 h-full data-hidden:hidden" keepMounted>
           <ComplianceUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
         </TabsContent>
-        <TabsContent value="agent-builder" className="mt-0 h-full data-hidden:hidden">
+        <TabsContent value="agent-builder" className="mt-0 h-full data-hidden:hidden" keepMounted>
           <DeprecationBanner featureName="The Playground's Agent Builder" />
           <AgentBuilderView
             accessToken={accessToken}

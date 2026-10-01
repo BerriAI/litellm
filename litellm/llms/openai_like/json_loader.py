@@ -66,6 +66,11 @@ class JSONProviderRegistry:
         return slug in cls._providers
 
     @classmethod
+    def get_by_base_url(cls, base_url: str) -> SimpleProviderConfig | None:
+        """Get a provider configuration by its default base url"""
+        return next((provider for provider in cls._providers.values() if provider.base_url == base_url), None)
+
+    @classmethod
     def supports_responses_api(cls, slug: str) -> bool:
         """Check if a JSON provider supports the Responses API"""
         provider: Final = cls._providers.get(slug)

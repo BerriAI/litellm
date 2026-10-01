@@ -1,4 +1,4 @@
-import { renderWithProviders, screen, within } from "@/../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, within } from "@/../tests/test-utils";
 import { waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,10 @@ const mockAccessGroups: AccessGroupResponse[] = [
     access_agent_ids: ["a1"],
     assigned_team_ids: [],
     assigned_key_ids: [],
+    access_mcp_servers: [{ id: "s1", name: "Server One" }],
+    access_agents: [{ id: "a1", name: "Agent One" }],
+    assigned_teams: [],
+    assigned_keys: [],
     created_at: "2024-01-15T10:00:00Z",
     created_by: "user-1",
     updated_at: "2024-01-20T12:00:00Z",
@@ -29,6 +33,10 @@ const mockAccessGroups: AccessGroupResponse[] = [
     access_agent_ids: [],
     assigned_team_ids: [],
     assigned_key_ids: [],
+    access_mcp_servers: [],
+    access_agents: [],
+    assigned_teams: [],
+    assigned_keys: [],
     created_at: "2024-01-10T09:00:00Z",
     created_by: null,
     updated_at: "2024-01-12T11:00:00Z",
@@ -99,6 +107,7 @@ describe("AccessGroupsPage", () => {
     renderWithProviders(<AccessGroupsPage />);
     expect(screen.getByRole("heading", { name: "Access Groups" })).toBeInTheDocument();
     expect(screen.getByText("Manage resource permissions for your organization")).toBeInTheDocument();
+    expect(document.querySelector(".lucide-boxes")).not.toBeNull();
   });
 
   it("shows the Create Access Group button for an admin", () => {
@@ -135,7 +144,9 @@ describe("AccessGroupsPage", () => {
   it("filters by name", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    await user.type(screen.getByPlaceholderText("Search groups by name, ID, or description..."), "Admin");
+    fireEvent.change(screen.getByPlaceholderText("Search groups by name, ID, or description..."), {
+      target: { value: "Admin" },
+    });
     expect(screen.getByText("Admin Group")).toBeInTheDocument();
     expect(screen.queryByText("Read Only")).not.toBeInTheDocument();
   });
@@ -143,7 +154,9 @@ describe("AccessGroupsPage", () => {
   it("filters by ID", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    await user.type(screen.getByPlaceholderText("Search groups by name, ID, or description..."), "ag-2");
+    fireEvent.change(screen.getByPlaceholderText("Search groups by name, ID, or description..."), {
+      target: { value: "ag-2" },
+    });
     expect(screen.getByText("Read Only")).toBeInTheDocument();
     expect(screen.queryByText("Admin Group")).not.toBeInTheDocument();
   });
@@ -151,7 +164,9 @@ describe("AccessGroupsPage", () => {
   it("filters by description", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    await user.type(screen.getByPlaceholderText("Search groups by name, ID, or description..."), "read-only");
+    fireEvent.change(screen.getByPlaceholderText("Search groups by name, ID, or description..."), {
+      target: { value: "read-only" },
+    });
     expect(screen.getByText("Read Only")).toBeInTheDocument();
     expect(screen.queryByText("Admin Group")).not.toBeInTheDocument();
   });
@@ -159,7 +174,9 @@ describe("AccessGroupsPage", () => {
   it("shows the filtered empty state when nothing matches", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AccessGroupsPage />);
-    await user.type(screen.getByPlaceholderText("Search groups by name, ID, or description..."), "no-such-group");
+    fireEvent.change(screen.getByPlaceholderText("Search groups by name, ID, or description..."), {
+      target: { value: "no-such-group" },
+    });
     expect(screen.getByText("No matching access groups")).toBeInTheDocument();
     expect(screen.queryByText("Admin Group")).not.toBeInTheDocument();
   });
@@ -244,7 +261,9 @@ describe("AccessGroupsPage", () => {
     expect(screen.queryByText("ag-01")).not.toBeInTheDocument();
 
     // The only match lives on page 1, so the page index must reset or the table reads as empty.
-    await user.type(screen.getByPlaceholderText("Search groups by name, ID, or description..."), "ag-01");
+    fireEvent.change(screen.getByPlaceholderText("Search groups by name, ID, or description..."), {
+      target: { value: "ag-01" },
+    });
     expect(await screen.findByText("ag-01")).toBeInTheDocument();
     expect(screen.queryByText("No matching access groups")).not.toBeInTheDocument();
   });

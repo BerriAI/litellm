@@ -2,12 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
 vi.mock("@/components/ModelSelect/ModelSelect", () => ({
   ModelSelect: ({ onChange }: { onChange: (values: string[]) => void }) => (
     <button type="button" onClick={() => onChange(["gpt-5.2"])}>
@@ -36,7 +32,7 @@ const Harness = ({ createAccessGroup }: { createAccessGroup: (body: unknown) => 
   );
 };
 
-const renderDialog = (overrides?: { createAccessGroup?: ReturnType<typeof vi.fn> }) => {
+const renderDialog = (overrides?: { createAccessGroup?: Mock }) => {
   const createAccessGroup = overrides?.createAccessGroup ?? vi.fn().mockResolvedValue({});
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
@@ -99,6 +95,31 @@ describe("AccessGroupCreateDialog", () => {
       access_group_name: "prod-models",
       description: "engineering access",
       access_model_names: ["gpt-5.2"],
+    });
+  });
+
+  it("sends MCP servers and agents picked from the chip selectors as ids", async () => {
+    const user = userEvent.setup();
+    const { createAccessGroup } = renderDialog();
+
+    await user.type(screen.getByLabelText("Group Name"), "mcp-group");
+    await user.click(screen.getByRole("tab", { name: "MCP Servers" }));
+    await user.click(screen.getByLabelText("Allowed MCP Servers"));
+    await user.click(await screen.findByRole("option", { name: "GitHub MCP" }));
+    expect(screen.getByLabelText("GitHub MCP")).toHaveAttribute("data-slot", "combobox-chip");
+    await user.keyboard("{Escape}");
+
+    await user.click(screen.getByRole("tab", { name: "Agents" }));
+    await user.click(screen.getByLabelText("Allowed Agents"));
+    await user.click(await screen.findByRole("option", { name: "Support Agent" }));
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Create Group" }));
+
+    await waitFor(() => expect(createAccessGroup).toHaveBeenCalledTimes(1));
+    expect(createAccessGroup.mock.calls[0][0]).toStrictEqual({
+      access_group_name: "mcp-group",
+      access_mcp_server_ids: ["srv-1"],
+      access_agent_ids: ["agent-1"],
     });
   });
 

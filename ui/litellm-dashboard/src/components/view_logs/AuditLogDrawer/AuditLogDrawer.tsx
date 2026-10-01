@@ -6,7 +6,8 @@ import DefaultProxyAdminTag from "../../common_components/DefaultProxyAdminTag";
 import CopyButton from "@/components/shared/CopyButton";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetTitle } from "@/components/ui/sheet";
+import { ResizableSheetContent } from "@/components/ui/ResizableSheetContent";
 
 interface AuditLogDrawerProps {
   open: boolean;
@@ -19,6 +20,7 @@ const ACTION_TONE: Record<string, StatusTone> = {
   updated: "info",
   deleted: "error",
   rotated: "warning",
+  kill_switch_fired: "error",
 };
 
 function CopyableJsonBlock({ label, value }: { label: string; value: Record<string, any> }) {
@@ -52,7 +54,7 @@ function CopyableJsonBlock({ label, value }: { label: string; value: Record<stri
       <div className="flex items-center justify-between border-b border-border bg-muted px-3 py-2">
         <span className="text-xs font-semibold text-muted-foreground">{label}</span>
         <Button variant="ghost" size="icon-xs" onClick={handleCopy} title="Copy JSON" aria-label="Copy JSON">
-          {copied ? <Check className="text-green-600" /> : <Copy />}
+          {copied ? <Check className="text-success" /> : <Copy />}
         </Button>
       </div>
       <pre className="m-0 max-h-96 overflow-auto bg-card p-3 font-mono text-xs break-all whitespace-pre-wrap">
@@ -175,7 +177,7 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
 
   return (
     <Sheet open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
-      <SheetContent side="right" className="w-[60%] gap-0 overflow-y-auto p-0 sm:max-w-none">
+      <ResizableSheetContent storageKey="litellm:auditLogDrawerWidth" className="gap-0 p-0">
         <SheetTitle className="sr-only">Audit log details</SheetTitle>
 
         <div className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-6 py-4">
@@ -216,7 +218,7 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
 
           <DiffSection log={log} />
         </div>
-      </SheetContent>
+      </ResizableSheetContent>
     </Sheet>
   );
 }

@@ -1,18 +1,15 @@
 import asyncio
+from typing import Final
 import json
 import os
-import sys
 import traceback
+from types import MappingProxyType
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -30,6 +27,14 @@ from litellm import (
 
 litellm.num_retries = 3
 
+
+FIREWORKS_TEXT_COMPLETION: Final = MappingProxyType(
+    {
+        "model": "text-completion-openai/accounts/fireworks/models/glm-5p3-flash",
+        "api_base": "https://api.fireworks.ai/inference/v1",
+        "api_key": os.environ.get("FIREWORKS_AI_API_KEY"),
+    }
+)
 
 token_prompt = [
     [
@@ -3783,8 +3788,9 @@ def test_completion_openai_prompt():
     try:
         print("\n text 003 test\n")
         response = text_completion(
-            model="gpt-3.5-turbo-instruct",
             prompt=["What's the weather in SF?", "How is Manchester?"],
+            max_tokens=5,
+            **FIREWORKS_TEXT_COMPLETION,
         )
         print(response)
         assert len(response.choices) == 2
@@ -3796,42 +3802,30 @@ def test_completion_openai_prompt():
 # test_completion_openai_prompt()
 
 
-def test_completion_openai_engine_and_model():
-    try:
-        print("\n text 003 test\n")
-        litellm.set_verbose = True
-        response = text_completion(
-            model="gpt-3.5-turbo-instruct",
-            engine="anything",
-            prompt="What's the weather in SF?",
-            max_tokens=5,
-        )
-        print(response)
-        response_str = response["choices"][0]["text"]
-        # print(response.choices[0])
-        # print(response.choices[0].text)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+def test_completion_openai_engine_and_model() -> None:
+    response: Final = text_completion(
+        model="gpt-6-luna",
+        engine="anything",
+        reasoning_effort="none",
+        prompt="What's the weather in SF?",
+        max_tokens=5,
+    )
+    assert response.model == "gpt-6-luna"
+    assert response.choices[0].text
 
 
 # test_completion_openai_engine_and_model()
 
 
-def test_completion_openai_engine():
-    try:
-        print("\n text 003 test\n")
-        litellm.set_verbose = True
-        response = text_completion(
-            engine="gpt-3.5-turbo-instruct",
-            prompt="What's the weather in SF?",
-            max_tokens=5,
-        )
-        print(response)
-        response_str = response["choices"][0]["text"]
-        # print(response.choices[0])
-        # print(response.choices[0].text)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+def test_completion_openai_engine() -> None:
+    response: Final = text_completion(
+        engine="gpt-6-luna",
+        reasoning_effort="none",
+        prompt="What's the weather in SF?",
+        max_tokens=5,
+    )
+    assert response.model == "gpt-6-luna"
+    assert response.choices[0].text
 
 
 # test_completion_openai_engine()
@@ -3858,9 +3852,9 @@ def test_completion_chatgpt_prompt():
 def test_completion_gpt_instruct():
     try:
         response = text_completion(
-            model="gpt-3.5-turbo-instruct-0914",
+            model="gpt-5.4-nano",
             prompt="What's the weather in SF?",
-            custom_llm_provider="openai",
+            custom_llm_provider="text-completion-openai",
         )
         print(response)
         response_str = response["choices"][0]["text"]
@@ -3879,7 +3873,7 @@ def test_text_completion_basic():
         print("\n test 003 with logprobs \n")
         litellm.set_verbose = False
         response = text_completion(
-            model="gpt-3.5-turbo-instruct",
+            model="text-completion-openai/gpt-5.4-nano",
             prompt="good morning",
             max_tokens=10,
             logprobs=10,
@@ -3903,13 +3897,11 @@ def test_completion_text_003_prompt_array():
     try:
         litellm.set_verbose = False
         response = text_completion(
-            model="gpt-3.5-turbo-instruct",
             prompt=token_prompt,  # token prompt is a 2d list
+            max_tokens=5,
+            **FIREWORKS_TEXT_COMPLETION,
         )
-        print("\n\n response")
-
-        print(response)
-        # response_str = response["choices"][0]["text"]
+        assert len(response.choices) == len(token_prompt)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -4028,60 +4020,44 @@ def test_async_text_completion():
     asyncio.run(test_get_response())
 
 
-@pytest.mark.flaky(retries=6, delay=1)
 def test_async_text_completion_together_ai():
-    litellm.set_verbose = True
-    print("test_async_text_completion")
+    from openai import AsyncOpenAI
 
-    async def test_get_response():
-        try:
+    client = AsyncOpenAI(api_key="my-fake-key")
+
+    async def run_call():
+        with patch.object(client.completions.with_raw_response, "create", side_effect=mock_post) as mock_call:
             response = await litellm.atext_completion(
-                model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
+                model="together_ai/Qwen/Qwen2-1.5B-Instruct",
                 prompt="good morning",
                 max_tokens=10,
+                client=client,
             )
-            print(f"response: {response}")
-        except litellm.RateLimitError as e:
-            print(e)
-        except litellm.Timeout as e:
-            print(e)
-        except Exception as e:
-            pytest.fail("An unexpected error occurred")
+        return response, mock_call.call_args.kwargs
 
-    asyncio.run(test_get_response())
+    response, sent = asyncio.run(run_call())
+    assert sent["model"] == "Qwen/Qwen2-1.5B-Instruct"
+    assert sent["prompt"] == "good morning"
+    assert sent["max_tokens"] == 10
+    assert response.choices[0].text == ") might be faster than then answering, and the added time it takes for the"
+    assert response.usage.total_tokens == 18
 
 
 # test_async_text_completion()
 
 
-def test_async_text_completion_stream():
-    # tests atext_completion + streaming - assert only one finish reason sent
-    litellm.set_verbose = False
-    print("test_async_text_completion with stream")
-
-    async def test_get_response():
-        try:
-            response = await litellm.atext_completion(
-                model="gpt-3.5-turbo-instruct",
-                prompt="good morning",
-                stream=True,
-            )
-            print(f"response: {response}")
-
-            num_finish_reason = 0
-            async for chunk in response:
-                print(chunk)
-                if chunk["choices"][0].get("finish_reason") is not None:
-                    num_finish_reason += 1
-                    print("finish_reason", chunk["choices"][0].get("finish_reason"))
-
-            assert (
-                num_finish_reason == 1
-            ), f"expected only one finish reason. Got {num_finish_reason}"
-        except Exception as e:
-            pytest.fail(f"GOT exception for gpt-3.5 instruct In streaming{e}")
-
-    asyncio.run(test_get_response())
+@pytest.mark.asyncio
+async def test_async_text_completion_stream() -> None:
+    response: Final = await litellm.atext_completion(
+        model="gpt-6-luna",
+        reasoning_effort="none",
+        prompt="good morning",
+        stream=True,
+        max_tokens=32,
+    )
+    chunks: Final = [chunk async for chunk in response]
+    assert sum(chunk.choices[0].finish_reason is not None for chunk in chunks) == 1
+    assert any(chunk.choices[0].text for chunk in chunks)
 
 
 # test_async_text_completion_stream()
@@ -4184,8 +4160,8 @@ def test_completion_fireworks_ai_multiple_choices():
 def test_text_completion_with_echo(stream):
     litellm.set_verbose = True
     response = litellm.text_completion(
-        model="davinci-002",
         prompt="hello",
+        **FIREWORKS_TEXT_COMPLETION,
         max_tokens=1,  # only see the first token
         stop="\n",  # stop at the first newline
         logprobs=1,  # return log prob
@@ -4199,6 +4175,8 @@ def test_text_completion_with_echo(stream):
             print(chunk)
     else:
         assert isinstance(response, TextCompletionResponse)
+        assert response.choices[0].text.startswith("hello")
+        assert response.choices[0].logprobs.token_logprobs
 
 
 def test_text_completion_ollama():

@@ -26,6 +26,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/v2/login",
     "/v3/login",
     "/logout",
+    "/session/logout",
     "/token",
     "/onboarding/",
     "/audit",
@@ -35,6 +36,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     # Models & routing config
     "/model/",
     "/v1/model/info",
+    "/v1/model/deprecations",
     "/v2/model/",
     "/model_group",
     "/model_access_group/",
@@ -50,6 +52,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/cache_settings",
     "/coordination_redis/",
     "/cost_tracking",
+    "/cost_optimization/",
     "/cost/",
     "/credentials",
     "/credential",
@@ -78,6 +81,8 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     # Spend / analytics
     "/spend/",
     "/analytics/",
+    "/lens/",
+    "/v1/traces",
     "/global/",
     "/user_agent",
     "/usage/",
@@ -141,6 +146,7 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
     {
         "/",
         "/routes",
+        "/lens",
         "/openapi.json",
         "/docs",
         "/docs/oauth2-redirect",

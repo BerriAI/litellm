@@ -3,14 +3,10 @@
 import asyncio
 import json
 import os
-import sys
 import tempfile
 from dotenv import load_dotenv
 
 load_dotenv()
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 
 import logging
 import time
@@ -103,6 +99,25 @@ def load_vertex_ai_credentials():
     print("created gcs path service account=", os.environ["GCS_PATH_SERVICE_ACCOUNT"])
 
 
+async def cancel_batch_unless_already_terminal(batch_id: str, provider: str) -> None:
+    try:
+        cancel_batch_response = await litellm.acancel_batch(batch_id=batch_id, custom_llm_provider=provider)
+    except openai.ConflictError as e:
+        if "Cannot cancel a batch with status 'completed'" in str(e):
+            print(f"Batch already completed, cannot cancel: {e}")
+            return
+        if "Cannot cancel a batch with status 'failed'" not in str(e):
+            raise
+        failed_batch = await litellm.aretrieve_batch(batch_id=batch_id, custom_llm_provider=provider)
+        print(f"Batch failed before cancel, errors={failed_batch.errors}")
+        failure_codes = {err.code for err in (failed_batch.errors.data if failed_batch.errors else None) or []}
+        assert failure_codes == {"token_limit_exceeded"}, (
+            f"batch failed for a reason other than the org's enqueued token limit: {failed_batch.errors}"
+        )
+        return
+    print("cancel_batch_response=", cancel_batch_response)
+
+
 @pytest.mark.parametrize("provider", ["openai"])  # , "azure"
 @pytest.mark.asyncio
 @skip_if_no_openai_network
@@ -176,24 +191,7 @@ async def test_create_batch(provider, tmp_path):
     result_file_path = tmp_path / "batch_job_results_furniture.jsonl"
     result_file_path.write_bytes(result)
 
-    # Cancel Batch - handle race condition where batch may already be completed
-    try:
-        cancel_batch_response = await litellm.acancel_batch(
-            batch_id=create_batch_response.id,
-            custom_llm_provider=provider,
-        )
-        print("cancel_batch_response=", cancel_batch_response)
-    except openai.ConflictError as e:
-        # Only allow to pass if it's specifically the "batch already completed" error
-        if "Cannot cancel a batch with status 'completed'" in str(e):
-            print(f"Batch already completed, cannot cancel: {e}")
-        else:
-            # Re-raise other ConflictError types
-            raise
-    except Exception as e:
-        # Re-raise any other unexpected errors
-        print(f"Unexpected error during batch cancellation: {e}")
-        raise
+    await cancel_batch_unless_already_terminal(batch_id=create_batch_response.id, provider=provider)
 
     pass
 
@@ -395,24 +393,7 @@ async def test_async_create_batch(provider, tmp_path):
     result_file_path = tmp_path / "batch_job_results_furniture.jsonl"
     result_file_path.write_bytes(file_content.content)
 
-    # Cancel Batch - handle race condition where batch may already be completed
-    try:
-        cancel_batch_response = await litellm.acancel_batch(
-            batch_id=create_batch_response.id,
-            custom_llm_provider=provider,
-        )
-        print("cancel_batch_response=", cancel_batch_response)
-    except openai.ConflictError as e:
-        # Only allow to pass if it's specifically the "batch already completed" error
-        if "Cannot cancel a batch with status 'completed'" in str(e):
-            print(f"Batch already completed, cannot cancel: {e}")
-        else:
-            # Re-raise other ConflictError types
-            raise
-    except Exception as e:
-        # Re-raise any other unexpected errors
-        print(f"Unexpected error during batch cancellation: {e}")
-        raise
+    await cancel_batch_unless_already_terminal(batch_id=create_batch_response.id, provider=provider)
 
 
 mock_file_response = {

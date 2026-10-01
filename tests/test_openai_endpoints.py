@@ -1,3 +1,5 @@
+import os
+from typing import Final
 # What this tests ?
 ## Tests /chat/completions by generating a key and then making a chat completions-request
 import pytest
@@ -307,7 +309,7 @@ async def test_chat_completion():
                 model="gpt-4",
                 messages=[{"role": "user", "content": "Hello!"}],
             )
-        assert "key not allowed to access model." in str(e)
+        assert "is not available for this API key" in str(e.value)
 
 
 @pytest.mark.asyncio
@@ -398,10 +400,12 @@ async def test_completion_streaming_usage_metrics():
     """
     [PROD Test] Ensures usage metrics are returned correctly when `include_usage` is set to `True`
     """
-    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+    client: Final = AsyncOpenAI(
+        api_key="sk-1234", base_url=os.environ.get("LITELLM_PROXY_BASE_URL", "http://0.0.0.0:4000")
+    )
 
     response = await client.completions.create(
-        model="gpt-instruct",
+        model="gpt-6-luna",
         prompt="hey",
         stream=True,
         stream_options={"include_usage": True},
@@ -417,9 +421,7 @@ async def test_completion_streaming_usage_metrics():
     assert last_chunk is not None, "No chunks were received"
     assert last_chunk.usage is not None, "Usage information was not received"
     assert last_chunk.usage.prompt_tokens > 0, "Prompt tokens should be greater than 0"
-    assert (
-        last_chunk.usage.completion_tokens > 0
-    ), "Completion tokens should be greater than 0"
+    assert last_chunk.usage.completion_tokens > 0, "Completion tokens should be greater than 0"
     assert last_chunk.usage.total_tokens > 0, "Total tokens should be greater than 0"
 
 
@@ -445,7 +447,7 @@ async def test_chat_completion_anthropic_structured_output():
     client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
 
     res = await client.beta.chat.completions.parse(
-        model="bedrock/us.anthropic.claude-3-sonnet-20240229-v1:0",
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         messages=messages,
         response_format=EventsList,
         timeout=60,
@@ -550,7 +552,7 @@ async def test_proxy_all_models():
     async with aiohttp.ClientSession() as session:
         # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
         await chat_completion(
-            session=session, key=LITELLM_MASTER_KEY, model="groq/llama-3.1-8b-instant"
+            session=session, key=LITELLM_MASTER_KEY, model="groq/openai/gpt-oss-120b"
         )
 
         await chat_completion(

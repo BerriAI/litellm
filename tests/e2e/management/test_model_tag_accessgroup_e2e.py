@@ -180,6 +180,12 @@ class ModelBlockBody(BaseModel):
     model_id: str
 
 
+class ModelBlockResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    model_id: str
+    blocked: bool
+
+
 class ModelInfoBlockDetail(BaseModel):
     id: str | None = None
     blocked: bool | None = None
@@ -245,11 +251,6 @@ class TestModelRoutes:
     def test_block_then_unblock_persists_to_model_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
-        """The blocked flag's persistence is read back from /model/info, not from the
-        /model/block response: that route currently returns a non-2xx serialization
-        envelope even though the DB write lands, so the /model/info read-back is the
-        authoritative persistence contract and keeps this test valid once the
-        response shape is fixed."""
         model_name = f"e2e-mgmt-model-block-{unique_marker()}"
         model_id = _create_db_model(client, resources, model_name)
 
@@ -257,27 +258,25 @@ class TestModelRoutes:
             f"{model_name!r} already reports blocked in /model/info before /model/block ran"
         )
 
-        _ = client.proxy.transport.send(
-            "/model/block",
-            headers=client.proxy.transport.master,
-            json=ModelBlockBody(model_id=model_id),
-        )
-        _ = _poll(
-            client.proxy,
-            lambda: True if _model_blocked_flag(client, model_id) is True else None,
-            f"/model/info never reported {model_name!r} blocked after /model/block",
-        )
-
-        _ = client.proxy.transport.send(
-            "/model/unblock",
-            headers=client.proxy.transport.master,
-            json=ModelBlockBody(model_id=model_id),
-        )
-        _ = _poll(
-            client.proxy,
-            lambda: True if _model_blocked_flag(client, model_id) is not True else None,
-            f"/model/info never cleared blocked for {model_name!r} after /model/unblock",
-        )
+        for action, expected in (("block", True), ("unblock", False)):
+            response = unwrap(
+                client.proxy.transport.post(
+                    f"/model/{action}",
+                    headers=client.proxy.transport.master,
+                    json=ModelBlockBody(model_id=model_id),
+                    response_type=ModelBlockResponse,
+                )
+            )
+            assert response.model_id == model_id
+            assert response.blocked is expected
+            _ = _poll(
+                client.proxy,
+                lambda want=expected: True
+                if _model_blocked_flag(client, model_id) is want
+                else None,
+                f"/model/info never reported blocked={expected} for {model_name!r} "
+                f"after /model/{action}",
+            )
 
 
 class TestTagRoutes:

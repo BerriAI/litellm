@@ -2,6 +2,7 @@
 Repository classes for database operations.
 """
 
+from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.credentials_repository import CredentialsRepository
@@ -28,6 +29,8 @@ from litellm.repositories.table_repositories import (
     ClaudeCodePluginRepository,
     ConfigOverridesRepository,
     DailyGuardrailMetricsRepository,
+    DailyGuardrailUsageUnitsRepository,
+    DailyModelUsageRepository,
     DailyPolicyMetricsRepository,
     DailyTagSpendRepository,
     DailyToolSpendRepository,
@@ -91,6 +94,7 @@ __all__ = [
     "AdaptiveRouterStateRepository",
     "AgentsRepository",
     "AuditLogRepository",
+    "AutoRouterSessionRepository",
     "BatchTable",
     "BudgetCascadeUnitOfWork",
     "BudgetRepository",
@@ -101,6 +105,8 @@ __all__ = [
     "ConfigRepository",
     "CredentialsRepository",
     "DailyGuardrailMetricsRepository",
+    "DailyGuardrailUsageUnitsRepository",
+    "DailyModelUsageRepository",
     "DailyPolicyMetricsRepository",
     "DailyTagSpendRepository",
     "DailyToolSpendRepository",

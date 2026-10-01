@@ -1,3 +1,4 @@
+import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Final
 
@@ -10,7 +11,7 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
-from litellm.types.router import LiteLLMParamsTypedDict
+from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -25,6 +26,15 @@ def _get_proxy_llm_router() -> "Router | None":
 def _get_str_value(values: dict[str, object] | None, key: str) -> str | None:
     value: Final = values.get(key) if values is not None else None
     return value if isinstance(value, str) else None
+
+
+def _credential_identity(credentials: VERTEX_CREDENTIALS_TYPES | None) -> str | None:
+    """
+    A hashable stand-in for a credential, so two deployments can be compared for holding the same one
+    """
+    if isinstance(credentials, dict):
+        return json.dumps(credentials, sort_keys=True)
+    return credentials
 
 
 class PassthroughEndpointRouter:
@@ -119,6 +129,86 @@ class PassthroughEndpointRouter:
         except litellm.exceptions.BadRequestError:
             return None
         return provider
+
+    def get_vertex_credentials_from_router_deployments(self, model: str | None) -> VertexPassThroughCredentials | None:
+        """
+        Resolve vertex pass-through credentials from the live router deployments flagged ``use_in_pass_through``.
+
+        ``deployment_key_to_vertex_credentials`` is only reachable when the caller names a project and location,
+        which WebSocket clients never do, so DB-stored deployments need this lookup to be usable at all.
+
+        With no model to go on, only deployments that agree on a project, a location, and a credential answer:
+        guessing between two Vertex projects would mint a token for one and later send the other one's model name
+        """
+        llm_router: Final = self.llm_router_getter()
+        if llm_router is None:
+            return None
+        resolved: Final = tuple(
+            (deployment, credentials)
+            for deployment in (llm_router.get_model_list() or ())
+            if (credentials := self._resolve_vertex_deployment_credentials(deployment["litellm_params"])) is not None
+        )
+        matched: Final = next(
+            (
+                credentials
+                for deployment, credentials in resolved
+                if model is not None and self._deployment_matches_model(deployment, model)
+            ),
+            None,
+        )
+        if matched is not None:
+            return matched
+        targets: Final = frozenset(
+            (
+                credentials.vertex_project,
+                credentials.vertex_location,
+                _credential_identity(credentials.vertex_credentials),
+            )
+            for _, credentials in resolved
+        )
+        if len(targets) != 1:
+            return None
+        return resolved[0][1]
+
+    def _resolve_vertex_deployment_credentials(
+        self, litellm_params: LiteLLMParamsTypedDict
+    ) -> VertexPassThroughCredentials | None:
+        if litellm_params.get("use_in_pass_through") is not True:
+            return None
+        if self._get_deployment_provider(litellm_params) != "vertex_ai":
+            return None
+        credential_name: Final = litellm_params.get("litellm_credential_name")
+        credential_values: Final = (
+            CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else None
+        )
+        vertex_project: Final = _get_str_value(credential_values, "vertex_project") or litellm_params.get(
+            "vertex_project"
+        )
+        vertex_location: Final = _get_str_value(credential_values, "vertex_location") or litellm_params.get(
+            "vertex_location"
+        )
+        stored_credentials: Final = (
+            credential_values.get("vertex_credentials") if credential_values is not None else None
+        )
+        vertex_credentials: Final = (
+            stored_credentials if isinstance(stored_credentials, (str, dict)) else None
+        ) or litellm_params.get("vertex_credentials")
+        if vertex_project is None or vertex_location is None:
+            return None
+        return VertexPassThroughCredentials(
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+        )
+
+    @staticmethod
+    def _deployment_matches_model(deployment: DeploymentTypedDict, model: str) -> bool:
+        upstream_model: Final = deployment["litellm_params"].get("model")
+        return model in (
+            deployment.get("model_name"),
+            upstream_model,
+            upstream_model.split("/", 1)[-1] if upstream_model is not None else None,
+        )
 
     def _get_vertex_env_vars(self) -> VertexPassThroughCredentials:
         """

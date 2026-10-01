@@ -80,10 +80,11 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
         },
         {
           header: "Discount Percentage",
+          numeric: true,
           cell: (row) => {
             const { displayName } = getProviderLogoAndName(row.provider);
             return (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center justify-end gap-2">
                 {editingProvider === row.provider ? (
                   <>
                     <Input
@@ -94,13 +95,13 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
                       className="w-20"
                       autoFocus
                     />
-                    <span className="text-gray-600">%</span>
+                    <span className="text-muted-foreground">%</span>
                     <Button
                       variant="ghost"
                       size="icon-sm"
                       aria-label={`Save discount for ${displayName}`}
                       onClick={() => handleSaveEdit(row.provider)}
-                      className="cursor-pointer text-green-600 hover:text-green-700"
+                      className="cursor-pointer text-success hover:text-success/80"
                     >
                       <Check className="size-5" />
                     </Button>
@@ -109,7 +110,7 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
                       size="icon-sm"
                       aria-label={`Cancel editing discount for ${displayName}`}
                       onClick={handleCancelEdit}
-                      className="cursor-pointer text-gray-600 hover:text-gray-700"
+                      className="cursor-pointer text-muted-foreground hover:text-foreground"
                     >
                       <X className="size-5" />
                     </Button>
@@ -122,7 +123,7 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
                       size="icon-sm"
                       aria-label={`Edit discount for ${displayName}`}
                       onClick={() => handleStartEdit(row.provider, row.discount)}
-                      className="cursor-pointer text-blue-600 hover:text-blue-700"
+                      className="cursor-pointer text-info hover:text-info/80"
                     >
                       <SquarePen className="size-5" />
                     </Button>
@@ -143,7 +144,7 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
                 size="icon-sm"
                 aria-label={`Remove discount for ${displayName}`}
                 onClick={() => onRemoveProvider(row.provider, displayName)}
-                className="cursor-pointer hover:text-red-600"
+                className="cursor-pointer hover:text-destructive"
               >
                 <Trash2 className="size-5" />
               </Button>

@@ -75,3 +75,9 @@ class HiddenParams(OpenAIObject):
         data: Final = super().model_dump(**kwargs)
         data["_response_ms"] = self._response_ms
         return data
+
+
+class CachedTokensDetails(BaseModel):
+    text_tokens: int | None = None
+    audio_tokens: int | None = None
+    image_tokens: int | None = None

@@ -53,6 +53,10 @@
           "type": "number",
           "minimum": 0
         },
+        "annotation_cost_per_page_batches": {
+          "type": "number",
+          "minimum": 0
+        },
         "audio_transcription_config": {
           "type": "string"
         },
@@ -79,6 +83,11 @@
           "minimum": 0,
           "description": "USD per token written to the provider's prompt cache."
         },
+        "cache_creation_input_token_cost_above_128k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "cache_creation_input_token_cost_above_1hr": {
           "type": "number",
           "minimum": 0,
@@ -94,7 +103,22 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "cache_creation_input_token_cost_above_200k_tokens_batches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "cache_creation_input_token_cost_above_256k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "cache_creation_input_token_cost_above_272k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "cache_creation_input_token_cost_above_272k_tokens_batches": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
@@ -103,6 +127,25 @@
           "type": "number",
           "minimum": 0,
           "description": "Flex service-tier rate for the same-named base field."
+        },
+        "cache_creation_input_token_cost_above_272k_tokens_priority": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Priority service-tier rate for the same-named base field."
+        },
+        "cache_creation_input_token_cost_above_272k_tokens_ultrafast": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "cache_creation_input_token_cost_above_32k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "cache_creation_input_token_cost_batches": {
+          "type": "number",
+          "minimum": 0
         },
         "cache_creation_input_token_cost_flex": {
           "type": "number",
@@ -114,7 +157,15 @@
           "minimum": 0,
           "description": "Priority service-tier rate for the same-named base field."
         },
+        "cache_creation_input_token_cost_ultrafast": {
+          "type": "number",
+          "minimum": 0
+        },
         "cache_read_input_audio_token_cost": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cache_read_input_image_token_cost": {
           "type": "number",
           "minimum": 0
         },
@@ -123,7 +174,17 @@
           "minimum": 0,
           "description": "USD per prompt token served from the provider's prompt cache."
         },
+        "cache_read_input_token_cost_above_128k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "cache_read_input_token_cost_above_200k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "cache_read_input_token_cost_above_200k_tokens_batches": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
@@ -133,7 +194,17 @@
           "minimum": 0,
           "description": "Priority service-tier rate for the same-named base field."
         },
+        "cache_read_input_token_cost_above_256k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "cache_read_input_token_cost_above_272k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "cache_read_input_token_cost_above_272k_tokens_batches": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
@@ -148,10 +219,28 @@
           "minimum": 0,
           "description": "Priority service-tier rate for the same-named base field."
         },
+        "cache_read_input_token_cost_above_272k_tokens_ultrafast": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "cache_read_input_token_cost_above_32k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "cache_read_input_token_cost_above_512k_tokens": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "cache_read_input_token_cost_balanced": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cache_read_input_token_cost_batches": {
+          "type": "number",
+          "minimum": 0
         },
         "cache_read_input_token_cost_flex": {
           "type": "number",
@@ -163,6 +252,10 @@
           "minimum": 0,
           "description": "Priority service-tier rate for the same-named base field."
         },
+        "cache_read_input_token_cost_ultrafast": {
+          "type": "number",
+          "minimum": 0
+        },
         "citation_cost_per_token": {
           "type": "number",
           "minimum": 0
@@ -173,6 +266,22 @@
         },
         "comment": {
           "type": "string"
+        },
+        "cost_per_second": {
+          "type": "number",
+          "minimum": 0
+        },
+        "default_reasoning_effort": {
+          "type": "string",
+          "description": "Reasoning effort the provider applies when the request omits reasoning_effort. Gates whether a non-default temperature or the top_p/logprobs sampling params are accepted, which hold only when the effort resolves to 'none'.",
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
         },
         "deprecation_date": {
           "type": "string",
@@ -186,6 +295,19 @@
         "gemini_native_audio": {
           "type": "boolean"
         },
+        "google_maps_grounding_cost_per_query": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD per Grounding with Google Maps request; billed per query or per prompt per web_search_billing_unit."
+        },
+        "guardrail_cost_per_unit": {
+          "type": "object",
+          "description": "USD cost per billable guardrail unit, keyed by the provider's usage counter name (e.g. Bedrock's contentPolicyUnits).",
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
         "input_cost_per_audio_per_second": {
           "type": "number",
           "minimum": 0
@@ -196,6 +318,10 @@
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
         "input_cost_per_audio_token": {
+          "type": "number",
+          "minimum": 0
+        },
+        "input_cost_per_audio_token_batches": {
           "type": "number",
           "minimum": 0
         },
@@ -223,6 +349,10 @@
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
         "input_cost_per_image_token": {
+          "type": "number",
+          "minimum": 0
+        },
+        "input_cost_per_image_token_batches": {
           "type": "number",
           "minimum": 0
         },
@@ -257,6 +387,11 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "input_cost_per_token_above_200k_tokens_batches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "input_cost_per_token_above_200k_tokens_priority": {
           "type": "number",
           "minimum": 0,
@@ -272,6 +407,11 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "input_cost_per_token_above_272k_tokens_batches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "input_cost_per_token_above_272k_tokens_flex": {
           "type": "number",
           "minimum": 0,
@@ -282,10 +422,24 @@
           "minimum": 0,
           "description": "Priority service-tier rate for the same-named base field."
         },
+        "input_cost_per_token_above_272k_tokens_ultrafast": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "input_cost_per_token_above_32k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "input_cost_per_token_above_512k_tokens": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "input_cost_per_token_balanced": {
+          "type": "number",
+          "minimum": 0
         },
         "input_cost_per_token_batches": {
           "type": "number",
@@ -306,6 +460,10 @@
           "minimum": 0,
           "description": "Priority service-tier rate for the same-named base field."
         },
+        "input_cost_per_token_ultrafast": {
+          "type": "number",
+          "minimum": 0
+        },
         "input_cost_per_video_per_second": {
           "type": "number",
           "minimum": 0
@@ -324,6 +482,14 @@
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "input_cost_per_video_token": {
+          "type": "number",
+          "minimum": 0
+        },
+        "input_cost_per_video_token_batches": {
+          "type": "number",
+          "minimum": 0
         },
         "input_dbu_cost_per_token": {
           "type": "number",
@@ -361,6 +527,8 @@
             "chat",
             "completion",
             "embedding",
+            "evaluation",
+            "guardrail",
             "image_edit",
             "image_generation",
             "moderation",
@@ -381,6 +549,118 @@
           "type": "number",
           "minimum": 0
         },
+        "ocr_cost_per_page_batches": {
+          "type": "number",
+          "minimum": 0
+        },
+        "off_peak_pricing": {
+          "type": "object",
+          "description": "Rates that replace the same-named base fields while the request falls inside the stated UTC windows.",
+          "properties": {
+            "hours_utc": {
+              "description": "UTC \"HH:MM-HH:MM\" window, or a list of them; a window may wrap past midnight.",
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^([01]\\d|2[0-3]):[0-5]\\d-([01]\\d|2[0-3]):[0-5]\\d$"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^([01]\\d|2[0-3]):[0-5]\\d-([01]\\d|2[0-3]):[0-5]\\d$"
+                  },
+                  "minItems": 1
+                }
+              ]
+            },
+            "windows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "hours_utc": {
+                    "description": "UTC \"HH:MM-HH:MM\" window, or a list of them; a window may wrap past midnight.",
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^([01]\\d|2[0-3]):[0-5]\\d-([01]\\d|2[0-3]):[0-5]\\d$"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d-([01]\\d|2[0-3]):[0-5]\\d$"
+                        },
+                        "minItems": 1
+                      }
+                    ]
+                  },
+                  "weekdays": {
+                    "type": "array",
+                    "description": "ISO-8601 weekday numbers (1 = Monday .. 7 = Sunday) or English day names the window applies on.",
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 7
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "(?i)^(mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)$"
+                        }
+                      ]
+                    },
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "hours_utc"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1
+            },
+            "weekday_timezone": {
+              "type": "string",
+              "description": "IANA zone the weekdays of each window are read on; defaults to UTC."
+            },
+            "input_cost_per_token": {
+              "type": "number",
+              "minimum": 0
+            },
+            "output_cost_per_token": {
+              "type": "number",
+              "minimum": 0
+            },
+            "output_cost_per_reasoning_token": {
+              "type": "number",
+              "minimum": 0
+            },
+            "cache_read_input_token_cost": {
+              "type": "number",
+              "minimum": 0
+            },
+            "cache_creation_input_token_cost": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "hours_utc"
+              ]
+            },
+            {
+              "required": [
+                "windows"
+              ]
+            }
+          ],
+          "additionalProperties": false
+        },
         "output_cost_per_audio_token": {
           "type": "number",
           "minimum": 0
@@ -395,6 +675,34 @@
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
         "output_cost_per_image": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_image_0.5K": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_image_1024": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_image_1536": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_image_1K": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_image_2K": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_image_4K": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_image_512": {
           "type": "number",
           "minimum": 0
         },
@@ -419,6 +727,26 @@
           "type": "number",
           "minimum": 0
         },
+        "output_cost_per_second_2k": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_second_480p": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_second_4k": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_second_720p": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_second_768p": {
+          "type": "number",
+          "minimum": 0
+        },
         "output_cost_per_token": {
           "type": "number",
           "minimum": 0,
@@ -430,6 +758,11 @@
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
         "output_cost_per_token_above_200k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "output_cost_per_token_above_200k_tokens_batches": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
@@ -449,6 +782,11 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "output_cost_per_token_above_272k_tokens_batches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "output_cost_per_token_above_272k_tokens_flex": {
           "type": "number",
           "minimum": 0,
@@ -459,10 +797,24 @@
           "minimum": 0,
           "description": "Priority service-tier rate for the same-named base field."
         },
+        "output_cost_per_token_above_272k_tokens_ultrafast": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "output_cost_per_token_above_32k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "output_cost_per_token_above_512k_tokens": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "output_cost_per_token_balanced": {
+          "type": "number",
+          "minimum": 0
         },
         "output_cost_per_token_batches": {
           "type": "number",
@@ -478,6 +830,10 @@
           "type": "number",
           "minimum": 0,
           "description": "Priority service-tier rate for the same-named base field."
+        },
+        "output_cost_per_token_ultrafast": {
+          "type": "number",
+          "minimum": 0
         },
         "output_cost_per_video_per_second": {
           "type": "number",
@@ -504,6 +860,27 @@
         "provider_specific_entry": {
           "type": "object",
           "description": "Provider-internal routing hints (e.g. bedrock_invocation_schema)."
+        },
+        "reasoning_effort_levels": {
+          "type": "array",
+          "description": "Exact reasoning_effort levels this deployment accepts; wins over supports_* flags.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        },
+        "regional_endpoint_uplift_multiplier": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Multiplier applied to all token costs when served from a non-global Vertex AI endpoint (e.g. 1.10 = +10%)."
         },
         "regional_processing_uplift_multiplier_eu": {
           "type": "number",
@@ -542,6 +919,17 @@
         "source": {
           "type": "string",
           "description": "URL of the provider pricing/model page this entry was taken from."
+        },
+        "supported_audio_formats": {
+          "type": "array",
+          "description": "Audio container formats the model can return.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "mp3",
+              "wav"
+            ]
+          }
         },
         "supported_endpoints": {
           "type": "array",
@@ -587,6 +975,12 @@
         "supports_adaptive_thinking": {
           "type": "boolean"
         },
+        "supports_anthropic_compaction": {
+          "type": "boolean"
+        },
+        "supports_anthropic_thinking_payload": {
+          "type": "boolean"
+        },
         "supports_assistant_prefill": {
           "type": "boolean"
         },
@@ -602,6 +996,12 @@
         "supports_embedding_image_input": {
           "type": "boolean"
         },
+        "supports_fast_mode": {
+          "type": "boolean"
+        },
+        "supports_forced_tool_use": {
+          "type": "boolean"
+        },
         "supports_function_calling": {
           "type": "boolean"
         },
@@ -609,6 +1009,9 @@
           "type": "boolean"
         },
         "supports_image_size": {
+          "type": "boolean"
+        },
+        "supports_legacy_thinking": {
           "type": "boolean"
         },
         "supports_low_reasoning_effort": {
@@ -650,6 +1053,9 @@
         "supports_pdf_input": {
           "type": "boolean"
         },
+        "supports_prompt_cache_breakpoint": {
+          "type": "boolean"
+        },
         "supports_prompt_caching": {
           "type": "boolean"
         },
@@ -666,6 +1072,9 @@
           "type": "boolean"
         },
         "supports_system_messages": {
+          "type": "boolean"
+        },
+        "supports_thinking_cache_preservation": {
           "type": "boolean"
         },
         "supports_tool_choice": {
@@ -687,6 +1096,9 @@
           "type": "boolean"
         },
         "supports_xhigh_reasoning_effort": {
+          "type": "boolean"
+        },
+        "thinking_always_on": {
           "type": "boolean"
         },
         "tiered_pricing": {
@@ -753,6 +1165,13 @@
         },
         "uses_embed_content": {
           "type": "boolean"
+        },
+        "vertex_ai_audio_api": {
+          "type": "string",
+          "enum": [
+            "lyria_predict",
+            "lyria_interactions"
+          ]
         },
         "web_search_billing_unit": {
           "type": "string",
