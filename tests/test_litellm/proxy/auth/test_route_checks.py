@@ -2538,6 +2538,66 @@ def test_proxy_admin_viewer_post_blocked_for_management_route_writes(route):
     assert exc_info.value.status_code == 403
 
 
+_VIEWER_SERVER_ID: Final = "3f2c1a9e-8d4b-4c7a-9e1f-2b6d5a7c8e90"
+
+
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("POST", f"/v1/mcp/server/oauth/{_VIEWER_SERVER_ID}/register"),
+        ("POST", f"/v1/mcp/server/{_VIEWER_SERVER_ID}/oauth-user-credential"),
+        ("DELETE", f"/v1/mcp/server/{_VIEWER_SERVER_ID}/oauth-user-credential"),
+        ("POST", "/v1/mcp/server/slack_mcp/oauth-user-credential"),
+        ("POST", f"/v1/mcp/server/{_VIEWER_SERVER_ID}/user-credential"),
+        ("DELETE", f"/v1/mcp/server/{_VIEWER_SERVER_ID}/user-credential"),
+        ("POST", f"/v1/mcp/server/{_VIEWER_SERVER_ID}/user-env-vars"),
+        ("DELETE", f"/v1/mcp/server/{_VIEWER_SERVER_ID}/user-env-vars"),
+    ],
+)
+def test_proxy_admin_viewer_can_manage_own_mcp_credentials(method, route):
+    """The per-user MCP OAuth / BYOK / env-var writes only touch the caller's own row, so the
+    dashboard's connect and disconnect flow must get past route checks for an Admin Viewer"""
+    allowed: Final = RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="viewer_user", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value),
+        _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        route=route,
+        request=_mock_request(method),
+        valid_token=UserAPIKeyAuth(user_id="viewer_user", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value),
+        request_data={},
+    )
+
+    assert allowed is None
+
+
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("POST", "/v1/mcp/server/register"),
+        ("POST", "/v1/mcp/server"),
+        ("PUT", "/v1/mcp/server"),
+        ("POST", "/v1/mcp/server/import"),
+        ("POST", "/v1/mcp/server/oauth/session"),
+        ("DELETE", f"/v1/mcp/server/{_VIEWER_SERVER_ID}"),
+        ("PUT", f"/v1/mcp/server/{_VIEWER_SERVER_ID}/approve"),
+        ("POST", f"/v1/mcp/server/{_VIEWER_SERVER_ID}/pin"),
+        ("PUT", f"/v1/mcp/server/{_VIEWER_SERVER_ID}/oauth-user-credential"),
+        ("POST", f"/v1/mcp/server/{_VIEWER_SERVER_ID}/oauth-user-credential/extra"),
+    ],
+)
+def test_proxy_admin_viewer_mcp_admin_writes_still_blocked(method, route):
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=LiteLLM_UserTable(user_id="viewer_user", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value),
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route=route,
+            request=_mock_request(method),
+            valid_token=UserAPIKeyAuth(user_id="viewer_user", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value),
+            request_data={},
+        )
+    assert exc_info.value.status_code == 403
+    assert "role= proxy_admin_viewer" in str(exc_info.value.detail)
+
+
 class TestModelsRouteExemptFromDisableLLMEndpoints:
     """
     Test that /models and /v1/models are exempt from DISABLE_LLM_API_ENDPOINTS.
