@@ -328,11 +328,21 @@ async def pump_events(
         end = _End(error=e)
     finally:
         await _aclose(events)
-        _put_end(queue, end)
+        await _put_end(queue, end)
 
 
-def _put_end(queue: asyncio.Queue[Event | _End], end: _End) -> None:
-    """The end marker must always land, even when the queue is full after a cancel."""
+async def _put_end(queue: asyncio.Queue[Event | _End], end: _End) -> None:
+    """Queue the end marker behind every event, waiting for room so no event is dropped.
+
+    A cancelled turn has no consumer left to drain the queue, so only then is space made
+    by discarding queued events.
+    """
+    if end.reason != "cancelled":
+        try:
+            await queue.put(end)
+            return
+        except asyncio.CancelledError:
+            pass
     while queue.full():
         queue.get_nowait()
     queue.put_nowait(end)
