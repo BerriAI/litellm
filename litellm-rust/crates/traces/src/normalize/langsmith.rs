@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, io};
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Value, ser::Formatter};
 
@@ -59,10 +60,8 @@ enum HiddenBlock {
 }
 
 #[derive(Deserialize, Serialize)]
-struct RawToolCall {
-    name: Option<Value>,
-    args: Option<Value>,
-}
+#[serde(transparent)]
+struct RawToolCall(IndexMap<String, Value>);
 
 #[derive(Deserialize)]
 struct ResponseMetadata {

@@ -4387,6 +4387,7 @@ dependencies = [
  "base64 0.22.1",
  "criterion",
  "flate2",
+ "indexmap 2.14.0",
  "litellm-http",
  "litellm-storage-clickhouse",
  "opentelemetry-proto",

@@ -368,6 +368,8 @@ fn normalizes_langsmith_fixture() {
         serde_json::from_str(&llm.normalized.output).expect("message output");
     assert_eq!(output["role"], "assistant");
     assert!(output["tool_calls"][0]["name"].is_string());
+    assert!(output["tool_calls"][0]["id"].is_string());
+    assert_eq!(output["tool_calls"][0]["type"], "tool_call");
     let root = spans
         .iter()
         .find(|span| span.name == "deep_research_agent")
