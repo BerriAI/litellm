@@ -1136,7 +1136,7 @@ class MCPClient:
         async def _list_resource_templates_operation(session: ClientSession) -> ListResourceTemplatesResult:
             capabilities: Final = session.server_capabilities
             if capabilities is not None and capabilities.resources is None:
-                return ListResourceTemplatesResult(resource_templates=[])  # mutable-ok: MCP result payload
+                return ListResourceTemplatesResult(resource_templates=[])
             try:
                 return ListResourceTemplatesResult(
                     resource_templates=await self._list_optional_pages(
@@ -1150,7 +1150,7 @@ class MCPClient:
                 verbose_logger.debug(
                     "MCP client list_resource_templates is unsupported by %s: %s", self.server_url or "stdio", error
                 )
-                return ListResourceTemplatesResult(resource_templates=[])  # mutable-ok: MCP result payload
+                return ListResourceTemplatesResult(resource_templates=[])
 
         try:
             result: Final = await self.run_with_session(_list_resource_templates_operation)

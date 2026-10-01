@@ -636,9 +636,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             live: Final = tuple((id(p), p) for p in (*self._processors.values(), *self._retired.values()))
             closing: Final = tuple(p for ident, p in live if ident not in self._exporting)
             self._processors.clear()
-            self._retired = OrderedDict(  # mutable-ok: the same bounded map, keeping only what is still exporting
-                (ident, p) for ident, p in live if ident in self._exporting
-            )
+            self._retired = OrderedDict((ident, p) for ident, p in live if ident in self._exporting)
         for processor in closing:
             self._drain.submit(processor)
         self._drain.close(timeout=max(0.0, deadline - time.monotonic()))

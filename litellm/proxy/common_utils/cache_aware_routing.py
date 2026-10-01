@@ -123,7 +123,7 @@ async def _available(
             await router.async_get_healthy_deployments(  # pyright: ignore[reportUnknownMemberType]  # legacy router results are validated at this boundary
                 model=candidate.model,
                 messages=_MESSAGES.validate_python(messages) if messages else None,  # pyright: ignore[reportArgumentType]  # router annotations predate structured native messages
-                request_kwargs=dict(request_kwargs),  # mutable-ok: Router's filtering API accepts a request dictionary
+                request_kwargs=dict(request_kwargs),
             )
         )
     except Exception:  # noqa: BLE001  # an unavailable optional candidate must not fail the originally selected route

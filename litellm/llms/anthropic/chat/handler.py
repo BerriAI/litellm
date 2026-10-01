@@ -763,7 +763,7 @@ class ModelResponseIterator:
         return content_block_start
 
     def _web_search_call_snapshot(self) -> dict[str, object]:
-        return dict(self._web_search_calls)  # mutable-ok: stream payload snapshot
+        return dict(self._web_search_calls)
 
     def _complete_web_search_call(self, result: dict[str, object]) -> None:
         tool_use_id: Final = result.get("tool_use_id")
@@ -771,7 +771,7 @@ class ModelResponseIterator:
             return
         self._web_search_calls[tool_use_id] = build_web_search_call(
             tool_id=tool_use_id,
-            tool_input=self._server_tool_inputs.get(tool_use_id, {}),  # mutable-ok: empty provider input
+            tool_input=self._server_tool_inputs.get(tool_use_id, {}),
             result=result,
         )
 
@@ -880,7 +880,7 @@ class ModelResponseIterator:
                             self._web_search_calls[self._current_server_tool_id] = build_web_search_call(
                                 self._current_server_tool_id,
                                 tool_input,
-                                {"content": []},  # mutable-ok: no provider result yet
+                                {"content": []},
                                 status="in_progress",
                             )
                             provider_specific_fields["web_search_calls"] = self._web_search_call_snapshot()

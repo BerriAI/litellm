@@ -428,9 +428,9 @@ def _effective_complexity_router_config(
             if key in ("api_key", "api_base") and (key != "api_key" or same_base)
         }
     )
-    return {  # mutable-ok: persisted JSON requires concrete nested dicts
+    return {
         **incoming,
-        "jev_classifier_config": {  # mutable-ok: json.dumps cannot serialize MappingProxyType
+        "jev_classifier_config": {
             **transport,
             **supplied,
         },
@@ -960,7 +960,7 @@ def _cost_map_entry(db_model: Deployment, incoming_model_info: Mapping[str, obje
     return MappingProxyType({})
 
 
-LoadedCatalog: TypeAlias = Callable[[], Mapping[str, Mapping[str, object]]]  # mutable-ok: Callable parameter syntax
+LoadedCatalog: TypeAlias = Callable[[], Mapping[str, Mapping[str, object]]]
 
 
 def _loaded_catalog_entry(
@@ -2688,12 +2688,10 @@ async def update_model(
                 "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             }
             renamed_update: Final[PrismaCompatibleUpdateDBModel] = (
-                {**base_update, "model_name": renamed_to}  # mutable-ok: Prisma serializes only concrete update dicts
-                if renamed_to is not None
-                else base_update
+                {**base_update, "model_name": renamed_to} if renamed_to is not None else base_update
             )
             _data: Final[PrismaCompatibleUpdateDBModel] = (
-                {  # mutable-ok: Prisma serializes only concrete update dicts
+                {
                     **renamed_update,
                     "model_info": deployment.model_info.model_copy(
                         update=MappingProxyType({"member_auto_router": member_marker})
@@ -2985,8 +2983,8 @@ class AutoRouterClassifierPromptPreviewRequest(BaseModel):
 @router.post(
     "/auto_router/classifier/default_prompt",
     description="Get the system prompt an auto-router's LLM classifier sends for an edited tier set",
-    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def preview_auto_router_classifier_prompt(
     request: AutoRouterClassifierPromptPreviewRequest,
@@ -2997,7 +2995,7 @@ async def preview_auto_router_classifier_prompt(
     Built by the same function the live classifier uses, so the preview cannot drift from what the
     router sends. Payload validity beyond a renderable definition stays the dry-run's job.
     """
-    labeled_tiers: Final = _validated_labeled_tiers(request.tier_labels or {})  # mutable-ok: Pydantic field default
+    labeled_tiers: Final = _validated_labeled_tiers(request.tier_labels or {})
     system_prompt: Final = (
         custom_tier_classification_prompt(
             request.tier_definitions,
@@ -3020,8 +3018,8 @@ async def preview_auto_router_classifier_prompt(
 @router.get(
     "/auto_router/classifier/default_prompt",
     description="Get the built-in system prompt used by an auto-router's LLM classifier",
-    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def get_auto_router_classifier_default_prompt(
     context_window_size: int = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,

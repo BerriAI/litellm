@@ -713,13 +713,13 @@ async def test_post_call_failure_hook_non_http_exception_in_callback_swallowed(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("logging_value", (None, "caller-controlled", {"baseline_cache_context": "untrusted"}))  # mutable-ok: emulate an untrusted JSON request field
+@pytest.mark.parametrize("logging_value", (None, "caller-controlled", {"baseline_cache_context": "untrusted"}))
 async def test_terminal_baseline_cleanup_ignores_missing_or_untrusted_logging(
     proxy_logging: ProxyLogging, monkeypatch: pytest.MonkeyPatch, logging_value: object
 ) -> None:
     monkeypatch.setattr(litellm, "callbacks", ())
-    proxy_logging.alert_types = []  # mutable-ok: disable optional alert sinks for this boundary test  # rebind-ok: isolate the fixture-owned alert configuration
-    request_data: Final = {"litellm_call_id": "untrusted-logging", "litellm_logging_obj": logging_value}  # mutable-ok: the production failure owner removes internal fields in place
+    proxy_logging.alert_types = []  # rebind-ok: isolate the fixture-owned alert configuration
+    request_data: Final = {"litellm_call_id": "untrusted-logging", "litellm_logging_obj": logging_value}
     result: Final = await proxy_logging.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # exercise the existing proxy terminal owner with its legacy request dictionary contract
         request_data=request_data,
         original_exception=ValueError("original provider failure"),

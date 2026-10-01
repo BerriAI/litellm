@@ -58,7 +58,7 @@ def _json(value: object) -> str:
 
 
 def _json_mapping(value: Mapping[str, Any]) -> str:
-    return _json(dict(value))  # mutable-ok: [LIT002] JSON serialization requires a dict
+    return _json(dict(value))
 
 
 def _find_traceparent(metadata: Mapping[str, Any], kwargs: Mapping[str, Any]) -> tuple[str, str]:
@@ -88,8 +88,8 @@ def _cache_tokens(usage: Mapping[str, Any]) -> tuple[int, int]:
 
 def _request_tags(value: object) -> list[str]:
     if not isinstance(value, list):
-        return []  # mutable-ok: [LIT002] empty spend-log tag payload
-    return [str(tag) for tag in value]  # mutable-ok: [LIT002] SpendLogRecord schema
+        return []
+    return [str(tag) for tag in value]
 
 
 def _session_id(payload: StandardLoggingPayload, kwargs: Mapping[str, Any]) -> str:
@@ -165,6 +165,6 @@ class ClickHouseSpendLogger(ClickHouseBatchLogger):
             if payload is None or _is_trace_ingest(payload):
                 return
             row: Final = spend_log_row_from_payload(payload, kwargs)
-            self.enqueue([dict(row)])  # mutable-ok: [LIT002] batch logger API
+            self.enqueue([dict(row)])
         except Exception as e:
             verbose_logger.exception("ClickHouseSpendLogger: failed to log request: %s", e)

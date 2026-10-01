@@ -210,7 +210,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 output_index = self._get_or_assign_tool_output_index(call_id)
                 self._web_search_calls[call_id] = item
                 if status == "in_progress":
-                    self._pending_tool_events = [  # mutable-ok: replaces speculative function events
+                    self._pending_tool_events = [
                         event
                         for event in self._pending_tool_events
                         if getattr(event, "output_index", None) != output_index
@@ -409,7 +409,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
             output_index=output_index,
             item=BaseLiteLLMOpenAIResponseObject(
-                **{  # mutable-ok: BaseLiteLLM object accepts dynamic item fields
+                **{
                     "id": item.id,
                     "type": item.type,
                     "status": "in_progress",

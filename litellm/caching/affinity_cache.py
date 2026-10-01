@@ -103,10 +103,10 @@ async def claim_affinity_pin(
         try:
             claim_script: Final = redis_cache.async_register_script(_CLAIM_PIN_SCRIPT)
             args: Final = (
-                json.dumps(dict(pin_value)),  # mutable-ok: JSON serialization requires dict, not a generic Mapping
+                json.dumps(dict(pin_value)),
                 int(ttl_seconds),
                 *(
-                    (json.dumps(tuple(dict(value) for value in eligible_values)),)  # mutable-ok: JSON requires dict
+                    (json.dumps(tuple(dict(value) for value in eligible_values)),)
                     if eligible_values is not None
                     else ()
                 ),

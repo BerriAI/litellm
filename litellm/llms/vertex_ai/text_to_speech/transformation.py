@@ -499,9 +499,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> list:  # mutable-ok: inherited provider interface returns a concrete parameter list
-        return [  # mutable-ok: inherited provider interface requires a concrete parameter list
-            "response_format"
-        ]
+        return ["response_format"]
 
     def map_openai_params(
         self,
@@ -511,9 +509,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
         drop_params: bool = False,
         kwargs: dict | None = None,  # mutable-ok: inherited provider interface accepts a concrete keyword dictionary
     ) -> tuple[str | None, dict]:  # mutable-ok: inherited provider interface returns concrete mapped parameters
-        mapped_params: Final = dict(  # mutable-ok: mapping drops unsupported parameters before provider dispatch
-            optional_params
-        )
+        mapped_params: Final = dict(optional_params)
         base_model: Final = model.removeprefix("vertex_ai/")
         model_info: Final = self._get_model_info(model=model)
         unsupported_params: Final = tuple(
@@ -580,7 +576,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
             return VertexAIInteractionsConfig(mint_access_token=mint_access_token).get_complete_url(
                 api_base=api_base,
                 model=base_model,
-                litellm_params={  # mutable-ok: interactions dispatch expects a concrete parameter dictionary
+                litellm_params={
                     **litellm_params,
                     "vertex_project": project,
                     "vertex_location": "global",
@@ -611,7 +607,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
             custom_llm_provider="vertex_ai",
         )
         headers.update(
-            {  # mutable-ok: HTTP dispatch requires a concrete header dictionary
+            {
                 "Authorization": f"Bearer {access_token}",
                 "x-goog-user-project": project,
                 "Content-Type": "application/json",
@@ -620,27 +616,23 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
         base_model: Final = model.removeprefix("vertex_ai/")
         model_info: Final = self._get_model_info(model=model)
         request_body: Final[dict[str, object]] = (  # mutable-ok: HTTP dispatch requires a concrete provider payload
-            {  # mutable-ok: predict dispatch requires a concrete provider request dictionary
-                "instances": [  # mutable-ok: predict dispatch requires a concrete instances list
-                    {"prompt": input}  # mutable-ok: predict dispatch requires a concrete instance dictionary
-                ],
-                "parameters": {  # mutable-ok: predict dispatch requires a concrete parameters dictionary
-                    "sample_count": 1
-                },
+            {
+                "instances": [{"prompt": input}],
+                "parameters": {"sample_count": 1},
             }
             if model_info["vertex_ai_audio_api"] == "lyria_predict"
-            else {  # mutable-ok: interactions dispatch requires a concrete provider request dictionary
+            else {
                 "model": base_model,
                 "input": input,
                 **(
-                    {  # mutable-ok: interactions dispatch requires a nested response-format dictionary
-                        "response_format": {  # mutable-ok: interactions response format is a concrete provider payload
+                    {
+                        "response_format": {
                             "type": "audio",
                             "mime_type": "audio/wav",
                         }
                     }
                     if optional_params.get("response_format") == "wav"
-                    else {}  # mutable-ok: no response override is merged for non-WAV output
+                    else {}
                 ),
             }
         )

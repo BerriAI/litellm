@@ -1079,7 +1079,7 @@ async def _reserve_counters(
                     exc_info=True,
                 )
                 await _release_applied_entries_best_effort(
-                    entries=[entry],  # mutable-ok: the release takes the reservation's list of entries
+                    entries=[entry],
                     default_reserved_cost=reservation_cost,
                 )
         return None
@@ -1210,7 +1210,7 @@ async def _release_applied_entries_best_effort(
     for entry in entries:
         try:
             await _set_reserved_entries_actual_cost(
-                entries=[entry],  # mutable-ok: the reconcile takes the reservation's list of entries
+                entries=[entry],
                 actual_cost=0.0,
                 default_reserved_cost=default_reserved_cost,
             )

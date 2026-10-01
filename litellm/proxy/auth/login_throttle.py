@@ -416,7 +416,7 @@ class LoginThrottle:
             type=ProxyErrorTypes.auth_error,
             param="username",
             code=status.HTTP_429_TOO_MANY_REQUESTS,
-            headers={"Retry-After": str(retry_after)},  # mutable-ok: ProxyException writes into its headers dict
+            headers={"Retry-After": str(retry_after)},
         )
 
 

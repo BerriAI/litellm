@@ -133,8 +133,8 @@ async def get_latest_release_info(
 
 @router.get(
     "/get/latest_release_info",
-    tags=["UI Settings"],  # mutable-ok: FastAPI's route decorator only accepts a list
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI's route decorator only accepts a list
+    tags=["UI Settings"],
+    dependencies=[Depends(user_api_key_auth)],
     response_model=LatestReleaseInfo | None,
 )
 async def latest_release_info(

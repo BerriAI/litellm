@@ -20,7 +20,7 @@ class CatoNetworksGuardrailConfigModel(GuardrailConfigModel):
             "Send /embeddings `input` to Cato Networks as user messages. Off by default because embedding "
             "input is documents being indexed, not a conversation."
         ),
-        json_schema_extra={"ui_type": GuardrailParamUITypes.BOOL},  # mutable-ok: pydantic accepts only a dict here
+        json_schema_extra={"ui_type": GuardrailParamUITypes.BOOL},
     )
 
     @staticmethod

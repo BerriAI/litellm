@@ -101,7 +101,7 @@ def _with_client_context(
     }
     if not stamped:
         return request_data
-    return {**request_data, key: {**base, **stamped}}  # mutable-ok: logging needs dicts
+    return {**request_data, key: {**base, **stamped}}
 
 
 def _escape_control_chars(value: str) -> str:

@@ -186,7 +186,7 @@ class Agent365Guardrail(CustomGuardrail):
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: CustomGuardrail contract
-        return [GuardrailEventHooks.pre_mcp_call]  # mutable-ok: CustomGuardrail contract expects a list
+        return [GuardrailEventHooks.pre_mcp_call]
 
     @log_guardrail_information
     async def async_pre_call_hook(
@@ -259,7 +259,7 @@ class Agent365Guardrail(CustomGuardrail):
             response: Final = await self._post_allowing_error_status(
                 url=EVALUATE_URL,
                 json=self._build_evaluate_payload(data=data, user_api_key_dict=user_api_key_dict),
-                headers={"Authorization": f"Bearer {obo_token}"},  # mutable-ok: httpx header dict
+                headers={"Authorization": f"Bearer {obo_token}"},
             )
         except (httpx.HTTPError, LitellmTimeout, TimeoutError) as exc:
             return self._handle_unavailable(
@@ -444,7 +444,7 @@ class Agent365Guardrail(CustomGuardrail):
 
         response: Final = await self._post_allowing_error_status(
             url=TOKEN_ENDPOINT_TEMPLATE.format(tenant_id=self.tenant_id),
-            data={  # mutable-ok: OAuth form body; AsyncHTTPHandler.post requires dict
+            data={
                 "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
                 "client_id": self.client_id,
                 "client_secret": self.client_secret,
@@ -452,7 +452,7 @@ class Agent365Guardrail(CustomGuardrail):
                 "scope": OBO_SCOPE,
                 "requested_token_use": "on_behalf_of",
             },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},  # mutable-ok: httpx header dict
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         if response.status_code in (408, 429):
             raise Agent365ThrottledError(status_code=response.status_code)

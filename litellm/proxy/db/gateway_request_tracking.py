@@ -70,7 +70,7 @@ class GatewayRequestAccumulator:
 
     def drain(self) -> GatewayRequestSnapshot:
         drained: Final = self._counts
-        self._counts = {}  # mutable-ok: the fold restarts empty; the drained map is handed off whole
+        self._counts = {}
         return drained
 
     def restore(self, snapshot: GatewayRequestSnapshot) -> None:
@@ -91,7 +91,7 @@ class GatewayRequestAccumulator:
         overcount on a dropped acknowledgement beats losing a whole interval to
         every database blip, so the trade is deliberate.
         """
-        self._counts = dict(fold_counts(chain(self._counts.items(), snapshot.items())))  # mutable-ok: fold replaced
+        self._counts = dict(fold_counts(chain(self._counts.items(), snapshot.items())))
 
 
 def fold_counts(items: Iterable[tuple[GatewayRequestKey, GatewayRequestCounts]]) -> GatewayRequestSnapshot:

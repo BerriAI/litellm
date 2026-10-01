@@ -656,7 +656,7 @@ def get_model_cost_map(
     if isinstance(outcome, _FetchAttemptRetryable) and max_attempts > 1:
         threading.Thread(
             target=_retry_remote_fetch_in_background,
-            kwargs={  # mutable-ok: threading requires a mutable keyword-arguments mapping
+            kwargs={
                 "url": url,
                 "timeout": timeout,
                 "max_attempts": max_attempts,

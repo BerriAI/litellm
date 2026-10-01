@@ -421,7 +421,7 @@ class RouterBudgetLimiting(CustomLogger):
             increment_operations_to_flush: Final = tuple(self.redis_increment_operation_queue)
             if not increment_operations_to_flush:
                 return increment_operations_to_flush
-            self.redis_increment_operation_queue = []  # mutable-ok: emptied queue must stay appendable
+            self.redis_increment_operation_queue = []
             self._detached_increment_operations = increment_operations_to_flush
             return increment_operations_to_flush
 
@@ -478,9 +478,7 @@ class RouterBudgetLimiting(CustomLogger):
             "Pushing Redis Increment Pipeline for queue: %s",
             increment_operations_to_flush,
         )
-        increment_list: Final = list(  # mutable-ok: Redis pipeline contract requires a list
-            increment_operations_to_flush
-        )
+        increment_list: Final = list(increment_operations_to_flush)
         try:
             await redis_cache.async_increment_pipeline(increment_list=increment_list)
         except Exception as error:

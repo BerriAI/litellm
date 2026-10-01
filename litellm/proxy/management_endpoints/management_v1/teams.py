@@ -27,7 +27,7 @@ router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
 
 @router.post(
     "/teams/{team_id}/members/bulk_delete",
-    tags=["team management"],  # mutable-ok: FastAPI types `tags` as list[str], not Sequence
+    tags=["team management"],
     dependencies=(Depends(user_api_key_auth), Depends(reject_unknown_query_params)),
     response_model=BulkTeamMemberDeleteResponse,
 )
@@ -99,7 +99,7 @@ async def bulk_delete_team_members_action(
 
 @router.post(
     "/teams/{team_id}/members/bulk_update",
-    tags=["team management"],  # mutable-ok: FastAPI types `tags` as list[str], not Sequence
+    tags=["team management"],
     dependencies=(Depends(user_api_key_auth), Depends(reject_unknown_query_params)),
     response_model=BulkTeamMemberBudgetUpdateResponse,
 )

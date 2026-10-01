@@ -1981,9 +1981,7 @@ def refresh_proxy_server_request_body_snapshot(
         | _TRANSPORT_ONLY_CREDENTIAL_KEYS
         | _CALLBACK_CREDENTIAL_KEYS
     )
-    body: Final = {  # mutable-ok: audit JSON serialization requires a dict with shared nested messages
-        k: v for k, v in data.items() if k not in _body_snapshot_exclude
-    }
+    body: Final = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
     proxy_server_request["body"] = body
     if guardrails_applied and isinstance(logging_obj, Logging):
         metadata: Final = data.get(get_metadata_variable_name_from_kwargs(data))

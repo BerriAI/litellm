@@ -123,11 +123,7 @@ class AutoRouterBaselineCache(CustomLogger):
         if not isinstance(logging_obj, Logging) or call_type != CallTypes.anthropic_messages:
             return
         try:
-            metadata: Final = _METADATA.validate_python(
-                get_litellm_metadata_from_kwargs(
-                    {"litellm_params": kwargs}  # mutable-ok: legacy metadata owner requires a dictionary
-                )
-            )
+            metadata: Final = _METADATA.validate_python(get_litellm_metadata_from_kwargs({"litellm_params": kwargs}))
             if metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
                 return
             if logging_obj.baseline_cache_context is not None:

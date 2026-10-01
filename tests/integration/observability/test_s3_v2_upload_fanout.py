@@ -634,7 +634,7 @@ def test_s3_v2_batch_retry_resends_identical_key_and_body(gateway: Gateway, tmp_
     assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
     by_target: Final = {}
     for put in puts:
-        by_target.setdefault(put.target, set()).add(put.body)  # mutable-ok: grouping attempts seen so far per target
+        by_target.setdefault(put.target, set()).add(put.body)
     assert all(len(bodies) == 1 for bodies in by_target.values()), "a retried batch PUT changed key or body"
     assert max(sum(1 for put in puts if put.target == target) for target in by_target) >= 2, "no retried PUT observed"
     assert frozenset(payload["id"] for payload in payloads) == ids

@@ -877,7 +877,7 @@ def test_flush_langfuse_tracing_exports_the_queued_spans_of_every_channel(monkey
     graceful restart must reach the exporter without waiting for the batch interval."""
     exporters: Final[
         list[InMemorySpanExporter]
-    ] = []  # mutable-ok: collects the exporters the patched builder hands out
+    ] = []
 
     def build_in_memory(*, public_key: str, secret_key: str, base_url: str) -> InMemorySpanExporter:
         exporters.append(InMemorySpanExporter())

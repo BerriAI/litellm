@@ -352,13 +352,9 @@ def _replace_string_leaves(value: object, values: Iterator[str]) -> object:
     if isinstance(value, str):
         return next(values)
     if isinstance(value, dict):
-        return {  # mutable-ok: LogRecord extras must keep JSON dict shape for handlers
-            key: _replace_string_leaves(child, values) for key, child in value.items()
-        }
+        return {key: _replace_string_leaves(child, values) for key, child in value.items()}
     if isinstance(value, list):
-        return [  # mutable-ok: LogRecord extras must keep JSON list shape for handlers
-            _replace_string_leaves(child, values) for child in value
-        ]
+        return [_replace_string_leaves(child, values) for child in value]
     if isinstance(value, tuple):
         return tuple(_replace_string_leaves(child, values) for child in value)
     return value
@@ -368,13 +364,9 @@ def _sort_processed_sets(original: object, processed: object) -> object:
     if isinstance(original, set) and isinstance(processed, list):
         return sorted(processed)
     if isinstance(original, dict) and isinstance(processed, dict):
-        return {  # mutable-ok: sorting nested sets must preserve the surrounding JSON dict
-            key: _sort_processed_sets(original.get(key), value) for key, value in processed.items()
-        }
+        return {key: _sort_processed_sets(original.get(key), value) for key, value in processed.items()}
     if isinstance(original, list) and isinstance(processed, list):
-        return [  # mutable-ok: sorting nested sets must preserve the surrounding JSON list
-            _sort_processed_sets(before, after) for before, after in zip(original, processed)
-        ]
+        return [_sort_processed_sets(before, after) for before, after in zip(original, processed)]
     if isinstance(original, tuple) and isinstance(processed, tuple):
         return tuple(_sort_processed_sets(before, after) for before, after in zip(original, processed))
     return processed

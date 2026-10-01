@@ -187,9 +187,7 @@ def _span_row(span: DecodedSpan) -> SpanRow:
         Output="",
     )
     normalize(row, attributes)
-    row["SpanAttributes"] = {  # mutable-ok: the Rust JSON bridge requires a plain dict for span attributes
-        k: _truncate(v) for k, v in attributes.items() if k not in _HEAVY_ATTRIBUTES
-    }
+    row["SpanAttributes"] = {k: _truncate(v) for k, v in attributes.items() if k not in _HEAVY_ATTRIBUTES}
     row["Input"], row["Output"] = _truncate_payload(row["Input"]), _truncate(row["Output"])
     return row
 

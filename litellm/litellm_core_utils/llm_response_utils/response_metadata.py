@@ -71,7 +71,7 @@ def response_timing_metrics(
     receive_anchored: Final = timing_window[1]
     total_response_time_ms: Final = (end_time.timestamp() - window_start.timestamp()) * 1000
     if not include_overhead:
-        return {"_response_ms": total_response_time_ms}  # mutable-ok: read-only timing result
+        return {"_response_ms": total_response_time_ms}
     caching_details: Final = logging_obj.caching_details
     cache_duration_ms: Final = (
         caching_details.get("cache_duration_ms")

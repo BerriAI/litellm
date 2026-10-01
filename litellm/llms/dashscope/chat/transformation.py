@@ -13,7 +13,7 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 class DashScopeChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base class contract returns a list
-        return [  # mutable-ok: base class contract returns a list
+        return [
             *super().get_supported_openai_params(model=model),
             "reasoning_effort",
         ]

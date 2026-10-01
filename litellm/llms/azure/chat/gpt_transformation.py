@@ -44,7 +44,7 @@ def sanitized_tools_update(optional_params: Mapping[str, object]) -> Mapping[str
     tools: Final = optional_params.get("tools")
     if not isinstance(tools, list):
         return _NO_TOOLS_UPDATE
-    sanitized: Final = [  # mutable-ok: request tools are a JSON list
+    sanitized: Final = [
         tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns)
         if isinstance(tool, dict)
         else tool

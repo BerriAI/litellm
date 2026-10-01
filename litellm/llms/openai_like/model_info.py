@@ -76,7 +76,7 @@ async def get_openai_compatible_model_info(
     try:
         response: Final = await client.get(
             url=url,
-            headers=dict(headers),  # mutable-ok: AsyncHTTPHandler requires a concrete dict
+            headers=dict(headers),
             timeout=httpx.Timeout(5.0),
             follow_redirects=False,
             max_response_bytes=2 * 1024 * 1024,

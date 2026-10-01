@@ -171,9 +171,7 @@ class TenantTracerCache:
         # thread-pool workers concurrently with the event loop, so cache
         # updates, span counts, and retirement must be atomic.
         self._lock: Final = threading.Lock()
-        self._providers: OrderedDict[_RouteKey, TracerProvider] = (
-            OrderedDict()  # mutable-ok: bounded LRU; eviction needs in-place ordered mutation
-        )
+        self._providers: OrderedDict[_RouteKey, TracerProvider] = OrderedDict()
         self._open_span_counts: dict[TracerProvider, int] = {}  # mutable-ok: live refcount state
         # Oldest-first so an overflow of draining providers sheds the stalest.
         self._retired: OrderedDict[TracerProvider, None] = OrderedDict()  # mutable-ok: draining evicted providers
@@ -393,7 +391,7 @@ class TenantTracerCache:
             if project_headers and kind not in _GRPC_KINDS
             else base
         )
-        update: Final = {  # mutable-ok: model_copy(update=...) requires a plain dict
+        update: Final = {
             field: value
             for field, value in (("headers", routed), ("endpoint", endpoint))
             if (field == "headers" and routed != spec.headers)

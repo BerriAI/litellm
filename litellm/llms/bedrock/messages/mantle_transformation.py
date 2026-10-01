@@ -110,7 +110,7 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
                 if value
             }
         )
-        return {  # mutable-ok: the base class contract returns a dict the handler signs into in place
+        return {
             **merged_headers,
             **mantle_headers,
         }, resolved_api_base
@@ -141,7 +141,7 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         mantle_fields: Final = MappingProxyType(
             {key: value for key, value in (("model", model_id), ("stream", streaming)) if value}
         )
-        return {  # mutable-ok: the base class contract returns the dict the handler serializes as the body
+        return {
             **body,
             **mantle_fields,
         }

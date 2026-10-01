@@ -326,7 +326,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             for descriptor in model_descriptors:
                 extra_descriptors.append(descriptor)
                 extra_increments.append(
-                    {  # mutable-ok: atomic limiter API requires mutable increment records
+                    {
                         "requests": 0,
                         "tokens": usage.get("output_tokens", 0)
                         if descriptor["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
@@ -744,7 +744,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             )
 
         increments: list[IncrementAmounts] = [  # mutable-ok: reassigned below to append project IO increments
-            {  # mutable-ok: atomic limiter API requires mutable increment records
+            {
                 "requests": batch_usage.request_count,
                 "tokens": batch_usage.total_tokens,
             }

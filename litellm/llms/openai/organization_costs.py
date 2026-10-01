@@ -21,7 +21,7 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 OPENAI_ADMIN_KEY_ENV_VAR: Final = "OPENAI_ADMIN_KEY"
 
 BillingHttpGet: TypeAlias = Callable[
-    [str, Mapping[str, object], Mapping[str, str]],  # mutable-ok: Callable parameter list is type syntax
+    [str, Mapping[str, object], Mapping[str, str]],
     Awaitable[httpx.Response],
 ]
 
@@ -63,8 +63,8 @@ async def provider_billing_get(url: str, params: Mapping[str, object], headers: 
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.ProviderBilling)
     return await client.get(
         url,
-        params=dict(params),  # mutable-ok: AsyncHTTPHandler.get takes dict params
-        headers=dict(headers),  # mutable-ok: AsyncHTTPHandler.get takes dict headers
+        params=dict(params),
+        headers=dict(headers),
         timeout=PROVIDER_BILLING_TIMEOUT_SECONDS,
     )
 

@@ -93,7 +93,7 @@ def _fold_by_route(rows: Sequence[_AggregateRow]) -> tuple[GatewayRequestBreakdo
 
 @router.get(
     "/gateway/daily/activity",
-    tags=["Budget & Spend Tracking"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    tags=["Budget & Spend Tracking"],
     response_model=GatewayRequestActivityResponse,
 )
 async def get_gateway_daily_activity(

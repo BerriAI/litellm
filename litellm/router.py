@@ -514,9 +514,7 @@ def _with_router_resolved_session_model(session: object, model_name: str) -> Map
         return _NO_SESSION_KWARGS
     if "model" not in typed_session:
         return _NO_SESSION_KWARGS
-    return MappingProxyType(
-        {"session": {**typed_session, "model": model_name}}  # mutable-ok: callees deepcopy and JSON-dump session
-    )
+    return MappingProxyType({"session": {**typed_session, "model": model_name}})
 
 
 # Router._aanthropic_messages_streaming_iterator buffers lifecycle chunks
@@ -636,9 +634,7 @@ class FallbackAwareAnthropicMessagesStream:
         self._async_generator = async_generator
         self._source_iterator = source_iterator
         self.fallback_headers_adopted = False
-        self._hidden_params = dict(  # mutable-ok: mutated in place by merge_fallback_hidden_params
-            getattr(source_iterator, "_hidden_params", None) or {}
-        )
+        self._hidden_params = dict(getattr(source_iterator, "_hidden_params", None) or {})
 
     @property
     def has_buffered_provider_output(self) -> bool:
@@ -690,12 +686,10 @@ class FallbackAwareAnthropicMessagesStream:
         existing_headers: Final = cast(  # cast-ok: additional_headers is always a dict[str, object] when present
             "dict[str, object]", self._hidden_params.get("additional_headers") or {}
         )
-        self._hidden_params = {  # mutable-ok: matches _hidden_params' existing dict[str, object] shape
+        self._hidden_params = {
             **self._hidden_params,
             **fallback_hidden_params,
-            "additional_headers": dict(  # mutable-ok: hidden params expect a writable header bag
-                replace_complexity_router_headers(existing_headers, fallback_headers)
-            ),
+            "additional_headers": dict(replace_complexity_router_headers(existing_headers, fallback_headers)),
         }
 
 
@@ -742,12 +736,12 @@ class FallbackAwareStreamWrapper(CustomStreamWrapper):
         self._response_headers = getattr(fallback_response, "_response_headers", None)
         fallback_hidden_params, fallback_headers = prepared_fallback_hidden_params
         if fallback_hidden_params:
-            self._hidden_params = {  # mutable-ok: the rest of litellm writes into _hidden_params
+            self._hidden_params = {
                 **fallback_hidden_params,
                 # dict() because add_retry_fallback_headers mutates additional_headers in place
-                "additional_headers": dict(fallback_headers),  # mutable-ok: see above
+                "additional_headers": dict(fallback_headers),
             }
-            self._base_hidden_params = {  # mutable-ok: CustomStreamWrapper keeps this snapshot as a dict
+            self._base_hidden_params = {
                 **self._hidden_params,
                 "response_cost": None,
             }
@@ -1590,7 +1584,7 @@ class Router:
         routing_group: Final = self.get_routing_group(model)
         if routing_group is None:
             return None
-        return [  # mutable-ok: matches _get_all_deployments' list contract expected by downstream filters
+        return [
             apply_routing_group_priority(routing_group, member, deployment)
             for member in routing_group.models
             for deployment in self._get_all_deployments(model_name=member, team_id=team_id)
@@ -2465,7 +2459,7 @@ class Router:
         ``*.effort`` must not remain beside it and either win or trigger a conflicting-params 400.
         Every changed mapping is copied so the Router's shared deployment config stays immutable.
         """
-        sanitized: Final = dict(deployment_params)  # mutable-ok: request-local copy protects shared Router state
+        sanitized: Final = dict(deployment_params)
         if request_kwargs.get("reasoning_effort") is None:
             return sanitized
 
@@ -2475,7 +2469,7 @@ class Router:
 
         extra_body: Final = sanitized.get("extra_body")
         if isinstance(extra_body, Mapping):
-            sanitized_extra_body: Final = dict(extra_body)  # mutable-ok: request-local nested copy
+            sanitized_extra_body: Final = dict(extra_body)
             sanitized_extra_body.pop("reasoning_effort", None)
             sanitized_extra_body.pop("thinking", None)
             Router._pop_effort_from_nested_carrier(sanitized_extra_body, "output_config")
@@ -3336,7 +3330,7 @@ class Router:
 
             def adopt_fallback_headers(self, fallback_response: object) -> tuple[dict[str, object], dict[str, object]]:
                 prepared: Final = Router._prepare_fallback_hidden_params(fallback_response)
-                self._hidden_params = {**prepared[0], "additional_headers": prepared[1]}  # mutable-ok: stream metadata
+                self._hidden_params = {**prepared[0], "additional_headers": prepared[1]}
                 self.fallback_headers_adopted = True
                 return prepared
 
@@ -6948,7 +6942,7 @@ class Router:
                 "avector_store_delete",
             ):
                 vector_store_kwargs: Final = (
-                    {  # mutable-ok: the async routed request requires dynamic keyword arguments
+                    {
                         **kwargs,
                         "_direct_vector_store_embedding_executor": RouterVectorStoreEmbeddingExecutor(
                             router=self,
@@ -10091,9 +10085,7 @@ class Router:
         requests that route to (and bill as) a real deployment.
         """
         if classify_strategy_router_model(model) is not None:
-            model_info = {  # mutable-ok: filtered copy of the caller's entry, handed straight to register_model
-                k: v for k, v in model_info.items() if k not in CustomPricingLiteLLMParams.model_fields
-            }
+            model_info = {k: v for k, v in model_info.items() if k not in CustomPricingLiteLLMParams.model_fields}
 
         if model_id is not None:
             litellm.register_model(
@@ -10834,7 +10826,7 @@ class Router:
 
         try:
             custom_model_info = (
-                {  # mutable-ok: the legacy model-info merge updates this private copy
+                {
                     **copy.deepcopy(litellm.model_cost.get(model_id) or MappingProxyType({})),
                     **self.get_discovered_model_info(model_id),
                 }
@@ -11917,10 +11909,8 @@ class Router:
         the group, so inheriting them here would let a key holding a member's
         access group list and call the whole group.
         """
-        model_info: Final = {  # mutable-ok: DeploymentTypedDict rows are plain dicts
-            k: v for k, v in (deployment.get("model_info") or {}).items() if k != "access_groups"
-        }
-        return {**deployment, "model_info": model_info}  # mutable-ok: DeploymentTypedDict rows are plain dicts
+        model_info: Final = {k: v for k, v in (deployment.get("model_info") or {}).items() if k != "access_groups"}
+        return {**deployment, "model_info": model_info}
 
     TIER_PARAMS_NEVER_DROPPED: Final = frozenset(all_litellm_params) | frozenset(
         {
@@ -12903,9 +12893,7 @@ class Router:
         self, model: str, deployments: Sequence[DeploymentTypedDict]
     ) -> list[DeploymentTypedDict]:
         """A strategy marker is never a callable deployment, whichever resolution arm produced it."""
-        selectable: Final = [  # mutable-ok: matches _common_checks_available_deployment's list contract
-            d for d in deployments if not self._is_strategy_marker_deployment(d)
-        ]
+        selectable: Final = [d for d in deployments if not self._is_strategy_marker_deployment(d)]
         if deployments and not selectable:
             raise litellm.BadRequestError(
                 message=f"You passed in model={model}. {RouterErrors.only_strategy_marker_deployments.value}",
@@ -13911,7 +13899,7 @@ class Router:
         # deployment-context filtering key off this field. Compared by value, since
         # pydantic rebuilds the list rather than keeping the object passed in.
         pre_routing_hook_response: Final = (
-            routed.model_copy(update={"messages": messages})  # mutable-ok: pydantic's model_copy takes a dict
+            routed.model_copy(update={"messages": messages})
             if routed is not None and routing_messages is not None and routed.messages == routing_messages
             else routed
         )
@@ -14555,7 +14543,7 @@ class Router:
         ]
 
         if not filtered:
-            return [] if health_check_probe else healthy_deployments  # mutable-ok: empty list signals unavailable probe
+            return [] if health_check_probe else healthy_deployments
 
         return filtered
 

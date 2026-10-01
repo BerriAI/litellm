@@ -109,9 +109,7 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         }
 
         excluded_params: Final = frozenset({"model", "OPENAI_TRANSCRIPTION_PARAMS", "extra_body"})
-        form_data: Final[
-            dict[str, str | list[str]]
-        ] = {  # mutable-ok: AudioTranscriptionRequestData.data requires dict and httpx needs list values
+        form_data: Final[dict[str, str | list[str]]] = {
             "model": model,
             **{
                 k: _serialize_form_value(v)

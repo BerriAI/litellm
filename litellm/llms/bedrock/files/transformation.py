@@ -1384,7 +1384,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             _listed_managed_file(entry, bucket_name, configured_bucket_name, allow_legacy_cloud_file_ids)
             for entry in listing.iterfind("{*}Contents")
         )
-        return [  # mutable-ok: the base files contract returns a list
+        return [
             listed_file
             for listed_file in listed_files
             if listed_file is not None and (purpose is None or listed_file.purpose == purpose)
@@ -1429,7 +1429,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             request_params=target.request_params,
         )
         litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM] = signed_headers  # rebind-ok: handed to validate_environment
-        return url, {}  # mutable-ok: the base files contract returns the query as a dict
+        return url, {}
 
     def _s3_request_target(
         self,
@@ -1446,7 +1446,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         )
         region_preference: Final = request_params.s3_region_name or request_params.aws_region_name
         aws_region_name: Final = self._get_aws_region_name(
-            optional_params={"aws_region_name": region_preference},  # mutable-ok: BaseAWSLLM takes a dict
+            optional_params={"aws_region_name": region_preference},
             model="",
         )
         endpoint_url: Final = (
@@ -1481,7 +1481,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         aws_request: Final = AWSRequest(  # any-ok: botocore AWSRequest is untyped
             method=method,
             url=api_base,
-            headers={"x-amz-content-sha256": empty_body_hash},  # mutable-ok: botocore AWSRequest takes a dict
+            headers={"x-amz-content-sha256": empty_body_hash},
         )
         auth: Final = S3SigV4Auth(credentials, "s3", aws_region_name)  # any-ok: botocore untyped
         auth.add_auth(aws_request)  # any-ok: botocore request mutation is untyped

@@ -155,7 +155,7 @@ class MistralFilesConfig(BaseFilesConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> list[OpenAICreateFileRequestOptionalParams]:  # mutable-ok: BaseFilesConfig signature
-        return ["purpose"]  # mutable-ok: BaseFilesConfig signature
+        return ["purpose"]
 
     def map_openai_params(
         self,
@@ -182,7 +182,7 @@ class MistralFilesConfig(BaseFilesConfig):
             file=(filename, extracted["content"], content_type),
             purpose=(None, _to_mistral_purpose(create_file_data.get("purpose") or "batch")),
         )
-        return dict(upload)  # mutable-ok: BaseFilesConfig signature
+        return dict(upload)
 
     def transform_create_file_response(
         self,
@@ -235,7 +235,7 @@ class MistralFilesConfig(BaseFilesConfig):
         url: Final = f"{_api_base_from(litellm_params)}/v1/files"
         if not purpose:
             return url, _NO_QUERY_PARAMS
-        return url, {"purpose": _to_mistral_purpose(purpose)}  # mutable-ok: BaseFilesConfig signature returns dict
+        return url, {"purpose": _to_mistral_purpose(purpose)}
 
     def transform_list_files_response(
         self,
@@ -243,9 +243,7 @@ class MistralFilesConfig(BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
     ) -> list[OpenAIFileObject]:  # mutable-ok: BaseFilesConfig signature
-        return [  # mutable-ok: BaseFilesConfig signature
-            _to_openai_file_object(f) for f in MistralFileList.model_validate(raw_response.json()).data
-        ]
+        return [_to_openai_file_object(f) for f in MistralFileList.model_validate(raw_response.json()).data]
 
     def transform_file_content_request(
         self,

@@ -648,9 +648,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 *self._composed_output,
                 *_output_items(response_obj),
             ]
-            merged_response: Final = response_obj.model_copy(
-                update={"output": merged_output}  # mutable-ok: pydantic's update argument must be a dict
-            )
+            merged_response: Final = response_obj.model_copy(update={"output": merged_output})
             _set_event_field(chunk, "response", merged_response)
         return chunk
 
@@ -767,11 +765,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     call_items[tool_call_id] = (item_id, output_index)
                     self.tool_execution_events.append(
                         OutputItemAddedEvent.model_validate(
-                            {  # mutable-ok: consumed once by model_validate
+                            {
                                 "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                                 "sequence_number": len(self.tool_execution_events) + 1,
                                 "output_index": output_index,
-                                "item": {  # mutable-ok: consumed once by model_validate
+                                "item": {
                                     "id": item_id,
                                     "type": "mcp_call",
                                     "status": "in_progress",
@@ -849,7 +847,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 from litellm.types.llms.openai import OutputItemDoneEvent
 
                 mcp_call_item = BaseLiteLLMOpenAIResponseObject(
-                    **{  # mutable-ok: consumed once by the model constructor
+                    **{
                         "id": item_id,
                         "type": "mcp_call",
                         "status": "completed",

@@ -247,8 +247,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 texts_to_check=texts,
                 images_to_check=images,
                 tool_calls_to_check=tool_calls,
-                text_task_mappings=[],  # mutable-ok: required by _extract_inputs, unused here
-                tool_call_task_mappings=[],  # mutable-ok: required by _extract_inputs, unused here
+                text_task_mappings=[],
+                tool_call_task_mappings=[],
             )
         if texts or tool_calls:
             return "no scannable content after message scoping"
@@ -695,7 +695,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 cast(
                     ModelResponse,
                     stream_chunk_builder(
-                        chunks=[  # mutable-ok: callee takes a list
+                        chunks=[
                             OpenAIChatCompletionsHandler._narrowed_to_choice(response, index)
                             for response in responses_so_far
                         ],
@@ -706,7 +706,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             for index in choice_indices
         )
         (_, base_response), *_ = rebuilt_by_index
-        stitched_choices: Final = [  # mutable-ok: choices is a List field; a tuple there breaks model_dump round-trips
+        stitched_choices: Final = [
             rebuilt.choices[0].model_copy(update=MappingProxyType({"index": index}))
             for index, rebuilt in rebuilt_by_index
         ]
@@ -714,7 +714,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     @staticmethod
     def _narrowed_to_choice(response: "ModelResponseStream", index: int) -> "ModelResponseStream":
-        narrowed: Final = [choice for choice in response.choices if choice.index == index]  # mutable-ok: List field
+        narrowed: Final = [choice for choice in response.choices if choice.index == index]
         return response.model_copy(update=MappingProxyType({"choices": narrowed}))
 
     def build_stream_error_items(
@@ -1115,8 +1115,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             return
         await self._apply_guardrail_responses_to_output_streaming(
             responses=responses_so_far,
-            guardrailed_texts=list(rewrites_by_choice.values()),  # mutable-ok: callee takes lists
-            task_mappings=[(index, None) for index in rewrites_by_choice],  # mutable-ok: callee takes lists
+            guardrailed_texts=list(rewrites_by_choice.values()),
+            task_mappings=[(index, None) for index in rewrites_by_choice],
         )
 
     @staticmethod

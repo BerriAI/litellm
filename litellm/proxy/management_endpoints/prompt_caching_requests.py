@@ -127,7 +127,7 @@ def _request_result(row: _PromptCachingRow, llm_router: "Callable[[], Router | N
 
 @router.get(
     "/cost_optimization/prompt_caching/requests",
-    tags=["Cost Optimization"],  # mutable-ok: FastAPI's route API requires a list
+    tags=["Cost Optimization"],
     response_model=PromptCachingRequestsResponse,
 )
 async def get_prompt_caching_requests(

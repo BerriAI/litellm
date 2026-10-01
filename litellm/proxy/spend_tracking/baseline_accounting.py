@@ -158,7 +158,7 @@ def _usage_with_cache(usage: Usage, total: int, read: int, write_5m: int, write_
         ),
     )
     return Usage.model_validate(
-        {  # mutable-ok: Usage only runs its normalizing constructor for a plain dictionary
+        {
             **usage.model_dump(),
             "prompt_tokens": total,
             "total_tokens": total + usage.completion_tokens,

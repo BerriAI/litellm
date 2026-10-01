@@ -123,13 +123,13 @@ def _reasoning_input_items(msg: "AllMessageValues") -> list[dict[str, object]]: 
     blocks are the fallback for turns that arrived over another API surface.
     """
     items: Final = _get_reasoning_items(msg)
-    stored: Final = [_reasoning_item_to_response_input(item) for item in items]  # mutable-ok: API message payload
+    stored: Final = [_reasoning_item_to_response_input(item) for item in items]
     if stored:
         return stored
     raw_blocks: Final = msg.get("thinking_blocks") or ()
     blocks: Final = cast("Iterable[ChatCompletionThinkingBlock]", raw_blocks)  # cast-ok: untyped client json
     replayed: Final = responses_reasoning_items_from_thinking_blocks(blocks)
-    return [dict(item) for item in replayed]  # mutable-ok: API message payload
+    return [dict(item) for item in replayed]
 
 
 def _build_reasoning_item(
@@ -441,7 +441,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 input_items.extend(_reasoning_input_items(msg))
                 if content:
                     input_items.append(
-                        {  # mutable-ok: API message payload
+                        {
                             "type": "message",
                             "role": "assistant",
                             "content": self._convert_content_to_responses_format(content, "assistant"),
@@ -475,7 +475,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 if role == "assistant":
                     input_items.extend(_reasoning_input_items(msg))
                 input_items.append(
-                    {  # mutable-ok: API message payload
+                    {
                         "type": "message",
                         "role": role,
                         "content": self._convert_content_to_responses_format(content, cast(str, role)),
@@ -531,11 +531,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     ) -> "ResponseText":
         existing: Final = cast(  # cast-ok: text field is a ResponseText | dict[str, Any] | None union
             "dict[str, object]",
-            dict(responses_api_request).get("text") or {},  # mutable-ok: one-shot merge seed
+            dict(responses_api_request).get("text") or {},
         )
         return cast(  # cast-ok: merged mapping is a valid ResponseText shape
             "ResponseText",
-            {**existing, **update},  # mutable-ok: one-shot merged payload
+            {**existing, **update},
         )
 
     def _build_sanitized_litellm_params(self, litellm_params: dict) -> dict[str, object]:
@@ -1506,7 +1506,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     # tool call; per-stream callers already received it via
                     # output_item.added and the argument delta events
                     return ModelResponseStream(
-                        choices=[  # mutable-ok: ModelResponseStream coerces only list choices
+                        choices=[
                             StreamingChoices(
                                 index=0,
                                 delta=Delta(
@@ -1612,7 +1612,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     )
                 ],
                 usage=usage,
-                provider_specific_fields=dict(provider_metadata) or None,  # mutable-ok: field is typed dict
+                provider_specific_fields=dict(provider_metadata) or None,
                 **(
                     MappingProxyType({"service_tier": served_service_tier})
                     if isinstance(served_service_tier, str)

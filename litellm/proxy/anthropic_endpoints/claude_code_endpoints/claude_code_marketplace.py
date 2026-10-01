@@ -584,7 +584,7 @@ async def update_plugin(
         _validate_plugin_source(request.source)
 
         existing: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
-            where={"name": plugin_name}  # mutable-ok: prisma query arguments must be plain dicts
+            where={"name": plugin_name}
         )
         if not existing:
             raise _error_response(404, f"Plugin '{plugin_name}' not found")
@@ -592,8 +592,8 @@ async def update_plugin(
         manifest: Final[Mapping[str, object]] = _build_plugin_manifest(plugin_name, request)
 
         plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.update(
-            where={"name": plugin_name},  # mutable-ok: prisma query arguments must be plain dicts
-            data={  # mutable-ok: prisma query arguments must be plain dicts
+            where={"name": plugin_name},
+            data={
                 "version": request.version,
                 "description": request.description,
                 "manifest_json": json.dumps(manifest),

@@ -61,7 +61,7 @@ def reported_cost(payload: object) -> float | None:
 def authorized_headers(
     headers: Mapping[str, object], api_key: str | None, model: str
 ) -> dict[str, object]:  # mutable-ok: header contract
-    return {**headers, "Authorization": f"Bearer {require_api_key(api_key, model)}"}  # mutable-ok: header contract
+    return {**headers, "Authorization": f"Bearer {require_api_key(api_key, model)}"}
 
 
 def json_headers(
@@ -69,7 +69,7 @@ def json_headers(
 ) -> dict[str, object]:  # mutable-ok: header contract
     """The shared HTTP handler sends some JSON bodies as raw content, so the type must be set here."""
     authorized: Final = authorized_headers(headers, api_key, model)
-    return {**authorized, "Content-Type": "application/json"}  # mutable-ok: header contract
+    return {**authorized, "Content-Type": "application/json"}
 
 
 def endpoint_url(api_base: str | None, path: str) -> str:

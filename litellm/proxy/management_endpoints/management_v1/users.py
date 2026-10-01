@@ -27,7 +27,7 @@ router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
 
 @router.post(
     "/users/bulk",
-    tags=["Internal User management"],  # mutable-ok: fastapi types tags as list[str | Enum]
+    tags=["Internal User management"],
     dependencies=(Depends(user_api_key_auth),),
     response_model=BulkNewUserResponse,
 )
@@ -110,7 +110,7 @@ async def bulk_create_users_route(
 
 @router.post(
     "/users/bulk_delete",
-    tags=["Internal User management"],  # mutable-ok: FastAPI types `tags` as list[str], not Sequence
+    tags=["Internal User management"],
     dependencies=(Depends(user_api_key_auth), Depends(reject_unknown_query_params)),
     response_model=BulkDeleteUsersResponse,
 )

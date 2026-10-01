@@ -280,7 +280,7 @@ class BaseSearchConfig:
         return self.get_error_class(
             error_message=error.response.text,
             status_code=error.response.status_code,
-            headers=dict(error.response.headers),  # mutable-ok: provider error factories require dict headers
+            headers=dict(error.response.headers),
         )
 
     def get_error_class(

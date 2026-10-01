@@ -140,13 +140,7 @@ class AutoRouterRoutingTestRequest(BaseModel):
             raise ValueError("provide exactly one of prompt or messages")
         if self.messages is not None:
             return self
-        return self.model_copy(
-            update={  # mutable-ok: model_copy types update as a plain dict
-                "messages": [  # mutable-ok: the routing hook's signature takes a list of message dicts
-                    {"role": "user", "content": self.prompt}  # mutable-ok: a message is dict-shaped
-                ]
-            }
-        )
+        return self.model_copy(update={"messages": [{"role": "user", "content": self.prompt}]})
 
     def wire_body(self) -> Mapping[str, object]:
         """The request kwargs a serving-path request would carry for this body.

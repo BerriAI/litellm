@@ -616,7 +616,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
             data["prompt"] = self.redact_text(prompt, source="prompt")
             return 1
         if isinstance(prompt, list):
-            data["prompt"] = [  # mutable-ok: data["prompt"] is a list on the wire
+            data["prompt"] = [
                 self.redact_text(item, source="prompt")
                 if isinstance(item, str) and item
                 else item

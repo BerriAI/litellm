@@ -108,9 +108,9 @@ def managed_inference_request(
             raise_identity_failure(
                 AgentIdentityFailure(message="Managed inference requires an explicit or configured model")
             )
-        return {**body, "model": model}  # mutable-ok: centralized auth hooks add request tags and budget metadata
+        return {**body, "model": model}
     if route not in _MANAGED_MODEL_ROUTES and not RouteChecks.check_route_access(route, _MANAGED_MODEL_PATHS):
-        return dict(body)  # mutable-ok: centralized auth hooks add request tags and budget metadata
+        return dict(body)
     from litellm.proxy.common_utils.http_parsing_utils import resolve_inference_model
 
     kind: Final = next((kind for suffix, kind in _MODEL_ROUTE_KINDS.items() if route.endswith(suffix)), "completion")
@@ -122,7 +122,7 @@ def managed_inference_request(
         raise_identity_failure(
             AgentIdentityFailure(message="Managed inference requires an explicit or configured model")
         )
-    return {**body, "model": effective}  # mutable-ok: centralized auth hooks add request tags and budget metadata
+    return {**body, "model": effective}
 
 
 def managed_agent_policy(auth: "UserAPIKeyAuth | None") -> AgentResponse | None:

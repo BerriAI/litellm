@@ -70,7 +70,7 @@ def get_xai_auth_headers(
         raise xai_batches_error(
             "Missing xAI API Key. Pass api_key, set litellm.xai_key or XAI_API_KEY", 401, _EMPTY_HEADERS
         )
-    return dict(headers, Authorization=f"Bearer {resolved_key}")  # mutable-ok: BaseConfig contract returns dict
+    return dict(headers, Authorization=f"Bearer {resolved_key}")
 
 
 def xai_batches_url(api_base: str | None, batch_id: str | None = None, suffix: str = "") -> str:
@@ -176,7 +176,7 @@ def to_litellm_batch(batch: XAIBatch, endpoint: str = DEFAULT_BATCH_ENDPOINT) ->
     created_at: Final = _to_unix_timestamp(batch.create_time)
     cancelled_at: Final = _to_unix_timestamp(batch.cancel_time)
     errors: Final = (
-        BatchErrors(object="list", data=[BatchError(message=batch.cancel_by_xai_message)])  # mutable-ok: openai type
+        BatchErrors(object="list", data=[BatchError(message=batch.cancel_by_xai_message)])
         if batch.cancel_by_xai_message
         else None
     )
@@ -198,7 +198,7 @@ def to_litellm_batch(batch: XAIBatch, endpoint: str = DEFAULT_BATCH_ENDPOINT) ->
             completed=batch.state.num_success,
             failed=batch.state.num_error + batch.state.num_cancelled,
         ),
-        metadata={"name": batch.name} if batch.name else None,  # mutable-ok: LiteLLMBatch.metadata is a dict
+        metadata={"name": batch.name} if batch.name else None,
     )
 
 
