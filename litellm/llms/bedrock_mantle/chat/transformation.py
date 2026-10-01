@@ -136,7 +136,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         )
         if "max_tokens" not in mapped_params:
             return mapped_params
-        return {  # mutable-ok: fresh dict required by the inherited signature
+        return {
             param: value
             for param, value in (("max_completion_tokens", mapped_params["max_tokens"]), *mapped_params.items())
             if param != "max_tokens"

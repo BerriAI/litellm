@@ -10,9 +10,11 @@ that stores one, must still get a completion back instead of the upstream 400
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Final
 
 import pytest
+from pydantic import BaseModel
 from e2e_config import unique_marker
 from lifecycle import ResourceManager
 from models import (
@@ -67,6 +69,48 @@ def _prompt() -> list[ChatMessage]:
     return [ChatMessage(role="user", content="reply with one word")]
 
 
+def _weather_prompt() -> list[ChatMessage]:
+    return [ChatMessage(role="user", content="What is the weather in Paris? Use the get_weather tool.")]
+
+
+class _StreamToolCallFunction(BaseModel):
+    name: str | None = None
+    arguments: str | None = None
+
+
+class _StreamToolCall(BaseModel):
+    function: _StreamToolCallFunction = _StreamToolCallFunction()
+
+
+class _StreamDelta(BaseModel):
+    tool_calls: list[_StreamToolCall] | None = None
+
+
+class _StreamChoice(BaseModel):
+    delta: _StreamDelta = _StreamDelta()
+
+
+class _StreamChunk(BaseModel):
+    choices: list[_StreamChoice] = []
+
+
+class _WeatherArgs(BaseModel):
+    city: str
+
+
+def _streamed_tool_calls(events: list[str]) -> Iterator[_StreamToolCall]:
+    for event in events:
+        for choice in _StreamChunk.model_validate_json(event).choices:
+            yield from choice.delta.tool_calls or []
+
+
+def _streamed_tool_call(events: list[str]) -> tuple[str, str]:
+    calls = tuple(_streamed_tool_calls(events))
+    name = "".join(call.function.name or "" for call in calls)
+    arguments = "".join(call.function.arguments or "" for call in calls)
+    return name, arguments
+
+
 class TestBedrockMantleChatOutputLimit:
     def test_client_max_tokens_returns_completion(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = _register_mantle_chat_model(client, resources)
@@ -96,7 +140,7 @@ class TestBedrockMantleChatOutputLimit:
             resources.key(),
             ChatBody(
                 model=model,
-                messages=_prompt(),
+                messages=_weather_prompt(),
                 stream=True,
                 stream_options=ChatStreamOptions(include_usage=True),
                 tools=[WEATHER_TOOL],
@@ -104,4 +148,9 @@ class TestBedrockMantleChatOutputLimit:
         )
         assert result.ok and result.stream_error is None and result.stream_done, (
             f"streamed chat call failed: {result.status_code} {result.stream_error} {result.body[:400]}"
+        )
+        name, arguments = _streamed_tool_call(result.stream_events)
+        assert name == "get_weather", f"streamed tool call named {name!r}: {result.stream_events[:5]}"
+        assert _WeatherArgs.model_validate_json(arguments).city.strip(), (
+            f"streamed tool call arguments missing city: {arguments!r}"
         )
