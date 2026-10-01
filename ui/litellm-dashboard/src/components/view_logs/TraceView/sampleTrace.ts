@@ -2,19 +2,8 @@ const NS_PER_MS = BigInt(1_000_000);
 
 export const SAMPLE_TRACE_SERVICE = "litellm-sample-agent";
 
-interface OtlpId {
-  hex: string;
-  base64: string;
-}
-
-// TODO: the proxy's OTLP/JSON decoder base64-decodes ids; the OTLP spec says hex. Switch to hex once that's fixed.
-const randomId = (bytes: number): OtlpId => {
-  const raw = crypto.getRandomValues(new Uint8Array(bytes));
-  return {
-    hex: Array.from(raw, (b) => b.toString(16).padStart(2, "0")).join(""),
-    base64: btoa(String.fromCharCode(...raw)),
-  };
-};
+const randomHexId = (bytes: number): string =>
+  Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
 
 const str = (key: string, value: string) => ({ key, value: { stringValue: value } });
 
@@ -22,7 +11,7 @@ const messages = (role: string, content: string): string => JSON.stringify([{ ro
 
 interface SampleSpan {
   name: string;
-  parent: OtlpId | null;
+  parent: string | null;
   startMs: number;
   endMs: number;
   attributes: ReturnType<typeof str>[];
@@ -30,11 +19,11 @@ interface SampleSpan {
 
 /** One small agent run (agent -> LLM call -> tool call) as an OTLP/JSON export request. */
 export function sampleTraceExport(nowMs: number): { traceId: string; body: object } {
-  const traceId = randomId(16);
-  const agentId = randomId(8);
+  const traceId = randomHexId(16);
+  const agentId = randomHexId(8);
   const question = "What is the weather in San Francisco?";
   const answer = "It is 18°C and sunny in San Francisco.";
-  const spans: readonly (SampleSpan & { id: OtlpId })[] = [
+  const spans: readonly (SampleSpan & { id: string })[] = [
     {
       id: agentId,
       name: "weather_agent",
@@ -49,7 +38,7 @@ export function sampleTraceExport(nowMs: number): { traceId: string; body: objec
       ],
     },
     {
-      id: randomId(8),
+      id: randomHexId(8),
       name: "chat sample-model",
       parent: agentId,
       startMs: 100,
@@ -63,7 +52,7 @@ export function sampleTraceExport(nowMs: number): { traceId: string; body: objec
       ],
     },
     {
-      id: randomId(8),
+      id: randomHexId(8),
       name: "get_weather",
       parent: agentId,
       startMs: 1600,
@@ -79,7 +68,7 @@ export function sampleTraceExport(nowMs: number): { traceId: string; body: objec
   const startNs = BigInt(nowMs - 2400) * NS_PER_MS;
   const toNs = (ms: number): string => String(startNs + BigInt(ms) * NS_PER_MS);
   return {
-    traceId: traceId.hex,
+    traceId,
     body: {
       resourceSpans: [
         {
@@ -88,9 +77,9 @@ export function sampleTraceExport(nowMs: number): { traceId: string; body: objec
             {
               scope: { name: "litellm-ui-sample" },
               spans: spans.map((s) => ({
-                traceId: traceId.base64,
-                spanId: s.id.base64,
-                ...(s.parent ? { parentSpanId: s.parent.base64 } : {}),
+                traceId,
+                spanId: s.id,
+                ...(s.parent ? { parentSpanId: s.parent } : {}),
                 name: s.name,
                 kind: 1,
                 startTimeUnixNano: toNs(s.startMs),
