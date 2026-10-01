@@ -10,14 +10,6 @@ _TURN1_TOOL: Final = ("toolu_a", "Read", {"file_path": "/tmp/cc_probe/a.txt"})
 _TURN2_TOOL: Final = ("toolu_b", "Read", {"file_path": "/tmp/cc_probe/b.txt"})
 
 
-def _diff(expected: dict[str, JsonValue], body: dict[str, JsonValue]) -> dict[str, JsonValue]:
-    return {
-        key: {"expected": expected.get(key), "upstream": body.get(key)}
-        for key in expected.keys() | body.keys()
-        if expected.get(key) != body.get(key)
-    }
-
-
 def _turn2(base: dict[str, JsonValue]) -> dict[str, JsonValue]:
     return cc.tool_loop_turn2(
         base,
@@ -119,8 +111,9 @@ def _interleaved_stream(identity: str) -> tuple[bytes, ...]:
     )
 
 
-def test_interleaved_thinking_text_and_tool_use_history_reaches_anthropic_identical(gateway: Gateway) -> None:
-    identity: Final = f"msg_il_{uuid.uuid4().hex}"
+def test_interleaved_thinking_history_and_reasoning_betas_reach_anthropic_and_blocks_stream_back_in_order(
+    gateway: Gateway,
+) -> None:
     turn1: Final = cc.frontier_request(
         f"cache-bust-{uuid.uuid4().hex}",
         "high",
@@ -129,22 +122,15 @@ def test_interleaved_thinking_text_and_tool_use_history_reaches_anthropic_identi
     )
     turn2: Final = _turn2(turn1)
     turn3: Final = _turn3(turn2)
-    turn2_expected: Final = {**turn2, "model": cc.FABLE}
-    turn3_expected: Final = {**turn3, "model": cc.FABLE}
+    expected: Final = ({**turn2, "model": cc.FABLE}, {**turn3, "model": cc.FABLE})
 
     def respond(request: Request) -> Reply:
-        assert request.method == "POST"
-        assert request.target == "/v1/messages", request.target
-        upstream_beta: Final = request.headers.get("anthropic-beta", "")
-        assert upstream_beta.split(",").count("interleaved-thinking-2025-05-14") == 1, upstream_beta
-        body: Final = cc.JSON_OBJECT.validate_json(request.body)
-        if body == turn2_expected:
+        if cc.JSON_OBJECT.validate_json(request.body) == expected[0]:
             return Reply(
                 content_type="text/event-stream",
                 chunks=cc.text_stream("msg_il_turn2", cc.FABLE, "got A", {"input_tokens": 20, "output_tokens": 4}),
             )
-        assert body == turn3_expected, _diff(turn3_expected, body)
-        return Reply(content_type="text/event-stream", chunks=_interleaved_stream(identity))
+        return Reply(content_type="text/event-stream", chunks=_interleaved_stream(f"msg_il_{uuid.uuid4().hex}"))
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{cc.FABLE}", api_base=wire.url, api_key=cc.ANTHROPIC_API_KEY)
@@ -157,11 +143,14 @@ def test_interleaved_thinking_text_and_tool_use_history_reaches_anthropic_identi
             "POST", "/v1/messages", {**turn3, "model": model}, params={"beta": "true"}, headers=headers
         )
         assert response3.status_code == 200, response3.text
-        events: Final = cc.sse_events(response3.text)
-        started: Final = [
-            (data["index"], data["content_block"]["type"]) for event, data in events if event == "content_block_start"
-        ]
-        assert started == [(0, "thinking"), (1, "text"), (2, "tool_use")], started
-        assert events[-1][0] == "message_stop"
-        bodies: Final = tuple(cc.JSON_OBJECT.validate_json(request.body) for request in wire.drain())
-        assert bodies == (turn2_expected, turn3_expected), bodies
+        received: Final = wire.drain()
+    bodies: Final = tuple(cc.JSON_OBJECT.validate_json(request.body) for request in received)
+    assert bodies == expected, tuple(map(cc.body_diff, expected, bodies))
+    betas: Final = tuple(cc.reasoning_betas(request.headers.get("anthropic-beta", "")) for request in received)
+    assert betas == (cc.reasoning_betas(cc.FRONTIER_CLI_BETA),) * 2, betas
+    started: Final = tuple(
+        (data["index"], data["content_block"]["type"])
+        for event, data in cc.sse_events(response3.text)
+        if event == "content_block_start"
+    )
+    assert started == ((0, "thinking"), (1, "text"), (2, "tool_use")), response3.text

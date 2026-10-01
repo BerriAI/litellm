@@ -35,17 +35,9 @@ def _without(body: Mapping[str, JsonValue], *keys: str) -> dict[str, JsonValue]:
     return {key: value for key, value in body.items() if key not in keys}
 
 
-def _diff(expected: Mapping[str, JsonValue], body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
-    return {
-        key: {"expected": expected.get(key), "upstream": body.get(key)}
-        for key in expected.keys() | body.keys()
-        if expected.get(key) != body.get(key)
-    }
-
-
-def _forwarded_body(
+def _forwarded(
     gateway: Gateway, upstream_model: str, client_body: Mapping[str, JsonValue]
-) -> dict[str, JsonValue]:
+) -> tuple[dict[str, JsonValue], tuple[str, ...]]:
     def respond(request: Request) -> Reply:
         return Reply(
             body=json.dumps(
@@ -66,11 +58,27 @@ def _forwarded_body(
         model: Final = scenario.model(
             model=f"anthropic/{upstream_model}", api_base=wire.url, api_key=cc.ANTHROPIC_API_KEY
         )
-        response: Final = gateway.request("POST", "/v1/messages", {**client_body, "model": model})
+        response: Final = gateway.request(
+            "POST",
+            "/v1/messages",
+            {**client_body, "model": model},
+            headers=cc.cli_headers(gateway.key, cc.FRONTIER_CLI_BETA),
+        )
         assert response.status_code == 200, response.text
         received: Final = wire.drain()
-        assert len(received) == 1, received
-        return cc.JSON_OBJECT.validate_json(received[0].body)
+    assert len(received) == 1, received
+    return (
+        cc.JSON_OBJECT.validate_json(received[0].body),
+        cc.reasoning_betas(received[0].headers.get("anthropic-beta", "")),
+    )
+
+
+def _assert_received(
+    gateway: Gateway, upstream_model: str, client_body: dict[str, JsonValue], expected: Mapping[str, JsonValue]
+) -> None:
+    body, betas = _forwarded(gateway, upstream_model, client_body)
+    assert body == expected, cc.body_diff(expected, body)
+    assert betas == cc.reasoning_betas(cc.FRONTIER_CLI_BETA), betas
 
 
 def _assert_forwarded(
@@ -80,9 +88,12 @@ def _assert_forwarded(
     expected_changes: Mapping[str, JsonValue],
     removed: tuple[str, ...],
 ) -> None:
-    expected: Final = {**_without(client_body, *removed), **expected_changes, "model": upstream_model}
-    body: Final = _forwarded_body(gateway, upstream_model, client_body)
-    assert body == expected, _diff(expected, body)
+    _assert_received(
+        gateway,
+        upstream_model,
+        client_body,
+        {**_without(client_body, *removed), **expected_changes, "model": upstream_model},
+    )
 
 
 @pytest.mark.parametrize(
@@ -330,8 +341,7 @@ def test_encrypted_reasoning_from_another_provider_is_stripped_and_anthropic_sig
         )
     )
     expected: Final = {**_with_assistant_content(client_body, (_SIGNED_THINKING, _TOOL_CALL)), "model": _HAIKU_4_5}
-    body: Final = _forwarded_body(gateway, _HAIKU_4_5, client_body)
-    assert body == expected, _diff(expected, body)
+    _assert_received(gateway, _HAIKU_4_5, client_body, expected)
 
 
 def test_empty_thinking_block_is_stripped_and_redacted_thinking_is_kept(gateway: Gateway) -> None:
@@ -340,8 +350,7 @@ def test_empty_thinking_block_is_stripped_and_redacted_thinking_is_kept(gateway:
         ({"type": "thinking", "thinking": "", "signature": "EqQBCkgIBRABGAIiQM"}, redacted, _TOOL_CALL)
     )
     expected: Final = {**_with_assistant_content(client_body, (redacted, _TOOL_CALL)), "model": _HAIKU_4_5}
-    body: Final = _forwarded_body(gateway, _HAIKU_4_5, client_body)
-    assert body == expected, _diff(expected, body)
+    _assert_received(gateway, _HAIKU_4_5, client_body, expected)
 
 
 @pytest.mark.parametrize(

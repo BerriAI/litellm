@@ -1,4 +1,3 @@
-import json
 import uuid
 from typing import Final
 
@@ -12,35 +11,27 @@ _MODEL: Final = "claude-haiku-4-5"
 _INPUT_RATE: Final = 1e-6
 _OUTPUT_RATE: Final = 2e-6
 _REASONING_RATE: Final = 7e-6
+_CONTENT: Final = (
+    {"type": "thinking", "thinking": "count the words", "signature": "EqQBCkgIBRABGAIiQLz"},
+    {"type": "text", "text": "PONG"},
+)
+_USAGE: Final = {"input_tokens": 100, "output_tokens": 50, "output_tokens_details": {"thinking_tokens": 30}}
 
 
+def _reply(identity: str, stream: bool) -> Reply:
+    if stream:
+        return Reply(chunks=cc.message_stream(identity, _MODEL, _CONTENT, _USAGE), content_type="text/event-stream")
+    return Reply(body=cc.message_reply(identity, _MODEL, _CONTENT, _USAGE))
+
+
+@pytest.mark.parametrize("stream", (pytest.param(False, id="non-streamed"), pytest.param(True, id="streamed")))
 def test_reported_thinking_tokens_are_billed_at_the_reasoning_rate_and_the_rest_at_the_output_rate(
-    gateway: Gateway,
+    gateway: Gateway, stream: bool
 ) -> None:
     identity: Final = f"msg_{uuid.uuid4().hex}"
 
     def respond(request: Request) -> Reply:
-        return Reply(
-            body=json.dumps(
-                {
-                    "id": identity,
-                    "type": "message",
-                    "role": "assistant",
-                    "model": _MODEL,
-                    "content": [
-                        {"type": "thinking", "thinking": "count the words", "signature": "EqQBCkgIBRABGAIiQLz"},
-                        {"type": "text", "text": "PONG"},
-                    ],
-                    "stop_reason": "end_turn",
-                    "stop_sequence": None,
-                    "usage": {
-                        "input_tokens": 100,
-                        "output_tokens": 50,
-                        "output_tokens_details": {"thinking_tokens": 30},
-                    },
-                }
-            ).encode()
-        )
+        return _reply(identity, stream)
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
@@ -51,16 +42,13 @@ def test_reported_thinking_tokens_are_billed_at_the_reasoning_rate_and_the_rest_
             output_cost_per_token=_OUTPUT_RATE,
             output_cost_per_reasoning_token=_REASONING_RATE,
         )
-        response: Final = gateway.request(
-            "POST",
-            "/v1/messages",
-            {
-                **cc.claude_code_request(f"cache-bust-{uuid.uuid4().hex}"),
-                "thinking": {"type": "enabled", "budget_tokens": 2048},
-                "stream": False,
-                "model": model,
-            },
-        )
+        body: Final = {
+            **cc.claude_code_request(f"cache-bust-{uuid.uuid4().hex}"),
+            "thinking": {"type": "enabled", "budget_tokens": 2048},
+            "stream": stream,
+            "model": model,
+        }
+        response: Final = gateway.request("POST", "/v1/messages", body)
         assert response.status_code == 200, response.text
         assert len(wire.drain()) == 1
         rows: Final = eventually(

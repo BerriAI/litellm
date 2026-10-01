@@ -23,6 +23,10 @@ CACHE: Final = {"type": "ephemeral"}
 CONTEXT_MANAGEMENT: Final = {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}
 THINKING_BUDGET: Final = {"budget_tokens": 31999, "type": "enabled", "display": "omitted"}
 THINKING_ADAPTIVE: Final = {"type": "adaptive", "display": "omitted"}
+REASONING_BETAS: Final = frozenset(
+    {"effort-2025-11-24", "interleaved-thinking-2025-05-14", "thinking-token-count-2026-05-13"}
+)
+_OUTPUT_USAGE_KEYS: Final = frozenset({"output_tokens", "output_tokens_details"})
 METADATA_USER_ID: Final = json.dumps(
     {
         "device_id": "0" * 64,
@@ -661,8 +665,103 @@ def sse_events(text: str) -> tuple[tuple[str, dict[str, object]], ...]:
     )
 
 
+def reasoning_betas(anthropic_beta: str) -> tuple[str, ...]:
+    return tuple(sorted(beta for beta in anthropic_beta.split(",") if beta in REASONING_BETAS))
+
+
+def body_diff(expected: Mapping[str, JsonValue], body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {
+        key: {"expected": expected.get(key), "upstream": body.get(key)}
+        for key in expected.keys() | body.keys()
+        if expected.get(key) != body.get(key)
+    }
+
+
 def _start_usage(usage: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
-    return {key: value for key, value in usage.items() if key != "output_tokens"}
+    return {key: value for key, value in usage.items() if key not in _OUTPUT_USAGE_KEYS}
+
+
+def _delta_usage(usage: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {key: value for key, value in usage.items() if key in _OUTPUT_USAGE_KEYS}
+
+
+def _block_start(index: int, block: Mapping[str, JsonValue]) -> bytes:
+    return sse_frame("content_block_start", {"type": "content_block_start", "index": index, "content_block": block})
+
+
+def _block_delta(index: int, delta: Mapping[str, JsonValue]) -> bytes:
+    return sse_frame("content_block_delta", {"type": "content_block_delta", "index": index, "delta": delta})
+
+
+def _block_stop(index: int) -> bytes:
+    return sse_frame("content_block_stop", {"type": "content_block_stop", "index": index})
+
+
+def _block_frames(index: int, block: Mapping[str, JsonValue]) -> tuple[bytes, ...]:
+    match block.get("type"):
+        case "thinking":
+            return (
+                _block_start(index, {"type": "thinking", "thinking": "", "signature": ""}),
+                _block_delta(index, {"type": "thinking_delta", "thinking": block["thinking"]}),
+                _block_delta(index, {"type": "signature_delta", "signature": block["signature"]}),
+                _block_stop(index),
+            )
+        case "text":
+            return (
+                _block_start(index, {"type": "text", "text": ""}),
+                _block_delta(index, {"type": "text_delta", "text": block["text"]}),
+                _block_stop(index),
+            )
+        case _:
+            return (_block_start(index, block), _block_stop(index))
+
+
+def message_reply(
+    identity: str, model: str, content: tuple[dict[str, JsonValue], ...], usage: dict[str, JsonValue]
+) -> bytes:
+    return json.dumps(
+        {
+            "id": identity,
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": list(content),
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": usage,
+        }
+    ).encode()
+
+
+def message_stream(
+    identity: str, model: str, content: tuple[dict[str, JsonValue], ...], usage: dict[str, JsonValue]
+) -> tuple[bytes, ...]:
+    start: Final = sse_frame(
+        "message_start",
+        {
+            "type": "message_start",
+            "message": {
+                "id": identity,
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": _start_usage(usage),
+            },
+        },
+    )
+    delta: Final = sse_frame(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": _delta_usage(usage),
+        },
+    )
+    blocks: Final = chain.from_iterable(_block_frames(index, block) for index, block in enumerate(content))
+    return (start, *blocks, delta, sse_frame("message_stop", {"type": "message_stop"}))
 
 
 def text_stream(identity: str, model: str, text: str, usage: dict[str, int]) -> tuple[bytes, ...]:
