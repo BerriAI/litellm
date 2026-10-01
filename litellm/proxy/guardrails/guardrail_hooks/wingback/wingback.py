@@ -1,10 +1,3 @@
-# +-------------------------------------------------------------+
-#
-#           Use Wingback for your LLM calls
-#                   https://wingback.ai/
-#
-# +-------------------------------------------------------------+
-
 import os
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -80,12 +73,6 @@ class WingbackGuardrail(GenericGuardrailAPI):
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
-        """
-        Apply Wingback to the given inputs.
-
-        NOTE: This override must live on this class so LiteLLM unified guardrail
-        routing detects apply_guardrail in type(callback).__dict__.
-        """
         return await super().apply_guardrail(
             inputs=inputs,
             request_data=request_data,
