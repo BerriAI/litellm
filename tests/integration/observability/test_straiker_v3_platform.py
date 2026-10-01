@@ -38,7 +38,7 @@ V1_KEY: Final = "synthetic-v1-collection-key"
 V3_PATH: Final = "/api/v3/detect"
 V1_PATH: Final = "/api/v1/detect/webhook"
 BLOCK_MARK: Final = "SYNTHETIC-INJECTION"
-STRAY_V3_BLOCK_MARK: Final = BLOCK_MARK + "-STRAY-VERSION"
+STRAY_V3_BLOCK_MARK: Final = "SYNTHETIC-STRAY-VERSION-BLOCK"
 KILL_MARK: Final = "SYNTHETIC-KILLSWITCH"
 DENY_MARK: Final = "SYNTHETIC-DENY"
 SINK_500_MARK: Final = "SYNTHETIC-SINK-500"
@@ -145,8 +145,10 @@ def _verdict(seen: Seen, text: str) -> tuple[int, bytes]:
         return 200, json.dumps({"action": "NONE"}).encode()
     assert seen.target == V3_PATH, seen.target
     turn: Final = "turn-" + hashlib.sha256(text.encode()).hexdigest()[:12]
-    if (BLOCK_MARK in text and (STRAY_V3_BLOCK_MARK not in text or agent is None)) or (
-        LOG_BLOCK_MARK in text and agent == LOG_AGENT
+    if (
+        BLOCK_MARK in text
+        or (STRAY_V3_BLOCK_MARK in text and agent is None)
+        or (LOG_BLOCK_MARK in text and agent == LOG_AGENT)
     ):
         return 200, json.dumps(
             {
