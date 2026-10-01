@@ -2183,7 +2183,10 @@ class _RecordedScanGuardrail(CustomGuardrail):
 
 
 def _recorded_guardrail_statuses(request_data):
-    return [entry["guardrail_status"] for entry in request_data["metadata"].get("standard_logging_guardrail_information", [])]
+    return [
+        entry["guardrail_status"]
+        for entry in request_data["metadata"].get("standard_logging_guardrail_information", [])
+    ]
 
 
 class TestStreamingClientDisconnectScan:
@@ -2385,7 +2388,9 @@ class TestStreamingClientDisconnectScan:
         tool_call = ChatCompletionDeltaToolCall(
             id="call_1", index=0, type="function", function=Function(name="get_weather", arguments='{"city": "Paris"}')
         )
-        yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=None, tool_calls=[tool_call]))])
+        yield ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content=None, tool_calls=[tool_call]))]
+        )
         yield _stream_chunk(None, finish_reason="tool_calls")
 
     @pytest.mark.asyncio
