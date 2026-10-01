@@ -57,6 +57,7 @@ import {
   ShieldCheck,
   Tags,
   Terminal,
+  Trophy,
   User,
   Users,
   Wallet,
@@ -215,7 +216,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "model-insights",
         page: "model-insights",
-        icon: <BarChart3 {...ICON} />,
+        icon: <Trophy {...ICON} />,
         roles: all_admin_roles,
         label: (
           <span className="flex items-center gap-2">
