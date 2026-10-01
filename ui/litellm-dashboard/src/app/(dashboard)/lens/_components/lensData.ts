@@ -55,6 +55,15 @@ export function evidenceTarget(id: string): { source: string; team: string; id: 
 
 export type Job = components["schemas"]["Job"];
 
+const FIX_MARKER = " Fix: ";
+
+/** Splits a stored failure message ("<what failed>. Fix: <what to try>") into its two parts. */
+export function failureParts(error: string): { reason: string; fix: string | null } {
+  const at = error.indexOf(FIX_MARKER);
+  if (at === -1) return { reason: error.trim(), fix: null };
+  return { reason: error.slice(0, at).trim(), fix: error.slice(at + FIX_MARKER.length).trim() };
+}
+
 export function analysisProgress(job: Job) {
   const {
     screened = 0,
