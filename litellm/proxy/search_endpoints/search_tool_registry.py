@@ -65,7 +65,7 @@ _STORED_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 def _stored_litellm_params(row: SearchToolRecord) -> Mapping[str, object] | None:
     try:
-        return _STORED_LITELLM_PARAMS.validate_python(dict(row).get("litellm_params"))  # mutable-ok: row fields
+        return _STORED_LITELLM_PARAMS.validate_python(dict(row).get("litellm_params"))
     except ValidationError:
         return None
 
@@ -81,9 +81,7 @@ def _encrypted_search_tool_value(value: object) -> object:
 
 def encrypt_search_tool_litellm_params(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
     """Encrypt every string value of a search tool's litellm_params for storage."""
-    return {  # mutable-ok: stored params are a JSON object
-        key: _encrypted_search_tool_value(value) for key, value in litellm_params.items()
-    }
+    return {key: _encrypted_search_tool_value(value) for key, value in litellm_params.items()}
 
 
 def _search_tool_plaintext(value: str) -> str | None:
@@ -100,9 +98,7 @@ def _decrypted_search_tool_value(value: object) -> object:
 
 def decrypt_search_tool_litellm_params(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
     """Decrypt stored litellm_params values; values that are not ciphertext are returned unchanged."""
-    return {  # mutable-ok: stored params are a JSON object
-        key: _decrypted_search_tool_value(value) for key, value in litellm_params.items()
-    }
+    return {key: _decrypted_search_tool_value(value) for key, value in litellm_params.items()}
 
 
 def _reencrypt_search_tool_value(value: object, encryption_key: str) -> object:
@@ -118,13 +114,13 @@ async def _rotate_search_tool_row(
     expected_litellm_params: Mapping[str, object] | None = stored_litellm_params
     while expected_litellm_params is not None:
         rows_updated = await table.update_many(
-            where={  # mutable-ok: Prisma where
+            where={
                 "search_tool_id": search_tool_id,
-                "litellm_params": {"equals": safe_dumps(expected_litellm_params)},  # mutable-ok: Prisma filter
+                "litellm_params": {"equals": safe_dumps(expected_litellm_params)},
             },
-            data={  # mutable-ok: Prisma data
+            data={
                 "litellm_params": safe_dumps(
-                    {  # mutable-ok: rotated params are a JSON object
+                    {
                         key: _reencrypt_search_tool_value(value, encryption_key)
                         for key, value in expected_litellm_params.items()
                     }
@@ -133,7 +129,7 @@ async def _rotate_search_tool_row(
         )
         if rows_updated:
             return
-        reread = await table.find_unique(where={"search_tool_id": search_tool_id})  # mutable-ok: Prisma where
+        reread = await table.find_unique(where={"search_tool_id": search_tool_id})
         reread_litellm_params = None if reread is None else _stored_litellm_params(reread)
         if reread_litellm_params == expected_litellm_params:
             verbose_proxy_logger.warning(
@@ -214,14 +210,12 @@ class SearchToolRegistry:
             Dict with datetime fields converted to ISO strings
         """
         stored_litellm_params: Final = _stored_litellm_params(prisma_obj)
-        result: Final = {  # mutable-ok: returned dict is mutated below
-            **dict(prisma_obj),  # mutable-ok: row fields
+        result: Final = {
+            **dict(prisma_obj),
             **(
-                {  # mutable-ok: spread into result
-                    "litellm_params": decrypt_search_tool_litellm_params(stored_litellm_params)
-                }
+                {"litellm_params": decrypt_search_tool_litellm_params(stored_litellm_params)}
                 if stored_litellm_params is not None
-                else {}  # mutable-ok: spread into result
+                else {}
             ),
         }
         # Convert datetime objects to ISO format strings
@@ -249,9 +243,7 @@ class SearchToolRegistry:
         try:
             search_tool_name: Final = search_tool.get("search_tool_name")
             litellm_params: Final[str] = safe_dumps(
-                encrypt_search_tool_litellm_params(
-                    search_tool.get("litellm_params", {})  # mutable-ok: default when no params
-                )
+                encrypt_search_tool_litellm_params(search_tool.get("litellm_params", {}))
             )
             search_tool_info: Final[str] = safe_dumps(search_tool.get("search_tool_info", {}))
 
@@ -323,9 +315,7 @@ class SearchToolRegistry:
         try:
             search_tool_name: Final = search_tool.get("search_tool_name")
             litellm_params: Final[str] = safe_dumps(
-                encrypt_search_tool_litellm_params(
-                    search_tool.get("litellm_params", {})  # mutable-ok: default when no params
-                )
+                encrypt_search_tool_litellm_params(search_tool.get("litellm_params", {}))
             )
             search_tool_info: Final[str] = safe_dumps(search_tool.get("search_tool_info", {}))
 
