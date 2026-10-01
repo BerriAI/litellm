@@ -98,6 +98,19 @@ def _as_json_array(value: object) -> list[object] | None:
     return _JSON_ARRAY.validate_python(value) if isinstance(value, list) else None
 
 
+def contains_encrypted_marker(value: object, depth: int = 0) -> bool:
+    """True if any string in value, at any JSON depth, starts with the encrypted-value prefix."""
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return False
+    if isinstance(value, str):
+        return value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX)
+    json_object: Final = _as_json_object(value)
+    if json_object is not None:
+        return any(contains_encrypted_marker(v, depth + 1) for v in json_object.values())
+    json_array: Final = _as_json_array(value)
+    return json_array is not None and any(contains_encrypted_marker(item, depth + 1) for item in json_array)
+
+
 def _encrypted_param(key: str, value: object, new_encryption_key: str | None, depth: int = 0) -> object:
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         return value

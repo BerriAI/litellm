@@ -2784,3 +2784,103 @@ async def test_get_category_yaml_serves_a_symlink_that_stays_inside_a_category_f
     result = await get_category_yaml("alias", roots=(*DATA_ROOTS, str(tmp_path / "legacy")))
     assert result["file_type"] == "yaml"
     assert yaml.safe_load(result["yaml_content"])["category_name"] == "real"
+
+
+_ENCRYPTED_MARKER_VALUE = "litellm_enc::opaque-value"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "extra_params",
+    [
+        {"description": _ENCRYPTED_MARKER_VALUE},
+        {"api_key": _ENCRYPTED_MARKER_VALUE},
+        {"extra_headers": {"x-team": "a", "x-secret": _ENCRYPTED_MARKER_VALUE}},
+        {"extra_headers": ["plain", _ENCRYPTED_MARKER_VALUE]},
+    ],
+    ids=["top_level_description", "top_level_api_key", "nested_object", "array_second_element"],
+)
+async def test_register_guardrail_rejects_encrypted_marker_values(mocker, extra_params):
+    mock_prisma = mocker.Mock()
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_guardrailstable.create = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    req = RegisterGuardrailRequest(
+        guardrail_name="marker-guard",
+        litellm_params={
+            "guardrail": "generic_guardrail_api",
+            "mode": "pre_call",
+            "api_base": "https://guardrails.example.com/validate",
+            **extra_params,
+        },
+    )
+    user = UserAPIKeyAuth(user_id="u1", user_email="a@b.com", team_id="team-1")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await register_guardrail(req, user)
+
+    assert exc_info.value.status_code == 400
+    assert "litellm_enc::" in exc_info.value.detail
+    mock_prisma.db.litellm_guardrailstable.create.assert_not_called()
+
+
+def _guardrail_with_encrypted_api_key() -> Guardrail:
+    return Guardrail(
+        guardrail_name="marker-guard",
+        litellm_params=LitellmParams(
+            guardrail="generic_guardrail_api",
+            mode="pre_call",
+            api_base="https://guardrails.example.com/validate",
+            api_key=_ENCRYPTED_MARKER_VALUE,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_guardrail_rejects_encrypted_marker_values(mocker, mock_guardrail_registry):
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())  # test-quality-ok: endpoint has no DI seam
+    mocker.patch(  # test-quality-ok: endpoint has no DI seam
+        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_guardrail(
+            CreateGuardrailRequest(guardrail=_guardrail_with_encrypted_api_key()),
+            user_api_key_dict=MOCK_ADMIN_USER,
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_guardrail_registry.add_guardrail_to_db.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_guardrail_rejects_encrypted_marker_values(mocker, mock_guardrail_registry):
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())  # test-quality-ok: endpoint has no DI seam
+    mocker.patch(  # test-quality-ok: endpoint has no DI seam
+        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_guardrail(
+            "test-guardrail-id",
+            UpdateGuardrailRequest(guardrail=_guardrail_with_encrypted_api_key()),
+            user_api_key_dict=MOCK_ADMIN_USER,
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_guardrail_registry.update_guardrail_in_db.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_patch_guardrail_rejects_encrypted_marker_values(mocker, mock_guardrail_registry):
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())  # test-quality-ok: endpoint has no DI seam
+    mocker.patch(  # test-quality-ok: endpoint has no DI seam
+        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry
+    )
+    request = PatchGuardrailRequest(litellm_params=BaseLitellmParams(api_key=_ENCRYPTED_MARKER_VALUE))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await patch_guardrail("test-guardrail-id", request, user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert exc_info.value.status_code == 400
+    mock_guardrail_registry.update_guardrail_in_db.assert_not_called()

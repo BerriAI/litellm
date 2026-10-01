@@ -21,6 +21,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
 from litellm.proxy.common_utils.path_utils import is_within, safe_join
 from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_ROOTS, category_dirs, find_category_file
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution import (
@@ -35,6 +36,7 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
 )
 from litellm.proxy.guardrails.guardrail_registry import (
     GuardrailRegistry,
+    contains_encrypted_marker,
     decrypt_guardrail_litellm_params,
     encrypt_guardrail_litellm_params,
 )
@@ -83,6 +85,16 @@ GUARDRAIL_REGISTRY: Final = GuardrailRegistry()
 
 def _as_str_object_mapping(mapping: Mapping[str, object]) -> Mapping[str, object]:
     return mapping
+
+
+def _reject_encrypted_litellm_params(litellm_params: object) -> None:
+    """Raise 400 if a client-supplied litellm_params value carries the encrypted-value prefix."""
+    params: Final = litellm_params.model_dump() if isinstance(litellm_params, BaseModel) else litellm_params
+    if contains_encrypted_marker(params):
+        raise HTTPException(
+            status_code=400,
+            detail=f"litellm_params values must not start with {CALLBACK_VAR_ENCRYPTED_PREFIX!r}",
+        )
 
 
 def _guardrails_table(prisma_client: "PrismaClient") -> "TableActions[LiteLLM_GuardrailsTable]":
@@ -401,6 +413,8 @@ async def create_guardrail(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
+    _reject_encrypted_litellm_params(request.guardrail.get("litellm_params"))
+
     try:
         result = await GUARDRAIL_REGISTRY.add_guardrail_to_db(guardrail=request.guardrail, prisma_client=prisma_client)
 
@@ -510,6 +524,8 @@ async def update_guardrail(
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    _reject_encrypted_litellm_params(request.guardrail.get("litellm_params"))
 
     try:
         # Check if guardrail exists
@@ -735,6 +751,7 @@ async def register_guardrail(
             )
 
     params: Final = request.get_litellm_params_dict()
+    _reject_encrypted_litellm_params(params)
     if params.get("guardrail") != GENERIC_GUARDRAIL_API:
         raise HTTPException(
             status_code=400,
@@ -1195,6 +1212,8 @@ async def patch_guardrail(
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    _reject_encrypted_litellm_params(request.litellm_params)
 
     try:
         # Check if guardrail exists and get current data
