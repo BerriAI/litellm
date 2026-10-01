@@ -7695,6 +7695,7 @@ class _InMemoryConfigTable:
     def __init__(self, rows: Mapping[str, Mapping[str, object]]) -> None:
         self.rows: dict[str, Mapping[str, object]] = dict(rows)
         self.db: Final = SimpleNamespace(litellm_config=self)
+        self.writer_db: Final = SimpleNamespace(litellm_config=self)
 
     def _row(self, param_name: str) -> _StoredConfigRow | None:
         value: Final = self.rows.get(param_name)
@@ -8109,3 +8110,43 @@ async def test_deleting_the_stored_pass_through_field_stops_serving_its_routes_r
 
     assert (served_before.status_code, served_after.status_code, config_after.status_code) == (200, 401, 200)
     assert db_upstream == []
+
+
+@dataclass(frozen=True, slots=True)
+class _LaggingReadReplica:
+    writer: _InMemoryConfigTable
+
+    async def find_first(self, where: Mapping[str, str]) -> _StoredConfigRow | None:
+        return None
+
+    async def upsert(self, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]) -> _StoredConfigRow:
+        return await self.writer.upsert(where=where, data=data)
+
+
+@pytest.mark.asyncio
+async def test_ui_create_keeps_stored_pass_throughs_a_lagging_read_replica_has_not_seen(tmp_path, monkeypatch):
+    from litellm.proxy._types import PassThroughGenericEndpoint
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import create_pass_through_endpoints
+
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[],
+        db_pass_through_endpoints=[
+            {"id": "db-endpoint", "path": "/db-stored", "target": "http://db-upstream.test/api", "auth": False}
+        ],
+    )
+    monkeypatch.setattr(
+        proxy.config_table, "db", SimpleNamespace(litellm_config=_LaggingReadReplica(proxy.config_table))
+    )
+
+    await create_pass_through_endpoints(
+        data=PassThroughGenericEndpoint(path="/ui-made", target="http://ui-upstream.test/api", auth=False),
+        request=MagicMock(spec=Request),
+        user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin"),
+    )
+
+    assert [endpoint["path"] for endpoint in proxy.config_table.rows["general_settings"]["pass_through_endpoints"]] == [
+        "/db-stored",
+        "/ui-made",
+    ]

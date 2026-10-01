@@ -18498,7 +18498,9 @@ async def _declared_general_setting(
     settings: SettingsStore, field_name: str, prisma_client: PrismaClient
 ) -> SettingValue:
     if is_resource_list("general_settings", field_name):
-        row: Final = await _config_param_table(prisma_client).find_first(where={"param_name": "general_settings"})
+        row: Final = await ConfigRepository(prisma_client, use_writer=True).table.find_first(
+            where={"param_name": "general_settings"}
+        )
         stored: Final = row.param_value if row is not None and isinstance(row.param_value, Mapping) else {}
         return stored.get(field_name, ABSENT) if stored.get(field_name) is not None else ABSENT
     if field_name not in settings:
