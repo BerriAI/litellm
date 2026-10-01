@@ -3438,7 +3438,11 @@ def test_completion_streaming_iterator_adopts_the_deployment_that_served_a_neste
             }
             return chunk
 
-    with patch.object(router, "function_with_fallbacks", return_value=NestedFallbackStream()):
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=NestedFallbackStream()),
+    ):
         result = router._completion_streaming_iterator(
             model_response=FailedStream(),
             messages=[{"role": "user", "content": "hi"}],
@@ -3453,6 +3457,67 @@ def test_completion_streaming_iterator_adopts_the_deployment_that_served_a_neste
 
     assert result._response_headers == {"x-request-id": "req-SERVED"}
     assert result._hidden_params["model_id"] == "served-deployment"
+
+
+def test_completion_streaming_fallback_resumes_chain_without_retrying_primary():
+    class FailingStream(CustomStreamWrapper):
+        def __init__(self, model: str):
+            super().__init__(
+                completion_stream=object(), model=model, custom_llm_provider="openai", logging_obj=MagicMock()
+            )
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise MidStreamFallbackError(
+                message=f"provider 500 from {self.model}",
+                model=self.model,
+                llm_provider="openai",
+                generated_content="",
+                is_pre_first_chunk=True,
+                original_exception=litellm.InternalServerError(
+                    message=f"provider 500 from {self.model}", model=self.model, llm_provider="openai"
+                ),
+            )
+
+    class OkStream(FailingStream):
+        def __init__(self, model: str):
+            super().__init__(model)
+            self._chunks = iter(
+                [litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": f"ok-from-{model}"}}])]
+            )
+
+        def __next__(self):
+            return next(self._chunks)
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/primary-model", "api_key": "fake-key"}},
+            {"model_name": "backup", "litellm_params": {"model": "openai/backup-model", "api_key": "fake-key"}},
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    primary_calls: Final = iter(range(2))
+
+    def fake_completion(**kwargs):
+        model_group: Final = kwargs["metadata"]["model_group"]
+        if model_group == "backup":
+            return OkStream(kwargs["model"])
+        if next(primary_calls) > 0:
+            raise RuntimeError("primary group retried")
+        return FailingStream(kwargs["model"])
+
+    with patch("litellm.completion", side_effect=fake_completion) as provider_calls:
+        response: Final = router.completion(model="primary", messages=[{"role": "user", "content": "hi"}], stream=True)
+        content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in response)
+
+    assert content == "ok-from-openai/backup-model"
+    assert [call.kwargs["metadata"]["model_group"] for call in provider_calls.call_args_list] == [
+        "primary",
+        "backup",
+    ]
 
 
 @pytest.mark.asyncio
@@ -3616,7 +3681,11 @@ def test_completion_streaming_iterator_adopts_fallback_response_headers():
         def __iter__(self):
             return iter([])
 
-    with patch.object(router, "function_with_fallbacks", return_value=FallbackStream()):
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=FallbackStream()),
+    ):
         result = router._completion_streaming_iterator(
             model_response=FailedStream(),
             messages=[{"role": "user", "content": "hi"}],
@@ -3683,8 +3752,8 @@ def test_completion_streaming_iterator_fallback_on_429():
 
     with patch.object(
         router,
-        "function_with_fallbacks",
-        return_value=mock_fallback_response,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=mock_fallback_response),
     ) as mock_fallback:
         result = router._completion_streaming_iterator(
             model_response=mock_response,
@@ -3694,12 +3763,12 @@ def test_completion_streaming_iterator_fallback_on_429():
 
         collected_chunks = list(result)
 
-        assert mock_fallback.called
-        call_kwargs = mock_fallback.call_args
+        mock_fallback.assert_awaited_once()
+        call_kwargs = mock_fallback.await_args.kwargs["kwargs"]
         # Pre-first-chunk: should use original messages, no continuation prompt
-        assert call_kwargs.kwargs.get("messages") == messages
+        assert call_kwargs.get("messages") == messages
         # Verify original_function is _completion (sync)
-        assert call_kwargs.kwargs.get("original_function") == router._completion
+        assert call_kwargs.get("original_function") == router._completion
 
 
 def test_completion_streaming_iterator_preserves_hidden_params():

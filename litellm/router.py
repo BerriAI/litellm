@@ -3582,11 +3582,17 @@ class Router:
                     initial_kwargs["original_function"] = router_self._completion
                     initial_kwargs["messages"] = messages
                     router_self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
-                    fallback_response = router_self.function_with_fallbacks(
-                        **initial_kwargs,
+                    fallback_response = run_async_function(
+                        router_self.async_function_with_fallbacks_common_utils,
+                        e=e,
+                        disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
                         content_policy_fallbacks=content_policy_fallbacks,
+                        model_group=model_group,
+                        args=(),
+                        kwargs=initial_kwargs,
+                        include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
                     )
 
                     if hasattr(fallback_response, "__iter__"):
