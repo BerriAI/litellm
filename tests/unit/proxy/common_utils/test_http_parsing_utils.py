@@ -1109,7 +1109,7 @@ class TestGetRequestBody:
         mock_request.method = "POST"
         mock_request.body = AsyncMock(return_value=orjson.dumps(payload))
         mock_request.headers = {"content-type": "application/json; charset=utf-8"}
-        mock_request.scope = {}
+        mock_request.scope = {"type": "http", "method": "POST", "path": "/v1/chat/completions"}
 
         result = await get_request_body(mock_request)
         assert result == payload
@@ -1120,7 +1120,7 @@ class TestGetRequestBody:
         mock_request.method = "POST"
         mock_request.headers = {"content-type": "multipart/form-data; boundary=x"}
         mock_request.form = AsyncMock(return_value=FormData({"k": "v"}))
-        mock_request.scope = {}
+        mock_request.scope = {"type": "http", "method": "POST", "path": "/v1/chat/completions"}
 
         result = await get_request_body(mock_request)
         assert result == {"k": "v"}

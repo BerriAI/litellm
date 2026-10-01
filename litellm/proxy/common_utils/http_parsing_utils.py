@@ -169,11 +169,7 @@ def _parse_binary_body(body: bytes) -> dict:
 
 
 def is_otlp_trace_request(request: Request) -> bool:
-    return (
-        request.scope.get("method") == "POST"
-        and "path" in request.scope
-        and get_route_path(request.scope) == "/v1/traces"
-    )
+    return request.method == "POST" and get_route_path(request.scope) == "/v1/traces"
 
 
 async def _read_request_body(request: Request | None) -> dict:
