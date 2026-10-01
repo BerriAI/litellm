@@ -1046,7 +1046,7 @@ async def _estimate_summary_input_tokens(
     try:
         return await asyncify(litellm.token_counter)(
             model=summary_model,
-            messages=list(summary_messages),
+            messages=summary_messages,
         )
     except Exception as e:
         verbose_logger.warning(
