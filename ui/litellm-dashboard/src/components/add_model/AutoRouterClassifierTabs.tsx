@@ -121,6 +121,16 @@ interface AutoRouterClassifierTabsProps {
   children: React.ReactNode;
 }
 
+const HEURISTIC_LABELS: Partial<Record<ClassifierType, string>> = {
+  heuristic_v2: "Heuristic v2",
+  model_directed: "Model directed",
+};
+
+const HEURISTIC_DESCRIPTIONS: Partial<Record<ClassifierType, string>> = {
+  heuristic_v2: "Use calibrated probabilities to match requests to a tier",
+  model_directed: "No classifier runs. A request naming a tier model, such as a subagent, uses that tier",
+};
+
 const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ value, onChange, children }) => {
   const id = useId();
   const availability = useContext(AutoRouterAvailabilityContext);
@@ -128,6 +138,7 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
   const familyByType: Record<ClassifierType, string> = {
     heuristic: "heuristics",
     heuristic_v2: "heuristics",
+    model_directed: "heuristics",
     llm: "llm",
     heuristic_first: "llm",
     hybrid: "llm",
@@ -198,11 +209,11 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
           <ClassifierMenu
             id={`${id}-heuristic`}
             label="Heuristic"
-            selectedLabel={classifierType === "heuristic_v2" ? "Heuristic v2" : "Rule-based"}
+            selectedLabel={HEURISTIC_LABELS[classifierType] ?? "Rule-based"}
             feature={classifierType === "heuristic_v2" ? "heuristic_v2" : undefined}
             value={classifierType}
             onValueChange={(next) => {
-              if (next === "heuristic" || next === "heuristic_v2") changeType(next);
+              if (next === "heuristic" || next === "heuristic_v2" || next === "model_directed") changeType(next);
             }}
           >
             <ClassifierOption
@@ -216,11 +227,15 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
               description="Use calibrated probabilities to match requests to a tier, with no API call"
               feature="heuristic_v2"
             />
+            <ClassifierOption
+              value="model_directed"
+              label="Model directed"
+              description="Serve the strongest tier, and let it route work down by naming a cheaper tier for a subagent"
+            />
           </ClassifierMenu>
           <p className="text-xs text-muted-foreground">
-            {classifierType === "heuristic_v2"
-              ? "Use calibrated probabilities to match requests to a tier"
-              : "Match requests using scoring rules. Choose or change tier models freely"}
+            {HEURISTIC_DESCRIPTIONS[classifierType] ??
+              "Match requests using scoring rules. Choose or change tier models freely"}
           </p>
         </div>
       )}

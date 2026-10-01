@@ -112,6 +112,7 @@ const CONSTANT_CAUSE_LABELS: Record<string, string> = {
   heuristic_first_short_circuit: "Heuristic scorer, classifier skipped",
   hybrid_short_circuit: "Heuristic scorer, score clear of every boundary",
   classifier_plugin: "Custom classifier plugin",
+  model_directed: "Model directed, no classifier",
   semantic_keyword_match: "Semantic keyword match",
   session_affinity_pin: "Pinned to session",
   session_affinity_escalation: "Escalated from session pin",

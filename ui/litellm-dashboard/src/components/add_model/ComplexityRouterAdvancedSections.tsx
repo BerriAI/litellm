@@ -118,7 +118,7 @@ const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSection
           },
         ]
       : []),
-    ...(!forecast
+    ...(!forecast && value.classifier_type !== "model_directed"
       ? [
           {
             key: "keyword-overrides",

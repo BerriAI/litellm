@@ -117,4 +117,17 @@ describe("transitionClassifierType", () => {
     expect(result.plan_mode_min_tier).toBeUndefined();
     expect(result.tiers.SIMPLE).toEqual(["efficient"]);
   });
+
+  it("turns off the settings model_directed rejects when switching to it", () => {
+    const pinned: ComplexityRouterConfigValue = {
+      ...standard,
+      session_affinity: true,
+      classification_mode: "user_turn",
+      adaptive: true,
+    };
+    const result = transitionClassifierType(pinned, "model_directed");
+    expect(result.session_affinity).toBe(false);
+    expect(result.classification_mode).toBe("every_request");
+    expect(result.adaptive).toBe(false);
+  });
 });

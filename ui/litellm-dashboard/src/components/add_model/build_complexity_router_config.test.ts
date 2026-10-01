@@ -57,6 +57,20 @@ const baseParams: BuildComplexityRouterConfigParams = {
 };
 
 describe("buildComplexityRouterConfig", () => {
+  it("drops keyword rules from a model_directed payload, since the request names the tier", () => {
+    const modelDirectedParams: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "model_directed",
+      keywordTierRules: [{ keywords: ["hello"], tier: "SIMPLE" }],
+      semanticMatchingEnabled: true,
+      embeddingModel: "embedder",
+    };
+    const config = buildComplexityRouterConfig(modelDirectedParams);
+    expect(config.classifier_type).toBe("model_directed");
+    expect(config.keyword_tier_rules).toBeUndefined();
+    expect(config.semantic_keyword_matching).toBeUndefined();
+  });
+
   it("accepts built-in JEV defaults without an LLM classifier model", () => {
     expect(getClassifierModelError({ classifier_type: "jev" })).toBeNull();
   });

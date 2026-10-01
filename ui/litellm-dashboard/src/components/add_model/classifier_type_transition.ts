@@ -54,6 +54,11 @@ export const transitionClassifierType = (
     hybrid_boundary_margin:
       classifierType === "hybrid" ? value.hybrid_boundary_margin ?? DEFAULT_HYBRID_BOUNDARY_MARGIN : undefined,
     ...nonReasoningTierFields(classifierType, value),
+    ...(classifierType === "model_directed" && {
+      session_affinity: false,
+      classification_mode: "every_request",
+      adaptive: false,
+    }),
   };
   return prepareForecastClassifier(nextValue, classifierType);
 };

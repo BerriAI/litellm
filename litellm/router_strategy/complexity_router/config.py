@@ -1029,6 +1029,7 @@ class ComplexityRouterConfig(BaseModel):
         "heuristic_first",
         "hybrid",
         "jev",
+        "model_directed",
     ] = Field(
         default="heuristic",
         description=(
@@ -1036,7 +1037,10 @@ class ComplexityRouterConfig(BaseModel):
             "an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, "
             "a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the "
             "local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer "
-            "everywhere except when its score lands near a tier boundary, or 'jev', a TypeSafe AI Jev structured choice call"
+            "everywhere except when its score lands near a tier boundary, or 'jev', a TypeSafe AI Jev structured choice call, or "
+            "'model_directed', which never classifies: a request naming one of this router's tier models, such as a "
+            "coding agent's subagent the main model sent to a cheaper tier, routes to that tier, and every other "
+            "request routes to the strongest configured tier"
         ),
     )
     llm_v2_config: LLMV2Config | None = Field(
@@ -2106,6 +2110,22 @@ class ComplexityRouterConfig(BaseModel):
             raise ValueError(
                 "plugins and adaptive=True cannot both be set: adaptive's bandit selection doesn't yet "
                 "consume plugin-narrowed candidate pools. Disable adaptive or remove plugins."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_model_directed(self) -> "ComplexityRouterConfig":
+        if self.classifier_type == "model_directed" and (
+            self.session_affinity
+            or self.classification_mode == "user_turn"
+            or self.adaptive
+            or self.keyword_tier_rules
+            or self.tier_definitions is not None
+        ):
+            raise ValueError(
+                "classifier_type 'model_directed' cannot be combined with session_affinity, "
+                "classification_mode='user_turn', adaptive, keyword_tier_rules or tier_definitions: the first "
+                "four replace the tier the request named, and a request can only name a built-in tier's model"
             )
         return self
 

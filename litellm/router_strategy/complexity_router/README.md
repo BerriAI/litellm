@@ -258,6 +258,40 @@ Spend logs record `routing_decision.cause: heuristic_v2`, the detected request
 type, and all four predicted probabilities. Existing `classifier_type: heuristic`
 configurations keep the original weighted scorer unchanged
 
+### Model directed
+
+Set `classifier_type: model_directed` to let the strongest model decide when work goes to a
+cheaper tier, instead of a classifier reading each turn. No classifier runs. A request that names
+one of the router's tier models, directly or through `model_group_alias`, routes to that tier.
+Every other request, including each main-loop turn, routes to the strongest configured tier
+
+```yaml
+model_list:
+  - model_name: claude-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        classifier_type: model_directed
+        tiers:
+          SIMPLE: tier-haiku
+          MEDIUM: tier-sonnet
+          COMPLEX: tier-opus
+router_settings:
+  model_group_alias:
+    claude-haiku-4-5-20251001: tier-haiku
+```
+
+Claude Code's Agent tool lets the main model pick `haiku`, `sonnet` or `opus` for each subagent.
+Subagent requests in a session that started on this router are routed through it, so the pick
+reaches the tier that owns the named model. Set `ANTHROPIC_DEFAULT_HAIKU_MODEL`,
+`ANTHROPIC_DEFAULT_SONNET_MODEL` and `ANTHROPIC_DEFAULT_OPUS_MODEL` to the tier groups, or alias the
+concrete ids Claude Code sends to them as above
+
+Spend logs record `routing_decision.cause: model_directed`, with `requested:<model>` or
+`strongest_tier` in `signals`. `session_affinity`, `classification_mode: user_turn`, `adaptive`
+and `keyword_tier_rules` are rejected, since each would replace the tier the request named.
+`tier_definitions` is rejected too: a request can only name a built-in tier's model
+
 ### Renaming the tiers
 
 `tier_labels` puts your own vocabulary on the four tiers:

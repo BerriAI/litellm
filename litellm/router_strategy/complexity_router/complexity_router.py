@@ -62,6 +62,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
     TierSuccessPredictor,
     resolve_tier_artifact,
 )
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -1076,6 +1077,7 @@ class ClassificationOutcome(NamedTuple):
         "classifier_fallback",
         "capability_classifier_fallback",
         "default_model_fallback",
+        "model_directed",
     ]
     classifier_cost: float | None = None
     capability_forecast: CapabilityClassifierForecast | None = None
@@ -1905,6 +1907,8 @@ class ComplexityRouter(CustomLogger):
         custom tier set, and classifier_fallback otherwise decides between the heuristic scorer and
         default_model. The outcome's `cause` reports which path actually ran.
         """
+        if self.config.classifier_type == "model_directed":
+            return self._model_directed_outcome(request_kwargs or EMPTY_MAPPING)
         if self.config.classifier_type == "heuristic_v2":
             return self._classify_with_heuristic_v2(prompt)
         if self.config.classifier_type == "custom":
@@ -1925,6 +1929,31 @@ class ComplexityRouter(CustomLogger):
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
+
+    def _model_directed_outcome(self, request_kwargs: Mapping[str, object]) -> ClassificationOutcome:
+        """The tier holding the model the client named, through model_group_alias, else the strongest one.
+
+        Read from the client's own body because the router rebinds a Claude Code subagent's
+        requested model to the session's router before this hook runs."""
+        proxy_request: Final = request_kwargs.get("proxy_server_request")
+        body: Final = proxy_request.get("body") if isinstance(proxy_request, Mapping) else None
+        requested: Final = body.get("model") if isinstance(body, Mapping) else None
+        requested_tier: Final = (
+            self._tier_for_model(
+                resolve_model_group_alias(self.litellm_router_instance.model_group_alias, requested) or requested
+            )
+            if isinstance(requested, str)
+            else None
+        )
+        if requested_tier is not None:
+            return ClassificationOutcome(
+                tier=requested_tier, score=None, signals=(f"requested:{requested}",), cause="model_directed"
+            )
+        strongest: Final = next(
+            (tier for tier in reversed(self.config.active_tier_severity_order()) if self.config.tiers.get(tier.value)),
+            ComplexityTier.MEDIUM,
+        )
+        return ClassificationOutcome(tier=strongest, score=None, signals=("strongest_tier",), cause="model_directed")
 
     def _classify_with_heuristic_v2(self, prompt: str) -> ClassificationOutcome:
         predictor: Final = self._tier_success_predictor

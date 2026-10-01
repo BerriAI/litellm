@@ -7,7 +7,8 @@ export type ClassifierType =
   | "hybrid"
   | "capability"
   | "llm_v2"
-  | "custom";
+  | "custom"
+  | "model_directed";
 
 export const usesLlmClassifier = (classifierType: ClassifierType): boolean =>
   (["llm", "heuristic_first", "hybrid", "capability", "llm_v2"] as const).some((type) => type === classifierType);

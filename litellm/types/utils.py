@@ -3013,6 +3013,9 @@ RoutingDecisionCause = Literal[
     # Distinct from "default_fallback",
     # which is a tier having no model configured rather than classification not happening.
     "default_model_fallback",
+    # classifier_type 'model_directed': no classifier ran. The request named one of the router's
+    # tier models, or named the router itself and took the strongest configured tier.
+    "model_directed",
     "literal_keyword_match",
     "semantic_keyword_match",
     # A plan-mode sentinel (Claude Code / Copilot plan mode) was detected on the request and

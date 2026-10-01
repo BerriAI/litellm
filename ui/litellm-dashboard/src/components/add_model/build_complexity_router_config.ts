@@ -736,6 +736,7 @@ export const buildComplexityRouterConfig = ({
   };
   const effectiveType = effectiveClassifierType({ custom_tier_set: customTierSet, classifier_type: classifierType });
   const forecast = isForecastClassifier(effectiveType);
+  const modelDirected = effectiveType === "model_directed";
   const preserveContextWindowBuffer = !forecast || enableContextWindowEscalation === true;
   const cleanList = (items: string[] | undefined): string[] | undefined => {
     const cleaned = (items ?? []).map((item) => item.trim()).filter(Boolean);
@@ -792,7 +793,7 @@ export const buildComplexityRouterConfig = ({
     modality_routing: modalityRouting ?? false,
     modality_pin_override: modalityPinOverride ?? false,
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
-    ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
+    ...(cleanedKeywordTierRules.length > 0 && !modelDirected && { keyword_tier_rules: cleanedKeywordTierRules }),
     escalation_keywords: forecast ? [] : cleanedEscalationKeywords,
     // Only written when on: the backend rejects it alongside session_affinity, user_turn mode and
     // a custom tier set, so an off router must not carry the key into any of those saves.
@@ -803,11 +804,12 @@ export const buildComplexityRouterConfig = ({
         stall_escalation_repeat_threshold: stallEscalationRepeatThreshold,
       }),
     }),
-    ...(semanticMatchingEnabled && {
-      semantic_keyword_matching: true,
-      embedding_model: embeddingModel,
-      match_threshold: matchThreshold,
-    }),
+    ...(semanticMatchingEnabled &&
+      !modelDirected && {
+        semantic_keyword_matching: true,
+        embedding_model: embeddingModel,
+        match_threshold: matchThreshold,
+      }),
     ...(adaptive &&
       !forecast && {
         adaptive: true,

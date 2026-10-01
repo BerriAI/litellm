@@ -53,7 +53,7 @@ function Form({
 }
 
 describe("Auto-router classifier selection", () => {
-  it.each(["heuristic", "heuristic_v2", "llm", "heuristic_first", "hybrid", "jev"] as const)(
+  it.each(["heuristic", "heuristic_v2", "model_directed", "llm", "heuristic_first", "hybrid", "jev"] as const)(
     "shows saved %s without changing its configuration",
     async (classifier_type) => {
       const onChange = vi.fn();
@@ -65,6 +65,7 @@ describe("Auto-router classifier selection", () => {
       const family = {
         heuristic: "Heuristics",
         heuristic_v2: "Heuristics",
+        model_directed: "Heuristics",
         llm: "LLM",
         heuristic_first: "LLM",
         hybrid: "LLM",
@@ -152,6 +153,13 @@ describe("Auto-router classifier selection", () => {
     await selectAutoRouterOption(field, option);
     expect(screen.getByRole("status", { name: "Classifier type" })).toHaveTextContent(feature);
     expect(screen.getByRole("button", { name: field })).toHaveTextContent("Used by this router");
+  });
+
+  it("selects Model directed from the Heuristics menu", async () => {
+    renderWithProviders(<Form initialValue={{ ...initial, classifier_type: "heuristic" }} />);
+    await selectAutoRouterOption("Heuristic", "Model directed");
+    expect(screen.getByRole("status", { name: "Classifier type" })).toHaveTextContent("model_directed");
+    expect(screen.getByRole("button", { name: "Heuristic" })).toHaveTextContent("Model directed");
   });
 
   it("shows Jev's single Complexity approach without changing saved configuration", () => {

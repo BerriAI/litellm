@@ -16961,3 +16961,92 @@ class TestNonReasoningTier:
             "complex",
             "reasoning",
         )
+
+
+class TestModelDirectedRouting:
+    """classifier_type 'model_directed': the strongest tier serves the main loop and the main model
+    routes work down by naming a cheaper tier for a subagent, which Claude Code sends through the
+    session's router."""
+
+    @staticmethod
+    def _router() -> Router:
+        return Router(
+            model_list=[
+                *(
+                    {"model_name": group, "litellm_params": {"model": "openai/gpt-4o-mini", "mock_response": group}}
+                    for group in ("tier-haiku", "tier-sonnet", "tier-opus")
+                ),
+                {
+                    "model_name": "claude-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {
+                            "classifier_type": "model_directed",
+                            "tiers": {"SIMPLE": "tier-haiku", "MEDIUM": "tier-sonnet", "COMPLEX": "tier-opus"},
+                        },
+                    },
+                },
+            ],
+            model_group_alias={"claude-haiku-4-5-20251001": "tier-haiku"},
+        )
+
+    @staticmethod
+    def _claude_code_kwargs(requested_model: str, agent_id: str | None = None) -> dict:
+        headers = {
+            "x-claude-code-session-id": "11111111-2222-3333-4444-555555555555",
+            "x-app": "cli",
+            **({"x-claude-code-agent-id": agent_id} if agent_id is not None else {}),
+        }
+        return {
+            "metadata": {"user_api_key_hash": "key-hash"},
+            "proxy_server_request": {"headers": headers, "body": {"model": requested_model}},
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("subagent_model", "served", "signal"),
+        [
+            ("tier-haiku", "tier-haiku", "requested:tier-haiku"),
+            ("claude-haiku-4-5-20251001", "tier-haiku", "requested:claude-haiku-4-5-20251001"),
+            ("tier-sonnet", "tier-sonnet", "requested:tier-sonnet"),
+        ],
+    )
+    async def test_main_loop_takes_the_strongest_tier_and_a_subagent_gets_the_tier_it_named(
+        self, subagent_model, served, signal
+    ):
+        router = self._router()
+        main_kwargs = self._claude_code_kwargs("claude-router")
+        main = await router.acompletion(
+            model="claude-router", messages=[{"role": "user", "content": "refactor the repo"}], **main_kwargs
+        )
+        subagent_kwargs = self._claude_code_kwargs(subagent_model, agent_id="agent-1")
+        subagent = await router.acompletion(
+            model=subagent_model,
+            messages=[{"role": "user", "content": "read calc.py"}],
+            **subagent_kwargs,
+        )
+
+        assert main.choices[0].message.content == "tier-opus"
+        assert main_kwargs["metadata"]["routing_decision"]["cause"] == "model_directed"
+        assert main_kwargs["metadata"]["routing_decision"]["signals"] == ["strongest_tier"]
+        assert subagent.choices[0].message.content == served
+        assert subagent_kwargs["metadata"]["routing_decision"]["cause"] == "model_directed"
+        assert subagent_kwargs["metadata"]["routing_decision"]["signals"] == [signal]
+
+    @pytest.mark.parametrize(
+        "conflict",
+        [
+            {"session_affinity": True},
+            {"classification_mode": "user_turn"},
+            {"adaptive": True},
+            {"keyword_tier_rules": [{"keywords": ["hello"], "tier": "SIMPLE"}]},
+            {
+                "tier_definitions": [{"name": "fast", "description": "a"}, {"name": "deep", "description": "b"}],
+                "tiers": {"fast": "a", "deep": "b"},
+                "fallback_tier": "deep",
+            },
+        ],
+    )
+    def test_settings_that_replace_the_named_tier_are_rejected(self, conflict):
+        with pytest.raises(ValueError, match="model_directed"):
+            ComplexityRouterConfig(classifier_type="model_directed", **conflict)
