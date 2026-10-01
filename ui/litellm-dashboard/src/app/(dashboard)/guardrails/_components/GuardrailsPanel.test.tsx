@@ -1,8 +1,8 @@
-import { type UrlUpdateEvent } from "nuqs/adapters/testing";
+import { NuqsTestingAdapter, type UrlUpdateEvent } from "nuqs/adapters/testing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import GuardrailsPanel from "./GuardrailsPanel";
 import { getGuardrailsList, deleteGuardrailCall } from "@/components/networking";
-import { fireEvent, renderWithProviders, screen, waitFor, within } from "@/../tests/test-utils";
+import { fireEvent, render, renderWithProviders, screen, waitFor, within } from "@/../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   getGuardrailsList: vi.fn(),
@@ -204,10 +204,10 @@ describe("GuardrailsPanel", () => {
       expect(await screen.findByTestId("guardrail-info-view")).toHaveTextContent("test-guardrail-1");
     });
 
-    it("should clear ?guardrail= by replacing history when the info view is closed", async () => {
+    it("should clear ?guardrail= and ?detail_tab= by replacing history when the info view is closed", async () => {
       const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
       renderWithProviders(<GuardrailsPanel {...defaultProps} />, {
-        searchParams: "?guardrail=test-guardrail-1",
+        searchParams: "?tab=guardrails&guardrail=test-guardrail-1&detail_tab=settings",
         onUrlUpdate,
       });
 
@@ -216,8 +216,80 @@ describe("GuardrailsPanel", () => {
       await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
       const lastUpdate = onUrlUpdate.mock.calls.at(-1)![0];
       expect(lastUpdate.searchParams.has("guardrail")).toBe(false);
+      expect(lastUpdate.searchParams.has("detail_tab")).toBe(false);
+      expect(lastUpdate.searchParams.get("tab")).toBe("guardrails");
       expect(lastUpdate.options.history).toBe("replace");
       expect(await screen.findByText("Mock Guardrail Table")).toBeInTheDocument();
     });
+  });
+});
+
+describe("GuardrailsPanel tab in the URL", () => {
+  const lastTabUpdate = (onUrlUpdate: ReturnType<typeof vi.fn<(event: UrlUpdateEvent) => void>>) =>
+    onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+  });
+
+  it("should select the Guardrails tab for an admin when the URL names no tab", () => {
+    renderWithProviders(<GuardrailsPanel accessToken="test-token" userRole="admin" />);
+
+    expect(screen.getByRole("tab", { name: "Guardrails" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("should select the tab named by ?tab=", () => {
+    renderWithProviders(<GuardrailsPanel accessToken="test-token" userRole="admin" />, {
+      searchParams: "?tab=garden",
+    });
+
+    expect(screen.getByRole("tab", { name: "Guardrail Garden" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Guardrails" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("should write the clicked tab to ?tab= and drop it for the default tab", async () => {
+    const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+    renderWithProviders(<GuardrailsPanel accessToken="test-token" userRole="admin" />, { onUrlUpdate });
+
+    fireEvent.click(screen.getByRole("tab", { name: "Test Playground" }));
+    await waitFor(() => expect(lastTabUpdate(onUrlUpdate)?.get("tab")).toBe("test"));
+    expect(screen.getByRole("tab", { name: "Test Playground" })).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Submitted Guardrails" }));
+    await waitFor(() => expect(lastTabUpdate(onUrlUpdate)?.get("tab")).toBe("submitted"));
+
+    fireEvent.click(screen.getByRole("tab", { name: "Guardrails" }));
+    await waitFor(() => expect(lastTabUpdate(onUrlUpdate)?.has("tab")).toBe(false));
+    expect(screen.getByRole("tab", { name: "Guardrails" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("should land a non-admin on Submitted Guardrails when the URL names no tab", () => {
+    renderWithProviders(<GuardrailsPanel accessToken="test-token" userRole="internal_user" />);
+
+    expect(screen.getByRole("tab", { name: "Submitted Guardrails" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("tab", { name: "Guardrails" })).not.toBeInTheDocument();
+    expect(screen.getByText("Mock Team Guardrails Tab")).toBeInTheDocument();
+  });
+
+  it("should send a non-admin with an admin-only ?tab= to Submitted Guardrails and drop the param", async () => {
+    const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+    render(<GuardrailsPanel accessToken="test-token" userRole="internal_user" />, {
+      wrapper: ({ children }) => (
+        <NuqsTestingAdapter
+          searchParams="?tab=guardrails&other=1"
+          onUrlUpdate={onUrlUpdate}
+          hasMemory
+          resetUrlUpdateQueueOnMount={false}
+        >
+          {children}
+        </NuqsTestingAdapter>
+      ),
+    });
+
+    expect(screen.getByRole("tab", { name: "Submitted Guardrails" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    expect(lastTabUpdate(onUrlUpdate)?.has("tab")).toBe(false);
+    expect(lastTabUpdate(onUrlUpdate)?.get("other")).toBe("1");
   });
 });

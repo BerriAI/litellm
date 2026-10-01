@@ -1,39 +1,19 @@
-import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { parseAsString, useQueryState } from "nuqs";
-import React, { useCallback, useMemo, useState } from "react";
-import { formatDate } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { GuardrailDetail } from "./GuardrailDetail";
 import { GuardrailsOverview } from "./GuardrailsOverview";
+import { useMonitorDateRange } from "./useMonitorDateRange";
 
 interface GuardrailsMonitorViewProps {
   accessToken?: string | null;
 }
-
-const defaultEnd = new Date();
-const defaultStart = new Date();
-defaultStart.setDate(defaultStart.getDate() - 7);
 
 export default function GuardrailsMonitorView({ accessToken = null }: GuardrailsMonitorViewProps) {
   const [selectedGuardrailId, setSelectedGuardrailId] = useQueryState(
     "guardrail",
     parseAsString.withOptions({ history: "push" }),
   );
-
-  const initialFrom = useMemo(() => new Date(defaultStart), []);
-  const initialTo = useMemo(() => new Date(defaultEnd), []);
-
-  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: initialFrom,
-    to: initialTo,
-  });
-
-  const startDate = dateValue.from ? formatDate(dateValue.from) : "";
-  const endDate = dateValue.to ? formatDate(dateValue.to) : "";
-
-  const handleDateChange = useCallback((newValue: DateRangePickerValue) => {
-    setDateValue(newValue);
-  }, []);
+  const { startDate, endDate, pickerValue, setPickerValue } = useMonitorDateRange();
 
   const handleSelectGuardrail = (id: string) => {
     void setSelectedGuardrailId(id);
@@ -44,7 +24,7 @@ export default function GuardrailsMonitorView({ accessToken = null }: Guardrails
   };
 
   const dateRangeControl = (
-    <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} label="" showTimeRange={false} />
+    <AdvancedDatePicker value={pickerValue} onValueChange={setPickerValue} label="" showTimeRange={false} />
   );
 
   return (

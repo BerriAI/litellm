@@ -1,7 +1,12 @@
-import type { ColumnDef, OnChangeFn, SortingState } from "@tanstack/react-table";
+import type { ColumnDef } from "@tanstack/react-table";
 import { CircleDollarSign, Download, HeartPulse, Settings, TrendingUp, TriangleAlert } from "lucide-react";
 import React, { useMemo, useState } from "react";
-import { DataTable, DataTableSortHeader } from "@/components/shared/DataTable";
+import {
+  DataTable,
+  DataTableSortHeader,
+  useUrlTableState,
+  type UrlTableStateOptions,
+} from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells/money_cell";
 import { CellTooltip } from "@/components/shared/table_cells/cell_tooltip";
 import {
@@ -32,7 +37,12 @@ interface GuardrailsOverviewProps {
   dateRangeControl?: React.ReactNode;
 }
 
-type SortKey = "failRate" | "requestsEvaluated" | "avgLatency" | "cost";
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: ["failRate", "requestsEvaluated", "avgLatency", "cost"],
+  defaultSort: { id: "failRate", desc: true },
+  defaultPageSize: 25,
+  filterColumns: [],
+};
 
 const providerColors: Record<string, string> = {
   Bedrock: "bg-warning/15 text-warning border-warning/20",
@@ -118,8 +128,7 @@ export function GuardrailsOverview({
   onSelectGuardrail,
   dateRangeControl,
 }: GuardrailsOverviewProps) {
-  const [sortBy, setSortBy] = useState<SortKey>("failRate");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const { sorting, onSortingChange } = useUrlTableState(TABLE_STATE_OPTIONS);
   const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
 
   const {
@@ -144,15 +153,6 @@ export function GuardrailsOverview({
     };
   }, [guardrailsData, activeData]);
   const chartData = guardrailsData?.chart;
-  const sorted = useMemo(() => {
-    const mult = sortDir === "desc" ? -1 : 1;
-    return [...activeData].sort((a, b) => {
-      const aVal = a[sortBy];
-      const bVal = b[sortBy];
-      if (aVal == null || bVal == null) return Number(aVal == null) - Number(bVal == null);
-      return (aVal - bVal) * mult;
-    });
-  }, [activeData, sortBy, sortDir]);
   const isLoading = guardrailsLoading;
   const error = guardrailsError;
 
@@ -234,7 +234,9 @@ export function GuardrailsOverview({
     },
     {
       header: ({ column }) => <DataTableSortHeader column={column} title="Avg. latency added" />,
-      accessorKey: "avgLatency",
+      id: "avgLatency",
+      accessorFn: (row) => row.avgLatency ?? undefined,
+      sortUndefined: "last",
       meta: { numeric: true },
       sortDescFirst: false,
       cell: ({ row }) => (
@@ -262,23 +264,14 @@ export function GuardrailsOverview({
     },
     {
       header: ({ column }) => <DataTableSortHeader column={column} title="Cost" />,
-      accessorKey: "cost",
+      id: "cost",
+      accessorFn: (row) => row.cost ?? undefined,
+      sortUndefined: "last",
       meta: { numeric: true },
       sortDescFirst: false,
       cell: ({ row }) => <CostCell row={row.original} />,
     },
   ];
-
-  const sortableKeys: SortKey[] = ["failRate", "requestsEvaluated", "avgLatency", "cost"];
-  const sorting = useMemo<SortingState>(() => [{ id: sortBy, desc: sortDir === "desc" }], [sortBy, sortDir]);
-  const handleSortingChange: OnChangeFn<SortingState> = (updater) => {
-    const nextSorting = typeof updater === "function" ? updater(sorting) : updater;
-    const primarySort = nextSorting[0];
-    if (primarySort && sortableKeys.includes(primarySort.id as SortKey)) {
-      setSortBy(primarySort.id as SortKey);
-      setSortDir(primarySort.desc ? "desc" : "asc");
-    }
-  };
 
   return (
     <div>
@@ -346,15 +339,15 @@ export function GuardrailsOverview({
         )}
         <DataTable
           columns={columns}
-          data={sorted}
+          data={activeData}
           getRowId={(row) => row.id}
           isLoading={isLoading}
           noDataMessage="No data for this period"
           onRowClick={(row) => onSelectGuardrail(row.id)}
           rowClassName={() => "cursor-pointer"}
-          sortingMode="server"
+          sortingMode="client"
           sorting={sorting}
-          onSortingChange={handleSortingChange}
+          onSortingChange={onSortingChange}
           enableSortingRemoval={false}
           size="compact"
           toolbar={() => (

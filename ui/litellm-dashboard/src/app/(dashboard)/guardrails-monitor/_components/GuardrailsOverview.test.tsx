@@ -1,5 +1,6 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { renderWithProviders, screen, waitFor, within } from "@/../tests/test-utils";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   GuardrailUsageOverview,
@@ -80,14 +81,18 @@ const overview: GuardrailUsageOverview = {
   totalUntrackedUsageUnits: { sensitiveInformationPolicyUnits: 250 },
 };
 
-function renderOverview(onSelectGuardrail = vi.fn()) {
-  return render(
+function renderOverview(
+  onSelectGuardrail = vi.fn(),
+  urlOptions: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction } = {},
+) {
+  return renderWithProviders(
     <GuardrailsOverview
       accessToken="test-token"
       startDate="2026-08-01"
       endDate="2026-08-12"
       onSelectGuardrail={onSelectGuardrail}
     />,
+    urlOptions,
   );
 }
 
@@ -287,5 +292,57 @@ describe("GuardrailsOverview", () => {
     renderOverview();
 
     expect(await screen.findByText("Failed to load data. Try again.")).toBeInTheDocument();
+  });
+
+  describe("sort in the URL (?sort_by= and ?sort_order=)", () => {
+    const rowOrder = () =>
+      screen
+        .getAllByRole("row")
+        .slice(1)
+        .map((r) => within(r).getAllByRole("button")[0].textContent);
+
+    it("orders rows by the column and direction in the URL", () => {
+      renderOverview(vi.fn(), { searchParams: "?sort_by=requestsEvaluated&sort_order=asc" });
+
+      expect(rowOrder()).toEqual(["Free Bedrock Guardrail", "High Failure Guardrail", "Low Failure Guardrail"]);
+    });
+
+    it("keeps guardrails with no known cost last when the URL sorts by cost ascending", () => {
+      renderOverview(vi.fn(), { searchParams: "?sort_by=cost&sort_order=asc" });
+
+      expect(rowOrder()).toEqual(["Free Bedrock Guardrail", "High Failure Guardrail", "Low Failure Guardrail"]);
+    });
+
+    it.each(["?sort_by=avgLatency&sort_order=asc", "?sort_by=avgLatency"])(
+      "keeps guardrails with no recorded latency last for %s",
+      (searchParams) => {
+        renderOverview(vi.fn(), { searchParams });
+
+        expect(rowOrder()[0]).toBe("Low Failure Guardrail");
+      },
+    );
+
+    it("falls back to the highest fail rate first for a column that cannot be sorted", () => {
+      renderOverview(vi.fn(), { searchParams: "?sort_by=name" });
+
+      expect(rowOrder()).toEqual(["High Failure Guardrail", "Low Failure Guardrail", "Free Bedrock Guardrail"]);
+    });
+
+    it("writes the clicked column and direction to the URL", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderOverview(vi.fn(), { onUrlUpdate });
+      const lastParams = () => onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+
+      await user.click(screen.getByRole("button", { name: /Requests/ }));
+      await waitFor(() => expect(lastParams()?.get("sort_by")).toBe("requestsEvaluated"));
+      expect(lastParams()?.get("sort_order")).toBe("asc");
+      expect(rowOrder()).toEqual(["Free Bedrock Guardrail", "High Failure Guardrail", "Low Failure Guardrail"]);
+
+      await user.click(screen.getByRole("button", { name: /Requests/ }));
+      await waitFor(() => expect(lastParams()?.has("sort_order")).toBe(false));
+      expect(lastParams()?.get("sort_by")).toBe("requestsEvaluated");
+      expect(rowOrder()).toEqual(["Low Failure Guardrail", "High Failure Guardrail", "Free Bedrock Guardrail"]);
+    });
   });
 });

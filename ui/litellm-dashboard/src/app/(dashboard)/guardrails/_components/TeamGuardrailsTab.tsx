@@ -40,6 +40,7 @@ import { isValidUrl } from "@/lib/forms/urlValidation";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { useTeamGuardrailsUrlState } from "./useTeamGuardrailsUrlState";
 
 const GUARDRAIL_MODES = [
   { value: "pre_call", label: "Pre Call" },
@@ -823,10 +824,9 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
     active: 0,
     rejected: 0,
   });
-  const [search, setSearch] = useState("");
+  const { search, setSearch, statusFilter, setStatusFilter, selectedId, openSubmission, closeSubmission } =
+    useTeamGuardrailsUrlState();
   const [searchDebounced] = useDebouncedValue(search, { wait: DEBOUNCE_WAIT_MS });
-  const [statusFilter, setStatusFilter] = useState<"all" | GuardrailStatus>("all");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expandedHeaders, setExpandedHeaders] = useState<Set<string>>(new Set());
   const [confirmAction, setConfirmAction] = useState<{
     id: string;
@@ -956,7 +956,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
     try {
       await approveGuardrailSubmission(accessToken, id);
       setConfirmAction(null);
-      if (selectedId === id) setSelectedId(null);
+      if (selectedId === id) closeSubmission();
       await fetchSubmissions();
       toast.success("Guardrail approved");
     } catch {
@@ -969,7 +969,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
     try {
       await rejectGuardrailSubmission(accessToken, id);
       setConfirmAction(null);
-      if (selectedId === id) setSelectedId(null);
+      if (selectedId === id) closeSubmission();
       await fetchSubmissions();
       toast.success("Guardrail rejected");
     } catch {
@@ -1009,7 +1009,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
           <select
             aria-label="Filter by status"
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
+            onChange={(e) => setStatusFilter(e.target.value)}
             className="border border-border rounded-md px-3 py-2 text-sm text-foreground focus:outline-hidden focus:ring-1 focus:ring-ring focus:border-info bg-background"
           >
             <option value="all">All Status</option>
@@ -1041,7 +1041,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
                 isSelected={selectedId === g.id}
                 isHeadersExpanded={expandedHeaders.has(g.id)}
                 isAdmin={isAdmin}
-                onSelect={() => setSelectedId(selectedId === g.id ? null : g.id)}
+                onSelect={() => (selectedId === g.id ? closeSubmission() : openSubmission(g.id))}
                 onToggleForwardKey={() => toggleForwardKey(g.id)}
                 onToggleHeaders={() => toggleHeaders(g.id)}
                 onApprove={() => setConfirmAction({ id: g.id, action: "approve" })}
@@ -1054,7 +1054,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
         <DetailPanel
           guardrail={selected}
           isAdmin={isAdmin}
-          onClose={() => setSelectedId(null)}
+          onClose={closeSubmission}
           onApprove={() => setConfirmAction({ id: selected.id, action: "approve" })}
           onReject={() => setConfirmAction({ id: selected.id, action: "reject" })}
           onToggleForwardKey={() => toggleForwardKey(selected.id)}

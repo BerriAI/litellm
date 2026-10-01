@@ -6,6 +6,7 @@ import AddGuardrailForm from "./add_guardrail_form";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { GUARDRAIL_PRESETS } from "./guardrail_garden_configs";
 import { GuardrailCardInfo } from "./guardrail_garden_data";
+import { useGardenDetailTab } from "./useGardenDetailTab";
 
 interface GuardrailDetailViewProps {
   card: GuardrailCardInfo;
@@ -16,7 +17,7 @@ interface GuardrailDetailViewProps {
 
 const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack, accessToken, onGuardrailCreated }) => {
   const [isAddFormVisible, setIsAddFormVisible] = useState(false);
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useGardenDetailTab(Boolean(card.eval));
 
   const detailRows = [
     { property: "Provider", value: card.category === "litellm" ? "LiteLLM Content Filter" : "Partner Guardrail" },
@@ -38,7 +39,10 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
       ]
     : [];
 
-  const tabs = [{ key: "overview", label: "Overview" }, ...(card.eval ? [{ key: "eval", label: "Eval Results" }] : [])];
+  const tabs = [
+    { key: "overview" as const, label: "Overview" },
+    ...(card.eval ? [{ key: "eval" as const, label: "Eval Results" }] : []),
+  ];
 
   return (
     <div className="mx-auto max-w-[960px]">

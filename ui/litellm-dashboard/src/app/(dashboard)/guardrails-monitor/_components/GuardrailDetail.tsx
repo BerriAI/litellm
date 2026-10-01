@@ -13,6 +13,7 @@ import { GuardrailUsageBreakdown } from "./GuardrailUsageBreakdown";
 import { LogViewer } from "@/components/GuardrailsMonitor/LogViewer";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
 import type { LogEntry } from "@/components/GuardrailsMonitor/mockData";
+import { useGuardrailDetailUrlState } from "./useGuardrailDetailUrlState";
 
 interface GuardrailDetailProps {
   guardrailId: string;
@@ -29,7 +30,7 @@ const STATUS_TONE: Record<string, StatusTone> = {
 };
 
 export function GuardrailDetail({ guardrailId, onBack, accessToken = null, startDate, endDate }: GuardrailDetailProps) {
-  const [activeTab, setActiveTab] = useState("overview");
+  const { tab: activeTab, setTab: setActiveTab, logViewerState, clear: clearUrlState } = useGuardrailDetailUrlState();
   const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
   const [logsPage] = useState(1);
   const logsPageSize = 50;
@@ -40,7 +41,7 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
     error: detailError,
   } = useGuardrailsUsageDetail(guardrailId, { accessToken, startDate, endDate });
   const { data: logsData, isLoading: logsLoading } = useQuery({
-    queryKey: ["guardrails-usage-logs", guardrailId, logsPage, logsPageSize],
+    queryKey: ["guardrails-usage-logs", guardrailId, startDate, endDate, logsPage, logsPageSize],
     queryFn: () =>
       getGuardrailsUsageLogs(accessToken!, {
         guardrailId,
@@ -90,6 +91,11 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
         avgLatency: undefined as number | undefined,
       };
 
+  const handleBack = () => {
+    clearUrlState();
+    onBack();
+  };
+
   if (detailLoading && !detailData) {
     return (
       <div role="status" aria-busy="true" aria-label="Loading" className="flex items-center justify-center py-12">
@@ -100,7 +106,7 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
   if (detailError && !detailData) {
     return (
       <div>
-        <Button variant="link" onClick={onBack} className="mb-4 pl-0">
+        <Button variant="link" onClick={handleBack} className="mb-4 pl-0">
           <ArrowLeft className="size-4" />
           Back to Overview
         </Button>
@@ -109,23 +115,23 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
     );
   }
 
-  const logViewer = (filterAction?: "all") => (
+  const renderLogViewer = () => (
     <LogViewer
       guardrailName={data.name}
-      filterAction={filterAction}
       logs={logs}
       logsLoading={logsLoading}
       totalLogs={logsData?.total ?? 0}
       accessToken={accessToken}
       startDate={startDate}
       endDate={endDate}
+      viewState={logViewerState}
     />
   );
 
   return (
     <div>
       <div className="mb-6">
-        <Button variant="link" onClick={onBack} className="mb-4 pl-0">
+        <Button variant="link" onClick={handleBack} className="mb-4 pl-0">
           <ArrowLeft className="size-4" />
           Back to Overview
         </Button>
@@ -156,7 +162,7 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
         </div>
       </div>
 
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as string)}>
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList variant="line">
           <TabsTrigger value="overview" className="flex-none">
             Overview
@@ -194,11 +200,11 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
 
           {detailData && <GuardrailUsageBreakdown detail={detailData} />}
 
-          {logViewer("all")}
+          {renderLogViewer()}
         </TabsContent>
 
         <TabsContent value="logs" className="mt-4">
-          {logViewer()}
+          {renderLogViewer()}
         </TabsContent>
       </Tabs>
 
