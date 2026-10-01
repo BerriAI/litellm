@@ -1,4 +1,4 @@
-"""Shared fixtures for tests/test_litellm/proxy/proxy_server/.
+"""Shared fixtures for tests/unit/proxy/proxy_server/.
 
 All fixtures and helpers used by PR1/PR2/PR3 test files live here. Do NOT
 add fixtures inside individual test files. If a fixture is missing, add it

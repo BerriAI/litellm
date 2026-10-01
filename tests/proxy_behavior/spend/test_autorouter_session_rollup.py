@@ -2,7 +2,7 @@
 Behavior tests for the LiteLLM_AutoRouterSession conditional upsert and the benchmarks
 aggregate, against a real Postgres. The classification lives in SQL, so these tests are
 the ones that exercise it; the builder and flush contracts are unit-tested in
-tests/test_litellm/proxy/db/test_autorouter_session_rollup.py.
+tests/unit/proxy/db/test_autorouter_session_rollup.py.
 """
 
 import asyncio

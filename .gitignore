@@ -104,7 +104,7 @@ litellm_config.yaml
 .cursor
 litellm/proxy/to_delete_loadtest_work/*
 update_model_cost_map.py
-tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_manager.py
+tests/unit/proxy/_experimental/mcp_server/test_mcp_server_manager.py
 scripts/test_vertex_ai_search.py
 LAZY_LOADING_IMPROVEMENTS.md
 STABILIZATION_TODO.md

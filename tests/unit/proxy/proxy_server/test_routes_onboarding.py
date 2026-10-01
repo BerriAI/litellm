@@ -8,11 +8,14 @@ Routes covered:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hashlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import jwt
 import pytest
+import respx
 
 from .conftest import normalize
 
@@ -202,7 +205,17 @@ def _make_onboarding_jwt(
     )
 
 
-def test_claim_onboarding_link_happy(client, monkeypatch, mock_prisma):
+def _hibp_url_for(password: str) -> str:
+    sha1 = hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()
+    return f"https://api.pwnedpasswords.com/range/{sha1[:5]}"
+
+
+def _hibp_suffix_for(password: str) -> str:
+    return hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()[5:]
+
+
+@respx.mock
+def test_claim_onboarding_link_happy(client, monkeypatch, mock_prisma, httpx_transport):
     """Valid claim → returns login_url, token, user_email, user."""
     from litellm.proxy import proxy_server as ps
 
@@ -228,13 +241,18 @@ def test_claim_onboarding_link_happy(client, monkeypatch, mock_prisma):
         ps, "_generate_onboarding_ui_session_token", _fake_session_token
     )
 
+    password = "Hunter2Strong!"
+    respx.get(_hibp_url_for(password)).mock(
+        return_value=httpx.Response(200, text=f"{_hibp_suffix_for('unrelated-password')}:9")
+    )
+
     onboarding_jwt = _make_onboarding_jwt("sk-master-test")
     response = client.post(
         "/onboarding/claim_token",
         json={
             "invitation_link": "inv-123",
             "user_id": "user-abc",
-            "password": "Hunter2Strong!",
+            "password": password,
         },
         headers={"Authorization": f"Bearer {onboarding_jwt}"},
     )
