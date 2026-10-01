@@ -2416,8 +2416,12 @@ async def apply_guardrail(
 
         metadata: Final = _guardrail_request_metadata(request.metadata, data.get("metadata"))
         request_data: Final[dict] = {
-            **({"messages": request.messages} if request.messages is not None else {}),
-            **({"metadata": metadata} if request.metadata is not None or metadata else {}),
+            key: value
+            for key, value in (
+                ("messages", request.messages),
+                ("metadata", metadata if request.metadata is not None or metadata else None),
+            )
+            if value is not None
         }
         _input_type: Final = _resolve_guardrail_input_type(active_guardrail, request.input_type)
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(

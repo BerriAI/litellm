@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
+from itertools import chain, product
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -66,7 +67,7 @@ def _metadata(block: object) -> Mapping[str, object]:
 
 def _consumer_id(request_data: Mapping[str, object]) -> str | None:
     blocks: Final = tuple(_metadata(request_data.get(source)) for source in ("litellm_metadata", "metadata"))
-    candidates: Final = (block.get(name) for names in CONSUMER_ID_KEYS for name in names for block in blocks)
+    candidates: Final = (block.get(name) for name, block in product(chain.from_iterable(CONSUMER_ID_KEYS), blocks))
     return next((value for value in candidates if isinstance(value, str) and value), None)
 
 
@@ -78,7 +79,9 @@ def _message_text(message: Mapping[str, object]) -> str:
 def _copy_message(value: object) -> Mapping[str, object] | None:
     if not isinstance(value, Mapping):
         return None
-    return {str(key): item for key, item in value.items()}  # mutable-ok: shallow copy for write-back
+    return {  # mutable-ok: shallow copy for write-back
+        str(key): item for key, item in TypeAdapter(Mapping[object, object]).validate_python(value).items()
+    }
 
 
 def _copy_messages(messages: Sequence[object]) -> tuple[Mapping[str, object], ...] | None:
@@ -96,14 +99,14 @@ def _tool_calls_in_message(message: Mapping[str, object]) -> tuple[object, ...] 
         return None
     if not isinstance(raw, list):
         raise HTTPException(status_code=400, detail=TRANSFORM_MISSING)
-    return tuple(raw)
+    return TypeAdapter(tuple[object, ...]).validate_python(raw)
 
 
 def _tool_calls_from_messages(messages: Sequence[Mapping[str, object]]) -> tuple[object, ...] | None:
     groups: Final = tuple(_tool_calls_in_message(message) for message in messages)
     if all(group is None for group in groups):
         return None
-    return tuple(tool_call for group in groups if group is not None for tool_call in group)
+    return tuple(chain.from_iterable(group for group in groups if group is not None))
 
 
 def _rewrite_last_user_message(
@@ -237,7 +240,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: CustomGuardrail.apply_guardrail contract
+        request_data: dict[str, object],  # mutable-ok: CustomGuardrail.apply_guardrail contract
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
@@ -249,7 +252,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
     async def _evaluate(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: CustomGuardrail.apply_guardrail contract
+        request_data: dict[str, object],  # mutable-ok: CustomGuardrail.apply_guardrail contract
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None,
     ) -> GenericGuardrailAPIInputs:
@@ -303,7 +306,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
     def _evaluate_body(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: CustomGuardrail.apply_guardrail contract
+        request_data: dict[str, object],  # mutable-ok: CustomGuardrail.apply_guardrail contract
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None,
     ) -> dict[str, object]:  # mutable-ok: outbound JSON
@@ -411,7 +414,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
 
         raw_messages: Final = transformed.get("messages")
         if isinstance(raw_messages, list) and raw_messages:
-            rewritten_messages: Final = _copy_messages(raw_messages)
+            rewritten_messages: Final = _copy_messages(TypeAdapter(tuple[object, ...]).validate_python(raw_messages))
             if rewritten_messages is None or len(rewritten_messages) != len(_sent_messages(inputs, input_type)):
                 raise HTTPException(status_code=400, detail=TRANSFORM_MISSING)
             return _inputs_with_messages(inputs, rewritten_messages, replace_tool_calls=True)

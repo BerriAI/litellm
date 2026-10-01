@@ -12,6 +12,7 @@ from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, 
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from fastapi import HTTPException
+from pydantic import InstanceOf, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -473,9 +474,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         self,
         *,
         reference_chunk: object,
-        mutated_text_per_choice: dict[int, str],
+        mutated_text_per_choice: Mapping[int, str],
         emitted_text_per_choice: dict[int, str],
-        holdback_per_choice: dict[int, int],
+        holdback_per_choice: Mapping[int, int],
         finish_reason_per_choice: dict[int, str | None],
         held_chars_per_choice: dict[int, int],
         is_final: bool,
@@ -983,7 +984,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         from litellm.integrations.custom_guardrail import ModifyResponseException
 
         if guardrail_to_apply is None:
-            guardrail_to_apply = request_data.pop("guardrail_to_apply", None)
+            guardrail_to_apply = TypeAdapter(InstanceOf[CustomGuardrail] | None).validate_python(
+                request_data.pop("guardrail_to_apply", None)
+            )
 
         def _streaming_flag(name: str, default: object) -> Any:
             return self.resolve_streaming_flag(guardrail_to_apply, name, default)
