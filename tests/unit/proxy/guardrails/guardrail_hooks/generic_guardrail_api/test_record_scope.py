@@ -5,10 +5,12 @@ import pytest
 
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.record_scope import (
+    Caller,
     RecordScope,
     returned_unchanged,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+    GuardrailInformationScope,
     GuardrailToolParam,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -48,7 +50,9 @@ def test_per_session_records_again_once_the_session_has_expired() -> None:
     )
 
     def record() -> bool:
-        return record_scope.should_record_allow(session_id="s1", tenant="hash-a", input_type="request")
+        return record_scope.should_record_allow(
+            session_id="s1", caller=Caller(key_hash="hash-a", team_id=None, user_id=None), input_type="request"
+        )
 
     first, within_ttl = record(), record()
     now[0] = 61.0
@@ -75,3 +79,20 @@ def test_a_non_json_value_passed_through_compares_as_unchanged() -> None:
     assert returned_unchanged(
         _chat_request(tools=[passed_through]), GenericGuardrailAPIInputs(texts=["hello"], tools=[passed_through])
     )
+
+
+@pytest.mark.parametrize(("scope", "recorded"), [("per_call", True), ("off", False)])
+def test_per_call_and_off_decide_without_claiming_a_session(scope: GuardrailInformationScope, recorded: bool) -> None:
+    sessions: Final = InMemoryCache()
+    record_scope: Final = RecordScope(scope, recorded_sessions=sessions)
+    caller: Final = Caller(key_hash="hash-a", team_id=None, user_id=None)
+
+    decisions: Final = [
+        record_scope.should_record_allow(session_id="s1", caller=caller, input_type="request") for _ in range(2)
+    ]
+
+    session_still_unclaimed: Final = RecordScope("per_session", recorded_sessions=sessions).should_record_allow(
+        session_id="s1", caller=caller, input_type="request"
+    )
+
+    assert (decisions, session_still_unclaimed) == ([recorded, recorded], True)

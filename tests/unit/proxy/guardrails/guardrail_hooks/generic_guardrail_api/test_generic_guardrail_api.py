@@ -429,3 +429,16 @@ async def test_a_misspelled_scope_in_the_guardrail_config_still_loads_the_guardr
     assert [await _run(guardrail, _turn()) for _ in range(2)] == [["success"], ["success"]], (
         "a typo in a logging setting must neither drop the guardrail nor its allow entries"
     )
+
+
+@pytest.mark.asyncio
+async def test_per_session_keeps_team_mates_without_a_key_hash_apart() -> None:
+    guardrail: Final = _guardrail(_Endpoint(_allow), guardrail_information_scope="per_session")
+    team_mates: Final = (
+        {"user_api_key_team_id": "team", "user_api_key_user_id": "alice"},
+        {"user_api_key_team_id": "team", "user_api_key_user_id": "bob"},
+    )
+
+    assert [await _run(guardrail, _turn("shared-id", identity)) for identity in team_mates] == [["success"]] * 2, (
+        "a second user of the same team must get their own first entry for the session"
+    )

@@ -17,7 +17,6 @@ from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
-    get_session_id_from_request_data,
     log_guardrail_information,
     skip_guardrail_success_record,
 )
@@ -27,9 +26,11 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.record_scope import (
+    Caller,
     RecordScope,
     guardrail_information_scope_from_config,
     returned_unchanged,
+    session_id_of,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -354,7 +355,7 @@ class GenericGuardrailAPI(CustomGuardrail):
     def _build_guardrail_return_inputs(
         self,
         *,
-        texts: list,
+        texts: list[str],
         images: list[str] | None,
         tools: list[ChatCompletionToolParam] | None,
         structured_messages: Sequence[AllMessageValues] | None,
@@ -538,11 +539,19 @@ class GenericGuardrailAPI(CustomGuardrail):
         except Exception as e:
             return self._handle_guardrail_request_error(e, inputs, input_type, logging_obj, is_unreachable=False)
 
-        unchanged_allow: Final = guardrail_response.action == "NONE" and returned_unchanged(inputs, return_inputs)
-        if unchanged_allow and not self._record_scope.should_record_allow(
-            session_id=get_session_id_from_request_data(request_data),
-            tenant=user_metadata.get("user_api_key_hash") or user_metadata.get("user_api_key_team_id"),
-            input_type=input_type,
+        if (
+            guardrail_response.action == "NONE"
+            and not self._record_scope.records_every_allow
+            and returned_unchanged(inputs, return_inputs)
+            and not self._record_scope.should_record_allow(
+                session_id=session_id_of(request_data),
+                caller=Caller(
+                    key_hash=user_metadata.get("user_api_key_hash"),
+                    team_id=user_metadata.get("user_api_key_team_id"),
+                    user_id=user_metadata.get("user_api_key_user_id"),
+                ),
+                input_type=input_type,
+            )
         ):
             skip_guardrail_success_record()
         return return_inputs
