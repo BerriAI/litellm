@@ -436,17 +436,24 @@ def _v3_request_body(request_data: Mapping[str, object], request_texts: Iterable
         if _v3_text_completion_route(request_data) and "messages" not in request_data
         else None
     )
+    texts: Final = tuple(text for text in request_texts if isinstance(text, str) and text)
+    no_conversation: Final = (
+        not request_data.get("messages") and "prompt" not in request_data and "input" not in request_data
+    )
+    text_turns: Final = (
+        tuple(_frozen((("role", "user"), ("content", text))) for text in texts)
+        if turns is None and no_conversation
+        else ()
+    )
     provider: Final = tuple(
         (key, _v3_without_credentials(value) if key in _V3_REDACTED_KEYS else value)
         for key, value in request_data.items()
-        if key in _V3_PROVIDER_BODY_KEYS and not (turns is not None and key == "prompt")
+        if key in _V3_PROVIDER_BODY_KEYS
+        and not (turns is not None and key == "prompt")
+        and not (text_turns and key == "messages")
     )
-    texts: Final = tuple(text for text in request_texts if isinstance(text, str) and text)
-    text_turns: Final = tuple(_frozen((("role", "user"), ("content", text))) for text in texts)
     prompt_turns: Final = (
-        (("messages", turns),)
-        if turns is not None
-        else ((("messages", text_turns),) if text_turns and not provider else ())
+        (("messages", turns),) if turns is not None else ((("messages", text_turns),) if text_turns else ())
     )
     return _frozen((*provider, *prompt_turns, *((("metadata", identity),) if identity else ())))
 
@@ -828,23 +835,23 @@ def _v3_decision(body: Mapping[str, object]) -> tuple[str | None, Mapping[str, o
     return (action.lower() if isinstance(action, str) and action else None), verdict
 
 
-def _v3_has_decision(body: Mapping[str, object]) -> bool:
-    """Whether Straiker stated a verdict. A missing decision or `ask` takes the failure policy: a
-    gateway has no one to ask. Other actions, such as a detect-mode `detect`, are not blocks."""
-    decision, verdict = _v3_decision(body)
-    return (decision is not None and decision not in V3_UNDECIDED) or bool(verdict.get("blocked_by"))
+def _v3_blocked_by(verdict: Mapping[str, object]) -> tuple[str, ...]:
+    raw: Final = verdict.get("blocked_by")
+    return tuple(sorted(str(control) for control in raw)) if isinstance(raw, list) else ()
 
 
-def _v3_response(body: Mapping[str, object]) -> StraikerWebhookResponse:
+def _v3_response(body: Mapping[str, object]) -> StraikerWebhookResponse | None:
     """Map a v3 verdict onto the action the guardrail already acts on.
 
     A detect-mode control fires into `controls` without changing the decision, so it
     correctly reads NONE. `blocked_by` is the block-mode subset and is honoured even if a
-    build answers it without flipping the decision.
+    build answers it without flipping the decision. None when Straiker stated no verdict:
+    a missing decision, or `ask`, which a gateway has no one to put to.
     """
     decision, verdict = _v3_decision(body)
-    raw_blocked_by: Final = verdict.get("blocked_by")
-    blocked_by: Final = tuple(sorted(str(c) for c in raw_blocked_by)) if isinstance(raw_blocked_by, list) else ()
+    blocked_by: Final = _v3_blocked_by(verdict)
+    if (decision is None or decision in V3_UNDECIDED) and not blocked_by:
+        return None
     blocked: Final = decision in V3_BLOCK_DECISIONS or bool(blocked_by)
     stated: Final = (verdict.get("block_message"), verdict.get("deny_reason"), body.get("stopReason"))
     reason: Final = (
@@ -1105,15 +1112,13 @@ class StraikerGuardrail(CustomGuardrail):
                 return None, _WebhookFailure(
                     f"invalid response schema: expected an object, got {type(body).__name__}", is_unreachable=False
                 )
-            if self.api_version == "v3" and not _v3_has_decision(body):
-                return None, _WebhookFailure(
-                    "invalid response schema: no allow or block decision", is_unreachable=False
-                )
             parsed: Final = (
                 _v3_response(body) if self.api_version == "v3" else StraikerWebhookResponse.model_validate(body)
             )
         except (ValidationError, json.JSONDecodeError) as ve:
             return None, _WebhookFailure(f"invalid response schema: {ve}", is_unreachable=False)
+        if parsed is None:
+            return None, _WebhookFailure("invalid response schema: no allow or block decision", is_unreachable=False)
         if self.verbose:
             verbose_proxy_logger.info(
                 json.dumps(
@@ -1223,10 +1228,11 @@ class StraikerGuardrail(CustomGuardrail):
             )
             payload: Final = _v3_payload(envelope, inputs, request_data, input_type, request_body)
             headers: Final = _v3_headers(request_data, self.agent_ref, self.client, self.format_hint)
-            # The memory is scoped by the principal and the session together; a request that has
-            # neither is never remembered, so two principals never share a block.
+            # The memory is scoped by the principal (the user, else the key) and the session
+            # together; a request that has neither is never remembered, so two callers never
+            # share a block.
             session: Final = _v3_session_id(envelope, request_data, request_body)
-            principal: Final = _v3_user(envelope)
+            principal: Final = _v3_user(envelope) or envelope.identity.litellm_key
             scope: Final = f"{principal or ''}\0{session or ''}" if session or principal else ""
             prefixes: Final = _v3_conversation_prefixes(request_body) if scope else ()
         except (ValidationError, TypeError, ValueError) as error:
