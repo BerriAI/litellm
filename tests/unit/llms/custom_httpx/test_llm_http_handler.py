@@ -4,10 +4,10 @@ import json
 import logging
 import threading
 import time
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from typing import Final
+from collections.abc import Awaitable, Callable
+from typing import Final, NoReturn
 from unittest.mock import AsyncMock, Mock, patch
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -30,7 +30,7 @@ from litellm.llms.brave.search.transformation import BraveSearchConfig
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import BaseImageGenerationConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, get_shared_realtime_ssl_context
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
     _collect_ws_project_quota_callbacks,
@@ -3983,91 +3983,71 @@ async def test_async_realtime_bridges_a_transcription_session_through_the_provid
     assert [bytes(request.audio) for request in speech_client.requests[1:]] == [b"\x00\x01" * 800, b"\x00\x01" * 800]
 
 
-class _PlainWebSocketBackend:
-    def __init__(self, reply: str | None) -> None:
-        self.paths: Final[list[str]] = []
-        self.frames: Final[list[str]] = []
-        self._reply: Final = reply
+class _RecordingConnect:
+    def __init__(self) -> None:
+        self.dials: Final[list[tuple[str, object]]] = []
 
-    async def handle(self, ws) -> None:
-        self.paths.append(ws.request.path)
-        self.frames.append(await ws.recv())
-        if self._reply is not None:
-            await ws.send(self._reply)
+    def __call__(self, uri: str, **kwargs: object) -> NoReturn:
+        self.dials.append((urlsplit(uri).scheme, kwargs["ssl"]))
+        raise RuntimeError("the test ends at the dial")
 
 
-def _session_logging_obj() -> Mock:
-    logging_obj = Mock()
-    logging_obj.litellm_trace_id = "trace_1"
-    logging_obj.model_call_details = {}
-    logging_obj.dispatch_success_handlers = AsyncMock()
-    logging_obj.dispatch_failure_handlers = AsyncMock()
-    return logging_obj
-
-
-@asynccontextmanager
-async def _serve_on_http_api_base(backend: _PlainWebSocketBackend) -> AsyncIterator[str]:
-    import websockets
-
-    async with websockets.serve(backend.handle, "127.0.0.1", 0) as server:
-        yield f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
-
-
-@pytest.mark.asyncio
-async def test_async_realtime_opens_a_ws_backend_from_an_http_api_base():
+async def _dial_realtime_backend(api_base: str) -> None:
     import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
 
     from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
-    backend = _PlainWebSocketBackend(reply=None)
-    client_ws = _ScriptedClientWebSocket([], last_event_type="never_sent")
+    await BaseLLMHTTPHandler().async_realtime(
+        model="gemini-3.8-live",
+        websocket=_FakeClientWebSocket(),
+        logging_obj=Mock(),
+        provider_config=GeminiRealtimeConfig(),
+        headers={},
+        api_base=api_base,
+        api_key="test-key",
+    )
 
-    async with _serve_on_http_api_base(backend) as api_base:
-        await BaseLLMHTTPHandler().async_realtime(
-            model="gemini-3.8-live",
-            websocket=client_ws,
-            logging_obj=_session_logging_obj(),
-            provider_config=GeminiRealtimeConfig(),
-            headers={},
-            api_base=api_base,
-            api_key="test-key",
-        )
 
-    assert backend.paths == [
-        "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=test-key"
-    ]
-    assert json.loads(backend.frames[0])["setup"]["model"] == "models/gemini-3.8-live"
-    assert client_ws.events == [("close", (1000, "upstream websocket closed with code 1000"))]
+async def _dial_responses_backend(api_base: str) -> None:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    await BaseLLMHTTPHandler().async_responses_websocket(
+        model="gpt-5.6",
+        websocket=_FakeClientWebSocket(),
+        logging_obj=Mock(),
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        api_base=f"{api_base}/v1",
+        api_key="sk-test",
+        custom_llm_provider="openai",
+    )
 
 
 @pytest.mark.asyncio
-async def test_async_responses_websocket_relays_through_a_ws_backend_from_an_http_api_base():
-    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+@pytest.mark.parametrize(
+    "dial_backend", [_dial_realtime_backend, _dial_responses_backend], ids=["realtime", "responses_websocket"]
+)
+async def test_a_ws_backend_from_an_http_api_base_is_dialed_without_ssl(
+    dial_backend: Callable[[str], Awaitable[None]],
+):
+    connect: Final = _RecordingConnect()
+    with patch("websockets.connect", connect):
+        await dial_backend("http://backend.test")
 
-    completed = json.dumps({"type": "response.completed", "response": {"id": "resp_1", "status": "completed"}})
-    backend = _PlainWebSocketBackend(reply=completed)
-    client_ws = _ScriptedClientWebSocket(
-        [json.dumps({"type": "response.create", "model": "gpt-5.6", "input": "hi"})],
-        last_event_type="response.completed",
-    )
+    assert connect.dials == [("ws", None)]
 
-    async with _serve_on_http_api_base(backend) as api_base:
-        await BaseLLMHTTPHandler().async_responses_websocket(
-            model="gpt-5.6",
-            websocket=client_ws,
-            logging_obj=_session_logging_obj(),
-            responses_api_provider_config=OpenAIResponsesAPIConfig(),
-            api_base=f"{api_base}/v1",
-            api_key="sk-test",
-            custom_llm_provider="openai",
-        )
 
-    assert backend.paths == ["/v1/responses?model=gpt-5.6"]
-    assert backend.frames == [json.dumps({"type": "response.create", "model": "gpt-5.6", "input": "hi"})]
-    assert [name for name, _ in client_ws.events] == ["send_text"]
-    assert [(event["type"], event["response"]["status"]) for event in client_ws.sent_events()] == [
-        ("response.completed", "completed")
-    ]
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "dial_backend", [_dial_realtime_backend, _dial_responses_backend], ids=["realtime", "responses_websocket"]
+)
+async def test_a_wss_backend_from_an_https_api_base_keeps_the_shared_ssl_context(
+    dial_backend: Callable[[str], Awaitable[None]],
+):
+    connect: Final = _RecordingConnect()
+    with patch("websockets.connect", connect):
+        await dial_backend("https://backend.test")
+
+    assert connect.dials == [("wss", get_shared_realtime_ssl_context())]
 
 
 @pytest.mark.asyncio
