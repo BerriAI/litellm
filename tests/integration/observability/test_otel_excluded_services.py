@@ -124,6 +124,20 @@ def _trace_spans(sink_url: str, trace_id: str, seconds: float = 30) -> tuple[Spa
     return group
 
 
+def _trace_spans_when(
+    sink_url: str,
+    trace_id: str,
+    ready: Callable[[tuple[Span, ...]], bool],
+    seconds: float = 30,
+) -> tuple[Span, ...]:
+    spans: Final = eventually(
+        lambda: spans_for_trace(recorded_spans(sink_url)[1], trace_id),
+        ready,
+        seconds=seconds,
+    )
+    return spans
+
+
 def _await_db_span(sink_url: str, trace_id: str | None, needle: str, seconds: float = 40, since: int = 0) -> None:
     def seen() -> bool:
         _, spans = recorded_spans(sink_url, since)
@@ -262,11 +276,21 @@ def test_a_non_mapping_otel_block_still_publishes_the_tenant_fan_out(
         traffic: Final = _drive(candidate, langfuse_vars)
         tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
         _await_db_span(audit_sinks.tenant, tenant_trace, "redis")
-        tenant_spans: Final = _trace_spans(audit_sinks.tenant, tenant_trace, seconds=15)
+        tenant_spans: Final = _trace_spans_when(
+            audit_sinks.tenant,
+            tenant_trace,
+            lambda spans: any(span["kind"] == 2 for span in spans) and "redis" in _db_systems(spans),
+            seconds=15,
+        )
         assert any(span["kind"] == 2 for span in tenant_spans), "tenant SERVER root span missing"
         assert "redis" in _db_systems(tenant_spans), f"tenant redis span missing: {_db_systems(tenant_spans)}"
         operator_trace: Final = _trace_id(audit_sinks.operator, traffic)
-        operator_spans: Final = _trace_spans(audit_sinks.operator, operator_trace, seconds=15)
+        operator_spans: Final = _trace_spans_when(
+            audit_sinks.operator,
+            operator_trace,
+            lambda spans: any(span["kind"] == 2 for span in spans),
+            seconds=15,
+        )
         assert any(span["kind"] == 2 for span in operator_spans), "operator SERVER root span missing"
 
 
@@ -287,7 +311,12 @@ def test_a_bare_excluded_services_env_var_is_ignored(
         traffic: Final = _drive(candidate, langfuse_vars)
         tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
         _await_db_span(audit_sinks.tenant, tenant_trace, "redis")
-        tenant_spans: Final = _trace_spans(audit_sinks.tenant, tenant_trace, seconds=15)
+        tenant_spans: Final = _trace_spans_when(
+            audit_sinks.tenant,
+            tenant_trace,
+            lambda spans: "redis" in _db_systems(spans),
+            seconds=15,
+        )
         assert "redis" in _db_systems(tenant_spans), f"redis span missing at tenant: {_db_systems(tenant_spans)}"
         _await_db_span(audit_sinks.tenant, None, "postgresql", since=tenant_start)
         _, all_tenant = recorded_spans(audit_sinks.tenant, tenant_start)
