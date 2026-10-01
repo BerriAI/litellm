@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from itertools import chain, count
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, cast
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router
@@ -81,16 +81,35 @@ def _guardrail_table(prisma_client: PrismaClient) -> "TableActions[prisma_models
     return GuardrailsRepository(prisma_client).table
 
 
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_JSON_ARRAY: Final = TypeAdapter(list[object])
+
+
+def _as_json_object(value: object) -> dict[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return _JSON_OBJECT.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _as_json_array(value: object) -> list[object] | None:
+    return _JSON_ARRAY.validate_python(value) if isinstance(value, list) else None
+
+
 def _encrypted_param(key: str, value: object, new_encryption_key: str | None, depth: int = 0) -> object:
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         return value
-    if isinstance(value, dict):
+    json_object: Final = _as_json_object(value)
+    if json_object is not None:
         return {  # mutable-ok: stored params are JSON objects
-            k: _encrypted_param(k, v, new_encryption_key, depth + 1) for k, v in value.items()
+            k: _encrypted_param(k, v, new_encryption_key, depth + 1) for k, v in json_object.items()
         }
-    if isinstance(value, list):
+    json_array: Final = _as_json_array(value)
+    if json_array is not None:
         return [  # mutable-ok: stored params are JSON arrays
-            _encrypted_param(key, item, new_encryption_key, depth + 1) for item in value
+            _encrypted_param(key, item, new_encryption_key, depth + 1) for item in json_array
         ]
     if not (
         isinstance(value, str)
@@ -108,10 +127,14 @@ def _encrypted_param(key: str, value: object, new_encryption_key: str | None, de
 def _decrypted_param(key: str, value: object, depth: int = 0) -> object:
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         return value
-    if isinstance(value, dict):
-        return {k: _decrypted_param(k, v, depth + 1) for k, v in value.items()}  # mutable-ok: guardrails read dicts
-    if isinstance(value, list):
-        return [_decrypted_param(key, item, depth + 1) for item in value]  # mutable-ok: guardrails read lists
+    json_object: Final = _as_json_object(value)
+    if json_object is not None:
+        return {  # mutable-ok: guardrails read dicts
+            k: _decrypted_param(k, v, depth + 1) for k, v in json_object.items()
+        }
+    json_array: Final = _as_json_array(value)
+    if json_array is not None:
+        return [_decrypted_param(key, item, depth + 1) for item in json_array]  # mutable-ok: guardrails read lists
     if not (isinstance(value, str) and value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX)):
         return value
     decrypted: Final = decrypt_value_helper(
@@ -142,8 +165,8 @@ def decrypt_guardrail_litellm_params(litellm_params: Mapping[str, object]) -> di
 def guardrail_from_db_row(row: Iterable[tuple[str, object]]) -> Guardrail:
     """Build a Guardrail from a guardrails table row with its litellm_params decrypted."""
     fields: Final = dict(row)  # mutable-ok: row fields re-spread into Guardrail
-    stored_params: Final = fields.get("litellm_params")
-    if not isinstance(stored_params, Mapping):
+    stored_params: Final = _as_json_object(fields.get("litellm_params"))
+    if stored_params is None:
         return Guardrail(**fields)
     return Guardrail(
         **{**fields, "litellm_params": decrypt_guardrail_litellm_params(stored_params)}  # mutable-ok: Guardrail kwargs
