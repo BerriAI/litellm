@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Callable, Generator, Mapping
 from contextlib import contextmanager
 from datetime import datetime
@@ -324,3 +325,41 @@ async def test_provider_counting_does_not_hold_the_inference_response(
             assert _observation(await rig.capture.payload()).observation.plan is not None
     finally:
         release.set()
+
+
+async def test_missing_baseline_stamp_stays_silent_and_forged_stamp_still_warns(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    rig: Final = _Rig(monkeypatch)
+    hook: Final = AutoRouterBaselineCache(None, router=lambda: None)
+    caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
+
+    async def invoke(metadata: Mapping[str, object]) -> Logging:
+        logging_obj: Final = rig.logging()
+        await hook.async_pre_call_deployment_hook(
+            {
+                "litellm_logging_obj": logging_obj,
+                "litellm_session_id": "baseline-session",
+                "litellm_metadata": metadata,
+            },
+            CallTypes.anthropic_messages,
+        )
+        return logging_obj
+
+    plain: Final = await invoke({"user_api_key_hash": "test-caller-hash"})
+    assert plain.baseline_cache_context is None
+    assert not [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Auto-router baseline observation could not be initialized"
+    ]
+
+    forged: Final = await invoke(
+        {"user_api_key_hash": "test-caller-hash", "_autorouter_baseline_route": {"forged": True}}
+    )
+    assert forged.baseline_cache_context is None
+    assert [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Auto-router baseline observation could not be initialized"
+    ]
