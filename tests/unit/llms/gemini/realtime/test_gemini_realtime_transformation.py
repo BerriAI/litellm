@@ -2264,15 +2264,18 @@ def test_live_tool_output_data_is_not_protocol_metadata() -> None:
 
 
 @pytest.mark.parametrize(
-    "extra",
+    ("extra", "message"),
     [
-        {"scheduling": "INVALID"},
-        {"will_continue": "false"},
-        {"will_continue": False, "willContinue": True},
+        ({"scheduling": "INVALID"}, "Invalid Gemini Live function response scheduling"),
+        ({"scheduling": None}, "Invalid Gemini Live function response scheduling"),
+        ({"will_continue": "false"}, "Gemini Live will_continue must be a boolean"),
+        ({"will_continue": 0}, "Gemini Live will_continue must be a boolean"),
+        ({"willContinue": None}, "Gemini Live will_continue must be a boolean"),
+        ({"will_continue": False, "willContinue": True}, "Conflicting Gemini Live continuation fields"),
     ],
 )
-def test_live_invalid_tool_controls_rejected(extra: dict[str, object]) -> None:
-    with pytest.raises(ValueError):
+def test_live_invalid_tool_controls_rejected(extra: dict[str, object], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
         GeminiRealtimeConfig()._handle_function_call_output({"call_id": "call-1", "output": "{}", **extra})
 
 
