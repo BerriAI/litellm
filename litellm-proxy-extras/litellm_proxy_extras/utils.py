@@ -1004,6 +1004,10 @@ class ProxyExtrasDBManager:
             pass
 
     @staticmethod
+    def _is_advisory_lock_contention(stderr: str) -> bool:
+        return "P1002" in stderr and "advisory lock" in stderr
+
+    @staticmethod
     def _budget_after_deploy_failure(
         error: subprocess.CalledProcessError,
         budget: "_MigrateAttemptBudget",
@@ -1077,7 +1081,7 @@ class ProxyExtrasDBManager:
             )
             return budget.spend()
 
-        if "P1002" in stderr and "advisory lock" in stderr:
+        if ProxyExtrasDBManager._is_advisory_lock_contention(stderr):
             logger.info(
                 "Waiting for the advisory lock held by another Prisma migration; "
                 "contention does not spend a migration failure attempt"
@@ -1175,13 +1179,18 @@ class ProxyExtrasDBManager:
         return migrated
 
     @staticmethod
-    def _run_migrations(use_migrate: bool, use_v2_resolver: bool) -> bool:
+    def _run_migrations(use_migrate: bool, use_v2_resolver: bool, clock: Callable[[], float] = time.monotonic) -> bool:
         if use_v2_resolver:
             logger.info("Using v2 migration resolver (--use_v2_migration_resolver)")
             return ProxyExtrasDBManager._setup_database_v2(use_migrate=use_migrate)
 
         schema_path = ProxyExtrasDBManager._get_prisma_dir() + "/schema.prisma"
-        for attempt in range(4):
+        budget = _MigrateAttemptBudget(
+            attempts_left=MAX_MIGRATE_DEPLOY_ATTEMPTS,
+            contention_seconds_left=prisma_toolchain.migration_lock_timeout(),
+        )
+        while not budget.exhausted:
+            attempt_started = clock()
             original_dir = os.getcwd()
             migrations_dir = ProxyExtrasDBManager._get_prisma_dir()
             os.chdir(migrations_dir)
@@ -1217,6 +1226,15 @@ class ProxyExtrasDBManager:
                         return True
                     except subprocess.CalledProcessError as e:
                         logger.info(f"prisma db error: {e.stderr}, e: {e.stdout}")
+                        if ProxyExtrasDBManager._is_advisory_lock_contention(e.stderr or ""):
+                            logger.info(
+                                "Waiting for another replica's migration lock; "
+                                "advisory-lock contention does not spend an attempt"
+                            )
+                            budget = budget.after_contention(
+                                clock() - attempt_started
+                            )  # rebind-ok: the loop carries contention time into the next pass
+                            continue
                         if "P3009" in e.stderr:
                             # Extract the failed migration name from the error message
                             migration_match = re.search(
@@ -1409,20 +1427,17 @@ class ProxyExtrasDBManager:
             except subprocess.TimeoutExpired:
                 logger.warning(
                     "Attempt %s timed out. Raise %s if this database needs longer to apply its schema.",
-                    attempt + 1,
+                    budget.attempt_number,
                     PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR if use_migrate else PRISMA_COMMAND_TIMEOUT_ENV_VAR,
                 )
                 time.sleep(random.randrange(5, 15))
             except subprocess.CalledProcessError as e:
-                attempts_left = 3 - attempt
-                retry_msg = (
-                    f" Retrying... ({attempts_left} attempts left)"
-                    if attempts_left > 0
-                    else ""
-                )
+                attempts_left = budget.attempts_left - 1
+                retry_msg = f" Retrying... ({attempts_left} attempts left)" if attempts_left > 0 else ""
                 logger.info(f"The process failed to execute. Details: {e}.{retry_msg}")
                 time.sleep(random.randrange(5, 15))
             finally:
                 os.chdir(original_dir)
                 pass
+            budget = budget.spend()  # rebind-ok: the loop carries the retry budget into the next pass
         return False
