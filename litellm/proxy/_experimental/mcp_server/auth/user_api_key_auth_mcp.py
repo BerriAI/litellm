@@ -835,13 +835,9 @@ class MCPRequestHandler:
             raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
         admitted: Final = await MCPRequestHandler._reload_admitted_principal(result.identity)
         await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
-        injected: Final = {  # mutable-ok: mcp_server_auth_headers contract requires concrete dicts
-            header_key: {  # mutable-ok: concrete dict header payload
-                "Authorization": result.upstream_authorization.get_secret_value()
-            }
-        }
-        new_headers: Final = {  # mutable-ok: merged header map must stay a concrete dict
-            **(mcp_server_auth_headers or {}),  # mutable-ok: empty-dict fallback for the merge
+        injected: Final = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
+        new_headers: Final = {
+            **(mcp_server_auth_headers or {}),
             **injected,
         }
         return admitted, new_headers
@@ -917,20 +913,14 @@ class MCPRequestHandler:
         ):
             raise HTTPException(
                 status_code=403,
-                detail={  # mutable-ok: HTTPException detail payload requires a concrete dict
-                    "error": "oauth_principal_mismatch"
-                },
+                detail={"error": "oauth_principal_mismatch"},
             )
         header_key: Final = server.alias or server.server_name
         if header_key is None:
             raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
-        injected: Final = {  # mutable-ok: mcp_server_auth_headers contract requires concrete dicts
-            header_key: {  # mutable-ok: concrete dict header payload
-                "Authorization": result.upstream_authorization.get_secret_value()
-            }
-        }
-        new_headers: Final = {  # mutable-ok: merged header map must stay a concrete dict
-            **(mcp_server_auth_headers or {}),  # mutable-ok: empty-dict fallback for the merge
+        injected: Final = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
+        new_headers: Final = {
+            **(mcp_server_auth_headers or {}),
             **injected,
         }
         return explicit_auth, new_headers
@@ -1957,10 +1947,41 @@ class MCPRequestHandler:
         scope, the tool union and billing attribution are all just different reads of this one
         answer — computing it separately per consumer is how they drift (a throttle map scoped by
         roster instead of by grant charged unrelated teams' buckets)."""
-        return [
+        grants: Final = [
             (source, set(await MCPRequestHandler.get_allowed_mcp_servers(source, keyless_source=True)))
             for source in await MCPRequestHandler.admitted_subject_sources(auth, allowed_team_ids=allowed_team_ids)
         ]
+        scope: Final = await MCPRequestHandler._toolset_scope(auth)
+        if scope is None:
+            return grants
+        return [(source, granted & frozenset(scope)) for source, granted in grants]
+
+    @staticmethod
+    async def _toolset_scope(auth: UserAPIKeyAuth) -> dict[str, list[str]] | None:
+        """The ``server_id -> tools`` a namespaced toolset route pinned this subject to via
+        ``mcp_toolset_id``, or None on the aggregate scope. Every source's servers and tools are
+        intersected with it, so the route narrows a team grant exactly as it narrows the user's own."""
+        if auth.mcp_toolset_id is None:
+            return None
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        return await global_mcp_server_manager.resolve_toolset_tool_permissions(
+            toolset_ids=[auth.mcp_toolset_id], requires_fresh_policy=auth.requires_fresh_policy
+        )
+
+    @staticmethod
+    async def _narrow_tools_to_toolset(
+        tools: list[str] | None,
+        server_id: str,
+        auth: UserAPIKeyAuth,
+    ) -> list[str] | None:
+        scope: Final = await MCPRequestHandler._toolset_scope(auth)
+        if scope is None:
+            return tools
+        scoped: Final = frozenset(scope.get(server_id, ()))
+        return sorted(scoped if tools is None else scoped & frozenset(tools))
 
     @staticmethod
     async def resolve_admitted_subject_servers(
@@ -2058,9 +2079,9 @@ class MCPRequestHandler:
                 continue
             tools = await MCPRequestHandler.get_allowed_tools_for_server(server_id, source, keyless_source=True)
             if tools is None:
-                return None
+                return await MCPRequestHandler._narrow_tools_to_toolset(None, server_id, auth)
             allowed.update(tools)
-        return sorted(allowed)
+        return await MCPRequestHandler._narrow_tools_to_toolset(sorted(allowed), server_id, auth)
 
     @staticmethod
     def _get_key_object_permission(
@@ -2076,6 +2097,16 @@ class MCPRequestHandler:
             return None
 
         return user_api_key_auth.object_permission
+
+    @staticmethod
+    async def team_object_permission(user_api_key_auth: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable | None:
+        return await MCPRequestHandler._get_team_object_permission(user_api_key_auth)
+
+    @staticmethod
+    async def key_object_permission_hydrated(
+        user_api_key_auth: UserAPIKeyAuth,
+    ) -> LiteLLM_ObjectPermissionTable | None:
+        return await MCPRequestHandler._key_object_permission_hydrated(user_api_key_auth)
 
     @staticmethod
     async def _get_team_object_permission(

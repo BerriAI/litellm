@@ -23,6 +23,7 @@ export const pageDescriptions: Record<string, string> = {
   "model-insights": "Model Leaderboard: compare usage, spend, tokens, and task mix across this gateway",
   "roi-calculator": "Compare gateway spend with estimated engineering effort for merged pull requests",
   logs: "Access request and response logs",
+  lens: "Review agent activity and investigate patterns with supporting evidence",
   "guardrails-monitor": "Monitor guardrail performance and view logs",
   users: "Manage internal user accounts and permissions",
   teams: "Create and manage teams for access control",

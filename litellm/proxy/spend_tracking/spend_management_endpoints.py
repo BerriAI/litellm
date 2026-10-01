@@ -1198,7 +1198,7 @@ async def get_global_activity_exceptions(
 
 @router.get(
     "/spend/capture_rate",
-    tags=["Budget & Spend Tracking"],  # mutable-ok: FastAPI tags kwarg is list-typed
+    tags=["Budget & Spend Tracking"],
     dependencies=(Depends(user_api_key_auth),),
     response_model=CaptureRateReport,
 )
@@ -2520,6 +2520,15 @@ async def ui_view_spend_logs(
         default=None,
         description="Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state",
     ),
+    used_client_oauth_token: Annotated[
+        bool | None,
+        fastapi.Query(
+            description=(
+                "Filter logs by the credential the upstream call used: true for a client-forwarded Anthropic OAuth "
+                "token, false for the deployment's configured key. Rows written before this flag existed match neither"
+            ),
+        ),
+    ] = None,
     span_type: str | None = fastapi.Query(
         default=None,
         description="Filter logs by span type: llm, agent, mcp, or batch",
@@ -2929,6 +2938,10 @@ async def ui_view_spend_logs(
             sql_conditions.append(f"metadata->'error_information'->>'error_message' LIKE ${p}")
             sql_params.append(f"%{error_message}%")
             p += 1
+        if used_client_oauth_token is not None:
+            sql_conditions.append(f"metadata->>'used_client_oauth_token' = ${p}")
+            sql_params.append(json.dumps(used_client_oauth_token))
+            p += 1
 
         if status_filter is not None and group_by_session is True and not is_search_lookup:
             session_filter_conditions: Final = " AND ".join(sql_conditions) or "TRUE"
@@ -3102,13 +3115,13 @@ async def _fetch_session_representatives(
         prisma_client,
         rep_query,
         *sql_params,
-        [session_key for session_key, _ in session_keys],  # mutable-ok: prisma serializes array params from a list
-        [api_key for _, api_key in session_keys],  # mutable-ok: prisma serializes array params from a list
+        [session_key for session_key, _ in session_keys],
+        [api_key for _, api_key in session_keys],
     )
     rep_by_key: Final[Mapping[tuple[str, str], dict[str, object]]] = MappingProxyType(  # mutable-ok: same rows
         {(str(row["session_id"] or row["request_id"]), str(row["api_key"])): row for row in rep_rows}
     )
-    return [rep_by_key[key] for key in session_keys if key in rep_by_key]  # mutable-ok: rows are enriched in place
+    return [rep_by_key[key] for key in session_keys if key in rep_by_key]
 
 
 async def _count_grouped_sessions(
@@ -3231,7 +3244,7 @@ async def _ui_session_grouped_spend_logs(
             session_keys=session_keys,
         )
         if session_keys
-        else []  # mutable-ok: downstream enrichment mutates rows in place
+        else []
     )
     _hydrate_spend_log_metadata(data)
 
@@ -3246,7 +3259,7 @@ async def _ui_session_grouped_spend_logs(
         enrich_session_counts=True,
         total_is_capped=total_is_capped,
     )
-    return {**response, "next_session_cursor": next_cursor, "has_more": has_more}  # mutable-ok: FastAPI response body
+    return {**response, "next_session_cursor": next_cursor, "has_more": has_more}
 
 
 class RequestResponsePayload(NamedTuple):
@@ -3568,9 +3581,7 @@ async def view_spend_logs(
             start_date_iso: Final = start_date_obj.isoformat()
             end_date_iso: Final = end_date_obj.isoformat()
 
-            filter_query: Final[
-                dict[str, object]
-            ] = {  # mutable-ok: legacy filters are extended for optional parameters
+            filter_query: Final[dict[str, object]] = {
                 "startTime": {
                     "gte": start_date_iso,  # Greater than or equal to Start Date
                     "lte": end_date_iso,  # Less than or equal to End Date
@@ -4848,10 +4859,8 @@ async def _can_team_member_view_log(
     Returns True if the team exists and the user is either a team admin or
     a team member with the ``/spend/logs`` permission.
     """
-    from litellm.proxy.management_endpoints.common_utils import (
-        _is_user_team_admin,
-        _team_member_has_permission,
-    )
+    from litellm.proxy.management.teams.access import is_team_admin
+    from litellm.proxy.management_endpoints.common_utils import _team_member_has_permission
 
     if team_id is None:
         return False
@@ -4859,7 +4868,7 @@ async def _can_team_member_view_log(
     if team_row is None:
         return False
     team_obj: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
-    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+    if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
         return True
     return _team_member_has_permission(
         user_api_key_dict=user_api_key_dict,
@@ -5078,10 +5087,8 @@ async def _get_permitted_team_ids_for_spend_logs(
     """
     # Imported here to avoid circular import: proxy_server imports this module.
     from litellm.proxy.auth.auth_checks import get_user_object
-    from litellm.proxy.management_endpoints.common_utils import (
-        _is_user_team_admin,
-        _team_member_has_permission,
-    )
+    from litellm.proxy.management.teams.access import is_team_admin
+    from litellm.proxy.management_endpoints.common_utils import _team_member_has_permission
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
     user_obj: Final = await get_user_object(
@@ -5099,7 +5106,7 @@ async def _get_permitted_team_ids_for_spend_logs(
     permitted: Final[list[str]] = []
     for team_row in team_rows:
         team_obj = LiteLLM_TeamTable.model_validate(team_row.model_dump())
-        if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj) or _team_member_has_permission(
+        if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj) or _team_member_has_permission(
             user_api_key_dict=user_api_key_dict,
             team_obj=team_obj,
             permission=KeyManagementRoutes.SPEND_LOGS.value,

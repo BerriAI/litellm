@@ -3,6 +3,7 @@
 import { ArrowDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cva.config";
 
 import { StatusMark } from "./StatusMark";
 import type { TraceSummary } from "./traceTypes";
@@ -15,10 +16,8 @@ interface AgentTracesTableProps {
   hasMore: boolean;
   onLoadMore: () => void;
   onOpenTrace: (trace: TraceSummary) => void;
+  selectedKey?: string | null;
 }
-
-/** Spend is only on summaries once the spend-enrichment PR lands; show Cost when it's there. */
-type SummaryWithSpend = TraceSummary & { spend?: number };
 
 const SECOND_MS = 1000;
 const MINUTE_S = 60;
@@ -56,8 +55,8 @@ export function AgentTracesTable({
   hasMore,
   onLoadMore,
   onOpenTrace,
+  selectedKey = null,
 }: AgentTracesTableProps) {
-  const showCost = traces.some((t) => typeof (t as SummaryWithSpend).spend === "number");
   const isEmpty = !isLoading && !error && traces.length === 0;
   return (
     <div className="min-h-0 flex-1 overflow-auto" data-testid="runs-table">
@@ -74,7 +73,7 @@ export function AgentTracesTable({
             <th className={`w-[72px] ${TH_NUM}`}>Agents</th>
             <th className={`w-[74px] ${TH_NUM}`}>Steps</th>
             <th className={`w-[86px] ${TH_NUM}`}>Duration</th>
-            {showCost && <th className={`w-[80px] ${TH_NUM}`}>Cost</th>}
+            <th className={`w-[80px] ${TH_NUM}`}>Cost</th>
             <th className={`w-[72px] ${TH_NUM}`}>Failed</th>
             <th className="w-8" />
           </tr>
@@ -85,7 +84,13 @@ export function AgentTracesTable({
               key={run.trace_ref || run.trace_id}
               data-testid="agent-trace-row"
               onClick={() => onOpenTrace(run)}
-              className="h-9 cursor-pointer border-b border-border/60 text-[12px] hover:bg-accent/50"
+              aria-selected={selectedKey === (run.trace_ref || run.trace_id)}
+              className={cn(
+                "h-9 cursor-pointer border-b border-border/60 text-[12px] transition-colors duration-150 motion-reduce:transition-none",
+                selectedKey === (run.trace_ref || run.trace_id)
+                  ? "bg-trace-row-selected shadow-[inset_2px_0_0_var(--trace-brand)]"
+                  : "hover:bg-trace-row-hover",
+              )}
             >
               <td
                 className="px-3 font-mono text-[11px] tabular-nums text-muted-foreground"
@@ -110,11 +115,9 @@ export function AgentTracesTable({
               <td className={TD_NUM}>{run.agent_count.toLocaleString()}</td>
               <td className={TD_NUM}>{run.span_count.toLocaleString()}</td>
               <td className="px-3 text-right font-mono tabular-nums text-foreground">{fmtMs(run.duration_ms)}</td>
-              {showCost && (
-                <td className="px-3 text-right font-mono tabular-nums text-foreground">
-                  {formatCost((run as SummaryWithSpend).spend ?? 0)}
-                </td>
-              )}
+              <td className="px-3 text-right font-mono tabular-nums text-foreground">
+                {run.spend == null ? "—" : formatCost(run.spend)}
+              </td>
               <td className="px-3 text-right">
                 {run.error_count > 0 ? (
                   <StatusMark status="error" count={run.error_count} />

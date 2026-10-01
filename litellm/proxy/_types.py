@@ -88,9 +88,15 @@ from .types_utils.utils import get_instance_fn, validate_custom_validate_return_
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.tracing import TraceReceiver
+
     Span = _Span | Any
 else:
     Span = Any
+
+
+class ProxyLifespanState(TypedDict):
+    tracing_receiver: ReadOnly["TraceReceiver | None"]
 
 
 class ReconcileOutcome(NamedTuple):
@@ -520,7 +526,16 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/rag/ingest",
         "/rag/query",
         "/v1/rag/query",
-        # agent tracing: OTLP ingest + reads (scoped to the caller's team in the handler)
+        "/lens",
+        "/lens/{lens_id}",
+        "/lens/{lens_id}/runs",
+        "/lens/{lens_id}/runs/{job_id}",
+        "/lens/{lens_id}/executions/{execution_id}",
+        "/lens/{lens_id}/cancel",
+        "/lens/{lens_id}/findings/{finding_id}",
+        "/lens/preview/sample",
+        "/lens/workers/register",
+        "/lens/workers/{worker_id}",
         "/v1/traces",
         "/v1/traces/{trace_id}",
         "/v1/traces/{trace_id}/spans/{span_id}",
@@ -901,7 +916,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/spend/by_user",
         "/team/{team_id}/members/me",
         # POST/GET the team's logging callbacks, and DELETE one of them. Every
-        # handler calls _verify_team_access, which admits only a proxy admin, an
+        # handler asks TeamAccess.allows for TEAM_OR_ORG_ADMIN: a proxy admin, an
         # org admin for the team, or an admin of this team.
         #
         # team_id is a free-form string, so it spells these with the same path
@@ -3948,6 +3963,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "AWS_SECRET_ACCESS_KEY",
             "AWS_REGION_NAME",
             "S3_LOG_PROMPTS_ONLY",
+            "S3_PARTITION_GRANULARITY",
         ],
     )
 
@@ -4050,7 +4066,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     pointfive: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="pointfive",
         ui_callback_name="PointFive",
-        litellm_callback_params=[  # mutable-ok: the registry field is typed list
+        litellm_callback_params=[
             "POINTFIVE_API_KEY",
             "POINTFIVE_API_URL",
         ],
@@ -4065,7 +4081,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     zerobus: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="zerobus",
         ui_callback_name="Databricks Zerobus",
-        litellm_callback_params=[  # mutable-ok: the registry field is typed list
+        litellm_callback_params=[
             "ZEROBUS_WORKSPACE_URL",
             "ZEROBUS_SERVER_ENDPOINT",
             "ZEROBUS_CLIENT_ID",
@@ -4146,6 +4162,7 @@ class SpendLogsMetadata(TypedDict):
     litellm_gateway_injected_cache: ReadOnly[str | None]
     router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
     azure_spillover: ReadOnly[AzureSpillover | None]  # None = Azure did not report spillover
+    used_client_oauth_token: ReadOnly[bool | None]  # None = row written before the flag existed
 
 
 class SpendLogsPayload(TypedDict):

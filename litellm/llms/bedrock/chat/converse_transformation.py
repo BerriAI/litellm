@@ -1434,7 +1434,7 @@ class AmazonConverseConfig(BaseConfig):
         if not text_blocks:
             return None
         note: Final = ChatCompletionTextObject(type="text", text=CONVERTED_SYSTEM_NOTE)
-        body: Final = [  # mutable-ok: _bedrock_converse_messages_pt narrows content with isinstance(list)
+        body: Final = [
             note,
             *text_blocks,
         ]
@@ -1502,7 +1502,7 @@ class AmazonConverseConfig(BaseConfig):
             )
         )
         converted: Final = tuple(self._converted_or_kept(message) for message in reordered)
-        kept: Final = [message for message in converted if message is not None]  # mutable-ok: converse pt takes a list
+        kept: Final = [message for message in converted if message is not None]
         return kept, system_content_blocks
 
     def _transform_inference_params(self, inference_params: dict) -> InferenceConfig:

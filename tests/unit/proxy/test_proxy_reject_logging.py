@@ -152,6 +152,7 @@ async def test_chat_completion_request_with_redaction(route, body):
         scope={
             "type": "http",
             "method": "POST",
+            "path": route,
             "headers": [(b"content-type", b"application/json")],
             "query_string": query_params.encode(),
         }

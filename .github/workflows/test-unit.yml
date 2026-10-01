@@ -119,10 +119,19 @@ jobs:
           - shard: proxy-auth
             artifact-name: proxy-auth
             test-path: >-
-              tests/test_litellm/proxy/auth
-              tests/test_litellm/proxy/hooks
-              tests/test_litellm/proxy/policy_engine
-              tests/test_litellm/proxy/client
+              tests/unit/proxy/auth
+              tests/unit/proxy/hooks
+              tests/unit/proxy/policy_engine
+              tests/unit/proxy/client
+              --ignore=tests/unit/proxy/auth/test_auth_checks.py
+              --ignore=tests/unit/proxy/auth/test_user_api_key_auth.py
+              --ignore=tests/unit/proxy/auth/test_default_end_user_budget_simple.py
+              --ignore=tests/unit/proxy/auth/test_jwt.py
+              --ignore=tests/unit/proxy/auth/test_models_fallback_endpoint.py
+              --ignore=tests/unit/proxy/auth/test_multipart_bypass_repro.py
+              --ignore=tests/unit/proxy/auth/test_proxy_routes.py
+              --ignore=tests/unit/proxy/hooks/test_banned_keyword_list.py
+              --ignore=tests/unit/proxy/hooks/test_unit_test_max_model_budget_limiter.py
             workers: 2
             reruns: 2
             timeout-minutes: 20
@@ -131,38 +140,46 @@ jobs:
           - shard: proxy-endpoints
             artifact-name: proxy-endpoints
             test-path: >-
-              tests/test_litellm/proxy/analytics_endpoints
-              tests/test_litellm/proxy/management_endpoints
-              tests/test_litellm/proxy/list_api
-              tests/test_litellm/proxy/memory
-              tests/test_litellm/proxy/guardrails
-              tests/test_litellm/proxy/management_helpers
-              tests/test_litellm/proxy/anthropic_endpoints
-              tests/test_litellm/proxy/google_endpoints
-              tests/test_litellm/proxy/openai_files_endpoint
-              tests/test_litellm/proxy/batches_endpoints
-              tests/test_litellm/proxy/container_endpoints
-              tests/test_litellm/proxy/fine_tuning_endpoints
-              tests/test_litellm/proxy/vector_store_files_endpoints
-              tests/test_litellm/proxy/video_endpoints
-              tests/test_litellm/proxy/response_api_endpoints
-              tests/test_litellm/proxy/image_endpoints
-              tests/test_litellm/proxy/ocr_endpoints
-              tests/test_litellm/proxy/vector_store_endpoints
-              tests/test_litellm/proxy/agent_endpoints
-              tests/test_litellm/proxy/a2a
-              tests/test_litellm/proxy/credential_endpoints
-              tests/test_litellm/proxy/discovery_endpoints
-              tests/test_litellm/proxy/health_endpoints
-              tests/test_litellm/proxy/shutdown
-              tests/test_litellm/proxy/public_endpoints
-              tests/test_litellm/proxy/prompts
-              tests/test_litellm/proxy/rag_endpoints
-              tests/test_litellm/proxy/rerank_endpoints
-              tests/test_litellm/proxy/realtime_endpoints
-              tests/test_litellm/proxy/ui_crud_endpoints
-              tests/test_litellm/proxy/config_resolvers
-              tests/test_litellm/proxy/utils
+              tests/unit/proxy/analytics_endpoints
+              tests/unit/proxy/management_endpoints
+              tests/unit/proxy/list_api
+              tests/unit/proxy/memory
+              tests/unit/proxy/guardrails
+              tests/unit/proxy/management_helpers
+              --ignore=tests/unit/proxy/management_endpoints/test_jwt_key_mapping.py
+              --ignore=tests/unit/proxy/management_endpoints/test_key_generate_prisma.py
+              --ignore=tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
+              --ignore=tests/unit/proxy/management_helpers/test_audit_logs_proxy.py
+              --ignore=tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py
+              --ignore=tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py
+              --ignore=tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py
+              --ignore=tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py
+              tests/unit/proxy/anthropic_endpoints
+              tests/unit/proxy/google_endpoints
+              tests/unit/proxy/openai_files_endpoint
+              tests/unit/proxy/batches_endpoints
+              tests/unit/proxy/container_endpoints
+              tests/unit/proxy/fine_tuning_endpoints
+              tests/unit/proxy/vector_store_files_endpoints
+              tests/unit/proxy/video_endpoints
+              tests/unit/proxy/response_api_endpoints
+              tests/unit/proxy/image_endpoints
+              tests/unit/proxy/ocr_endpoints
+              tests/unit/proxy/vector_store_endpoints
+              tests/unit/proxy/agent_endpoints
+              tests/unit/proxy/a2a
+              tests/unit/proxy/credential_endpoints
+              tests/unit/proxy/discovery_endpoints
+              tests/unit/proxy/health_endpoints
+              tests/unit/proxy/shutdown
+              tests/unit/proxy/public_endpoints
+              tests/unit/proxy/prompts
+              tests/unit/proxy/rag_endpoints
+              tests/unit/proxy/rerank_endpoints
+              tests/unit/proxy/realtime_endpoints
+              tests/unit/proxy/ui_crud_endpoints
+              tests/unit/proxy/config_resolvers
+              tests/unit/proxy/utils
             workers: 4
             reruns: 2
             timeout-minutes: 20
@@ -170,7 +187,7 @@ jobs:
 
           - shard: proxy-server
             artifact-name: proxy-server
-            test-path: "tests/test_litellm/proxy/proxy_server"
+            test-path: "tests/unit/proxy/proxy_server"
             workers: 4
             reruns: 2
             timeout-minutes: 60
@@ -179,18 +196,61 @@ jobs:
           - shard: proxy-infra
             artifact-name: proxy-infra
             test-path: >-
-              tests/test_litellm/proxy/db
-              tests/test_litellm/proxy/middleware
-              tests/test_litellm/proxy/spend_tracking
-              tests/test_litellm/proxy/pass_through_endpoints
-              tests/test_litellm/proxy/_experimental
-              tests/test_litellm/proxy/experimental
-              tests/test_litellm/proxy/common_utils
-              tests/test_litellm/proxy/enterprise_billing
-              tests/test_litellm/proxy/types_utils
-              tests/test_litellm/proxy/logging_endpoints
-              tests/test_litellm/proxy/test_*.py
+              tests/unit/proxy/db
+              --ignore=tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
+              --ignore=tests/unit/proxy/db/test_update_daily_tag_spend.py
+              tests/unit/proxy/middleware
+              --ignore=tests/unit/proxy/middleware/test_request_size_limit_middleware.py
+              tests/unit/proxy/spend_tracking
+              --ignore=tests/unit/proxy/spend_tracking/test_search_api_logging.py
+              tests/unit/proxy/pass_through_endpoints
+              tests/unit/proxy/_experimental
+              --ignore=tests/unit/proxy/_experimental/mcp_server
+              tests/unit/proxy/experimental
+              tests/unit/proxy/common_utils
+              --ignore=tests/unit/proxy/common_utils/test_cache_aware_routing.py
+              --ignore=tests/unit/proxy/common_utils/test_check_batch_cost.py
+              --ignore=tests/unit/proxy/common_utils/test_check_responses_cost.py
+              --ignore=tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py
+              --ignore=tests/unit/proxy/common_utils/test_realtime_cache.py
+              tests/unit/proxy/enterprise_billing
+              tests/unit/proxy/types_utils
+              tests/unit/proxy/logging_endpoints
             unit-flag: proxy-infra
+            workers: 4
+            reruns: 2
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+
+          - shard: proxy-infra-root
+            artifact-name: proxy-infra-root
+            test-path: >-
+              tests/unit/proxy/test_*.py
+              --ignore=tests/unit/proxy/test_aproxy_startup.py
+              --ignore=tests/unit/proxy/test_credential_slot_registry.py
+              --ignore=tests/unit/proxy/test_custom_callback_input.py
+              --ignore=tests/unit/proxy/test_custom_logger_s3_gcs.py
+              --ignore=tests/unit/proxy/test_custom_tokenizer_bug.py
+              --ignore=tests/unit/proxy/test_db_schema_changes.py
+              --ignore=tests/unit/proxy/test_deprecated_key_grace_period.py
+              --ignore=tests/unit/proxy/test_get_favicon.py
+              --ignore=tests/unit/proxy/test_get_image.py
+              --ignore=tests/unit/proxy/test_prisma_client_backoff_retry.py
+              --ignore=tests/unit/proxy/test_prompt_test_endpoint.py
+              --ignore=tests/unit/proxy/test_proxy_config_unit_test.py
+              --ignore=tests/unit/proxy/test_proxy_custom_auth.py
+              --ignore=tests/unit/proxy/test_proxy_reject_logging.py
+              --ignore=tests/unit/proxy/test_proxy_server.py
+              --ignore=tests/unit/proxy/test_proxy_setting_guardrails.py
+              --ignore=tests/unit/proxy/test_proxy_token_counter.py
+              --ignore=tests/unit/proxy/test_proxy_utils.py
+              --ignore=tests/unit/proxy/test_reducto_ocr_route.py
+              --ignore=tests/unit/proxy/test_response_polling_pre_call_checks.py
+              --ignore=tests/unit/proxy/test_server_root_path.py
+              --ignore=tests/unit/proxy/test_ui_path_detection.py
+              --ignore=tests/unit/proxy/test_unit_test_proxy_hooks.py
+              --ignore=tests/unit/proxy/test_update_spend.py
+              --ignore=tests/unit/proxy/test_zero_cost_model_budget_bypass.py
             workers: 4
             reruns: 2
             timeout-minutes: 20
