@@ -135,8 +135,8 @@ def test_async_rate_limit(
     if num_try_send > num_allowed_send:
         pytest.skip(
             "RPM tracking via background thread is racy; "
-            "rate-limit enforcement is tested in "
-            "tests/unit/proxy/hooks/test_parallel_request_limiter.py"
+            "RPM over-limit rejection is tested for usage-based-routing-v2 in "
+            "tests/unit/router_strategy/test_router_routing_groups.py"
         )
 
     list_of_messages = generate_list_of_messages(max(num_try_send, num_allowed_send))
