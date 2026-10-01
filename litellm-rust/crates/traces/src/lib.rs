@@ -2,6 +2,7 @@ mod error;
 mod insert;
 mod normalize;
 mod otlp;
+mod query;
 mod schema;
 mod shared;
 mod sql;
@@ -16,3 +17,5 @@ pub use otlp::{DecodedSpan, decode_otlp};
 pub use schema::{ensure_schema, schema_statements};
 pub use shared::{Shared, SharedIdentity};
 pub use sql::{LensQuery, ReadQuery, execute_named_read};
+
+pub use query::{query_help, query_sql};

@@ -207,3 +207,74 @@ async def test_insert_validates_values_without_pydantic_copy(recording_server: R
     assert stored["Timestamp"] == "1970-01-01T00:00:00.000000001Z"
     assert stored["ResourceAttributes"] == attributes
     assert stored["SpanAttributes"] == attributes
+
+
+@pytest.mark.parametrize("role", ["proxy_admin", "proxy_admin_viewer", "internal_user"])
+def test_trace_sql_endpoint_executes_for_admin_and_preserves_clickhouse_envelope(
+    recording_server: RecordingServer, role: str
+) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.tracing_endpoints import provide_receiver, router
+
+    envelope: Final = {"meta": [{"name": "answer", "type": "UInt8"}], "data": [{"answer": 42}], "rows": 1}
+    if role == "proxy_admin":
+        recording_server.enqueue(ResponseSpec(body=envelope))
+    else:
+        recording_server.expected_requests = 0
+    storage: Final = ClickHouseStorage("trace_test", recording_server.base_url, recording_server.base_url)
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=role, token="test")
+    app.dependency_overrides[provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
+    with TestClient(app) as client:
+        result: Final = client.post("/v1/traces/query", json={"sql": "SELECT 42 AS answer"})
+        if role != "proxy_admin":
+            assert result.status_code == 403
+            assert client.get("/v1/traces/query/help").status_code == 403
+            assert recording_server.requests == []
+            return
+        assert result.status_code == 200, result.text
+        assert result.json() == envelope
+        assert recording_server.requests[0].raw_body == b"SELECT 42 AS answer"
+        assert client.post("/v1/traces/query", json={"sql": "  "}).status_code == 400
+        assert client.post("/v1/traces/query", json={}).status_code == 422
+
+
+def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(recording_server: RecordingServer) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.tracing_endpoints import provide_receiver, router
+
+    for response in (
+        {"data": [{"name": "Model", "type": "String"}]},
+        {"data": []},
+        {"data": []},
+        {"data": [{"metadata": '{"custom": {"label": "hello"}}'}]},
+        {"data": [{"key": "custom.span"}]},
+        {"data": [{"key": "custom.resource"}]},
+    ):
+        recording_server.enqueue(ResponseSpec(body=response))
+    storage: Final = ClickHouseStorage("trace_test", recording_server.base_url, recording_server.base_url)
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role="proxy_admin", token="test")
+    app.dependency_overrides[provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
+    with TestClient(app) as client:
+        result: Final = client.get("/v1/traces/query/help")
+    assert result.status_code == 200, result.text
+    body: Final = result.json()
+    assert body["tables"][0]["columns"] == [{"name": "Model", "type": "String"}]
+    assert body["metadata"]["fields"][1] == {
+        "path": ["custom", "label"],
+        "types": ["string"],
+        "expression": "JSONExtractRaw(metadata, 'custom', 'label')",
+    }
+    assert body["attributes"][0]["fields"][0]["expression"] == "SpanAttributes['custom.span']"
+    assert body["attributes"][1]["fields"][0]["expression"] == "ResourceAttributes['custom.resource']"

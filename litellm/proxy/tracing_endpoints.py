@@ -15,12 +15,14 @@ from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel, ConfigDict
 
 from litellm.constants import OTLP_RETRY_AFTER_SECONDS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
+from litellm.rust_bridge.traces import ClickHouseStorage
 from litellm.tracing import (
     Tenant,
     TraceReceiver,
@@ -135,6 +137,43 @@ async def list_agent_traces(
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+class TraceQueryRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    sql: str
+
+
+async def provide_trace_query_storage(
+    auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
+) -> ClickHouseStorage:
+    if auth.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(status_code=403, detail="Trace SQL queries require a proxy admin")
+    return require_receiver(tracing).store.storage
+
+
+@router.post("/v1/traces/query")
+async def query_agent_traces(
+    body: TraceQueryRequest,
+    storage: Annotated[ClickHouseStorage, Depends(provide_trace_query_storage)],
+) -> Response:
+    try:
+        return Response(content=await storage.query_sql(body.sql), media_type="application/json")
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail="Trace SQL query failed or exceeded reader limits") from error
+
+
+@router.get("/v1/traces/query/help")
+async def help_agent_trace_queries(
+    storage: Annotated[ClickHouseStorage, Depends(provide_trace_query_storage)],
+) -> Response:
+    try:
+        return Response(content=await storage.query_help(), media_type="application/json")
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail="Trace query help is temporarily unavailable") from error
 
 
 @router.get("/v1/traces/{trace_id}", response_model=Trace)

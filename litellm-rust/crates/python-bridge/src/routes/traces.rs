@@ -107,6 +107,30 @@ impl NativeTraceStorage {
         )
     }
 
+    fn query_sql<'py>(&self, py: Python<'py>, sql: String) -> PyResult<Bound<'py, PyAny>> {
+        let connection = self.storage.reader().cloned().ok_or_else(|| {
+            PyRuntimeError::new_err("Trace reads require a separate ClickHouse reader URL")
+        })?;
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        crate::execution::run_async(
+            py,
+            async move { litellm_traces::query_sql(&client, &connection, &sql).await },
+            map_error,
+        )
+    }
+
+    fn query_help<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let connection = self.storage.reader().cloned().ok_or_else(|| {
+            PyRuntimeError::new_err("Trace reads require a separate ClickHouse reader URL")
+        })?;
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        crate::execution::run_async(
+            py,
+            async move { litellm_traces::query_help(&client, &connection).await },
+            map_error,
+        )
+    }
+
     fn lens_query<'py>(
         &self,
         py: Python<'py>,
