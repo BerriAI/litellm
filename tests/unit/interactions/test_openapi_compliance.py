@@ -9,7 +9,8 @@ Run with: pytest tests/unit/interactions/test_openapi_compliance.py -v
 
 import json
 import os
-from typing import Any, Dict, Final
+import re
+from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -32,38 +33,28 @@ def _load_openapi_spec_dict() -> Dict[str, Any]:
         return response.json()
     except Exception as e:  # pragma: no cover - defensive, env-dependent
         pytest.skip(
-            f"Skipping Google Interactions OpenAPI compliance tests - unable to load spec from {OPENAPI_SPEC_URL}: {e}"
+            f"Skipping Google Interactions OpenAPI compliance tests - "
+            f"unable to load spec from {OPENAPI_SPEC_URL}: {e}"
         )
 
 
-def _create_model_interaction_schema(spec_dict: Dict[str, Any]) -> Dict[str, Any]:
-    schemas: Final = spec_dict["components"]["schemas"]
-    for path, methods in spec_dict["paths"].items():
-        if not path.rstrip("/").endswith("/interactions") or "post" not in methods:
-            continue
-        schema: Final = methods["post"]["requestBody"]["content"]["application/json"]["schema"]
-        refs: Final = (
-            [schema["$ref"]]
-            if "$ref" in schema
-            else [option["$ref"] for option in schema.get("oneOf", []) if "$ref" in option]
-        )
-        for ref in refs:
-            name: Final = ref.rsplit("/", 1)[-1]
-            candidate: Final = schemas[name]
-            properties: Final = candidate.get("properties", {})
-            if "model" in properties and "input" in properties:
-                return candidate
-    raise AssertionError("POST /interactions has no request schema with model and input")
+def _model_create_request_schema(spec_dict: Dict[str, Any]) -> Dict[str, Any]:
+    schemas = spec_dict["components"]["schemas"]
+    create_path = next(path for path in spec_dict["paths"] if path.endswith("/interactions"))
+    body_schema = spec_dict["paths"][create_path]["post"]["requestBody"]["content"]["application/json"]["schema"]
+    variants = [schemas[option["$ref"].split("/")[-1]] for option in body_schema.get("oneOf", []) if "$ref" in option]
+    return next(variant for variant in variants if "model" in variant.get("properties", {}))
 
 
 def _interaction_resource_path(spec_dict: Dict[str, Any], method: str) -> str | None:
-    for path, methods in spec_dict["paths"].items():
-        if "/interactions/{" not in path or method not in methods:
-            continue
-        if path.rstrip("/").endswith("/cancel"):
-            continue
-        return path
-    return None
+    return next(
+        (
+            path
+            for path, methods in spec_dict["paths"].items()
+            if re.search(r"/interactions/\{[^}]+\}$", path) and method in methods
+        ),
+        None,
+    )
 
 
 def _declared_type_value(variant_schema: Dict[str, Any]) -> Any:
@@ -89,12 +80,10 @@ class TestRequestCompliance:
     """Tests that our request bodies match the OpenAPI spec."""
 
     def test_create_model_interaction_request_schema(self, spec_dict):
-        """Verify the POST /interactions model request schema still has our fields."""
-        schema = _create_model_interaction_schema(spec_dict)
+        schema = _model_create_request_schema(spec_dict)
 
-        assert "model" in schema["properties"]
+        assert "model" in schema["required"]
         assert "input" in schema["properties"]
-        assert "model" in schema.get("required", [])
 
         # Check our supported optional fields exist in spec
         our_optional_fields = [
@@ -117,7 +106,7 @@ class TestRequestCompliance:
 
     def test_input_types_match_spec(self, spec_dict):
         """Verify input field supports string, Content, Content[], Turn[]."""
-        schema = _create_model_interaction_schema(spec_dict)
+        schema = _model_create_request_schema(spec_dict)
         input_schema = schema["properties"]["input"]
 
         # The input property may be inline oneOf or a $ref to InteractionsInput
@@ -154,18 +143,22 @@ class TestRequestCompliance:
 
         discriminator = content_schema.get("discriminator")
         if discriminator is not None:
-            assert discriminator.get("propertyName") == "type", (
-                f"Content is discriminated on {discriminator.get('propertyName')!r}, not 'type'"
-            )
+            assert (
+                discriminator.get("propertyName") == "type"
+            ), f"Content is discriminated on {discriminator.get('propertyName')!r}, not 'type'"
 
         variant_names = [
-            option["$ref"].split("/")[-1] for option in content_schema.get("oneOf", []) if "$ref" in option
+            option["$ref"].split("/")[-1]
+            for option in content_schema.get("oneOf", [])
+            if "$ref" in option
         ]
         assert variant_names, f"Content is not a union of named variants: {content_schema}"
 
         mapping = (discriminator or {}).get("mapping") or {}
         type_values = {
-            variant: mapping_value for mapping_value, ref in mapping.items() for variant in [ref.split("/")[-1]]
+            variant: mapping_value
+            for mapping_value, ref in mapping.items()
+            for variant in [ref.split("/")[-1]]
         } or {
             variant: _declared_type_value(spec_dict["components"]["schemas"].get(variant, {}))
             for variant in variant_names
@@ -216,9 +209,7 @@ class TestRequestCompliance:
             for option in spec_dict["components"]["schemas"]["Step"]["oneOf"]
             if "$ref" in option
         }
-        assert {"UserInputStep", "ModelOutputStep"} <= step_variants, (
-            f"Step union is missing role steps: {step_variants}"
-        )
+        assert {"UserInputStep", "ModelOutputStep"} <= step_variants, f"Step union is missing role steps: {step_variants}"
 
         for step_name, type_value in [("UserInputStep", "user_input"), ("ModelOutputStep", "model_output")]:
             step_schema = spec_dict["components"]["schemas"][step_name]
@@ -288,7 +279,9 @@ class TestResponseCompliance:
         expected_fields = ["total_input_tokens", "total_output_tokens", "total_tokens"]
 
         for field in expected_fields:
-            assert field in usage_schema["properties"], f"Usage field '{field}' not in spec"
+            assert (
+                field in usage_schema["properties"]
+            ), f"Usage field '{field}' not in spec"
             print(f"✓ Usage field '{field}' exists")
 
 
@@ -307,7 +300,9 @@ class TestToolsCompliance:
         """Verify FunctionDeclaration schema for function tools."""
         if "FunctionDeclaration" in spec_dict["components"]["schemas"]:
             func_schema = spec_dict["components"]["schemas"]["FunctionDeclaration"]
-            assert "name" in func_schema.get("properties", {}) or "name" in func_schema.get("required", [])
+            assert "name" in func_schema.get(
+                "properties", {}
+            ) or "name" in func_schema.get("required", [])
             print("✓ FunctionDeclaration schema found")
         else:
             print("⚠ FunctionDeclaration schema not found (may be nested)")
@@ -331,15 +326,17 @@ class TestEndpointCompliance:
         print(f"✓ Create endpoint: POST {create_path}")
 
     def test_get_endpoint_exists(self, spec_dict):
-        """Verify GET on a parameterized /interactions resource exists."""
+        """Verify GET /interactions/{id} endpoint exists."""
         get_path = _interaction_resource_path(spec_dict, "get")
-        assert get_path is not None, "GET /interactions/{...} endpoint not found"
+
+        assert get_path is not None, "GET /interactions/{id} endpoint not found"
         print(f"✓ Get endpoint: GET {get_path}")
 
     def test_delete_endpoint_exists(self, spec_dict):
-        """Verify DELETE on a parameterized /interactions resource exists."""
+        """Verify DELETE /interactions/{id} endpoint exists."""
         delete_path = _interaction_resource_path(spec_dict, "delete")
-        assert delete_path is not None, "DELETE /interactions/{...} endpoint not found"
+
+        assert delete_path is not None, "DELETE /interactions/{id} endpoint not found"
         print(f"✓ Delete endpoint: DELETE {delete_path}")
 
 
@@ -359,4 +356,6 @@ if __name__ == "__main__":
             if method in ["get", "post", "delete", "put", "patch"]:
                 print(f"  {method.upper()} {path}")
 
-    print(f"\nSchemas: {list(spec.get('components', {}).get('schemas', {}).keys())[:10]}...")
+    print(
+        f"\nSchemas: {list(spec.get('components', {}).get('schemas', {}).keys())[:10]}..."
+    )
