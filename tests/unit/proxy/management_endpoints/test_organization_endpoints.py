@@ -1292,7 +1292,7 @@ async def test_get_organization_daily_activity_non_admin_without_org_admin_role_
     )
 
     assert get_daily_activity_mock.call_args.kwargs["entity_id"] == []
-    assert org_table_find_many.call_args.kwargs["where"] == {"organization_id": {"in": []}}
+    org_table_find_many.assert_not_awaited()
 
 
 @pytest.mark.asyncio

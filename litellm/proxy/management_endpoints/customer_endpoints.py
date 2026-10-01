@@ -12,7 +12,8 @@ All /customer management endpoints
 #### END-USER/CUSTOMER MANAGEMENT ####
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Final, Protocol, TypeVar, overload
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypeVar, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -41,6 +42,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.table_repositories import EndUserRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -490,6 +492,33 @@ async def new_end_user(
         raise handle_exception_on_proxy(e)
 
 
+class _CustomerDailyActivityScope(NamedTuple):
+    end_user_ids: tuple[str, ...] | None
+    end_user_metadata: Mapping[str, dict[str, object]]
+
+
+async def resolve_customer_daily_activity_scope(
+    *,
+    end_user_ids: tuple[str, ...] | None,
+    prisma_client: "PrismaClient",
+) -> _CustomerDailyActivityScope:
+    end_user_table: Final = _typed_table(EndUserRepository(prisma_client))
+    end_user_aliases: Final = (
+        await find_many_in(end_user_table, "user_id", end_user_ids)
+        if end_user_ids is not None
+        else await end_user_table.find_many(where={})
+    )
+    metadata: Final = MappingProxyType({end_user.user_id: {"alias": end_user.alias} for end_user in end_user_aliases})
+    return _CustomerDailyActivityScope(end_user_ids, metadata)
+
+
+def customer_daily_activity_is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    return user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    )
+
+
 @router.get(
     "/customer/info",
     tags=["Customer Management"],
@@ -888,10 +917,7 @@ async def get_customer_daily_activity(
     """
     Get daily activity for specific organizations or all accessible organizations.
     """
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
-    ):
+    if not customer_daily_activity_is_admin(user_api_key_dict):
         raise HTTPException(
             status_code=401,
             detail={"error": f"Admin-only endpoint. Your user role={user_api_key_dict.user_role}"},
@@ -906,24 +932,22 @@ async def get_customer_daily_activity(
         )
 
     # Parse comma-separated ids
-    end_user_ids_list: Final = end_user_ids.split(",") if end_user_ids else None
+    end_user_ids_list: Final = tuple(end_user_ids.split(",")) if end_user_ids else None
     exclude_end_user_ids_list: list[str] | None = None
     if exclude_end_user_ids:
         exclude_end_user_ids_list = exclude_end_user_ids.split(",") if exclude_end_user_ids else None
 
-    # Fetch organization aliases for metadata
-    where_condition: Final = dict[str, object]()
-    if end_user_ids_list:
-        where_condition["user_id"] = {"in": list(end_user_ids_list)}
-    end_user_aliases: Final = await _typed_table(EndUserRepository(prisma_client)).find_many(where=where_condition)
+    customer_scope: Final = await resolve_customer_daily_activity_scope(
+        end_user_ids=end_user_ids_list,
+        prisma_client=prisma_client,
+    )
 
-    # Query daily activity for organizations
     return await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailyenduserspend",
         entity_id_field="end_user_id",
-        entity_id=end_user_ids_list,
-        entity_metadata_field={e.user_id: {"alias": e.alias} for e in end_user_aliases},
+        entity_id=None if customer_scope.end_user_ids is None else list(customer_scope.end_user_ids),
+        entity_metadata_field=customer_scope.end_user_metadata,
         exclude_entity_ids=exclude_end_user_ids_list,
         start_date=start_date,
         end_date=end_date,
