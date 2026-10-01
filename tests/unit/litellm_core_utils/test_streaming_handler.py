@@ -4999,6 +4999,7 @@ def test_generic_chunk_predicate_rejects_partial_chunk():
         "index": 0,
     }
     assert generic_chunk_has_all_required_fields(full_chunk) is True
+    assert generic_chunk_has_all_required_fields({**full_chunk, "unknown_extra_key": "value"}) is False
 
     stream = convert_generic_chunk_to_model_response_stream(full_chunk)
     assert stream.choices[0].delta.content == "hello"
