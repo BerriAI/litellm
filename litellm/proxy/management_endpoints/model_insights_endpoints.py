@@ -211,14 +211,19 @@ async def get_model_insights(
         else []
     )
     date_rows: Final = _DATE_ROWS.validate_python(
-        await table.group_by(by=["date"], sum=_SUM_FIELDS, where=date_window, order={"date": "asc"})
+        await table.group_by(
+            by=["date"],  # mutable-ok: prisma group_by requires a list of fields
+            sum=_SUM_FIELDS,
+            where=date_window,
+            order={"date": "asc"},  # mutable-ok: prisma order clause must be a dict
+        )
     )
     return ModelInsightsResponse(
         start_date=start_day.isoformat(),
         end_date=end_day.isoformat(),
         top_models=[_metric(row) for row in model_rows],
         daily=[_daily_metric(row) for row in daily_rows],
-        daily_totals=[_daily_total(row) for row in date_rows],
+        daily_totals=tuple(_daily_total(row) for row in date_rows),
     )
 
 
