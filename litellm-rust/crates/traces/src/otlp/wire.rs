@@ -4,6 +4,18 @@ use prost::Message;
 use super::limits::{json_preflight, protobuf_preflight};
 use crate::DecodeError;
 
+#[derive(strum::EnumString)]
+#[strum(ascii_case_insensitive)]
+enum OtlpMediaType {
+    #[strum(serialize = "application/json")]
+    Json,
+    #[strum(
+        serialize = "application/x-protobuf",
+        serialize = "application/protobuf"
+    )]
+    Protobuf,
+}
+
 pub(super) fn decode(
     body: &[u8],
     content_type: Option<&str>,
@@ -12,22 +24,25 @@ pub(super) fn decode(
     if body.len() > max_body_bytes {
         return Err(DecodeError::TooLarge);
     }
+    
     let media_type = content_type
         .unwrap_or("application/x-protobuf")
         .split(';')
         .next()
         .unwrap_or_default()
-        .trim();
-    let request = if media_type.eq_ignore_ascii_case("application/json") {
-        json_preflight(body)?;
-        serde_json::from_slice(body).map_err(|_| DecodeError::InvalidPayload)?
-    } else if media_type.eq_ignore_ascii_case("application/x-protobuf")
-        || media_type.eq_ignore_ascii_case("application/protobuf")
-    {
-        protobuf_preflight(body)?;
-        ExportTraceServiceRequest::decode(body).map_err(|_| DecodeError::InvalidPayload)?
-    } else {
-        return Err(DecodeError::InvalidPayload);
+        .trim()
+        .parse::<OtlpMediaType>()
+        .map_err(|_| DecodeError::InvalidPayload)?;
+    
+        let request = match media_type {
+        OtlpMediaType::Json => {
+            json_preflight(body)?;
+            serde_json::from_slice(body).map_err(|_| DecodeError::InvalidPayload)?
+        }
+        OtlpMediaType::Protobuf => {
+            protobuf_preflight(body)?;
+            ExportTraceServiceRequest::decode(body).map_err(|_| DecodeError::InvalidPayload)?
+        }
     };
     Ok(request)
 }

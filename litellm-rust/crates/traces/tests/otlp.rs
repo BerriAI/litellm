@@ -85,6 +85,24 @@ fn standard_json_and_protobuf_preserve_the_same_identifiers(
 }
 
 #[rstest]
+#[case::json("APPLICATION/JSON; charset=utf-8", b"{}")]
+#[case::protobuf("application/x-protobuf; charset=binary", b"")]
+#[case::protobuf_alias("APPLICATION/PROTOBUF", b"")]
+fn supported_content_types_select_the_decoder(#[case] content_type: &str, #[case] body: &[u8]) {
+    assert!(decode_otlp(body, Some(content_type)).is_ok());
+}
+
+#[rstest]
+#[case::missing_content_type(None)]
+#[case::unsupported_content_type(Some("text/plain"))]
+fn content_type_defaults_to_protobuf_and_rejects_unknown_values(
+    #[case] content_type: Option<&str>,
+) {
+    let result = decode_otlp(b"", content_type);
+    assert_eq!(result.is_ok(), content_type.is_none());
+}
+
+#[rstest]
 #[case::short_trace(vec![1; 15], vec![2;8], 1, 2)]
 #[case::zero_trace(vec![0; 16], vec![2;8], 1, 2)]
 #[case::short_span(vec![1; 16], vec![2;7], 1, 2)]
