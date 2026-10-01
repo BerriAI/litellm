@@ -6,7 +6,8 @@ import asyncio
 import os
 import posixpath
 import shutil
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final
 
 from litellm.constants import HARNESS_SNAPSHOT_SKIP_DIRS
@@ -32,17 +33,15 @@ def _snapshot_script() -> str:
     )
 
 
-def parse_sha256sum(output: str) -> dict[str, str]:
+def parse_sha256sum(output: str) -> Mapping[str, str]:
     """Parse `sha256sum` lines ("<hex>  ./rel/path") into {rel/path: hex}."""
-    result: dict[str, str] = {}
-    for line in output.splitlines():
-        if len(line) <= _SHA256_HEX_LEN + 2:
-            continue
-        digest = line[:_SHA256_HEX_LEN]
-        path = line[_SHA256_HEX_LEN + 2 :]
-        path = path.removeprefix("./")
-        result[path] = digest
-    return result
+    return MappingProxyType(
+        {
+            line[_SHA256_HEX_LEN + 2 :].removeprefix("./"): line[:_SHA256_HEX_LEN]
+            for line in output.splitlines()
+            if len(line) > _SHA256_HEX_LEN + 2
+        }
+    )
 
 
 class DockerSandbox:
@@ -65,14 +64,14 @@ class DockerSandbox:
             raise SandboxError(f"docker workdir must be absolute: {workdir}")
         self.image = image
         self.workdir: str = posixpath.normpath(workdir)
-        self.mounts: dict[str, str] = {
-            os.path.abspath(os.fspath(host)): container for host, container in (mounts or {}).items()
-        }
-        self.env: dict[str, str] = dict(env or {})
+        self.mounts: Mapping[str, str] = MappingProxyType(
+            {os.path.abspath(os.fspath(host)): container for host, container in (mounts.items() if mounts else ())}
+        )
+        self.env: Mapping[str, str] = MappingProxyType(dict(env or ()))
         self.name = name
         self.container_id: str | None = None
         self._start_lock = asyncio.Lock()
-        self._processes: set[SubprocessHandle] = set()
+        self._processes: set[SubprocessHandle] = set()  # mutable-ok: live-process registry (add/discard)
         self._closed = False
 
     def __repr__(self) -> str:
@@ -88,7 +87,7 @@ class DockerSandbox:
             )
         return binary
 
-    async def _spawn(self, args: list[str]) -> SubprocessHandle:
+    async def _spawn(self, args: Sequence[str]) -> SubprocessHandle:
         """Start `docker <args>` with stdin/stdout/stderr pipes."""
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -104,7 +103,7 @@ class DockerSandbox:
 
     async def _docker(
         self,
-        args: list[str],
+        args: Sequence[str],
         *,
         input: bytes | None = None,
         timeout: float | None = None,
@@ -119,29 +118,51 @@ class DockerSandbox:
 
     # -- command construction --------------------------------------------------
 
-    def run_args(self) -> list[str]:
-        args = ["run", "-d", "--rm", f"--add-host={DOCKER_HOST_ALIAS}:host-gateway"]
-        if self.name:
-            args += ["--name", self.name]
-        for host, container in self.mounts.items():
-            args += ["-v", f"{host}:{container}"]
-        for key, value in self.env.items():
-            args += ["-e", f"{key}={value}"]
-        args += ["-w", self.workdir, self.image, "sleep", "infinity"]
-        return args
+    def run_args(
+        self,
+    ) -> list[str]:  # mutable-ok: argv is returned as a list, the shape callers and tests compare against
+        name_args = ("--name", self.name) if self.name else ()
+        mount_args = tuple(
+            arg for host, container in self.mounts.items() for arg in ("-v", f"{host}:{container}")
+        )  # comprehension-ok: flattens (flag, value) pairs into argv
+        env_args = tuple(
+            arg for key, value in self.env.items() for arg in ("-e", f"{key}={value}")
+        )  # comprehension-ok: flattens (flag, value) pairs into argv
+        return [  # mutable-ok: argv is returned as a list, the shape callers and tests compare against
+            "run",
+            "-d",
+            "--rm",
+            f"--add-host={DOCKER_HOST_ALIAS}:host-gateway",
+            *name_args,
+            *mount_args,
+            *env_args,
+            "-w",
+            self.workdir,
+            self.image,
+            "sleep",
+            "infinity",
+        ]
 
     def exec_args(
         self,
         container_id: str,
-        cmd: list[str],
+        cmd: Sequence[str],
         *,
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
-    ) -> list[str]:
-        args = ["exec", "-i", "-w", self.container_path(cwd or self.workdir)]
-        for key, value in (env or {}).items():
-            args += ["-e", f"{key}={value}"]
-        return [*args, container_id, *cmd]
+    ) -> list[str]:  # mutable-ok: argv is returned as a list, the shape callers and tests compare against
+        env_args = tuple(
+            arg for key, value in (env.items() if env else ()) for arg in ("-e", f"{key}={value}")
+        )  # comprehension-ok: flattens (flag, value) pairs into argv
+        return [  # mutable-ok: argv is returned as a list, the shape callers and tests compare against
+            "exec",
+            "-i",
+            "-w",
+            self.container_path(cwd or self.workdir),
+            *env_args,
+            container_id,
+            *cmd,
+        ]
 
     def container_path(self, path: str) -> str:
         """Absolute container path; relative paths resolve against workdir."""
@@ -166,7 +187,7 @@ class DockerSandbox:
             self.container_id = container_id
             return container_id
 
-    async def _exec_capture(self, cmd: list[str], *, input: bytes | None = None) -> tuple[int, bytes, bytes]:
+    async def _exec_capture(self, cmd: Sequence[str], *, input: bytes | None = None) -> tuple[int, bytes, bytes]:
         container_id = await self.start()
         return await self._docker(self.exec_args(container_id, cmd), input=input)
 
@@ -174,7 +195,7 @@ class DockerSandbox:
 
     async def exec(
         self,
-        cmd: list[str],
+        cmd: Sequence[str],
         *,
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
@@ -188,7 +209,7 @@ class DockerSandbox:
 
     async def run(
         self,
-        cmd: list[str],
+        cmd: Sequence[str],
         *,
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
@@ -202,14 +223,14 @@ class DockerSandbox:
 
     async def read(self, path: str) -> bytes:
         target = self.container_path(path)
-        code, out, err = await self._exec_capture(["cat", target])
+        code, out, err = await self._exec_capture(("cat", target))
         if code != 0:
             raise SandboxError(f"could not read {target}: {err.decode(errors='replace').strip()}")
         return out
 
     async def write(self, path: str, data: bytes) -> None:
         target = self.container_path(path)
-        code, _, err = await self._exec_capture(["sh", "-c", _WRITE_SCRIPT, "sh", target], input=data)
+        code, _, err = await self._exec_capture(("sh", "-c", _WRITE_SCRIPT, "sh", target), input=data)
         if code != 0:
             raise SandboxError(f"could not write {target}: {err.decode(errors='replace').strip()}")
 
@@ -217,20 +238,20 @@ class DockerSandbox:
         return f"http://{DOCKER_HOST_ALIAS}:{port}"
 
     async def which(self, binary: str) -> str | None:
-        code, out, _ = await self._exec_capture(["sh", "-lc", _WHICH_SCRIPT, "sh", binary])
+        code, out, _ = await self._exec_capture(("sh", "-lc", _WHICH_SCRIPT, "sh", binary))
         found = out.decode(errors="replace").strip()
         return found if code == 0 and found else None
 
     async def tempdir(self) -> str:
         """A fresh `mktemp -d` directory inside the container."""
-        code, out, err = await self._exec_capture(["mktemp", "-d"])
+        code, out, err = await self._exec_capture(("mktemp", "-d"))
         path = out.decode(errors="replace").strip()
         if code != 0 or not path:
             raise SandboxError(f"mktemp -d failed: {err.decode(errors='replace').strip()}")
         return path
 
-    async def snapshot(self) -> dict[str, str]:
-        code, out, err = await self._exec_capture(["sh", "-c", _snapshot_script(), "sh", self.workdir])
+    async def snapshot(self) -> Mapping[str, str]:
+        code, out, err = await self._exec_capture(("sh", "-c", _snapshot_script(), "sh", self.workdir))
         if code != 0:
             raise SandboxError(f"snapshot failed: {err.decode(errors='replace').strip()}")
         return parse_sha256sum(out.decode("utf-8", errors="replace"))
@@ -239,12 +260,14 @@ class DockerSandbox:
         if self._closed:
             return
         self._closed = True
-        live = [h for h in self._processes if h.returncode is None]
+        live = tuple(h for h in self._processes if h.returncode is None)
         await asyncio.gather(*(h.kill() for h in live), return_exceptions=True)
         self._processes.clear()
         if self.container_id is not None:
             container_id, self.container_id = self.container_id, None
-            await self._docker(["rm", "-f", container_id])
+            await self._docker(
+                ["rm", "-f", container_id]  # mutable-ok: argv list, the shape _spawn records and tests assert on
+            )
 
     async def __aenter__(self) -> DockerSandbox:
         await self.start()
