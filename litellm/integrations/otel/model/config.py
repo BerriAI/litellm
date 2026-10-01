@@ -131,18 +131,13 @@ class OpenTelemetryV2Config(BaseSettings):
 
     @classmethod
     def settings_customise_sources(
-        cls: type[BaseSettings],
+        cls,
         settings_cls: type[BaseSettings],
         init_settings: PydanticBaseSettingsSource,
         env_settings: PydanticBaseSettingsSource,
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
-    ) -> tuple[
-        PydanticBaseSettingsSource,
-        PydanticBaseSettingsSource,
-        PydanticBaseSettingsSource,
-        PydanticBaseSettingsSource,
-    ]:
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
         return (
             init_settings,
             _EnvWithoutBareExcludedServices(settings_cls),
