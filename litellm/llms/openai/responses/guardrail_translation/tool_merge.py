@@ -159,7 +159,8 @@ def _merged_original(
         original.get("type") == TOOL_SEARCH_FUNCTION_NAME
         and original.get("execution") == "client"
         and len(flattened_group) == 1
-        and _chat_tool_key(next(iter(flattened_group), MappingProxyType({}))) == f"function:{TOOL_SEARCH_FUNCTION_NAME}"
+        and _chat_tool_key(next(iter(flattened_group), MappingProxyType[str, object]({})))
+        == f"function:{TOOL_SEARCH_FUNCTION_NAME}"
     ):
         flattened: Final = next(iter(flattened_group))
         guardrailed: Final = next(iter(guardrailed_group), None)

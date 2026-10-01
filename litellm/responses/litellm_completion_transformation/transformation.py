@@ -131,7 +131,7 @@ def _has_tool_search_function_name_collision(tools: ResponseTools) -> bool:
 def _tool_search_function_tool(tool: Mapping[str, object]) -> ChatCompletionToolParam:
     raw_parameters: Final[object] = tool.get("parameters")
     parameters: Final[dict[str, object]] = (
-        dict(raw_parameters)  # mutable-ok: Chat Completions tool parameters are mutable payloads
+        dict(cast("Mapping[str, object]", raw_parameters))  # mutable-ok: Chat Completions tool parameters
         if isinstance(raw_parameters, Mapping)
         else {  # mutable-ok: default Chat Completions schema
             "type": "object",
@@ -2851,7 +2851,7 @@ class LiteLLMCompletionResponsesConfig:
         messages: Final[list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall]] = []
         output_items: Final = responses_api_output.output
         for _output_item in output_items:
-            output_item: dict = dict(_output_item)
+            output_item: dict[str, object] = dict(_output_item)  # mutable-ok: JSON-plain response output item
             if output_item.get("type") == "function_call":
                 # handle function call output
                 messages.append(

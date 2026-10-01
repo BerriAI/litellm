@@ -9,7 +9,7 @@ every text fragment.
 """
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Any, Final
+from typing import Any, Final, TypeGuard
 
 # Call types whose body carries free-form chat / prompt text that
 # text-content guardrails (banned keywords, content moderation, secret
@@ -63,6 +63,18 @@ _OUTPUT_ITEM_TYPES: Final[frozenset[str]] = frozenset(
 _TOOL_SEARCH_TOOL_TEXT_KEYS: Final[tuple[str, ...]] = ("description",)
 
 
+def _is_object_list(value: object) -> TypeGuard[list[object]]:
+    return isinstance(value, list)
+
+
+def _is_object_dict(value: object) -> TypeGuard[dict[str, object]]:
+    return isinstance(value, dict)
+
+
+def _is_object_mapping(value: object) -> TypeGuard[Mapping[str, object]]:
+    return isinstance(value, Mapping)
+
+
 def _part_text(part: Mapping[str, object]) -> str | None:
     """Return non-empty plaintext from any content part that carries ``text``."""
     if not isinstance(part, dict):
@@ -79,7 +91,7 @@ def _iter_text_parts_in_content(content: object) -> Iterator[str]:
     if isinstance(content, str):
         if content:
             yield content
-    elif isinstance(content, list):
+    elif _is_object_list(content):
         for part in content:
             if isinstance(part, str):
                 # A bare string in a content/input list is itself a text
@@ -98,11 +110,9 @@ def _has_plain_text_content(content: object) -> bool:
     """Return True when in-place masking can replace content without losing parts."""
     if isinstance(content, str):
         return True
-    if not isinstance(content, list):
+    if not _is_object_list(content):
         return False
-    return all(
-        isinstance(part, str) or (isinstance(part, Mapping) and _part_text(part) is not None) for part in content
-    )
+    return all(isinstance(part, str) or (_is_object_mapping(part) and _part_text(part) is not None) for part in content)
 
 
 def _tool_search_tool_text(tool: Mapping[str, object]) -> str:
@@ -115,13 +125,13 @@ def _coerce_input_to_messages(input_value: object) -> list[dict[str, object]]:
     """Coerce a Responses-API ``data["input"]`` value into chat-style messages."""
     if isinstance(input_value, str):
         return [{"role": "user", "content": input_value}]
-    if not isinstance(input_value, list):
+    if not _is_object_list(input_value):
         return []
-    messages: Final[list[dict[str, object]]] = []
+    messages: list[dict[str, object]] = []
     for item in input_value:
         if isinstance(item, str):
             messages.append({"role": "user", "content": item})
-        elif isinstance(item, dict):
+        elif _is_object_dict(item):
             if _part_text(item) is not None:
                 messages.append({"role": item.get("role") or "user", "content": [item]})
             elif item.get("type") == "reasoning":
@@ -132,7 +142,7 @@ def _coerce_input_to_messages(input_value: object) -> list[dict[str, object]]:
                             "content": item["content"],
                         }
                     )
-                if isinstance(item.get("summary"), list):
+                if _is_object_list(item.get("summary")):
                     messages.append(
                         {  # mutable-ok: append reasoning summary
                             "role": item.get("role") or "assistant",
@@ -143,9 +153,9 @@ def _coerce_input_to_messages(input_value: object) -> list[dict[str, object]]:
                 messages.append({"role": item.get("role") or "user", "content": item["content"]})
             elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
                 messages.append({"role": item.get("role") or "tool", "content": item["output"]})
-            elif item.get("type") == "tool_search_output" and isinstance(item.get("tools"), list):
+            elif item.get("type") == "tool_search_output" and _is_object_list(item.get("tools")):
                 for tool_idx, tool in enumerate(item["tools"]):
-                    if isinstance(tool, Mapping):
+                    if _is_object_mapping(tool):
                         messages.append(
                             {  # mutable-ok: inspection snapshot with a write-back index
                                 "role": "tool",
@@ -159,7 +169,7 @@ def _coerce_input_to_messages(input_value: object) -> list[dict[str, object]]:
 def _iter_inspection_messages(data: Mapping[str, object]) -> Iterator[object]:
     """Yield every message-like dict, walking ``messages`` AND ``input``."""
     messages: Final = data.get("messages")
-    if isinstance(messages, list):
+    if _is_object_list(messages):
         yield from messages
     yield from _coerce_input_to_messages(data.get("input"))
 
@@ -171,7 +181,7 @@ def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
     the entire conversation, not just user turns.
     """
     for message in _iter_inspection_messages(data):
-        if not isinstance(message, dict):
+        if not _is_object_dict(message):
             continue
         yield from _iter_text_parts_in_content(message.get("content"))
 
@@ -192,13 +202,13 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
                 visited += 1
                 return visit(content)
             return content
-        if isinstance(content, list):
+        if _is_object_list(content):
             new_parts: Final[list[object]] = []
             for part in content:
                 if isinstance(part, str) and part:
                     visited += 1
                     new_parts.append(visit(part))
-                elif isinstance(part, dict) and _part_text(part) is not None:
+                elif _is_object_dict(part) and _part_text(part) is not None:
                     visited += 1
                     new_parts.append({**part, "text": visit(part["text"])})
                 else:
@@ -217,9 +227,9 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
         return rewritten
 
     messages: Final = data.get("messages")
-    if isinstance(messages, list):
+    if _is_object_list(messages):
         for message in messages:
-            if isinstance(message, dict) and "content" in message:
+            if _is_object_dict(message) and "content" in message:
                 message["content"] = _rewrite_content(message["content"])
 
     input_value: Final = data.get("input")
@@ -228,28 +238,29 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
             visited += 1
             data["input"] = visit(input_value)
         return visited
-    if isinstance(input_value, list):
+    if _is_object_list(input_value):
         for idx, item in enumerate(input_value):
             if isinstance(item, str):
                 if item:
                     visited += 1
                     input_value[idx] = visit(item)
-            elif isinstance(item, dict):
+            elif _is_object_dict(item):
                 if _part_text(item) is not None:
                     visited += 1
                     input_value[idx] = {**item, "text": visit(item["text"])}  # mutable-ok: rewrite text part in place
                 elif item.get("type") == "reasoning":
                     if "content" in item:
                         item["content"] = _rewrite_content(item["content"])
-                    if isinstance(item.get("summary"), list):
+                    if _is_object_list(item.get("summary")):
                         item["summary"] = _rewrite_content(item["summary"])
                 elif "content" in item:
                     item["content"] = _rewrite_content(item["content"])
                 elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
                     item["output"] = _rewrite_content(item["output"])
-                elif item.get("type") == "tool_search_output" and isinstance(item.get("tools"), list):
+                elif item.get("type") == "tool_search_output" and _is_object_list(item.get("tools")):
+                    tools: list[object] = item["tools"]
                     item["tools"] = [  # mutable-ok: rewrites forwarded tool-search results in place
-                        _rewrite_tool_search_tool(tool) if isinstance(tool, Mapping) else tool for tool in item["tools"]
+                        _rewrite_tool_search_tool(tool) if _is_object_mapping(tool) else tool for tool in tools
                     ]
         return visited
 
@@ -263,7 +274,7 @@ def is_string_batch_input(data: Mapping[str, object]) -> bool:
     if "messages" in data:
         return False
     input_value: Final = data.get("input")
-    return isinstance(input_value, list) and bool(input_value) and all(isinstance(item, str) for item in input_value)
+    return _is_object_list(input_value) and bool(input_value) and all(isinstance(item, str) for item in input_value)
 
 
 def _apply_redacted_input_texts(input_value: list[object], response_texts: tuple[str, ...]) -> None:
@@ -272,7 +283,7 @@ def _apply_redacted_input_texts(input_value: list[object], response_texts: tuple
         if isinstance(item, str):
             if item:
                 input_value[item_idx] = next(redacted_iter)
-        elif isinstance(item, dict):
+        elif _is_object_dict(item):
             _apply_redacted_input_item(item, redacted_iter)
 
 
@@ -282,24 +293,24 @@ def _apply_redacted_input_item(item: dict[str, object], redacted_iter: Iterator[
     elif item.get("type") == "reasoning":
         if "content" in item and any(_iter_text_parts_in_content(item["content"])):
             item["content"] = next(redacted_iter)
-        if isinstance(item.get("summary"), list) and any(_iter_text_parts_in_content(item["summary"])):
+        if _is_object_list(item.get("summary")) and any(_iter_text_parts_in_content(item["summary"])):
             item["summary"] = next(redacted_iter)
     elif "content" in item and any(_iter_text_parts_in_content(item["content"])):
         item["content"] = next(redacted_iter)
     elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
         if any(_iter_text_parts_in_content(item["output"])):
             item["output"] = next(redacted_iter)
-    elif item.get("type") == "tool_search_output" and isinstance(item.get("tools"), list):
+    elif item.get("type") == "tool_search_output" and _is_object_list(item.get("tools")):
         _apply_redacted_tool_search_tools(item, redacted_iter)
 
 
 def _apply_redacted_tool_search_tools(item: dict[str, object], redacted_iter: Iterator[str]) -> None:
     rewritten_tools: list[object] = []
     tools: Final[object] = item["tools"]
-    if not isinstance(tools, list):
+    if not _is_object_list(tools):
         return
     for tool in tools:
-        if isinstance(tool, Mapping) and _tool_search_tool_text(tool):
+        if _is_object_mapping(tool) and _tool_search_tool_text(tool):
             rewritten_tools.append(
                 {  # mutable-ok: request tools must remain plain JSON dicts
                     **tool,
@@ -394,7 +405,7 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
             return False
         _apply_redacted_string_input(data, redacted_input_text)
     else:
-        if not isinstance(input_value, list) or not _structured_redactions_apply(input_value, input_redactions):
+        if not _is_object_list(input_value) or not _structured_redactions_apply(input_value, input_redactions):
             return False
     data["messages"] = redacted_messages[:message_count]
     return True
@@ -415,7 +426,7 @@ def _apply_redacted_input_without_messages(
             return False
         _apply_redacted_string_input(data, input_text)
         return True
-    if isinstance(input_value, list):
+    if _is_object_list(input_value):
         return _structured_redactions_apply(input_value, redacted_messages)
     return True
 
@@ -440,13 +451,13 @@ def _text_of_message(message: object) -> str | None:
     content: Final = message.get("content")
     if isinstance(content, str):
         return content
-    if isinstance(content, list):
+    if _is_object_list(content):
         return "\n".join(_iter_text_parts_in_content(content))
     return None
 
 
 def _has_non_string_input_item(item: object) -> bool:
-    if not isinstance(item, dict):
+    if not _is_object_dict(item):
         return True
     if _part_text(item) is not None:
         return False
@@ -470,15 +481,15 @@ def has_non_string_content(data: Mapping[str, object]) -> bool:
     are not silently stripped during in-place masking.
     """
     messages: Final = data.get("messages")
-    if isinstance(messages, list):
+    if _is_object_list(messages):
         for message in messages:
-            if isinstance(message, dict) and not isinstance(message.get("content"), str):
+            if _is_object_dict(message) and not isinstance(message.get("content"), str):
                 if message.get("content") is not None:
                     return True
     input_value: Final = data.get("input")
     if input_value is None or isinstance(input_value, str):
         return False
-    if not isinstance(input_value, list):
+    if not _is_object_list(input_value):
         return True
     return any(_has_non_string_input_item(item) for item in input_value)
 
@@ -496,7 +507,7 @@ def build_inspection_messages(data: dict[str, Any]) -> list[dict[str, str]]:
     """
     flattened: Final[list[dict[str, str]]] = []
     for message in _iter_inspection_messages(data):
-        if not isinstance(message, dict):
+        if not _is_object_dict(message):
             continue
         if "_tool_index" in message and isinstance(message.get("content"), str):
             flattened.append(
