@@ -25,7 +25,13 @@ async def lens_database() -> AsyncIterator[PrismaClient]:
     original_db: Final = proxy_server.prisma_client
     original_router: Final = proxy_server.llm_router
     original_settings: Final = proxy_server.general_settings
-    proxy_server.general_settings = {**original_settings, "allowed_ips": ["127.0.0.1"]}
+    proxy_server.general_settings = {
+        **original_settings,
+        "allowed_ips": ["127.0.0.1"],
+        "use_x_forwarded_for": True,
+        "mcp_trusted_proxy_ranges": ["192.0.2.100/32"],
+        "mcp_xff_num_trusted_hops": 1,
+    }
     client: Final = PrismaClient(os.environ["DATABASE_URL"], ProxyLogging(UserApiKeyCache()))
     await client.connect()
     proxy_server.prisma_client = client
@@ -123,15 +129,48 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
                         "type": "http",
                         "scheme": "http",
                         "path": "/engine/worker/model",
-                        "headers": [],
+                        "headers": [(b"x-forwarded-for", b"127.0.0.1")],
                         "client": ("192.0.2.1", 1234),
                     }
                 ),
             )
         assert denied_ip.value.status_code == 403
+        forwarded: Final = await endpoints.model(
+            engine.id,
+            claimed.job.id,
+            ModelRequest(prompt="Return an empty observations list", purpose="extract"),
+            worker,
+            Request(
+                {
+                    "type": "http",
+                    "scheme": "http",
+                    "path": "/engine/worker/model",
+                    "headers": [(b"x-forwarded-for", b"127.0.0.1")],
+                    "client": ("192.0.2.100", 1234),
+                }
+            ),
+        )
+        assert '"observations"' in forwarded.content
+        with pytest.raises(HTTPException) as spoofed_chain:
+            await endpoints.model(
+                engine.id,
+                claimed.job.id,
+                ModelRequest(prompt="Must not run", purpose="extract"),
+                worker,
+                Request(
+                    {
+                        "type": "http",
+                        "scheme": "http",
+                        "path": "/engine/worker/model",
+                        "headers": [(b"x-forwarded-for", b"127.0.0.1, 192.0.2.1")],
+                        "client": ("192.0.2.100", 1234),
+                    }
+                ),
+            )
+        assert spoofed_chain.value.status_code == 403
         charged: Final = await endpoints.get_engine(engine.id, worker.scope)
-        assert charged.spent == pytest.approx(response.cost)
-        assert charged.jobs[0].cost == pytest.approx(response.cost)
+        assert charged.spent == pytest.approx(response.cost + forwarded.cost)
+        assert charged.jobs[0].cost == pytest.approx(response.cost + forwarded.cost)
         legacy: Final = worker.model_copy(update={"analysis_key_id": None})
         await endpoints.repository().save_worker(legacy)
         authenticated_legacy: Final = await endpoints.worker_auth(credentials)

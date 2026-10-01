@@ -329,10 +329,10 @@ async def revoke_worker(worker_id: str, auth: Auth) -> bool:
 
 @router.post("/worker/claim", response_model=Claim | None)
 async def claim(worker: WorkerAuth, protocol_version: int = 1) -> Claim | None:
-    if worker.analysis_key_id is None:
-        raise HTTPException(409, "Assign an analysis key to this worker in Lens setup")
     if protocol_version != 2:
         raise HTTPException(409, "Upgrade the Lens worker using the current Connect worker command")
+    if worker.analysis_key_id is None:
+        raise HTTPException(409, "Assign an analysis key to this worker in Lens setup")
     now: Final = datetime.now(timezone.utc)
     await repository().heartbeat(worker.id, now.isoformat())
     for candidate in await repository().engines():

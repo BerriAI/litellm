@@ -8,6 +8,7 @@ from starlette.types import Message
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.resolvers.store import IdentityStore
 from litellm.proxy.auth.user_api_key_auth import authorize_internal_virtual_key
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -37,9 +38,7 @@ async def complete(
     from litellm.proxy.proxy_server import llm_router, proxy_config, proxy_logging_obj, version
 
     payload: Final = orjson.dumps(data)
-    forwarded: Final = tuple(
-        (b"x-forwarded-for", value.encode()) for value in incoming.headers.getlist("x-forwarded-for")
-    )
+    client_ip: Final = IPAddressUtils.get_mcp_client_ip(incoming)
 
     async def receive() -> Message:
         return {"type": "http.request", "body": payload, "more_body": False}  # mutable-ok: ASGI message contract
@@ -51,9 +50,9 @@ async def complete(
             "path": "/v1/chat/completions",
             "raw_path": b"/v1/chat/completions",
             "query_string": b"",
-            "headers": [(b"content-type", b"application/json"), *forwarded],  # mutable-ok: ASGI header contract
+            "headers": [(b"content-type", b"application/json")],  # mutable-ok: ASGI header contract
             "scheme": incoming.url.scheme or "http",
-            "client": (incoming.client.host, incoming.client.port) if incoming.client else None,
+            "client": (client_ip, incoming.client.port if incoming.client else 0) if client_ip else None,
             "server": ("litellm.internal", 80),
         },
         receive=receive,
