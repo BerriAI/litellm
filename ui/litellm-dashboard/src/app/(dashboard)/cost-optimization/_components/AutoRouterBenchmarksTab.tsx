@@ -76,10 +76,8 @@ const SpendRow: React.FC<{ label: string; value: string; hint?: string; subdued?
 const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
   const stats = view.stats;
   const cheaper = stats.saved_pct != null && stats.saved_pct >= 0;
-  const completeCoverage = stats.savings_estimated_turns === stats.turns;
-  const coveredClassifierCost =
-    stats.savings_estimated_classifier_cost ?? (completeCoverage ? stats.classifier_cost : null);
-  const classifierCost = stats.baseline_spend == null ? null : coveredClassifierCost;
+  const classifierCost = stats.baseline_spend == null ? null : stats.savings_estimated_classifier_cost ?? null;
+  const comparedAll = stats.savings_estimated_turns === stats.turns;
   return (
     <Card className="overflow-hidden py-0">
       <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -101,15 +99,10 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
               </Badge>
             )}
           </div>
-          {stats.baseline_spend != null && !completeCoverage && (
+          {stats.baseline_spend != null && !comparedAll && (
             <p className="text-center text-xs text-muted-foreground">
-              Savings based on {stats.savings_estimated_turns.toLocaleString()} of {stats.turns.toLocaleString()}{" "}
-              requests
-            </p>
-          )}
-          {stats.saved_spend != null && stats.baseline_spend == null && (
-            <p className="text-center text-xs text-muted-foreground">
-              Historical savings are included. Matching cost details are unavailable.
+              Compared on {stats.savings_estimated_turns.toLocaleString()} of {stats.turns.toLocaleString()} requests;
+              adaptive and quality routers are excluded
             </p>
           )}
         </div>
@@ -118,7 +111,7 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
           <SpendRow
             label="Actual auto-router spend"
             value={stats.baseline_spend == null ? "Unavailable" : usd(stats.savings_estimated_actual_spend)}
-            tooltip="Savings, actual spend, and baseline include historical and newer requests with recorded savings estimates. Requests without estimates are excluded. Actual spend includes classification costs."
+            tooltip="Auto-routed spend in the range, including classification costs, for complexity routers. Adaptive and quality routers are excluded. Baseline is this spend plus recorded savings."
           />
           <div className="mb-3 border-l-2 pl-4">
             <SpendRow
@@ -316,11 +309,9 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Savings, actual spend, and baseline compare the same historical and newer requests with recorded estimates,
-        including zero or negative savings. Requests without estimates are excluded. Savings are net of recorded LLM
-        classification cost. If historical cost details are unavailable, recorded savings remain visible without a
-        baseline or percentage. The range counts whole sessions that overlap it, so totals can differ from savings views
-        that group usage by UTC day.
+        Actual spend covers every request on complexity routers, including LLM classification cost. Baseline is actual
+        spend plus recorded savings, so savings can be zero or negative. The range counts whole sessions that overlap
+        it, so totals can differ from savings views that group usage by UTC day.
       </p>
 
       <div className="space-y-4">

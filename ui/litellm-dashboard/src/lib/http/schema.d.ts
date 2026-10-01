@@ -1263,8 +1263,8 @@ export interface paths {
          * @description Benchmarks for the auto-router dashboard: session shape, savings against the configured
          *     baseline, and prompt-caching behaviour bucketed by what the router did.
          *
-         *     Reads session rollups folded once per request at spend-write time, with bounded
-         *     retained-log recovery for historical comparisons. A user filter selects only turns attributed to that
+         *     Reads session rollups folded once per request at spend-write time, so this endpoint
+         *     never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
          *     internal user when written; older key-only history remains outside user views. A session
          *     is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
          *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
@@ -25464,7 +25464,7 @@ export interface components {
             avg_turns_per_session: number;
             /**
              * Baseline Spend
-             * @description Estimated single-model cost for covered turns only
+             * @description Estimated single-model cost: compared actual spend plus recorded savings; null when traffic has no recorded savings
              */
             baseline_spend: number | null;
             cache: components["schemas"]["AutoRouterCacheStats"];
@@ -25485,7 +25485,7 @@ export interface components {
             router_type: string;
             /**
              * Saved Pct
-             * @description Total recorded savings over the matching historical and current baseline; null when costs are unavailable
+             * @description Recorded savings over baseline_spend, as a percentage
              */
             saved_pct: number | null;
             /**
@@ -25500,17 +25500,17 @@ export interface components {
             saved_spend: number | null;
             /**
              * Savings Estimated Actual Spend
-             * @description Actual spend, including classifier cost, for covered turns only
+             * @description Actual spend, including classifier cost, for the compared requests
              */
             savings_estimated_actual_spend: number;
             /**
              * Savings Estimated Classifier Cost
-             * @description Classifier cost included in the matching historical and newer savings comparison; null when classification costs for those requests are unavailable
+             * @description Classifier cost included in the compared actual spend; null when classification costs for those requests are unavailable
              */
             savings_estimated_classifier_cost?: number | null;
             /**
              * Savings Estimated Turns
-             * @description Requests with a matching savings comparison, including historical recorded estimates
+             * @description Requests compared against the baseline: every request on complexity routers that recorded savings
              */
             savings_estimated_turns: number;
             /** Sessions */
@@ -25543,7 +25543,7 @@ export interface components {
             avg_turns_per_session: number;
             /**
              * Baseline Spend
-             * @description Estimated single-model cost for covered turns only
+             * @description Estimated single-model cost: compared actual spend plus recorded savings; null when traffic has no recorded savings
              */
             baseline_spend: number | null;
             cache: components["schemas"]["AutoRouterCacheStats"];
@@ -25554,7 +25554,7 @@ export interface components {
             classifier_cost: number | null;
             /**
              * Saved Pct
-             * @description Total recorded savings over the matching historical and current baseline; null when costs are unavailable
+             * @description Recorded savings over baseline_spend, as a percentage
              */
             saved_pct: number | null;
             /**
@@ -25569,17 +25569,17 @@ export interface components {
             saved_spend: number | null;
             /**
              * Savings Estimated Actual Spend
-             * @description Actual spend, including classifier cost, for covered turns only
+             * @description Actual spend, including classifier cost, for the compared requests
              */
             savings_estimated_actual_spend: number;
             /**
              * Savings Estimated Classifier Cost
-             * @description Classifier cost included in the matching historical and newer savings comparison; null when classification costs for those requests are unavailable
+             * @description Classifier cost included in the compared actual spend; null when classification costs for those requests are unavailable
              */
             savings_estimated_classifier_cost?: number | null;
             /**
              * Savings Estimated Turns
-             * @description Requests with a matching savings comparison, including historical recorded estimates
+             * @description Requests compared against the baseline: every request on complexity routers that recorded savings
              */
             savings_estimated_turns: number;
             /** Sessions */
@@ -25868,7 +25868,7 @@ export interface components {
             };
             /**
              * Baseline Spend
-             * @description Estimated single-model cost; unavailable unless every turn is covered
+             * @description Estimated single-model cost: spend plus recorded savings
              */
             baseline_spend: number | null;
             /**
@@ -25893,17 +25893,17 @@ export interface components {
             saved_spend: number | null;
             /**
              * Savings Estimated Actual Spend
-             * @description Actual spend, including classifier cost, for covered turns only
+             * @description Actual spend, including classifier cost, for requests whose estimate recorded its baseline cost
              */
             savings_estimated_actual_spend: number;
             /**
              * Savings Estimated Baseline Spend
-             * @description Estimated single-model cost for covered turns only
+             * @description Estimated single-model cost for requests whose estimate recorded its baseline cost
              */
             savings_estimated_baseline_spend: number | null;
             /**
              * Savings Estimated Turns
-             * @description Requests with a matching savings comparison, including historical recorded estimates
+             * @description Requests whose savings estimate recorded its baseline cost
              */
             savings_estimated_turns: number;
             /** Session Id */
