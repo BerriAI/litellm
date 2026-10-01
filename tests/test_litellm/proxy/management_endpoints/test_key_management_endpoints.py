@@ -3377,30 +3377,25 @@ async def test_validate_key_team_change_with_member_permissions():
             "litellm.proxy.management_endpoints.key_management_endpoints._get_user_in_team"
         ) as mock_get_user:
             with patch(
-                "litellm.proxy.management_endpoints.key_management_endpoints._is_user_team_admin"
-            ) as mock_is_admin:
-                with patch(
-                    "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint"
-                ) as mock_has_perms:
+                "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint"
+            ) as mock_has_perms:
+                mock_get_user.return_value = mock_member_object
+                mock_has_perms.return_value = True
 
-                    mock_get_user.return_value = mock_member_object
-                    mock_is_admin.return_value = False
-                    mock_has_perms.return_value = True
+                # This should not raise an exception due to member permissions
+                await validate_key_team_change(
+                    key=mock_key,
+                    team=mock_team,
+                    change_initiated_by=mock_change_initiator,
+                    llm_router=mock_router,
+                )
 
-                    # This should not raise an exception due to member permissions
-                    await validate_key_team_change(
-                        key=mock_key,
-                        team=mock_team,
-                        change_initiated_by=mock_change_initiator,
-                        llm_router=mock_router,
-                    )
-
-                    # Verify the permission check was called with correct parameters
-                    mock_has_perms.assert_called_once_with(
-                        team_member_role=mock_member_object.role,
-                        team_table=mock_team,
-                        route=KeyManagementRoutes.KEY_UPDATE.value,
-                    )
+                # Verify the permission check was called with correct parameters
+                mock_has_perms.assert_called_once_with(
+                    team_member_role=mock_member_object.role,
+                    team_table=mock_team,
+                    route=KeyManagementRoutes.KEY_UPDATE.value,
+                )
 
 
 @pytest.mark.asyncio
@@ -20291,7 +20286,11 @@ async def test_update_key_row_with_soft_budget_updates_budget_and_key_in_transac
     existing_key = LiteLLM_VerificationToken(token="test-token", budget_id=None)
     created_row = MagicMock(budget_id="budget-new")
     updated_row = MagicMock()
-    updated_row.model_dump.return_value = {"token": "hashed", "budget_id": "budget-new"}
+    updated_row.model_dump.return_value = {
+        "token": "hashed",
+        "budget_id": "budget-new",
+        "object_permission": {"mcp_servers": ["srv-1"], "mcp_tool_permissions": {"srv-1": ["read"]}},
+    }
     tx = MagicMock()
     tx.litellm_budgettable.create = AsyncMock(return_value=created_row)
     tx.litellm_verificationtoken.update = AsyncMock(return_value=updated_row)
@@ -20312,10 +20311,15 @@ async def test_update_key_row_with_soft_budget_updates_budget_and_key_in_transac
     )
 
     assert set(result) == {"token", "data"}
-    assert result["data"] == {"token": "hashed", "budget_id": "budget-new"}
+    assert result["data"] == {
+        "token": "hashed",
+        "budget_id": "budget-new",
+        "object_permission": {"mcp_servers": ["srv-1"], "mcp_tool_permissions": {"srv-1": ["read"]}},
+    }
     tx.litellm_verificationtoken.update.assert_awaited_once()
     update_call = tx.litellm_verificationtoken.update.await_args
     assert update_call.kwargs["where"] == {"token": result["token"]}
+    assert update_call.kwargs["include"] == {"object_permission": True}
     assert update_call.kwargs["data"]["budget_id"] == "budget-new"
     assert "soft_budget" not in update_call.kwargs["data"]
 

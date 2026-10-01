@@ -634,3 +634,28 @@ async def test_query_first_with_cached_plan_fallback_reports_the_reader_generati
         "reader_served_the_query": 2,
         "writer_served_the_query": 0,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rotated", (False, True))
+async def test_authoritative_combined_key_view_uses_writer_through_rotation(
+    prisma_client: PrismaClient, rotated: bool
+) -> None:
+    writer: Final = MagicMock()
+    reader: Final = MagicMock()
+    active: Final = {
+        "token": "current-token", "team_id": "current-team", "team_models": None,
+        "team_blocked": None, "team_members_with_roles": None, "user_id": None, "expires": None,
+    }
+    writer.query_first = AsyncMock(side_effect=[None, active] if rotated else [active])
+    reader.query_first = AsyncMock(return_value={**active, "team_id": "stale-team"})
+    writer.litellm_deprecatedverificationtoken.find_first = AsyncMock(return_value=SimpleNamespace(
+        active_token_id="current-token", revoke_at=datetime.now(timezone.utc) + timedelta(hours=1)
+    ))
+    prisma_client.db = RoutingPrismaWrapper(writer=writer, reader=reader)
+    response: Final = await prisma_client.get_data(token="original-token", table_name="combined_view", use_writer=True)
+    assert isinstance(response, LiteLLM_VerificationTokenView)
+    assert response.team_id == "current-team"
+    assert response.token == "current-token"
+    reader.query_first.assert_not_awaited()
+    assert writer.query_first.await_count == (2 if rotated else 1)

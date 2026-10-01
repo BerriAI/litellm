@@ -1129,11 +1129,8 @@ class LLMCachingHandler:
         Returns:
             bool: True if the result should be stored in the cache, False otherwise.
         """
-        return (
-            (litellm.cache is not None)
-            and litellm.cache.supported_call_types is not None
-            and (str(original_function.__name__) in litellm.cache.supported_call_types)
-            and (kwargs.get("cache", {}).get("no-store", False) is not True)
+        return self._is_call_type_supported_by_cache(original_function=original_function) and (
+            kwargs.get("cache", {}).get("no-store", False) is not True
         )
 
     def wrap_streaming_result_for_cache(
@@ -1170,13 +1167,11 @@ class LLMCachingHandler:
         Returns:
             bool: True if the call type is supported by the cache, False otherwise.
         """
-        if (
-            litellm.cache is not None
-            and litellm.cache.supported_call_types is not None
-            and str(original_function.__name__) in litellm.cache.supported_call_types
-        ):
-            return True
-        return False
+        if litellm.cache is None or litellm.cache.supported_call_types is None:
+            return False
+        call_type: Final = str(original_function.__name__)
+        covering_call_types: Final = ("aresponses", "responses") if call_type == "aresponses" else (call_type,)
+        return any(name in litellm.cache.supported_call_types for name in covering_call_types)
 
     async def _add_streaming_response_to_cache(self, processed_chunk: ModelResponse):
         """

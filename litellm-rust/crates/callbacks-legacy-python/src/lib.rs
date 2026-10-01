@@ -20,5 +20,13 @@ pub(crate) use callbacks::{LegacyCallbacks, is_internal_call};
 pub(crate) use logger::{DeploymentHooks, PythonLogger, finalize, setup};
 pub use mapping::{CallBoundary, CallbackMapping, Dispatch, callback_mappings};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoggingOperation {
+    Completion,
+    Responses,
+    Messages,
+    Ocr,
+}
+
 #[cfg(test)]
 mod test_support;

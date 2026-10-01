@@ -495,7 +495,7 @@ class TestZeroCostDiagnostic:
     DEPLOYMENT_ID: Final = "lit7898-query-only-priced-deployment"
     MODEL_GROUP: Final = "query-only-priced-chat"
     QUERY_ONLY_PRICING: Final = {"input_cost_per_query": 0.00042}
-    PER_SECOND_PRICING: Final = {"input_cost_per_second": 0.00042, "output_cost_per_second": 0.00042}
+    PER_SECOND_PRICING: Final = {"cost_per_second": 0.00042}
     FREE_PRICING: Final = {"input_cost_per_token": 0, "output_cost_per_token": 0}
 
     @pytest.fixture(params=["query_only", "free"])
@@ -845,7 +845,7 @@ class TestZeroCostDiagnostic:
             response: Final = self._response(usage)
             response._response_ms = 1000.0
             with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-                assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.00084)
+                assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.00042)
 
             assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
             assert self._zero_cost_warnings(caplog) == []
@@ -4858,6 +4858,75 @@ def test_get_standard_logging_object_payload_includes_litellm_call_id(logging_ob
     assert payload["litellm_call_id"] == call_id
 
 
+@pytest.mark.parametrize(
+    "client_sent_oauth_token, custom_llm_provider, expected",
+    [(True, "anthropic", True), (True, "bedrock", False), (False, "anthropic", False), (None, "anthropic", None)],
+)
+def test_get_standard_logging_object_payload_resolves_used_client_oauth_token_against_the_selected_provider(
+    logging_obj, client_sent_oauth_token: bool | None, custom_llm_provider: str, expected: bool | None
+):
+    """The proxy stamps whether the client presented an Anthropic OAuth bearer before routing, but the
+    bearer only reaches an Anthropic deployment, so the logged flag must follow the provider that was called."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    request_metadata = {} if client_sent_oauth_token is None else {"used_client_oauth_token": client_sent_oauth_token}
+    now = datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "model": "claude-sonnet-5",
+            "messages": [],
+            "custom_llm_provider": custom_llm_provider,
+            "litellm_params": {"metadata": request_metadata},
+        },
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["metadata"]["used_client_oauth_token"] is expected
+
+
+@pytest.mark.parametrize(
+    "metadata, litellm_metadata, expected",
+    [
+        ({"used_client_oauth_token": True}, {"used_client_oauth_token": False}, False),
+        ({"used_client_oauth_token": False}, {"used_client_oauth_token": True}, True),
+        ({"used_client_oauth_token": True}, {"compression_savings": 1}, True),
+    ],
+)
+def test_get_standard_logging_object_payload_takes_used_client_oauth_token_from_the_proxy_stamped_slot(
+    logging_obj, metadata: dict, litellm_metadata: dict, expected: bool
+):
+    """On routes that carry proxy metadata in `litellm_metadata`, `metadata` is the caller's own body field,
+    so a caller writing the flag there must not override what the proxy stamped."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    now = datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "model": "claude-sonnet-5",
+            "messages": [],
+            "custom_llm_provider": "anthropic",
+            "litellm_params": {"metadata": metadata, "litellm_metadata": litellm_metadata},
+        },
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["metadata"]["used_client_oauth_token"] is expected
+
+
 def test_get_standard_logging_object_payload_carries_matched_access_groups(logging_obj):
     """Access groups stamped at auth time reach the logging payload, so integrations see what a request billed."""
     from datetime import datetime
@@ -8809,6 +8878,58 @@ async def test_async_failure_handler_delivers_failure_payload_to_custom_logger()
     assert "smoke-failure" in payload["error_str"]
     assert payload["model"] == "openai/gpt-5.6"
     assert events.empty()
+
+
+def test_responses_completed_event_bills_the_served_service_tier():
+    """The served service_tier on response.completed's inner ResponsesAPIResponse
+    must reach the cost calculator, so a priority-served stream prices at the
+    priority rates instead of the default tier's."""
+    logging_obj: Final = LitellmLogging(
+        model="openai/gpt-5.1",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="aresponses",
+        start_time=time.time(),
+        litellm_call_id="resp-served-tier",
+        function_id="resp-served-tier",
+    )
+    logging_obj.update_environment_variables(
+        model="openai/gpt-5.1",
+        user="",
+        optional_params={},
+        litellm_params={},
+        custom_llm_provider="openai",
+    )
+    inner: Final = ResponsesAPIResponse(
+        id="resp-served-tier",
+        created_at=1,
+        object="response",
+        status="completed",
+        model="gpt-5.1",
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=10, output_tokens=20, total_tokens=30),
+        service_tier="priority",
+    )
+    event: Final = ResponseCompletedEvent(type="response.completed", response=inner)
+
+    cost: Final = logging_obj._response_cost_calculator(result=event)  # pyright: ignore[reportPrivateUsage]  # parity with the suite's own direct calls
+
+    billed_response: Final = ModelResponse(
+        model="gpt-5.1",
+        usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+    tier_cost: Final = litellm.completion_cost(
+        completion_response=billed_response,
+        model="openai/gpt-5.1",
+        service_tier="priority",
+    )
+    default_cost: Final = litellm.completion_cost(
+        completion_response=billed_response,
+        model="openai/gpt-5.1",
+    )
+
+    assert cost == pytest.approx(tier_cost)
+    assert cost > default_cost
 
 
 def _image_logging_obj() -> LitellmLogging:

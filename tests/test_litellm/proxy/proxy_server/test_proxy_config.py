@@ -22,6 +22,7 @@ from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors
@@ -33,14 +34,59 @@ from litellm.proxy.proxy_server import (
     _scrub_guardrail_inner,
     resolve_complexity_router_plugins,
     resolve_routing_plugins,
+    validate_auto_router_capability_limits,
     validate_deployment_access_windows,
     validate_deployment_complexity_router_placement,
     validate_deployment_max_agentic_loops,
-    validate_auto_router_capability_limits,
 )
 
 from .conftest import normalize
-from pydantic import JsonValue, TypeAdapter, ValidationError
+
+
+@pytest.mark.asyncio
+async def test_tracing_config_automatically_logs_spend_without_callback_setting():
+    from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
+    from litellm.proxy import tracing_endpoints
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.tracing import TraceReceiver
+    from litellm.tracing.store import ClickHouseTraceStore
+
+    storage = MagicMock()
+    storage.ensure_schema = AsyncMock()
+    storage.insert_rows = AsyncMock()
+    receiver = TraceReceiver(ClickHouseTraceStore(storage))
+    prior_receiver = tracing_endpoints.receiver
+
+    try:
+        await ProxyStartupEvent.init_tracing({"tracing": {"store": "clickhouse"}}, receiver=receiver)
+        storage.ensure_schema.assert_awaited_once()
+        logger = next(
+            callback for callback in litellm._async_success_callback if isinstance(callback, ClickHouseSpendLogger)
+        )
+        now = datetime.now()
+        await logger.async_log_success_event(
+            {
+                "standard_logging_object": {
+                    "id": "response-1",
+                    "startTime": now.timestamp(),
+                    "endTime": now.timestamp(),
+                    "response_cost": 0.25,
+                }
+            },
+            None,
+            now,
+            now,
+        )
+        await logger.flush_queue()
+        assert storage.insert_rows.await_args.args[0] == "spend_logs"
+        assert storage.insert_rows.await_args.args[1][0]["spend"] == 0.25
+
+        await ProxyStartupEvent.init_tracing({})
+        assert all(not isinstance(callback, ClickHouseSpendLogger) for callback in litellm._async_success_callback)
+    finally:
+        await ProxyStartupEvent.init_tracing({})
+        tracing_endpoints.receiver = prior_receiver
+
 
 # ---------------------------------------------------------------------------
 # _is_remote_module_url
@@ -4699,24 +4745,28 @@ def _config_agent(agent_name: str) -> Dict[str, Any]:
     }
 
 
-class _FakeAgentRow:
-    """Stand-in for a prisma agent record: supports dict() and .object_permission."""
+def _agent_db_row(agent_id: str, agent_name: str):
+    import json
+    from datetime import datetime, timezone
 
-    def __init__(self, agent_id: str, agent_name: str) -> None:
-        self.agent_id = agent_id
-        self.agent_name = agent_name
-        self.object_permission = None
-        self.spend = 0.0
+    from prisma.models import LiteLLM_AgentsTable
 
-    def __iter__(self):
-        return iter(
-            {
-                "agent_id": self.agent_id,
-                "agent_name": self.agent_name,
-                "agent_card_params": {"name": self.agent_name, "url": "http://db-agent"},
-                "litellm_params": {},
-            }.items()
-        )
+    return LiteLLM_AgentsTable(
+        agent_id=agent_id,
+        agent_name=agent_name,
+        agent_card_params=json.dumps({"name": agent_name, "url": "http://db-agent"}),
+        extra_headers=[],
+        agent_access_groups=[],
+        access_group_ids=[],
+        spend=0.0,
+        identity_managed=False,
+        enabled=True,
+        execution_mode="autonomous",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        created_by="admin",
+        updated_by="admin",
+    )
 
 
 @pytest.mark.asyncio
@@ -4740,7 +4790,7 @@ async def test_ProxyConfig__init_agents_in_db_keeps_config_defined_agents(clean_
     )
 
     prisma_client = MagicMock()
-    prisma_client.db.litellm_agentstable.find_many = AsyncMock(return_value=[_FakeAgentRow("db-id", "db-agent")])
+    prisma_client.db.litellm_agentstable.find_many = AsyncMock(return_value=[_agent_db_row("db-id", "db-agent")])
 
     await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
 
@@ -4777,7 +4827,7 @@ async def test_ProxyStartupEvent_jwt_auth_resolves_agent_claims_against_live_reg
         elif agents_source == "db":
             prisma_client = MagicMock()
             prisma_client.db.litellm_agentstable.find_many = AsyncMock(
-                return_value=[_FakeAgentRow("db-id", "loaded-agent")]
+                return_value=[_agent_db_row("db-id", "loaded-agent")]
             )
             await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
         else:
