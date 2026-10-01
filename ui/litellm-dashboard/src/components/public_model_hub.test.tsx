@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { render, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { renderWithProviders } from "@/../tests/test-utils";
 import PublicModelHub from "./public_model_hub";
 import { getPublicMCPHubColumns, MCPServerData, ModelGroupInfo } from "./PublicModelHubTableColumns";
 
@@ -94,7 +95,7 @@ const lastModelQuery = (): QueryRecord => modelQueries()[modelQueries().length -
 
 const renderHub = () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  return render(
+  return renderWithProviders(
     <QueryClientProvider client={client}>
       <PublicModelHub />
     </QueryClientProvider>,
@@ -125,6 +126,7 @@ beforeEach(() => {
   Object.defineProperty(window, "location", {
     writable: true,
     value: {
+      href: "http://localhost:3000/",
       pathname: "/",
       origin: "http://localhost:3000",
     },
@@ -260,7 +262,7 @@ describe("PublicModelHub", () => {
     await user.click(screen.getByTestId("pagination-next"));
     await waitFor(() => expect(lastModelQuery().page).toBe(2));
 
-    await user.type(screen.getByPlaceholderText("Search model names..."), "claude");
+    fireEvent.change(screen.getByPlaceholderText("Search model names..."), { target: { value: "claude" } });
 
     await waitFor(() => expect(lastModelQuery().q).toBe("claude"));
     expect(lastModelQuery().page).toBe(1);

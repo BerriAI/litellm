@@ -10,7 +10,7 @@ import type { components } from "@/lib/http/schema";
 
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { useResourceList, type ResourceListQuery, type ResourceListResult } from "../common/useResourceList";
-import { serializeBudgetFilters } from "./budgetFilters";
+import { BUDGET_LIST_URL_STATE, serializeBudgetFilters } from "./budgetFilters";
 
 export type budgetItem = components["schemas"]["BudgetListItem"];
 
@@ -39,6 +39,7 @@ export const useBudgetList = (): ResourceListResult<budgetItem> => {
     defaultSorting: DEFAULT_SORTING,
     defaultPageSize: DEFAULT_PAGE_SIZE,
     enabled: Boolean(accessToken),
+    urlState: BUDGET_LIST_URL_STATE,
   };
   return useResourceList<budgetItem>(listOptions);
 };
