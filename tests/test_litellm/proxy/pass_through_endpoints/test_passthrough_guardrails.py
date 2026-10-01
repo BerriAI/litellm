@@ -260,3 +260,79 @@ class TestPassthroughGuardrailHandlerPrepareOutput:
         assert "targeted1" in result
         assert "targeted2" in result
         assert "ignored" not in result
+
+
+class TestHasApplicablePostCallGuardrail:
+    """Tests for PassthroughGuardrailHandler.has_applicable_post_call_guardrail.
+
+    The post-call hook in pass_through_request is gated on this check when no
+    endpoint-level guardrails are configured, so that default_on / request-level
+    guardrails still enforce (issue #32201) while plain pass-through traffic
+    keeps skipping the hook entirely.
+    """
+
+    def _register_guardrail(self, monkeypatch, guardrail):
+        import litellm
+
+        monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    def _make_guardrail(self, event_hook: str, default_on: bool):
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+
+        return CustomGuardrail(
+            guardrail_name="test-guard",
+            event_hook=event_hook,
+            default_on=default_on,
+        )
+
+    def test_returns_false_with_no_callbacks(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setattr(litellm, "callbacks", [])
+        assert PassthroughGuardrailHandler.has_applicable_post_call_guardrail({}) is False
+
+    def test_returns_true_for_default_on_post_call_guardrail(self, monkeypatch):
+        guardrail = self._make_guardrail(event_hook="post_call", default_on=True)
+        self._register_guardrail(monkeypatch, guardrail)
+        assert PassthroughGuardrailHandler.has_applicable_post_call_guardrail({}) is True
+
+    def test_returns_false_for_default_on_pre_call_only_guardrail(self, monkeypatch):
+        """A pre_call-only guardrail never runs post_call, so the hook stays skipped."""
+        guardrail = self._make_guardrail(event_hook="pre_call", default_on=True)
+        self._register_guardrail(monkeypatch, guardrail)
+        assert PassthroughGuardrailHandler.has_applicable_post_call_guardrail({}) is False
+
+    def test_returns_false_for_unattached_non_default_on_guardrail(self, monkeypatch):
+        """Opt-in stays opt-in: a registered but unrequested guardrail does not
+        trigger the post-call hook."""
+        guardrail = self._make_guardrail(event_hook="post_call", default_on=False)
+        self._register_guardrail(monkeypatch, guardrail)
+        assert PassthroughGuardrailHandler.has_applicable_post_call_guardrail({}) is False
+
+    def test_returns_true_for_request_attached_guardrail(self, monkeypatch):
+        guardrail = self._make_guardrail(event_hook="post_call", default_on=False)
+        self._register_guardrail(monkeypatch, guardrail)
+        data = {"guardrails": ["test-guard"]}
+        assert PassthroughGuardrailHandler.has_applicable_post_call_guardrail(data) is True
+
+    def test_returns_false_for_non_guardrail_callbacks(self, monkeypatch):
+        """Plain CustomLogger callbacks (loggers, budget hooks) must not flip
+        the check — otherwise every pass-through response would start invoking
+        post_call_success_hook."""
+        import litellm
+        from litellm.integrations.custom_logger import CustomLogger
+
+        monkeypatch.setattr(litellm, "callbacks", [CustomLogger()])
+        assert PassthroughGuardrailHandler.has_applicable_post_call_guardrail({}) is False
+
+    def test_fails_closed_when_should_run_guardrail_errors(self, monkeypatch):
+        """If applicability cannot be determined, run the hook so the error
+        surfaces there instead of silently skipping enforcement."""
+        guardrail = self._make_guardrail(event_hook="post_call", default_on=True)
+
+        def _boom(**kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(guardrail, "should_run_guardrail", _boom)
+        self._register_guardrail(monkeypatch, guardrail)
+        assert PassthroughGuardrailHandler.has_applicable_post_call_guardrail({}) is True
