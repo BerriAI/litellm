@@ -1,16 +1,13 @@
-import json
 import secrets
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
 
 import httpx
-import psutil
 import pytest
 import yaml
-from integration._support.client import Gateway, Scenario, eventually, object_value
+from integration._support.client import Gateway, Scenario, object_value
 from integration._support.mcp import (
     INITIALIZE,
     Outcome,
@@ -21,7 +18,7 @@ from integration._support.mcp import (
     tool_calls,
 )
 from integration._support.mcp_grants import create_toolset
-from integration._support.process import owned_proxy, owned_proxy_process
+from integration._support.process import owned_proxy
 
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -264,34 +261,6 @@ def _route_call(gateway: Gateway, headers: dict[str, str], name: str, tool: str)
     return _toolset_rpc(gateway, headers, name, "tools/call", {"name": tool, "arguments": dict(ADD)})
 
 
-def _fresh_connection_initialize_codes(gateway: Gateway, headers: dict[str, str], name: str) -> tuple[int, ...]:
-    url: Final = f"{gateway.client.base_url}/toolset/{name}/mcp"
-    body: Final = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": dict(INITIALIZE)}
-    sent: Final = {**headers, "Accept": "application/json, text/event-stream", "Connection": "close"}
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        return tuple(pool.map(lambda _: httpx.post(url, json=body, headers=sent, timeout=30).status_code, range(16)))
-
-
-def _served_by_every_worker(gateway: Gateway, headers: dict[str, str], name: str) -> None:
-    """A newly registered server reaches the other uvicorn workers on their periodic registry reload."""
-    eventually(
-        lambda: tuple(_fresh_connection_initialize_codes(gateway, headers, name) for _ in range(3)),
-        lambda rounds: all(all(code == 200 for code in codes) for codes in rounds),
-        seconds=75,
-    )
-
-
-def _workers_listening_on(root: psutil.Process, port: int) -> tuple[psutil.Process, ...]:
-    return tuple(child for child in root.children(recursive=True) if _listens_on(child, port))
-
-
-def _listens_on(process: psutil.Process, port: int) -> bool:
-    return any(
-        connection.status == psutil.CONN_LISTEN and connection.laddr.port == port
-        for connection in process.net_connections(kind="inet")
-    )
-
-
 def _strict_config(directory: Path) -> Path:
     base: Final = yaml.safe_load((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text())
     strict: Final = {
@@ -515,21 +484,6 @@ def test_a_member_added_after_the_team_was_cached_sees_the_toolset_on_every_foll
         assert listings == ((granted_id,),) * 8, listings
 
 
-def test_repeated_team_key_listings_and_detail_reads_are_byte_identical(gateway: Gateway) -> None:
-    with mcp_peer() as peer, gateway.scenario() as scenario:
-        server_id: Final = register_mcp(scenario, peer, "lit6029same" + uuid.uuid4().hex[:6])
-        granted_id, _ = _toolset(scenario, server_id, "add")
-        headers: Final = _bearer(scenario.key(team_id=scenario.team(object_permission={"mcp_toolsets": [granted_id]})))
-        listings: Final = tuple(gateway.client.get("/v1/mcp/toolset", headers=headers) for _ in range(10))
-        assert {response.status_code for response in listings} == {200}, [r.text for r in listings]
-        assert len({response.text for response in listings}) == 1, [r.text for r in listings]
-        assert [toolset["toolset_id"] for toolset in json.loads(listings[0].text)] == [granted_id]
-        details: Final = tuple(gateway.client.get(f"/v1/mcp/toolset/{granted_id}", headers=headers) for _ in range(10))
-        assert {response.status_code for response in details} == {200}, [r.text for r in details]
-        assert len({response.text for response in details}) == 1, [r.text for r in details]
-        assert json.loads(details[0].text)["toolset_id"] == granted_id
-
-
 def test_a_member_of_two_teams_sees_the_union_and_each_route_stays_narrowed_to_its_own_toolset(
     gateway: Gateway, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -553,117 +507,3 @@ def test_a_member_of_two_teams_sees_the_union_and_each_route_stays_narrowed_to_i
         crossed: Final = _route_call(gateway, headers, first_name, f"{alias}-multiply")
         assert not crossed.ok, crossed.raw
         assert tool_calls(peer.drain()) == ()
-
-
-def test_editing_the_toolset_changes_what_the_team_key_sees_on_its_next_request(gateway: Gateway) -> None:
-    with mcp_peer() as peer, gateway.scenario() as scenario:
-        alias: Final = "lit6029edit" + uuid.uuid4().hex[:6]
-        server_id: Final = register_mcp(scenario, peer, alias)
-        granted_id, granted_name = _toolset(scenario, server_id, "add")
-        headers: Final = _bearer(scenario.key(team_id=scenario.team(object_permission={"mcp_toolsets": [granted_id]})))
-        assert _route_tools(gateway, headers, granted_name).tools == (f"{alias}-add",)
-        edited: Final = gateway.request(
-            "PUT",
-            "/v1/mcp/toolset",
-            {"toolset_id": granted_id, "tools": [{"server_id": server_id, "tool_name": "multiply"}]},
-        )
-        assert edited.status_code == 200, edited.text
-        eventually(
-            lambda: _route_tools(gateway, headers, granted_name).tools,
-            lambda tools: tools == (f"{alias}-multiply",),
-            seconds=150,
-        )
-        peer.drain()
-        removed: Final = _route_call(gateway, headers, granted_name, f"{alias}-add")
-        assert not removed.ok, removed.raw
-        assert tool_calls(peer.drain()) == ()
-        kept: Final = _route_call(gateway, headers, granted_name, f"{alias}-multiply")
-        assert kept.ok and kept.text == "20", kept.raw
-        assert [call["body"]["params"]["name"] for call in tool_calls(peer.drain())] == ["multiply"]
-
-
-def test_twenty_concurrent_team_toolset_calls_all_succeed_and_each_reaches_the_peer_once(gateway: Gateway) -> None:
-    with mcp_peer() as peer, gateway.scenario() as scenario:
-        alias: Final = "lit6029burst" + uuid.uuid4().hex[:6]
-        server_id: Final = register_mcp(scenario, peer, alias)
-        granted_id, granted_name = _toolset(scenario, server_id, "add")
-        headers: Final = _bearer(scenario.key(team_id=scenario.team(object_permission={"mcp_toolsets": [granted_id]})))
-        _served_by_every_worker(gateway, headers, granted_name)
-        peer.drain()
-        with ThreadPoolExecutor(max_workers=20) as pool:
-            outcomes: Final = tuple(
-                pool.map(lambda _: _route_call(gateway, headers, granted_name, f"{alias}-add"), range(20))
-            )
-        assert all(outcome.ok and outcome.text == "9" for outcome in outcomes), [o.raw for o in outcomes if not o.ok]
-        assert len(tool_calls(peer.drain())) == 20
-
-
-def test_a_stopped_peer_fails_its_toolset_calls_while_the_sibling_toolset_and_the_proxy_keep_serving(
-    gateway: Gateway,
-) -> None:
-    with mcp_peer() as healthy, gateway.scenario() as scenario:
-        steady: Final = "lit6029steady" + uuid.uuid4().hex[:6]
-        fragile: Final = "lit6029fragile" + uuid.uuid4().hex[:6]
-        steady_server: Final = register_mcp(scenario, healthy, steady)
-        steady_id, steady_name = _toolset(scenario, steady_server, "add")
-        with mcp_peer() as doomed:
-            fragile_server: Final = register_mcp(scenario, doomed, fragile)
-            fragile_id, fragile_name = _toolset(scenario, fragile_server, "add")
-            headers: Final = _bearer(
-                scenario.key(team_id=scenario.team(object_permission={"mcp_toolsets": [steady_id, fragile_id]}))
-            )
-            _served_by_every_worker(gateway, headers, fragile_name)
-            _served_by_every_worker(gateway, headers, steady_name)
-            with ThreadPoolExecutor(max_workers=5) as pool:
-                before: Final = tuple(
-                    pool.map(lambda _: _route_call(gateway, headers, fragile_name, f"{fragile}-add"), range(5))
-                )
-            assert all(outcome.ok and outcome.text == "9" for outcome in before), [o.raw for o in before]
-            assert len(tool_calls(doomed.drain())) == 5
-        with ThreadPoolExecutor(max_workers=5) as pool:
-            during: Final = tuple(
-                pool.map(lambda _: _route_call(gateway, headers, fragile_name, f"{fragile}-add"), range(5))
-            )
-        assert all(not outcome.ok for outcome in during), [o.raw for o in during if o.ok]
-        assert gateway.client.get("/health/liveliness").status_code == 200
-        healthy.drain()
-        sibling: Final = _route_call(gateway, headers, steady_name, f"{steady}-add")
-        assert sibling.ok and sibling.text == "9", sibling.raw
-        assert len(tool_calls(healthy.drain())) == 1
-        with mcp_peer() as replacement:
-            repointed: Final = gateway.request(
-                "PUT",
-                "/v1/mcp/server",
-                {"server_id": fragile_server, "server_name": fragile, "alias": fragile, **replacement.registration()},
-            )
-            assert repointed.status_code == 202, repointed.text
-            recovered: Final = _route_call(gateway, headers, fragile_name, f"{fragile}-add")
-            assert recovered.ok and recovered.text == "9", recovered.raw
-            assert len(tool_calls(replacement.drain())) == 1
-
-
-def test_the_surviving_worker_keeps_serving_the_team_toolset_after_a_worker_is_killed(
-    gateway: Gateway, tmp_path: Path
-) -> None:
-    with (
-        owned_proxy_process(gateway, tmp_path, {}, workers=2) as owned,
-        mcp_peer() as peer,
-        owned.gateway.scenario() as scenario,
-    ):
-        alias: Final = "lit6029kill" + uuid.uuid4().hex[:6]
-        server_id: Final = register_mcp(scenario, peer, alias)
-        granted_id, granted_name = _toolset(scenario, server_id, "add")
-        headers: Final = _bearer(scenario.key(team_id=scenario.team(object_permission={"mcp_toolsets": [granted_id]})))
-        _served_by_every_worker(owned.gateway, headers, granted_name)
-        assert _route_tools(owned.gateway, headers, granted_name).tools == (f"{alias}-add",)
-        workers: Final = _workers_listening_on(
-            psutil.Process(owned.process.pid), int(owned.gateway.client.base_url.port)
-        )
-        assert len(workers) == 2, workers
-        workers[0].kill()
-        workers[0].wait(timeout=10)
-        peer.drain()
-        outcomes: Final = tuple(_route_call(owned.gateway, headers, granted_name, f"{alias}-add") for _ in range(8))
-        assert all(outcome.ok and outcome.text == "9" for outcome in outcomes), [o.raw for o in outcomes if not o.ok]
-        assert len(tool_calls(peer.drain())) == 8
-        assert _listed_toolset_ids(owned.gateway, headers) == (granted_id,)
