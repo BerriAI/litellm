@@ -1,6 +1,6 @@
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import AlertingSettings from "./alerting_settings";
@@ -59,8 +59,8 @@ describe("AlertingSettings", () => {
 
     await screen.findByDisplayValue("60");
     const numberInputs = screen.getAllByRole("spinbutton");
-    await user.type(numberInputs[1], "5");
-    await user.clear(numberInputs[1]);
+    fireEvent.change(numberInputs[1], { target: { value: "5" } });
+    fireEvent.change(numberInputs[1], { target: { value: "" } });
     await user.click(screen.getByRole("switch", { name: "slack_alerting" }));
     await user.click(screen.getByRole("button", { name: "Update Settings" }));
 
@@ -70,5 +70,21 @@ describe("AlertingSettings", () => {
       });
     });
     expect(updateConfigFieldSetting).toHaveBeenNthCalledWith(2, "sk-test", "alerting", ["slack"]);
+  });
+
+  it("submits the reset value instead of a stale typed threshold", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<AlertingSettings accessToken="sk-test" premiumUser />);
+
+    const budgetInput = await screen.findByDisplayValue("60");
+    fireEvent.change(budgetInput, { target: { value: "75" } });
+    await user.click(screen.getByRole("button", { name: "Reset budget_alert_ttl" }));
+    await user.click(screen.getByRole("button", { name: "Update Settings" }));
+
+    await waitFor(() => {
+      expect(updateConfigFieldSetting).toHaveBeenCalledWith("sk-test", "alerting_args", {
+        budget_alert_ttl: 30,
+      });
+    });
   });
 });
