@@ -9003,17 +9003,17 @@ class Router:
                 backend_model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             )
+            Router._inherit_builtin_service_tier_pricing(
+                model_info=_model_info,
+                backend_model=Router._cost_map_backend_model(deployment),
+                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            )
             if _model_info.get("input_cost_per_token") is not None:
                 Router._inherit_builtin_cache_pricing(
                     model_info=_model_info,
                     backend_model=deployment.litellm_params.model,
                     custom_llm_provider=deployment.litellm_params.custom_llm_provider,
                 )
-            Router._inherit_builtin_service_tier_pricing(
-                model_info=_model_info,
-                backend_model=Router._cost_map_backend_model(deployment),
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-            )
             Router._inherit_builtin_tiered_output_rate(
                 model_info=_model_info,
                 backend_model=deployment.litellm_params.model,
@@ -10048,17 +10048,17 @@ class Router:
             backend_model=deployment.litellm_params.model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         )
+        Router._inherit_builtin_service_tier_pricing(
+            model_info=model_info,
+            backend_model=Router._cost_map_backend_model(deployment),
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+        )
         if model_info.get("input_cost_per_token") is not None:
             Router._inherit_builtin_cache_pricing(
                 model_info=model_info,
                 backend_model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             )
-        Router._inherit_builtin_service_tier_pricing(
-            model_info=model_info,
-            backend_model=Router._cost_map_backend_model(deployment),
-            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-        )
         Router._inherit_builtin_tiered_output_rate(
             model_info=model_info,
             backend_model=deployment.litellm_params.model,

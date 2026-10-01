@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.types.utils import PromptTokensDetailsWrapper
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
     reapply_runtime_model_cost_registrations,
@@ -1152,6 +1153,69 @@ def test_router_completion_uses_backend_ultrafast_long_context_rates() -> None:
         assert response._hidden_params["response_cost"] == pytest.approx(
             300_000 * _TIER_BACKEND_ENTRY["input_cost_per_token_above_272k_tokens_ultrafast"]
             + 100 * _TIER_BACKEND_ENTRY["output_cost_per_token_above_272k_tokens_ultrafast"]
+        )
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+def test_router_completion_bills_cached_tokens_at_backend_priority_long_context_cache_rate() -> None:
+    backend_model: Final = "tier-priced-200k-backend"
+    backend_key: Final = f"gemini/{backend_model}"
+    backend_entry: Final = {
+        "key": backend_key,
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "input_cost_per_token": 0.00021,
+        "output_cost_per_token": 0.00032,
+        "cache_read_input_token_cost": 0.00002,
+        "cache_read_input_token_cost_above_200k_tokens": 0.00004,
+        "input_cost_per_token_above_200k_tokens_priority": 0.00014,
+        "output_cost_per_token_above_200k_tokens_priority": 0.00015,
+        "cache_read_input_token_cost_above_200k_tokens_priority": 0.00007,
+    }
+    model_id: Final = "tier-priced-200k-deployment"
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (backend_key, backend_model, model_id)
+    }
+    try:
+        litellm.model_cost[backend_key] = copy.deepcopy(backend_entry)
+        litellm.get_model_info.cache_clear()
+        _invalidate_model_cost_lowercase_map()
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "tier-priced-200k-router",
+                    "litellm_params": {
+                        "model": backend_key,
+                        "api_key": "sk-tier-pricing-not-used",
+                        "input_cost_per_token": _CUSTOM_STANDARD_INPUT_RATE,
+                        "output_cost_per_token": _CUSTOM_STANDARD_OUTPUT_RATE,
+                    },
+                    "model_info": {"id": model_id},
+                }
+            ]
+        )
+
+        response: Final = router.completion(
+            model="tier-priced-200k-router",
+            messages=[{"role": "user", "content": "long context cached tier pricing"}],
+            service_tier="priority",
+            mock_response=litellm.ModelResponse(
+                model=backend_model,
+                service_tier="priority",
+                usage=litellm.Usage(
+                    prompt_tokens=300_000,
+                    completion_tokens=100,
+                    total_tokens=300_100,
+                    prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100_000),
+                ),
+            ),
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            200_000 * 0.00014 + 100_000 * 0.00007 + 100 * 0.00015
         )
     finally:
         _restore_model_cost_entries(model_cost_entries)
