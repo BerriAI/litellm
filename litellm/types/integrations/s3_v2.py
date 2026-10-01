@@ -1,4 +1,8 @@
+from typing import Literal
+
 from pydantic import BaseModel
+
+S3PartitionGranularity = Literal["day", "hour"]
 
 
 class s3BatchLoggingElement(BaseModel):

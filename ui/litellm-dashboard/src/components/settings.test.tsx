@@ -313,6 +313,7 @@ describe("Settings", () => {
             "AWS_SECRET_ACCESS_KEY",
             "AWS_REGION_NAME",
             "S3_LOG_PROMPTS_ONLY",
+            "S3_PARTITION_GRANULARITY",
           ],
           ui_callback_name: "s3 Bucket (AWS)",
         },
@@ -326,6 +327,12 @@ describe("Settings", () => {
         dynamic_params: {
           s3_bucket_name: { type: "text", ui_name: "S3 Bucket Name", required: false },
           s3_log_prompts_only: { type: "boolean", ui_name: "Log Prompts Only", required: false },
+          s3_partition_granularity: {
+            type: "select",
+            ui_name: "Folder Partitioning",
+            options: ["day", "hour"],
+            required: false,
+          },
         },
       },
     ]);
@@ -407,6 +414,46 @@ describe("Settings", () => {
         }),
       );
     });
+  });
+
+  it("should show the saved s3_v2 folder partitioning and post the newly selected value", async () => {
+    mockS3Callback({ S3_LOG_PROMPTS_ONLY: null, S3_PARTITION_GRANULARITY: "hour" }, "s3_v2");
+    const user = await openS3EditModal("s3_v2");
+
+    const dialog = screen.getByRole("dialog");
+    const partitioning = await within(dialog).findByRole("combobox", { name: "Folder Partitioning" });
+    expect(partitioning).toHaveTextContent("hour");
+
+    await user.click(partitioning);
+    await user.click(await screen.findByRole("option", { name: "day" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({
+          environment_variables: expect.objectContaining({ callback: "s3_v2", s3_partition_granularity: "day" }),
+          litellm_settings: { success_callback: ["s3_v2"] },
+        }),
+      );
+    });
+  });
+
+  it("should not offer folder partitioning for the legacy s3 callback, which cannot honour it", async () => {
+    mockS3Callback({ S3_LOG_PROMPTS_ONLY: null, S3_PARTITION_GRANULARITY: null });
+    const user = await openS3EditModal();
+
+    const dialog = screen.getByRole("dialog");
+    await within(dialog).findByRole("switch", { name: "Log Prompts Only" });
+    expect(within(dialog).queryByRole("combobox", { name: "Folder Partitioning" })).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledTimes(1);
+    });
+    const [, payload] = vi.mocked(setCallbacksCall).mock.calls[0];
+    expect(payload.environment_variables).not.toHaveProperty("s3_partition_granularity");
+    expect(payload.environment_variables).not.toHaveProperty("S3_PARTITION_GRANULARITY");
   });
 
   it("should send the typed webhook url for an alert type when the alerting tab is saved", async () => {

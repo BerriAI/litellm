@@ -238,6 +238,7 @@ export const CallbackSelector: React.FC<CallbackSelectorProps> = ({
 };
 
 const CALLBACK_CONFIG_ALIASES: Record<string, string> = { s3_v2: "s3" };
+const CALLBACK_UNSUPPORTED_PARAMS: Record<string, readonly string[]> = { s3: ["s3_partition_granularity"] };
 
 interface DynamicParamConfig {
   type?: string;
@@ -274,7 +275,8 @@ const getDynamicParamsForCallback = (
 
   const callbackConfig = findCallbackConfig(callbackConfigs, callbackName);
   if (callbackConfig?.dynamic_params) {
-    return Object.keys(callbackConfig.dynamic_params);
+    const unsupportedParams = CALLBACK_UNSUPPORTED_PARAMS[callbackName] ?? [];
+    return Object.keys(callbackConfig.dynamic_params).filter((param) => !unsupportedParams.includes(param));
   }
 
   return fallbackVariables ? Object.keys(fallbackVariables) : [];

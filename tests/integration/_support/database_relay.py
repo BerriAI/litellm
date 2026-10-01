@@ -29,6 +29,7 @@ class DatabaseRelay:
         self._armed: Final = threading.Event()
         self.tripped: Final = threading.Event()
         self.refused = 0
+        self.reconnected: Final = threading.Event()
         self._tripped_at = 0.0
         self._writers: tuple[asyncio.StreamWriter, ...] = ()
         self._ready: Final = threading.Event()
@@ -61,6 +62,8 @@ class DatabaseRelay:
             self.refused += 1
             client_writer.close()
             return
+        if self.tripped.is_set():
+            self.reconnected.set()
         server_reader, server_writer = await asyncio.open_connection(self._upstream_host, self._upstream_port)
         self._writers = (*self._writers, client_writer, server_writer)
 
