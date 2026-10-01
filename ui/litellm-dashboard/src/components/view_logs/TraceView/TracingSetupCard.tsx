@@ -20,8 +20,13 @@ const COPIED_RESET_MS = 1500;
 const DOCS_URL = "https://docs.litellm.ai";
 const OTEL_BASE_PACKAGES = "opentelemetry-distro opentelemetry-exporter-otlp-proto-http";
 const RUN_SNIPPET = "opentelemetry-instrument python my_agent.py";
+const TRACES_ROUTE = "/v1/traces";
+// HTTP client instrumentors would otherwise emit a one-span "POST" run for every model call.
+const DISABLED_INSTRUMENTATIONS = "httpx,requests,urllib3,urllib,aiohttp-client";
+const LANGCHAIN_INSTRUMENTOR_PACKAGE = "openinference-instrumentation-langchain";
 
 type Installer = "pip" | "uv";
+type InstrumentMode = "Environment variables (no code)" | "In code";
 
 interface FrameworkGuide {
   id: string;
@@ -29,30 +34,48 @@ interface FrameworkGuide {
   logo: string;
   packages: string;
   quickstart: string;
+  /** The agent-building lines for the in-code walkthrough; only for frameworks whose instrumentor was verified. */
+  inCodeAgent?: string;
 }
+
+const LLM_LINE = `llm = ChatOpenAI(model="claude-sonnet-4-5", base_url=f"{LITELLM_PROXY}/v1", api_key=LITELLM_API_KEY)`;
 
 const FRAMEWORKS: readonly FrameworkGuide[] = [
   {
-    id: "langgraph",
-    label: "LangGraph / Deep Agents",
+    id: "deepagents",
+    label: "Deep Agents",
     logo: langgraphLogo.src,
-    packages: "langgraph langchain-openai openinference-instrumentation-langchain",
+    packages: `deepagents langchain-openai ${LANGCHAIN_INSTRUMENTOR_PACKAGE}`,
+    quickstart: `from deepagents import create_deep_agent
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(model="claude-sonnet-4-5", base_url="{PROXY}/v1", api_key=os.environ["LITELLM_API_KEY"])
+agent = create_deep_agent(model=llm, tools=[], name="my_agent")
+agent.invoke({"messages": [{"role": "user", "content": "What is LiteLLM?"}]})`,
+    inCodeAgent: `from deepagents import create_deep_agent
+from langchain_openai import ChatOpenAI
+
+${LLM_LINE}
+agent = create_deep_agent(model=llm, tools=[], name="my_agent")
+agent.invoke({"messages": [{"role": "user", "content": "What is LiteLLM?"}]})`,
+  },
+  {
+    id: "langchain",
+    label: "LangChain / LangGraph",
+    logo: langchainLogo.src,
+    packages: `langchain langgraph langchain-openai ${LANGCHAIN_INSTRUMENTOR_PACKAGE}`,
     quickstart: `from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 
 llm = ChatOpenAI(model="claude-sonnet-4-5", base_url="{PROXY}/v1", api_key=os.environ["LITELLM_API_KEY"])
 agent = create_agent(model=llm, tools=[], name="my_agent")
 agent.invoke({"messages": [{"role": "user", "content": "What is LiteLLM?"}]})`,
-  },
-  {
-    id: "langchain",
-    label: "LangChain",
-    logo: langchainLogo.src,
-    packages: "langchain langchain-openai openinference-instrumentation-langchain",
-    quickstart: `from langchain_openai import ChatOpenAI
+    inCodeAgent: `from langchain.agents import create_agent
+from langchain_openai import ChatOpenAI
 
-llm = ChatOpenAI(model="claude-sonnet-4-5", base_url="{PROXY}/v1", api_key=os.environ["LITELLM_API_KEY"])
-llm.invoke("What is LiteLLM?")`,
+${LLM_LINE}
+agent = create_agent(model=llm, tools=[], name="my_agent")
+agent.invoke({"messages": [{"role": "user", "content": "What is LiteLLM?"}]})`,
   },
   {
     id: "openai-agents",
@@ -124,30 +147,107 @@ const HIGHLIGHTS = [
   ["Hand off to Claude / Codex", "Copy one command and your coding agent debugs the run."],
 ] as const;
 
+const INSTRUMENT_MODES: InstrumentMode[] = ["Environment variables (no code)", "In code"];
+
 const installPackages = (guide: Pick<FrameworkGuide, "packages">): string =>
   [OTEL_BASE_PACKAGES, guide.packages].filter(Boolean).join(" ");
 
-/** The endpoint is the proxy base URL: OTLP exporters append /v1/traces themselves. */
+export interface EndpointRow {
+  label: string;
+  value: string;
+}
+
+/** What receives traces and how, for the guide and for any always-visible endpoint panel. */
+export const otlpEndpointRows = (proxyUrl: string): EndpointRow[] => [
+  { label: "OTLP endpoint", value: proxyUrl },
+  { label: "Ingest route", value: `POST ${proxyUrl}${TRACES_ROUTE}` },
+  { label: "Protocol", value: "OTLP/HTTP, protobuf (application/x-protobuf) or JSON" },
+  {
+    label: "Auth",
+    value: "Authorization: Bearer <virtual key>. Traces are scoped to that key and its team",
+  },
+  { label: "List runs", value: `GET ${proxyUrl}${TRACES_ROUTE}?start_ms=…&end_ms=…` },
+  { label: "One run", value: `GET ${proxyUrl}${TRACES_ROUTE}/{trace_id}` },
+  { label: "Markdown for Claude / Codex", value: `GET ${proxyUrl}${TRACES_ROUTE}/{trace_id}?format=md` },
+];
+
+/** OTLP exporters append /v1/traces themselves, so the env endpoint is the proxy base URL. */
 export const tracingEnvSnippet = (proxyUrl: string): string =>
   [
     `export OTEL_EXPORTER_OTLP_ENDPOINT=${proxyUrl}`,
+    "export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf",
     'export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $LITELLM_API_KEY"',
     "export OTEL_SERVICE_NAME=my-agent",
+    `export OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=${DISABLED_INSTRUMENTATIONS}`,
+  ].join("\n");
+
+/** In code the exporter takes the full ingest URL, so /v1/traces is spelled out here. */
+export const inCodeSnippet = (proxyUrl: string, agentLines: string): string =>
+  [
+    "import os",
+    "",
+    "from openinference.instrumentation.langchain import LangChainInstrumentor",
+    "from opentelemetry import trace",
+    "from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter",
+    "from opentelemetry.sdk.resources import Resource",
+    "from opentelemetry.sdk.trace import TracerProvider",
+    "from opentelemetry.sdk.trace.export import BatchSpanProcessor",
+    "",
+    `LITELLM_PROXY = os.environ.get("LITELLM_PROXY", "${proxyUrl}")`,
+    'LITELLM_API_KEY = os.environ["LITELLM_API_KEY"]',
+    "",
+    'provider = TracerProvider(resource=Resource.create({"service.name": "my-agent"}))',
+    "provider.add_span_processor(",
+    "    BatchSpanProcessor(",
+    "        OTLPSpanExporter(",
+    `            endpoint=f"{LITELLM_PROXY}${TRACES_ROUTE}",`,
+    '            headers={"Authorization": f"Bearer {LITELLM_API_KEY}"},',
+    "        )",
+    "    )",
+    ")",
+    "trace.set_tracer_provider(provider)",
+    "LangChainInstrumentor().instrument(tracer_provider=provider)",
+    "",
+    agentLines,
+    "",
+    "provider.shutdown()  # flush spans before the process exits",
+  ].join("\n");
+
+export const modelClientSnippet = (proxyUrl: string): string =>
+  [
+    "from langchain_openai import ChatOpenAI",
+    "",
+    `llm = ChatOpenAI(model="claude-sonnet-4-5", base_url="${proxyUrl}/v1", api_key=os.environ["LITELLM_API_KEY"])`,
+  ].join("\n");
+
+export const verifySnippet = (proxyUrl: string): string =>
+  [
+    "NOW=$(($(date +%s) * 1000))",
+    `curl "${proxyUrl}${TRACES_ROUTE}?start_ms=$((NOW - 3600000))&end_ms=$NOW" \\`,
+    '  -H "Authorization: Bearer $LITELLM_API_KEY"',
+    "",
+    '# -> {"data": [{"trace_id": "...", "name": "my_agent", "span_count": ...}], "next_cursor": null}',
   ].join("\n");
 
 export const codingAgentPrompt = (proxyUrl: string, guide: Pick<FrameworkGuide, "label" | "packages">): string =>
   [
-    `Send this ${guide.label} project's OpenTelemetry traces to LiteLLM.`,
+    `Send this ${guide.label} project's OpenTelemetry traces to LiteLLM, then prove it works.`,
     "",
     `1. Add these dependencies: ${installPackages(guide)}`,
     "2. Set these env vars wherever the project loads config (.env, settings, deployment manifests):",
-    `   OTEL_EXPORTER_OTLP_ENDPOINT=${proxyUrl}`,
+    `   OTEL_EXPORTER_OTLP_ENDPOINT=${proxyUrl}   (base URL only; the exporter appends ${TRACES_ROUTE})`,
+    "   OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf",
     '   OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $LITELLM_API_KEY"',
     "   OTEL_SERVICE_NAME=<a short name for this agent>",
+    `   OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=${DISABLED_INSTRUMENTATIONS}`,
     "3. Start the app through OTEL auto-instrumentation: opentelemetry-instrument <existing start command>.",
-    `4. Point every LLM client at LiteLLM: base_url=${proxyUrl}/v1, api key from LITELLM_API_KEY.`,
-    "5. Give each agent and subagent a name so runs are easy to read.",
-    "6. Run the agent once and confirm the run shows up in the LiteLLM UI under Logs > Agent Traces.",
+    `   If the project can't be started that way, set up a TracerProvider with OTLPSpanExporter(endpoint="${proxyUrl}${TRACES_ROUTE}")`,
+    "   and call the framework's OpenInference instrumentor at startup instead.",
+    `4. Point every LLM client at LiteLLM: base_url=${proxyUrl}/v1, api key from LITELLM_API_KEY, so each step has real cost.`,
+    "5. Pass name=... to every agent and subagent so runs are easy to read.",
+    "6. Flush spans before short-lived scripts exit (provider.shutdown() or force_flush()).",
+    `7. Verify: run the agent once, then GET ${proxyUrl}${TRACES_ROUTE}?start_ms=<now-1h in ms>&end_ms=<now in ms>`,
+    '   with header "Authorization: Bearer $LITELLM_API_KEY" and confirm the run appears in "data".',
     "",
     "Never hardcode the key. Read it from LITELLM_API_KEY.",
   ].join("\n");
@@ -200,13 +300,15 @@ function LineTabs<T extends string>({
   value,
   options,
   onChange,
+  label,
 }: {
   value: T;
   options: T[];
   onChange: (v: T) => void;
+  label?: string;
 }) {
   return (
-    <div role="tablist" className="flex h-9 items-end gap-3">
+    <div role="tablist" aria-label={label} className="flex h-9 items-end gap-3">
       {options.map((option) => (
         <button
           key={option}
@@ -230,11 +332,15 @@ function LineTabs<T extends string>({
 
 function Step({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="mt-6">
+    <section className="mt-6" aria-label={title}>
       <h3 className="mb-2 text-[13px] font-medium text-foreground">{title}</h3>
       {children}
     </section>
   );
+}
+
+function Hint({ children }: { children: React.ReactNode }) {
+  return <p className="mb-2 text-[13px] text-muted-foreground">{children}</p>;
 }
 
 function SetupStatus({ detail, connected }: { detail: string | null; connected: boolean }) {
@@ -287,9 +393,22 @@ function WhatYoullSee() {
   );
 }
 
+function EndpointTable({ proxyUrl }: { proxyUrl: string }) {
+  return (
+    <dl className="overflow-hidden rounded-md border border-border" data-testid="otlp-endpoint">
+      {otlpEndpointRows(proxyUrl).map((row) => (
+        <div key={row.label} className="grid grid-cols-[180px_1fr] border-b border-border last:border-0">
+          <dt className="bg-muted/40 px-3 py-2 text-[12.5px] text-muted-foreground">{row.label}</dt>
+          <dd className="min-w-0 px-3 py-2 font-mono text-[12.5px] break-all text-foreground">{row.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function FrameworkPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
   return (
-    <div className="mt-4 flex flex-wrap gap-2" role="radiogroup" aria-label="Framework">
+    <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Framework">
       {FRAMEWORKS.map((f) => (
         <button
           key={f.id}
@@ -312,6 +431,53 @@ function FrameworkPicker({ value, onChange }: { value: string; onChange: (id: st
   );
 }
 
+function EnvInstrumentation({
+  guide,
+  proxyUrl,
+  installer,
+  onInstallerChange,
+}: {
+  guide: FrameworkGuide;
+  proxyUrl: string;
+  installer: Installer;
+  onInstallerChange: (installer: Installer) => void;
+}) {
+  const packages = installPackages(guide);
+  const install = installer === "pip" ? `pip install -U ${packages}` : `uv add ${packages}`;
+  return (
+    <div className="grid gap-3">
+      <CodeBlock
+        code={install}
+        tabs={<LineTabs value={installer} options={["pip", "uv"]} onChange={onInstallerChange} />}
+      />
+      <Hint>
+        The endpoint is the proxy base URL; the exporter adds {TRACES_ROUTE}. The last line stops HTTP client
+        instrumentation from logging every model call as its own run.
+      </Hint>
+      <CodeBlock code={tracingEnvSnippet(proxyUrl)} tabs={<FileLabel>Shell</FileLabel>} />
+      <CodeBlock
+        code={`import os\n\n${guide.quickstart.replace("{PROXY}", proxyUrl)}`}
+        tabs={<FileLabel>my_agent.py</FileLabel>}
+      />
+      <CodeBlock code={RUN_SNIPPET} tabs={<FileLabel>Shell</FileLabel>} />
+    </div>
+  );
+}
+
+function CodeInstrumentation({ guide, proxyUrl }: { guide: FrameworkGuide; proxyUrl: string }) {
+  if (!guide.inCodeAgent) return null;
+  return (
+    <div className="grid gap-3">
+      <CodeBlock code={`pip install -U ${installPackages(guide)}`} tabs={<FileLabel>Shell</FileLabel>} />
+      <Hint>
+        {guide.label} runs on LangChain, so LangChainInstrumentor traces every agent, LLM call and tool call. In code
+        the exporter takes the full ingest URL, ending in {TRACES_ROUTE}. Run it with plain python.
+      </Hint>
+      <CodeBlock code={inCodeSnippet(proxyUrl, guide.inCodeAgent)} tabs={<FileLabel>my_agent.py</FileLabel>} />
+    </div>
+  );
+}
+
 /**
  * Agent Traces onboarding: shown until the first trace arrives (and when tracing isn't enabled on the proxy).
  * `detail` is the proxy's 501 message when tracing is off; null means tracing is on and we're waiting.
@@ -320,9 +486,10 @@ export function TracingSetupCard({ detail, connected = false }: { detail: string
   const proxyUrl = getProxyBaseUrl().replace(/\/$/, "");
   const [framework, setFramework] = useState(FRAMEWORKS[0].id);
   const [installer, setInstaller] = useState<Installer>("pip");
+  const [mode, setMode] = useState<InstrumentMode>(INSTRUMENT_MODES[0]);
   const guide = FRAMEWORKS.find((f) => f.id === framework) ?? FRAMEWORKS[0];
-  const packages = installPackages(guide);
-  const install = installer === "pip" ? `pip install -U ${packages}` : `uv add ${packages}`;
+  const modes = guide.inCodeAgent ? INSTRUMENT_MODES : INSTRUMENT_MODES.slice(0, 1);
+  const activeMode = modes.includes(mode) ? mode : modes[0];
 
   return (
     <div className="pb-12" data-testid="tracing-setup-card">
@@ -346,9 +513,8 @@ export function TracingSetupCard({ detail, connected = false }: { detail: string
             Send your agent&apos;s OpenTelemetry traces to LiteLLM
           </h2>
           <p className="mt-1 text-[13px] text-muted-foreground">
-            Standard OTLP. Pick your framework, set three env vars, and run your agent as usual.
+            Standard OTLP. No vendor SDK: point any OpenTelemetry exporter at your LiteLLM proxy.
           </p>
-          <FrameworkPicker value={framework} onChange={setFramework} />
 
           {detail !== null && (
             <Step title="Enable tracing on the proxy">
@@ -356,32 +522,45 @@ export function TracingSetupCard({ detail, connected = false }: { detail: string
             </Step>
           )}
 
+          <Step title="OpenTelemetry endpoint">
+            <EndpointTable proxyUrl={proxyUrl} />
+          </Step>
+
+          <Step title="Pick your framework">
+            <FrameworkPicker value={framework} onChange={setFramework} />
+          </Step>
+
+          <Step title="Instrument your agent">
+            <div className="mb-3 border-b border-border">
+              <LineTabs value={activeMode} options={modes} onChange={setMode} label="Instrumentation method" />
+            </div>
+            {activeMode === "In code" ? (
+              <CodeInstrumentation guide={guide} proxyUrl={proxyUrl} />
+            ) : (
+              <EnvInstrumentation
+                guide={guide}
+                proxyUrl={proxyUrl}
+                installer={installer}
+                onInstallerChange={setInstaller}
+              />
+            )}
+          </Step>
+
+          <Step title="Point model calls at LiteLLM">
+            <Hint>
+              Send the agent&apos;s model calls through the proxy too, so every LLM step carries its real cost.
+            </Hint>
+            <CodeBlock code={modelClientSnippet(proxyUrl)} tabs={<FileLabel>Python</FileLabel>} />
+          </Step>
+
           <Step title="Let Claude Code or Codex set it up">
-            <p className="mb-2 text-[13px] text-muted-foreground">
-              Paste this into your coding agent from the project root, or follow the steps below by hand.
-            </p>
+            <Hint>Paste this into your coding agent from the project root. It wires everything up and checks it.</Hint>
             <CodeBlock code={codingAgentPrompt(proxyUrl, guide)} wrap tabs={<FileLabel>Prompt</FileLabel>} />
           </Step>
 
-          <Step title="Install dependencies">
-            <CodeBlock
-              code={install}
-              tabs={<LineTabs value={installer} options={["pip", "uv"]} onChange={setInstaller} />}
-            />
-          </Step>
-
-          <Step title="Configure environment">
-            <CodeBlock code={tracingEnvSnippet(proxyUrl)} tabs={<FileLabel>Shell</FileLabel>} />
-          </Step>
-
-          <Step title="Run your agent">
-            <CodeBlock
-              code={`import os\n\n${guide.quickstart.replace("{PROXY}", proxyUrl)}`}
-              tabs={<FileLabel>my_agent.py</FileLabel>}
-            />
-            <div className="mt-3">
-              <CodeBlock code={RUN_SNIPPET} tabs={<FileLabel>Shell</FileLabel>} />
-            </div>
+          <Step title="Verify">
+            <Hint>Run the agent once. The run appears in this tab within a few seconds, and the API returns it:</Hint>
+            <CodeBlock code={verifySnippet(proxyUrl)} tabs={<FileLabel>Shell</FileLabel>} />
           </Step>
         </div>
       </div>
