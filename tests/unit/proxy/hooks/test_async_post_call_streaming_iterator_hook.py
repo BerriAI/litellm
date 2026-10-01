@@ -31,7 +31,7 @@ class MockStreamingCallback(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncGenerator[Any, None],
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> AsyncGenerator[Any, None]:
         """Transform chunks by tracking and optionally prefixing."""
         async for chunk in response:
@@ -198,7 +198,7 @@ class CleanupRecordingCallback(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncGenerator[Any, None],
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> AsyncGenerator[Any, None]:
         try:
             async for chunk in response:
@@ -234,7 +234,7 @@ class RaisingCleanupCallback(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncGenerator[Any, None],
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> AsyncGenerator[Any, None]:
         try:
             async for chunk in response:

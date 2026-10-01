@@ -45,7 +45,15 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import CallTypes, Delta, GenericGuardrailAPIInputs, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    CallTypes,
+    Delta,
+    GenericGuardrailAPIInputs,
+    ModelResponse,
+    ModelResponseStream,
+    StandardLoggingGuardrailInformation,
+    StreamingChoices,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -2125,7 +2133,7 @@ class _GatedScanGuardrail(_ScanCountingGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         **kwargs: object,
     ) -> GenericGuardrailAPIInputs:
@@ -2146,14 +2154,20 @@ class _FinishReasonRecordingGuardrail(_ScanCountingGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         **kwargs: object,
     ) -> GenericGuardrailAPIInputs:
         rebuilt = request_data.get("response")
+        released = request_data.get("responses")
+        chunks = (
+            tuple(chunk for chunk in released if isinstance(chunk, ModelResponseStream))
+            if isinstance(released, list)
+            else ()
+        )
         choices = [
-            *(rebuilt.choices if rebuilt is not None else ()),
-            *(choice for chunk in request_data.get("responses") or () for choice in chunk.choices),
+            *(rebuilt.choices if isinstance(rebuilt, ModelResponse) else ()),
+            *(choice for chunk in chunks for choice in chunk.choices),
         ]
         self.finish_reasons = (*self.finish_reasons, *(choice.finish_reason for choice in choices))
         return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
@@ -2170,7 +2184,7 @@ class _GatedToolCallGuardrail(_StreamingTextGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         **kwargs: object,
     ) -> GenericGuardrailAPIInputs:
@@ -2191,14 +2205,14 @@ class _RecordedScanGuardrail(CustomGuardrail):
         self._reply = reply
         self._error = error
 
-    def should_run_guardrail(self, data: dict, event_type: GuardrailEventHooks) -> bool:
+    def should_run_guardrail(self, data: dict[str, object], event_type: GuardrailEventHooks) -> bool:
         return True
 
     @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         **kwargs: object,
     ) -> GenericGuardrailAPIInputs:
@@ -2207,11 +2221,11 @@ class _RecordedScanGuardrail(CustomGuardrail):
         return inputs if self._reply is None else self._reply
 
 
-def _recorded_guardrail_statuses(request_data: dict) -> list[str]:
-    return [
-        entry["guardrail_status"]
-        for entry in request_data["metadata"].get("standard_logging_guardrail_information", [])
-    ]
+def _recorded_guardrail_statuses(request_data: dict[str, object]) -> list[str]:
+    metadata = request_data["metadata"]
+    assert isinstance(metadata, dict), request_data
+    entries: list[StandardLoggingGuardrailInformation] = metadata.get("standard_logging_guardrail_information", [])
+    return [entry["guardrail_status"] for entry in entries]
 
 
 class TestStreamingClientDisconnectScan:
@@ -2369,8 +2383,8 @@ class TestStreamingClientDisconnectScan:
         assert [scan["texts"] for scan in guardrail.scans] == [["synthetic secret tail"]], guardrail.scans
 
     @staticmethod
-    async def _close_after_first_chunk(guardrail: CustomGuardrail) -> dict:
-        request_data = {"guardrail_to_apply": guardrail, "model": "gpt-4", "metadata": {}}
+    async def _close_after_first_chunk(guardrail: CustomGuardrail) -> dict[str, object]:
+        request_data: dict[str, object] = {"guardrail_to_apply": guardrail, "model": "gpt-4", "metadata": {}}
 
         async def upstream() -> AsyncIterator[ModelResponseStream]:
             yield _stream_chunk("synthetic secret")
