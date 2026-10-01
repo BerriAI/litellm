@@ -3886,20 +3886,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-gateway-traces"
-version = "0.1.0"
-dependencies = [
- "axum",
- "flate2",
- "litellm-traces",
- "opentelemetry-proto",
- "prost",
- "rstest",
- "tokio",
- "tower",
-]
-
-[[package]]
 name = "litellm-gateway-ui"
 version = "0.1.0"
 dependencies = [

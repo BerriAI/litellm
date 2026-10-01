@@ -18,7 +18,6 @@ litellm-core = { path = "crates/core" }
 litellm-gateway-mcp = { path = "crates/gateway-mcp" }
 litellm-gateway = { path = "crates/gateway" }
 litellm-gateway-inference = { path = "crates/gateway-inference" }
-litellm-gateway-traces = { path = "crates/gateway-traces" }
 litellm-gateway-auth = { path = "crates/gateway-auth" }
 litellm-gateway-management = { path = "crates/gateway-management" }
 litellm-gateway-ui = { path = "crates/gateway-ui" }

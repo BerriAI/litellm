@@ -1897,7 +1897,7 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     )
     status_code: Final = int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
     _close_dangling_otel_server_span(request, status_code, exc=exc)
-    otlp_response: Final = tracing_endpoints.otlp_error_response(request, status_code, exc.message, headers)
+    otlp_response: Final = tracing_endpoints.otlp_error_response(request, status_code, headers)
     if otlp_response is not None:
         return otlp_response
     return JSONResponse(
@@ -1909,7 +1909,7 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 @app.exception_handler(StarletteHTTPException)
 async def otlp_http_exception_handler(request: Request, exc: StarletteHTTPException) -> Response:
-    response: Final = tracing_endpoints.otlp_error_response(request, exc.status_code, str(exc.detail), exc.headers)
+    response: Final = tracing_endpoints.otlp_error_response(request, exc.status_code, exc.headers)
     if response is not None:
         _close_dangling_otel_server_span(request, exc.status_code, exc=exc)
         return response
@@ -2037,7 +2037,7 @@ async def otel_request_validation_exception_handler(request: Request, exc: Reque
         _close_dangling_otel_server_span(request, problem.status, exc=public_exc)
         return problem_response(problem)
     _close_dangling_otel_server_span(request, 422, exc=public_exc)
-    otlp_response: Final = tracing_endpoints.otlp_error_response(request, 422, "Invalid request parameters")
+    otlp_response: Final = tracing_endpoints.otlp_error_response(request, 422)
     if otlp_response is not None:
         return otlp_response
     return JSONResponse(status_code=422, content={"detail": public_errors})
@@ -2063,7 +2063,7 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
             )
         )
     _close_dangling_otel_server_span(request, 500, exc=exc)
-    otlp_response: Final = tracing_endpoints.otlp_error_response(request, 500, "Internal server error")
+    otlp_response: Final = tracing_endpoints.otlp_error_response(request, 500)
     if otlp_response is not None:
         return otlp_response
     return JSONResponse(

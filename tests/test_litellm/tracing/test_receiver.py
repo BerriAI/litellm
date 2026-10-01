@@ -2,7 +2,10 @@
 Tests for TraceReceiver.ingest (litellm/tracing/receiver.py) with a fake store.
 """
 
+import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -140,3 +143,20 @@ async def test_cancelled_request_keeps_its_worker_slot_until_decode_finishes():
         await asyncio.wait_for(stored.wait(), 5)
         await asyncio.sleep(0)
     assert await tracing.ingest(b"", None, None, TENANT) == 0
+
+
+@pytest.mark.asyncio
+async def test_expired_upload_releases_ingestion_slot_without_writing() -> None:
+    from litellm.tracing.receiver import TracingOverloadedError
+
+    async def unfinished_body() -> AsyncIterator[bytes]:
+        await asyncio.Event().wait()
+        yield b""
+
+    store: Final = _fake_store()
+    receiver: Final = TraceReceiver(store, max_concurrent_ingests=1, body_read_timeout=0)
+    with pytest.raises(TracingOverloadedError, match="upload timed out"):
+        await receiver.ingest(unfinished_body(), "application/json", None, TENANT)
+    store.insert_spans.assert_not_awaited()
+    assert await receiver.ingest(b"{}", "application/json", None, TENANT) == 0
+    store.insert_spans.assert_awaited_once_with(())

@@ -925,3 +925,58 @@ async fn trace_error_previews_preserve_paginated_diagnostics(
     );
     Ok(())
 }
+
+#[rstest]
+#[case::different_start(1, 0)]
+#[case::different_receive(0, 1)]
+#[case::tied_timestamps(0, 0)]
+#[tokio::test]
+async fn duplicate_span_preview_matches_diagnostic(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] start_delta: i64,
+    #[case] receive_delta: i64,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let message = "a".repeat(200);
+    let rows = [
+        (start_delta, receive_delta, "z".repeat(200)),
+        (0, 0, message.clone()),
+    ]
+    .into_iter()
+    .map(|(start_delta, receive_delta, message)| {
+        serde_json::from_value(serde_json::json!({
+            "Timestamp": timestamp + start_delta, "EngineReceivedMs": 100 + receive_delta,
+            "TraceId": "duplicate-trace", "SpanId": "duplicate-span", "StatusMessage": message,
+        }))
+    })
+    .collect::<Result<Vec<BTreeMap<String, serde_json::Value>>, _>>()?;
+    insert_rows(&database, "otel_traces", rows).await?;
+    let reader = Connection::reader(&database.url, "trace_test")?;
+    let parameters = BTreeMap::from([
+        ("trace_id".into(), Parameter::Text("duplicate-trace".into())),
+        ("span_id".into(), Parameter::Text("duplicate-span".into())),
+        ("team_ids".into(), Parameter::Strings(vec![])),
+        ("api_key_hash".into(), Parameter::Text(String::new())),
+        ("trace_ref".into(), Parameter::Text(String::new())),
+        ("error_version".into(), Parameter::Text(String::new())),
+        ("error_offset".into(), Parameter::Integer(0)),
+    ]);
+    let preview = execute_named_read(
+        &database.client,
+        &reader,
+        ReadQuery::TraceSpans,
+        &parameters,
+    )
+    .await?;
+    let diagnostic =
+        execute_named_read(&database.client, &reader, ReadQuery::SpanError, &parameters).await?;
+    let preview: serde_json::Value = serde_json::from_str(&preview)?;
+    let diagnostic: serde_json::Value = serde_json::from_str(&diagnostic)?;
+    assert_eq!(preview["data"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["data"][0]["status_message"], message[..128]);
+    assert_eq!(diagnostic["data"][0]["message"], message);
+    Ok(())
+}

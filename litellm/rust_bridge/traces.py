@@ -78,6 +78,8 @@ def decode_otlp(body: bytes, content_type: str | None) -> list[DecodedSpan]:
 
 
 def encode_error(message: str) -> bytes:
+    if get_native_bridge() is None:
+        return b""
     return _native().trace_encode_error(message)
 
 

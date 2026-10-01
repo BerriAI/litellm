@@ -92,11 +92,13 @@ class TraceReceiver:
         store: TraceStore,
         max_concurrent_ingests: int = OTLP_MAX_CONCURRENT_INGESTS,
         decoder: Callable[[bytes, str | None, str | None], tuple[SpanRow, ...]] = decode_otlp,
+        body_read_timeout: float = 30,
     ) -> None:
         if max_concurrent_ingests < 1:
             raise ValueError("OTLP ingestion concurrency must be positive")
         self.store = store
         self._decoder: Final = decoder
+        self._body_read_timeout: Final = body_read_timeout
         self._ingest_slots: Final = BoundedSemaphore(max_concurrent_ingests)
 
     @classmethod
@@ -143,7 +145,14 @@ class TraceReceiver:
         content_encoding: str | None,
         tenant: Tenant,
     ) -> int:
-        payload: Final = body if isinstance(body, bytes) else await _read_body(body)
+        try:
+            payload: Final = (
+                body
+                if isinstance(body, bytes)
+                else await asyncio.wait_for(_read_body(body), timeout=self._body_read_timeout)
+            )
+        except asyncio.TimeoutError as error:
+            raise TracingOverloadedError("OTLP body upload timed out") from error
         if len(payload) > OTLP_MAX_BODY_BYTES:
             raise TracingPayloadTooLargeError(f"OTLP body exceeds {OTLP_MAX_BODY_BYTES} bytes")
         try:

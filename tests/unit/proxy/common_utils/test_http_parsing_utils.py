@@ -1109,7 +1109,7 @@ class TestGetRequestBody:
         mock_request.method = "POST"
         mock_request.body = AsyncMock(return_value=orjson.dumps(payload))
         mock_request.headers = {"content-type": "application/json; charset=utf-8"}
-        mock_request.scope = {}
+        mock_request.scope = {"path": "/v1/chat/completions"}
 
         result = await get_request_body(mock_request)
         assert result == payload
@@ -1120,7 +1120,7 @@ class TestGetRequestBody:
         mock_request.method = "POST"
         mock_request.headers = {"content-type": "multipart/form-data; boundary=x"}
         mock_request.form = AsyncMock(return_value=FormData({"k": "v"}))
-        mock_request.scope = {}
+        mock_request.scope = {"path": "/v1/chat/completions"}
 
         result = await get_request_body(mock_request)
         assert result == {"k": "v"}
@@ -1285,11 +1285,15 @@ def test_shared_inference_model_selection_preserves_handler_precedence(
         ("POST", "/v1/traces/other", False),
     ],
 )
-async def test_only_trace_ingest_skips_json_body(method: str, path: str, skip_parse: bool) -> None:
+@pytest.mark.parametrize("root_path", ["", "/tenant-a"])
+async def test_only_trace_ingest_skips_json_body(method: str, path: str, skip_parse: bool, root_path: str) -> None:
     body: Final = b'{"key":"value"}'
     receive: Final = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})
     request: Final = Request(
-        {"type": "http", "method": method, "path": path, "headers": [(b"content-type", b"application/json")]},
+        {
+            "type": "http", "method": method, "path": root_path + path, "root_path": root_path,
+            "headers": [(b"content-type", b"application/json")],
+        },
         receive,
     )
 

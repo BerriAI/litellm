@@ -10,6 +10,7 @@ GET  /v1/traces/{trace_id}/spans/{span_id}   SpanDetail
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from http.client import responses
 from types import MappingProxyType
 from typing import Annotated, Final
 
@@ -18,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from litellm.constants import OTLP_RETRY_AFTER_SECONDS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
 from litellm.tracing import (
     Tenant,
@@ -69,11 +71,13 @@ async def provide_trace_access(
 
 
 def otlp_error_response(
-    request: Request, status_code: int, message: str, headers: Mapping[str, str] | None = None
+    request: Request, status_code: int, headers: Mapping[str, str] | None = None
 ) -> Response | None:
-    if request.url.path != "/v1/traces" or request.method != "POST":
+    if not is_otlp_trace_request(request):
         return None
-    body, media_type = encode_otlp_response(request.headers.get("content-type"), message[:1024])
+    body, media_type = encode_otlp_response(
+        request.headers.get("content-type"), responses.get(status_code, "Trace request failed")
+    )
     return Response(content=body, status_code=status_code, media_type=media_type, headers=headers)
 
 

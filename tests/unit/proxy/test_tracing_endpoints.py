@@ -96,8 +96,22 @@ def client() -> TestClient:
     return TestClient(app)
 
 
-def test_501_when_tracing_not_enabled(client):
-    assert client.post("/v1/traces", content=b"").status_code == 501
+@pytest.mark.parametrize("native_available", [True, False])
+def test_501_when_tracing_not_enabled(
+    client: TestClient, native_available: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from google.rpc.status_pb2 import Status
+
+    from litellm.rust_bridge import loader
+
+    if not native_available:
+        monkeypatch.setattr(loader, "_cached_bridge", None)
+    response: Final = client.post("/v1/traces", content=b"")
+    assert response.status_code == 501
+    assert response.headers["content-type"] == "application/x-protobuf"
+    assert Status.FromString(response.content).message == (
+        "Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL." if native_available else ""
+    )
     assert client.get("/v1/traces").status_code == 501
 
 

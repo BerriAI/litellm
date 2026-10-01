@@ -6,6 +6,7 @@ from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
+from starlette._utils import get_route_path
 from typing_extensions import NotRequired, ReadOnly, Required, assert_never
 
 from litellm._logging import verbose_proxy_logger
@@ -167,6 +168,10 @@ def _parse_binary_body(body: bytes) -> dict:
     return {}
 
 
+def is_otlp_trace_request(request: Request) -> bool:
+    return request.method == "POST" and get_route_path(request.scope) == "/v1/traces"
+
+
 async def _read_request_body(request: Request | None) -> dict:
     """
     Safely read the request body and parse it as JSON.
@@ -181,7 +186,7 @@ async def _read_request_body(request: Request | None) -> dict:
         if request is None:
             return {}
 
-        if request.scope.get("path") == "/v1/traces" and request.scope.get("method") == "POST":
+        if is_otlp_trace_request(request):
             return {}
 
         # Check if we already read and parsed the body

@@ -9,5 +9,5 @@ WHERE TraceId = {trace_id:String} AND SpanId = {span_id:String}
   AND ({trace_ref:String} = '' OR
        hex(SHA256(concat(TeamId, char(0), ApiKeyHash, char(0), TraceId))) = {trace_ref:String})
   AND ({error_version:String} = '' OR hex(SHA256(StatusMessage)) = {error_version:String})
-ORDER BY Timestamp DESC, EngineReceivedMs DESC
+ORDER BY Timestamp, EngineReceivedMs, StatusMessage
 LIMIT 1

@@ -13,5 +13,5 @@ WHERE o.TraceId = {trace_id:String}
   AND ({api_key_hash:String} = '' OR o.ApiKeyHash = {api_key_hash:String})
   AND ({trace_ref:String} = '' OR
        hex(SHA256(concat(o.TeamId, char(0), o.ApiKeyHash, char(0), o.TraceId))) = {trace_ref:String})
-ORDER BY o.Timestamp
+ORDER BY o.Timestamp, o.EngineReceivedMs, o.StatusMessage
 LIMIT 1 BY o.SpanId
