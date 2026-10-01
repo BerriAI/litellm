@@ -1,7 +1,7 @@
 """The HTTP contract of `POST /management/v1/users/bulk`: envelope, problem documents and strict bodies.
 
 The batching behaviour itself is covered next to the helper, in
-`tests/test_litellm/proxy/management_helpers/test_bulk_user_creation.py`, whose in-memory Prisma this reuses.
+`tests/unit/proxy/management_helpers/test_bulk_user_creation.py`, whose in-memory Prisma this reuses.
 """
 
 import pytest
@@ -14,7 +14,7 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_au
 from litellm.proxy.list_api.common import ManagementProblem, problem_response, request_validation_problem
 from litellm.proxy.management_endpoints.management_v1 import router
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
-from tests.test_litellm.proxy.management_helpers.test_bulk_user_creation import _FakePrisma, _License, _team
+from tests.unit.proxy.management_helpers.test_bulk_user_creation import _FakePrisma, _License, _team
 
 app = FastAPI()
 

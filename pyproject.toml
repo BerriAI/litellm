@@ -397,7 +397,7 @@ paths_to_mutate = [
 # a mutation score is only meaningful against the tests that claim to cover
 # the mutated code anyway.
 tests_dir = [
-    "tests/test_litellm/proxy/management_endpoints/",
+    "tests/unit/proxy/management_endpoints/",
 ]
 also_copy = [
     "litellm/",
@@ -423,7 +423,7 @@ pytest_add_cli_args = [
     "-p", "no:pytest-retry",
     "-p", "no:rerunfailures",
     "-p", "no:xdist",
-    "--ignore=tests/test_litellm/proxy/management_endpoints/test_saml_sso.py",
+    "--ignore=tests/unit/proxy/management_endpoints/test_saml_sso.py",
 ]
 
 [tool.coverage.run]

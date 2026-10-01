@@ -79,7 +79,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamMemberAddResult,
 )
 from litellm.types.utils import StandardAuditLogPayload
-from tests.test_litellm.proxy.management_endpoints.jwt_key_mapping_doubles import (
+from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
 )

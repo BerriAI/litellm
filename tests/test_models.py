@@ -270,7 +270,7 @@ async def delete_model(session, model_id="123", key="sk-1234"):
 
 
 @pytest.mark.skip(
-    reason="Requires live proxy + OPENAI_API_KEY. Deterministic mock version in tests/test_litellm/proxy/management_endpoints/test_model_management_endpoints.py::TestAddAndDeleteModelLifecycle"
+    reason="Requires live proxy + OPENAI_API_KEY. Deterministic mock version in tests/unit/proxy/management_endpoints/test_model_management_endpoints.py::TestAddAndDeleteModelLifecycle"
 )
 @pytest.mark.asyncio
 async def test_add_and_delete_models():

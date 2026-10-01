@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from litellm._uuid import uuid
-from tests.test_litellm.proxy.management_endpoints.jwt_key_mapping_doubles import (
+from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
 )
