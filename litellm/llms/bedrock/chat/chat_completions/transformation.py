@@ -108,7 +108,8 @@ def chat_completions_reasoning_efforts_refused_for(model: str) -> frozenset[str]
 
 
 def without_refused_reasoning_effort(model: str, params: Mapping[str, object]) -> Mapping[str, object]:
-    if params.get("reasoning_effort") not in chat_completions_reasoning_efforts_refused_for(model):
+    effort: Final = params.get("reasoning_effort")
+    if not isinstance(effort, str) or effort not in chat_completions_reasoning_efforts_refused_for(model):
         return params
     return _without_params(params, frozenset(("reasoning_effort",)))
 

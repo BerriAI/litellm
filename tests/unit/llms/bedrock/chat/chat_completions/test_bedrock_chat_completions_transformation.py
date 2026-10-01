@@ -573,6 +573,19 @@ def test_map_openai_params_keeps_reasoning_effort_low_for_grok():
     assert mapped["reasoning_effort"] == "low"
 
 
+@pytest.mark.parametrize("model", ["us.xai.grok-4.6", "global.openai.gpt-5.6-sol"])
+@pytest.mark.parametrize("reasoning_effort", [["low"], {"effort": "low"}, 5])
+def test_map_openai_params_forwards_a_malformed_reasoning_effort_for_aws_to_refuse(model, reasoning_effort):
+    cfg = AmazonBedrockRuntimeChatCompletionsConfig()
+    mapped = cfg.map_openai_params(
+        non_default_params={"reasoning_effort": reasoning_effort, "max_tokens": 64},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert mapped["reasoning_effort"] == reasoning_effort
+
+
 def test_map_openai_params_keeps_reasoning_effort_none_for_gpt56():
     cfg = AmazonBedrockRuntimeChatCompletionsConfig()
     mapped = cfg.map_openai_params(
