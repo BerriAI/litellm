@@ -56,7 +56,8 @@ class ClickHouseBatchLogger(CustomBatchLogger):
         self._stop.set()
         if self._flush_task is not None:
             await self._flush_task
-        await self.flush_queue()
+        while self.log_queue:
+            await self.flush_queue()
 
     async def periodic_flush(self) -> None:
         while True:
