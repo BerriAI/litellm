@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import itertools
 import posixpath
 import re
 import shlex
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, Final, TypeVar
 
 from deepagents.backends.protocol import (
@@ -64,7 +66,7 @@ T = TypeVar("T")
 # Module alias so ruff recognises `.exception()` as logging the swallowed error (BLE001).
 _logger = verbose_logger
 # Models cost_per_token could not price: logged once, then skipped (always 0.0).
-_UNPRICED_MODELS: set[str] = set()
+_UNPRICED_MODELS: set[str] = set()  # mutable-ok: process-wide log-once memo, grown as unpriced models are seen
 
 DEEPAGENTS_EXECUTE_TIMEOUT_SECONDS: Final = 120.0
 DEEPAGENTS_FS_TIMEOUT_SECONDS: Final = 60.0
@@ -93,6 +95,14 @@ _FILTER_MIDDLEWARE_NAME: Final = "LiteLLMHarnessToolFilter"
 
 def _decode(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
+
+
+def _ls_entries(base: str, stdout: str) -> Iterator[FileInfo]:
+    for line in stdout.splitlines():
+        kind, _, name = line.partition("/")
+        if name:
+            is_dir = kind == "d"
+            yield FileInfo(path=f"{base}/{name}" + ("/" if is_dir else ""), is_dir=is_dir)
 
 
 class SandboxBackend(SandboxBackendProtocol):
@@ -138,7 +148,7 @@ class SandboxBackend(SandboxBackendProtocol):
         follow it and read host secrets even in read-only mode.
         """
         real = self.to_real(path)
-        done = await self._run(["sh", "-c", _REALPATH_SCRIPT, "sh", real])
+        done = await self._run(("sh", "-c", _REALPATH_SCRIPT, "sh", real))
         resolved = done.stdout.strip()
         if done.exit_code != 0 or not resolved:
             raise ValueError(f"path not found: {path}")
@@ -149,7 +159,7 @@ class SandboxBackend(SandboxBackendProtocol):
 
     async def _resolved_root(self) -> str:
         if self._real_root is None:
-            done = await self._run(["realpath", "--", self._root])
+            done = await self._run(("realpath", "--", self._root))
             self._real_root = done.stdout.strip() if done.exit_code == 0 and done.stdout.strip() else self._root
         return self._real_root
 
@@ -172,7 +182,7 @@ class SandboxBackend(SandboxBackendProtocol):
             raise RuntimeError("SandboxBackend sync methods cannot run on the event loop thread")
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
 
-    async def _run(self, cmd: list[str], timeout: float | None = DEEPAGENTS_FS_TIMEOUT_SECONDS) -> CompletedRun:
+    async def _run(self, cmd: Sequence[str], timeout: float | None = DEEPAGENTS_FS_TIMEOUT_SECONDS) -> CompletedRun:
         return await self._sandbox.run(cmd, timeout=timeout)
 
     # -- ls -----------------------------------------------------------------
@@ -180,7 +190,7 @@ class SandboxBackend(SandboxBackendProtocol):
     async def als(self, path: str) -> LsResult:
         try:
             real = await self.to_confined(path)
-            done = await self._run(["sh", "-c", _LS_SCRIPT, "sh", real])
+            done = await self._run(("sh", "-c", _LS_SCRIPT, "sh", real))
         except (ValueError, SandboxError) as e:
             return LsResult(error=f"Path '{path}': {e}")
         if done.exit_code == _EXIT_NOT_FOUND:
@@ -190,14 +200,7 @@ class SandboxBackend(SandboxBackendProtocol):
         if done.exit_code != 0:
             return LsResult(error=f"Path '{path}': {done.stderr.strip() or 'ls failed'}")
         base = self.to_virtual(real).rstrip("/")
-        entries: list[FileInfo] = []
-        for line in done.stdout.splitlines():
-            kind, _, name = line.partition("/")
-            if not name:
-                continue
-            is_dir = kind == "d"
-            entries.append({"path": f"{base}/{name}" + ("/" if is_dir else ""), "is_dir": is_dir})
-        entries.sort(key=lambda e: e["path"])
+        entries = sorted(_ls_entries(base, done.stdout), key=lambda e: e["path"])
         return LsResult(entries=entries)
 
     def ls(self, path: str) -> LsResult:
@@ -280,7 +283,7 @@ class SandboxBackend(SandboxBackendProtocol):
             real = await self.to_confined(file_path)
             if real == self._root:
                 return DeleteResult(error="Error: refusing to delete the workspace root")
-            done = await self._run(["sh", "-c", _DELETE_SCRIPT, "sh", real])
+            done = await self._run(("sh", "-c", _DELETE_SCRIPT, "sh", real))
         except (ValueError, SandboxError) as e:
             return DeleteResult(error=f"Error deleting '{file_path}': {e}")
         if done.exit_code == _EXIT_NOT_FOUND:
@@ -294,18 +297,21 @@ class SandboxBackend(SandboxBackendProtocol):
 
     # -- glob / grep --------------------------------------------------------
 
-    def _find_cmd(self, root: str) -> list[str]:
-        prune: list[str] = []
-        for name in sorted(HARNESS_SNAPSHOT_SKIP_DIRS):
-            prune += ["-o", "-name", name] if prune else ["-name", name]
+    def _find_cmd(self, root: str) -> tuple[str, ...]:
+        prune = tuple(
+            itertools.chain.from_iterable(
+                ("-o", "-name", name) if index else ("-name", name)
+                for index, name in enumerate(sorted(HARNESS_SNAPSHOT_SKIP_DIRS))
+            )
+        )
         # -P: never follow symlinks, so a repo link to ~/.aws cannot pull host files in.
-        return ["find", "-P", root, "(", *prune, ")", "-prune", "-o", "-type", "f", "-print"]
+        return ("find", "-P", root, "(", *prune, ")", "-prune", "-o", "-type", "f", "-print")
 
-    def _grep_cmd(self, pattern: str, root: str) -> list[str]:
+    def _grep_cmd(self, pattern: str, root: str) -> tuple[str, ...]:
         # grep only the regular files `find -P -type f` lists: symlinks are never followed,
         # whatever grep implementation (GNU -R vs BSD -r) the sandbox has.
         find_cmd = " ".join(shlex.quote(part) for part in self._find_cmd(root))
-        return ["sh", "-c", f'{find_cmd} | tr "\\n" "\\0" | xargs -0 grep -nHFI -e "$1" --', "sh", pattern]
+        return ("sh", "-c", f'{find_cmd} | tr "\\n" "\\0" | xargs -0 grep -nHFI -e "$1" --', "sh", pattern)
 
     async def aglob(self, pattern: str, path: str | None = None) -> GlobResult:
         try:
@@ -315,14 +321,25 @@ class SandboxBackend(SandboxBackendProtocol):
         except (InvalidGlobPatternError, ValueError, SandboxError) as e:
             return GlobResult(error=str(e), matches=None)
         if done.exit_code != 0 and not done.stdout:
-            return GlobResult(matches=[])
-        matches: list[FileInfo] = []
-        for real in done.stdout.splitlines():
-            rel = posixpath.relpath(real, root)
-            if matcher(rel):
-                matches.append({"path": self.to_virtual(real), "is_dir": False})
-        matches.sort(key=lambda m: m["path"])
+            return GlobResult(matches=[])  # mutable-ok: deepagents GlobResult.matches is typed list[FileInfo]
+        matches = sorted(
+            (
+                FileInfo(path=self.to_virtual(real), is_dir=False)
+                for real in done.stdout.splitlines()
+                if matcher(posixpath.relpath(real, root))
+            ),
+            key=lambda m: m["path"],
+        )
         return GlobResult(matches=matches, truncated=done.exit_code != 0)
+
+    def _grep_matches(self, stdout: str, root: str, include: Callable[[str], bool] | None) -> Iterator[GrepMatch]:
+        for line in stdout.splitlines():
+            parsed = _GREP_LINE.match(line)
+            if parsed is None:
+                continue
+            real = parsed.group(1)
+            if include is None or include(posixpath.relpath(real, root)):
+                yield GrepMatch(path=self.to_virtual(real), line=int(parsed.group(2)), text=parsed.group(3))
 
     def glob(self, pattern: str, path: str | None = None) -> GlobResult:
         return self._sync(self.aglob(pattern, path))
@@ -343,15 +360,9 @@ class SandboxBackend(SandboxBackendProtocol):
             return GrepResult(error=f"Path '{path or '/'}': {e}")
         if done.exit_code not in (0, 1) and not done.stdout:
             return GrepResult(error=f"Path '{path or '/'}': {done.stderr.strip() or 'grep failed'}")
-        matches: list[GrepMatch] = []
-        for line in done.stdout.splitlines():
-            parsed = _GREP_LINE.match(line)
-            if parsed is None:
-                continue
-            real, line_no, text = parsed.group(1), int(parsed.group(2)), parsed.group(3)
-            if include is not None and not include(posixpath.relpath(real, root)):
-                continue
-            matches.append({"path": self.to_virtual(real), "line": line_no, "text": text})
+        matches = list(  # mutable-ok: GrepResult.matches is list[GrepMatch]
+            self._grep_matches(done.stdout, root, include)
+        )
         if max_count is not None and len(matches) > max_count:
             return GrepResult(matches=matches[:max_count], truncated=True)
         return GrepResult(matches=matches)
@@ -368,36 +379,49 @@ class SandboxBackend(SandboxBackendProtocol):
 
     # -- upload / download --------------------------------------------------
 
-    async def aupload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
-        responses: list[FileUploadResponse] = []
-        for path, data in files:
-            if not self._writable:
-                responses.append(FileUploadResponse(path=path, error="permission_denied"))
-                continue
-            try:
-                await self._sandbox.write(await self.to_confined(path), data)
-                responses.append(FileUploadResponse(path=path))
-            except ValueError:
-                responses.append(FileUploadResponse(path=path, error="invalid_path"))
-            except SandboxError as e:
-                responses.append(FileUploadResponse(path=path, error=str(e)))
-        return responses
+    async def _upload_one(self, path: str, data: bytes) -> FileUploadResponse:
+        if not self._writable:
+            return FileUploadResponse(path=path, error="permission_denied")
+        try:
+            await self._sandbox.write(await self.to_confined(path), data)
+        except ValueError:
+            return FileUploadResponse(path=path, error="invalid_path")
+        except SandboxError as e:
+            return FileUploadResponse(path=path, error=str(e))
+        return FileUploadResponse(path=path)
 
-    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+    async def aupload_files(
+        self,
+        files: list[tuple[str, bytes]],  # mutable-ok: signature fixed by deepagents BackendProtocol
+    ) -> list[FileUploadResponse]:  # mutable-ok: return type fixed by deepagents BackendProtocol
+        return [  # mutable-ok: BackendProtocol returns a list
+            await self._upload_one(path, data) for path, data in files
+        ]
+
+    def upload_files(
+        self,
+        files: list[tuple[str, bytes]],  # mutable-ok: signature fixed by deepagents BackendProtocol
+    ) -> list[FileUploadResponse]:  # mutable-ok: return type fixed by deepagents BackendProtocol
         return self._sync(self.aupload_files(files))
 
-    async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
-        responses: list[FileDownloadResponse] = []
-        for path in paths:
-            try:
-                responses.append(FileDownloadResponse(path=path, content=await self._read_bytes(path)))
-            except ValueError:
-                responses.append(FileDownloadResponse(path=path, error="invalid_path"))
-            except SandboxError:
-                responses.append(FileDownloadResponse(path=path, error="file_not_found"))
-        return responses
+    async def _download_one(self, path: str) -> FileDownloadResponse:
+        try:
+            return FileDownloadResponse(path=path, content=await self._read_bytes(path))
+        except ValueError:
+            return FileDownloadResponse(path=path, error="invalid_path")
+        except SandboxError:
+            return FileDownloadResponse(path=path, error="file_not_found")
 
-    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+    async def adownload_files(
+        self,
+        paths: list[str],  # mutable-ok: signature fixed by deepagents BackendProtocol
+    ) -> list[FileDownloadResponse]:  # mutable-ok: return type fixed by deepagents BackendProtocol
+        return [await self._download_one(path) for path in paths]  # mutable-ok: BackendProtocol returns a list
+
+    def download_files(
+        self,
+        paths: list[str],  # mutable-ok: signature fixed by deepagents BackendProtocol
+    ) -> list[FileDownloadResponse]:  # mutable-ok: return type fixed by deepagents BackendProtocol
         return self._sync(self.adownload_files(paths))
 
     # -- execute ------------------------------------------------------------
@@ -407,7 +431,7 @@ class SandboxBackend(SandboxBackendProtocol):
             return ExecuteResponse(output=_NO_EXECUTE_ERROR, exit_code=1)
         limit = float(timeout) if timeout else DEEPAGENTS_EXECUTE_TIMEOUT_SECONDS
         try:
-            done = await self._run(["sh", "-c", command], timeout=limit)
+            done = await self._run(("sh", "-c", command), timeout=limit)
         except SandboxError as e:
             return ExecuteResponse(output=f"Error: {e}", exit_code=_EXIT_TIMEOUT)
         output = done.stdout
@@ -451,7 +475,11 @@ class ToolFilterMiddleware(AgentMiddleware):
         return _FILTER_MIDDLEWARE_NAME
 
     def _filtered(self, request: ModelRequest) -> ModelRequest:
-        return request.override(tools=[t for t in request.tools if _tool_name(t) not in self._blocked])
+        return request.override(
+            tools=[  # mutable-ok: ModelRequest.tools is a list
+                t for t in request.tools if _tool_name(t) not in self._blocked
+            ]
+        )
 
     def wrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
@@ -482,7 +510,7 @@ def _number(value: object) -> float | None:
 
 def message_cost(message: object, cost_model: str | None, input_tokens: int, output_tokens: int) -> float:
     """Cost of one model call: response_cost reported by litellm, else cost_per_token, else 0."""
-    metadata = getattr(message, "response_metadata", None) or {}
+    metadata = getattr(message, "response_metadata", None) or MappingProxyType({})
     reported = _number(metadata.get("response_cost"))
     if reported is not None:
         return reported
@@ -508,7 +536,7 @@ def record_llm_usage(ctx: SessionContext, cost_model: str | None, response: LLMR
         for generations in response.generations:
             for generation in generations:
                 message = getattr(generation, "message", None)
-                usage = getattr(message, "usage_metadata", None) or {}
+                usage = getattr(message, "usage_metadata", None) or MappingProxyType({})
                 input_tokens = int(usage.get("input_tokens") or 0)
                 output_tokens = int(usage.get("output_tokens") or 0)
                 ctx.input_tokens += input_tokens
