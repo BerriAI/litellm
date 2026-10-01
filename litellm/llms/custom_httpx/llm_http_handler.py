@@ -6251,6 +6251,9 @@ class BaseLLMHTTPHandler:
         Uses provider_config (BaseRealtimeHTTPConfig) for URL construction and
         header auth when available; falls back to the legacy OpenAI-style defaults.
         """
+        from litellm.llms.chatgpt.common_utils import without_oauth_identity_headers
+        from litellm.llms.chatgpt.realtime import ChatGPTRealtimeHTTPConfig
+
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.OPENAI,
@@ -6276,7 +6279,11 @@ class BaseLLMHTTPHandler:
             }
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(
+                without_oauth_identity_headers(extra_headers)
+                if isinstance(provider_config, ChatGPTRealtimeHTTPConfig)
+                else extra_headers
+            )
 
         logging_obj.pre_call(
             input=request_data,
@@ -6327,6 +6334,9 @@ class BaseLLMHTTPHandler:
           - sdp: the SDP offer (text)
           - session: JSON string with {"type": "realtime", "model": "...", ...}
         """
+        from litellm.llms.chatgpt.common_utils import without_oauth_identity_headers
+        from litellm.llms.chatgpt.realtime import ChatGPTRealtimeHTTPConfig
+
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.OPENAI,
@@ -6344,11 +6354,15 @@ class BaseLLMHTTPHandler:
             }
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(
+                without_oauth_identity_headers(extra_headers)
+                if isinstance(provider_config, ChatGPTRealtimeHTTPConfig)
+                else extra_headers
+            )
 
         # Build multipart form data: sdp + session JSON
         session_data: Final = session_config or {}
-        if "type" not in session_data:
+        if "type" not in session_data and not getattr(provider_config, "realtime_calls_json", False):
             session_data["type"] = "realtime"
         if "model" not in session_data and model:
             session_data["model"] = model
@@ -6371,6 +6385,13 @@ class BaseLLMHTTPHandler:
         )
 
         try:
+            if getattr(provider_config, "realtime_calls_json", False):
+                return await async_httpx_client.post(
+                    url=url,
+                    headers=headers,
+                    json={"sdp": sdp_text, "session": session_data},  # mutable-ok: JSON signaling payload
+                    timeout=timeout,
+                )
             return await async_httpx_client.post(
                 url=url,
                 headers=headers,
@@ -6572,6 +6593,14 @@ class BaseLLMHTTPHandler:
                     raise Exception(f"Unexpected error while closing WebSocket: {close_error}")
         return None
 
+    @staticmethod
+    def _image_extra_headers(custom_llm_provider: str, headers: Mapping[str, object]) -> Mapping[str, object]:
+        if custom_llm_provider == "chatgpt":
+            from litellm.llms.chatgpt.common_utils import without_oauth_identity_headers
+
+            return without_oauth_identity_headers(headers)
+        return headers
+
     def image_edit_handler(
         self,
         model: str,
@@ -6628,7 +6657,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(self._image_extra_headers(custom_llm_provider, extra_headers))
 
         api_base: Final = image_edit_provider_config.get_complete_url(
             model=model,
@@ -6729,7 +6758,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(self._image_extra_headers(custom_llm_provider, extra_headers))
 
         api_base: Final = image_edit_provider_config.get_complete_url(
             model=model,
@@ -6848,7 +6877,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(self._image_extra_headers(custom_llm_provider, extra_headers))
 
         api_base: Final = image_generation_provider_config.get_complete_url(
             model=model,
@@ -6956,7 +6985,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(self._image_extra_headers(custom_llm_provider, extra_headers))
 
         api_base: Final = image_generation_provider_config.get_complete_url(
             model=model,

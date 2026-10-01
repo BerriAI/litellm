@@ -308,6 +308,7 @@ class TestProcessResponse:
             )
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 class TestProcessEmbedContentResponseUsage:
     """Gemini Embedding 2 embedContent usageMetadata must drive spend.
 

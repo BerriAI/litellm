@@ -17,6 +17,24 @@ from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
 from litellm.proxy.auth.route_checks import RouteChecks
 
 
+@pytest.mark.parametrize("route", ["/live", "/v1/live", "/v1/live/rtc_litellm_test"])
+def test_codex_live_routes_allow_inference_keys(route: str):
+    from litellm.proxy.auth.auth_checks import _allowed_routes_check
+
+    assert RouteChecks.is_llm_api_route(route)
+    assert _allowed_routes_check(user_route=route, allowed_routes=["openai_routes"])
+    token = UserAPIKeyAuth(allowed_routes=["llm_api_routes"])
+    RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=token)
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=None,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route=route,
+        request=Request({"type": "http", "path": route, "query_string": b"", "headers": []}),
+        valid_token=token,
+        request_data={},
+    )
+
+
 def test_non_admin_config_update_route_rejected():
     """Test that non-admin users are rejected when trying to call /config/update"""
 

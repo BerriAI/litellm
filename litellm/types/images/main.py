@@ -16,7 +16,7 @@ class ImageEditOptionalRequestParams(TypedDict, total=False):
     input_fidelity: Literal["high", "low"] | None
     mask: str | None
     n: int | None
-    quality: Literal["high", "medium", "low", "standard", "auto"] | None
+    quality: Literal["high", "medium", "low", "standard", "auto", "xhigh", "max"] | None
     response_format: Literal["url", "b64_json"] | None
     size: str | None
     user: str | None

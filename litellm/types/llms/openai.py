@@ -93,7 +93,7 @@ from litellm.types.responses.main import (
 
 from .base import CachedTokensDetails
 
-FileContent = IO[bytes] | bytes | PathLike
+FileContent = IO[bytes] | bytes | PathLike[str]
 
 FileTypes = (
     # file (or bytes)
@@ -2081,6 +2081,16 @@ class OpenAIRealtimeStreamResponseBaseObject(TypedDict):
     type: str
 
 
+class OpenAIRealtimeSessionClosed(TypedDict):
+    type: ReadOnly[Literal["session.closed", "session.usage.updated", "litellm.live.initialization"]]
+    usage: ReadOnly[Mapping[str, object]]
+
+
+class OpenAILiveResponseEvent(TypedDict):
+    type: ReadOnly[Literal["response.event"]]
+    event: ReadOnly[Mapping[str, object]]
+
+
 class OpenAIRealtimeConversationObject(TypedDict, total=False):
     id: str
     object: Required[Literal["realtime.conversation"]]
@@ -2341,6 +2351,8 @@ class OpenAIRealtimeEventTypes(Enum):
 
 OpenAIRealtimeEvents = (
     OpenAIRealtimeStreamResponseBaseObject
+    | OpenAIRealtimeSessionClosed
+    | OpenAILiveResponseEvent
     | OpenAIRealtimeStreamSessionEvents
     | OpenAIRealtimeStreamResponseOutputItemAdded
     | OpenAIRealtimeResponseContentPartAdded
@@ -2371,6 +2383,8 @@ class ImageGenerationRequestQuality(str, Enum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+    XHIGH = "xhigh"
+    MAX = "max"
     AUTO = "auto"
     STANDARD = "standard"
     HD = "hd"

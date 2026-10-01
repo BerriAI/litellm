@@ -12,6 +12,11 @@ queries:
 query-filters:
   - exclude:
       id: py/clear-text-logging-sensitive-data  # CWE-312
+  # CodeQL 2.27.0 exceeds its 2 GiB result-set limit while evaluating the
+  # repository-wide log-injection data-flow query. Keep the remaining Python
+  # security-and-quality queries enabled until the upstream query scales.
+  - exclude:
+      id: py/log-injection                       # CWE-117
   - exclude:
       id: py/polynomial-redos                   # CWE-730
   # Import resolution confuses stdlib types with management_endpoints/types.py.

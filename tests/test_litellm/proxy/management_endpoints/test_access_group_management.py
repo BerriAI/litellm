@@ -784,20 +784,22 @@ def _proxy_with_stubbed_reload(prisma):
 
 
 def _eviction_journal(access_group):
-    """Both auth cache keys, in the order a write path has to evict them."""
+    """Every auth cache key that holds this group's limits, in the order a write path has to evict them."""
     from litellm.proxy.common_utils.user_api_key_cache import (
+        live_model_access_group_limits_cache_key,
         model_access_group_cache_key,
         model_access_group_registry_cache_key,
     )
 
     return [
         f"auth_cache.delete:{model_access_group_cache_key(access_group)}",
+        f"auth_cache.delete:{live_model_access_group_limits_cache_key(access_group)}",
         f"auth_cache.delete:{model_access_group_registry_cache_key()}",
     ]
 
 
 def _assert_evicted_after_write(journal, access_group, write_entry):
-    """Exactly the two keys, in order, after the DB write. Deliberately not a tail slice: what
+    """Exactly the cached keys, in order, after the DB write. Deliberately not a tail slice: what
     has to hold is that the eviction follows the write, not that nothing follows the eviction."""
     evictions = [entry for entry in journal if entry.startswith("auth_cache.delete:")]
     assert evictions == _eviction_journal(access_group)
@@ -1206,7 +1208,7 @@ async def test_list_access_groups_reports_a_budgetless_group_as_unbudgeted_rathe
 
 
 @pytest.mark.asyncio
-async def test_put_access_group_budget_evicts_both_auth_cache_keys():
+async def test_put_access_group_budget_evicts_every_cached_limit_key():
     """Auth reads the per-group row and the registry of budgeted groups cache-first with no
     freshness check, so a PUT that skips either eviction returns 200 and enforces nothing until
     the TTL expires. Both keys, after the write."""
@@ -1233,7 +1235,7 @@ async def test_put_access_group_budget_evicts_both_auth_cache_keys():
 
 
 @pytest.mark.asyncio
-async def test_delete_access_group_budget_evicts_both_auth_cache_keys():
+async def test_delete_access_group_budget_evicts_every_cached_limit_key():
     """Clearing a budget has the same window as setting one: until both keys are dropped, auth
     keeps enforcing the budget that is already gone."""
     from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
@@ -1252,7 +1254,7 @@ async def test_delete_access_group_budget_evicts_both_auth_cache_keys():
 
 
 @pytest.mark.asyncio
-async def test_deleting_the_access_group_evicts_both_auth_cache_keys():
+async def test_deleting_the_access_group_evicts_every_cached_limit_key():
     """The group-delete cascade drops the budget row too, so it owes the same two evictions."""
     from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
         delete_access_group,

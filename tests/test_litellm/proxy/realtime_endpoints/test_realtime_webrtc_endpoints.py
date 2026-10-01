@@ -7,14 +7,13 @@ Tests for LiteLLM proxy realtime WebRTC HTTP endpoints:
 import json
 import time
 from collections.abc import Awaitable
-from typing import Protocol
+from typing import Final, Protocol
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -118,6 +117,114 @@ def proxy_app(monkeypatch):
 
     monkeypatch.setattr(proxy_server, "master_key", "sk-test-master-key")
     return proxy_server.app
+
+
+@pytest.mark.parametrize("path", ["/v1/live", "/live", "/openai/v1/live"])
+@pytest.mark.parametrize("query", ["", "?intent=custom&architecture=custom"])
+def test_live_multipart_offer_runs_authenticated_call_pipeline(
+    proxy_app: FastAPI, monkeypatch: pytest.MonkeyPatch, path: str, query: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.realtime_endpoints import call_sessions
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-live-signaling-salt")
+    session: Final = {"model": "gpt-live-1-codex", "audio": {"output": {"voice": "sol"}}}
+    authenticate: Final = AsyncMock(wraps=call_sessions.user_api_key_auth)
+    process: Final = AsyncMock(side_effect=lambda request, data, *args: (data, MagicMock()))
+    supervise: Final = AsyncMock()
+    upstream: Final = httpx.Response(
+        201,
+        content=b"v=0\r\nanswer",
+        headers={"Location": "/v1/live/rtc_private"},
+        extensions={"chatgpt_realtime": {"model": "gpt-live-1-codex"}},
+    )
+
+    async def route(**kwargs: object) -> Awaitable[httpx.Response]:
+        assert kwargs["route_type"] == "arealtime_calls"
+        assert isinstance(kwargs["data"], dict)
+        assert kwargs["data"]["sdp_body"] == b"v=0\r\noffer"
+        assert kwargs["data"]["session"] == session
+        assert kwargs["data"]["chatgpt_realtime_client_query"] == (
+            {"architecture": "custom", "intent": "custom"}
+            if query
+            else {"architecture": "avas", "intent": "quicksilver"}
+        )
+
+        async def respond() -> httpx.Response:
+            return upstream
+
+        return respond()
+
+    monkeypatch.setattr(call_sessions, "user_api_key_auth", authenticate)
+    monkeypatch.setattr(call_sessions, "process_codex_request", process)
+    monkeypatch.setattr(call_sessions, "supervise_codex_call", supervise)
+    monkeypatch.setattr(proxy_server, "route_request", route)
+    response: Final = TestClient(proxy_app).post(
+        f"{path}{query}",
+        headers={"Authorization": "Bearer sk-test-master-key"},
+        files={
+            "sdp": (None, "v=0\r\noffer", "application/sdp"),
+            "session": (None, json.dumps(session), "application/json"),
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.content == b"v=0\r\nanswer"
+    assert response.headers["content-type"] == "application/sdp"
+    authenticate.assert_awaited_once()
+    process.assert_awaited_once()
+    assert process.await_args.args[3:] == ("gpt-live-1-codex", "arealtime_calls")
+    assert isinstance(process.await_args.args[2], UserAPIKeyAuth)
+    supervise.assert_awaited_once()
+    assert response.headers["location"].startswith("/v1/live/")
+    token: Final = response.headers["location"].rsplit("/", 1)[-1]
+    call: Final = call_sessions.decode_call(token, "Bearer sk-test-master-key")
+    assert call.call_id == "rtc_private"
+    assert call.alias == "gpt-live-1-codex"
+    assert call.usage_supervised
+
+
+@pytest.mark.parametrize("path", ["/v1/live", "/live", "/openai/v1/live"])
+def test_live_multipart_offer_rejects_invalid_credentials_before_routing(
+    proxy_app: FastAPI, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.realtime_endpoints import call_sessions
+
+    authenticate: Final = AsyncMock(wraps=call_sessions.user_api_key_auth)
+    route: Final = AsyncMock()
+    monkeypatch.setattr(call_sessions, "user_api_key_auth", authenticate)
+    monkeypatch.setattr(proxy_server, "route_request", route)
+    response: Final = TestClient(proxy_app).post(
+        path,
+        files={"sdp": (None, "v=0\r\n"), "session": (None, '{"model":"gpt-live-1-codex"}')},
+    )
+
+    assert response.status_code == 401
+    authenticate.assert_awaited_once()
+    route.assert_not_awaited()
+
+
+def test_live_multipart_offer_rejects_model_outside_key_scope(
+    proxy_app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.realtime_endpoints import call_sessions
+
+    authenticate: Final = AsyncMock(return_value=UserAPIKeyAuth(models=["another-model"]))
+    route: Final = AsyncMock()
+    monkeypatch.setattr(call_sessions, "user_api_key_auth", authenticate)
+    monkeypatch.setattr(proxy_server, "route_request", route)
+    response: Final = TestClient(proxy_app).post(
+        "/v1/live",
+        headers={"Authorization": "Bearer restricted-key"},
+        files={"sdp": (None, "v=0\r\n"), "session": (None, '{"model":"gpt-live-1-codex"}')},
+    )
+
+    assert response.status_code == 403
+    assert "gpt-live-1-codex" in response.text
+    authenticate.assert_awaited_once()
+    route.assert_not_awaited()
 
 
 @pytest.fixture
@@ -414,12 +521,109 @@ def test_realtime_calls_invalid_token_returns_401(proxy_app):
     assert "Invalid or expired token" in response.json().get("error", "")
 
 
+@pytest.mark.parametrize("handle_kind", ["codex", "live"])
+@pytest.mark.parametrize("provider", ["chatgpt", "openai"])
+def test_legacy_sdp_rejects_handle_ciphertext_before_oauth_dispatch(
+    proxy_app, monkeypatch, tmp_path, handle_kind, provider
+):
+    import base64
+    import hashlib
+
+    from litellm import Router
+    from litellm.llms.chatgpt.codex import CodexRealtimeCall
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy import proxy_server
+    from litellm.proxy.realtime_endpoints.call_sessions import encode_call
+    from litellm.proxy.realtime_endpoints.live import LiveHandle, encode_session
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-sdp-handle-salt")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("CHATGPT_AUTH_FILE", "auth.json")
+    (tmp_path / "auth.json").write_text(
+        json.dumps(
+            {"access_token": "test-sdp-oauth", "account_id": "test-sdp-account", "expires_at": time.time() + 3600}
+        )
+    )
+    owner = hashlib.sha256(b"Bearer restricted-key", usedforsecurity=False).hexdigest()
+    handle = (
+        encode_call(
+            CodexRealtimeCall(
+                call_id="rtc_allowed",
+                model="gpt-live-1-codex",
+                alias="allowed-voice",
+                owner=owner,
+                expires_at=time.time() + 3600,
+            )
+        )
+        if handle_kind == "codex"
+        else encode_session(
+            LiveHandle(
+                session_id="live_allowed",
+                alias="allowed-voice",
+                deployment={"model": "chatgpt/gpt-live-1-codex"},
+                owner=owner,
+                expires_at=time.time() + 3600,
+                policy={},
+            )
+        )
+    )
+    encoded = handle.removeprefix("rtc_litellm_").removeprefix("live_litellm_")
+    ciphertext = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(201, text="v=0\r\nanswer")
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    router = Router(
+        model_list=[
+            {
+                "model_name": "forbidden-voice",
+                "litellm_params": {
+                    "model": "chatgpt/gpt-live-1-codex" if provider == "chatgpt" else "openai/gpt-realtime"
+                },
+            }
+        ]
+    )
+
+    async def add_data(data, **kwargs):
+        return data
+
+    async def pre_call(user_api_key_dict, data, call_type):
+        return data
+
+    async def route(data, route_type, **kwargs):
+        assert route_type == "arealtime_calls"
+        return router.arealtime_calls(**data, client=client)
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", add_data)
+    monkeypatch.setattr(proxy_server, "route_request", route)
+    monkeypatch.setattr(
+        proxy_server,
+        "proxy_logging_obj",
+        MagicMock(pre_call_hook=AsyncMock(side_effect=pre_call), post_call_failure_hook=AsyncMock()),
+    )
+    response = TestClient(proxy_app).post(
+        "/v1/realtime/calls?model=forbidden-voice",
+        headers={"Authorization": f"Bearer {ciphertext}", "Content-Type": "application/sdp"},
+        content=b"v=0\r\noffer",
+    )
+    assert response.status_code == 401, [(r.url.path, r.headers.get("authorization")) for r in requests]
+    assert not requests
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("token_format", ["versioned", "legacy"])
 async def test_realtime_calls_success_with_valid_encrypted_token(
     proxy_app,
     mock_route_request_realtime_calls,
     mock_add_litellm_data,
     mock_pre_call_hook,
+    token_format,
 ):
     """POST /v1/realtime/calls returns 201 with valid encrypted token from client_secrets."""
     # Build a valid encrypted token (same format as client_secrets returns)
@@ -431,7 +635,7 @@ async def test_realtime_calls_success_with_valid_encrypted_token(
         team_id=None,
         expires_at=future_expires_at,
     )
-    encrypted_token = encrypt_value_helper(token_payload)
+    encrypted_token = encrypt_value_helper(token_payload if token_format == "versioned" else "fake_upstream_epk")
 
     client = TestClient(proxy_app)
     with (
