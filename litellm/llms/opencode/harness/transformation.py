@@ -12,9 +12,11 @@ DB outlives a session for resume. Verified against opencode 1.14.41.
 
 from __future__ import annotations
 
+import itertools
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm.harness.errors import CapabilityUnsupported, HarnessError, OptionsMismatch
@@ -35,6 +37,7 @@ from litellm.llms.base_llm.harness.transformation import (
     HarnessTurnError,
     HarnessTurnRequest,
     HarnessTurnResponse,
+    event_list,
 )
 from litellm.llms.base_llm.harness.utils import (
     last_json_object,
@@ -58,20 +61,22 @@ XDG_DIRNAME: Final = "xdg"
 XDG_SUBDIRS: Final = ("config", "data", "state", "cache")
 
 # Env that keeps opencode off the network (except the endpoint) and away from ~/.claude.
-OPENCODE_ISOLATION_ENV: Final[Mapping[str, str]] = {
-    "OPENCODE_DISABLE_AUTOUPDATE": "1",
-    "OPENCODE_DISABLE_MODELS_FETCH": "1",
-    "OPENCODE_DISABLE_LSP_DOWNLOAD": "1",
-    "OPENCODE_DISABLE_SHARE": "1",
-    "OPENCODE_DISABLE_DEFAULT_PLUGINS": "1",
-    "OPENCODE_DISABLE_CLAUDE_CODE": "1",
-    "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
-    # Blank (falsy to opencode) so an inherited value can't add config, auth or rules.
-    "OPENCODE_CONFIG": "",
-    "OPENCODE_CONFIG_DIR": "",
-    "OPENCODE_PERMISSION": "",
-    "OPENCODE_AUTH_CONTENT": "",
-}
+OPENCODE_ISOLATION_ENV: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "OPENCODE_DISABLE_AUTOUPDATE": "1",
+        "OPENCODE_DISABLE_MODELS_FETCH": "1",
+        "OPENCODE_DISABLE_LSP_DOWNLOAD": "1",
+        "OPENCODE_DISABLE_SHARE": "1",
+        "OPENCODE_DISABLE_DEFAULT_PLUGINS": "1",
+        "OPENCODE_DISABLE_CLAUDE_CODE": "1",
+        "OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
+        # Blank (falsy to opencode) so an inherited value can't add config, auth or rules.
+        "OPENCODE_CONFIG": "",
+        "OPENCODE_CONFIG_DIR": "",
+        "OPENCODE_PERMISSION": "",
+        "OPENCODE_AUTH_CONTENT": "",
+    }
+)
 
 MANAGED_CONFIG_KEYS: Final = frozenset(
     {
@@ -90,38 +95,44 @@ AGENT_MANAGED_KEYS: Final = frozenset({"permission", "tools", "model"})
 
 # Later keys win in opencode, so disable_tools denies go last. `opencode run` auto-rejects
 # anything left at "ask", so no mode leaves a tool on ask.
-PERMISSION_RULES: Final[Mapping[str, Mapping[str, str]]] = {
-    "read-only": {"edit": "deny", "bash": "deny", "webfetch": "deny"},
-    "edit": {"edit": "allow", "bash": "deny", "webfetch": "allow"},
-    "full": {"*": "allow"},
-}
+PERMISSION_RULES: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
+    {
+        "read-only": MappingProxyType({"edit": "deny", "bash": "deny", "webfetch": "deny"}),
+        "edit": MappingProxyType({"edit": "allow", "bash": "deny", "webfetch": "allow"}),
+        "full": MappingProxyType({"*": "allow"}),
+    }
+)
 
 # opencode gates write, edit and apply_patch with the single `edit` permission.
-NORMALIZED_TO_NATIVE: Final[Mapping[str, tuple[str, ...]]] = {
-    "read": ("read",),
-    "write": ("edit",),
-    "edit": ("edit",),
-    "bash": ("bash",),
-    "glob": ("glob",),
-    "grep": ("grep",),
-    "ls": ("list",),
-    "web_search": ("webfetch", "websearch"),
-}
+NORMALIZED_TO_NATIVE: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "read": ("read",),
+        "write": ("edit",),
+        "edit": ("edit",),
+        "bash": ("bash",),
+        "glob": ("glob",),
+        "grep": ("grep",),
+        "ls": ("list",),
+        "web_search": ("webfetch", "websearch"),
+    }
+)
 
-NATIVE_TO_NORMALIZED: Final[Mapping[str, str]] = {
-    "read": "read",
-    "write": "write",
-    "edit": "edit",
-    "multiedit": "edit",
-    "patch": "edit",
-    "apply_patch": "edit",
-    "bash": "bash",
-    "glob": "glob",
-    "grep": "grep",
-    "list": "ls",
-    "webfetch": "web_search",
-    "websearch": "web_search",
-}
+NATIVE_TO_NORMALIZED: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "read": "read",
+        "write": "write",
+        "edit": "edit",
+        "multiedit": "edit",
+        "patch": "edit",
+        "apply_patch": "edit",
+        "bash": "bash",
+        "glob": "glob",
+        "grep": "grep",
+        "list": "ls",
+        "webfetch": "web_search",
+        "websearch": "web_search",
+    }
+)
 
 OPENCODE_BUILTIN_TOOLS: Final = frozenset(
     {
@@ -147,14 +158,14 @@ class OpenCodeStreamState:
     session_id: str | None = None
     final_text: str = ""
     error: str | None = None
-    step_texts: list[str] = field(default_factory=list)
+    step_texts: Sequence[str] = ()
 
 
-def _as_dict(value: object) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
+def _as_dict(value: object) -> Mapping[str, Any]:
+    return value if isinstance(value, dict) else MappingProxyType({})
 
 
-def _tool_events(part: Mapping[str, Any]) -> list[Event]:
+def _tool_events(part: Mapping[str, Any]) -> Sequence[Event]:
     native = str(part.get("tool") or "")
     call_id = str(part.get("callID") or part.get("id") or "")
     state = _as_dict(part.get("state"))
@@ -163,16 +174,16 @@ def _tool_events(part: Mapping[str, Any]) -> list[Event]:
         id=call_id,
         name=normalize_tool_name(native, NATIVE_TO_NORMALIZED),
         native_name=native,
-        input=tool_input if isinstance(tool_input, dict) else {"input": tool_input},
+        input=tool_input if isinstance(tool_input, dict) else MappingProxyType({"input": tool_input}),
         builtin=native in OPENCODE_BUILTIN_TOOLS,
     )
     if state.get("status") == "error":
         message = str(state.get("error") or state.get("output") or "tool failed")
-        return [call, ToolResult(id=call_id, output=message, is_error=True)]
+        return event_list(call, ToolResult(id=call_id, output=message, is_error=True))
     output = state.get("output")
     text = output if isinstance(output, str) else json.dumps(output)
     # The `invalid` pseudo-tool is how opencode reports a call to an unavailable tool.
-    return [call, ToolResult(id=call_id, output=text, is_error=native == "invalid")]
+    return event_list(call, ToolResult(id=call_id, output=text, is_error=native == "invalid"))
 
 
 def _error_message(error: object) -> str:
@@ -199,7 +210,7 @@ def validate_user_config(config: Mapping[str, Any]) -> None:
         if not isinstance(entries, Mapping):
             raise OptionsMismatch(f"OpenCodeOptions.config[{section!r}] must be a mapping")
         for name, agent in entries.items():
-            managed = AGENT_MANAGED_KEYS & set(agent or {})
+            managed = AGENT_MANAGED_KEYS & frozenset(agent or ())
             if managed:
                 raise OptionsMismatch(
                     f"OpenCodeOptions.config[{section!r}][{name!r}] sets {sorted(managed)}, "
@@ -207,17 +218,17 @@ def validate_user_config(config: Mapping[str, Any]) -> None:
                 )
 
 
-def permission_rules(permissions: PermissionMode, disable_tools: Sequence[str]) -> dict[str, str]:
+def permission_rules(permissions: PermissionMode, disable_tools: Sequence[str]) -> Mapping[str, str]:
     """opencode `permission` config for a mode plus denies for disable_tools."""
     if permissions not in PERMISSION_RULES:
         raise CapabilityUnsupported(
             f"Harness.OPENCODE does not support permissions={permissions!r} (supported: {sorted(PERMISSION_RULES)})"
         )
-    rules = dict(PERMISSION_RULES[permissions])
-    for native in native_tool_names(disable_tools, NORMALIZED_TO_NATIVE):
-        rules.pop(native, None)
-        rules[native] = "deny"
-    return rules
+    denied: Final = native_tool_names(disable_tools, NORMALIZED_TO_NATIVE)
+    # Denies go last (later keys win in opencode), so drop them from the mode rules first.
+    kept: Final = ((key, value) for key, value in PERMISSION_RULES[permissions].items() if key not in denied)
+    rules: Final = itertools.chain(kept, ((native, "deny") for native in denied))
+    return dict(rules)  # mutable-ok: opencode config JSON
 
 
 def build_opencode_config(
@@ -230,47 +241,44 @@ def build_opencode_config(
     user_config: Mapping[str, Any] | None = None,
     instructions_path: str | None = None,
     skills_path: str | None = None,
-) -> dict[str, Any]:
+) -> Mapping[str, Any]:
     """The full opencode config: user config underneath, LiteLLM-managed keys on top."""
-    user = dict(user_config or {})
+    user: Final = user_config or MappingProxyType({})
     validate_user_config(user)
     qualified = f"{OPENCODE_PROVIDER_ID}/{model}"
-    instructions = list(user.get("instructions") or [])
-    if instructions_path:
-        instructions.append(instructions_path)
+    extra_instructions: Final = (instructions_path,) if instructions_path else ()
+    instructions: Final = [*(user.get("instructions") or ()), *extra_instructions]  # mutable-ok: opencode config JSON
     user_skills = _as_dict(user.get("skills"))
-    skill_paths = list(user_skills.get("paths") or [])
-    if skills_path:
-        skill_paths.append(skills_path)
-    managed: dict[str, Any] = {
-        "provider": {
-            OPENCODE_PROVIDER_ID: {
-                "npm": OPENCODE_PROVIDER_NPM,
-                "name": "LiteLLM",
-                "options": {"baseURL": base_url, "apiKey": "{file:" + token_path + "}"},
-                "models": {model: {}},
-            }
-        },
-        "enabled_providers": [OPENCODE_PROVIDER_ID],
+    extra_skills: Final = (skills_path,) if skills_path else ()
+    skill_paths: Final = [*(user_skills.get("paths") or ()), *extra_skills]  # mutable-ok: opencode config JSON
+    options: Final = {"baseURL": base_url, "apiKey": "{file:" + token_path + "}"}  # mutable-ok: opencode config JSON
+    models: Final[dict[str, Any]] = {model: {}}  # mutable-ok: opencode config JSON
+    provider: Final = {  # mutable-ok: opencode config JSON
+        "npm": OPENCODE_PROVIDER_NPM,
+        "name": "LiteLLM",
+        "options": options,
+        "models": models,
+    }
+    managed: Final = {  # mutable-ok: opencode config JSON
+        "provider": {OPENCODE_PROVIDER_ID: provider},  # mutable-ok: opencode config JSON
+        "enabled_providers": [OPENCODE_PROVIDER_ID],  # mutable-ok: opencode config JSON
         "model": qualified,
         "small_model": qualified,
         "permission": permission_rules(permissions, disable_tools),
         "autoupdate": False,
         "share": "disabled",
     }
-    if instructions:
-        managed["instructions"] = instructions
-    if skill_paths:
-        managed["skills"] = {**user_skills, "paths": skill_paths}
-    return {**user, **managed}
+    skills: Final = {**user_skills, "paths": skill_paths}  # mutable-ok: opencode config JSON
+    optional: Final = (("instructions", instructions), ("skills", skills if skill_paths else None))
+    present: Final = ((key, value) for key, value in optional if value)
+    return {**user, **managed, **dict(present)}  # mutable-ok: opencode config JSON
 
 
 def build_instructions(ctx: SessionContext) -> str | None:
-    sections: list[str] = []
-    if ctx.instructions:
-        sections.append(ctx.instructions)
-    if ctx.output is not None:
-        sections.append(structured_output_instruction(ctx.output.model_json_schema()))
+    schema_part: Final = (
+        structured_output_instruction(ctx.output.model_json_schema()) if ctx.output is not None else None
+    )
+    sections: Final = tuple(section for section in (ctx.instructions, schema_part) if section)
     return "\n\n".join(sections) if sections else None
 
 
@@ -312,10 +320,13 @@ class OpenCodeHarnessConfig(BaseCLIHarnessConfig):
         if not model:
             raise ValueError("Harness.OPENCODE needs model= (a gateway model group or litellm model)")
         options: OpenCodeOptions = self.get_options(ctx)
-        files: dict[str, bytes] = {TOKEN_FILENAME: ctx.endpoint.token.encode("utf-8")}
         instructions = build_instructions(ctx)
-        if instructions is not None:
-            files[INSTRUCTIONS_FILENAME] = instructions.encode("utf-8")
+        token: Final = ctx.endpoint.token.encode("utf-8")
+        files: Final = (
+            MappingProxyType({TOKEN_FILENAME: token, INSTRUCTIONS_FILENAME: instructions.encode("utf-8")})
+            if instructions is not None
+            else MappingProxyType({TOKEN_FILENAME: token})
+        )
         config = build_opencode_config(
             model=model,
             base_url=ctx.sandbox.host_url(ctx.endpoint.port).rstrip("/") + "/v1",
@@ -326,12 +337,16 @@ class OpenCodeHarnessConfig(BaseCLIHarnessConfig):
             instructions_path=f"{private_dir}/{INSTRUCTIONS_FILENAME}" if instructions is not None else None,
             skills_path=f"{private_dir}/skills" if ctx.skills else None,
         )
-        xdg = {f"XDG_{sub.upper()}_HOME": f"{private_dir}/{XDG_DIRNAME}/{sub}" for sub in XDG_SUBDIRS}
+        xdg: Final = MappingProxyType(
+            {f"XDG_{sub.upper()}_HOME": f"{private_dir}/{XDG_DIRNAME}/{sub}" for sub in XDG_SUBDIRS}
+        )
         return HarnessSessionSetup(
             files=files,
-            persisted_dirs=[(XDG_DIRNAME, "opencode")],
+            persisted_dirs=((XDG_DIRNAME, "opencode"),),
             skills_dir="skills",
-            env={**OPENCODE_ISOLATION_ENV, **options.env, **xdg, "OPENCODE_CONFIG_CONTENT": json.dumps(config)},
+            env=MappingProxyType(
+                {**OPENCODE_ISOLATION_ENV, **options.env, **xdg, "OPENCODE_CONFIG_CONTENT": json.dumps(config)}
+            ),
         )
 
     def transform_turn_request(
@@ -346,7 +361,7 @@ class OpenCodeHarnessConfig(BaseCLIHarnessConfig):
         model = ctx.model or (ctx.endpoint.model if ctx.endpoint else None)
         # --pure: never load plugins. A repo's .opencode/plugin/*.js would otherwise run as the
         # host user at startup, before any tool permission applies.
-        argv = [
+        argv: Final = (
             OPENCODE_BINARY,
             "run",
             "--pure",
@@ -355,20 +370,16 @@ class OpenCodeHarnessConfig(BaseCLIHarnessConfig):
             "--thinking",
             "-m",
             f"{OPENCODE_PROVIDER_ID}/{model}",
-        ]
-        if options.agent:
-            argv += ["--agent", options.agent]
-        if native_session_id:
-            argv += ["--session", native_session_id]
-        else:
-            argv += ["--title", OPENCODE_SESSION_TITLE]
+            *(("--agent", options.agent) if options.agent else ()),
+            *(("--session", native_session_id) if native_session_id else ("--title", OPENCODE_SESSION_TITLE)),
+        )
         # The prompt goes on stdin; opencode appends non-TTY stdin to the message.
         return HarnessTurnRequest(argv=argv, env=setup.env, stdin=turn_prompt(ctx, prompt), cwd=ctx.sandbox.workdir)
 
     def create_stream_state(self) -> OpenCodeStreamState:
         return OpenCodeStreamState()
 
-    def transform_stream_line(self, line: Mapping[str, Any], state: OpenCodeStreamState) -> list[Event]:
+    def transform_stream_line(self, line: Mapping[str, Any], state: OpenCodeStreamState) -> Sequence[Event]:
         """step_finish token counts are ignored on purpose: the session endpoint accounts usage."""
         session_id = line.get("sessionID")
         if session_id and state.session_id is None:
@@ -376,24 +387,24 @@ class OpenCodeHarnessConfig(BaseCLIHarnessConfig):
         event_type = line.get("type")
         part = _as_dict(line.get("part"))
         if event_type == "step_start":
-            state.step_texts = []
-            return []
+            state.step_texts = ()
+            return event_list()
         if event_type == "text":
             text = str(part.get("text") or "")
             if not text:
-                return []
-            state.step_texts.append(text)
+                return event_list()
+            state.step_texts = (*state.step_texts, text)
             state.final_text = "\n\n".join(state.step_texts)
-            return [Text(delta=text)]
+            return event_list(Text(delta=text))
         if event_type == "reasoning":
             text = str(part.get("text") or "")
-            return [Reasoning(delta=text)] if text else []
+            return event_list(Reasoning(delta=text)) if text else event_list()
         if event_type == "tool_use":
             return _tool_events(part)
         if event_type == "error":
             message = _error_message(line.get("error"))
             state.error = f"{state.error}\n{message}" if state.error else message
-        return []
+        return event_list()
 
     def get_native_session_id(self, state: OpenCodeStreamState) -> str | None:
         return state.session_id
