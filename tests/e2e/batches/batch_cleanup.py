@@ -28,10 +28,6 @@ class BatchCleanupClient(Protocol):
     def cancel_batch(self, batch_id: str, *, key: str, provider: str | None = None) -> Result[BatchObject]: ...
 
 
-class BatchCleanupLeftover(UserWarning):
-    pass
-
-
 def cleanup_result[R: BaseModel](
     action: Callable[[], Result[R]], *, wait: Callable[[float], None] = sleep
 ) -> Result[R]:
@@ -68,7 +64,7 @@ def cleanup_file(client: BatchCleanupClient, file_id: str, *, key: str, provider
     if isinstance(result, UnknownApiError) and result.status_code == 400 and FILE_IN_USE_REFUSAL in result.body:
         warnings.warn(
             f"Left file {file_id} in place: LiteLLM refused to delete it while a batch still references it",
-            BatchCleanupLeftover,
+            UserWarning,
             stacklevel=2,
         )
         return
@@ -140,7 +136,7 @@ def cleanup_batch(
             )
             warnings.warn(
                 f"Left batch {batch_id} cancelling after {BATCH_CANCEL_TIMEOUT_SECONDS}s for the provider to finish",
-                BatchCleanupLeftover,
+                UserWarning,
                 stacklevel=2,
             )
             return

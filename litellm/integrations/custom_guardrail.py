@@ -3,10 +3,12 @@ import copy
 import hashlib
 import os
 import secrets
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
+
+import httpx
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -37,6 +39,7 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+    from litellm.proxy._types import UserAPIKeyAuth
 dc: Final = DualCache()
 
 
@@ -106,6 +109,33 @@ def is_guardrail_intervention(e: Exception) -> bool:
     return is_fastapi_http_exception(e, _GUARDRAIL_BLOCK_STATUS_CODES)
 
 
+def _user_api_key_auth_from_request(request_data: Mapping[str, object]) -> "UserAPIKeyAuth":
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    metadata: Final = request_data.get(get_metadata_variable_name_from_kwargs(request_data))
+    stamped: Final[Mapping[str, object]] = metadata if isinstance(metadata, dict) else {}
+
+    def stamped_str(field: str) -> str | None:
+        value: Final = stamped.get(field)
+        return value if isinstance(value, str) else None
+
+    return UserAPIKeyAuth(
+        user_id=stamped_str("user_api_key_user_id"),
+        team_id=stamped_str("user_api_key_team_id"),
+        end_user_id=stamped_str("user_api_key_end_user_id"),
+        api_key=stamped_str("user_api_key_hash"),
+        request_route=stamped_str("user_api_key_request_route"),
+    )
+
+
+def _unified_hook_fields(guardrail: "CustomGuardrail", request_data: Mapping[str, object]) -> Mapping[str, object]:
+    metadata_bucket: Final = request_data.get(get_metadata_variable_name_from_kwargs(request_data))
+    return {
+        "guardrail_to_apply": guardrail,
+        **({"litellm_metadata": metadata_bucket} if isinstance(metadata_bucket, dict) else {}),
+    }
+
+
 def _strict_guardrail_modes_enabled() -> bool:
     """Whether guardrail-mode validation raises (default) or logs a warning.
 
@@ -148,6 +178,8 @@ class CustomGuardrail(CustomLogger):
 
     records_own_guardrail_information: ClassVar[bool] = False
 
+    timeout: float | httpx.Timeout | None = None
+
     def __init_subclass__(cls, **kwargs: object) -> None:  # kwargs-ok: forwarded to cooperative __init_subclass__ hooks
         super().__init_subclass__(**kwargs)
         own_apply_guardrail: Final[object] = cls.__dict__.get("apply_guardrail")
@@ -173,6 +205,7 @@ class CustomGuardrail(CustomLogger):
         run_in_parallel: bool = False,
         scan_raw_request: bool = False,
         only_scan_new_messages: bool = False,
+        timeout: float | None = None,
         **kwargs,
     ):
         """
@@ -201,6 +234,8 @@ class CustomGuardrail(CustomLogger):
                 guardrails: any data this guardrail returns is discarded, matching run_in_parallel's
                 contract, since applying its mutations on top of a stale snapshot would silently
                 undo whatever later guardrails already did to the live request.
+            timeout: Per-request timeout in seconds for the guardrail provider's API call. When
+                None, the guardrail keeps whatever default its HTTP handler or SDK already uses.
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -218,6 +253,8 @@ class CustomGuardrail(CustomLogger):
         self.run_in_parallel: bool = run_in_parallel
         self.scan_raw_request: bool = scan_raw_request
         self.only_scan_new_messages: bool = only_scan_new_messages
+        if timeout is not None:
+            self.timeout = timeout
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks
@@ -335,7 +372,7 @@ class CustomGuardrail(CustomLogger):
             land and degrade to blocking instead of silently letting the
             flagged request through unmodified.
         """
-        advisory_message: Final = {"role": "system", "content": message}  # mutable-ok: plain dict for live request
+        advisory_message: Final = {"role": "system", "content": message}
         existing_messages: Final = data.get("messages")
         existing_input: Final = data.get("input")
         existing_instructions: Final = data.get("instructions")
@@ -346,7 +383,7 @@ class CustomGuardrail(CustomLogger):
             # model to disregard a trailing warning. Prefer it over "input"
             # whenever present.
             if isinstance(existing_messages, list):
-                messages_with_instructions_note: Final = [  # mutable-ok: fresh list
+                messages_with_instructions_note: Final = [
                     *existing_messages,
                     advisory_message,
                 ]
@@ -358,7 +395,7 @@ class CustomGuardrail(CustomLogger):
             # real, read field (e.g. a chat-completions call carrying a stray
             # "input"), so write to both when both are present.
             if isinstance(existing_messages, list):
-                messages_with_input_note: Final = [*existing_messages, advisory_message]  # mutable-ok: fresh list
+                messages_with_input_note: Final = [*existing_messages, advisory_message]
                 data["messages"] = messages_with_input_note  # rebind-ok: mutates caller's dict by design
             # The Responses API reads "input", not "messages" -- appending only to
             # "messages" would leave the advisory unreachable for that endpoint.
@@ -372,10 +409,10 @@ class CustomGuardrail(CustomLogger):
             # non-delivery so the caller degrades to blocking.
             return False
         if isinstance(existing_messages, list):
-            messages_without_input_note: Final = [*existing_messages, advisory_message]  # mutable-ok: fresh list
+            messages_without_input_note: Final = [*existing_messages, advisory_message]
             data["messages"] = messages_without_input_note  # rebind-ok: mutates caller's dict by design
             return True
-        sole_message: Final = [advisory_message]  # mutable-ok: plain list for the live JSON request
+        sole_message: Final = [advisory_message]
         data["messages"] = sole_message  # rebind-ok: mutates caller's dict by design
         return True
 
@@ -789,8 +826,6 @@ class CustomGuardrail(CustomLogger):
         return unified_guardrail
 
     async def async_pre_call_deployment_hook(self, kwargs: dict[str, Any], call_type: CallTypes | None) -> dict | None:
-        from litellm.proxy._types import UserAPIKeyAuth
-
         # should run guardrail
         litellm_guardrails: Final = kwargs.get("guardrails")
         if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
@@ -808,13 +843,7 @@ class CustomGuardrail(CustomLogger):
             if target is not self:
                 kwargs["guardrail_to_apply"] = self
             result: Final = await target.async_pre_call_hook(
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_id=kwargs.get("user_api_key_user_id"),
-                    team_id=kwargs.get("user_api_key_team_id"),
-                    end_user_id=kwargs.get("user_api_key_end_user_id"),
-                    api_key=kwargs.get("user_api_key_hash"),
-                    request_route=kwargs.get("user_api_key_request_route"),
-                ),
+                user_api_key_dict=_user_api_key_auth_from_request(kwargs),
                 cache=dc,
                 data=kwargs,
                 call_type="completion" if call_type == CallTypes.completion else "acompletion",
@@ -827,6 +856,52 @@ class CustomGuardrail(CustomLogger):
 
         return kwargs
 
+    async def async_pre_call_hook_on_messages(
+        self,
+        request_data: Mapping[str, object],
+        messages: Sequence[AllMessageValues],
+    ) -> tuple[AllMessageValues, ...]:
+        from litellm.proxy.guardrails.exception_utils import (
+            enrich_http_exception_with_guardrail_context,
+            pre_call_rejection,
+        )
+
+        target: Final = self._deployment_hook_target()
+        scan_request: Final[dict[str, object]] = {  # mutable-ok: async_pre_call_hook writes into the dict it is handed
+            **{key: value for key, value in request_data.items() if key not in _PRE_CALL_CONTENT_KEYS},
+            "messages": list(messages),
+            **({} if target is self else _unified_hook_fields(self, request_data)),
+        }
+        try:
+            result: Final = await target.async_pre_call_hook(
+                user_api_key_dict=_user_api_key_auth_from_request(scan_request),
+                cache=dc,
+                data=scan_request,
+                call_type="acompletion",
+            )
+        except SensitiveDataRouteException as e:
+            unroutable: Final = pre_call_rejection(
+                f"{e.guardrail_name or self.guardrail_name} asked to reroute the request to {e.route_to_model} "
+                "over retrieved content; a request cannot be rerouted after retrieval, so it was blocked",
+                self.guardrail_name,
+            )
+            enrich_http_exception_with_guardrail_context(unroutable, self)
+            raise unroutable from e
+        except Exception as e:
+            enrich_http_exception_with_guardrail_context(e, self)
+            raise
+        if result is None:
+            return tuple(messages)
+        if isinstance(result, dict):
+            scanned: Final = result.get("messages")
+            return tuple(scanned) if isinstance(scanned, list) else tuple(messages)
+        if isinstance(result, str):
+            rejection: Final = pre_call_rejection(result, self.guardrail_name)
+            enrich_http_exception_with_guardrail_context(rejection, self)
+            raise rejection
+        enrich_http_exception_with_guardrail_context(result, self)
+        raise result
+
     async def async_post_call_success_deployment_hook(
         self,
         request_data: dict,
@@ -836,8 +911,6 @@ class CustomGuardrail(CustomLogger):
         """
         Allow modifying / reviewing the response just after it's received from the deployment.
         """
-        from litellm.proxy._types import UserAPIKeyAuth
-
         # should run guardrail
         litellm_guardrails: Final = request_data.get("guardrails")
         if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
@@ -851,13 +924,7 @@ class CustomGuardrail(CustomLogger):
             if target is not self:
                 request_data["guardrail_to_apply"] = self  # rebind-ok: dispatch consumes this key
             result: Final = await target.async_post_call_success_hook(
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_id=request_data.get("user_api_key_user_id"),
-                    team_id=request_data.get("user_api_key_team_id"),
-                    end_user_id=request_data.get("user_api_key_end_user_id"),
-                    api_key=request_data.get("user_api_key_hash"),
-                    request_route=request_data.get("user_api_key_request_route"),
-                ),
+                user_api_key_dict=_user_api_key_auth_from_request(request_data),
                 data=request_data,
                 response=response,
             )
@@ -1422,6 +1489,7 @@ class CustomGuardrail(CustomLogger):
             or call_type == CallTypes.acompletion.value
             or call_type == CallTypes.anthropic_messages.value
             or call_type == CallTypes.call_mcp_tool.value
+            or call_type == CallTypes.list_mcp_tools.value
         ):
             return data.get("messages")
 

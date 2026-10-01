@@ -464,7 +464,7 @@ async def adelete(
     extra_headers: dict[str, Any] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> DeleteInteractionResult:
     """Async: Delete an interaction by its ID."""
     local_vars: Final = locals()

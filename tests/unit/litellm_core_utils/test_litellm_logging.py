@@ -495,7 +495,7 @@ class TestZeroCostDiagnostic:
     DEPLOYMENT_ID: Final = "lit7898-query-only-priced-deployment"
     MODEL_GROUP: Final = "query-only-priced-chat"
     QUERY_ONLY_PRICING: Final = {"input_cost_per_query": 0.00042}
-    PER_SECOND_PRICING: Final = {"input_cost_per_second": 0.00042, "output_cost_per_second": 0.00042}
+    PER_SECOND_PRICING: Final = {"cost_per_second": 0.00042}
     FREE_PRICING: Final = {"input_cost_per_token": 0, "output_cost_per_token": 0}
 
     @pytest.fixture(params=["query_only", "free"])
@@ -845,7 +845,7 @@ class TestZeroCostDiagnostic:
             response: Final = self._response(usage)
             response._response_ms = 1000.0
             with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-                assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.00084)
+                assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.00042)
 
             assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
             assert self._zero_cost_warnings(caplog) == []
@@ -1612,6 +1612,48 @@ async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
 
         assert endpoint == "https://logfire-api-custom.pydantic.dev/v1/traces"
 
+    finally:
+        logging_module._in_memory_loggers.clear()
+
+
+@pytest.mark.parametrize(
+    ("api_host", "expected_endpoint"),
+    [
+        (None, "https://app.langtrace.ai/api/trace"),
+        ("http://langtrace.internal:3000/", "http://langtrace.internal:3000/api/trace"),
+        ("http://langtrace.internal:3000/api/trace", "http://langtrace.internal:3000/api/trace"),
+    ],
+)
+def test_langtrace_callback_exports_to_api_trace_with_x_api_key(
+    monkeypatch: pytest.MonkeyPatch, api_host: str | None, expected_endpoint: str
+) -> None:
+    """The exporter must post to Langtrace's complete /api/trace path with the key in x-api-key,
+    without leaking it into the process-wide OTEL_EXPORTER_OTLP_TRACES_HEADERS."""
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+    from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    api_key: Final = "synthetic-langtrace-key"
+    monkeypatch.setenv("LANGTRACE_API_KEY", api_key)
+    monkeypatch.delenv("LANGTRACE_API_HOST", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", raising=False)
+    if api_host is not None:
+        monkeypatch.setenv("LANGTRACE_API_HOST", api_host)
+    logging_module._in_memory_loggers.clear()
+    try:
+        logger: Final = logging_module._init_custom_logger_compatible_class(
+            logging_integration="langtrace",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert type(logger) is OpenTelemetry and logger.callback_name == "langtrace"
+        exporter: Final = logger._get_span_processor().span_exporter
+        assert isinstance(exporter, OTLPSpanExporter)
+        assert exporter._endpoint == expected_endpoint
+        assert exporter._headers == {"x-api-key": api_key}
+        assert "OTEL_EXPORTER_OTLP_TRACES_HEADERS" not in os.environ
     finally:
         logging_module._in_memory_loggers.clear()
 
@@ -3185,6 +3227,7 @@ async def test_e2e_generate_cold_storage_object_key_successful():
             prefix="",  # No prefix for cold storage
             start_time=start_time,
             s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
+            partition_granularity="day",
         )
 
         # Verify the result
@@ -3234,6 +3277,7 @@ async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path()
             prefix="",
             start_time=start_time,
             s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
+            partition_granularity="day",
         )
 
         # Verify the result
@@ -3278,6 +3322,7 @@ async def test_e2e_generate_cold_storage_object_key_with_logger_no_s3_path():
             prefix="",
             start_time=start_time,
             s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
+            partition_granularity="day",
         )
 
         # Verify the result
@@ -4814,6 +4859,75 @@ def test_get_standard_logging_object_payload_includes_litellm_call_id(logging_ob
 
     assert payload is not None
     assert payload["litellm_call_id"] == call_id
+
+
+@pytest.mark.parametrize(
+    "client_sent_oauth_token, custom_llm_provider, expected",
+    [(True, "anthropic", True), (True, "bedrock", False), (False, "anthropic", False), (None, "anthropic", None)],
+)
+def test_get_standard_logging_object_payload_resolves_used_client_oauth_token_against_the_selected_provider(
+    logging_obj, client_sent_oauth_token: bool | None, custom_llm_provider: str, expected: bool | None
+):
+    """The proxy stamps whether the client presented an Anthropic OAuth bearer before routing, but the
+    bearer only reaches an Anthropic deployment, so the logged flag must follow the provider that was called."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    request_metadata = {} if client_sent_oauth_token is None else {"used_client_oauth_token": client_sent_oauth_token}
+    now = datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "model": "claude-sonnet-5",
+            "messages": [],
+            "custom_llm_provider": custom_llm_provider,
+            "litellm_params": {"metadata": request_metadata},
+        },
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["metadata"]["used_client_oauth_token"] is expected
+
+
+@pytest.mark.parametrize(
+    "metadata, litellm_metadata, expected",
+    [
+        ({"used_client_oauth_token": True}, {"used_client_oauth_token": False}, False),
+        ({"used_client_oauth_token": False}, {"used_client_oauth_token": True}, True),
+        ({"used_client_oauth_token": True}, {"compression_savings": 1}, True),
+    ],
+)
+def test_get_standard_logging_object_payload_takes_used_client_oauth_token_from_the_proxy_stamped_slot(
+    logging_obj, metadata: dict, litellm_metadata: dict, expected: bool
+):
+    """On routes that carry proxy metadata in `litellm_metadata`, `metadata` is the caller's own body field,
+    so a caller writing the flag there must not override what the proxy stamped."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    now = datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "model": "claude-sonnet-5",
+            "messages": [],
+            "custom_llm_provider": "anthropic",
+            "litellm_params": {"metadata": metadata, "litellm_metadata": litellm_metadata},
+        },
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["metadata"]["used_client_oauth_token"] is expected
 
 
 def test_get_standard_logging_object_payload_carries_matched_access_groups(logging_obj):
@@ -8769,6 +8883,58 @@ async def test_async_failure_handler_delivers_failure_payload_to_custom_logger()
     assert events.empty()
 
 
+def test_responses_completed_event_bills_the_served_service_tier():
+    """The served service_tier on response.completed's inner ResponsesAPIResponse
+    must reach the cost calculator, so a priority-served stream prices at the
+    priority rates instead of the default tier's."""
+    logging_obj: Final = LitellmLogging(
+        model="openai/gpt-5.1",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="aresponses",
+        start_time=time.time(),
+        litellm_call_id="resp-served-tier",
+        function_id="resp-served-tier",
+    )
+    logging_obj.update_environment_variables(
+        model="openai/gpt-5.1",
+        user="",
+        optional_params={},
+        litellm_params={},
+        custom_llm_provider="openai",
+    )
+    inner: Final = ResponsesAPIResponse(
+        id="resp-served-tier",
+        created_at=1,
+        object="response",
+        status="completed",
+        model="gpt-5.1",
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=10, output_tokens=20, total_tokens=30),
+        service_tier="priority",
+    )
+    event: Final = ResponseCompletedEvent(type="response.completed", response=inner)
+
+    cost: Final = logging_obj._response_cost_calculator(result=event)  # pyright: ignore[reportPrivateUsage]  # parity with the suite's own direct calls
+
+    billed_response: Final = ModelResponse(
+        model="gpt-5.1",
+        usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+    tier_cost: Final = litellm.completion_cost(
+        completion_response=billed_response,
+        model="openai/gpt-5.1",
+        service_tier="priority",
+    )
+    default_cost: Final = litellm.completion_cost(
+        completion_response=billed_response,
+        model="openai/gpt-5.1",
+    )
+
+    assert cost == pytest.approx(tier_cost)
+    assert cost > default_cost
+
+
 def _image_logging_obj() -> LitellmLogging:
     logging_obj = LitellmLogging(
         model="gpt-image-2",
@@ -8890,3 +9056,100 @@ async def test_prompt_management_with_unchanged_variables_replays_a_byte_identic
     assert json.dumps(messages_n_plus_one[: len(messages_n)], sort_keys=True) == json.dumps(messages_n, sort_keys=True)
     assert messages_n[0] == {"role": "system", "content": "You are a pirate. Answer in one sentence."}
     assert len(messages_n_plus_one) == len(messages_n) + 2
+
+
+def test_signoz_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import ExporterOwner, is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "https://ingest.eu.signoz.cloud:443")
+    monkeypatch.setenv("SIGNOZ_INGESTION_KEY", "test-key")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        v2_logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="signoz",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(v2_logger, OpenTelemetryV2)
+        assert v2_logger.callback_name == "signoz"
+        spec = next(e for e in v2_logger.config.exporters if e.owner == ExporterOwner.SIGNOZ)
+        assert spec.endpoint == "https://ingest.eu.signoz.cloud:443"
+        assert spec.headers == "signoz-ingestion-key=test-key"
+        again = logging_module._init_custom_logger_compatible_class(
+            logging_integration="signoz",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert again is v2_logger
+    finally:
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_signoz_dispatch_keeps_legacy_otel_when_flag_off(monkeypatch):
+    from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "http://signoz-collector.internal:4318")
+    monkeypatch.setenv("SIGNOZ_INGESTION_KEY", "legacy-key")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        legacy = logging_module._init_custom_logger_compatible_class(
+            logging_integration="signoz",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(legacy, OpenTelemetry)
+        assert legacy.callback_name == "signoz"
+        assert legacy.config.endpoint == "http://signoz-collector.internal:4318/v1/traces"
+        assert legacy.config.headers == "signoz-ingestion-key=legacy-key"
+        assert "OTEL_EXPORTER_OTLP_TRACES_HEADERS" not in os.environ
+        # Same name resolves to the same instance, not a second exporter.
+        again = logging_module._init_custom_logger_compatible_class(
+            logging_integration="signoz",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert again is legacy
+    finally:
+        logging_module._in_memory_loggers.clear()
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.delenv("SIGNOZ_INGESTION_ENDPOINT", raising=False)
+    monkeypatch.delenv("SIGNOZ_INGESTION_KEY", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        created = logging_module._init_custom_logger_compatible_class(
+            logging_integration="signoz",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert created is None
+        assert not [
+            cb for cb in logging_module._in_memory_loggers if getattr(cb, "callback_name", None) == "signoz"
+        ]
+    finally:
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()

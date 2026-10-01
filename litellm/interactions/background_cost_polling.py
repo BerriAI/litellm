@@ -228,6 +228,8 @@ _CARRIED_METADATA_PREFIX: Final = "user_api_"
 _UNCARRIED_METADATA_KEY: Final = "user_api_key_auth"
 
 _JSON_VALUE: Final = TypeAdapter(JsonValue)
+_STRING: Final = TypeAdapter(str)
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
 def _carries(key: str) -> bool:
@@ -245,7 +247,8 @@ def _json_value(value: object) -> tuple[JsonValue, ...]:
 
 
 def _json_values(items: Iterable[tuple[str, object]]) -> Mapping[str, JsonValue]:
-    return MappingProxyType({key: parsed for key, value in items for parsed in _json_value(value)})
+    parsed: Final = ((key, _json_value(value)) for key, value in items)
+    return MappingProxyType({key: values[0] for key, values in parsed if values})
 
 
 def _as_datetime(start_time: datetime | float) -> datetime:
@@ -253,11 +256,14 @@ def _as_datetime(start_time: datetime | float) -> datetime:
 
 
 def _create_context(logging_obj: "LiteLLMLoggingObj", custom_llm_provider: str) -> BackgroundInteractionCreateContext:
-    metadata: Final = get_litellm_metadata_from_kwargs(kwargs=logging_obj.model_call_details)
+    metadata: Final = _OBJECT_MAPPING.validate_python(
+        get_litellm_metadata_from_kwargs(kwargs=logging_obj.model_call_details)
+    )
+    litellm_params: Final = _OBJECT_MAPPING.validate_python(logging_obj.litellm_params)
     model: Final = logging_obj.model_call_details.get("model")
     return BackgroundInteractionCreateContext(
         model=model if isinstance(model, str) else logging_obj.model,
-        call_type=logging_obj.call_type,
+        call_type=_STRING.validate_python(logging_obj.call_type),
         litellm_call_id=logging_obj.litellm_call_id,
         function_id=logging_obj.function_id,
         litellm_trace_id=logging_obj.litellm_trace_id,
@@ -265,9 +271,7 @@ def _create_context(logging_obj: "LiteLLMLoggingObj", custom_llm_provider: str) 
         custom_llm_provider=custom_llm_provider,
         metadata=_json_values((key, value) for key, value in metadata.items() if _carries(key)),
         custom_pricing=_json_values(
-            (key, value)
-            for key, value in logging_obj.litellm_params.items()
-            if key in _CUSTOM_PRICING_KEYS and value is not None
+            (key, value) for key, value in litellm_params.items() if key in _CUSTOM_PRICING_KEYS and value is not None
         ),
     )
 
@@ -285,13 +289,13 @@ def _rebuild_logging_obj(create_context: BackgroundInteractionCreateContext) -> 
         function_id=create_context.function_id,
         litellm_trace_id=create_context.litellm_trace_id,
     )
-    litellm_params: Final = {  # mutable-ok: Logging scrubs and merges the params it is handed in place
-        "metadata": dict(create_context.metadata),  # mutable-ok: Logging pops keys from the metadata it is handed
+    litellm_params: Final = {
+        "metadata": dict(create_context.metadata),
         **create_context.custom_pricing,
     }
     logging_obj.update_environment_variables(
         litellm_params=litellm_params,
-        optional_params={},  # mutable-ok: Logging stores the optional params it is handed and updates them in place
+        optional_params={},
         model=create_context.model,
         custom_llm_provider=create_context.custom_llm_provider,
     )

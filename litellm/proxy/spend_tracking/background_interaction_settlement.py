@@ -4,6 +4,7 @@ import socket
 from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeVar
 
@@ -107,7 +108,7 @@ def _json(data: Mapping[str, object]) -> object:
 
 
 def _pending_rows(rows: Sequence[_SettlementRow]) -> tuple[PendingBackgroundInteraction, ...]:
-    return tuple(pending for row in rows for pending in _pending_row(row))
+    return tuple(chain.from_iterable(_pending_row(row) for row in rows))
 
 
 def _pending_row(row: _SettlementRow) -> tuple[PendingBackgroundInteraction, ...]:

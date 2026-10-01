@@ -1,10 +1,12 @@
 import asyncio
 import logging
 import re
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
 
+import litellm
 import litellm.caching.redis_cache as redis_cache_module
 from litellm.caching.caching import Cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
@@ -389,3 +391,15 @@ async def test_embedding_cache_serves_base64_string_embeddings_on_repeat(monkeyp
 
     assert embedder.provider_calls == 1, "a string embedding written to the cache must be served on repeat"
     assert [item["embedding"] for item in second.data] == [item["embedding"] for item in first.data] == ["AACAPwAAAEA="]
+
+
+def test_provider_specific_cache_key_ignores_litellm_owned_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", True)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "hi"}], "top_k": 5}
+
+    base_key: Final = cache.get_cache_key(**request)
+
+    assert cache.get_cache_key(**request, _litellm_control={"stream_chunk_size": 64}) == base_key
+    assert cache.get_cache_key(**request, litellm_trace_id="trace-1") == base_key
+    assert cache.get_cache_key(**{**request, "top_k": 6}) != base_key

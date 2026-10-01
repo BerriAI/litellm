@@ -129,6 +129,7 @@ OPTION_NAMES: Final = (
     "order",
     "tag_regex",
     "max_file_size_mb",
+    "silent_model",
     "auto_router_config_path",
     "auto_router_config",
     "auto_router_default_model",
@@ -161,6 +162,7 @@ OPTION_NAMES: Final = (
     "logger_fn",
     "verbose",
     "no-log",
+    "log_client_error_tracebacks",
     "max_agentic_loops",
     "guardrails",
     "prompt_id",
@@ -262,7 +264,7 @@ OWNED_NAMES: Final = (
     *PRICING_NAMES,
 )
 
-Classifier: TypeAlias = Callable[[dict[str, object]], dict[str, object]]  # mutable-ok: classifiers use dict
+Classifier: TypeAlias = Callable[[Mapping[str, object]], Mapping[str, object]]
 
 CLASSIFIERS: Final[Mapping[str, Classifier]] = MappingProxyType(
     {  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy classifiers
@@ -279,16 +281,29 @@ def test_owned_name_is_kept_out_of_provider_params(name: str, classifier_name: s
     provider_value: Final = object()
     classify: Final = CLASSIFIERS[classifier_name]
 
-    result: Final = classify({name: object(), PROVIDER_KNOB: provider_value})  # mutable-ok: classifiers take a dict
+    result: Final = classify(MappingProxyType({name: object(), PROVIDER_KNOB: provider_value}))
 
     assert result == MappingProxyType({PROVIDER_KNOB: provider_value})
     assert result[PROVIDER_KNOB] is provider_value
 
 
 def test_a_name_no_object_declares_reaches_the_provider() -> None:
-    result: Final = CLASSIFIERS["completion"]({PROVIDER_KNOB: 1})  # mutable-ok: classifier input type
+    result: Final = CLASSIFIERS["completion"](MappingProxyType({PROVIDER_KNOB: 1}))
 
     assert result == MappingProxyType({PROVIDER_KNOB: 1})
+
+
+@pytest.mark.parametrize("classifier_name", CLASSIFIERS)
+def test_an_undeclared_internal_prefixed_name_is_kept_out_of_provider_params(classifier_name: str) -> None:
+    undeclared: Final = "_litellm_never_declared_anywhere"
+    lookalike: Final = "provider_litellm_knob"
+    assert undeclared not in all_litellm_params
+
+    result: Final = CLASSIFIERS[classifier_name](
+        MappingProxyType({undeclared: object(), PROVIDER_KNOB: 1, lookalike: 2})
+    )
+
+    assert result == MappingProxyType({PROVIDER_KNOB: 1, lookalike: 2})
 
 
 def _cache_key_for_model_group(cache: Cache, model_group: str, options: CachingOptions) -> str:
@@ -303,7 +318,7 @@ def test_caching_groups_is_a_flat_sequence_of_model_groups_that_share_one_cache_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for callback_list in ("input_callback", "success_callback", "_async_success_callback"):
-        monkeypatch.setattr(litellm, callback_list, [])  # mutable-ok: Cache() appends "cache" to these lists
+        monkeypatch.setattr(litellm, callback_list, [])
     options: Final = CachingOptions(caching_groups=(("gpt-4", "gpt-4o"), ("claude-3",)))
     cache: Final = Cache()
 
@@ -380,7 +395,7 @@ def test_owned_wire_names_refuse_a_root_that_declares_a_kwarg_outside_a_leaf() -
 
 
 def test_agentic_loop_names_concatenate_as_a_list() -> None:
-    extended: Final = agentic_loop_internal_litellm_params + ["caller_added"]  # mutable-ok: list contract under test
+    extended: Final = agentic_loop_internal_litellm_params + ["caller_added"]
 
     assert (type(extended), len(extended), frozenset(extended)) == (
         list,
@@ -403,7 +418,7 @@ def test_proxy_stamped_fields_keep_their_wire_names() -> None:
 
 
 def test_all_litellm_params_concatenates_with_a_list_like_the_completion_entrypoint_does() -> None:
-    extended: Final = ["aembedding", "extra_headers"] + all_litellm_params  # mutable-ok: list contract under test
+    extended: Final = ["aembedding", "extra_headers"] + all_litellm_params
 
     assert (type(extended), frozenset(extended)) == (list, frozenset(("aembedding", "extra_headers", *OWNED_NAMES)))
 
@@ -421,9 +436,7 @@ CARRIED_PARAMS: Final = tuple(
 def test_every_param_get_litellm_params_carries_is_kept_out_of_provider_params(name: str) -> None:
     provider_value: Final = object()
 
-    result: Final = CLASSIFIERS["completion"](
-        {name: object(), PROVIDER_KNOB: provider_value}  # mutable-ok: classifier input type
-    )
+    result: Final = CLASSIFIERS["completion"](MappingProxyType({name: object(), PROVIDER_KNOB: provider_value}))
 
     assert result == MappingProxyType({PROVIDER_KNOB: provider_value})
 
@@ -493,7 +506,8 @@ LEAF_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
     litellm_params.AgenticLoopOptions: {"max_agentic_loops": 2},
     litellm_params.GuardrailOptions: {"guardrails": ("default",)},
     litellm_params.PromptOptions: {"prompt_id": "prompt", "prompt_variables": {"name": "value"}},
-    litellm_params.ResponseOptions: {"stream_chunk_size": 64},
+    litellm_params.ResponseOptions: {"keepalive_seconds": 1.5},
+    litellm_params.ControlOptions: {"stream_chunk_size": 64},
     litellm_params.MockOptions: {"mock_timeout": True},
     litellm_params.CallState: {
         "completion_call_id": "call",
@@ -522,7 +536,8 @@ LEAF_BAD_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
     litellm_params.AgenticLoopOptions: {"max_agentic_loops": "2"},
     litellm_params.GuardrailOptions: {"guardrails": (1,)},
     litellm_params.PromptOptions: {"prompt_id": 1},
-    litellm_params.ResponseOptions: {"stream_chunk_size": "64"},
+    litellm_params.ResponseOptions: {"keepalive_seconds": "1.5"},
+    litellm_params.ControlOptions: {"stream_chunk_size": "sixty-four"},
     litellm_params.MockOptions: {"mock_timeout": "true"},
     litellm_params.CallState: {"completion_call_id": 1},
     litellm_params.AgenticLoopState: {"depth": "1"},
@@ -572,10 +587,8 @@ def test_every_owned_leaf_accepts_a_strict_reader_shaped_sample(leaf: type, samp
 
 @pytest.mark.parametrize("leaf,sample", LEAF_BAD_SAMPLES.items(), ids=_leaf_id)
 def test_every_owned_leaf_rejects_a_strict_wrong_typed_sample(leaf: type, sample: Mapping[str, object]) -> None:
-    instance: Final = _leaf_instance(leaf, sample)
-
     with pytest.raises(ValidationError):
-        _strict_leaf_validation(leaf, instance)
+        _strict_leaf_validation(leaf, _leaf_instance(leaf, sample))
 
 
 @pytest.mark.parametrize("leaf,sample", INVALID_LITERAL_SAMPLES, ids=_leaf_id)

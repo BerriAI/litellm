@@ -30,7 +30,7 @@ import { ActivityMetrics, processActivityData } from "@/components/activity_metr
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
-import { getApiKeyTruncation, getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
+import { getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
@@ -39,7 +39,6 @@ import {
   tagListCall,
   userDailyActivityAggregatedCall,
   userDailyActivityCall,
-  userDailyActivityKeySearchCall,
 } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { ChartLoader } from "@/components/shared/chart_loader";
@@ -253,15 +252,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   // Read through the same range stamp as the tiles, so the export is blocked from the first
   // render of a new range rather than from whenever the fetch effect gets around to running.
-  const apiKeyTruncation = getApiKeyTruncation(
-    userSpendData.metadata?.api_key_limit,
-    userSpendData.metadata?.total_api_keys,
-  );
   const spendFetchState = {
     coversRange: activeAggregated !== null || paginatedResult.coversRange,
     cancelled: paginatedResult.cancelled,
     failed: paginatedResult.failed,
-    apiKeyTruncation,
   };
   const exportBlockedReason = getExportBlockedReason(spendFetchState);
 
@@ -439,15 +433,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     [userSpendData, modelViewType, teams],
   );
   const keyMetrics = useMemo(() => processActivityData(userSpendData, "api_keys", teams), [userSpendData, teams]);
-  const searchKeys = useCallback(
-    (q: string) => {
-      if (!accessToken || !startTime || !endTime) return Promise.resolve({});
-      return userDailyActivityKeySearchCall(accessToken, startTime, endTime, q, effectiveUserId).then((data) =>
-        processActivityData(data, "api_keys", teams),
-      );
-    },
-    [accessToken, startTime, endTime, effectiveUserId, teams],
-  );
   const mcpServerMetrics = useMemo(
     () => processActivityData(userSpendData, "mcp_servers", teams),
     [userSpendData, teams],
@@ -876,11 +861,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <ActivityMetrics modelMetrics={modelMetrics} />
                 </TabsContent>
                 <TabsContent value="keys" keepMounted>
-                  <KeyActivityPanel
-                    keyMetrics={keyMetrics}
-                    apiKeyTruncation={apiKeyTruncation}
-                    searchKeys={searchKeys}
-                  />
+                  <KeyActivityPanel keyMetrics={keyMetrics} />
                 </TabsContent>
                 <TabsContent value="mcp" keepMounted>
                   <ActivityMetrics modelMetrics={mcpServerMetrics} />

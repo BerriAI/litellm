@@ -1,3 +1,4 @@
+import itertools
 import uuid
 from pathlib import Path
 from typing import Final
@@ -7,10 +8,13 @@ import yaml
 from integration._support.client import Gateway, eventually
 from integration._support.mcp import (
     McpCaller,
+    McpPeer,
     call_tool,
     delete_mcp,
     forget_mcp,
+    listed_tools,
     mcp_peer,
+    openapi_peer,
     register_mcp,
     tool_calls,
     tool_names,
@@ -189,6 +193,54 @@ def test_duplicate_alias_is_rejected_so_tool_prefixes_cannot_collide(gateway: Ga
         scenario.cleanups.callback(forget_mcp, gateway, winner)
 
 
+def _openapi_server_lists_and_calls_only_its_own_tools(
+    gateway: Gateway, key: str, peer: McpPeer, identity: str
+) -> None:
+    listed: Final = set(listed_tools(gateway, key, identity))
+    assert listed == {"getpet", "createpet"}, (identity, listed)
+    peer.drain()
+    called: Final = call_tool(gateway, key, identity, "getpet", {"petId": "7"})
+    assert called.status_code == 200, called.text
+    assert [(item["method"], item["path"]) for item in peer.drain()] == [("GET", "/pets/7")], identity
+
+
+def test_openapi_listing_is_scoped_to_the_exact_alias_when_aliases_overlap(gateway: Gateway) -> None:
+    with openapi_peer() as short, openapi_peer() as long, gateway.scenario() as scenario:
+        stem: Final = "pet" + uuid.uuid4().hex[:8]
+        servers: Final = tuple(
+            (peer, alias, register_mcp(scenario, peer, alias))
+            for peer, alias in ((short, stem), (long, stem + "store"))
+        )
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity for _, _, identity in servers]})
+        for peer, _, identity in servers:
+            _openapi_server_lists_and_calls_only_its_own_tools(gateway, key, peer, identity)
+        aggregate: Final = McpCaller(gateway, key, "mcp").list_tools()
+        assert aggregate.ok, aggregate.raw
+        assert sorted(aggregate.tools) == sorted(
+            f"{prefix}-{tool}" for prefix, tool in itertools.product((stem, stem + "store"), ("getpet", "createpet"))
+        ), aggregate.tools
+        assert all(peer.drain() == () for peer, _, _ in servers), "listing must not reach any OpenAPI upstream"
+
+
+def test_config_declared_openapi_server_with_a_space_in_its_name_lists_its_tools(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with openapi_peer() as peer:
+        config: Final = yaml.safe_load((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text())
+        name: Final = "pet store " + uuid.uuid4().hex[:8]
+        config["mcp_servers"] = {name: peer.registration()}
+        path: Final = tmp_path / "openapi-space.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            identity: Final = next(i for i, s in _servers(candidate).items() if s["server_name"] == name)
+            key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+            _openapi_server_lists_and_calls_only_its_own_tools(candidate, key, peer, identity)
+            aggregate: Final = McpCaller(candidate, key, "mcp").list_tools()
+            assert aggregate.ok, aggregate.raw
+            prefix: Final = name.replace(" ", "_")
+            assert sorted(aggregate.tools) == [f"{prefix}-createpet", f"{prefix}-getpet"], aggregate.tools
+
+
 def test_invalid_registrations_are_rejected(gateway: Gateway) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "mgmt" + uuid.uuid4().hex[:8]
@@ -296,11 +348,6 @@ def test_config_declared_server_behaves_like_database_server_but_is_read_only(ga
             assert len(tool_calls(declared_peer.drain())) == 1 and tool_calls(database_peer.drain()) == ()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.RaisesExc(AssertionError, match="Team-granted server detail access should succeed"),
-    reason="LIT-3974 A: team-granted detail access",
-)
 def test_team_granted_database_server_detail_is_available_to_team_key(gateway: Gateway) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "lit3974_team_" + uuid.uuid4().hex[:8]
@@ -315,11 +362,6 @@ def test_team_granted_database_server_detail_is_available_to_team_key(gateway: G
         assert response.json()["alias"] == alias, response.text
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.RaisesExc(AssertionError, match="Team-granted server detail access should succeed"),
-    reason="LIT-3974 A: team-granted detail access",
-)
 def test_ui_session_lists_and_fetches_team_granted_config_server(
     gateway: Gateway,
     tmp_path: Path,
