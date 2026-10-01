@@ -44,9 +44,9 @@ Gotchas
 
 {% block time_window %}Always bound Timestamp or start_time and use LIMIT; add TeamId/ApiKeyHash or team_id/api_key filters when investigating one tenant{% endblock %}
 
-{% block reader_limits %}The reader enforces 1000 result rows, 4 MiB response bytes and a 10 second query limit; exceeding limits fails instead of returning partial results{% endblock %}
+{% block reader_limits %}The reader enforces 1000 result rows, 4 MiB response bytes, 256 MiB memory and a 10 second query limit; exceeding limits fails instead of returning partial results{% endblock %}
 
-{% block reader_profile %}Use the SELECT-only reader profile in crates/traces/config/reader.xml; never configure administrator credentials as the reader{% endblock %}
+{% block reader_profile %}LiteLLM provisions SELECT-only readers from the configured ClickHouse connection and enforces authenticated team scope through row policies. Project-bound and teamless keys see only their own rows. Provisioning requires user, row-policy, and table-grant permissions{% endblock %}
 
 {% block output_format %}Do not add FORMAT clauses; the endpoint requires ClickHouse JSON output{% endblock %}
 

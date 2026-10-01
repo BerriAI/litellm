@@ -199,7 +199,7 @@ fn metadata_catalog(sample: &[MetadataRow]) -> MetadataCatalog {
         truncated: limited,
         sample_sql: METADATA_SQL,
         error: None,
-        scope: "Up to 200 recent rows from the last 7 days, excluding metadata larger than 8192 bytes; up to 200 paths and 16 levels. Missing paths may exist outside this sample. Array indexes are 1-based and describe sampled positions, not a fixed schema",
+        scope: "Up to 200 unordered rows from the last 7 days, excluding metadata larger than 8192 bytes; up to 200 paths and 16 levels. Missing paths may exist outside this sample. Array indexes are 1-based and describe sampled positions, not a fixed schema",
     }
 }
 
@@ -244,7 +244,7 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Stri
         attributes.push(AttributeCatalog {
             table: "otel_traces", column, fields,
             truncated: error.is_some() || keys.len() > MAX_FIELDS, discovery_sql: sql, error,
-            scope: "Distinct keys from up to 200 recent spans in the last 7 days; up to 200 keys per map. Missing keys may exist outside this sample",
+            scope: "Distinct keys from up to 200 unordered spans in the last 7 days; up to 200 keys per map. Missing keys may exist outside this sample",
         });
     }
     let guide = guide::QueryGuide {
@@ -255,7 +255,7 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Stri
     };
     Ok(json!({
         "dialect": "ClickHouse SQL",
-        "access": "Proxy admin only; reads all teams using CLICKHOUSE_READER_URL with SELECT-only grants",
+        "access": "Authenticated team scope enforced by ClickHouse row policies; proxy admins can read all teams, while project-bound and teamless keys can read only their own rows",
         "response": "ClickHouse JSON envelope: meta, data, rows, statistics; 64-bit integers may be strings",
         "tables": tables,
         "normalized_fields": NORMALIZED_FIELD_DEFINITIONS.iter().map(|field| json!({

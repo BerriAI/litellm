@@ -58,6 +58,24 @@ class DecodedSpan(TypedDict):
 ReadQueryName = Literal["list_traces", "trace_spans", "span_detail", "span_error", "spend_by_response_ids"]
 
 
+class AdminQueryScope(TypedDict):
+    kind: ReadOnly[Literal["admin"]]
+
+
+class TeamQueryScope(TypedDict):
+    kind: ReadOnly[Literal["team"]]
+    team_id: ReadOnly[str]
+
+
+class KeyQueryScope(TypedDict):
+    kind: ReadOnly[Literal["key"]]
+    team_id: ReadOnly[str]
+    api_key_hash: ReadOnly[str]
+
+
+QueryScope = AdminQueryScope | TeamQueryScope | KeyQueryScope
+
+
 class NativeStore(Protocol):
     def __init__(self, database: str, url: str, reader_url: str | None = None) -> None: ...
 
@@ -65,9 +83,9 @@ class NativeStore(Protocol):
 
     def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> Awaitable[None]: ...
 
-    def query_sql(self, sql: str) -> Awaitable[str]: ...
+    def query_sql(self, sql: str, scope: QueryScope, secret: str) -> Awaitable[str]: ...
 
-    def query_help(self) -> Awaitable[str]: ...
+    def query_help(self, scope: QueryScope, secret: str) -> Awaitable[str]: ...
 
     def lens_query(self, name: str, parameters: Mapping[str, str | int | Sequence[str]]) -> Awaitable[str]: ...
 
@@ -142,11 +160,11 @@ class ClickHouseStorage:
         )
         return QueryResponse.model_validate_json(result).data
 
-    async def query_sql(self, sql: str) -> str:
-        return await self._native.query_sql(sql)
+    async def query_sql(self, sql: str, scope: QueryScope, secret: str) -> str:
+        return await self._native.query_sql(sql, scope, secret)
 
-    async def query_help(self) -> str:
-        return await self._native.query_help()
+    async def query_help(self, scope: QueryScope, secret: str) -> str:
+        return await self._native.query_help(scope, secret)
 
     async def _lens_query(self, name: str, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
         result: Final = await self._native.lens_query(name, QUERY_PARAMETERS.validate_python(parameters))

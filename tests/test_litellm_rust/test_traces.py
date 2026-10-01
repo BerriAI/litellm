@@ -218,28 +218,24 @@ def test_trace_sql_endpoint_executes_for_admin_and_preserves_clickhouse_envelope
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    from litellm.proxy.tracing_endpoints import provide_receiver, router
+    from litellm.proxy.tracing_endpoints import provide_receiver, provide_trace_query_secret, router
 
     envelope: Final = {"meta": [{"name": "answer", "type": "UInt8"}], "data": [{"answer": 42}], "rows": 1}
-    if role == "proxy_admin":
-        recording_server.enqueue(ResponseSpec(body=envelope))
-    else:
-        recording_server.expected_requests = 0
+    recording_server.expected_requests = 11
+    for _ in range(10):
+        recording_server.enqueue(ResponseSpec(body=""))
+    recording_server.enqueue(ResponseSpec(body=envelope))
     storage: Final = ClickHouseStorage("trace_test", recording_server.base_url, recording_server.base_url)
     app: Final = FastAPI()
     app.include_router(router)
+    app.dependency_overrides[provide_trace_query_secret] = lambda: "test-master-secret"
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=role, token="test")
     app.dependency_overrides[provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
     with TestClient(app) as client:
         result: Final = client.post("/v1/traces/query", json={"sql": "SELECT 42 AS answer"})
-        if role != "proxy_admin":
-            assert result.status_code == 403
-            assert client.get("/v1/traces/query/help").status_code == 403
-            assert recording_server.requests == []
-            return
         assert result.status_code == 200, result.text
         assert result.json() == envelope
-        assert recording_server.requests[0].raw_body == b"SELECT 42 AS answer"
+        assert recording_server.requests[-1].raw_body == b"SELECT 42 AS answer"
         assert client.post("/v1/traces/query", json={"sql": "  "}).status_code == 400
         assert client.post("/v1/traces/query", json={}).status_code == 422
 
@@ -250,9 +246,11 @@ def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(recording
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    from litellm.proxy.tracing_endpoints import provide_receiver, router
+    from litellm.proxy.tracing_endpoints import provide_receiver, provide_trace_query_secret, router
 
-    recording_server.expected_requests = 6
+    recording_server.expected_requests = 16
+    for _ in range(10):
+        recording_server.enqueue(ResponseSpec(body=""))
     for response in (
         {"data": [{"name": "Model", "type": "String"}]},
         {"data": []},
@@ -265,6 +263,7 @@ def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(recording
     storage: Final = ClickHouseStorage("trace_test", recording_server.base_url, recording_server.base_url)
     app: Final = FastAPI()
     app.include_router(router)
+    app.dependency_overrides[provide_trace_query_secret] = lambda: "test-master-secret"
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role="proxy_admin", token="test")
     app.dependency_overrides[provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
     with TestClient(app) as client:
@@ -292,15 +291,18 @@ def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    from litellm.proxy.tracing_endpoints import provide_receiver, router
+    from litellm.proxy.tracing_endpoints import provide_receiver, provide_trace_query_secret, router
 
-    recording_server.expected_requests = 2
+    recording_server.expected_requests = 12
+    for _ in range(10):
+        recording_server.enqueue(ResponseSpec(body=""))
     recording_server.enqueue(ResponseSpec(status=clickhouse_status, body=b"ClickHouse rejected the query"))
     envelope: Final = {"meta": [{"name": "answer", "type": "UInt8"}], "data": [{"answer": 42}], "rows": 1}
     recording_server.enqueue(ResponseSpec(body=envelope))
     storage: Final = ClickHouseStorage("trace_test", recording_server.base_url, recording_server.base_url)
     app: Final = FastAPI()
     app.include_router(router)
+    app.dependency_overrides[provide_trace_query_secret] = lambda: "test-master-secret"
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role="proxy_admin", token="test")
     app.dependency_overrides[provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
     with TestClient(app) as client:
@@ -309,4 +311,4 @@ def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
         recovered: Final = client.post("/v1/traces/query", json={"sql": "SELECT 42 AS answer"})
         assert recovered.status_code == 200, recovered.text
         assert recovered.json() == envelope
-    assert recording_server.requests[0].raw_body == b"SELEC 42"
+    assert recording_server.requests[-2].raw_body == b"SELEC 42"
