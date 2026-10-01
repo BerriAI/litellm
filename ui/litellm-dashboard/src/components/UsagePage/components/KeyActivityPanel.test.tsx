@@ -65,6 +65,7 @@ describe("KeyActivityPanel", () => {
     render(<KeyActivityPanel keyMetrics={keyMetrics} />);
     fireEvent.change(screen.getByLabelText("Search keys"), { target: { value: "/[/" } });
     expect(screen.getByText("Invalid regular expression: /[/")).toBeInTheDocument();
+    expect(screen.queryByText(/Showing \d+ of \d+ keys/)).not.toBeInTheDocument();
     expect(screen.queryByTestId("rendered-keys")).not.toBeInTheDocument();
   });
 

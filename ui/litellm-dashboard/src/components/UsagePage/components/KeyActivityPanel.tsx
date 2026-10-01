@@ -42,9 +42,11 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({ keyMetrics, hidePro
             </InputGroupAddon>
           )}
         </InputGroup>
-        <span className="text-sm text-muted-foreground">
-          Showing {shownKeys.toLocaleString()} of {totalKeys.toLocaleString()} keys
-        </span>
+        {parsed.kind !== "invalid" && (
+          <span className="text-sm text-muted-foreground">
+            Showing {shownKeys.toLocaleString()} of {totalKeys.toLocaleString()} keys
+          </span>
+        )}
       </div>
       {parsed.kind === "invalid" && (
         <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">

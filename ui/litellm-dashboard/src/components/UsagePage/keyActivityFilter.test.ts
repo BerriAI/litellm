@@ -104,19 +104,40 @@ describe("parseKeyQuery and keyActivityMatches", () => {
     expect(keyActivityMatches("hash-alice", alice, "/[/")).toBe(false);
   });
 
-  it("strips stateful flags from a regular expression reused for multiple matches", () => {
+  it("preserves global flags and matches repeatedly and when filtering", () => {
     const query = parseKeyQuery("/^alice/g");
     expect(query.kind).toBe("pattern");
     if (query.kind !== "pattern") return;
 
-    expect(query.regex.flags).not.toContain("g");
-    expect(query.regex.test("alice-batch")).toBe(true);
-    expect(query.regex.test("alice-batch")).toBe(true);
+    expect(query.regex.flags).toContain("g");
+    expect(keyActivityMatches("hash-alice", alice, "/^alice/g")).toBe(true);
+    expect(keyActivityMatches("hash-alice", alice, "/^alice/g")).toBe(true);
     expect(
       Object.keys(
-        filterKeyActivity({ "hash-alice": alice, "hash-alice-2": activity("alice-secondary", aliceMeta) }, "/^alice/g"),
+        filterKeyActivity(
+          { "alice-hash": activity("secondary key"), "alice-hash-2": activity("another key") },
+          "/^alice/g",
+        ),
       ),
-    ).toEqual(["hash-alice", "hash-alice-2"]);
+    ).toEqual(["alice-hash", "alice-hash-2"]);
+  });
+
+  it("keeps sticky expressions anchored at the start of a field", () => {
+    const bobPrefix = activity("member key", { key_alias: "bob-service", team_id: "team-research" });
+    const userBob = activity("member key", { key_alias: "user-bob-1", team_id: "team-research" });
+
+    expect(keyActivityMatches("hash-bob-prefix", bobPrefix, "/bob/y")).toBe(true);
+    expect(keyActivityMatches("hash-user-bob", userBob, "/bob/y")).toBe(false);
+  });
+
+  it("treats slashes with invalid regular expression flags as substring text", () => {
+    const slashActivity = activity("team/prod/dev-key", {
+      key_alias: "team/prod/dev-key",
+      team_id: "team-research",
+    });
+
+    expect(parseKeyQuery("/prod/dev")).toEqual({ kind: "substring", needle: "/prod/dev" });
+    expect(keyActivityMatches("hash-prod-dev", slashActivity, "/prod/dev")).toBe(true);
   });
 
   it("keeps a lone slash and a slash within text as substring queries", () => {

@@ -10,11 +10,11 @@ export function parseKeyQuery(query: string): KeyQuery {
   const trimmedQuery = query.trim();
   if (trimmedQuery === "") return { kind: "all" };
 
-  const regexLiteral = new RegExp("^/(.+)/([a-z]*)$", "s").exec(trimmedQuery);
+  const regexLiteral = new RegExp("^/(.+)/([dgimsuvy]*)$", "s").exec(trimmedQuery);
   if (regexLiteral !== null) {
     const [, body, flags] = regexLiteral;
     try {
-      return { kind: "pattern", regex: new RegExp(body, flags.replace(/[gy]/g, "")) };
+      return { kind: "pattern", regex: new RegExp(body, flags) };
     } catch {
       return { kind: "invalid", source: trimmedQuery };
     }
@@ -40,7 +40,7 @@ function matchesQuery(fields: readonly (string | null | undefined)[], query: Key
     case "substring":
       return fields.some((field) => field?.toLowerCase().includes(query.needle) ?? false);
     case "pattern":
-      return fields.some((field) => typeof field === "string" && query.regex.test(field));
+      return fields.some((field) => typeof field === "string" && field.search(query.regex) !== -1);
     case "invalid":
       return false;
     default: {
