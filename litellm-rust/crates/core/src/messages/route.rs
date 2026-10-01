@@ -43,8 +43,14 @@ impl super::MessagesRoute {
             request,
             observers,
             move |call, _, interceptors, observers| async move {
-                self.run(call, cache_options, &interceptors, observers.as_ref())
-                    .await
+                let context = crate::context::CallContext::new(
+                    &interceptors,
+                    crate::CallOptions {
+                        cache: cache_options,
+                        observers,
+                    },
+                );
+                self.run(call, context).await
             },
         )
     }
