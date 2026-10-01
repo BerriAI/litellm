@@ -227,3 +227,45 @@ def test_batch_snapshot_keeps_feedback_identity_and_only_current_evidence() -> N
     assert snapshot.title == "Updated wording"
     assert snapshot.evidence == draft.evidence
     assert snapshot.revision == 2
+
+
+@pytest.mark.parametrize("explicit_reference", (False, True))
+def test_issue_and_pattern_with_same_title_keep_independent_feedback(explicit_reference: bool) -> None:
+    from litellm.proxy.engine.state import snapshot_finding
+
+    original: Final = engine()
+    issue: Final = merge_finding(original, finding("old"), 1, NOW).model_copy(
+        update={"status": "dismissed", "reason": "Expected retry"}
+    )
+    reviewed: Final = original.model_copy(update={"findings": (issue,)})
+    draft: Final = finding("new").model_copy(
+        update={"kind": "pattern", "existing_finding_id": issue.id if explicit_reference else None}
+    )
+    pattern: Final = merge_finding(reviewed, draft, 1, NOW)
+    assert pattern.id != issue.id
+    assert pattern.kind == "pattern"
+    assert pattern.status == "open" and pattern.reason == ""
+    assert pattern.occurrences == ("new",)
+    assert snapshot_finding(reviewed, draft, 1, NOW).id == pattern.id
+    both: Final = reviewed.model_copy(update={"findings": (issue, pattern)})
+    assert merge_finding(both, finding("again"), 1, NOW).id == issue.id
+    assert merge_finding(both, finding("again"), 1, NOW).status == "dismissed"
+
+
+def test_legacy_finding_identity_preserves_feedback_only_for_same_kind_and_check() -> None:
+    import hashlib
+
+    original: Final = engine()
+    draft: Final = finding("old")
+    legacy_id: Final = hashlib.sha256(f"{original.id}:{draft.check_id}:{draft.title.lower()}".encode()).hexdigest()[:24]
+    legacy: Final = merge_finding(original, draft, 1, NOW).model_copy(
+        update={"id": legacy_id, "status": "dismissed", "reason": "Accepted"}
+    )
+    reviewed: Final = original.model_copy(update={"findings": (legacy,)})
+    repeated: Final = merge_finding(reviewed, finding("new"), 2, NOW)
+    assert repeated.id == legacy_id
+    assert repeated.status == "dismissed" and repeated.reason == "Accepted"
+    other: Final = finding("new").model_copy(update={"check_id": "different", "existing_finding_id": legacy_id})
+    separate: Final = merge_finding(reviewed, other, 2, NOW)
+    assert separate.id != legacy_id
+    assert separate.status == "open" and separate.reason == ""

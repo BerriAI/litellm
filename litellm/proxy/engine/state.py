@@ -103,8 +103,17 @@ def renew_budget(engine: Engine, now: datetime) -> Engine:
 
 
 def merge_finding(engine: Engine, draft: FindingDraft, revision: int, now: datetime) -> Finding:
-    identity: Final = hashlib.sha256(f"{engine.id}:{draft.check_id}:{draft.title.lower()}".encode()).hexdigest()[:24]
-    previous: Final = next((f for f in engine.findings if f.id == (draft.existing_finding_id or identity)), None)
+    legacy_identity: Final = hashlib.sha256(f"{engine.id}:{draft.check_id}:{draft.title.lower()}".encode()).hexdigest()[
+        :24
+    ]
+    identity: Final = hashlib.sha256(
+        f"{engine.id}:{draft.check_id}:{draft.kind}:{draft.title.lower()}".encode()
+    ).hexdigest()[:24]
+    identities: Final = (draft.existing_finding_id, identity, legacy_identity)
+    previous: Final = next(
+        (f for f in engine.findings if f.id in identities and f.kind == draft.kind and f.check_id == draft.check_id),
+        None,
+    )
     occurrences: Final = tuple(sorted(frozenset(e.execution_id for e in draft.evidence if e.role == "support")))
     if previous is None:
         return Finding(
