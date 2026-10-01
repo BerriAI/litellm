@@ -246,6 +246,34 @@ class TestAgentRequestHandler:
         with patch.object(proxy_server, "general_settings", {}):
             assert await AgentRequestHandler.is_agent_allowed("agent-alpha", auth) is True
 
+    @pytest.mark.parametrize(
+        ("settings", "expected_allowed"),
+        [
+            pytest.param({"require_key_agent_access_defined": True}, False, id="true-bool"),
+            pytest.param({"require_key_agent_access_defined": "true"}, False, id="true-lower-string"),
+            pytest.param({"require_key_agent_access_defined": "True"}, False, id="true-capitalized-string"),
+            pytest.param({"require_key_agent_access_defined": 1}, False, id="one"),
+            pytest.param({"require_key_agent_access_defined": False}, True, id="false-bool"),
+            pytest.param({"require_key_agent_access_defined": "false"}, True, id="false-string"),
+            pytest.param({"require_key_agent_access_defined": 0}, True, id="zero"),
+            pytest.param({}, True, id="missing"),
+            pytest.param({"require_key_agent_access_defined": "not-a-bool"}, False, id="invalid-string"),
+        ],
+    )
+    async def test_require_key_agent_access_defined_coerces_general_settings(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        settings: dict[str, object],
+        expected_allowed: bool,
+    ):
+        from litellm.proxy import proxy_server
+
+        auth: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+        with patch.object(proxy_server, "general_settings", settings):
+            assert await AgentRequestHandler.is_agent_allowed("agent-alpha", auth) is expected_allowed
+
     async def test_disjoint_key_and_team_grants_deny_every_agent(self):
         """LIT-5143: a key restricted to one agent inside a team restricted to another
         must reach nothing. The empty intersection used to read as "no restrictions",

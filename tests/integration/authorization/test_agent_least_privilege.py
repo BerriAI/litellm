@@ -299,7 +299,7 @@ def test_require_key_agent_access_defined_toggles_at_runtime_through_config_api(
             {
                 "config_type": "general_settings",
                 "field_name": "require_key_agent_access_defined",
-                "field_value": True,
+                "field_value": "true",
             },
         )
         assert enabled.status_code == 200, enabled.text
@@ -314,7 +314,7 @@ def test_require_key_agent_access_defined_toggles_at_runtime_through_config_api(
             for field in config_fields.json()
             if object_value(field)["field_name"] == "require_key_agent_access_defined"
         )
-        assert setting["field_type"] == "Boolean" and setting["field_value"] is True, setting
+        assert setting["field_type"] == "Boolean" and setting["field_value"] == "true", setting
         eventually(
             lambda: tuple(_card(candidate, agent_id, ungranted_key) for _ in range(8)),
             lambda responses: all(response.status_code == 403 for response in responses),
