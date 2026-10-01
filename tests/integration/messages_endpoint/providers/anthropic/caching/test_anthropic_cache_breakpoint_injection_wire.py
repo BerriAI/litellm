@@ -11,6 +11,7 @@ from pydantic import JsonValue
 
 _MODEL: Final = "claude-sonnet-4-5"
 _FIVE_MINUTES: Final = {"type": "ephemeral"}
+_PONG: Final[tuple[dict[str, JsonValue], ...]] = ({"type": "text", "text": "PONG"},)
 _SUBAGENT_BILLING: Final = (
     "x-anthropic-billing-header: cc_version=2.1.283.00; cc_entrypoint=sdk-cli; cc_is_subagent=true;"
 )
@@ -39,11 +40,7 @@ def _forward(
     identity: Final = f"msg_{uuid.uuid4().hex}"
 
     def respond(request: Request) -> Reply:
-        return Reply(
-            body=cc.message_reply(
-                identity, _MODEL, ({"type": "text", "text": "PONG"},), {"input_tokens": 12, "output_tokens": 4}
-            )
-        )
+        return Reply(body=cc.message_reply(identity, _MODEL, _PONG, {"input_tokens": 12, "output_tokens": 4}))
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
@@ -103,6 +100,16 @@ def test_prompt_caching_key_adds_nothing_when_the_client_marked_any_breakpoint(g
     forwarded, _, spend_row = _forward(gateway, sent, {"enable_prompt_caching": True}, {})
     assert forwarded.breakpoints == {"tools[23]": _FIVE_MINUTES}
     assert forwarded.other_changes == {}
+    assert spend_row["injected_for"] is None, spend_row
+
+
+def test_prompt_caching_key_adds_nothing_when_extra_body_unmarks_the_client_tool_breakpoint(gateway: Gateway) -> None:
+    marked: Final = cc.with_block_breakpoint(_unmarked_claude_code_turn(), "tools", 23, _FIVE_MINUTES)
+    envelope: Final = {"tools": cc.without_cache_breakpoints(marked)["tools"]}
+    sent: Final = {**marked, "extra_body": envelope}
+    forwarded, _, spend_row = _forward(gateway, sent, {"enable_prompt_caching": True}, {})
+    assert forwarded.breakpoints == {"tools[23]": _FIVE_MINUTES}
+    assert forwarded.other_changes == {"extra_body": {"expected": envelope, "upstream": None}}
     assert spend_row["injected_for"] is None, spend_row
 
 
@@ -177,3 +184,49 @@ def test_configured_injection_points_stop_at_anthropics_four_breakpoint_limit(
     )
     assert forwarded.breakpoints == received
     assert forwarded.other_changes == {}
+
+
+def test_fallback_deployment_gets_its_own_breakpoints_and_the_injection_credit(gateway: Gateway) -> None:
+    identity: Final = f"msg_{uuid.uuid4().hex}"
+    sent: Final = _unmarked_claude_code_turn()
+
+    def fail(request: Request) -> Reply:
+        return Reply(status=500, body=b'{"type":"error","error":{"type":"api_error","message":"primary down"}}')
+
+    def respond(request: Request) -> Reply:
+        return Reply(body=cc.message_reply(identity, _MODEL, _PONG, {"input_tokens": 12, "output_tokens": 4}))
+
+    with wire_server(fail) as primary_wire, wire_server(respond) as fallback_wire, gateway.scenario() as scenario:
+        primary: Final = scenario.model(
+            model=f"anthropic/{_MODEL}", api_base=primary_wire.url, api_key=cc.ANTHROPIC_API_KEY
+        )
+        fallback: Final = scenario.model(
+            model=f"anthropic/{_MODEL}", api_base=fallback_wire.url, api_key=cc.ANTHROPIC_API_KEY
+        )
+        key: Final = scenario.key(enable_prompt_caching=True)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/messages",
+            {**sent, "model": primary, "fallbacks": [fallback]},
+            key=key,
+            headers=cc.cli_headers(key, cc.CACHING_CLI_BETA),
+        )
+        assert response.status_code == 200, response.text
+        primary_legs: Final = primary_wire.drain()
+        fallback_legs: Final = fallback_wire.drain()
+        rows: Final = eventually(
+            lambda: read_rows(
+                "SELECT spend.model_id, deployment.model_name, "
+                "spend.metadata->>'litellm_gateway_injected_cache' AS injected_for "
+                'FROM "LiteLLM_SpendLogs" spend JOIN "LiteLLM_ProxyModelTable" deployment '
+                "ON deployment.model_id = spend.model_id WHERE spend.request_id=%s",
+                (identity,),
+            ),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+    injected: Final = {"system[2]": _FIVE_MINUTES, "messages[0].content[7]": _FIVE_MINUTES}
+    assert [cc.cache_forwarded(sent, leg).breakpoints for leg in primary_legs] == [injected], primary_legs
+    assert [cc.cache_forwarded(sent, leg).breakpoints for leg in fallback_legs] == [injected], fallback_legs
+    assert rows[0]["model_name"] == fallback, rows
+    assert rows[0]["injected_for"] == rows[0]["model_id"], rows
