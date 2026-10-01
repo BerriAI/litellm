@@ -72583,12 +72583,13 @@
         "max_input_tokens": 1049000,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
-        "source": "https://wandb.ai/site/pricing/tokens/",
+        "source": "https://docs.wandb.ai/inference/models.md",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "openrouter/~anthropic/claude-fable-latest": {
         "cache_creation_input_token_cost": 1.25e-05,
