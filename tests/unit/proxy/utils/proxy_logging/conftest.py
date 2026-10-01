@@ -1,4 +1,4 @@
-"""Shared fixtures for tests/test_litellm/proxy/utils/proxy_logging/.
+"""Shared fixtures for tests/unit/proxy/utils/proxy_logging/.
 
 All fixtures used by PR1 of the proxy/utils.py behavior-pinning project
 live here. Tests should not declare fixtures inline.

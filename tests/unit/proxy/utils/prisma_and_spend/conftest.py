@@ -1,4 +1,4 @@
-"""Shared fixtures for tests/test_litellm/proxy/utils/prisma_and_spend/.
+"""Shared fixtures for tests/unit/proxy/utils/prisma_and_spend/.
 
 All fixtures used by PR2 test files live here. Do NOT add fixtures inside
 individual test files; if a fixture is missing, add it here and update the
