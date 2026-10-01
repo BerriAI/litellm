@@ -8,6 +8,7 @@ GET  /v1/traces/{trace_id}/spans/{span_id}   SpanDetail
 """
 
 import time
+from dataclasses import dataclass
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -32,12 +33,16 @@ receiver: TraceReceiver | None = None
 
 
 def get_receiver() -> TraceReceiver:
-    if receiver is None:
+    return _require_receiver(receiver)
+
+
+def _require_receiver(tracing: TraceReceiver | None) -> TraceReceiver:
+    if tracing is None:
         raise HTTPException(
             status_code=501,
             detail="Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL.",
         )
-    return receiver
+    return tracing
 
 
 def tenant_for(user_api_key_dict: UserAPIKeyAuth) -> Tenant:
@@ -59,6 +64,31 @@ def scope_for(user_api_key_dict: UserAPIKeyAuth) -> TraceScope:
     return TraceScope(team_ids=("",), api_key_hash=user_api_key_dict.token)
 
 
+@dataclass(frozen=True, slots=True)
+class TraceAccessContext:
+    auth: UserAPIKeyAuth
+    receiver: TraceReceiver | None
+
+    def reader(self) -> tuple[TraceReceiver, TraceScope]:
+        return _require_receiver(self.receiver), scope_for(self.auth)
+
+    def writer(self) -> tuple[TraceReceiver, Tenant]:
+        if self.auth.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
+            raise HTTPException(status_code=403, detail="Not allowed to ingest agent traces")
+        return _require_receiver(self.receiver), tenant_for(self.auth)
+
+
+async def provide_receiver() -> TraceReceiver | None:
+    return receiver
+
+
+async def provide_trace_access(
+    auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
+) -> TraceAccessContext:
+    return TraceAccessContext(auth=auth, receiver=tracing)
+
+
 async def _read_otlp_body(request: Request) -> bytes:
     body: Final = bytearray()
     async for chunk in request.stream():
@@ -71,18 +101,16 @@ async def _read_otlp_body(request: Request) -> bytes:
 @router.post("/v1/traces", include_in_schema=False)
 async def ingest_otlp_traces(
     request: Request,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
 ) -> Response:
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
-        raise HTTPException(status_code=403, detail="Not allowed to ingest agent traces")
-    tracing: Final = get_receiver()
+    tracing, tenant = context.writer()
     content_type: Final = request.headers.get("content-type")
     try:
         await tracing.ingest(
             body=await _read_otlp_body(request),
             content_type=content_type,
             content_encoding=request.headers.get("content-encoding"),
-            tenant=tenant_for(user_api_key_dict),
+            tenant=tenant,
         )
     except TracingPayloadTooLargeError as e:
         raise HTTPException(status_code=413, detail=str(e))
@@ -99,15 +127,16 @@ async def ingest_otlp_traces(
 
 @router.get("/v1/traces", response_model=None)
 async def list_agent_traces(
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
     start_ms: Annotated[int | None, Query(description="Window start, unix ms. Default: 24h ago")] = None,
     end_ms: Annotated[int | None, Query(description="Window end, unix ms. Default: now")] = None,
     cursor: Annotated[str | None, Query()] = None,
 ) -> TracePage:
     now_ms: Final = int(time.time() * 1000)
     try:
-        return await get_receiver().list_traces(
-            scope=scope_for(user_api_key_dict),
+        tracing, scope = context.reader()
+        return await tracing.list_traces(
+            scope=scope,
             start_ms=start_ms if start_ms is not None else now_ms - MS_PER_DAY,
             end_ms=end_ms if end_ms is not None else now_ms,
             cursor=cursor,
@@ -119,10 +148,11 @@ async def list_agent_traces(
 @router.get("/v1/traces/{trace_id}", response_model=None)
 async def get_agent_trace(
     trace_id: str,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
     trace_ref: Annotated[str, Query()] = "",
 ) -> Trace:
-    trace: Final = await get_receiver().get_trace(trace_id, scope_for(user_api_key_dict), trace_ref)
+    tracing, scope = context.reader()
+    trace: Final = await tracing.get_trace(trace_id, scope, trace_ref)
     if trace is None:
         raise HTTPException(status_code=404, detail=f"Trace {trace_id} not found")
     return trace
@@ -132,10 +162,11 @@ async def get_agent_trace(
 async def get_agent_trace_span(
     trace_id: str,
     span_id: str,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
     trace_ref: Annotated[str, Query()] = "",
 ) -> SpanDetail:
-    span: Final = await get_receiver().get_span(trace_id, span_id, scope_for(user_api_key_dict), trace_ref)
+    tracing, scope = context.reader()
+    span: Final = await tracing.get_span(trace_id, span_id, scope, trace_ref)
     if span is None:
         raise HTTPException(status_code=404, detail=f"Span {span_id} not found")
     return span

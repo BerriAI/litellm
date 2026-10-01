@@ -2,6 +2,7 @@
 Tests for the agent tracing endpoints (litellm/proxy/tracing_endpoints.py).
 """
 
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -11,7 +12,9 @@ from fastapi.testclient import TestClient
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.tracing import TracingPayloadTooLargeError
+from litellm.rust_bridge.traces import TraceStorage
+from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
+from litellm.tracing.store import ClickHouseTraceStore
 
 TEAM_KEY = UserAPIKeyAuth(
     token="hashed-key", team_id="team-research", org_id="org-1", user_role=LitellmUserRoles.INTERNAL_USER
@@ -53,13 +56,13 @@ def test_tenant_for_comes_from_auth():
 
 
 @pytest.fixture
-def receiver(monkeypatch) -> MagicMock:
+def receiver(client) -> MagicMock:
     fake = MagicMock()
     fake.ingest = AsyncMock(return_value=1)
     fake.list_traces = AsyncMock(return_value={"data": [], "next_cursor": None})
     fake.get_trace = AsyncMock(return_value=None)
     fake.get_span = AsyncMock(return_value=None)
-    monkeypatch.setattr(tracing_endpoints, "receiver", fake)
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: fake
     return fake
 
 
@@ -71,8 +74,7 @@ def client() -> TestClient:
     return TestClient(app)
 
 
-def test_501_when_tracing_not_enabled(client, monkeypatch):
-    monkeypatch.setattr(tracing_endpoints, "receiver", None)
+def test_501_when_tracing_not_enabled(client):
     assert client.post("/v1/traces", content=b"").status_code == 501
     assert client.get("/v1/traces").status_code == 501
 
@@ -178,3 +180,164 @@ def test_view_only_admin_cannot_ingest_traces(client, receiver):
     response = client.post("/v1/traces", content=b"{}")
     assert response.status_code == 403
     receiver.ingest.assert_not_called()
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_auth_failure_precedes_disabled_receiver(client: TestClient, status_code: int) -> None:
+    def unavailable() -> None:
+        return None
+
+    def authenticate() -> UserAPIKeyAuth:
+        if status_code == 401:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+
+    client.app.dependency_overrides[user_api_key_auth] = authenticate
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = unavailable
+    response: Final = client.post("/v1/traces", content=b"{}")
+    assert response.status_code == status_code
+    assert response.json() == {
+        "detail": "Invalid API key" if status_code == 401 else "Not allowed to ingest agent traces"
+    }
+
+
+def test_disabled_receiver_precedes_read_scope_rejection(client: TestClient) -> None:
+    client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    response: Final = client.get("/v1/traces")
+    assert response.status_code == 501
+    assert response.json() == {
+        "detail": "Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL."
+    }
+
+
+@pytest.mark.requires_rust_extension
+def test_injected_receiver_persists_authenticated_tenant(client: TestClient) -> None:
+    storage: Final = MagicMock(spec=TraceStorage)
+    storage.insert_rows = AsyncMock()
+    tracing: Final = TraceReceiver(ClickHouseTraceStore(storage))
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
+    response: Final = client.post(
+        "/v1/traces",
+        json={
+            "resourceSpans": [
+                {
+                    "resource": {
+                        "attributes": [
+                            {"key": "litellm.team_id", "value": {"stringValue": "spoofed-team"}},
+                            {"key": "litellm.api_key_hash", "value": {"stringValue": "spoofed-key"}},
+                            {"key": "litellm.org_id", "value": {"stringValue": "spoofed-org"}},
+                        ]
+                    },
+                    "scopeSpans": [
+                        {
+                            "spans": [
+                                {
+                                    "traceId": "01" * 16,
+                                    "spanId": "02" * 8,
+                                    "name": "dependency-injection",
+                                    "startTimeUnixNano": "1000000000",
+                                    "endTimeUnixNano": "1000000001",
+                                }
+                            ]
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {}
+    storage.insert_rows.assert_awaited_once()
+    table, rows = storage.insert_rows.await_args.args
+    assert table == "otel_traces"
+    assert len(rows) == 1
+    assert rows[0]["TeamId"] == TEAM_KEY.team_id
+    assert rows[0]["ApiKeyHash"] == TEAM_KEY.token
+    assert rows[0]["ResourceAttributes"] == {
+        "litellm.team_id": TEAM_KEY.team_id,
+        "litellm.api_key_hash": TEAM_KEY.token,
+        "litellm.org_id": TEAM_KEY.org_id,
+    }
+
+
+def test_receiver_overrides_are_app_local() -> None:
+    first_storage: Final = MagicMock(spec=TraceStorage)
+    first_storage.query = AsyncMock(
+        return_value=[
+            {
+                "span_id": "first-span",
+                "input": "first-input",
+                "output": "",
+                "attributes": {},
+            }
+        ]
+    )
+    second_storage: Final = MagicMock(spec=TraceStorage)
+    second_storage.query = AsyncMock(
+        return_value=[
+            {
+                "span_id": "second-span",
+                "input": "second-input",
+                "output": "",
+                "attributes": {},
+            }
+        ]
+    )
+    first_receiver: Final = TraceReceiver(ClickHouseTraceStore(first_storage))
+    second_receiver: Final = TraceReceiver(ClickHouseTraceStore(second_storage))
+    first_app: Final = FastAPI()
+    second_app: Final = FastAPI()
+    first_app.include_router(tracing_endpoints.router)
+    second_app.include_router(tracing_endpoints.router)
+    first_app.dependency_overrides[user_api_key_auth] = lambda: TEAM_KEY
+    second_app.dependency_overrides[user_api_key_auth] = lambda: TEAM_KEY
+    first_app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: first_receiver
+    second_app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: second_receiver
+
+    with TestClient(first_app) as first_client, TestClient(second_app) as second_client:
+        first_response: Final = first_client.get("/v1/traces/t1/spans/first-span?trace_ref=first-run")
+        second_response: Final = second_client.get("/v1/traces/t1/spans/second-span?trace_ref=second-run")
+
+    assert first_response.status_code == second_response.status_code == 200
+    assert first_response.json() == {
+        "span_id": "first-span",
+        "input": "first-input",
+        "output": "",
+        "attributes": {},
+    }
+    assert second_response.json() == {
+        "span_id": "second-span",
+        "input": "second-input",
+        "output": "",
+        "attributes": {},
+    }
+    first_storage.query.assert_awaited_once_with(
+        "span_detail",
+        {
+            "team_ids": (TEAM_KEY.team_id,),
+            "api_key_hash": "",
+            "trace_id": "t1",
+            "span_id": "first-span",
+            "trace_ref": "first-run",
+        },
+    )
+    second_storage.query.assert_awaited_once_with(
+        "span_detail",
+        {
+            "team_ids": (TEAM_KEY.team_id,),
+            "api_key_hash": "",
+            "trace_id": "t1",
+            "span_id": "second-span",
+            "trace_ref": "second-run",
+        },
+    )
+
+
+@pytest.mark.parametrize("auth", [TEAM_KEY, UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)])
+def test_query_validation_precedes_trace_access_checks(client: TestClient, auth: UserAPIKeyAuth) -> None:
+    client.app.dependency_overrides[user_api_key_auth] = lambda: auth
+    response: Final = client.get("/v1/traces", params={"start_ms": "invalid"})
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["query", "start_ms"]
