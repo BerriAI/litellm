@@ -2686,7 +2686,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model_response.model = completion_response["model"]
 
         _hidden_params["provider_specific_fields"] = provider_specific_fields
-        model_response._hidden_params = _hidden_params
+        # Merge so earlier values (e.g. Bedrock Invoke region_name / custom_llm_provider
+        # set in main.py for region-based pricing) are not wiped. See #44002.
+        model_response._hidden_params = {**model_response._hidden_params, **_hidden_params}
         return model_response
 
     def get_prefix_prompt(self, messages: list[AllMessageValues]) -> str | None:
