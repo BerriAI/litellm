@@ -22609,6 +22609,9 @@
                         "$ref": "#/components/schemas/OutputImageGenerationCall"
                       },
                       {
+                        "$ref": "#/components/schemas/ResponseToolSearchCall"
+                      },
+                      {
                         "$ref": "#/components/schemas/ResponseFunctionToolCall"
                       },
                       {
