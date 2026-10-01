@@ -61,3 +61,18 @@ async def test_grep_still_finds_real_repo_files(repo_with_escape_links: Path) ->
     b = await _backend(repo_with_escape_links)
     result = await b.agrep("hello")
     assert [(m["path"], m["line"]) for m in result.matches] == [("/README.md", 1)]
+
+
+async def test_write_into_new_nested_directory_is_allowed(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    b = backend.SandboxBackend(LocalSandbox(str(repo)), loop=asyncio.get_running_loop(), writable=True)
+    result = await b.awrite("/new_dir/sub/file.py", "print('hi')\n")
+    assert result.error is None, result.error
+    assert (repo / "new_dir" / "sub" / "file.py").read_text() == "print('hi')\n"
+
+
+async def test_write_under_symlinked_dir_is_refused(repo_with_escape_links: Path) -> None:
+    b = backend.SandboxBackend(LocalSandbox(str(repo_with_escape_links)), loop=asyncio.get_running_loop(), writable=True)
+    result = await b.awrite("/home_link/new_dir/evil.txt", "x")
+    assert result.error and "outside the workspace" in result.error
