@@ -6694,7 +6694,6 @@ class MCPServerManager:
                 start_time=start_time,
                 litellm_logging_obj=litellm_logging_obj,
                 guardrail_context=guardrail_context,
-                tool=self.get_listed_tool(mcp_server, name, listed_caller),
             )
             tasks.append(during_hook_task)
 

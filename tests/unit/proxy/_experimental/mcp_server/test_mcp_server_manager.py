@@ -7085,7 +7085,9 @@ class TestMCPServerManager:
         assert (hook_kwargs["tool_description"], hook_kwargs["tool_input_schema"]) == ("Runs the test tool", schema)
 
     @pytest.mark.asyncio
-    async def test_call_tool_hands_listed_tool_metadata_to_during_call_hooks_through_real_conversion(self):
+    async def test_call_tool_hands_during_call_hooks_name_and_arguments_only_even_for_a_listed_tool(self):
+        """A during_mcp_call guardrail evaluates the call in flight, so it keeps seeing only the name and
+        arguments it always did; the listed description and schema go to the pre-call hooks alone."""
         schema = {"type": "object", "properties": {"param": {"type": "string"}}}
         listed = [MCPTool(name="test_tool", description="Runs the test tool", inputSchema=schema)]
         auth = UserAPIKeyAuth(api_key="sk-test")
@@ -7103,10 +7105,9 @@ class TestMCPServerManager:
         )
 
         during_data = proxy_logging_obj.during_call_hook.call_args.kwargs["data"]
-        assert (during_data["mcp_tool_description"], during_data["mcp_input_schema"]) == (
-            "Runs the test tool",
-            schema,
-        )
+        assert during_data["mcp_arguments"] == {"param": "value"}
+        assert (during_data.get("mcp_tool_description"), during_data.get("mcp_input_schema")) == (None, None)
+        assert "Description:" not in during_data["messages"][0]["content"]
 
     @pytest.mark.asyncio
     async def test_call_tool_passes_no_tool_metadata_when_tool_was_never_listed(self):
