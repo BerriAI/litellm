@@ -1197,6 +1197,70 @@ def test_reset_budget_windows_resets_expired_team_window(monkeypatch):
     spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:team:team-expired:window:30d", value=0.0)
 
 
+def test_reset_budget_windows_resets_expired_window_with_non_utc_offset(monkeypatch):
+    """Regression: a `reset_at` serialized with a non-UTC offset (what
+    `litellm_settings.timezone: Asia/Shanghai` produces) must be compared in UTC.
+    Dropping the offset kept an already-expired window blocked for the length of
+    the offset, so the window never reset on time."""
+    shanghai = timezone(timedelta(hours=8))
+    expired = (datetime.now(shanghai) - timedelta(minutes=5)).isoformat()
+
+    key_rows = [
+        {
+            "token": "sk-shanghai-expired",
+            "budget_limits": [{"budget_duration": "24h", "reset_at": expired}],
+        }
+    ]
+    job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=key_rows, team_rows=[]
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_verificationtoken.update.assert_awaited_once()
+    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:key:sk-shanghai-expired:window:24h", value=0.0
+    )
+
+
+def test_reset_budget_windows_skips_unexpired_window_with_non_utc_offset(monkeypatch):
+    """The mirror of the guard above: a `+08:00` timestamp still in the future must
+    not reset early just because its wall-clock value already trails naive UTC now."""
+    shanghai = timezone(timedelta(hours=8))
+    future = (datetime.now(shanghai) + timedelta(minutes=5)).isoformat()
+
+    key_rows = [
+        {
+            "token": "sk-shanghai-future",
+            "budget_limits": [{"budget_duration": "24h", "reset_at": future}],
+        }
+    ]
+    job, prisma_client, _ = _make_reset_budget_windows_job(monkeypatch, key_rows=key_rows, team_rows=[])
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_verificationtoken.update.assert_not_awaited()
+
+
+@pytest.mark.parametrize(("minutes_from_now", "expected_resets"), [(-5, 1), (5, 0)])
+def test_reset_budget_windows_reads_offsetless_reset_at_as_utc(monkeypatch, minutes_from_now, expected_resets):
+    """A `reset_at` stored without any offset is UTC wall clock, so it must keep
+    resetting exactly at that instant now that the comparison is timezone-aware."""
+    reset_at = (datetime.now(timezone.utc) + timedelta(minutes=minutes_from_now)).replace(tzinfo=None).isoformat()
+
+    key_rows = [
+        {
+            "token": "sk-offsetless",
+            "budget_limits": [{"budget_duration": "24h", "reset_at": reset_at}],
+        }
+    ]
+    job, prisma_client, _ = _make_reset_budget_windows_job(monkeypatch, key_rows=key_rows, team_rows=[])
+
+    asyncio.run(job.reset_budget_windows())
+
+    assert prisma_client.db.litellm_verificationtoken.update.await_count == expected_resets
+
+
 def test_reset_budget_windows_handles_string_budget_limits(monkeypatch):
     """Defensive: if `query_raw` returns `budget_limits` as a JSON-encoded
     string (driver-dependent), the code still parses and resets it.
