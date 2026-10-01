@@ -130,3 +130,23 @@ def test_json_provider_passthrough_adds_per_turn_control_beta():
     )
 
     assert PER_TURN_CONTROL in _betas(headers)
+
+
+@pytest.mark.parametrize("display", (None, "summarized", "omitted", "updates"))
+@pytest.mark.parametrize("explicit_beta", (False, True))
+def test_native_messages_thinking_display_updates_beta(display: str | None, explicit_beta: bool) -> None:
+    from typing import Final
+
+    from litellm.types.llms.anthropic import ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
+
+    beta: Final = ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
+    headers, _ = AnthropicMessagesConfig().validate_anthropic_messages_environment(
+        headers={"anthropic-beta": beta} if explicit_beta else {},
+        model="claude-opus-5",
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        optional_params={"thinking": {"type": "adaptive", "display": display}} if display else {},
+        litellm_params={},
+        api_key="sk-ant-test",
+    )
+
+    assert headers.get("anthropic-beta", "").split(",").count(beta) == int(display == "updates" or explicit_beta)
