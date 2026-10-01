@@ -3647,6 +3647,27 @@ def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():
     assert combined_pair.prompt_tokens_details.cache_creation_tokens == 100
 
 
+def test_combine_usage_objects_plain_usage_without_cache_fields_does_not_crash():
+    """Regression: with PromptTokensDetailsWrapper reading deleted fields as their
+    declared defaults (issue #43756), the combiner's hasattr guard can no longer
+    tell "field absent" from "field present". Non-numeric declared fields such as
+    cache_creation_token_details must stay out of the numeric summation, or every
+    plain (no cache activity) streaming combination raises a pydantic
+    ValidationError on PromptTokensDetailsWrapper(cache_creation_token_details=0)."""
+    plain = Usage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100),
+    )
+    combined = BaseTokenUsageProcessor.combine_usage_objects([plain, plain])
+    assert combined.prompt_tokens_details is not None
+    assert combined.prompt_tokens_details.cached_tokens == 200
+    dumped = combined.prompt_tokens_details.model_dump()
+    assert "cache_creation_token_details" not in dumped
+    assert "cache_write_tokens" not in dumped
+
+
 def test_select_model_name_strips_unregistered_alias_prefix(_local_model_cost_map):
     """A router-facing model_name alias containing "/" whose leading segment is NOT a
     registered provider must not be double-prefixed into a non-existent cost key.

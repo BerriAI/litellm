@@ -1832,6 +1832,23 @@ class PromptTokensDetailsWrapper(
         if self.cached_tokens_details is None:
             del self.cached_tokens_details
 
+    def __getattr__(self, name: str):
+        """Return declared defaults for payload-hygiene deletions (issue #43756).
+
+        __init__ deletes None-valued fields from the instance dict so they stay
+        out of serialized payloads; pydantic v2 then raises on direct attribute
+        access to those deleted fields. This fallback returns the declared
+        class default instead, so downstream direct reads
+        (e.g. wrapper.cache_creation_tokens on a first-turn response with no
+        cache activity) behave like a None-valued field rather than crashing.
+        Undeclared names fall through to pydantic's own lookup so accepted
+        extras (e.g. DashScope's cache_creation_input_tokens) stay readable.
+        """
+        field_info = type(self).model_fields.get(name)
+        if field_info is not None:
+            return field_info.get_default()
+        return super().__getattr__(name)
+
 
 class ServerToolUse(BaseModel):
     web_search_requests: int | None = None

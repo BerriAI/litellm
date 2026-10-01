@@ -2704,13 +2704,17 @@ def _combine_prompt_tokens_details(
 ) -> PromptTokensDetailsWrapper:
     base: Final = current if current is not None else PromptTokensDetailsWrapper()
     base_values: Final = MappingProxyType(
-        {attr: getattr(base, attr) for attr in type(base).model_fields if hasattr(base, attr)}
+        {
+            attr: getattr(base, attr)
+            for attr in type(base).model_fields
+            if getattr(base, attr, None) is not None
+        }
     )
     summed: Final = MappingProxyType(
         {
             attr: (getattr(base, attr, 0) or 0) + (getattr(new, attr) or 0)
             for attr in _summable_prompt_token_fields(new)
-            if hasattr(new, attr) and isinstance(getattr(new, attr) or 0, (int, float))
+            if isinstance(getattr(new, attr, None), (int, float))
         }
     )
     new_cached_tokens_details: Final = getattr(new, "cached_tokens_details", None)
