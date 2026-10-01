@@ -1,6 +1,6 @@
 """Coverage for team-scoped model-name translation in /model/info responses.
 
-These live in tests/test_litellm/proxy/proxy_server/ (not the top-level
+These live in tests/unit/proxy/proxy_server/ (not the top-level
 test_proxy_server.py) because the CI coverage job collects this directory.
 They exercise the read-path fix for issue #28382: `/v1`, `/v2`, and
 `/model/info` must surface `model_info.team_public_model_name` for team-scoped

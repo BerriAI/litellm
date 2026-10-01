@@ -12,7 +12,9 @@ from __future__ import annotations
 import asyncio
 import json
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.litellm_core_utils import get_llm_provider_logic
@@ -282,10 +284,14 @@ def test_model_info_lookup_unknown_model_returns_404(client, auth_as, monkeypatc
     assert "is not in the model cost map" in response.text
 
 
-def test_model_info_lookup_returns_404_when_typed_info_has_no_cost_map_entry(client, auth_as, monkeypatch):
+@respx.mock
+def test_model_info_lookup_returns_404_when_typed_info_has_no_cost_map_entry(client, auth_as, monkeypatch, local_model_cost_map):
     """``get_model_info`` synthesizes info for huggingface fallbacks absent from ``model_cost``;
     with no raw entry the route must 404 rather than answer 200 with typed fields only."""
     monkeypatch.setattr(proxy_server, "llm_router", None)
+    respx.get("https://huggingface.co/not-in-map-org/not-in-map-model/raw/main/config.json").mock(
+        return_value=httpx.Response(404)
+    )
     with auth_as():
         response = client.get("/utils/model_info", params={"model": "huggingface/not-in-map-org/not-in-map-model"})
     assert response.status_code == 404, response.text

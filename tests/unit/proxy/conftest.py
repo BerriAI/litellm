@@ -56,7 +56,7 @@ def _snapshot_mutable_state(module):
             continue
         if value is None or isinstance(value, _SNAPSHOT_TYPES):
             try:
-                snapshot[attr] = copy.deepcopy(value)
+                snapshot[attr] = _restored_value(value)
             except Exception as exc:
                 warnings.warn(
                     f"conftest: could not snapshot {module.__name__}.{attr}: {exc}",
@@ -65,10 +65,18 @@ def _snapshot_mutable_state(module):
     return snapshot
 
 
+def _restored_value(value):
+    if isinstance(value, (list, dict, set, bytearray)):
+        return copy.deepcopy(value)
+    if isinstance(value, tuple):
+        return tuple(_restored_value(element) for element in value)
+    return value
+
+
 def _restore_mutable_state(module, snapshot):
     for attr, default in snapshot.items():
         try:
-            setattr(module, attr, copy.deepcopy(default))
+            setattr(module, attr, _restored_value(default))
         except Exception as exc:
             warnings.warn(
                 f"conftest: could not restore {module.__name__}.{attr}: {exc}",

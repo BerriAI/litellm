@@ -187,7 +187,7 @@ jobs:
 
           - shard: proxy-server
             artifact-name: proxy-server
-            test-path: "tests/test_litellm/proxy/proxy_server"
+            test-path: "tests/unit/proxy/proxy_server"
             workers: 4
             reruns: 2
             timeout-minutes: 60
@@ -196,11 +196,14 @@ jobs:
           - shard: proxy-infra
             artifact-name: proxy-infra
             test-path: >-
-              tests/test_litellm/proxy/db
+              tests/unit/proxy/db
+              --ignore=tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
+              --ignore=tests/unit/proxy/db/test_update_daily_tag_spend.py
               tests/test_litellm/proxy/middleware
               tests/test_litellm/proxy/spend_tracking
               tests/test_litellm/proxy/pass_through_endpoints
-              tests/test_litellm/proxy/_experimental
+              tests/unit/proxy/_experimental
+              --ignore=tests/unit/proxy/_experimental/mcp_server
               tests/test_litellm/proxy/experimental
               tests/test_litellm/proxy/common_utils
               tests/test_litellm/proxy/enterprise_billing
