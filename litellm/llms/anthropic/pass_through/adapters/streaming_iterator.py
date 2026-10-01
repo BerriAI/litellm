@@ -11,6 +11,7 @@ from typing import (
     Final,
     Literal,
     Protocol,
+    cast,
     get_args,
 )
 
@@ -35,6 +36,7 @@ from litellm.types.utils import AdapterCompletionStreamWrapper, Delta
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+    from litellm.types.llms.openai import AllMessageValues
     from litellm.types.utils import ModelResponseStream
 
 
@@ -114,6 +116,18 @@ class _CombinedChunkSplitter:
         self._sync_iter: Iterator[ModelResponseStream] | None = None
         self._async_iter: AsyncIterator[ModelResponseStream] | None = None
         self._buffer: deque[ModelResponseStream] = deque()
+
+    @property
+    def chunks(self) -> "list[ModelResponseStream] | None":
+        return cast(  # cast-ok: chunks is a list of ModelResponseStream on the inner stream
+            "list[ModelResponseStream] | None", getattr(self._stream, "chunks", None)
+        )
+
+    @property
+    def messages(self) -> "list[AllMessageValues] | None":
+        return cast(  # cast-ok: messages is a list of AllMessageValues on the inner stream
+            "list[AllMessageValues] | None", getattr(self._stream, "messages", None)
+        )
 
     @staticmethod
     def _is_combined(chunk: "ModelResponseStream") -> bool:
@@ -349,6 +363,18 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self.current_content_block_start: AnthropicStreamWrapper.ContentBlockContentBlockDict = self.TextBlock(
             type="text",
             text="",
+        )
+
+    @property
+    def chunks(self) -> "list[ModelResponseStream] | None":
+        return cast(  # cast-ok: chunks is a list of ModelResponseStream on the inner stream
+            "list[ModelResponseStream] | None", getattr(self.completion_stream, "chunks", None)
+        )
+
+    @property
+    def messages(self) -> "list[AllMessageValues] | None":
+        return cast(  # cast-ok: messages is a list of AllMessageValues on the inner stream
+            "list[AllMessageValues] | None", getattr(self.completion_stream, "messages", None)
         )
 
     def _merge_usage_into_held_stop_reason_chunk(self, chunk: Any) -> MessageBlockDelta:
@@ -1173,3 +1199,37 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return True
 
         return False
+
+
+class AnthropicSSEStream(AsyncIterator[bytes]):
+    """
+    AsyncIterator[bytes] view of AnthropicStreamWrapper returned to callers of
+    translate_completion_output_params_streaming. Keeps the wrapper reachable so
+    the proxy's disconnect-time partial billing can read the inner chat stream's
+    collected chunks, messages, and model; a bare async generator would hide them.
+    """
+
+    def __init__(self, anthropic_wrapper: AnthropicStreamWrapper) -> None:
+        self._anthropic_wrapper = anthropic_wrapper
+        self._byte_stream: Final[AsyncIterator[bytes]] = anthropic_wrapper.async_anthropic_sse_wrapper()
+        self._hidden_params: dict[
+            str, object
+        ] = {}  # mutable-ok: the proxy merges provider headers onto _hidden_params in place
+
+    @property
+    def chunks(self) -> "list[ModelResponseStream] | None":
+        return self._anthropic_wrapper.chunks
+
+    @property
+    def messages(self) -> "list[AllMessageValues] | None":
+        return self._anthropic_wrapper.messages
+
+    @property
+    def model(self) -> str:
+        return self._anthropic_wrapper.model
+
+    async def __anext__(self) -> bytes:
+        return await self._byte_stream.__anext__()
+
+    async def aclose(self) -> None:
+        await self._byte_stream.aclose()

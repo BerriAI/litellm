@@ -890,6 +890,9 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             }
             if "usage" in chunk and chunk["usage"] is not None:
                 kwargs["usage"] = chunk["usage"]
+            service_tier: Final = chunk.get("service_tier")
+            if isinstance(service_tier, str) and service_tier:
+                kwargs["service_tier"] = service_tier
             return ModelResponseStream(**kwargs)
         except Exception as e:
             raise e
