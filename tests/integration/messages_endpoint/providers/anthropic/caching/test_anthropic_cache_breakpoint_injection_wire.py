@@ -226,7 +226,9 @@ def test_fallback_deployment_gets_its_own_breakpoints_and_the_injection_credit(g
             seconds=70,
         )
     injected: Final = {"system[2]": _FIVE_MINUTES, "messages[0].content[7]": _FIVE_MINUTES}
-    assert [cc.cache_forwarded(sent, leg).breakpoints for leg in primary_legs] == [injected], primary_legs
-    assert [cc.cache_forwarded(sent, leg).breakpoints for leg in fallback_legs] == [injected], fallback_legs
+    legs: Final = [cc.cache_forwarded(sent, leg) for leg in (*primary_legs, *fallback_legs)]
+    assert len(primary_legs) == 1, primary_legs
+    assert len(fallback_legs) == 1, fallback_legs
+    assert [(leg.breakpoints, leg.other_changes) for leg in legs] == [(injected, {}), (injected, {})], legs
     assert rows[0]["model_name"] == fallback, rows
     assert rows[0]["injected_for"] == rows[0]["model_id"], rows
