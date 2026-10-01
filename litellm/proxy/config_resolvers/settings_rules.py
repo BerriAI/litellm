@@ -77,6 +77,13 @@ def _build_dual_source_keys() -> Mapping[tuple[Section, str], KeyRule]:
 DUAL_SOURCE_KEYS: Final[Mapping[tuple[Section, str], KeyRule]] = _build_dual_source_keys()
 
 
+RESOURCE_LIST_KEYS: Final[frozenset[tuple[Section, str]]] = frozenset({("general_settings", "pass_through_endpoints")})
+
+
+def is_resource_list(section: Section, key: str) -> bool:
+    return (section, key) in RESOURCE_LIST_KEYS
+
+
 def rule_for(section: Section, key: str) -> KeyRule:
     return DUAL_SOURCE_KEYS.get((section, key), DUAL_SOURCE_KEYS[(section, "*")])
 

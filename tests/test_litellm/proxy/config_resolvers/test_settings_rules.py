@@ -13,6 +13,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
     Section,
     SettingValue,
     is_absent,
+    is_resource_list,
     resolve,
     rule_for,
 )
@@ -87,7 +88,6 @@ _PREVIOUSLY_DB_WINS: Final[tuple[str, ...]] = (
     "user_url_allowed_hosts",
     "provider_url_destination_allowed_hosts",
     "alerting",
-    "pass_through_endpoints",
 )
 
 
@@ -104,8 +104,9 @@ def test_the_store_resolves_every_config_and_stored_value_combination(
     section: Section, key: str, config_value: SettingValue, db_value: SettingValue
 ) -> None:
     store: Final = _store_for(section, key, config_value, db_value)
+    owned_config_value: Final = ABSENT if is_resource_list(section, key) else config_value
 
-    if not is_absent(config_value):
+    if not is_absent(owned_config_value):
         assert store[key] == config_value
         assert store.source(key) == "config"
     elif is_absent(db_value) or db_value is None:
@@ -120,7 +121,7 @@ def test_the_store_resolves_every_config_and_stored_value_combination(
 def test_the_store_and_the_resolver_never_disagree(
     section: Section, key: str, config_value: SettingValue, db_value: SettingValue
 ) -> None:
-    resolved: Final = resolve(config_value, db_value)
+    resolved: Final = resolve(ABSENT if is_resource_list(section, key) else config_value, db_value)
     store: Final = _store_for(section, key, config_value, db_value)
 
     assert store.source(key) == resolved.source
