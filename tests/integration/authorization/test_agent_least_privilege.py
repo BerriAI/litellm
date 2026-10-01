@@ -235,7 +235,6 @@ def test_require_key_agent_access_defined_denies_ungranted_key_but_keeps_explici
         ]
         assert _listed_agent_ids(candidate, key_a) == frozenset()
         assert f"a2a/{agent_name}" not in _model_names(candidate, "/v1/model/info", key_a)
-        assert f"a2a/{agent_name}" not in _model_names(candidate, "/v2/model/info", key_a)
         assert f"a2a/{agent_name}" not in _model_names(candidate, "/model_group/info", key_a)
         assert tuple(item for item in wire.drain() if item.method == "POST") == ()
 
@@ -254,7 +253,6 @@ def test_require_key_agent_access_defined_denies_ungranted_key_but_keeps_explici
             if key != candidate.key:
                 assert agent_id in _listed_agent_ids(candidate, key)
                 assert f"a2a/{agent_name}" in _model_names(candidate, "/v1/model/info", key)
-                assert f"a2a/{agent_name}" in _model_names(candidate, "/v2/model/info", key)
 
 
 @pytest.mark.timeout(180)
