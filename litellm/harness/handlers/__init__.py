@@ -32,4 +32,4 @@ def get_harness_handler(config: BaseHarnessConfig) -> BaseHarnessHandler:
     raise HarnessError(f"No handler for Harness.{config.harness.name}")
 
 
-__all__ = ["BaseHarnessHandler", "get_harness_config", "get_harness_handler"]
+__all__ = ("BaseHarnessHandler", "get_harness_config", "get_harness_handler")
