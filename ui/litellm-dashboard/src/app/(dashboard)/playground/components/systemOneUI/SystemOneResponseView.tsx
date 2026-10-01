@@ -1,7 +1,7 @@
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronDown, LoaderCircle } from "lucide-react";
 import { useState } from "react";
@@ -169,9 +169,11 @@ export default function SystemOneResponseView({
       <CardContent className="grid gap-3">
         {Object.entries(response.answers).map(([id, answer]) => (
           <Card key={id} size="sm">
-            <CardHeader className="flex-row items-center justify-between gap-2">
+            <CardHeader>
               <CardTitle className="font-mono">{id}</CardTitle>
-              <Badge variant="secondary">{answer.type}</Badge>
+              <CardAction>
+                <Badge variant="secondary">{answer.type}</Badge>
+              </CardAction>
             </CardHeader>
             <CardContent>
               <AnswerDetails answer={answer} />

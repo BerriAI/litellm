@@ -4,13 +4,13 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { useMutation } from "@tanstack/react-query";
 import { Code, Info, LoaderCircle, Send } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { makeSystemOneRequest } from "../../llm_calls/system_one";
 import { SYSTEM_ONE_PRESETS } from "./system_one_presets";
 import type { SystemOneRequest } from "./system_one_schemas";
+import SystemOneJsonEditor from "./SystemOneJsonEditor";
 import SystemOneQuestionBreakdown from "./SystemOneQuestionBreakdown";
 import SystemOneResponseView from "./SystemOneResponseView";
 import { validateSystemOnePayload } from "./validate_system_one_payload";
@@ -172,26 +172,8 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
       </section>
 
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-2">
-        <section className="flex min-h-96 flex-col gap-3" aria-label="System One request editor">
-          <Textarea
-            aria-label="System One JSON payload"
-            value={rawPayload}
-            onChange={(event) => handlePayloadChange(event.target.value)}
-            className="min-h-80 flex-1 resize-y font-mono text-xs"
-            spellCheck={false}
-          />
-          {validation.issues.length > 0 && (
-            <div className="grid gap-2" aria-label="Payload validation issues">
-              {validation.issues.map((issue, index) => (
-                <Alert key={`${issue.path}-${index}`} variant={issue.severity === "error" ? "destructive" : "default"}>
-                  <AlertTitle>
-                    {issue.severity === "error" ? "Error" : "Warning"}: {issue.path}
-                  </AlertTitle>
-                  <AlertDescription>{issue.message}</AlertDescription>
-                </Alert>
-              ))}
-            </div>
-          )}
+        <section className="flex min-h-96 flex-col" aria-label="System One request editor">
+          <SystemOneJsonEditor value={rawPayload} onChange={handlePayloadChange} validation={validation} />
         </section>
         <section className="grid content-start gap-4" aria-label="System One results">
           <SystemOneQuestionBreakdown payload={validation.payload} />
