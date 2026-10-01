@@ -6288,6 +6288,65 @@ async def test_process_group_patch_operations_pathless_replace_members_is_absolu
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("later_op", "expected_alias", "expected_external_id", "expected_snapshot"),
+    [
+        (
+            SCIMPatchOperation(op="replace", path="displayName", value="path-wins"),
+            "path-wins",
+            "ext-pathless",
+            {"id": "team-1", "displayName": "path-wins", "externalId": "ext-pathless"},
+        ),
+        (
+            SCIMPatchOperation(op="remove", path="displayName"),
+            None,
+            "ext-pathless",
+            {"id": "team-1", "externalId": "ext-pathless"},
+        ),
+        (
+            SCIMPatchOperation(op="replace", path="externalId", value="ext-path-wins"),
+            "pathless-name",
+            "ext-path-wins",
+            {"id": "team-1", "displayName": "pathless-name", "externalId": "ext-path-wins"},
+        ),
+    ],
+)
+async def test_process_group_patch_operations_later_path_op_wins_over_pathless_snapshot(
+    mocker, later_op, expected_alias, expected_external_id, expected_snapshot
+):
+    """Operations apply in order (RFC 7644 Section 3.5.2), so a path op after a path-less one
+    decides both the team's value and the ``scim_data`` snapshot; the snapshot must never keep
+    the path-less value the later op replaced or removed."""
+    existing_team = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="Team One",
+        members=[],
+        members_with_roles=[],
+        metadata={"scim_managed": True, "scim_data": {"id": "team-1", "displayName": "Team One"}},
+    )
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[
+            SCIMPatchOperation(
+                op="replace",
+                value={"id": "team-1", "displayName": "pathless-name", "externalId": "ext-pathless"},
+            ),
+            later_op,
+        ],
+    )
+
+    update_data, _, _ = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=mocker.MagicMock(),
+    )
+
+    assert update_data["team_alias"] == expected_alias
+    assert update_data["metadata"].get("externalId") == expected_external_id
+    assert update_data["metadata"]["scim_data"] == expected_snapshot
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("op", "value"),
     [("remove", {"displayName": "okta-push-group"}), ("replace", "okta-push-group-renamed")],
 )

@@ -2753,6 +2753,31 @@ def _replaces_members(op: SCIMPatchOperation) -> bool:
     return any(attribute.startswith("members") for attribute, _ in _group_patch_attribute_values(op))
 
 
+def _patched_group_snapshot(
+    existing_snapshot: Mapping[str, object],
+    pathless_resources: Sequence[Mapping[str, object]],
+    mirrored_values: Sequence[tuple[str, object | None]],
+) -> dict[str, object]:
+    """The ``scim_data`` snapshot after a PATCH: the path-less resources merged over the
+    existing snapshot in operation order (``members`` live in members_with_roles), then
+    each attribute in ``mirrored_values`` set to what the whole operation list left on
+    the team, so a later path op wins over an earlier path-less value; ``None`` drops it.
+    """
+    pathless_items: Final = (
+        (key, value)
+        for key, value in chain.from_iterable(resource.items() for resource in pathless_resources)
+        if key.lower() != "members"
+    )
+    mirrored_keys: Final = frozenset(key.lower() for key, _ in mirrored_values)
+    kept: Final = (
+        (key, value)
+        for key, value in chain(existing_snapshot.items(), pathless_items)
+        if key.lower() not in mirrored_keys
+    )
+    refreshed: Final = ((key, value) for key, value in mirrored_values if value is not None)
+    return dict(chain(kept, refreshed))
+
+
 async def _process_group_patch_operations(
     patch_ops: SCIMPatchOp, existing_team: LiteLLM_TeamTable, prisma_client: PrismaClient
 ) -> tuple[dict[str, object], set[str], set[str] | None]:
@@ -2773,9 +2798,11 @@ async def _process_group_patch_operations(
 
     A path-less op carries a partial Group resource: each attribute applies as if
     sent with that path, and its attributes other than ``members`` (the roster
-    lives in members_with_roles) are merged into the ``scim_data`` snapshot the
-    PUT path writes. An empty metadata key left behind by an earlier path-less op
-    (stored whole under ``""``) is dropped.
+    lives in members_with_roles) are merged in operation order into the
+    ``scim_data`` snapshot the PUT path writes, whose displayName and externalId
+    then mirror what the whole operation list left on the team. An empty metadata
+    key left behind by an earlier path-less op (stored whole under ``""``) is
+    dropped.
     """
     update_data: Final[dict[str, object]] = {}
     existing_metadata: Final = _json_object_fields(existing_team.metadata) or _NO_FIELDS
@@ -2785,14 +2812,6 @@ async def _process_group_patch_operations(
 
     kept_metadata_items: Final = ((key, value) for key, value in existing_metadata.items() if key)
     metadata: Final = dict(chain(kept_metadata_items, ((SCIM_MANAGED_TEAM_METADATA_KEY, True),)))
-    if pathless_resources:
-        existing_snapshot: Final = _json_object_fields(existing_metadata.get(SCIM_TEAM_DATA_METADATA_KEY)) or _NO_FIELDS
-        snapshot_updates: Final = (
-            (key, value)
-            for key, value in chain.from_iterable(resource.items() for resource in pathless_resources)
-            if key.lower() != "members"
-        )
-        metadata[SCIM_TEAM_DATA_METADATA_KEY] = dict(chain(existing_snapshot.items(), snapshot_updates))
 
     # Track member changes. members_with_roles is the source of truth for team
     # membership; the legacy `members` column is not populated by team creation
@@ -2843,6 +2862,24 @@ async def _process_group_patch_operations(
                 metadata.pop(attribute, None)
             else:
                 metadata[attribute] = value
+
+    if pathless_resources:
+        applied_attributes: Final = frozenset(
+            attribute for attribute, _ in chain.from_iterable(map(_group_patch_attribute_values, patch_ops.Operations))
+        )
+        mirrored_values: Final = tuple(
+            (snapshot_key, final_value)
+            for attribute, snapshot_key, final_value in (
+                ("displayname", "displayName", update_data.get("team_alias")),
+                ("externalid", "externalId", metadata.get("externalId")),
+            )
+            if attribute in applied_attributes
+        )
+        metadata[SCIM_TEAM_DATA_METADATA_KEY] = _patched_group_snapshot(
+            existing_snapshot=_json_object_fields(existing_metadata.get(SCIM_TEAM_DATA_METADATA_KEY)) or _NO_FIELDS,
+            pathless_resources=pathless_resources,
+            mirrored_values=mirrored_values,
+        )
 
     update_data["metadata"] = metadata
 
