@@ -3,6 +3,7 @@
 Pins (PR2):
     - POST /utils/token_counter
     - GET /utils/supported_openai_params
+    - GET /utils/model_info
     - POST /utils/transform_request
 """
 
@@ -14,8 +15,8 @@ import json
 import pytest
 
 import litellm
+from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.proxy import proxy_server
-from litellm.router_utils import pattern_match_deployments
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -203,7 +204,7 @@ def test_supported_openai_params_never_runs_oauth_for_authenticating_providers(c
         raise AssertionError("get_llm_provider would run the OAuth device flow")
 
     monkeypatch.setattr(litellm, "get_llm_provider", _oauth_tripwire)
-    monkeypatch.setattr(pattern_match_deployments, "get_llm_provider", _oauth_tripwire)
+    monkeypatch.setattr(get_llm_provider_logic, "get_llm_provider", _oauth_tripwire)
     expected = litellm.get_supported_openai_params(model="gpt-4o", custom_llm_provider="github_copilot")
 
     with auth_as():
@@ -229,6 +230,66 @@ def test_supported_openai_params_invalid_model(client, auth_as, monkeypatch):
         response = client.get("/utils/supported_openai_params", params={"model": "??"})
     assert response.status_code == 400
     assert "Could not map model" in response.text
+
+
+# ---------------------------------------------------------------------------
+# GET /utils/model_info
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def lookup_fixture_model(monkeypatch):
+    entry = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "max_input_tokens": 1234,
+        "max_output_tokens": 56,
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "supports_vision": True,
+        "deprecation_date": "2099-01-01",
+        "supports_lookup_fixture_edit": True,
+    }
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setitem(litellm.model_cost, "lookup-fixture-model", entry)
+    litellm.get_model_info.cache_clear()
+    litellm.utils._cached_get_model_info_helper.cache_clear()
+    yield entry
+    litellm.get_model_info.cache_clear()
+    litellm.utils._cached_get_model_info_helper.cache_clear()
+
+
+def test_model_info_lookup_returns_full_cost_map_entry_for_unregistered_model(client, auth_as, lookup_fixture_model):
+    """Every raw cost map field comes back, including ones outside ``ModelInfoBase`` that ``get_model_info`` drops."""
+    with auth_as():
+        response = client.get(
+            "/utils/model_info", params={"model": "lookup-fixture-model", "custom_llm_provider": "openai"}
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["model"] == "lookup-fixture-model"
+    assert body["custom_llm_provider"] == "openai"
+    assert body["model_info"]["key"] == "lookup-fixture-model"
+    assert isinstance(body["model_info"]["supported_openai_params"], list)
+    assert {k: body["model_info"][k] for k in lookup_fixture_model} == lookup_fixture_model
+
+
+def test_model_info_lookup_unknown_model_returns_404(client, auth_as, monkeypatch):
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    with auth_as():
+        response = client.get("/utils/model_info", params={"model": "no-such-model-lit-7476"})
+    assert response.status_code == 404, response.text
+    assert "is not in the model cost map" in response.text
+
+
+def test_model_info_lookup_returns_404_when_typed_info_has_no_cost_map_entry(client, auth_as, monkeypatch):
+    """``get_model_info`` synthesizes info for huggingface fallbacks absent from ``model_cost``;
+    with no raw entry the route must 404 rather than answer 200 with typed fields only."""
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    with auth_as():
+        response = client.get("/utils/model_info", params={"model": "huggingface/not-in-map-org/not-in-map-model"})
+    assert response.status_code == 404, response.text
+    assert "is not in the model cost map" in response.text
 
 
 # ---------------------------------------------------------------------------

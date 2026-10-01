@@ -247,6 +247,13 @@ class TinyfishSearchConfig(BaseSearchConfig):
         hidden["additional_headers"] = process_response_headers(raw_headers)
         return parsed
 
+    def get_http_error_class(self, error: httpx.HTTPStatusError) -> Exception:
+        return self._wrap_error(
+            error_message=error.response.text,
+            status_code=error.response.status_code,
+            headers=dict(error.response.headers),  # mutable-ok: existing error wrapper requires dict headers
+        )
+
     def _wrap_error(
         self,
         error_message: str,
@@ -256,8 +263,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
         """
         Build an attributed ``BaseLLMException`` from a TinyFish error body.
 
-        Used only at the call sites we control inside
-        ``transform_search_response`` (non-2xx, JSONDecodeError, ValidationError).
+        Used for HTTP status errors and response transformation errors.
         Not an override of ``BaseSearchConfig.get_error_class``: that path is
         left to inherit from the base so it auto-picks-up any future LiteLLM
         improvements. Trade-off: network failures (routed through LiteLLM

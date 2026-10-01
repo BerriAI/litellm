@@ -2,15 +2,15 @@ import os
 
 import pytest
 
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-    global_mcp_server_manager,
-)
-
 
 @pytest.fixture(autouse=True)
 def _hermetic_mcp_server_registry():
     """Restore the singleton ``global_mcp_server_manager``'s registry state around every
     test, so entries seeded by one test never leak into another on a shared shard."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
     saved_registry = dict(global_mcp_server_manager.registry)
     saved_config_servers = dict(global_mcp_server_manager.config_mcp_servers)
     saved_tool_mapping = dict(global_mcp_server_manager.tool_name_to_mcp_server_name_mapping)
@@ -44,3 +44,37 @@ def _hermetic_server_root_path():
     finally:
         if saved is not None:
             os.environ["SERVER_ROOT_PATH"] = saved
+
+
+@pytest.fixture
+def config_only_mcp_manager_factory():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    class ConfigOnlyManager(MCPServerManager):
+        def initialize_tool_name_to_mcp_server_name_mapping(self):
+            return None
+
+    return ConfigOnlyManager
+
+
+@pytest.fixture
+def _mcp_request_ctx():
+    def _mcp_request_ctx(**overrides):
+        from types import SimpleNamespace
+
+        from mcp.server.context import ServerRequestContext
+
+        kwargs = {
+            "session": SimpleNamespace(),
+            "lifespan_context": {},
+            "protocol_version": "2025-06-18",
+            "method": "",
+            "params": None,
+            "request_id": 1,
+            "meta": None,
+            "request": None,
+        }
+        kwargs.update(overrides)
+        return ServerRequestContext(**kwargs)
+
+    return _mcp_request_ctx

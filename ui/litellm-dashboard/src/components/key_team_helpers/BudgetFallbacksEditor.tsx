@@ -96,10 +96,10 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
               <label className="block text-xs font-medium text-muted-foreground mb-1">Primary Model</label>
               <SearchSelect
                 options={availablePrimaryOptions.map((m) => ({ label: m, value: m }))}
-                value={entry.primaryModel ?? ""}
+                value={entry.primaryModel}
                 onValueChange={(v) => {
                   const newFallbacks = entry.fallbackModels.filter((m) => m !== v);
-                  updateEntry(entry.id, { primaryModel: v === "" ? null : v, fallbackModels: newFallbacks });
+                  updateEntry(entry.id, { primaryModel: v, fallbackModels: newFallbacks });
                 }}
                 placeholder="Select model"
                 emptyText="No models found"

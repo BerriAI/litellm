@@ -280,7 +280,7 @@ class VertexFineTuningAPI(VertexLLM):
         vertex_location: str,
         vertex_credentials: str,
         request_route: str,
-    ):
+    ) -> object:
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -341,5 +341,4 @@ class VertexFineTuningAPI(VertexLLM):
                 f"Error creating fine tuning job. Status code: {response.status_code}. Response: {response.text}"
             )
 
-        response_json: Final = response.json()
-        return response_json
+        return response.json()

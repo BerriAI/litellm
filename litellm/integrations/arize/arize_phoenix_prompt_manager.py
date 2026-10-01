@@ -379,7 +379,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
         """Reload prompts from Arize Phoenix."""
         if self.prompt_id:
             self._prompt_manager = None  # Reset to force reload
-            self.prompt_manager  # This will trigger reload
+            _ = self.prompt_manager  # access triggers lazy reload
 
     def should_run_prompt_management(
         self,

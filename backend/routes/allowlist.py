@@ -26,6 +26,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/v2/login",
     "/v3/login",
     "/logout",
+    "/session/logout",
     "/token",
     "/onboarding/",
     "/audit",
@@ -51,6 +52,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/cache_settings",
     "/coordination_redis/",
     "/cost_tracking",
+    "/cost_optimization/",
     "/cost/",
     "/credentials",
     "/credential",
@@ -79,6 +81,8 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     # Spend / analytics
     "/spend/",
     "/analytics/",
+    "/engine/",
+    "/v1/traces",
     "/global/",
     "/user_agent",
     "/usage/",
@@ -142,6 +146,7 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
     {
         "/",
         "/routes",
+        "/engine",
         "/openapi.json",
         "/docs",
         "/docs/oauth2-redirect",

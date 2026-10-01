@@ -1,10 +1,10 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Team } from "../key_team_helpers/key_list";
 
 interface TeamDropdownProps {
-  value?: string;
+  value?: string | null;
   onChange?: (value: string | null) => void;
   /** Callback with the full Team object (or null on clear). */
   onTeamSelect?: (team: Team | null) => void;
@@ -13,6 +13,7 @@ interface TeamDropdownProps {
   organizationId?: string | null;
   pageSize?: number;
   id?: string;
+  filterTeam?: (team: Team) => boolean;
 }
 
 const TeamDropdown: React.FC<TeamDropdownProps> = ({
@@ -23,10 +24,11 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
   organizationId,
   pageSize = 20,
   id,
+  filterTeam,
 }) => {
   const [search, setSearch] = useState("");
 
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteTeams(
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError, isLoading } = useInfiniteTeams(
     pageSize,
     search || undefined,
     organizationId,
@@ -46,8 +48,33 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
     return result;
   }, [data]);
 
-  const handleChange = (teamId: string) => {
-    onChange?.(teamId || null);
+  const eligibleTeams = useMemo(() => teams.filter((team) => !filterTeam || filterTeam(team)), [teams, filterTeam]);
+  const hasTeamFilter = filterTeam != null;
+
+  useEffect(() => {
+    if (
+      hasTeamFilter &&
+      eligibleTeams.length < pageSize &&
+      hasNextPage &&
+      !isLoading &&
+      !isFetchingNextPage &&
+      !isFetchNextPageError
+    ) {
+      void fetchNextPage();
+    }
+  }, [
+    hasTeamFilter,
+    eligibleTeams.length,
+    pageSize,
+    hasNextPage,
+    isLoading,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    fetchNextPage,
+  ]);
+
+  const handleChange = (teamId: string | null) => {
+    onChange?.(teamId);
     if (onTeamSelect) {
       onTeamSelect(teamId ? teams.find((t) => t.team_id === teamId) ?? null : null);
     }
@@ -56,12 +83,12 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
   return (
     <div data-testid="team-dropdown">
       <PaginatedSearchSelect
-        options={teams.map((team) => ({
+        options={eligibleTeams.map((team) => ({
           label: team.team_alias || team.team_id,
           value: team.team_id,
           sublabel: team.team_id,
         }))}
-        value={value || undefined}
+        value={value}
         onValueChange={handleChange}
         onSearchChange={setSearch}
         onLoadMore={fetchNextPage}

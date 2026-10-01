@@ -62,6 +62,20 @@ export async function dismissFeedbackPopup(page: PlaywrightPage): Promise<void> 
   }
 }
 
+export async function hideLiteAdmin(page: PlaywrightPage): Promise<void> {
+  await page.getByRole("button", { name: /Account menu/i }).click();
+  const panel = page.getByTestId("sidebar-account-menu-panel");
+  await expect(panel).toBeVisible({ timeout: 5_000 });
+  const toggle = panel.getByRole("switch", { name: "Toggle hide LiteAdmin" });
+  if ((await toggle.getAttribute("aria-checked")) !== "true") {
+    await toggle.click();
+  }
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Escape");
+  await expect(panel).toBeHidden();
+  await expect(page.getByRole("button", { name: "LiteAdmin", exact: true })).toBeHidden();
+}
+
 /**
  * Click on a team ID in the table. Team IDs are rendered differently depending
  * on the component version — try button first (Tremor Button), fall back to
@@ -72,4 +86,14 @@ export async function clickTeamId(page: PlaywrightPage, teamId: string): Promise
   await expect(cell).toBeVisible({ timeout: 10_000 });
   await cell.click();
   await expect(page.getByText("Back to Teams")).toBeVisible({ timeout: 10_000 });
+}
+
+export async function openKeyDetail(page: PlaywrightPage, alias: string): Promise<void> {
+  await page.getByPlaceholder("Search by key alias or ID").fill(alias);
+  const row = page.getByRole("row").filter({ hasText: alias });
+  await expect(row, `key row "${alias}" never appeared on the Virtual Keys page`).toBeVisible({ timeout: 15_000 });
+  await row.getByRole("button", { name: alias }).click();
+  await expect(page.getByText("Back to Keys"), `key detail for "${alias}" never opened`).toBeVisible({
+    timeout: 15_000,
+  });
 }

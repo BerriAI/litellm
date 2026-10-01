@@ -1,8 +1,11 @@
 """Guard the cost map on pull requests.
 
-Every pull request gets the file checks: the three cost map files parse, the backup copy matches the root file,
-and the JSON schema is in sync and validates the map. Pull requests from the cost map sync bot (branches named
-litellm_cost_map_sync_*) additionally may only touch those three files and may only add or update models.
+Every pull request whose diff against its merge base touches one of the three cost map files gets the file
+checks: the files parse, the backup copy matches the root file, and the JSON schema is in sync and validates the
+map. A pull request that leaves all three untouched skips them, since merging it keeps the base branch's copies
+and its head tree only carries whatever state the branch was cut from. Pull requests from the cost map sync bot
+(branches named litellm_cost_map_sync_*) always get the file checks and additionally may only touch those three
+files and may only add or update models.
 """
 
 from __future__ import annotations
@@ -108,20 +111,37 @@ def _bot_failures(base: Snapshot, head_map: CostMap, changed_files: Sequence[str
     )
 
 
+def touches_cost_map(changed_files: Sequence[str]) -> bool:
+    return any(path in GUARDED_PATHS for path in changed_files)
+
+
+def contract_for(bot: bool, changed_files: Sequence[str]) -> str:
+    if bot:
+        return "bot contract enforced"
+    return "human PR, file checks only" if touches_cost_map(changed_files) else "human PR, cost map untouched"
+
+
 def guard_failures(base: Snapshot, head: Snapshot, changed_files: Sequence[str], bot: bool) -> tuple[str, ...]:
+    if not bot and not touches_cost_map(changed_files):
+        return ()
     head_map: Final = _parse_object(head.cost_map, COST_MAP_PATH)
     if isinstance(head_map, str):
         return (head_map,)
     return (*_file_failures(head, head_map), *(_bot_failures(base, head_map, changed_files) if bot else ()))
 
 
-def _git(*args: str) -> str:
+def _git(*args: str) -> str | None:
     result: Final = subprocess.run(("git", *args), check=False, capture_output=True, text=True)
-    return result.stdout if result.returncode == 0 else ""
+    return result.stdout if result.returncode == 0 else None
 
 
 def snapshot(revision: str) -> Snapshot:
-    return Snapshot(*(_git("show", f"{revision}:{path}") for path in GUARDED_PATHS))
+    return Snapshot(*(_git("show", f"{revision}:{path}") or "" for path in GUARDED_PATHS))
+
+
+def changed_files(base: str, head: str) -> tuple[str, ...] | None:
+    diff: Final = _git("diff", "--name-only", "--no-renames", base, head)
+    return None if diff is None else tuple(diff.splitlines())
 
 
 def main(argv: Sequence[str]) -> int:
@@ -131,9 +151,12 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--head-ref", required=True, help="head branch name of the pull request")
     args: Final = parser.parse_args(argv)
     bot: Final = args.head_ref.startswith(BOT_BRANCH_PREFIX)
-    changed_files: Final = tuple(_git("diff", "--name-only", args.base, args.head).splitlines())
-    failures: Final = guard_failures(snapshot(args.base), snapshot(args.head), changed_files, bot)
-    contract: Final = "bot contract enforced" if bot else "human PR, file checks only"
+    changed: Final = changed_files(args.base, args.head)
+    if changed is None:
+        print(f"cost map guard failed: git diff {args.base} {args.head} failed, so the changed files are unknown")
+        return 1
+    failures: Final = guard_failures(snapshot(args.base), snapshot(args.head), changed, bot)
+    contract: Final = contract_for(bot, changed)
     if failures:
         print(f"cost map guard failed ({contract}):")
         print("\n".join(f"- {failure}" for failure in failures))

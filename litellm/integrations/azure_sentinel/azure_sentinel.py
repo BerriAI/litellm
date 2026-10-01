@@ -21,6 +21,8 @@ from types import MappingProxyType
 from typing import Final, TypeVar
 from urllib.parse import urlparse
 
+import httpx
+
 from litellm._logging import verbose_logger
 from litellm.integrations.batch_utils import (
     BatchSendCancelled,
@@ -418,7 +420,7 @@ class AzureSentinelLogger(CustomBatchLogger):
             "Content-Type": "application/json",
         }
 
-        async def _send_batch(batch: Sequence[_QueuedPayload]):
+        async def _send_batch(batch: Sequence[_QueuedPayload]) -> httpx.Response:
             body: Final = safe_dumps(batch)
             return await self.async_httpx_client.post(
                 url=api_endpoint,

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -522,7 +523,7 @@ class RedisSemanticCache(BaseCache):
             llm_router = None
 
         router: Final = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
-        embedding_input: Final = self._embedding_input(prompt, router)
+        embedding_input: Final = await asyncify(self._embedding_input)(prompt, router)
         embedding_call: Final = (
             router.aembedding(
                 model=self.embedding_model,

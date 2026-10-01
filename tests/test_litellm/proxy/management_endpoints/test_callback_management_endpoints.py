@@ -81,35 +81,29 @@ class TestCallbackManagementEndpoints:
         # Setup test client
         client = TestClient(app)
 
-        # Initialize Langfuse logger and add to callbacks
-        with patch("litellm.integrations.langfuse.langfuse.Langfuse") as mock_langfuse:
-            # Mock the Langfuse client initialization
-            mock_langfuse_client = MagicMock()
-            mock_langfuse.return_value = mock_langfuse_client
+        # Add string representation to callback lists (this is how the system typically works)
+        litellm.success_callback.append("langfuse")
+        litellm._async_success_callback.append("langfuse")
 
-            # Add string representation to callback lists (this is how the system typically works)
-            litellm.success_callback.append("langfuse")
-            litellm._async_success_callback.append("langfuse")
+        # Make request to list callbacks endpoint
+        response = client.get(
+            "/callbacks/list", headers={"Authorization": "Bearer sk-1234"}
+        )
 
-            # Make request to list callbacks endpoint
-            response = client.get(
-                "/callbacks/list", headers={"Authorization": "Bearer sk-1234"}
-            )
+        # Verify response
+        assert response.status_code == 200
 
-            # Verify response
-            assert response.status_code == 200
+        response_data = response.json()
 
-            response_data = response.json()
+        # Verify langfuse appears in success callbacks
+        assert "langfuse" in response_data["success"]
+        assert response_data["failure"] == []
+        assert response_data["success_and_failure"] == []
 
-            # Verify langfuse appears in success callbacks
-            assert "langfuse" in response_data["success"]
-            assert response_data["failure"] == []
-            assert response_data["success_and_failure"] == []
-
-            # Verify the response structure is correct
-            assert isinstance(response_data["success"], list)
-            assert isinstance(response_data["failure"], list)
-            assert isinstance(response_data["success_and_failure"], list)
+        # Verify the response structure is correct
+        assert isinstance(response_data["success"], list)
+        assert isinstance(response_data["failure"], list)
+        assert isinstance(response_data["success_and_failure"], list)
 
     def test_alist_callbacks_with_datadog_logger(self):
         """Test /callbacks/list endpoint with DataDog logger configuration"""
@@ -283,6 +277,20 @@ class TestNewRelicCallbackConfig:
         # The operator-only agent env flag must not appear as a team-configurable
         # field: it is not a StandardCallbackDynamicParams key and would be rejected.
         assert "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED" not in params
+
+
+class TestLangfuseOtelCallbackConfig:
+    def test_span_scope_is_a_select_over_exactly_the_scopes_the_validator_accepts(self):
+        from litellm.types.utils import OTEL_SPAN_SCOPES
+
+        client = TestClient(app)
+        response = client.get("/callbacks/configs", headers={"Authorization": "Bearer sk-1234"})
+        assert response.status_code == 200
+        langfuse_otel = next(config for config in response.json() if config.get("id") == "langfuse_otel")
+        scope = langfuse_otel["dynamic_params"]["langfuse_span_scope"]
+        assert scope["type"] == "select"
+        assert frozenset(scope["options"]) == OTEL_SPAN_SCOPES
+        assert scope["required"] is False
 
 
 class TestNewRelicTeamCallbackValidation:

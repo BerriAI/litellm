@@ -4,6 +4,7 @@ Unit tests for AttachmentRegistry - tests policy attachment matching.
 Tests the main entry point: get_attached_policies()
 """
 
+import time
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -13,7 +14,8 @@ from litellm.proxy.policy_engine.attachment_registry import (
     AttachmentRegistry,
     get_attachment_registry,
 )
-from litellm.types.proxy.policy_engine import PolicyMatchContext
+from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
+from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyGuardrails, PolicyMatchContext
 
 
 class TestGetAttachedPolicies:
@@ -29,9 +31,7 @@ class TestGetAttachedPolicies:
         )
 
         # Should match any context
-        context = PolicyMatchContext(
-            team_alias="any-team", key_alias="any-key", model="any-model"
-        )
+        context = PolicyMatchContext(team_alias="any-team", key_alias="any-key", model="any-model")
         attached = registry.get_attached_policies(context)
         assert "global-baseline" in attached
 
@@ -45,15 +45,11 @@ class TestGetAttachedPolicies:
         )
 
         # Match
-        context = PolicyMatchContext(
-            team_alias="healthcare-team", key_alias="key", model="gpt-4"
-        )
+        context = PolicyMatchContext(team_alias="healthcare-team", key_alias="key", model="gpt-4")
         assert "healthcare-policy" in registry.get_attached_policies(context)
 
         # No match - different team
-        context_other = PolicyMatchContext(
-            team_alias="finance-team", key_alias="key", model="gpt-4"
-        )
+        context_other = PolicyMatchContext(team_alias="finance-team", key_alias="key", model="gpt-4")
         assert "healthcare-policy" not in registry.get_attached_policies(context_other)
 
     def test_key_wildcard_pattern_attachment(self):
@@ -66,15 +62,11 @@ class TestGetAttachedPolicies:
         )
 
         # Match - key starts with dev-key-
-        context = PolicyMatchContext(
-            team_alias="team", key_alias="dev-key-123", model="gpt-4"
-        )
+        context = PolicyMatchContext(team_alias="team", key_alias="dev-key-123", model="gpt-4")
         assert "dev-policy" in registry.get_attached_policies(context)
 
         # No match - different prefix
-        context_prod = PolicyMatchContext(
-            team_alias="team", key_alias="prod-key-123", model="gpt-4"
-        )
+        context_prod = PolicyMatchContext(team_alias="team", key_alias="prod-key-123", model="gpt-4")
         assert "dev-policy" not in registry.get_attached_policies(context_prod)
 
     def test_model_specific_attachment(self):
@@ -91,9 +83,7 @@ class TestGetAttachedPolicies:
         assert "gpt4-policy" in registry.get_attached_policies(context)
 
         # No match
-        context_other = PolicyMatchContext(
-            team_alias="team", key_alias="key", model="gpt-3.5"
-        )
+        context_other = PolicyMatchContext(team_alias="team", key_alias="key", model="gpt-3.5")
         assert "gpt4-policy" not in registry.get_attached_policies(context_other)
 
     def test_model_wildcard_pattern(self):
@@ -106,15 +96,11 @@ class TestGetAttachedPolicies:
         )
 
         # Match
-        context = PolicyMatchContext(
-            team_alias="team", key_alias="key", model="bedrock/claude-3"
-        )
+        context = PolicyMatchContext(team_alias="team", key_alias="key", model="bedrock/claude-3")
         assert "bedrock-policy" in registry.get_attached_policies(context)
 
         # No match
-        context_other = PolicyMatchContext(
-            team_alias="team", key_alias="key", model="openai/gpt-4"
-        )
+        context_other = PolicyMatchContext(team_alias="team", key_alias="key", model="openai/gpt-4")
         assert "bedrock-policy" not in registry.get_attached_policies(context_other)
 
     def test_multiple_attachments_match_same_context(self):
@@ -128,9 +114,7 @@ class TestGetAttachedPolicies:
             ]
         )
 
-        context = PolicyMatchContext(
-            team_alias="healthcare-team", key_alias="key", model="gpt-4"
-        )
+        context = PolicyMatchContext(team_alias="healthcare-team", key_alias="key", model="gpt-4")
         attached = registry.get_attached_policies(context)
 
         # All three should match
@@ -138,6 +122,133 @@ class TestGetAttachedPolicies:
         assert "healthcare-policy" in attached
         assert "gpt4-policy" in attached
         assert len(attached) == 3
+
+    def test_matches_are_ordered_from_broadest_to_narrowest_scope(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "model-policy", "models": ["gpt-4"]},
+                {"policy": "team-policy", "teams": ["t1"]},
+                {"policy": "global-policy", "scope": "*"},
+            ]
+        )
+
+        context = PolicyMatchContext(team_alias="t1", model="gpt-4")
+
+        assert registry.get_attached_policies(context) == [
+            "global-policy",
+            "team-policy",
+            "model-policy",
+        ]
+
+    def test_prioritized_attachments_run_before_unprioritized_attachments(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "unprioritized-tag", "tags": ["prod"]},
+                {"policy": "prioritized-tag", "tags": ["prod"], "priority": 5},
+                {"policy": "prioritized-model", "models": ["gpt-4"], "priority": 0},
+            ]
+        )
+
+        context = PolicyMatchContext(model="gpt-4", tags=["prod"])
+
+        assert registry.get_attached_policies(context) == [
+            "prioritized-model",
+            "prioritized-tag",
+            "unprioritized-tag",
+        ]
+
+    def test_prioritized_attachments_order_by_priority_across_scope_tiers(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "team-policy", "teams": ["team-a"], "priority": 2},
+                {"policy": "model-policy", "models": ["gpt-4"], "priority": 1},
+            ]
+        )
+
+        context = PolicyMatchContext(team_alias="team-a", model="gpt-4")
+
+        assert registry.get_attached_policies(context) == ["model-policy", "team-policy"]
+
+    def test_equal_priority_attachments_fall_back_to_scope_tier_order(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "model-policy", "models": ["gpt-4"], "priority": 1},
+                {"policy": "tag-policy", "tags": ["prod"], "priority": 1},
+                {"policy": "global-policy", "scope": "*", "priority": 1},
+            ]
+        )
+
+        context = PolicyMatchContext(model="gpt-4", tags=["prod"])
+
+        assert registry.get_attached_policies(context) == ["global-policy", "tag-policy", "model-policy"]
+
+    def test_duplicate_policy_uses_highest_priority_attachment(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "shared-policy", "scope": "*"},
+                {"policy": "global-policy", "scope": "*"},
+                {"policy": "shared-policy", "models": ["gpt-4"], "priority": 0},
+            ]
+        )
+
+        context = PolicyMatchContext(model="gpt-4")
+
+        assert registry.get_attached_policies_with_reasons(context) == [
+            {"policy_name": "shared-policy", "matched_via": "model:gpt-4"},
+            {"policy_name": "global-policy", "matched_via": "scope:*"},
+        ]
+
+    def test_combined_team_and_model_attachment_uses_model_specificity(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "team-policy", "teams": ["t1"]},
+                {"policy": "team-model-policy", "teams": ["t1"], "models": ["gpt-4"]},
+            ]
+        )
+
+        context = PolicyMatchContext(team_alias="t1", model="gpt-4")
+
+        assert registry.get_attached_policies(context) == [
+            "team-policy",
+            "team-model-policy",
+        ]
+
+    def test_duplicate_policy_uses_broadest_matching_attachment(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "shared-policy", "models": ["gpt-4"]},
+                {"policy": "model-policy", "models": ["gpt-4"]},
+                {"policy": "shared-policy", "scope": "*"},
+            ]
+        )
+
+        context = PolicyMatchContext(model="gpt-4")
+
+        assert registry.get_attached_policies(context) == [
+            "shared-policy",
+            "model-policy",
+        ]
+        assert registry.get_attached_policies_with_reasons(context)[0]["matched_via"] == "scope:*"
+
+    def test_duplicate_policy_prefers_single_scope_over_combined_scope(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "shared-policy", "teams": ["t1"], "models": ["gpt-4"]},
+                {"policy": "shared-policy", "models": ["gpt-4"]},
+            ]
+        )
+
+        context = PolicyMatchContext(team_alias="t1", model="gpt-4")
+
+        assert registry.get_attached_policies_with_reasons(context)[0]["matched_via"] == "model:gpt-4"
 
     def test_same_policy_multiple_attachments_no_duplicates(self):
         """Test same policy attached multiple ways doesn't duplicate."""
@@ -149,13 +260,24 @@ class TestGetAttachedPolicies:
             ]
         )
 
-        context = PolicyMatchContext(
-            team_alias="healthcare-team", key_alias="key", model="gpt-4"
-        )
+        context = PolicyMatchContext(team_alias="healthcare-team", key_alias="key", model="gpt-4")
         attached = registry.get_attached_policies(context)
 
         # Should only appear once
         assert attached.count("multi-policy") == 1
+
+    def test_many_distinct_policies_resolve_in_linear_time(self):
+        policy_count = 20_000
+        registry = AttachmentRegistry()
+        registry.load_attachments([{"policy": f"policy-{index}", "scope": "*"} for index in range(policy_count)])
+        context = PolicyMatchContext(team_alias="team", key_alias="key", model="gpt-4")
+
+        started = time.perf_counter()
+        attached = registry.get_attached_policies(context)
+        elapsed = time.perf_counter() - started
+
+        assert attached == [f"policy-{index}" for index in range(policy_count)]
+        assert elapsed < 1.0, f"{policy_count} attachments took {elapsed:.2f}s, dedup is no longer one pass"
 
     def test_no_attachments_returns_empty(self):
         """Test empty attachments returns empty list."""
@@ -175,9 +297,7 @@ class TestGetAttachedPolicies:
             ]
         )
 
-        context = PolicyMatchContext(
-            team_alias="finance-team", key_alias="key", model="gpt-4"
-        )
+        context = PolicyMatchContext(team_alias="finance-team", key_alias="key", model="gpt-4")
         attached = registry.get_attached_policies(context)
         assert attached == []
 
@@ -195,23 +315,15 @@ class TestGetAttachedPolicies:
         )
 
         # Match - both team and model match
-        context = PolicyMatchContext(
-            team_alias="healthcare-team", key_alias="key", model="gpt-4"
-        )
+        context = PolicyMatchContext(team_alias="healthcare-team", key_alias="key", model="gpt-4")
         assert "strict-policy" in registry.get_attached_policies(context)
 
         # No match - team matches but model doesn't
-        context_wrong_model = PolicyMatchContext(
-            team_alias="healthcare-team", key_alias="key", model="gpt-3.5"
-        )
-        assert "strict-policy" not in registry.get_attached_policies(
-            context_wrong_model
-        )
+        context_wrong_model = PolicyMatchContext(team_alias="healthcare-team", key_alias="key", model="gpt-3.5")
+        assert "strict-policy" not in registry.get_attached_policies(context_wrong_model)
 
         # No match - model matches but team doesn't
-        context_wrong_team = PolicyMatchContext(
-            team_alias="finance-team", key_alias="key", model="gpt-4"
-        )
+        context_wrong_team = PolicyMatchContext(team_alias="finance-team", key_alias="key", model="gpt-4")
         assert "strict-policy" not in registry.get_attached_policies(context_wrong_team)
 
 
@@ -384,6 +496,111 @@ class TestMatchAttribution:
         assert "catch-all" in attached
 
 
+class TestDefaultAttachments:
+    """`default: true` attachments apply only when no non-default attachment matches."""
+
+    @staticmethod
+    def _registry() -> AttachmentRegistry:
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "guardrail-y", "scope": "*", "default": True},
+                {"policy": "guardrail-x", "tags": ["opt-in"]},
+            ]
+        )
+        return registry
+
+    def test_opted_in_request_gets_only_the_opt_in_policy(self):
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.2", tags=["opt-in"])
+
+        assert self._registry().get_attached_policies(context) == ["guardrail-x"]
+
+    def test_request_without_opt_in_falls_back_to_default_policy(self):
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.2")
+
+        assert self._registry().get_attached_policies(context) == ["guardrail-y"]
+
+    def test_default_attachment_still_honors_its_own_scope(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments([{"policy": "team-default", "teams": ["team-a"], "default": True}])
+
+        assert registry.get_attached_policies(PolicyMatchContext(team_alias="team-a", key_alias="k", model="m")) == [
+            "team-default"
+        ]
+        assert registry.get_attached_policies(PolicyMatchContext(team_alias="team-b", key_alias="k", model="m")) == []
+
+    def test_all_matching_defaults_apply_when_nothing_else_matches(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "default-a", "scope": "*", "default": True},
+                {"policy": "default-b", "teams": ["team-a"], "default": True},
+                {"policy": "opt-in", "tags": ["opt-in"]},
+            ]
+        )
+        context = PolicyMatchContext(team_alias="team-a", key_alias="k", model="m")
+
+        assert registry.get_attached_policies(context) == ["default-a", "default-b"]
+
+    def test_non_default_attachments_remain_additive(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "baseline", "scope": "*"},
+                {"policy": "opt-in", "tags": ["opt-in"]},
+                {"policy": "fallback", "scope": "*", "default": True},
+            ]
+        )
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="m", tags=["opt-in"])
+
+        assert registry.get_attached_policies(context) == ["baseline", "opt-in"]
+
+    def test_default_match_reason_is_labelled(self):
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="m")
+
+        results = self._registry().get_attached_policies_with_reasons(context)
+
+        assert results == [{"policy_name": "guardrail-y", "matched_via": "default:scope:*"}]
+
+    def test_inapplicable_opt_in_policy_does_not_suppress_default(self):
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.2", tags=["opt-in"])
+        policies = {
+            "guardrail-y": Policy(guardrails=PolicyGuardrails(add=["y"])),
+            "guardrail-x": Policy(guardrails=PolicyGuardrails(add=["x"]), condition=PolicyCondition(model="claude.*")),
+        }
+
+        results = self._registry().get_attached_policies_with_reasons(
+            context, PolicyMatcher.policy_applies(context, policies)
+        )
+
+        assert results == [{"policy_name": "guardrail-y", "matched_via": "default:scope:*"}]
+
+    def test_attachment_to_missing_policy_does_not_suppress_default(self):
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.2", tags=["opt-in"])
+        policies = {"guardrail-y": Policy(guardrails=PolicyGuardrails(add=["y"]))}
+
+        assert self._registry().get_attached_policies(context, PolicyMatcher.policy_applies(context, policies)) == [
+            "guardrail-y"
+        ]
+
+    def test_applicable_opt_in_policy_still_wins_with_predicate(self):
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.2", tags=["opt-in"])
+        policies = {
+            "guardrail-y": Policy(guardrails=PolicyGuardrails(add=["y"])),
+            "guardrail-x": Policy(guardrails=PolicyGuardrails(add=["x"]), condition=PolicyCondition(model="gpt.*")),
+        }
+
+        assert self._registry().get_attached_policies(context, PolicyMatcher.policy_applies(context, policies)) == [
+            "guardrail-x"
+        ]
+
+    def test_default_defaults_to_false_when_omitted(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments([{"policy": "p"}])
+
+        assert registry.get_all_attachments()[0].default is False
+
+
 class TestAttachmentRegistrySingleton:
     """Test global singleton behavior."""
 
@@ -393,8 +610,29 @@ class TestAttachmentRegistrySingleton:
         registry2 = get_attachment_registry()
         assert registry1 is registry2
 
+    def test_parse_attachment_reads_priority(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "prioritized", "priority": 4},
+                {"policy": "unprioritized"},
+            ]
+        )
 
-def _make_db_attachment_row(attachment_id="att-1", policy_name="db-policy", scope=None, teams=None):
+        attachments = registry.get_all_attachments()
+
+        assert attachments[0].priority == 4
+        assert attachments[1].priority is None
+
+
+def _make_db_attachment_row(
+    attachment_id: str = "att-1",
+    policy_name: str = "db-policy",
+    scope: str | None = None,
+    teams: list[str] | None = None,
+    priority: int | None = None,
+    is_default: bool = False,
+) -> MagicMock:
     row = MagicMock()
     row.attachment_id = attachment_id
     row.policy_name = policy_name
@@ -403,6 +641,8 @@ def _make_db_attachment_row(attachment_id="att-1", policy_name="db-policy", scop
     row.keys = []
     row.models = []
     row.tags = []
+    row.priority = priority
+    row.is_default = is_default
     row.created_at = datetime.now(timezone.utc)
     row.updated_at = datetime.now(timezone.utc)
     row.created_by = None
@@ -410,9 +650,9 @@ def _make_db_attachment_row(attachment_id="att-1", policy_name="db-policy", scop
     return row
 
 
-def _prisma_with_attachment_rows(rows):
+def _prisma_with_attachment_rows(rows: list[MagicMock]) -> MagicMock:
     prisma = MagicMock()
-    prisma.db.litellm_policyattachmenttable.find_many = AsyncMock(return_value=rows)
+    prisma.configure_mock(**{"db.litellm_policyattachmenttable.find_many": AsyncMock(return_value=rows)})
     return prisma
 
 
@@ -453,6 +693,24 @@ class TestConfigAttachmentsPreservedAcrossDbSync:
         await registry.sync_attachments_from_db(_prisma_with_attachment_rows([]))
 
         assert len(registry.get_all_attachments()) == 1
+
+    @pytest.mark.asyncio
+    async def test_sync_round_trips_db_attachment_priority(self):
+        registry = AttachmentRegistry()
+        db_row = _make_db_attachment_row(priority=7)
+
+        await registry.sync_attachments_from_db(_prisma_with_attachment_rows([db_row]))
+
+        assert registry.get_all_attachments()[0].priority == 7
+
+    @pytest.mark.asyncio
+    async def test_sync_round_trips_db_attachment_default_flag(self):
+        registry = AttachmentRegistry()
+        db_row = _make_db_attachment_row(is_default=True)
+
+        await registry.sync_attachments_from_db(_prisma_with_attachment_rows([db_row]))
+
+        assert registry.get_all_attachments()[0].default is True
 
     @pytest.mark.asyncio
     async def test_clear_removes_config_snapshot_so_sync_does_not_resurrect(self):

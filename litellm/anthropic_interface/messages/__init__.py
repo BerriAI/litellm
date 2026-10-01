@@ -13,10 +13,10 @@ This is an __init__.py file to allow the following interface
 from collections.abc import AsyncIterator, Coroutine, Iterator
 from typing import Any
 
-from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+from litellm.messages import (
     anthropic_messages as _async_anthropic_messages,
 )
-from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+from litellm.messages import (
     anthropic_messages_handler as _sync_anthropic_messages,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (

@@ -25,8 +25,16 @@ export const handleAddAutoRouterSubmit = async (
         model: "auto_router/complexity_router",
         complexity_router_config: values.complexity_router_config,
         complexity_router_default_model: values.auto_router_default_model,
-        auto_router_routing_compression: values.auto_router_routing_compression,
-        auto_router_model_compression: values.auto_router_model_compression,
+        ...(values.auto_router_routing_compression === undefined
+          ? {}
+          : {
+              auto_router_routing_compression: values.auto_router_routing_compression,
+            }),
+        ...(values.auto_router_model_compression === undefined
+          ? {}
+          : {
+              auto_router_model_compression: values.auto_router_model_compression,
+            }),
       },
       model_info: {
         ...(values.team_id ? { team_id: values.team_id } : {}),

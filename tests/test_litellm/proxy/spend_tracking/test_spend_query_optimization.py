@@ -528,8 +528,8 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
 
     group_key = "COALESCE(NULLIF(session_id, ''), request_id), api_key"
     session_rows = [
-        {"session_key": "req-1", "api_key": "k", "last_activity": "2026-02-16 10:00:00"},
-        {"session_key": "req-2", "api_key": "k", "last_activity": "2026-02-16 09:00:00"},
+        {"session_key": f"req-{index}", "api_key": "k", "last_activity": f"2026-02-16 10:{59 - index:02d}:00"}
+        for index in range(51)
     ]
     representative_rows = [
         {"request_id": "req-1", "api_key": "k", "metadata": "{}", "session_id": None},
@@ -538,8 +538,8 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
 
     async def mock_query_raw(sql_query, *params):
         if "COUNT(*) AS total_count" in sql_query:
-            return [{"total_count": 12}]
-        if "DISTINCT ON" in sql_query:
+            return [{"total_count": 60}]
+        if "AS session_representatives" in sql_query:
             return representative_rows
         return session_rows
 
@@ -584,17 +584,19 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
 
     rep_sql = emitted[2][0]
     assert f"DISTINCT ON ({group_key})" in rep_sql, f"page must return one row per session. SQL was:\n{rep_sql}"
-    assert f"ORDER BY {group_key}, call_type IN ('call_mcp_tool', 'list_mcp_tools'), \"startTime\" DESC" in rep_sql, (
-        "the session representative must prefer the newest non-MCP call"
-    )
+    assert (
+        f"ORDER BY {group_key}, (call_type = 'asend_message') DESC, "
+        "CASE WHEN call_type = 'asend_message' THEN \"endTime\" END DESC NULLS LAST, "
+        "call_type IN ('call_mcp_tool', 'list_mcp_tools'), \"startTime\" DESC"
+    ) in rep_sql, "the session representative must prefer the final agent outcome, then the newest non-MCP call"
     assert "COUNT(*) OVER ()" not in rep_sql
 
     assert [row["request_id"] for row in response["data"]] == ["req-1", "req-2"]
-    assert response["total"] == 12
+    assert response["total"] == 60
     assert response["total_is_capped"] is False
-    assert response["total_pages"] == 1
-    assert response["has_more"] is False
-    assert response["next_session_cursor"] is None
+    assert response["total_pages"] == 2
+    assert response["has_more"] is True
+    assert response["next_session_cursor"] == "2026-02-16 10:10:00|k|req-49"
 
 
 @pytest.mark.asyncio

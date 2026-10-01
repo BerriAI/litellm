@@ -14,6 +14,8 @@ vi.mock("@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity", (
       isFetchingMore: false,
       progress: { currentPage: 4, totalPages: 9 },
       cancelled: false,
+      failed: false,
+      coversRange: true,
       cancel: mockCancel,
     };
   },

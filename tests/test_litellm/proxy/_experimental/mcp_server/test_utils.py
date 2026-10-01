@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._experimental.mcp_server.utils import (
-    _upstream_credential_headers,
+    upstream_credential_headers,
     build_synthetic_mcp_request,
     logging_safe_mcp_headers,
     validate_and_normalize_mcp_server_payload,
@@ -189,8 +189,8 @@ class TestLoggingSafeMcpHeaders:
         """clean_headers already strips authorization, and claiming it here would change which
         header authenticated_with_header resolves to on a config that lists it by design."""
         with _configured_servers(_server_forwarding("Authorization", "X-GitHub-Token")):
-            assert "authorization" not in _upstream_credential_headers(["authorization", "x-github-token"])
-            assert "x-github-token" in _upstream_credential_headers(["authorization", "x-github-token"])
+            assert "authorization" not in upstream_credential_headers(["authorization", "x-github-token"])
+            assert "x-github-token" in upstream_credential_headers(["authorization", "x-github-token"])
 
     def test_keeps_headers_when_no_server_forwards_them(self):
         with _configured_servers(_server_forwarding("x-github-token")):
@@ -269,3 +269,17 @@ class TestBuildSyntheticMcpRequest:
                 )
 
         assert request.headers.get("x-user-email") == "alice@corp.example"
+
+
+@pytest.mark.parametrize("field", ["structuredContent", "structured_content"])
+def test_structured_content_redaction_updates_shared_dictionary(field):
+    from litellm.proxy._experimental.mcp_server.utils import (
+        mcp_tool_result_structured_content,
+        set_mcp_tool_result_structured_content,
+    )
+
+    result = {field: {"secret": "sensitive"}, "content": []}
+    logging_reference = result
+    assert set_mcp_tool_result_structured_content(result, {"secret": "[REDACTED]"}) is True
+    assert mcp_tool_result_structured_content(logging_reference) == {"secret": "[REDACTED]"}
+    assert set(result) == {field, "content"}

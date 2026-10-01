@@ -1,23 +1,26 @@
 """
-Tests for partial-update semantics of PUT /v1/mcp/server.
+Tests for partial-update semantics of PUT /v1/mcp/server and PUT /v1/mcp/toolset.
 
 A partial update must only write the fields the caller explicitly provided.
 Omitting a field must NOT reset it to its Pydantic schema default (e.g.
 ``transport=sse``, ``mcp_access_groups=[]``, ``allow_all_keys=False``), which
-would silently overwrite the existing DB row.
+would silently overwrite the existing DB row, and a field the caller sent as null
+must be cleared rather than left at its stored value.
 """
 
 import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from prisma import Json
+from prisma import Json, models
 
 from litellm.proxy._experimental.mcp_server.db import (
     create_mcp_server,
+    set_mcp_server_pinned_tools,
     update_mcp_server,
 )
 from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
+from litellm.types.mcp_server.mcp_server_manager import PinnedMCPTool
 
 
 def _credentials_cleared(value) -> bool:
@@ -28,8 +31,18 @@ def _credentials_cleared(value) -> bool:
 def _mock_prisma():
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_mcpservertable = AsyncMock()
-    mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
-    mock_prisma.db.litellm_mcpservertable.create = AsyncMock(return_value=MagicMock())
+    row = models.LiteLLM_MCPServerTable.model_construct(server_id="test-server", transport="http", env={}, env_vars=[])
+    mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=row)
+    mock_prisma.db.litellm_mcpservertable.create = AsyncMock(return_value=row)
+    mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
+    tx_client = MagicMock()
+    tx_client.execute_raw = AsyncMock()
+    tx_client.litellm_mcpservertable = mock_prisma.db.litellm_mcpservertable
+    tx = MagicMock()
+    tx.__aenter__ = AsyncMock(return_value=tx_client)
+    tx.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma.db.tx = MagicMock(return_value=tx)
     return mock_prisma
 
 
@@ -847,3 +860,287 @@ async def test_cf_pair_switch_does_not_clear_dcr_bridge():
     data = UpdateMCPServerRequest(server_id="s", auth_type="oauth_delegate")
     data_dict = await _run_update_with_existing(data, existing_auth_type="true_passthrough")
     assert "dcr_bridge" not in data_dict
+
+
+def _mock_toolset_prisma():
+    """A prisma double whose update answers with a row the reader can expand, so the
+    call under test returns instead of failing inside the row mapper."""
+    updated_row = MagicMock()
+    updated_row.model_dump.return_value = {
+        "toolset_id": "ts-1",
+        "toolset_name": "ops",
+        "description": None,
+        "tools": "[]",
+    }
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_mcptoolsettable = AsyncMock()
+    mock_prisma.db.litellm_mcptoolsettable.update = AsyncMock(return_value=updated_row)
+    return mock_prisma
+
+
+async def _run_toolset_update(payload: dict) -> dict:
+    """The columns PUT /v1/mcp/toolset writes for this payload, minus the audit stamp
+    every write carries. The prisma double is injected, so nothing is patched."""
+    from litellm.proxy._experimental.mcp_server.toolset_db import update_mcp_toolset
+    from litellm.types.mcp_server.mcp_toolset import UpdateMCPToolsetRequest
+
+    mock_prisma = _mock_toolset_prisma()
+    await update_mcp_toolset(mock_prisma, UpdateMCPToolsetRequest.model_validate(payload), "test-user")
+    written = dict(mock_prisma.db.litellm_mcptoolsettable.update.call_args[1]["data"])
+    assert written["updated_by"] == "test-user"
+    return {name: value for name, value in written.items() if name != "updated_by"}
+
+
+@pytest.mark.asyncio
+async def test_toolset_partial_update_clears_description_on_explicit_null():
+    """The dump used to drop None, so a null description could never clear the stored
+    one: the toolset kept a description its owner had deleted."""
+    assert await _run_toolset_update({"toolset_id": "ts-1", "description": None}) == {"description": None}
+
+
+@pytest.mark.asyncio
+async def test_toolset_partial_update_omits_the_fields_the_caller_left_out():
+    tools = [{"server_id": "s1", "tool_name": "alpha"}]
+    assert await _run_toolset_update({"toolset_id": "ts-1", "tools": tools}) == {"tools": json.dumps(tools)}
+
+
+@pytest.mark.asyncio
+async def test_toolset_partial_update_ignores_null_tools_rather_than_revoking_them():
+    """A client that sends tools=null means "leave the selection alone", so the grants
+    survive. Clearing them is an explicit [], which cannot be confused with an omitted
+    field; treating null as a clear would silently revoke every tool the toolset grants."""
+    assert await _run_toolset_update({"toolset_id": "ts-1", "tools": None, "description": "kept"}) == {
+        "description": "kept"
+    }
+
+
+@pytest.mark.asyncio
+async def test_toolset_partial_update_empties_the_selection_on_an_explicit_empty_list():
+    assert await _run_toolset_update({"toolset_id": "ts-1", "tools": []}) == {"tools": "[]"}
+
+
+@pytest.mark.asyncio
+async def test_toolset_partial_update_ignores_a_null_name():
+    """A toolset always has a name, so a null toolset_name is a no-op, not a clear
+    that would write a NOT NULL column to null."""
+    assert await _run_toolset_update({"toolset_id": "ts-1", "toolset_name": None, "description": "kept"}) == {
+        "description": "kept"
+    }
+
+
+def _conflict_row(server_id: str = "other-server"):
+    return models.LiteLLM_MCPServerTable.model_construct(
+        server_id=server_id, server_name="taken", alias="taken", transport="http", env={}, env_vars=[]
+    )
+
+
+@pytest.mark.asyncio
+async def test_find_identifier_conflict_reports_alias_hit():
+    """A stored row matching the incoming alias yields a conflict naming it.
+
+    Case-insensitive and cross-field matching is exercised end to end against
+    real Postgres by test_duplicate_alias_is_rejected_so_tool_prefixes_cannot_collide.
+    """
+    from litellm.proxy._experimental.mcp_server.db import (
+        find_mcp_server_identifier_conflict,
+    )
+
+    mock_prisma = _mock_prisma()
+    mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=_conflict_row())
+
+    conflict = await find_mcp_server_identifier_conflict(
+        mock_prisma, server_name="new-name", alias="taken", exclude_server_id="my-server"
+    )
+
+    assert conflict is not None
+    assert conflict.field == "alias"
+    assert conflict.value == "taken"
+    assert conflict.server_id == "other-server"
+
+
+@pytest.mark.asyncio
+async def test_find_identifier_conflict_reports_server_name_when_alias_is_free():
+    """alias is checked first so the reported field is deterministic; a clean
+    alias does not mask a colliding server_name."""
+    from litellm.proxy._experimental.mcp_server.db import (
+        find_mcp_server_identifier_conflict,
+    )
+
+    mock_prisma = _mock_prisma()
+    mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(side_effect=[None, _conflict_row()])
+
+    conflict = await find_mcp_server_identifier_conflict(
+        mock_prisma, server_name="taken", alias="free", exclude_server_id=None
+    )
+
+    assert conflict is not None
+    assert conflict.field == "server_name"
+
+
+@pytest.mark.asyncio
+async def test_find_identifier_conflict_returns_none_when_free():
+    from litellm.proxy._experimental.mcp_server.db import (
+        find_mcp_server_identifier_conflict,
+    )
+
+    conflict = await find_mcp_server_identifier_conflict(
+        _mock_prisma(), server_name="fresh", alias="fresh", exclude_server_id=None
+    )
+
+    assert conflict is None
+
+
+@pytest.mark.asyncio
+async def test_update_writing_alias_returns_conflict_instead_of_row():
+    from litellm.proxy._experimental.mcp_server.db import McpIdentifierConflict
+
+    mock_prisma = _mock_prisma()
+    mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=_conflict_row())
+
+    result = await update_mcp_server(
+        mock_prisma,
+        UpdateMCPServerRequest(server_id="my-test-server", alias="taken"),
+        "test-user",
+    )
+
+    assert isinstance(result, McpIdentifierConflict)
+
+
+@pytest.mark.asyncio
+async def test_update_without_identifier_fields_returns_the_row():
+    mock_prisma = _mock_prisma()
+
+    result = await update_mcp_server(
+        mock_prisma,
+        UpdateMCPServerRequest(server_id="my-test-server", allowed_tools=["foo"]),
+        "test-user",
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_writing_free_alias_returns_the_row():
+    mock_prisma = _mock_prisma()
+
+    result = await update_mcp_server(
+        mock_prisma,
+        UpdateMCPServerRequest(server_id="my-test-server", alias="fresh-alias"),
+        "test-user",
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_clearing_alias_conflicts_on_the_fallback_server_name():
+    """alias: null drops the tool prefix to the stored server_name, which may
+    already belong to another row, so that name goes through the conflict check."""
+    from litellm.proxy._experimental.mcp_server.db import McpIdentifierConflict
+
+    mock_prisma = _mock_prisma()
+    existing = MagicMock()
+    existing.server_name = "taken"
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=_conflict_row())
+
+    result = await update_mcp_server(
+        mock_prisma,
+        UpdateMCPServerRequest(server_id="my-test-server", alias=None),
+        "test-user",
+        fields_set={"server_id", "alias"},
+    )
+
+    assert isinstance(result, McpIdentifierConflict)
+    assert result.field == "server_name"
+
+
+@pytest.mark.asyncio
+async def test_clearing_alias_to_empty_string_conflicts_on_the_fallback_server_name():
+    """alias: "" publishes the stored server_name as the tool prefix, just like
+    alias: null, so the fallback name must go through the conflict check too."""
+    from litellm.proxy._experimental.mcp_server.db import McpIdentifierConflict
+
+    mock_prisma = _mock_prisma()
+    existing = MagicMock()
+    existing.server_name = "taken"
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=_conflict_row())
+
+    result = await update_mcp_server(
+        mock_prisma,
+        UpdateMCPServerRequest(server_id="my-test-server", alias=""),
+        "test-user",
+        fields_set={"server_id", "alias"},
+    )
+
+    assert isinstance(result, McpIdentifierConflict)
+    assert result.field == "server_name"
+
+
+@pytest.mark.asyncio
+async def test_clearing_alias_with_free_server_name_returns_the_row():
+    mock_prisma = _mock_prisma()
+    existing = MagicMock()
+    existing.server_name = "free-name"
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    result = await update_mcp_server(
+        mock_prisma,
+        UpdateMCPServerRequest(server_id="my-test-server", alias=None),
+        "test-user",
+        fields_set={"server_id", "alias"},
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_register_and_update_bodies_never_write_pinned_tools():
+    """Only POST /v1/mcp/server/{id}/pin sets the pin; a pinned_tools field in a request body is dropped."""
+    body_pin = {"list_notes": {"description": "List notes", "input_schema": {}}}
+
+    updated = await _run_update(
+        UpdateMCPServerRequest.model_validate(
+            {"server_id": "my-test-server", "allowed_tools": ["foo"], "pinned_tools": body_pin}
+        )
+    )
+    assert "pinned_tools" not in updated
+
+    mock_prisma = _mock_prisma()
+    await create_mcp_server(
+        mock_prisma,
+        NewMCPServerRequest.model_validate(
+            {"server_id": "new-server", "url": "https://example.com/mcp", "transport": "http", "pinned_tools": body_pin}
+        ),
+        "test-user",
+    )
+    assert "pinned_tools" not in mock_prisma.db.litellm_mcpservertable.create.call_args[1]["data"]
+
+
+@pytest.mark.asyncio
+async def test_set_mcp_server_pinned_tools_writes_the_snapshot_and_null_clears_it():
+    mock_prisma = _mock_prisma()
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=MagicMock())
+    pinned = {"list_notes": PinnedMCPTool(description="List notes", input_schema={"type": "object"})}
+
+    record = await set_mcp_server_pinned_tools(mock_prisma, "test-server", pinned, "admin")
+
+    written = mock_prisma.db.litellm_mcpservertable.update.call_args[1]
+    assert written["where"] == {"server_id": "test-server"}
+    assert json.loads(written["data"]["pinned_tools"]) == {
+        "list_notes": {"description": "List notes", "input_schema": {"type": "object"}}
+    }
+    assert written["data"]["updated_by"] == "admin"
+    assert record is not None and record.server_id == "test-server"
+
+    await set_mcp_server_pinned_tools(mock_prisma, "test-server", None, "admin")
+    assert mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]["pinned_tools"] == "{}"
+
+
+@pytest.mark.asyncio
+async def test_set_mcp_server_pinned_tools_on_a_missing_server_writes_nothing():
+    mock_prisma = _mock_prisma()
+
+    assert await set_mcp_server_pinned_tools(mock_prisma, "ghost", None, "admin") is None
+    mock_prisma.db.litellm_mcpservertable.update.assert_not_awaited()
