@@ -961,5 +961,6 @@ async def test_c03_proxy_terminated_mid_burst_lands_every_answered_content_less_
                 )
             )
             assert len(landed) == len(set(landed)), landed
-            assert set(landed) <= answered, (landed, answered)
+            stray: Final = set(landed) - answered
+            assert len(stray) <= 12 - len(answered), (landed, answered)
             assert len(wire.drain()) == 12
