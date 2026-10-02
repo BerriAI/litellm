@@ -506,7 +506,7 @@ def _build_authorize_html(
     <button class="close-btn" type="button" onclick="doCancel()" title="Close">&times;</button>
 
     <div class="logos">
-      <img src="/ui/assets/logos/litellm_logo.jpg" class="logo-img" alt="LiteLLM">
+      <img src="/get_image?variant=monogram" class="logo-img" alt="LiteLLM">
       <span class="logo-arrow">&#8594;</span>
       <div class="logo logo-s">{server_initial}</div>
     </div>

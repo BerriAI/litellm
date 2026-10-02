@@ -3227,6 +3227,7 @@ async def test_e2e_generate_cold_storage_object_key_successful():
             prefix="",  # No prefix for cold storage
             start_time=start_time,
             s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
+            partition_granularity="day",
         )
 
         # Verify the result
@@ -3276,6 +3277,7 @@ async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path()
             prefix="",
             start_time=start_time,
             s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
+            partition_granularity="day",
         )
 
         # Verify the result
@@ -3320,6 +3322,7 @@ async def test_e2e_generate_cold_storage_object_key_with_logger_no_s3_path():
             prefix="",
             start_time=start_time,
             s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
+            partition_granularity="day",
         )
 
         # Verify the result
@@ -4856,6 +4859,75 @@ def test_get_standard_logging_object_payload_includes_litellm_call_id(logging_ob
 
     assert payload is not None
     assert payload["litellm_call_id"] == call_id
+
+
+@pytest.mark.parametrize(
+    "client_sent_oauth_token, custom_llm_provider, expected",
+    [(True, "anthropic", True), (True, "bedrock", False), (False, "anthropic", False), (None, "anthropic", None)],
+)
+def test_get_standard_logging_object_payload_resolves_used_client_oauth_token_against_the_selected_provider(
+    logging_obj, client_sent_oauth_token: bool | None, custom_llm_provider: str, expected: bool | None
+):
+    """The proxy stamps whether the client presented an Anthropic OAuth bearer before routing, but the
+    bearer only reaches an Anthropic deployment, so the logged flag must follow the provider that was called."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    request_metadata = {} if client_sent_oauth_token is None else {"used_client_oauth_token": client_sent_oauth_token}
+    now = datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "model": "claude-sonnet-5",
+            "messages": [],
+            "custom_llm_provider": custom_llm_provider,
+            "litellm_params": {"metadata": request_metadata},
+        },
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["metadata"]["used_client_oauth_token"] is expected
+
+
+@pytest.mark.parametrize(
+    "metadata, litellm_metadata, expected",
+    [
+        ({"used_client_oauth_token": True}, {"used_client_oauth_token": False}, False),
+        ({"used_client_oauth_token": False}, {"used_client_oauth_token": True}, True),
+        ({"used_client_oauth_token": True}, {"compression_savings": 1}, True),
+    ],
+)
+def test_get_standard_logging_object_payload_takes_used_client_oauth_token_from_the_proxy_stamped_slot(
+    logging_obj, metadata: dict, litellm_metadata: dict, expected: bool
+):
+    """On routes that carry proxy metadata in `litellm_metadata`, `metadata` is the caller's own body field,
+    so a caller writing the flag there must not override what the proxy stamped."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    now = datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "model": "claude-sonnet-5",
+            "messages": [],
+            "custom_llm_provider": "anthropic",
+            "litellm_params": {"metadata": metadata, "litellm_metadata": litellm_metadata},
+        },
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["metadata"]["used_client_oauth_token"] is expected
 
 
 def test_get_standard_logging_object_payload_carries_matched_access_groups(logging_obj):

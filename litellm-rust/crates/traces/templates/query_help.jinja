@@ -1,0 +1,65 @@
+Trace SQL query guide
+
+Live ClickHouse schema
+{% for table in tables %}
+{{ table.name }}
+{% for column in table.columns %}{{ column.name }}: {{ column.kind }}
+{% endfor %}{% endfor %}
+Normalized span fields
+{% for field in normalized_fields %}{{ field.name }}: otel_traces.{{ field.clickhouse_column }} ({{ field.clickhouse_type }})
+{{ field.meaning }}
+{% endfor %}
+Observed LLM call metadata
+{{ metadata.scope }}
+Sampled rows: {{ metadata.sampled_rows }}; invalid JSON rows: {{ metadata.invalid_json_rows }}; truncated: {{ metadata.truncated }}
+{% if let Some(error) = metadata.error %}Metadata discovery unavailable: {{ error }}
+{% else if metadata.fields.is_empty() %}No metadata paths found in the sampled rows
+{% else %}{% for field in metadata.fields %}{{ field.expression }}: {% for kind in field.types %}{{ kind }} {% endfor %}
+{% endfor %}{% endif %}
+Observed span and resource attributes
+{% for catalog in attributes %}{{ catalog.table }}.{{ catalog.column }}
+{{ catalog.scope }}
+{% if let Some(error) = catalog.error %}Attribute discovery unavailable: {{ error }}
+{% else if catalog.fields.is_empty() %}No attribute keys found in the sampled spans
+{% else %}{% for field in catalog.fields %}{{ field.expression }}: {{ field.kind }}
+{% endfor %}{% endif %}{% endfor %}
+Examples
+
+{% block recent_spans_name %}Recent normalized LLM spans{% endblock %}
+{% block recent_spans_sql %}SELECT TraceId, SpanId, Model, InputTokens, OutputTokens, Duration / 1000000 AS duration_ms FROM otel_traces WHERE Timestamp >= now() - INTERVAL 1 DAY AND ObservationType = 'llm' ORDER BY Timestamp DESC LIMIT 100{% endblock %}
+
+{% block custom_metadata_name %}Find calls by custom metadata{% endblock %}
+{% block custom_metadata_sql %}SELECT request_id, response_id, model, spend, JSONExtractString(metadata, 'project') AS project FROM spend_logs FINAL WHERE start_time >= now() - INTERVAL 1 DAY AND JSONHas(metadata, 'project') AND JSONExtractString(metadata, 'project') = 'example' ORDER BY start_time DESC LIMIT 100{% endblock %}
+
+{% block nested_metadata_name %}Nested metadata with unknown types{% endblock %}
+{% block nested_metadata_sql %}SELECT request_id, JSONType(metadata, 'labels', 'priority') AS type, JSONExtractRaw(metadata, 'labels', 'priority') AS value FROM spend_logs FINAL WHERE start_time >= now() - INTERVAL 1 DAY AND JSONHas(metadata, 'labels', 'priority') LIMIT 100{% endblock %}
+
+{% block correlated_calls_name %}Traces correlated with LLM call metadata{% endblock %}
+{% block correlated_calls_sql %}SELECT t.TraceId, t.SpanId, s.request_id, s.spend, s.metadata FROM otel_traces AS t INNER JOIN (SELECT * FROM spend_logs FINAL WHERE start_time >= now() - INTERVAL 1 DAY) AS s ON t.LiteLLMRequestId = s.response_id AND t.TeamId = s.team_id AND t.ApiKeyHash = s.api_key WHERE t.Timestamp >= now() - INTERVAL 1 DAY AND t.LiteLLMRequestId != '' AND JSONExtractString(s.metadata, 'project') = 'example' LIMIT 100{% endblock %}
+
+{% block discover_keys_name %}Discover metadata keys over a different window{% endblock %}
+{% block discover_keys_sql %}SELECT DISTINCT arrayJoin(JSONExtractKeys(metadata)) AS key FROM spend_logs FINAL WHERE start_time >= now() - INTERVAL 30 DAY ORDER BY key LIMIT 200{% endblock %}
+
+Gotchas
+
+{% block time_window %}Always bound Timestamp or start_time and use LIMIT; add TeamId/ApiKeyHash or team_id/api_key filters when investigating one tenant{% endblock %}
+
+{% block reader_limits %}The reader enforces 1000 result rows, 4 MiB response bytes, 256 MiB memory and a 10 second query limit; exceeding limits fails instead of returning partial results{% endblock %}
+
+{% block reader_profile %}LiteLLM provisions SELECT-only readers from the configured ClickHouse connection and enforces authenticated team scope through row policies. Project-bound and teamless keys see only their own rows. Provisioning requires CREATE USER, ALTER USER, CREATE ROW POLICY, and GRANT SELECT permissions{% endblock %}
+
+{% block output_format %}Do not add FORMAT clauses; the endpoint requires ClickHouse JSON output{% endblock %}
+
+{% block json_values %}metadata is a JSON-encoded String; use JSONHas before typed extraction to distinguish missing values from empty strings, zero and false{% endblock %}
+
+{% block map_values %}SpanAttributes and ResourceAttributes are Map(String, String); missing map keys return an empty string, so use mapContains for existence checks{% endblock %}
+
+{% block literal_keys %}Use the discovered path components as separate JSONExtract arguments; a dot inside a key is literal, not a path separator{% endblock %}
+
+{% block time_units %}Duration is nanoseconds; Timestamp has nanosecond precision, spend start_time has millisecond precision{% endblock %}
+
+{% block spend_totals %}Use spend_logs FINAL to collapse replacement rows before totals. Shared response IDs and multiple spans can multiply costs in joins; aggregate spend separately{% endblock %}
+
+{% block trace_rollups %}agent_traces_by_key uses SimpleAggregateFunction columns; group by TeamId, ApiKeyHash and TraceId, using min(StartTs), max(EndTs), sum(SpanCount) and groupUniqArrayArray(Models). Do not use Merge combinators{% endblock %}
+
+{% block sampling %}Discovery is sampled, contains no metadata values, and is not an exhaustive schema. Edit the supplied discovery SQL for older data or nested JSONExtractKeys(metadata, 'parent'){% endblock %}

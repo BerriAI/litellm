@@ -47,4 +47,4 @@ litellm-host-native.workspace = true
 litellm-llms = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
 rstest_reuse.workspace = true
-wiremock = "0.6.5"
+wiremock.workspace = true
