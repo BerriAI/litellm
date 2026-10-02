@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.resource_ownership import (
     is_proxy_admin,
     user_can_access_resource_owner,
 )
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.types.videos.utils import extract_original_video_id
 
@@ -49,8 +50,7 @@ def _video_id_of(item: object) -> str | None:
             return video_id
         case object(id=str(video_id)) if video_id:
             return video_id
-        case _:
-            return None
+    return None
 
 
 def _is_object_mapping(value: object) -> TypeIs[Mapping[str, object]]:  # guard-ok: provider JSON objects have str keys
@@ -150,12 +150,15 @@ async def filter_video_list_for_caller(listed: object, user_api_key_dict: UserAP
     )
     owner_scopes: Final = get_resource_owner_scopes(user_api_key_dict)
     rows: Final = (
-        await ManagedObjectRepository(prisma_client).table.find_many(
+        await find_many_in(
+            ManagedObjectRepository(prisma_client).table,
+            "model_object_id",
+            candidate_ids,
             where={  # mutable-ok: prisma filters are plain dicts
-                "model_object_id": {"in": list(candidate_ids)},  # mutable-ok: prisma filters are plain dicts
                 "file_purpose": VIDEO_OBJECT_PURPOSE,
+                # bounded-ok: owner scopes are the caller's user, team, org and key identities
                 "created_by": {"in": owner_scopes},  # mutable-ok: prisma filters are plain dicts
-            }
+            },
         )
         if candidate_ids and owner_scopes
         else ()
