@@ -143,6 +143,26 @@ class TestLoggingSafeMcpHeaders:
 
         assert safe == {"x-nuid": "nuid-1"}
 
+    def test_strips_approval_reference_header(self):
+        """The approval reference is a caller-held credential; it must never reach
+        a guardrail payload or a spend row where it could be replayed."""
+        safe = logging_safe_mcp_headers(
+            {
+                "x-litellm-mcp-approval-reference": "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJhIn0.sig",
+                "x-nuid": "nuid-1",
+            }
+        )
+        assert safe == {"x-nuid": "nuid-1"}
+
+    def test_strips_approval_reference_header_any_casing(self):
+        safe = logging_safe_mcp_headers(
+            {
+                "X-LiteLLM-MCP-Approval-Reference": "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJhIn0.sig",
+                "x-nuid": "nuid-1",
+            }
+        )
+        assert safe == {"x-nuid": "nuid-1"}
+
     def test_strips_caller_asserted_host(self):
         """This mapping reaches the guardrail payload and the list_tools spend row, so a caller
         must not be able to name the deployment there either."""
@@ -283,3 +303,15 @@ def test_structured_content_redaction_updates_shared_dictionary(field):
     assert set_mcp_tool_result_structured_content(result, {"secret": "[REDACTED]"}) is True
     assert mcp_tool_result_structured_content(logging_reference) == {"secret": "[REDACTED]"}
     assert set(result) == {field, "content"}
+
+
+def test_synthetic_mcp_request_drops_approval_reference_header():
+    request = build_synthetic_mcp_request(
+        path="/mcp/tools/call",
+        raw_headers={
+            "x-litellm-mcp-approval-reference": "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJhIn0.sig",
+            "x-nuid": "nuid-1",
+        },
+    )
+    assert "x-litellm-mcp-approval-reference" not in request.headers
+    assert request.headers.get("x-nuid") == "nuid-1"

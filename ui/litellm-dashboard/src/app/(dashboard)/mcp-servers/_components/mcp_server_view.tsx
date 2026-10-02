@@ -332,6 +332,33 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-4 py-3">
+                  <p className="text-sm font-medium text-muted-foreground">Approval references</p>
+                  <div className="col-span-2 text-sm">
+                    {mcpServer.approval_policy ? (
+                      <div className="space-y-1">
+                        <p>
+                          <span className="text-muted-foreground">Tools: </span>
+                          {mcpServer.approval_policy.tools.join(", ")}
+                        </p>
+                        <p>
+                          <span className="text-muted-foreground">Issuer: </span>
+                          <span className="font-mono break-all">{mcpServer.approval_policy.issuer}</span>
+                        </p>
+                        <p>
+                          <span className="text-muted-foreground">JWKS URL: </span>
+                          <span className="font-mono break-all">{mcpServer.approval_policy.jwks_url}</span>
+                        </p>
+                        <p>
+                          <span className="text-muted-foreground">Audience: </span>
+                          {mcpServer.approval_policy.audience || <span className="text-muted-foreground">Not set</span>}
+                        </p>
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">Not set</span>
+                    )}
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-4 py-3">
                   <p className="text-sm font-medium text-muted-foreground">Network access</p>
                   <div className="col-span-2">
                     <Badge variant="outline">

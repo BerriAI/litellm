@@ -370,3 +370,65 @@ void isClientForwardedTokenMode;
 void normalizeEnvVars;
 void preservedAdminCredentials;
 export type { MCPServer };
+
+describe("buildEditServerPayload approval policy", () => {
+  const existingPolicy = {
+    tools: ["delete_records"],
+    issuer: "https://approvals.example.com",
+    jwks_url: "https://approvals.example.com/.well-known/jwks.json",
+    audience: null,
+  };
+  const mkUi = (approval_policy?: typeof existingPolicy | null) =>
+    ({
+      ...baseUi,
+      mcpServer: { ...baseUi.mcpServer, ...(approval_policy === undefined ? {} : { approval_policy }) },
+    }) as EditServerUiState;
+
+  const approvalFields = {
+    approval_policy_tools: ["delete_records"],
+    approval_policy_issuer: "https://approvals.example.com",
+    approval_policy_jwks_url: "https://approvals.example.com/.well-known/jwks.json",
+  };
+
+  it("omits approval_policy when the form matches the stored policy", () => {
+    const result = buildEditServerPayload({ ...approvalFields }, mkUi(existingPolicy));
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
+    expect(result.payload).not.toHaveProperty("approval_policy");
+  });
+
+  it("sends the new approval_policy object when it changed", () => {
+    const result = buildEditServerPayload(
+      { ...approvalFields, approval_policy_tools: ["wipe_records"], approval_policy_audience: "mcp-gateway" },
+      mkUi(existingPolicy),
+    );
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
+    const expectedPolicy = {
+      tools: ["wipe_records"],
+      issuer: "https://approvals.example.com",
+      jwks_url: "https://approvals.example.com/.well-known/jwks.json",
+      audience: "mcp-gateway",
+    };
+    expect(result.payload.approval_policy).toEqual(expectedPolicy);
+  });
+
+  it("sends approval_policy null when the tools list is cleared and a policy exists", () => {
+    const result = buildEditServerPayload({ approval_policy_tools: [] }, mkUi(existingPolicy));
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
+    expect(result.payload.approval_policy).toBeNull();
+  });
+
+  it("omits approval_policy when tools are empty and no policy is stored", () => {
+    const result = buildEditServerPayload({ approval_policy_tools: [] }, mkUi(null));
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
+    expect(result.payload).not.toHaveProperty("approval_policy");
+  });
+
+  it("rejects tools without an issuer and JWKS URL", () => {
+    const result = buildEditServerPayload({ approval_policy_tools: ["delete_records"] }, mkUi(null));
+    expect(result).toEqual({ kind: "invalid_approval_policy" });
+  });
+});

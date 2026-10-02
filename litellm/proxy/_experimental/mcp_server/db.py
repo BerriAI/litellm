@@ -414,6 +414,8 @@ def _prepare_mcp_server_data(
         data_dict["tool_name_to_display_name"] = safe_dumps(data_dict["tool_name_to_display_name"] or {})
     if "tool_name_to_description" in data_dict:
         data_dict["tool_name_to_description"] = safe_dumps(data_dict["tool_name_to_description"] or {})
+    if "approval_policy" in data_dict and data_dict["approval_policy"] is not None:
+        data_dict["approval_policy"] = safe_dumps(data_dict["approval_policy"])
     # mcp_access_groups is already List[str], no serialization needed
 
     # On create, force is_byok so a False value is always written to the DB. On
@@ -1175,6 +1177,22 @@ async def _update_mcp_server_row(
     )
 
 
+_JSON_NULLABLE_FIELDS: Final = ("credentials", "approval_policy")
+
+
+def _translate_json_null_sentinels(data_dict: dict[str, Any]) -> None:
+    # prisma-python rejects a raw ``None`` for a ``Json?`` field ("value is required but not set"); the
+    # clear paths above use ``None`` as the merge-skip sentinel, so translate it here to ``Json(None)``,
+    # which writes SQL null and reads back as ``None``. Done at the edge so the merge guards stay simple.
+    if not any(field in data_dict and data_dict[field] is None for field in _JSON_NULLABLE_FIELDS):
+        return
+    from prisma import Json  # noqa: PLC0415  # local import: prisma may be ungenerated at module load in some tools
+
+    for field in _JSON_NULLABLE_FIELDS:
+        if field in data_dict and data_dict[field] is None:
+            data_dict[field] = Json(None)
+
+
 async def update_mcp_server(
     prisma_client: PrismaClient,
     data: UpdateMCPServerRequest,
@@ -1286,13 +1304,7 @@ async def update_mcp_server(
     # Add audit fields
     data_dict["updated_by"] = touched_by
 
-    # prisma-python rejects a raw ``None`` for a ``Json?`` field ("value is required but not set"); the
-    # clear paths above use ``None`` as the merge-skip sentinel, so translate it here to ``Json(None)``,
-    # which writes SQL null and reads back as ``None``. Done at the edge so the merge guards stay simple.
-    if "credentials" in data_dict and data_dict["credentials"] is None:
-        from prisma import Json  # noqa: PLC0415  # local import: prisma may be ungenerated at module load in some tools
-
-        data_dict["credentials"] = Json(None)
+    _translate_json_null_sentinels(data_dict)
 
     updated_mcp_server: Final = await _update_mcp_server_row(
         prisma_client,

@@ -206,6 +206,11 @@ MCP_TOOL_LISTING_MAX_PAGES: Final = 1000
 MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH: Final = 8
 MCP_BYOK_CREDENTIAL_CACHE_TTL_SECONDS: Final = 60
 MCP_BYOK_CREDENTIAL_CACHE_MAX_SIZE: Final = 4096
+MCP_APPROVAL_REFERENCE_HEADER: Final = "x-litellm-mcp-approval-reference"
+MCP_APPROVAL_JWKS_CACHE_TTL_SECONDS: Final = 3600
+MCP_APPROVAL_JWT_ALGORITHMS: Final[frozenset[str]] = frozenset(
+    {"RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "PS256", "PS384", "PS512"}
+)
 
 # Allowlist of commands permitted for MCP stdio transport.
 # Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.

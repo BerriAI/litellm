@@ -1,6 +1,7 @@
 import {
   ADMIN_CONFIG_CREDENTIAL_KEYS,
   AUTH_TYPE,
+  MCPApprovalPolicy,
   MCPEnvVar,
   MCPInfo,
   MCPServer,
@@ -12,7 +13,12 @@ import {
   isClientForwardedTokenMode,
   preservedAdminCredentials,
 } from "@/components/mcp_tools/types";
-import { AUTH_TYPES_REQUIRING_CREDENTIALS, reduceStaticHeaders } from "./createServerPayload";
+import {
+  AUTH_TYPES_REQUIRING_CREDENTIALS,
+  reduceStaticHeaders,
+  toToolNameList,
+  toTrimmedString,
+} from "./createServerPayload";
 import { TOOL_DISPLAY_NAME_PATTERN, normalizeEnvVars } from "./utils";
 
 export type MCPAccessGroupValue = string | { readonly name?: string };
@@ -31,6 +37,10 @@ export interface EditServerFormValues {
   readonly oauth_passthrough?: boolean;
   readonly dcr_bridge?: boolean;
   readonly token_validation_json?: string;
+  readonly approval_policy_tools?: readonly string[];
+  readonly approval_policy_issuer?: string;
+  readonly approval_policy_jwks_url?: string;
+  readonly approval_policy_audience?: string;
   readonly mcp_access_groups?: readonly MCPAccessGroupValue[];
   readonly transport?: string;
   readonly server_name?: string;
@@ -68,6 +78,7 @@ export interface EditServerPayload {
   readonly tool_name_to_description: Readonly<Record<string, string>> | null;
   readonly oauth2_flow?: string;
   readonly token_validation?: unknown;
+  readonly approval_policy?: MCPApprovalPolicy | null;
   readonly credentials?: Readonly<Record<string, unknown>>;
   readonly [key: string]: unknown;
 }
@@ -91,7 +102,8 @@ export type BuildEditPayloadResult =
   | { readonly kind: "invalid_stdio_json" }
   | { readonly kind: "invalid_stdio_env_json" }
   | { readonly kind: "stdio_command_required" }
-  | { readonly kind: "invalid_token_validation_json" };
+  | { readonly kind: "invalid_token_validation_json" }
+  | { readonly kind: "invalid_approval_policy" };
 
 interface StdioFields {
   readonly command: string;
@@ -126,9 +138,38 @@ export const editPayloadErrorMessage = (result: Exclude<BuildEditPayloadResult, 
       return "Stdio transport requires a command";
     case "invalid_token_validation_json":
       return "Invalid JSON in Token Validation Rules";
+    case "invalid_approval_policy":
+      return "Tools requiring approval also need an issuer and a JWKS URL";
     default:
       return assertNever(result);
   }
+};
+
+const approvalPoliciesEqual = (a: MCPApprovalPolicy, b: MCPApprovalPolicy): boolean =>
+  a.issuer === b.issuer &&
+  a.jwks_url === b.jwks_url &&
+  (a.audience ?? null) === (b.audience ?? null) &&
+  [...a.tools].sort().join("\u0000") === [...b.tools].sort().join("\u0000");
+
+const approvalPolicyEntry = (
+  raw: { tools: unknown; issuer: unknown; jwksUrl: unknown; audience: unknown },
+  existing: MCPApprovalPolicy | null | undefined,
+): { readonly entry: Record<string, unknown> } | { readonly kind: "invalid_approval_policy" } => {
+  const tools = toToolNameList(raw.tools);
+  if (tools.length === 0) {
+    return { entry: existing ? { approval_policy: null } : {} };
+  }
+  const issuer = toTrimmedString(raw.issuer);
+  const jwksUrl = toTrimmedString(raw.jwksUrl);
+  if (!issuer || !jwksUrl) {
+    return { kind: "invalid_approval_policy" };
+  }
+  const audience = toTrimmedString(raw.audience) || null;
+  const candidate: MCPApprovalPolicy = { tools: [...tools], issuer, jwks_url: jwksUrl, audience };
+  if (existing && approvalPoliciesEqual(existing, candidate)) {
+    return { entry: {} };
+  }
+  return { entry: { approval_policy: candidate } };
 };
 
 const toStringArgs = (raw: unknown): readonly string[] =>
@@ -272,6 +313,11 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     oauth_passthrough: oauthPassthroughRaw,
     dcr_bridge: dcrBridgeRaw,
     token_validation_json: rawTokenValidationJson,
+    approval_policy_tools: rawApprovalTools,
+    approval_policy_issuer: rawApprovalIssuer,
+    approval_policy_jwks_url: rawApprovalJwksUrl,
+    approval_policy_audience: rawApprovalAudience,
+    approval_policy: _rawApprovalPolicy,
     ...rawRestValues
   } = values;
 
@@ -337,6 +383,17 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
   };
   const credentialsEntry = resolveCredentialsEntry(credentialsEntryInput);
 
+  const approvalPolicyInput = {
+    tools: rawApprovalTools,
+    issuer: rawApprovalIssuer,
+    jwksUrl: rawApprovalJwksUrl,
+    audience: rawApprovalAudience,
+  };
+  const approvalPolicyResult = approvalPolicyEntry(approvalPolicyInput, mcpServer.approval_policy);
+  if ("kind" in approvalPolicyResult) {
+    return { kind: "invalid_approval_policy" };
+  }
+
   const payload: EditServerPayload = {
     ...restValues,
     ...stdio.fields,
@@ -398,6 +455,7 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     ...(tokenValidation.value !== null || mcpServer.token_validation
       ? { token_validation: tokenValidation.value }
       : {}),
+    ...approvalPolicyResult.entry,
     ...credentialsEntry,
   };
 

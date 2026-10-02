@@ -10,6 +10,13 @@ const ENTRA_OBO_PROFILE = "entra_obo";
 
 const ALWAYS_MOUNTED_ROOT = ["server_name", "alias", "description", "transport", "max_concurrent_requests"] as const;
 
+const APPROVAL_SECTION_ROOT = [
+  "approval_policy_tools",
+  "approval_policy_issuer",
+  "approval_policy_jwks_url",
+  "approval_policy_audience",
+] as const;
+
 const PERMISSION_SECTION_ROOT = [
   "allow_all_keys",
   "available_on_public_internet",
@@ -146,6 +153,7 @@ export const mountedEditFieldNames = (values: Record<string, unknown>): MountedF
       ...(!isStdio && isClientForwardedTokenMode(gates.authType) ? ["dcr_bridge"] : []),
       "env_vars",
       ...permissionSectionRoot(gates.authType, values.extra_headers),
+      ...APPROVAL_SECTION_ROOT,
     ]),
     credentials: isStdio ? [] : dedupe(authSubtreeCredentials(gates)),
   };
@@ -175,6 +183,7 @@ export const mountedCreateFieldNames = (values: Record<string, unknown>): Mounte
       ...(isStdio ? ["stdio_config"] : []),
       "env_vars",
       ...permissionSectionRoot(gates.authType, values.extra_headers),
+      ...APPROVAL_SECTION_ROOT,
     ]),
     credentials: authSectionMounted ? dedupe(authSubtreeCredentials(gates)) : [],
   };

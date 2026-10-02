@@ -2851,6 +2851,13 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_auth_metadata: dict[str, str] | None
 
 
+class StandardLoggingMCPApprovalReference(TypedDict):
+    jti: ReadOnly[str]
+    issuer: ReadOnly[str]
+    subject: ReadOnly[str | None]
+    expires_at: ReadOnly[int]
+
+
 class StandardLoggingMCPToolCall(TypedDict, total=False):
     name: str
     """
@@ -2910,6 +2917,13 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     stripped, because hosted MCP servers routinely embed the credential in the URL path and
     this value is readable by callers via request logs.
     Records which upstream received a relayed request; never a credential.
+    """
+
+    approval_reference: ReadOnly[StandardLoggingMCPApprovalReference]
+    """
+    Which external approval reference admitted this high-risk tool call: the JWT id,
+    issuer, subject, and expiry of the verified reference. The token itself is never
+    logged.
     """
 
 

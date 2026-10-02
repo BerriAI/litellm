@@ -49,7 +49,7 @@ from mcp.types import (
 )
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, BaseModel, TypeAdapter
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, assert_never
 
 import litellm
 from litellm._logging import verbose_logger
@@ -67,6 +67,12 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.proxy._experimental.mcp_server.approval_reference import (
+    ApprovalRejected,
+    ApprovalVerified,
+    ApprovalVerifierUnavailable,
+    verify_approval_reference,
+)
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
     MCPServerAccess,
@@ -207,9 +213,10 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPInfo,
     MCPOAuthMetadata,
     MCPServer,
+    parse_approval_policy,
     parse_pinned_tools,
 )
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, StandardLoggingMCPApprovalReference
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -2580,6 +2587,7 @@ class MCPServerManager:
                 disallowed_tools=server_config.get("disallowed_tools", None),
                 allowed_params=server_config.get("allowed_params", None),
                 pinned_tools=server_config.get("pinned_tools", None),
+                approval_policy=server_config.get("approval_policy", None),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
                 env_vars=server_config.get("env_vars", None),
@@ -3156,6 +3164,7 @@ class MCPServerManager:
             tool_name_to_display_name=_deserialize_json_dict(getattr(mcp_server, "tool_name_to_display_name", None)),
             tool_name_to_description=_deserialize_json_dict(getattr(mcp_server, "tool_name_to_description", None)),
             pinned_tools=parse_pinned_tools(getattr(mcp_server, "pinned_tools", None)),
+            approval_policy=parse_approval_policy(getattr(mcp_server, "approval_policy", None)),
             is_byok=bool(getattr(mcp_server, "is_byok", False)),
             byok_description=getattr(mcp_server, "byok_description", None) or [],
             byok_api_key_help_url=getattr(mcp_server, "byok_api_key_help_url", None),
@@ -5497,6 +5506,61 @@ class MCPServerManager:
                 is_error=True,
             )
 
+    async def _enforce_approval_reference(
+        self,
+        *,
+        name: str,
+        server: MCPServer,
+        raw_headers: dict[str, str] | None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
+    ) -> None:
+        policy: Final = server.approval_policy
+        if policy is None:
+            return
+        policy_tool: Final = match_known_tool_name(name, server, policy.tools)
+        if policy_tool is None:
+            return
+        result: Final = await verify_approval_reference(
+            policy=policy,
+            policy_tool=policy_tool,
+            server_id=server.server_id,
+            raw_headers=raw_headers,
+        )
+        match result:
+            case ApprovalVerified(record=record):
+                self._stamp_approval_reference(litellm_logging_obj=litellm_logging_obj, record=record)
+            case ApprovalRejected(reason=reason, message=message):
+                if reason == "missing":
+                    raise HTTPException(
+                        status_code=403,
+                        detail={"error": "mcp_approval_reference_required", "message": message},
+                    )
+                raise HTTPException(
+                    status_code=403,
+                    detail={"error": "mcp_approval_reference_invalid", "message": message},
+                )
+            case ApprovalVerifierUnavailable(message=message):
+                raise HTTPException(
+                    status_code=503,
+                    detail={"error": "mcp_approval_verifier_unavailable", "message": message},
+                )
+            case _ as unreachable:
+                assert_never(unreachable)
+
+    @staticmethod
+    def _stamp_approval_reference(
+        *,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
+        record: StandardLoggingMCPApprovalReference,
+    ) -> None:
+        if litellm_logging_obj is None:
+            return
+        existing: Final = litellm_logging_obj.model_call_details.get("mcp_tool_call_metadata")
+        litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = {
+            **(existing if isinstance(existing, dict) else {}),
+            "approval_reference": dict(record),
+        }
+
     async def pre_call_tool_check(
         self,
         name: str,
@@ -5548,6 +5612,13 @@ class MCPServerManager:
             tool_name=name,
             server=server,
             user_api_key_auth=user_api_key_auth,
+        )
+
+        await self._enforce_approval_reference(
+            name=name,
+            server=server,
+            raw_headers=raw_headers,
+            litellm_logging_obj=litellm_logging_obj,
         )
 
         ## filter parameters based on allowed_params configuration
@@ -6967,6 +7038,7 @@ class MCPServerManager:
             instructions=server.instructions,
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
+            approval_policy=server.approval_policy,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -7090,6 +7162,7 @@ class MCPServerManager:
             instructions=server.instructions,
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
+            approval_policy=server.approval_policy,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> list[LiteLLM_MCPServerTable]:
