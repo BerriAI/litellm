@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Final
 
 import pytest
@@ -68,3 +69,43 @@ def test_regular_keys_cannot_read_lens_results(role: LitellmUserRoles | None) ->
     with pytest.raises(HTTPException) as error:
         user_scope(auth)
     assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_updating_an_unknown_finding_returns_404(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import datetime, timezone
+
+    from litellm.proxy.lens import endpoints
+    from litellm.proxy.lens.models import Finding, FindingUpdate, Lens
+    from tests.unit.proxy.lens.test_state import finding, lens
+
+    now: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
+    draft: Final = finding("run")
+    known: Final = Finding(
+        title=draft.title,
+        description=draft.description,
+        check_id=draft.check_id,
+        evidence=draft.evidence,
+        id="known",
+        first_seen=now,
+        last_seen=now,
+        revision=1,
+    )
+    stored: Final = lens().model_copy(update={"findings": (known,)})
+
+    class Repository:
+        async def get(self, lens_id: str) -> Lens | None:
+            return stored if lens_id == stored.id else None
+
+        async def update(self, lens_id: str, transform: Callable[[Lens], Lens]) -> Lens | None:
+            return transform(stored)
+
+    monkeypatch.setattr(endpoints, "repository", Repository)
+    admin: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(HTTPException) as error:
+        await endpoints.update_finding("lens", "missing", FindingUpdate(status="dismissed"), admin)
+    assert error.value.status_code == 404
+
+    updated: Final = await endpoints.update_finding("lens", "known", FindingUpdate(status="dismissed"), admin)
+    assert updated.findings[0].status == "dismissed"
