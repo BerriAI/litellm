@@ -15,12 +15,13 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from functools import partial
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, Unpack
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, TypeIs, Unpack
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -6805,6 +6806,32 @@ def _get_rag_query_vector_store_id(request_body: Mapping[str, object]) -> str | 
     return vector_store_id if isinstance(vector_store_id, str) and vector_store_id else None
 
 
+def _is_object_list(value: object) -> TypeIs[list[object]]:  # guard-ok: trivial isinstance narrowing
+    return isinstance(value, list)
+
+
+def _is_object_mapping(value: object) -> TypeIs[Mapping[str, object]]:  # guard-ok: request JSON keys are str
+    return isinstance(value, dict)
+
+
+def _object_items(value: object) -> tuple[object, ...]:
+    return tuple(value) if _is_object_list(value) else ()
+
+
+def _tool_vector_store_ids(tool: object) -> tuple[object, ...]:
+    return _object_items(tool.get("vector_store_ids")) if _is_object_mapping(tool) else ()
+
+
+def _get_requested_vector_store_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    candidate_ids: Final = (
+        *_object_items(request_body.get("vector_store_ids")),
+        *chain.from_iterable(_tool_vector_store_ids(tool) for tool in _object_items(request_body.get("tools"))),
+    )
+    return tuple(
+        vector_store_id for vector_store_id in candidate_ids if isinstance(vector_store_id, str) and vector_store_id
+    )
+
+
 def _is_strict_vector_store_identity(valid_token: UserAPIKeyAuth | None) -> bool:
     return (
         valid_token is not None
@@ -6845,7 +6872,7 @@ async def vector_store_access_check(
 
     Raises ProxyException if the object (key, team, org) cannot access the specific vector store.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     #########################################################
     # Get the vector store the user is trying to access
@@ -6855,12 +6882,17 @@ async def vector_store_access_check(
         return True
 
     registry_ids: Final = (
-        litellm.vector_store_registry.get_vector_store_ids_to_run(
-            non_default_params=request_body, tools=request_body.get("tools", None)
+        _get_requested_vector_store_ids(_typed_request_body(request_body))
+        if deny_by_default
+        else (
+            litellm.vector_store_registry.get_vector_store_ids_to_run(
+                non_default_params=request_body, tools=request_body.get("tools", None)
+            )
+            if litellm.vector_store_registry is not None
+            else None
         )
-        if litellm.vector_store_registry is not None
-        else None
-    ) or ()
+        or ()
+    )
     rag_vector_store_id: Final = _get_rag_query_vector_store_id(_typed_request_body(request_body))
     rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
     vector_store_ids_to_run: Final = tuple(dict.fromkeys((*registry_ids, *rag_ids)))
@@ -6912,8 +6944,10 @@ async def vector_store_access_check(
 
     if strict_identity and not strict_key and not has_team:
         user_object_permission: Final = (
-            await _object_permission_table(ObjectPermissionRepository(prisma_client)).find_unique(
-                where={"object_permission_id": user_object.object_permission_id},
+            await get_object_permission(
+                object_permission_id=user_object.object_permission_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
             )
             if user_object is not None and user_object.object_permission_id is not None
             else None

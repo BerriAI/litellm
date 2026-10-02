@@ -2334,7 +2334,7 @@ async def test_load_config_logs_disabled_budget_reservation_once(tmp_path, monke
 async def test_load_config_yaml_vector_store_deny_by_default_is_boolean(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, yaml_value: str, expected: bool
 ):
-    config_file = tmp_path / "vector_store.yaml"
+    config_file: Final = tmp_path / "vector_store.yaml"
     config_file.write_text(
         f"model_list: []\nlitellm_settings: {{}}\ngeneral_settings:\n  vector_store_deny_by_default: {yaml_value}\n"
     )

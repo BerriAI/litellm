@@ -12,6 +12,7 @@ from functools import partial
 from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 
@@ -21,6 +22,7 @@ from fastapi import HTTPException, status
 import litellm
 import litellm.proxy.proxy_server
 from litellm.caching.dual_cache import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy._types import (
     LiteLLMRoutes,
     LiteLLM_JWTAuth,
@@ -5320,19 +5322,19 @@ async def test_team_key_vector_store_access_when_team_cannot_be_resolved(
     from fastapi import Request
     from starlette.datastructures import URL
 
-    token = UserAPIKeyAuth(
+    token: Final = UserAPIKeyAuth(
         api_key="sk-team-key", team_id="team-1", team_models=["gpt-4o-mini"], object_permission_id="key-permission"
     )
     token.via_virtual_key = True
-    request = Request(scope={"type": "http"})
+    request: Final = Request(scope={"type": "http"})
     request._url = URL(url="/v1/rag/query")
-    database = MagicMock()
+    database: Final = MagicMock()
     database.db.litellm_objectpermissiontable.find_unique = AsyncMock(
         side_effect=lambda where: SimpleNamespace(vector_stores=["KBSTOREA"])
         if where["object_permission_id"] == "key-permission"
         else None
     )
-    attrs = {
+    attrs: Final = {
         **_proxy_attrs_for_centralized_checks(),
         "prisma_client": database,
         "general_settings": {"vector_store_deny_by_default": deny_by_default},
@@ -5344,7 +5346,7 @@ async def test_team_key_vector_store_access_when_team_cannot_be_resolved(
         "litellm.proxy.auth.user_api_key_auth.get_team_object", AsyncMock(side_effect=team_lookup_error)
     )
 
-    checks = _run_centralized_common_checks(
+    checks: Final = _run_centralized_common_checks(
         user_api_key_auth_obj=token,
         request=request,
         request_data={
@@ -5382,25 +5384,25 @@ async def test_keyless_team_member_vector_store_access_uses_only_the_resolved_te
     from fastapi import Request
     from starlette.datastructures import URL
 
-    token = UserAPIKeyAuth(
+    token: Final = UserAPIKeyAuth(
         user_id="user-1",
         team_id="team-1",
         team_models=["gpt-4o-mini"],
         user_role=LitellmUserRoles.INTERNAL_USER,
     )
-    request = Request(scope={"type": "http"})
+    request: Final = Request(scope={"type": "http"})
     request._url = URL(url="/v1/rag/query")
-    grants = {
+    grants: Final = {
         "team-1-grants-a": ["KBSTOREA"],
         "team-1-grants-none": [],
         "team-2-grants-a": ["KBSTOREA"],
         "user-grants-a": ["KBSTOREA"],
     }
-    database = MagicMock()
+    database: Final = MagicMock()
     database.db.litellm_objectpermissiontable.find_unique = AsyncMock(
         side_effect=lambda where: SimpleNamespace(vector_stores=grants[where["object_permission_id"]])
     )
-    attrs = {
+    attrs: Final = {
         **_proxy_attrs_for_centralized_checks(),
         "prisma_client": database,
         "general_settings": {"vector_store_deny_by_default": True},
@@ -5425,7 +5427,7 @@ async def test_keyless_team_member_vector_store_access_uses_only_the_resolved_te
         ),
     )
 
-    checks = _run_centralized_common_checks(
+    checks: Final = _run_centralized_common_checks(
         user_api_key_auth_obj=token,
         request=request,
         request_data={
@@ -5442,6 +5444,73 @@ async def test_keyless_team_member_vector_store_access_uses_only_the_resolved_te
         await checks
     assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (
         ProxyErrorTypes.team_vector_store_access_denied,
+        "vector_store",
+        "401",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_permission_id", "denied"),
+    [("admin-grants-a", False), (None, True)],
+    ids=["admin-personal-grant", "admin-without-grant"],
+)
+async def test_keyless_proxy_admin_keeps_personal_vector_store_grants_under_deny_by_default(
+    monkeypatch: pytest.MonkeyPatch, user_permission_id: str | None, denied: bool
+):
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token: Final = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    request: Final = Request(scope={"type": "http"})
+    request._url = URL(url="/v1/rag/query")
+    database: Final = MagicMock()
+    database.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        side_effect=lambda where: SimpleNamespace(
+            dict=lambda: {"object_permission_id": where["object_permission_id"], "vector_stores": ["KBSTOREA"]},
+            vector_stores=["KBSTOREA"],
+        )
+    )
+    attrs: Final = {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": database,
+        "general_settings": {"vector_store_deny_by_default": True},
+        "user_api_key_cache": UserApiKeyCache(),
+        "proxy_logging_obj": MagicMock(
+            service_logging_obj=MagicMock(
+                async_service_success_hook=AsyncMock(), async_service_failure_hook=AsyncMock()
+            )
+        ),
+    }
+    for name, value in attrs.items():
+        monkeypatch.setattr(litellm.proxy.proxy_server, name, value)
+    monkeypatch.setattr(litellm, "vector_store_registry", None)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.user_api_key_auth.get_user_object",
+        AsyncMock(
+            return_value=LiteLLM_UserTable(
+                user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN, object_permission_id=user_permission_id
+            )
+        ),
+    )
+
+    checks: Final = _run_centralized_common_checks(
+        user_api_key_auth_obj=token,
+        request=request,
+        request_data={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what is in this KB?"}],
+            "retrieval_config": {"vector_store_id": "KBSTOREA", "custom_llm_provider": "bedrock"},
+        },
+        route="/v1/rag/query",
+    )
+    if not denied:
+        await checks
+        return
+    with pytest.raises(ProxyException) as exc_info:
+        await checks
+    assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (
+        ProxyErrorTypes.user_vector_store_access_denied,
         "vector_store",
         "401",
     )
