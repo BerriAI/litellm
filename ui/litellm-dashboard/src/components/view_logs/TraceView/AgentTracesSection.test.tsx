@@ -1,9 +1,10 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/http/client";
 
-import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import traceList from "./__fixtures__/trace_list.json";
 import AgentTracesPage from "./AgentTracesPage";
 import { AgentTracesSection, filterRuns } from "./AgentTracesSection";
@@ -267,6 +268,28 @@ describe("AgentTracesSection", () => {
     const rows = screen.getAllByTestId("agent-trace-row");
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent("Should we store OTEL agent spans");
+  });
+
+  it("labels the OTEL service as the agent and filters runs by it", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue({
+      ...(traceList as TracePage),
+      data: [...runs.slice(1), { ...runs[0], service: "billing-agent" }],
+    });
+    const user = userEvent.setup();
+    renderSection();
+    await screen.findAllByTestId("agent-trace-row");
+
+    expect(screen.getByRole("columnheader", { name: "Agent" })).toBeInTheDocument();
+    const agentFilter = screen.getByRole("combobox", { name: "Filter by agent" });
+    expect(agentFilter).toHaveTextContent("All agents");
+
+    await chooseSelectOption(user, agentFilter, "billing-agent");
+    const rows = screen.getAllByTestId("agent-trace-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("billing-agent");
+
+    await chooseSelectOption(user, agentFilter, "All agents");
+    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
   });
 
   it("status filter 'Failed' keeps only runs with errors", () => {
