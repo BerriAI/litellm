@@ -16,10 +16,6 @@ import httpx
 import psutil
 from integration._support.client import Gateway
 
-DB_PUSH: Final = ("--use_prisma_db_push",)
-MIGRATE_DEPLOY: Final = ()
-LEGACY_MIGRATE_DEPLOY: Final = ("--use_legacy_migration_resolver",)
-
 
 def proxy_database_environment() -> Mapping[str, str]:
     writer: Final = os.environ.get("INTEGRATION_PROXY_DATABASE_URL", "")
@@ -77,16 +73,9 @@ def owned_proxy(
     config: Path | None = None,
     remove_environment: tuple[str, ...] = (),
     workers: int = 1,
-    database_setup: tuple[str, ...] = DB_PUSH,
 ) -> Iterator[Gateway]:
     with owned_proxy_process(
-        gateway,
-        directory,
-        overrides,
-        config=config,
-        remove_environment=remove_environment,
-        workers=workers,
-        database_setup=database_setup,
+        gateway, directory, overrides, config=config, remove_environment=remove_environment, workers=workers
     ) as owned:
         yield owned.gateway
 
@@ -100,7 +89,6 @@ def owned_proxy_process(
     config: Path | None = None,
     remove_environment: tuple[str, ...] = (),
     workers: int = 1,
-    database_setup: tuple[str, ...] = DB_PUSH,
 ) -> Iterator[OwnedProxy]:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
@@ -134,7 +122,7 @@ def owned_proxy_process(
                 str(port),
                 "--num_workers",
                 str(workers),
-                *database_setup,
+                "--use_prisma_db_push",
                 "--enforce_prisma_migration_check",
             ],
             cwd=root,
