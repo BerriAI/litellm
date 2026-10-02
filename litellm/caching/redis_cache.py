@@ -13,6 +13,7 @@ import asyncio
 import functools
 import hashlib
 import inspect
+import itertools
 import json
 import logging
 import threading
@@ -178,11 +179,17 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
         first: Final = f_back.f_back
         if first is None:
             return "unknown"
-        frames: Final = tuple(_caller_frames(first))
-        function_names: Final = tuple(frame.f_code.co_name for frame in frames if not _is_generic_caller_frame(frame))[
-            :num_frames
-        ]
-        raw_names: Final = tuple(frame.f_code.co_name for frame in frames[:num_frames])
+        frames: Final = _caller_frames(first)
+        leading: Final = tuple(itertools.islice(frames, num_frames))
+        raw_names: Final = tuple(frame.f_code.co_name for frame in leading)
+        leading_names: Final = tuple(frame.f_code.co_name for frame in leading if not _is_generic_caller_frame(frame))
+        further_names: Final = tuple(
+            itertools.islice(
+                (frame.f_code.co_name for frame in frames if not _is_generic_caller_frame(frame)),
+                num_frames - len(leading_names),
+            )
+        )
+        function_names: Final = leading_names + further_names
 
         if function_names:
             return " <- ".join(function_names)
