@@ -625,7 +625,10 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
   });
 
-  it("applies the internal-user page allowlist to Projects for team admins", () => {
+  it.each([
+    { allowlist: ["teams"], visible: false },
+    { allowlist: ["teams", "projects"], visible: true },
+  ])("applies the internal-user page allowlist $allowlist to Projects for team admins", ({ allowlist, visible }) => {
     mockUseAuthorized.mockReturnValue(teamAdminAuthorization);
     mockUseTeams.mockReturnValue({
       data: [
@@ -637,9 +640,17 @@ describe("Sidebar (leftnav)", () => {
       error: null,
     });
 
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI enabledPagesInternalUsers={["teams"]} />);
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI enabledPagesInternalUsers={allowlist} />);
 
-    expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Projects/ }) !== null).toBe(visible);
+  });
+
+  it("shows Projects to a user whose global role is org admin", () => {
+    mockUseAuthorized.mockReturnValue({ ...teamMemberAuthorization, userRole: "Org Admin" });
+
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+
+    expect(screen.getByRole("link", { name: /Projects/ })).toHaveAttribute("href", "/ui/projects");
   });
 
   it("marks the nav item for the current route active", () => {
