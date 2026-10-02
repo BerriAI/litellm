@@ -172,16 +172,18 @@ async def worker_supports_model(worker: Worker, settings: LensSettings) -> bool:
 
 
 async def validate_workers(settings: LensSettings, scope: Scope) -> None:
-    workers: Final = tuple(w for w in await repository().workers() if not w.revoked and can_access(w.scope, scope))
-    for worker in workers:
+    workers: Final = repository().eligible_workers(scope)
+    first: Final = await anext(workers, None)
+    if first is None or await worker_supports_model(first, settings):
+        return
+    async for worker in workers:
         if await worker_supports_model(worker, settings):
             return
-    if workers:
-        raise HTTPException(
-            400,
-            "No worker can use this analysis model. Choose a model available to the worker's virtual key, "
-            "or update its model access and pricing.",
-        )
+    raise HTTPException(
+        400,
+        "No worker can use this analysis model. Choose a model available to the worker's virtual key, "
+        "or update its model access and pricing.",
+    )
 
 
 @router.get("", response_model=LensList)
@@ -225,8 +227,10 @@ async def list_agents(auth: Auth, storage: StorageDep) -> tuple[str, ...]:
 
 @router.put("/{lens_id}", response_model=Lens)
 async def update_lens(lens_id: str, settings: LensSettings, auth: Auth) -> Lens:
-    await get_lens(lens_id, user_scope(auth, write=True))
-    await validate_model(settings, auth)
+    lens: Final = await get_lens(lens_id, user_scope(auth, write=True))
+    validate_selection(settings)
+    if settings.model != lens.settings.model or (settings.enabled and not lens.settings.enabled):
+        await validate_model(settings, auth)
     return required(
         await repository().update(
             lens_id,
