@@ -294,8 +294,8 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
 
     def _dispose_owned_session_on_finalization(self) -> None:
         try:
-            if self._owns_session:
-                self._close_recycled_session(self.client)  # pyright: ignore[reportArgumentType]
+            if self._owns_session and isinstance(self.client, ClientSession):
+                self._close_recycled_session(self.client)
         except (RuntimeError, AttributeError, OSError) as e:
             verbose_logger.debug("Error closing session on transport finalization: %s", e)
 
