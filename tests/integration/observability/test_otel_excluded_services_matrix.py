@@ -713,23 +713,31 @@ def test_killing_one_of_two_workers_mid_burst_keeps_the_filter_on_the_survivor(r
     _assert_withheld(rig, rig.raw("chat", _marker(), stream=False), after)
 
 
-def _assert_tenant_kept(rig: Rig, trace_id: str, cursors: Cursors) -> tuple[Span, ...]:
+def _assert_tenant_kept(
+    rig: Rig, trace_id: str, cursors: Cursors, *, needs_model_span: bool = False
+) -> tuple[Span, ...]:
+    def ready(spans: tuple[Span, ...]) -> bool:
+        return (
+            sum(1 for span in spans if span["kind"] == SERVER) == 1
+            and "redis" in _db_systems(spans)
+            and (not needs_model_span or any("gen_ai.operation.name" in span["attributes"] for span in spans))
+        )
+
     tenant: Final = eventually(
         lambda: spans_for_trace(recorded_spans(rig.sinks.tenant, cursors.tenant)[1], trace_id),
-        lambda spans: sum(1 for span in spans if span["kind"] == SERVER) == 1 and "redis" in _db_systems(spans),
+        ready,
         seconds=40,
         return_last_on_timeout=True,
     )
     assert sum(1 for span in tenant if span["kind"] == SERVER) == 1, _names(tenant)
     assert "redis" in _db_systems(tenant), f"redis spans missing at the tenant: {_names(tenant)}"
+    assert not needs_model_span or any("gen_ai.operation.name" in span["attributes"] for span in tenant), _names(tenant)
     return tenant
 
 
 def _assert_kept(rig: Rig, sent: Sent, cursors: Cursors) -> tuple[Span, ...]:
     operator: Final = _operator_trace(rig, sent, cursors)
-    tenant: Final = _assert_tenant_kept(rig, operator[0]["trace_id"], cursors)
-    assert any("gen_ai.operation.name" in span["attributes"] for span in tenant), _names(tenant)
-    return tenant
+    return _assert_tenant_kept(rig, operator[0]["trace_id"], cursors, needs_model_span=True)
 
 
 @pytest.mark.timeout(120)
@@ -835,11 +843,11 @@ def test_unconfigured_key_level_destination_keeps_datastore_spans(
 
 def _assert_tenant_kept_the_burst(rig: Rig, cursors: Cursors, traces: set[str]) -> None:
     def ready(spans: tuple[Span, ...]) -> bool:
-        counts: Final = {
-            trace: sum(1 for span in spans if span["trace_id"] == trace and span["kind"] == SERVER) for trace in traces
-        }
-        burst: Final = tuple(span for span in spans if span["trace_id"] in traces)
-        return all(count >= 1 for count in counts.values()) and "redis" in _db_systems(burst)
+        def trace_kept(trace: str) -> bool:
+            trace_spans: Final = spans_for_trace(spans, trace)
+            return any(span["kind"] == SERVER for span in trace_spans) and "redis" in _db_systems(trace_spans)
+
+        return all(trace_kept(trace) for trace in traces)
 
     tenant: Final = eventually(
         lambda: recorded_spans(rig.sinks.tenant, cursors.tenant)[1],
@@ -848,13 +856,12 @@ def _assert_tenant_kept_the_burst(rig: Rig, cursors: Cursors, traces: set[str]) 
         return_last_on_timeout=True,
     )
     burst: Final = tuple(span for span in tenant if span["trace_id"] in traces)
-    counts: Final = {
-        trace: sum(1 for span in burst if span["trace_id"] == trace and span["kind"] == SERVER) for trace in traces
-    }
-    assert all(count >= 1 for count in counts.values()), (
-        f"SERVER root missing from burst traces: {counts}, {_names(burst)}"
+    missing_roots: Final = tuple(
+        trace for trace in traces if not any(span["kind"] == SERVER for span in spans_for_trace(burst, trace))
     )
-    assert "redis" in _db_systems(burst), f"redis spans missing at the tenant: {_names(burst)}"
+    missing_redis: Final = tuple(trace for trace in traces if "redis" not in _db_systems(spans_for_trace(burst, trace)))
+    assert not missing_roots, f"SERVER root missing from tenant burst traces: {missing_roots}, {_names(burst)}"
+    assert not missing_redis, f"redis spans missing from tenant burst traces: {missing_redis}, {_names(burst)}"
 
 
 @pytest.mark.timeout(300)
