@@ -282,6 +282,8 @@ curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 
 For MCP OAuth, an upstream may advertise dynamic client registration but refuse requests with HTTP 401 or 403. If the provider requires a pre-registered OAuth app, configure its `credentials.client_id` and, when required, `credentials.client_secret` on the MCP server. This skips dynamic registration in the gateway sign-in flow. The provider must approve the app for MCP access; reaching its authorization page does not establish that login or tool calls will succeed
 
+MCP REST tool calls return HTTP 404 with `tool_not_found` only after successful discovery confirms that the requested tool is absent. A cold catalogue keeps upstream authentication challenges and discovery failures: HTTP 401 or 403 for authentication, 504 for timeout, and 502 for an unreachable upstream. Known tools still use the configured server and key permission checks
+
 [**Docs: MCP Gateway**](https://docs.litellm.ai/docs/mcp)
 
 </details>

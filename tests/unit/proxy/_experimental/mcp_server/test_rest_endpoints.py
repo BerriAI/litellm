@@ -2,8 +2,9 @@ import asyncio
 import inspect
 import json
 import sys
+from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Any, Dict, Final, Optional
+from typing import Any, Final, TypeAlias
 from unittest.mock import AsyncMock, MagicMock
 
 from litellm.proxy._experimental.mcp_server import operations as mcp_operations
@@ -12,8 +13,9 @@ if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
     from exceptiongroup import BaseExceptionGroup
 
 import httpx
+import httpx2
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from mcp.types import CallToolResult, TextContent, Tool
 from starlette.requests import Request
 
@@ -22,7 +24,9 @@ from litellm.proxy._experimental.mcp_server import rest_endpoints
 from litellm.proxy._experimental.mcp_server.auth import (
     user_api_key_auth_mcp as auth_mcp,
 )
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.proxy._types import (
+    LiteLLM_ObjectPermissionTable,
     NewMCPServerRequest,
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
@@ -41,12 +45,12 @@ def _rendered_log_message(call):
 
 
 def _build_request(
-    headers: Optional[Dict[str, str]] = None,
+    headers: dict[str, str] | None = None,
     *,
     path: str = "/mcp-rest/test/tools/list",
     method: str = "POST",
-    json_body: Optional[Any] = None,
-    body: Optional[bytes] = None,
+    json_body: Any | None = None,
+    body: bytes | None = None,
 ) -> Request:
     headers = headers or {}
     if json_body is not None:
@@ -807,11 +811,10 @@ class TestTestConnection:
     async def test_inherits_stored_credentials_of_saved_server(self, monkeypatch):
         """The edit form resends a saved server without its masked credential; the stored one
         must be used, as /test/tools/list already does."""
-        from litellm.proxy._types import LitellmUserRoles
-        from litellm.types.mcp_server.mcp_server_manager import MCPServer
-
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy._types import LitellmUserRoles
         from litellm.proxy.management_endpoints import mcp_management_endpoints
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
         manager = MCPServerManager()
         monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
@@ -1564,7 +1567,13 @@ class TestListToolsRestAPI:
         monkeypatch,
     ):
         """The REST tools/list path should include tools beyond the upstream first page."""
-        from mcp.types import Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities
+        from mcp.types import (
+            Implementation,
+            InitializeResult,
+            ListToolsResult,
+            PaginatedRequestParams,
+            ServerCapabilities,
+        )
         from mcp.types import Tool as MCPTool
 
         import litellm.experimental_mcp_client.client as mcp_client_module
@@ -3456,7 +3465,7 @@ async def test_request_selected_tool_specific_guardrail_applies_to_virtual_execu
     import litellm
     from litellm.caching.caching import DualCache
     from litellm.proxy import proxy_server
-    from litellm.proxy._experimental.mcp_server import mcp_server_manager, server, tool_registry
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager, tool_registry
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable
     from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeGuardrail
     from litellm.proxy.utils import ProxyLogging
@@ -4223,7 +4232,6 @@ class TestConnectionErrorMessage:
 
     def test_closed_connection_explains_incomplete_request(self) -> None:
         from mcp import MCPError
-        from mcp.types import ErrorData
 
         message: Final = rest_endpoints._connection_error_message(
             MCPError(code=-32000, message="Connection closed", data="secret-data"), None, 30
@@ -4240,7 +4248,7 @@ class TestConnectionErrorMessage:
     @pytest.mark.parametrize("read_timeout", [0, 1])
     async def test_timeout_message_uses_the_deadline_that_expired(self, sdk_timeout: bool, read_timeout: int) -> None:
         from mcp import MCPError
-        from mcp.types import REQUEST_TIMEOUT, ErrorData
+        from mcp.types import REQUEST_TIMEOUT
 
         async def operation(client: rest_endpoints.MCPClient) -> dict[str, object]:
             try:
@@ -4267,7 +4275,6 @@ class TestConnectionErrorMessage:
 
     def test_sdk_session_terminated_explains_endpoint_and_retry(self) -> None:
         from mcp.shared.exceptions import MCPError
-        from mcp.types import ErrorData
 
         message: Final = rest_endpoints._connection_error_message(
             MCPError(code=32600, message="Session terminated"), "https://example.com/mcp", 30.0
@@ -4282,7 +4289,6 @@ class TestConnectionErrorMessage:
     @pytest.mark.parametrize("code", [-32700, -32601, -32602, -32603, -32000, 32600, 408])
     def test_rpc_errors_include_code_without_echoing_upstream_data(self, code: int) -> None:
         from mcp.shared.exceptions import MCPError
-        from mcp.types import ErrorData
 
         message: Final = rest_endpoints._connection_error_message(
             MCPError(code=code, message="secret-message", data={"token": "secret-data"}),
@@ -4862,3 +4868,197 @@ async def test_saved_preview_protocol_omission_and_explicit_edits(
     assert result == {"protocol_version": expected}
     assert saved.protocol_version == "2025-11-25"
     assert payload.mcp_info == metadata
+
+
+class CataloguePeer:
+    def __init__(self) -> None:
+        self.tools: list[Tool] = [Tool(name="known", input_schema={"type": "object"})]
+        self.failure: Exception | None = None
+        self.calls: list[tuple[str, dict[str, object]]] = []
+        self.list_count = 0
+
+    async def respond(self, request: httpx2.Request) -> httpx2.Response:
+        if request.method == "DELETE":
+            return httpx2.Response(200)
+        payload: Final[dict[str, object]] = json.loads(request.content)
+        if "id" not in payload:
+            return httpx2.Response(202)
+        result: Final[dict[str, object]]
+        if payload["method"] == "initialize":
+            result = {
+                "protocolVersion": "2025-03-26",
+                "serverInfo": {"name": "catalogue", "version": "1"},
+                "capabilities": {"tools": {}},
+            }
+        elif payload["method"] == "tools/list":
+            self.list_count += 1
+            if self.failure is not None:
+                if isinstance(self.failure, httpx.HTTPStatusError):
+                    return httpx2.Response(
+                        self.failure.response.status_code, headers=dict(self.failure.response.headers)
+                    )
+                raise self.failure
+            result = {"tools": [tool.model_dump(by_alias=True, exclude_none=True) for tool in self.tools]}
+        else:
+            assert payload["method"] == "tools/call"
+            params: Final[dict[str, object]] = payload["params"]
+            self.calls.append((params["name"], params["arguments"]))
+            result = _OK_TOOL_RESULT.model_dump(by_alias=True, exclude_none=True)
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": result})
+
+
+CatalogueGateway: TypeAlias = tuple[httpx.AsyncClient, MCPServerManager, CataloguePeer, UserAPIKeyAuth]
+
+
+@pytest.fixture
+async def catalogue_gateway(
+    monkeypatch: pytest.MonkeyPatch, config_only_mcp_manager_factory: type[MCPServerManager]
+) -> AsyncIterator[CatalogueGateway]:
+    manager: Final = config_only_mcp_manager_factory()
+    await manager.load_servers_from_config({
+        "catalogue": {
+            "url": "https://catalogue.example.invalid/mcp",
+            "transport": "http",
+            "auth_type": "none",
+        }
+    })
+    peer: Final = CataloguePeer()
+
+    import httpx2
+    import httpx2._client
+
+    monkeypatch.setattr(httpx2._client, "AsyncHTTPTransport", lambda **kwargs: httpx2.MockTransport(peer.respond))
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+    auth: Final = UserAPIKeyAuth(api_key="synthetic-admission", user_role="proxy_admin")
+    app: Final = FastAPI()
+    app.include_router(rest_endpoints.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: auth
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway") as client:
+        yield client, manager, peer, auth
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty", [False, True])
+@pytest.mark.parametrize("name", ["missing", "catalogue-missing"])
+async def test_successfully_discovered_unknown_tool_returns_404(
+    catalogue_gateway: CatalogueGateway, empty: bool, name: str
+) -> None:
+    client, _, peer, _ = catalogue_gateway
+    if empty:
+        peer.tools = []
+    response: Final = await client.post(
+        "/mcp-rest/tools/call", json={"server_id": "catalogue", "name": name, "arguments": {}}
+    )
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"]["error"] == "tool_not_found"
+    assert peer.calls == []
+
+
+@pytest.mark.asyncio
+async def test_successfully_discovered_known_tool_executes(catalogue_gateway: CatalogueGateway) -> None:
+    client, _, peer, _ = catalogue_gateway
+    response: Final = await client.post(
+        "/mcp-rest/tools/call", json={"server_id": "catalogue", "name": "known", "arguments": {"q": "value"}}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["content"][0]["text"] == '{"result": "ok"}'
+    assert peer.calls == [("known", {"q": "value"})]
+
+
+def catalogue_http_error(status: int) -> httpx.HTTPStatusError:
+    response: Final = httpx.Response(
+        status,
+        headers={"www-authenticate": 'Bearer realm="catalogue"'} if status == 401 else {},
+        request=httpx.Request("POST", "https://catalogue.example.invalid/mcp"),
+    )
+    return httpx.HTTPStatusError("Discovery failed", request=response.request, response=response)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "status", "category"),
+    [
+        (catalogue_http_error(401), 401, None),
+        (catalogue_http_error(403), 403, None),
+        (TimeoutError("catalogue timed out"), 504, "timeout"),
+        (ConnectionError("catalogue unreachable"), 502, "unreachable"),
+        (ValueError("invalid catalogue schema"), 500, "internal"),
+    ],
+)
+async def test_failed_discovery_keeps_its_status_not_tool_not_found(
+    catalogue_gateway: CatalogueGateway, failure: Exception, status: int, category: str | None
+) -> None:
+    client, _, peer, _ = catalogue_gateway
+    peer.failure = failure
+    response: Final = await client.post(
+        "/mcp-rest/tools/call", json={"server_id": "catalogue", "name": "missing", "arguments": {}}
+    )
+    assert response.status_code == status, response.text
+    if status == 401:
+        assert response.headers["www-authenticate"] == 'Bearer realm="catalogue"'
+    if category is not None:
+        assert response.json()["detail"]["error"] == category
+    assert peer.calls == []
+
+
+@pytest.mark.asyncio
+async def test_classified_discovery_fault_maps_through_rest_boundary(
+    catalogue_gateway: CatalogueGateway,
+) -> None:
+    from litellm.proxy._experimental.mcp_server.exceptions import MCPServerListError
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListFault
+
+    client, _, peer, _ = catalogue_gateway
+    peer.failure = MCPServerListError(ServerListFault(tag="unreachable"), "catalogue")
+    response: Final = await client.post(
+        "/mcp-rest/tools/call", json={"server_id": "catalogue", "name": "missing", "arguments": {}}
+    )
+    assert response.status_code == 502, response.text
+    assert response.json()["detail"]["error"] == "unreachable"
+    assert peer.calls == []
+
+
+@pytest.mark.asyncio
+async def test_known_forbidden_tool_still_returns_403(catalogue_gateway: CatalogueGateway) -> None:
+    client, manager, peer, _ = catalogue_gateway
+    server: Final = manager.get_mcp_server_by_name("catalogue")
+    assert server is not None
+    server.allowed_tools = []
+    server.mcp_info = {**(server.mcp_info or {}), "tool_allowlist_enforced": True}
+    response: Final = await client.post(
+        "/mcp-rest/tools/call", json={"server_id": "catalogue", "name": "known", "arguments": {}}
+    )
+    assert response.status_code == 403, response.text
+    assert peer.calls == []
+
+
+@pytest.mark.asyncio
+async def test_denied_server_does_not_discover_its_catalogue(catalogue_gateway: CatalogueGateway) -> None:
+    client, _, peer, auth = catalogue_gateway
+    auth.object_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="synthetic-denial", mcp_servers=["no-mcp-servers"]
+    )
+    response: Final = await client.post(
+        "/mcp-rest/tools/call", json={"server_id": "catalogue", "name": "missing", "arguments": {}}
+    )
+    assert response.status_code == 403, response.text
+    assert peer.calls == []
+    assert peer.list_count == 0
+
+
+@pytest.mark.asyncio
+async def test_key_tool_ceiling_still_denies_a_known_tool(catalogue_gateway: CatalogueGateway) -> None:
+    client, manager, peer, auth = catalogue_gateway
+    server: Final = manager.get_mcp_server_by_name("catalogue")
+    assert server is not None
+    auth.object_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="synthetic-tool-ceiling",
+        mcp_servers=[server.server_id],
+        mcp_tool_permissions={server.server_id: ["different_tool"]},
+    )
+    response: Final = await client.post(
+        "/mcp-rest/tools/call", json={"server_id": "catalogue", "name": "known", "arguments": {}}
+    )
+    assert response.status_code == 403, response.text
+    assert peer.calls == []

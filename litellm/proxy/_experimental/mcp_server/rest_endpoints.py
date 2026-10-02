@@ -221,6 +221,16 @@ def _known_connection_error_message(exc: BaseException, url: str | None, timeout
     return None
 
 
+def _tool_call_http_exception(error: HTTPException | MCPServerListError) -> HTTPException:
+    if isinstance(error, HTTPException):
+        return error
+    fault: Final = classify_list_exception(error)
+    return HTTPException(
+        status_code=list_fault_http_status(fault),
+        detail={"error": fault.tag, "message": "Failed to discover MCP tools before execution"},
+    )
+
+
 if MCP_AVAILABLE:
     from mcp.shared.exceptions import MCPError
     from mcp.types import Tool as MCPTool
@@ -1404,12 +1414,13 @@ if MCP_AVAILABLE:
             # and log at info: an expected caller-must-reauth signal, not an operator-actionable error.
             verbose_logger.info("MCP tool call relaying upstream HTTP %s", e.status_code)
             raise _relay_upstream_auth_http_exception(e, request)
-        except HTTPException as e:
+        except (HTTPException, MCPServerListError) as e:
             # Locally generated denials (tool/server permission, IP filtering, BYOK) stay at error level
             # so restriction probing keeps full monitoring visibility; the relayed upstream 401 above is
             # the only status demoted to info.
-            verbose_logger.error("HTTPException in MCP tool call: %s", e)
-            raise e
+            http_error: Final = _tool_call_http_exception(e)
+            verbose_logger.error("HTTPException in MCP tool call: %s", http_error)
+            raise http_error
         except Exception as e:
             verbose_logger.exception("Unexpected error in MCP tool call: %s", e)
             raise HTTPException(

@@ -1,4 +1,3 @@
-from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 import asyncio
 import contextlib
 import contextvars
@@ -30,6 +29,7 @@ from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERS
 from pydantic import JsonValue, TypeAdapter
 from starlette.types import Message, Receive, Scope, Send
 
+from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller
 from litellm.proxy._types import (
@@ -312,6 +312,62 @@ async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror(_mcp_r
     )
     info_calls = [str(c.args[0]) for c in mock_logger.info.call_args_list if c.args]
     assert any("Upstream auth failure" in m for m in info_calls)
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_tool_call_classifies_discovery_failure(_mcp_request_ctx, monkeypatch: pytest.MonkeyPatch):
+    """A session tools/call against a cold, unreachable server surfaces the classified
+    discovery fault as isError text, with no own-code mock: the real manager, real
+    client, and a foreign MockTransport speaking JSON-RPC drive the path."""
+    import httpx2
+    from mcp.types import JSONRPCMessage, JSONRPCRequest
+    from pydantic import TypeAdapter
+
+    from litellm.proxy._experimental.mcp_server.server import mcp_server_tool_call, set_auth_context
+
+    set_auth_context(UserAPIKeyAuth(api_key="test_key", user_id="test_user", user_role="proxy_admin"))
+
+    _jsonrpc: Final = TypeAdapter(JSONRPCMessage)
+
+    def peer_respond(request: httpx2.Request) -> httpx2.Response:
+        payload: Final[JSONRPCMessage] = _jsonrpc.validate_json(request.content)
+        if request.method == "DELETE" or not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        if payload.method == "initialize":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": "2025-03-26",
+                        "serverInfo": {"name": "catalogue", "version": "1"},
+                        "capabilities": {"tools": {}},
+                    },
+                },
+            )
+        raise httpx2.ConnectTimeout("catalogue timed out")
+
+    monkeypatch.setattr(httpx2._client, "AsyncHTTPTransport", lambda **kwargs: httpx2.MockTransport(peer_respond))
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    await global_mcp_server_manager.load_servers_from_config(
+        {
+            "catalogue": {
+                "url": "https://catalogue.example.invalid/mcp",
+                "transport": "http",
+            }
+        }
+    )
+
+    with patch("litellm.proxy.proxy_server.proxy_config", MagicMock()):
+        result = await mcp_server_tool_call(_mcp_request_ctx(), _call_tool_params("catalogue-missing", {}))
+
+    assert result.is_error is True
+    assert "failed to discover tools from MCP server 'catalogue' before execution (status=timeout)" in (
+        result.content[0].text
+    )
 
 
 def test_prepare_mcp_server_headers_case_insensitive_extra_headers():
@@ -1166,6 +1222,7 @@ async def test_mcp_read_resource_success():
 )
 async def test_read_resource_preserves_content_metadata(_mcp_request_ctx, kind, metadata):
     from mcp.types import ReadResourceRequestParams
+
     from litellm.proxy._experimental.mcp_server import operations, server
 
     uri: Final = "https://example.com/resource"
@@ -1314,9 +1371,12 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
         "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
         mock_manager,
     ):
-        with patch(
-            "litellm.proxy._experimental.mcp_server.catalog.verbose_logger",
-        ) as mock_logger, patch("litellm.proxy._experimental.mcp_server.operations.verbose_logger", mock_logger):
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.catalog.verbose_logger",
+            ) as mock_logger,
+            patch("litellm.proxy._experimental.mcp_server.operations.verbose_logger", mock_logger),
+        ):
             # Test with server-specific auth headers
             mcp_server_auth_headers = {
                 "working": {"Authorization": "Bearer working-token"},
@@ -1410,9 +1470,12 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
         mock_manager,
     ):
-        with patch(
-            "litellm.proxy._experimental.mcp_server.catalog.verbose_logger",
-        ) as mock_logger, patch("litellm.proxy._experimental.mcp_server.operations.verbose_logger", mock_logger):
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.catalog.verbose_logger",
+            ) as mock_logger,
+            patch("litellm.proxy._experimental.mcp_server.operations.verbose_logger", mock_logger),
+        ):
             # Test with server-specific auth headers
             mcp_server_auth_headers = {
                 "failing1": {"Authorization": "Bearer failing1-token"},
@@ -3506,8 +3569,15 @@ async def test_initialize_request_with_existing_session_tracks_new_session():
             patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
                 "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers",
                 new_callable=AsyncMock,
-                return_value=[MCPServer(server_id="new-server", name="new-server", url="http://upstream/mcp",
-                                        transport=MCPTransport.http, auth_type=MCPAuth.none)],
+                return_value=[
+                    MCPServer(
+                        server_id="new-server",
+                        name="new-server",
+                        url="http://upstream/mcp",
+                        transport=MCPTransport.http,
+                        auth_type=MCPAuth.none,
+                    )
+                ],
             ),
             patch(
                 "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
@@ -7205,9 +7275,9 @@ async def test_oauth_passthrough_preflight_preserves_status_contract(probe_statu
                 user_api_key_auth=UserAPIKeyAuth(user_id="admitted-user"),
                 mcp_servers=["passthrough_server"],
                 client_ip=None,
-            oauth2_headers={"Authorization": "Bearer upstream-token"},
-            mcp_server_auth_headers=None,
-            raw_headers={"x-litellm-api-key": "sk-litellm-proxy-key", "Authorization": "Bearer upstream-token"},
+                oauth2_headers={"Authorization": "Bearer upstream-token"},
+                mcp_server_auth_headers=None,
+                raw_headers={"x-litellm-api-key": "sk-litellm-proxy-key", "Authorization": "Bearer upstream-token"},
             )
             assert result is None
         else:
@@ -7217,9 +7287,9 @@ async def test_oauth_passthrough_preflight_preserves_status_contract(probe_statu
                     user_api_key_auth=UserAPIKeyAuth(user_id="admitted-user"),
                     mcp_servers=["passthrough_server"],
                     client_ip=None,
-            oauth2_headers={"Authorization": "Bearer upstream-token"},
-            mcp_server_auth_headers=None,
-            raw_headers={"x-litellm-api-key": "sk-litellm-proxy-key", "Authorization": "Bearer upstream-token"},
+                    oauth2_headers={"Authorization": "Bearer upstream-token"},
+                    mcp_server_auth_headers=None,
+                    raw_headers={"x-litellm-api-key": "sk-litellm-proxy-key", "Authorization": "Bearer upstream-token"},
                 )
             assert exc_info.value.status_code == expected_status
             if expected_status == 401:
@@ -7510,7 +7580,7 @@ async def test_execute_mcp_tool_rest_server_id_authoritative_for_unprefixed_tool
     with (
         patch.dict(
             mcp_operations.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
-            {"echo": oauth_server.name},
+            {"echo": oauth_server.name, "echo_api_key-echo": api_key_server.name},
         ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
@@ -7525,11 +7595,8 @@ async def test_execute_mcp_tool_rest_server_id_authoritative_for_unprefixed_tool
             "get_mcp_server_from_tool_name",
             return_value=oauth_server,
         ),
-        patch.object(
-            mcp_operations,
-            "_handle_managed_mcp_tool",
-            new=fake_handle_managed_mcp_tool,
-        ),
+        patch.object(mcp_operations, "_list_tools_before_first_call", new=AsyncMock()),
+        patch.object(mcp_operations, "_handle_managed_mcp_tool", new=fake_handle_managed_mcp_tool),
         patch.object(
             mcp_module.MCPRequestHandler,
             "is_tool_allowed",
@@ -7572,8 +7639,6 @@ def _worker_that_never_listed(server: MCPServer, upstream_tools: tuple[str, ...]
     tools/list with ``upstream_tools`` and a managed dispatch that records what reaches it."""
     from mcp.types import Tool as MCPTool
 
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
-
     mcp_operations.global_mcp_server_manager.registry[server.server_id] = server
     dispatched: dict[str, object] = {}
 
@@ -7606,7 +7671,6 @@ def _worker_that_never_listed(server: MCPServer, upstream_tools: tuple[str, ...]
 async def test_execute_mcp_tool_lists_never_listed_passthrough_server_with_caller_token_first():
     """A prefixed tools/call on a worker that has not served tools/list must list that server once
     with the caller's own credentials and then dispatch, instead of answering 404."""
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     server = _never_listed_passthrough_server()
     with _worker_that_never_listed(server, upstream_tools=("add",)) as worker:
@@ -7627,7 +7691,6 @@ async def test_execute_mcp_tool_lists_never_listed_passthrough_server_with_calle
 
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_rest_server_id_lists_never_listed_server_first():
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     server = _never_listed_passthrough_server()
     with _worker_that_never_listed(server, upstream_tools=("add",)) as worker:
@@ -7647,7 +7710,6 @@ async def test_execute_mcp_tool_rest_server_id_lists_never_listed_server_first()
 
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_unknown_tool_on_never_listed_server_lists_once_then_404s():
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     server = _never_listed_passthrough_server()
     with (
@@ -7671,8 +7733,6 @@ async def test_execute_mcp_tool_unknown_tool_on_never_listed_server_lists_once_t
 async def test_execute_mcp_tool_does_not_relist_a_server_this_worker_already_listed():
     from mcp.types import Tool as MCPTool
 
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
-
     server = _never_listed_passthrough_server()
     with _worker_that_never_listed(server, upstream_tools=("add",)) as worker:
         mcp_operations.global_mcp_server_manager._create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
@@ -7694,8 +7754,6 @@ async def test_execute_mcp_tool_lists_a_tool_this_worker_has_not_yet_seen_on_a_l
     for a different tool it has not cached, so callers with wider upstream catalogs are not 404ed."""
     from mcp.types import Tool as MCPTool
 
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
-
     server = _never_listed_passthrough_server()
     with _worker_that_never_listed(server, upstream_tools=("add", "multiply")) as worker:
         mcp_operations.global_mcp_server_manager._create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
@@ -7714,7 +7772,6 @@ async def test_execute_mcp_tool_lists_a_tool_this_worker_has_not_yet_seen_on_a_l
 
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_never_lists_a_server_the_caller_cannot_access():
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     server = _never_listed_passthrough_server()
     other_server = MCPServer(server_id="other-1", name="other", transport=MCPTransport.http)
@@ -7772,11 +7829,8 @@ async def test_execute_mcp_tool_strips_a_prefix_that_contains_the_separator():
             "get_mcp_server_from_tool_name",
             return_value=alias_less_server,
         ),
-        patch.object(
-            mcp_operations,
-            "_handle_managed_mcp_tool",
-            new=fake_handle_managed_mcp_tool,
-        ),
+        patch.object(mcp_operations, "_list_tools_before_first_call", new=AsyncMock()),
+        patch.object(mcp_operations, "_handle_managed_mcp_tool", new=fake_handle_managed_mcp_tool),
         patch.object(
             mcp_module.MCPRequestHandler,
             "is_tool_allowed",
@@ -7912,6 +7966,10 @@ async def test_execute_mcp_tool_rest_prefixed_tool_still_validates_server_id():
     )
 
     with (
+        patch.dict(
+            mcp_operations.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
+            {"echo_oauth_m2m-echo": oauth_server.name},
+        ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
             "get_registry",
@@ -7974,6 +8032,10 @@ async def test_execute_mcp_tool_rest_unauthorized_prefix_still_mismatches():
     )
 
     with (
+        patch.dict(
+            mcp_operations.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
+            {"restricted_server-echo": restricted_server.name},
+        ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
             "get_registry",
@@ -8038,6 +8100,10 @@ async def test_execute_mcp_tool_rest_hyphenated_upstream_tool_name_routes_to_req
         )
 
     with (
+        patch.dict(
+            mcp_operations.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
+            {"echo_api_key-text-to-speech": api_key_server.name},
+        ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
             "get_registry",
@@ -8048,11 +8114,8 @@ async def test_execute_mcp_tool_rest_hyphenated_upstream_tool_name_routes_to_req
             "get_mcp_server_from_tool_name",
             return_value=None,
         ),
-        patch.object(
-            mcp_operations,
-            "_handle_managed_mcp_tool",
-            new=fake_handle_managed_mcp_tool,
-        ),
+        patch.object(mcp_operations, "_list_tools_before_first_call", new=AsyncMock()),
+        patch.object(mcp_operations, "_handle_managed_mcp_tool", new=fake_handle_managed_mcp_tool),
         patch.object(
             mcp_module.MCPRequestHandler,
             "is_tool_allowed",
@@ -8087,7 +8150,6 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
     import uuid
     from datetime import timezone
 
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
     from litellm.proxy._types import LitellmUserRoles
     from litellm.utils import Rules, function_setup
 
@@ -8507,12 +8569,9 @@ async def test_fetch_pinnable_tool_catalog_records_no_listed_catalog_for_the_adm
 
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requested_server():
-    """A prefixed REST name that resolves to no tool must still dispatch to the server_id.
+    """An explicitly mapped requested-server tool wins a shared prefix collision.
 
-    The prefix here belongs to a different server, so it is not a prefix boundary on the
-    routed server and the name travels upstream whole. Stripping it would invoke the routed
-    server's similarly named tool instead, which is what the tool_server_mismatch 403 exists
-    to prevent when the prefix does resolve.
+    The requested server owns the alias and mapping, so server_id remains authoritative.
     """
     from mcp.types import TextContent
 
@@ -8521,6 +8580,7 @@ async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requeste
     requested_server = MCPServer(
         server_id="rest-target-id",
         name="rest_target",
+        alias="known_prefix",
         server_name="rest_target",
         url="http://127.0.0.1:5115/mcp",
         transport=MCPTransport.http,
@@ -8547,6 +8607,13 @@ async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requeste
         )
 
     with (
+        patch.dict(
+            mcp_operations.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
+            {
+                "rest_target-known_prefix-list_things": requested_server.name,
+                "known_prefix-list_things": requested_server.name,
+            },
+        ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
             "get_registry",
@@ -8560,11 +8627,8 @@ async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requeste
             "get_mcp_server_from_tool_name",
             return_value=None,
         ),
-        patch.object(
-            mcp_operations,
-            "_handle_managed_mcp_tool",
-            new=fake_handle_managed_mcp_tool,
-        ),
+        patch.object(mcp_operations, "_list_tools_before_first_call", new=AsyncMock()),
+        patch.object(mcp_operations, "_handle_managed_mcp_tool", new=fake_handle_managed_mcp_tool),
         patch.object(
             mcp_module.MCPRequestHandler,
             "is_tool_allowed",
@@ -8585,8 +8649,7 @@ async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requeste
         )
 
     assert captured["server_name"] == "rest_target"
-    assert captured["name"] == "known_prefix-list_things"
-
+    assert captured["name"] == "list_things"
     routed_server = {
         requested_server.name: requested_server,
         prefix_owner.name: prefix_owner,
@@ -8627,6 +8690,10 @@ async def test_execute_mcp_tool_rest_prefix_retry_resolution_still_enforces_serv
         return prefix_owner
 
     with (
+        patch.dict(
+            mcp_operations.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
+            {"echo_api_key-known_prefix-echo": requested_server.name},
+        ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
             "get_registry",
@@ -9625,9 +9692,10 @@ async def test_call_tool_with_legacy_db_m2m_server_resolves_oauth2_flow():
             "litellm.proxy._experimental.mcp_server.operations.execute_mcp_tool",
             side_effect=capture_execute,
         ),
-        patch(
-            "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers_from_mcp_server_names",
-            new=AsyncMock(side_effect=lambda mcp_servers, allowed_mcp_servers: allowed_mcp_servers),
+        patch.object(
+            mock_manager,
+            "filter_server_ids_by_ip_with_info",
+            return_value=(["legacy-m2m-id"], 0),
         ),
     ):
         mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["legacy-m2m-id"])
@@ -10097,7 +10165,6 @@ class TestPreemptive401ModeAware:
 
     @pytest.mark.asyncio
     async def test_deferred_discovery_runs_before_delegate_challenge(self):
-        from litellm.proxy._experimental.mcp_server import server as server_module
 
         manager = mcp_operations.global_mcp_server_manager
         server = _make_oauth2_server(
@@ -10129,7 +10196,6 @@ class TestPreemptive401ModeAware:
 
     @pytest.mark.asyncio
     async def test_stamped_m2m_challenge_skips_deferred_discovery(self):
-        from litellm.proxy._experimental.mcp_server import server as server_module
 
         manager = mcp_operations.global_mcp_server_manager
         server = _make_oauth2_server("stamped_m2m", oauth2_flow="client_credentials")
@@ -10969,8 +11035,8 @@ async def test_native_listing_preserves_empty_result_on_auth_failure(_mcp_reques
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure_hook_raises", [False, True])
 async def test_tool_listing_preserves_permission_denial_when_failure_logging_fails(failure_hook_raises):
-    from litellm.proxy._experimental.mcp_server import operations
     from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import operations
 
     auth = UserAPIKeyAuth(user_id="denied-caller")
     denial = HTTPException(status_code=403, detail="scope denied")
@@ -11006,8 +11072,9 @@ async def test_legacy_sse_mount_emits_message_endpoint(
 ) -> None:
     from starlette.applications import Starlette
     from starlette.routing import Mount
-    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+
     from litellm.proxy._experimental.mcp_server import server as mcp_server
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
 
     app: Final = Starlette(routes=[Mount("/mcp", app=mcp_server.app)])
     incoming: Final[asyncio.Queue[Message]] = asyncio.Queue()
@@ -11165,6 +11232,7 @@ def test_protocol_header_respects_configured_advertisement(revision, rejected):
 @pytest.mark.asyncio
 async def test_discovery_adapter_preserves_authenticated_context(_mcp_request_ctx):
     from mcp.types import DiscoverResult, RequestParams, ServerCapabilities
+
     from litellm.proxy._experimental.mcp_server import server
 
     expected = DiscoverResult(supported_versions=["2025-11-25"], capabilities=ServerCapabilities())
@@ -11208,11 +11276,13 @@ async def test_modern_oauth_challenge_follows_continuation_authorization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import time
+
+    from mcp.types import InputRequiredResult
     from pydantic import TypeAdapter
+
     from litellm.proxy._experimental.mcp_server import server
     from litellm.proxy._experimental.mcp_server.contracts import OperationContext
     from litellm.proxy._experimental.mcp_server.interactions import InteractionOperation, bind_target, seal_continuation
-    from mcp.types import InputRequiredResult
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "challenge-test-salt")
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"mcp_advertised_versions": ["2026-07-28"]})
@@ -11473,9 +11543,10 @@ async def test_modern_preflight_leaves_invalid_envelopes_to_sdk_without_upstream
 @pytest.mark.parametrize("forwarded_token", (False, True))
 async def test_modern_passthrough_probe_uses_scrubbed_server_credential(binding: str, forwarded_token: bool):
     import respx
-    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
     from litellm.proxy._experimental.mcp_server import server
     from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 
     target: Final = MCPServer(
         server_id="probe-id",
@@ -11546,8 +11617,9 @@ async def test_modern_passthrough_probe_uses_scrubbed_server_credential(binding:
 @pytest.mark.parametrize("header_shape", ("mapping", "non_authorization"))
 async def test_passthrough_probes_bind_each_token_to_its_authorized_server(allowed: bool, header_shape: str):
     import respx
-    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
     from litellm.proxy._experimental.mcp_server import server
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 
     targets: Final = [
         MCPServer(
@@ -11588,8 +11660,7 @@ async def test_passthrough_probes_bind_each_token_to_its_authorized_server(allow
         )
     assert result is None
     assert tuple(
-        (str(call.request.url), call.request.headers["Authorization"])
-        for call in (*first.calls, *second.calls)
+        (str(call.request.url), call.request.headers["Authorization"]) for call in (*first.calls, *second.calls)
     ) == (
         (("http://first/mcp", "Bearer first-token"), ("http://second/mcp", "Bearer second-token"))
         if allowed and header_shape != "non_authorization"
