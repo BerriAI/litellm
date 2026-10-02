@@ -393,6 +393,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return None, index
 
     def convert_chat_completion_messages_to_responses_api(
+        self,
+        messages: list["AllMessageValues"],
+        *,
+        keep_prompt_cache_breakpoints: bool = False,
+    ) -> tuple[list[object], str | None]:
+        converted_input_items, instructions = self._convert_chat_completion_messages_to_responses_input(messages)
+        return (
+            converted_input_items
+            if keep_prompt_cache_breakpoints
+            else _strip_prompt_cache_breakpoints(converted_input_items),
+            instructions,
+        )
+
+    def _convert_chat_completion_messages_to_responses_input(
         self, messages: list["AllMessageValues"]
     ) -> tuple[list[object], str | None]:
         input_items: Final[list[object]] = []
@@ -623,23 +637,19 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: object | None = None,
     ) -> dict:
-        converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(messages)
         base_model: Final = litellm_params.get("base_model")
         supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model) or (
             isinstance(base_model, str) and bool(base_model) and supports_openai_prompt_cache_breakpoint(base_model)
         )
-        input_items_without_unsupported_markers: Final = (
-            converted_input_items
-            if supports_prompt_cache_breakpoint
-            else _strip_prompt_cache_breakpoints(converted_input_items)
+        converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(
+            messages,
+            keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
         )
         # OpenAI's Responses API rejects an empty input. For a system-only
         # request, carry the system message as a system-role input item instead
         # of instructions, mirroring how non-string system content is already
         # handled in convert_chat_completion_messages_to_responses_api.
-        is_system_only_request: Final = (
-            not input_items_without_unsupported_markers and converted_instructions is not None
-        )
+        is_system_only_request: Final = not converted_input_items and converted_instructions is not None
         input_items: Final = (
             [
                 {
@@ -649,7 +659,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 }
             ]
             if is_system_only_request
-            else input_items_without_unsupported_markers
+            else converted_input_items
         )
         instructions: Final = None if is_system_only_request else converted_instructions
 

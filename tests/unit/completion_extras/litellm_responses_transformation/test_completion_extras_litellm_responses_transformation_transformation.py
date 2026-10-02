@@ -1,3 +1,4 @@
+import copy
 import datetime
 import json
 import os
@@ -4331,6 +4332,120 @@ def test_prompt_cache_breakpoints_are_dropped_from_function_call_output_for_unsu
             "content": [{"type": "text", "text": "Tool result", "prompt_cache_breakpoint": {"mode": "explicit"}}],
         }
     ]
+
+
+def test_convert_chat_completion_messages_to_responses_api_drops_prompt_cache_breakpoints_unless_kept() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    image_data_url: Final = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+    file_data: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Review these inputs", "prompt_cache_breakpoint": cache_breakpoint},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": image_data_url},
+                        "prompt_cache_breakpoint": cache_breakpoint,
+                    },
+                    {
+                        "type": "file",
+                        "file": {"file_data": file_data, "filename": "input.pdf"},
+                        "prompt_cache_breakpoint": cache_breakpoint,
+                    },
+                ],
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [
+                    {"type": "text", "text": "Tool result", "prompt_cache_breakpoint": cache_breakpoint}
+                ],
+            },
+        ],
+    )
+    messages_before: Final = copy.deepcopy(messages)
+
+    default_input, default_instructions = handler.convert_chat_completion_messages_to_responses_api(messages)
+    kept_input, kept_instructions = handler.convert_chat_completion_messages_to_responses_api(
+        messages,
+        keep_prompt_cache_breakpoints=True,
+    )
+
+    assert default_instructions is None
+    assert default_input == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Review these inputs"},
+                {"type": "input_image", "image_url": image_data_url, "detail": "auto"},
+                {"type": "input_file", "file_data": file_data, "filename": "input.pdf"},
+            ],
+        },
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "lookup",
+            "arguments": "{}",
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [{"type": "input_text", "text": "Tool result"}],
+        },
+    ]
+    assert kept_instructions is None
+    assert kept_input == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "Review these inputs",
+                    "prompt_cache_breakpoint": cache_breakpoint,
+                },
+                {
+                    "type": "input_image",
+                    "image_url": image_data_url,
+                    "detail": "auto",
+                    "prompt_cache_breakpoint": cache_breakpoint,
+                },
+                {
+                    "type": "input_file",
+                    "file_data": file_data,
+                    "filename": "input.pdf",
+                    "prompt_cache_breakpoint": cache_breakpoint,
+                },
+            ],
+        },
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "lookup",
+            "arguments": "{}",
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [{"type": "input_text", "text": "Tool result", "prompt_cache_breakpoint": cache_breakpoint}],
+        },
+    ]
+    assert messages == messages_before
 
 
 @pytest.mark.parametrize(
