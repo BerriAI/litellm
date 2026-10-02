@@ -62,12 +62,12 @@ def test_unset_environment_reference_does_not_fall_back(field: str) -> None:
 
 @pytest.mark.parametrize("store", ["clickhouse", {"type": "other"}])
 def test_non_clickhouse_store_is_rejected(store: object) -> None:
-    with pytest.raises(ValueError, match="tracing.store.type must be clickhouse"):
+    with pytest.raises(ValueError, match=r"tracing\.store\.type must be clickhouse"):
         trace_storage_config({"store": store}, {"CLICKHOUSE_URL": "http://localhost:8123"})
 
 
 def test_non_string_database_is_rejected() -> None:
-    with pytest.raises(ValueError, match="tracing.store.database must be a string"):
+    with pytest.raises(ValueError, match=r"tracing\.store\.database must be a string"):
         trace_storage_config({"store": {"type": "clickhouse", "url": "http://localhost:8123", "database": 1}}, {})
 
 
