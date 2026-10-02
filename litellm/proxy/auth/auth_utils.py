@@ -2109,8 +2109,10 @@ def request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool
     Reads the marker set by ``create_pass_through_route`` off the dispatched endpoint
     (``request.scope["endpoint"]``). Because routing has already run by the time auth
     dependencies execute, this reflects the handler that actually serves the request:
-    a custom path colliding with a built-in route resolves to the built-in handler,
-    which carries no marker, so model-access checks are never wrongly skipped.
+    an exact-path collision or a built-in that is not a ``/<prefix>/{name:path}``
+    catch-all still resolves to the built-in handler, which carries no marker. A
+    configured route shadowed by such a catch-all is dispatched ahead of it unless
+    ``LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST`` is set.
     """
     if request is None:
         return False
@@ -2145,10 +2147,12 @@ def get_model_from_request(
     ``model`` field there names an upstream model, not a LiteLLM-managed one, and
     enforcing key/team model allowlists against it would reject valid requests. The
     check reads the FastAPI-resolved endpoint (``request.scope["endpoint"]``), not the
-    request path, so a custom path that collides with a built-in route never
-    suppresses model-access checks: on a collision the built-in handler is dispatched
-    and does not carry the marker. Built-in provider passthrough routes
-    (``/vertex_ai``, ``/gemini``, ...) are separate handlers and keep model enforcement.
+    request path, so only a dispatched configured handler suppresses model-access
+    checks: exact-path collisions and built-ins that are not ``/<prefix>/{name:path}``
+    catch-alls still resolve to the built-in handler, which carries no marker. A
+    configured route shadowed by such a catch-all is dispatched ahead of it unless
+    ``LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST`` is set. Built-in provider passthrough
+    routes (``/vertex_ai``, ``/gemini``, ...) are separate handlers and keep model enforcement.
     """
     if request_dispatched_to_pass_through_endpoint(request):
         return None
