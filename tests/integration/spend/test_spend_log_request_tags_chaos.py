@@ -1,10 +1,10 @@
 import json
 import threading
 import uuid
-from collections.abc import Set, Mapping, Sequence
-from itertools import chain
+from collections.abc import Mapping, Sequence, Set
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
+from itertools import chain
 from pathlib import Path
 from typing import Final
 
@@ -150,7 +150,7 @@ def test_burst_across_routes_records_tags_once_per_response(gateway: Gateway, tm
             _landed_tags(key, lambda values: len(values) == 50)
 
 
-@pytest.mark.timeout(240)  # proxy boot, a full outage window and post-recovery delivery exceed the 90s default
+@pytest.mark.timeout(240)
 def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Path) -> None:
     down: Final = threading.Event()
     delivered: Final = []

@@ -2,14 +2,14 @@ import asyncio
 import http.client
 import json
 import uuid
+from collections.abc import Mapping, Sequence
 from hashlib import sha256
+from itertools import chain
 from pathlib import Path
 from typing import Final
 
 import anthropic
 import httpx
-from collections.abc import Mapping, Sequence
-from itertools import chain
 import openai
 import pytest
 import yaml
