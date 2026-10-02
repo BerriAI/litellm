@@ -236,6 +236,14 @@ fn spans_to_py<'py>(
             "events",
             litellm_host_python::Pythonized(&span.events).into_pyobject(py)?,
         )?;
+        row.set_item(
+            "normalized",
+            litellm_host_python::Pythonized(&span.normalized).into_pyobject(py)?,
+        )?;
+        row.set_item(
+            "consumed_attributes",
+            litellm_host_python::Pythonized(&span.consumed_attributes).into_pyobject(py)?,
+        )?;
         result.append(row)?;
     }
     Ok(result)
@@ -287,4 +295,9 @@ mod tests {
             assert!(actual.eq(expected).unwrap());
         });
     }
+}
+
+#[pyfunction]
+pub fn trace_normalized_field_definitions<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    litellm_host_python::Pythonized(litellm_traces::NORMALIZED_FIELD_DEFINITIONS).into_pyobject(py)
 }

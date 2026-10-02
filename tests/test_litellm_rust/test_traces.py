@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from litellm.rust_bridge._native import NativeTraceStorage, trace_decode_otlp
-from litellm.rust_bridge.traces import ClickHouseStorage
+from litellm.rust_bridge.traces import ClickHouseStorage, NormalizedSpan, normalized_field_definitions
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.decode import decode_otlp
 from litellm.tracing.store import TraceStore
@@ -155,6 +155,15 @@ def test_decode_and_tenant_stamping_share_resources_without_crossing_groups() ->
     }
     assert second[0]["ResourceAttributes"]["litellm.team_id"] == "team-b"
     assert rows[0]["ResourceAttributes"] == {"shared": "x" * 128, "litellm.team_id": "spoofed"}
+
+
+def test_normalized_field_contract_matches_decoded_rust_span() -> None:
+    body: Final = _resource_export(8, 1)
+    spans: Final = trace_decode_otlp(body, "application/json")
+    fields: Final = normalized_field_definitions()
+    assert len(spans) == 1
+    assert {field.name for field in fields} == set(spans[0]["normalized"]) == set(NormalizedSpan.model_fields)
+    assert len({field.clickhouse_column for field in fields}) == len(fields)
 
 
 @pytest.mark.asyncio

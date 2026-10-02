@@ -117,7 +117,7 @@ async def ingest_otlp_traces(
     return Response(content=body, media_type=media_type)
 
 
-@router.get("/v1/traces", response_model=None)
+@router.get("/v1/traces", response_model=TracePage)
 async def list_agent_traces(
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
     start_ms: Annotated[int | None, Query(description="Window start, unix ms. Default: 24h ago")] = None,
@@ -137,7 +137,7 @@ async def list_agent_traces(
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-@router.get("/v1/traces/{trace_id}", response_model=None)
+@router.get("/v1/traces/{trace_id}", response_model=Trace)
 async def get_agent_trace(
     trace_id: str,
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
@@ -150,7 +150,7 @@ async def get_agent_trace(
     return trace
 
 
-@router.get("/v1/traces/{trace_id}/spans/{span_id}", response_model=None)
+@router.get("/v1/traces/{trace_id}/spans/{span_id}", response_model=SpanDetail)
 async def get_agent_trace_span(
     trace_id: str,
     span_id: str,
