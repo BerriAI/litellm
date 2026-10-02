@@ -789,3 +789,75 @@ def test_db_lookup_deadline_is_a_connection_and_unavailability_error_but_never_a
     assert PrismaDBExceptionHandler.is_database_service_unavailable_error(deadline) is True
     assert PrismaDBExceptionHandler.is_database_transport_error(deadline) is False
     assert "temporarily unreachable" in PrismaDBExceptionHandler.database_unavailable_message(deadline)
+
+
+_TOO_MANY_CLIENTS: Final = "Error in connector: Error querying the database: FATAL: sorry, too many clients already"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        DataError(data={"user_facing_error": {"message": _TOO_MANY_CLIENTS}}),
+        DataError(
+            data={
+                "user_facing_error": {
+                    "message": "Error querying the database: FATAL: zu viele Verbindungen",
+                    "meta": {"code": "53300", "message": "zu viele Verbindungen"},
+                }
+            }
+        ),
+        DataError(
+            data={
+                "user_facing_error": {
+                    "message": "Error in connector: Error querying the database: FATAL: remaining connection slots are reserved for roles with the SUPERUSER attribute"
+                }
+            }
+        ),
+        DataError(
+            data={
+                "user_facing_error": {
+                    "message": 'Error occurred during query execution: ConnectorError(ConnectorError { user_facing_error: None, kind: QueryError(PostgresError { code: "53300", message: "too many connections for role \\"litellm\\"", severity: "FATAL" }) })'
+                }
+            }
+        ),
+        DataError(
+            data={
+                "user_facing_error": {
+                    "message": 'Error in connector: Error querying the database: FATAL: too many connections for role "litellm"'
+                }
+            }
+        ),
+        DataError(
+            data={
+                "user_facing_error": {
+                    "message": 'Error in connector: Error querying the database: FATAL: too many connections for database "litellm"'
+                }
+            }
+        ),
+    ],
+)
+def test_postgres_connection_capacity_refusal_is_service_unavailable_not_a_data_error(error: DataError) -> None:
+    """Postgres refusing a new connection (SQLSTATE 53300) reaches the proxy as a
+    bare ``DataError`` with no SQLSTATE in ``meta``. The server is up but full, so
+    the failure is service-unavailable (the spend-log flush re-raises and requeues
+    instead of bisecting the batch row by row against a full server) while not a
+    transport error, which would make auth and the health check tear the engine
+    down and open yet more connections against it."""
+    assert PrismaDBExceptionHandler.is_database_capacity_error(error) is True
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(error) is True
+    assert PrismaDBExceptionHandler.is_database_transport_error(error) is False
+    assert PrismaDBExceptionHandler.is_prisma_data_error(error) is True
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        DataError(data={"user_facing_error": {"message": "invalid byte sequence for encoding UTF8: 0x00"}}),
+        UniqueViolationError(data={"user_facing_error": {"error_code": "P2002", "meta": {"table": "t"}}}),
+        PrismaError("can't reach database server"),
+        httpx.ConnectError("connection refused"),
+        RuntimeError(_TOO_MANY_CLIENTS),
+    ],
+)
+def test_is_database_capacity_error_excludes_other_failures(error: Exception) -> None:
+    assert PrismaDBExceptionHandler.is_database_capacity_error(error) is False
