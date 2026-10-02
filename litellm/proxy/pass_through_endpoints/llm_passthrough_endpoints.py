@@ -58,6 +58,10 @@ from litellm.llms.deepgram.common_utils import (
 )
 from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost, fal_ai_queue_base
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
+from litellm.llms.openai.workload_identity import (
+    get_workload_identity_bearer_token_async,
+    resolve_openai_workload_identity_config,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 from litellm.proxy._types import *
@@ -99,7 +103,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     get_litellm_managed_vector_store,
     is_allowed_to_call_vector_store_endpoint,
 )
-from litellm.secret_managers.main import get_secret_str, str_to_bool
+from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str, str_to_bool
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
@@ -2920,6 +2924,21 @@ async def vertex_proxy_route(
     )
 
 
+async def _openai_passthrough_credential(base_target_url: str) -> str | None:
+    static_api_key: Final = normalize_nonempty_secret_str(
+        passthrough_endpoint_router.get_credentials(
+            custom_llm_provider=litellm.LlmProviders.OPENAI.value,
+            region_name=None,
+        )
+    )
+    if static_api_key is not None:
+        return static_api_key
+    workload_identity_config: Final = resolve_openai_workload_identity_config(api_key=None, api_base=base_target_url)
+    if workload_identity_config is None:
+        return None
+    return await get_workload_identity_bearer_token_async(workload_identity_config)
+
+
 @router.api_route(
     "/openai/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -2955,11 +2974,7 @@ async def openai_proxy_route(
     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
     """
     base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
-    # Add or update query parameters
-    openai_api_key: Final = passthrough_endpoint_router.get_credentials(
-        custom_llm_provider=litellm.LlmProviders.OPENAI.value,
-        region_name=None,
-    )
+    openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
     if openai_api_key is None:
         raise Exception("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
 
@@ -3127,10 +3142,7 @@ async def openai_websocket_proxy_route(
         return
 
     base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
-    openai_api_key: Final = passthrough_endpoint_router.get_credentials(
-        custom_llm_provider=litellm.LlmProviders.OPENAI.value,
-        region_name=None,
-    )
+    openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
     if openai_api_key is None:
         await websocket.close(
             code=1011,

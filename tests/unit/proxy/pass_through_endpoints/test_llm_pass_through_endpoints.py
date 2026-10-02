@@ -3583,6 +3583,72 @@ def test_openai_passthrough_forwards_verbatim_to_openai(
         assert route.calls.last.request.headers["authorization"] == "Bearer sk-upstream"
 
 
+@pytest.fixture
+def openai_wif_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from litellm.llms.openai.workload_identity import _workload_identity_auth
+
+    token_file: Final = tmp_path / "subject_token.jwt"
+    token_file.write_text("subject-token-from-file")
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setenv("OPENAI_IDENTITY_PROVIDER_ID", "idp_test123")
+    monkeypatch.setenv("OPENAI_SERVICE_ACCOUNT_ID", "user-test456")
+    monkeypatch.setenv("OPENAI_IDENTITY_TOKEN_FILE", str(token_file))
+    _workload_identity_auth.cache_clear()
+
+
+@pytest.mark.parametrize("static_key", [None, "", "   "])
+def test_openai_passthrough_uses_workload_identity_token_without_static_key(
+    openai_passthrough_client: TestClient,
+    openai_wif_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+    static_key: str | None,
+) -> None:
+    if static_key is None:
+        monkeypatch.delenv("OPENAI_API_KEY")
+    else:
+        monkeypatch.setenv("OPENAI_API_KEY", static_key)
+    with respx.mock(assert_all_called=True) as upstream:
+        token_exchange = upstream.post("https://auth.openai.com/oauth/token").mock(
+            return_value=httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})
+        )
+        route = upstream.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json={"id": "upstream_123"})
+        )
+        response = openai_passthrough_client.post(
+            "/openai_passthrough/v1/responses", json={"model": "gpt-5.1", "input": "hi"}
+        )
+
+        assert (response.status_code, response.json()) == (200, {"id": "upstream_123"})
+        assert route.calls.last.request.headers["authorization"] == "Bearer wif-bearer"
+        assert json.loads(token_exchange.calls.last.request.content)["subject_token"] == "subject-token-from-file"
+
+
+@pytest.mark.asyncio
+async def test_openai_passthrough_never_sends_workload_identity_token_to_foreign_api_base(
+    openai_wif_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_BASE", "https://my-vllm.internal/")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value=None,
+        ),
+        respx.mock(assert_all_mocked=True) as upstream,
+        pytest.raises(Exception, match="Required 'OPENAI_API_KEY'"),
+    ):
+        await openai_proxy_route(
+            endpoint="v1/responses",
+            request=MagicMock(spec=Request),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=MagicMock(),
+        )
+    assert upstream.calls.call_count == 0
+
+
 class TestCursorProxyRoute:
     """Tests for the Cursor Cloud Agents pass-through route."""
 

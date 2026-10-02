@@ -70,6 +70,10 @@ def get_workload_identity_bearer_token(config: OpenAIWorkloadIdentityConfig) -> 
     return _workload_identity_auth(config).get_token()
 
 
+async def get_workload_identity_bearer_token_async(config: OpenAIWorkloadIdentityConfig) -> str:
+    return await _workload_identity_auth(config).get_token_async()
+
+
 def _targets_openai_api(api_base: str | None) -> bool:
     if api_base is None:
         return True
