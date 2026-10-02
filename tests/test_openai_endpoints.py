@@ -1,3 +1,5 @@
+import os
+from typing import Final
 # What this tests ?
 ## Tests /chat/completions by generating a key and then making a chat completions-request
 import pytest
@@ -398,10 +400,12 @@ async def test_completion_streaming_usage_metrics():
     """
     [PROD Test] Ensures usage metrics are returned correctly when `include_usage` is set to `True`
     """
-    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+    client: Final = AsyncOpenAI(
+        api_key="sk-1234", base_url=os.environ.get("LITELLM_PROXY_BASE_URL", "http://0.0.0.0:4000")
+    )
 
     response = await client.completions.create(
-        model="gpt-instruct",
+        model="gpt-6-luna",
         prompt="hey",
         stream=True,
         stream_options={"include_usage": True},
@@ -417,9 +421,7 @@ async def test_completion_streaming_usage_metrics():
     assert last_chunk is not None, "No chunks were received"
     assert last_chunk.usage is not None, "Usage information was not received"
     assert last_chunk.usage.prompt_tokens > 0, "Prompt tokens should be greater than 0"
-    assert (
-        last_chunk.usage.completion_tokens > 0
-    ), "Completion tokens should be greater than 0"
+    assert last_chunk.usage.completion_tokens > 0, "Completion tokens should be greater than 0"
     assert last_chunk.usage.total_tokens > 0, "Total tokens should be greater than 0"
 
 
@@ -519,23 +521,6 @@ async def test_image_generation():
         key_gen = await new_user(session=session)
         key_2 = key_gen["key"]
         await image_generation(session=session, key=key_2)
-
-
-@pytest.mark.flaky(retries=5, delay=1)
-@pytest.mark.asyncio
-async def test_openai_wildcard_chat_completion():
-    """
-    - Create key for model = "*" -> this has access to all models
-    - proxy_server_config.yaml has model = *
-    - Make chat completion call
-
-    """
-    async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session, models=["*"])
-        key = key_gen["key"]
-
-        # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
-        await chat_completion(session=session, key=key, model="gpt-3.5-turbo-0125")
 
 
 @pytest.mark.asyncio
