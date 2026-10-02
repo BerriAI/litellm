@@ -3208,7 +3208,7 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, obje
     return None
 
 
-def is_generalized_model_info(model_info: ModelInfo) -> bool:
+def is_generalized_model_info(model_info: ModelInfoBase) -> bool:
     """Whether ``model_info`` came from a fallback-generalization capability rule.
 
     Detected as the resolved key missing ``litellm.model_cost`` while matching a
@@ -3220,6 +3220,29 @@ def is_generalized_model_info(model_info: ModelInfo) -> bool:
     if not isinstance(key, str):
         return False
     return key not in litellm.model_cost and match_capability_generalizations(key) is not None
+
+
+def get_priced_model_info(model: str, custom_llm_provider: str | None = None) -> ModelInfo:
+    """``get_model_info`` that raises ``ModelNotMappedError`` when the only match is a pricing-free capability rule."""
+    model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    if is_generalized_model_info(model_info):
+        raise ModelNotMappedError(_model_not_mapped_message(model, custom_llm_provider))
+    return model_info
+
+
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _cached_get_priced_model_info_helper(
+    model: str,
+    custom_llm_provider: str | None,
+    api_base: str | None = None,
+) -> ModelInfoBase:
+    """``_cached_get_model_info_helper`` that raises ``ModelNotMappedError`` on a capability-rule-only match."""
+    model_info: Final = _cached_get_model_info_helper(
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+    )
+    if is_generalized_model_info(model_info):
+        raise ModelNotMappedError(_model_not_mapped_message(model, custom_llm_provider))
+    return model_info
 
 
 def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
@@ -5558,6 +5581,7 @@ def _invalidate_model_cost_lowercase_map() -> None:
     # Clear LRU caches that depend on model_cost data
     _cached_get_model_info.cache_clear()
     _cached_get_model_info_helper.cache_clear()
+    _cached_get_priced_model_info_helper.cache_clear()
 
 
 def _rebuild_model_cost_lowercase_map() -> dict[str, str]:

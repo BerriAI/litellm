@@ -9,7 +9,7 @@ from typing import Any, Final, Literal
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import CallTypes, ModelInfo, Usage
-from litellm.utils import get_model_info
+from litellm.utils import get_priced_model_info
 
 
 def cost_router(call_type: CallTypes) -> Literal["cost_per_token", "cost_per_second"]:
@@ -61,7 +61,7 @@ def cost_per_second(model: str, custom_llm_provider: str | None, duration: float
     """
 
     ## GET MODEL INFO
-    model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider or "openai")
+    model_info: Final = get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider or "openai")
     prompt_cost = 0.0
     completion_cost = 0.0
     ## Speech / Audio cost calculation
@@ -149,7 +149,7 @@ def video_generation_cost(
     """
     ## GET MODEL INFO
     if model_info is None:
-        model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider or "openai")
+        model_info = get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider or "openai")
 
     # Check for video-specific cost per second
     video_cost_per_second: Final = model_info.get("output_cost_per_video_per_second")

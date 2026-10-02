@@ -1525,7 +1525,7 @@ def _get_model_cost_info(
         model_group_info: Final = llm_router.cached_model_group_info(model)
         if model_group_info is not None:
             return model_group_info.model_dump()
-    return dict(litellm.get_model_info(model=model))
+    return dict(litellm.get_priced_model_info(model=model))
 
 
 def _get_model_cost_infos(

@@ -7,7 +7,10 @@ its end-to-end wiring into provider routing (get_llm_provider) and model-info
 resolution (get_model_info) including the shipped rules in the bundled cost map.
 """
 
+import json
 import logging
+from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -986,3 +989,21 @@ def test_shipped_tool_search_rule_fills_mapped_claude_entries_without_flag(shipp
     assert match_fill_missing_generalizations("claude-opus-5", "bedrock")["supports_tool_search"] is True
     assert "supports_tool_search" not in match_fill_missing_generalizations("claude-opus-5", "azure_ai")
     assert match_fill_missing_generalizations("claude-opus-5", "perplexity") is None
+
+
+def test_shipped_rules_carry_no_pricing_fields():
+    """A capability rule's model_info can only carry behavior facts (mode, supports_*,
+    context windows). A cost field would let an unmapped alias resolve to a guessed rate."""
+    repo_root: Final = Path(__file__).resolve().parents[3]
+    for path in (
+        repo_root / "model_prices_and_context_window.json",
+        repo_root / "litellm" / "model_prices_and_context_window_backup.json",
+    ):
+        rules: Final = json.loads(path.read_text())["fallback_generalizations"]["rules"]
+        offenders: Final = [
+            f"{path.name}:{rule['name']}:{field}"
+            for rule in rules
+            for field in rule.get("model_info", {})
+            if "cost" in field
+        ]
+        assert not offenders

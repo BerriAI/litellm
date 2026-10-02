@@ -4,7 +4,7 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.utils import get_model_info
+from litellm.utils import get_priced_model_info
 
 PARALLEL_AI_DEFAULT_RESULTS: Final = 10
 PARALLEL_AI_ADDITIONAL_RESULT_COST: Final = 0.001
@@ -63,7 +63,7 @@ def _effective_max_results(optional_params: Mapping[str, object]) -> int:
 
 def _request_cost(mode: str) -> float:
     pricing_model: Final = PARALLEL_AI_PRICING_MODEL_BY_MODE.get(mode, PARALLEL_AI_STANDARD_SEARCH_MODEL)
-    model_info: Final = get_model_info(model=pricing_model, custom_llm_provider="parallel_ai")
+    model_info: Final = get_priced_model_info(model=pricing_model, custom_llm_provider="parallel_ai")
     return float(model_info.get("input_cost_per_query") or 0.0)
 
 

@@ -8,7 +8,7 @@ from typing import Final
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import TokenRates, apply_off_peak_pricing
 from litellm.types.utils import Usage
-from litellm.utils import get_model_info
+from litellm.utils import get_priced_model_info
 
 
 def cost_per_token(model: str, usage: Usage, current_time: datetime | None = None) -> tuple[float, float]:
@@ -41,7 +41,7 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
 
     ## FALLBACK: Calculate cost manually if Perplexity doesn't provide it
     ## GET MODEL INFO
-    model_info: Final = get_model_info(model=model, custom_llm_provider="perplexity")
+    model_info: Final = get_priced_model_info(model=model, custom_llm_provider="perplexity")
 
     def _safe_float_cast(value: str | float | None | object, default: float = 0.0) -> float:
         """Safely cast a value to float with proper type handling for mypy."""

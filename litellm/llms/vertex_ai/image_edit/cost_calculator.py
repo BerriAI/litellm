@@ -18,7 +18,7 @@ def cost_calculator(
     Mirrors image generation pricing: charge per returned image based on
     model metadata (`output_cost_per_image`).
     """
-    model_info: Final = litellm.get_model_info(
+    model_info: Final = litellm.get_priced_model_info(
         model=model,
         custom_llm_provider="vertex_ai",
     )

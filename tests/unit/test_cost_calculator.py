@@ -1260,7 +1260,7 @@ def test_cost_calculator_with_cache_creation():
             }
         ),
     )
-    model = "claude-sonnet-4@20250514"
+    model = "claude-sonnet-4-5@20250929"
 
     assert litellm_model_response.usage.prompt_tokens_details.cached_tokens == 28491
 
@@ -5693,3 +5693,48 @@ def test_pricing_entry_for_cost_calc_skips_capability_rule_alias(_local_model_co
 
     assert resolved is not None
     assert resolved[0] == "vertex_ai/claude-opus-4-8@default"
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider,deployment_model,cost_map_key",
+    [
+        ("vertex_ai", "claude-opus-4-8@default", "vertex_ai/claude-opus-4-8@default"),
+        ("anthropic", "claude-opus-4-8", "claude-opus-4-8"),
+    ],
+)
+def test_response_cost_calculator_prices_capability_rule_alias_from_the_deployment(
+    _local_model_cost_map: None, custom_llm_provider: str, deployment_model: str, cost_map_key: str
+) -> None:
+    response: Final = ModelResponse(
+        id="chatcmpl_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="claude-opus-4.8",
+        usage=Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
+    )
+    row: Final = litellm.model_cost[cost_map_key]
+    expected: Final = 30 * row["input_cost_per_token"] + 40 * row["output_cost_per_token"]
+    assert expected > 0
+
+    cost: Final = response_cost_calculator(
+        response_object=response,
+        model=deployment_model,
+        custom_llm_provider=custom_llm_provider,
+        call_type="completion",
+        optional_params={},
+        cache_hit=None,
+        base_model=None,
+    )
+
+    assert cost == pytest.approx(expected)
+
+
+def test_cost_per_token_raises_for_capability_rule_only_alias(_local_model_cost_map: None) -> None:
+    """The alias only matches a pricing-free capability rule, so cost lookup must raise
+    (the unmapped contract) rather than bill $0."""
+    with pytest.raises(litellm.ModelNotMappedError):
+        cost_per_token(
+            model="claude-opus-4.8",
+            custom_llm_provider="anthropic",
+            prompt_tokens=30,
+            completion_tokens=40,
+        )

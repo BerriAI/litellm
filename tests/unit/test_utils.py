@@ -240,6 +240,32 @@ def test_get_model_info_prefers_exact_dated_key_over_stripped(
     assert info["key"] == expected_key
 
 
+def test_get_priced_model_info_raises_on_capability_rule_only_match(local_model_cost_map: None) -> None:
+    """An alias like claude-opus-4.8 resolves through the claude-family-baseline rule, so
+    get_model_info returns it, but it prices nothing and get_priced_model_info must raise."""
+    info: Final = litellm.get_model_info(model="claude-opus-4.8", custom_llm_provider="anthropic")
+    assert info["key"] not in litellm.model_cost
+    with pytest.raises(litellm.ModelNotMappedError):
+        litellm.get_priced_model_info(model="claude-opus-4.8", custom_llm_provider="anthropic")
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        ("claude-opus-4-8", "anthropic"),
+        ("vertex_ai/claude-opus-4-8@default", "vertex_ai"),
+        ("Claude-Opus-4-8", "anthropic"),
+    ],
+)
+def test_get_priced_model_info_returns_priced_entries(
+    local_model_cost_map: None, model: str, custom_llm_provider: str
+) -> None:
+    expected: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    info: Final = litellm.get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    assert info == expected
+    assert info["input_cost_per_token"] is not None and info["input_cost_per_token"] > 0
+
+
 def test_get_model_info_internal_failure_is_not_reported_as_unmapped() -> None:
     with patch("litellm.utils._get_potential_model_names", side_effect=RuntimeError("malformed metadata")):
         with pytest.raises(Exception, match="This model isn't mapped yet") as exc_info:
