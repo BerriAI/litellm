@@ -24,18 +24,23 @@ MID_STREAM_CONTINUATION_MARKER: Final = _ContinuationMarker()
 _STR_KEYED_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
+def _declared_prefill_support(deployment_map: Mapping[str, object]) -> bool | None:
+    try:
+        model_info: Final = _STR_KEYED_DICT_ADAPTER.validate_python(deployment_map.get("model_info"))
+    except ValidationError:
+        return None
+    declared: Final = model_info.get("supports_assistant_prefill")
+    return declared if isinstance(declared, bool) else None
+
+
 def _deployment_supports_prefill(deployment: object) -> bool:
     try:
         deployment_map: Final = _STR_KEYED_DICT_ADAPTER.validate_python(deployment)
     except ValidationError:
         return False
-    try:
-        model_info: Final = _STR_KEYED_DICT_ADAPTER.validate_python(deployment_map.get("model_info"))
-        declared: Final = model_info.get("supports_assistant_prefill")
-        if isinstance(declared, bool):
-            return declared
-    except ValidationError:
-        pass
+    declared: Final = _declared_prefill_support(deployment_map)
+    if declared is not None:
+        return declared
     try:
         litellm_params: Final = _STR_KEYED_DICT_ADAPTER.validate_python(deployment_map.get("litellm_params"))
     except ValidationError:

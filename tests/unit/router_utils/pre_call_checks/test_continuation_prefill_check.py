@@ -32,6 +32,8 @@ def _deployment(model: str, dep_id: str) -> dict:
 def test_deployment_supports_prefill_reads_capability():
     assert _deployment_supports_prefill(_deployment(PREFILL_MODEL, "a")) is True
     assert _deployment_supports_prefill(_deployment(NON_PREFILL_MODEL, "b")) is False
+    assert _deployment_supports_prefill({"litellm_params": {"model": PREFILL_MODEL}}) is True
+    assert _deployment_supports_prefill({"litellm_params": {"model": PREFILL_MODEL}, "model_info": "bogus"}) is True
 
 
 def test_deployment_model_info_override_wins_over_cost_map():
