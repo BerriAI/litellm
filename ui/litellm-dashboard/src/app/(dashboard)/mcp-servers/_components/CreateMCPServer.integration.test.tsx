@@ -1944,6 +1944,29 @@ describe("CreateMCPServer", () => {
         expect(nameInput).toHaveValue("github_mcp");
       });
     });
+
+    const sqlitePrefill = {
+      name: "sqlite",
+      title: "SQLite",
+      description: "Local database",
+      category: "Databases",
+      transport: "stdio",
+      command: "uvx",
+      args: ["mcp-server-sqlite"],
+    };
+
+    it("explains that a catalog stdio server cannot be added while the proxy has stdio off", async () => {
+      render(<CreateMCPServer {...defaultProps} prefillData={sqlitePrefill} stdioEnabled={false} />);
+
+      expect(await screen.findByText("stdio is disabled on this proxy")).toBeInTheDocument();
+    });
+
+    it("shows no stdio banner for a catalog stdio server once stdio is enabled", async () => {
+      render(<CreateMCPServer {...defaultProps} prefillData={sqlitePrefill} stdioEnabled />);
+
+      await waitFor(() => expect(getServerNameInput()).toHaveValue("sqlite"));
+      expect(screen.queryByText("stdio is disabled on this proxy")).not.toBeInTheDocument();
+    });
   });
 
   describe("with back to discovery button", () => {

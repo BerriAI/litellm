@@ -29,6 +29,7 @@ import CreateMCPServer from "./CreateMCPServer";
 import ImportMCPServers from "./ImportMCPServers";
 import MCPConnect from "./mcp_connect";
 import MCPServerCard from "./MCPServerCard";
+import { useMcpStdioEnabled } from "./StdioAvailability";
 import { MCPServerView } from "./mcp_server_view";
 import type {
   DiscoverableMCPServer,
@@ -224,6 +225,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [sortKey, setSortKey] = useState<SortKey>("created_desc");
   const isInternalUser = userRole === "Internal User";
+
+  const stdioEnabled = useMcpStdioEnabled();
 
   // Single bulk fetch of this user's per-server env-var status. Drives the
   // red "N user fields missing" footer on each card with no per-row request.
@@ -500,6 +503,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
           availableAccessGroups={uniqueMcpAccessGroups}
           existingServers={mcpServers}
           prefillData={prefillData}
+          stdioEnabled={stdioEnabled}
           onBackToDiscovery={() => {
             setModalVisible(false);
             setPrefillData(null);
@@ -614,6 +618,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                 availableAccessGroups={uniqueMcpAccessGroups}
                 existingServers={mcpServers}
                 initialTabIndex={selectedServerId === toolsTabServerId ? 1 : 0}
+                stdioEnabled={stdioEnabled}
               />
             ) : (
               <div className="w-full h-full">
@@ -752,6 +757,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                           onByokConnect={server.is_byok ? () => setByokModalServer(server) : undefined}
                           onOpenFillFields={() => setEnvVarsModalServer(server)}
                           onDelete={isAdminRole(userRole) ? () => handleDelete(server.server_id) : undefined}
+                          stdioEnabled={stdioEnabled}
                         />
                       ))}
                     </div>

@@ -222,6 +222,31 @@ describe("MCPServerView", () => {
     expect(screen.queryByText("edit form")).not.toBeInTheDocument();
   });
 
+  it.each([
+    { transport: "stdio", stdioEnabled: false, shown: true },
+    { transport: "stdio", stdioEnabled: true, shown: false },
+    { transport: "http", stdioEnabled: false, shown: false },
+  ])(
+    "explains why a $transport server is inert when stdioEnabled=$stdioEnabled",
+    ({ transport, stdioEnabled, shown }) => {
+      renderView({ transport }, { stdioEnabled });
+
+      expect(screen.getByText("srv-1")).toBeInTheDocument();
+      expect(screen.queryByText("stdio is disabled on this proxy") !== null).toBe(shown);
+    },
+  );
+
+  it("leaves the stdio warning to the edit form once editing starts", async () => {
+    renderView({ transport: "stdio" }, { stdioEnabled: false });
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(screen.getByText("stdio is disabled on this proxy")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit Settings" }));
+
+    expect(screen.getByText("edit form")).toBeInTheDocument();
+    expect(screen.queryByText("stdio is disabled on this proxy")).not.toBeInTheDocument();
+  });
+
   it("opens on the tab named by initialTabIndex", async () => {
     renderView({}, { initialTabIndex: 1 });
 
