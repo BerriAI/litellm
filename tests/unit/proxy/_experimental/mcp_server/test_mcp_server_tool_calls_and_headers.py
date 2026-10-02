@@ -32,7 +32,7 @@ import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller, MCPServerManager
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPTransport,
@@ -1279,7 +1279,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
     mock_manager.get_mcp_server_by_id = lambda server_id: (
         working_server if server_id == "working_server" else failing_server
     )
-    mock_manager.get_mcp_server_answering_to = lambda name, client_ip=None: None
+    mock_manager.get_mcp_server_answering_to = MCPServerManager().get_mcp_server_answering_to
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
     mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (
         server_ids,
@@ -6765,7 +6765,7 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
     ):
         mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["legacy-m2m-id"])
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=legacy_server)
-        mock_manager.get_mcp_server_answering_to = MagicMock(return_value=None)
+        mock_manager.get_mcp_server_answering_to = MCPServerManager().get_mcp_server_answering_to
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(return_value=(["legacy-m2m-id"], 0))
         mock_manager._get_tools_from_server = AsyncMock(side_effect=capture_extra_headers)
 
@@ -8620,7 +8620,9 @@ async def test_scoped_router_selects_the_server_the_connect_preflight_resolves(a
     finally:
         global_mcp_server_manager.registry.clear()
 
-    assert only_b == [], "a name the registry gives to an ungranted server must not fall through to another"
+    assert [s.server_id for s in only_b] == ["b-id"], (
+        "the granted server answering to the name wins over the registry's ungranted alias holder"
+    )
 
 
 @pytest.mark.asyncio
@@ -8691,8 +8693,200 @@ async def test_scoped_router_hides_a_private_server_from_an_external_ip_like_the
         global_mcp_server_manager.registry.clear()
 
     assert external == [], "a name the preflight hides from this IP must not reroute to a case variant"
-    assert internal == []
+    assert [s.server_id for s in internal] == ["u-id"], "with no IP hiding in play the granted case variant wins"
     assert [s.server_id for s in by_own_name] == ["u-id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("registry", "scope", "granted", "expected"),
+    [
+        pytest.param(("a-id", "d-id"), "docs", ("d-id",), ["d-id"], id="alias-collision-alias-holder-listed-first"),
+        pytest.param(("d-id", "a-id"), "docs", ("d-id",), ["d-id"], id="alias-collision-exact-name-listed-first"),
+        pytest.param(("g1", "g2"), "GITHUB", ("g2",), ["g2"], id="case-variant-collision"),
+        pytest.param(("p-id", "m-id"), "shared", ("m-id",), [], id="ungranted-only-name-stays-denied"),
+    ],
+)
+async def test_scoped_router_prefers_the_granted_server_answering_to_the_name(registry, scope, granted, expected):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.server import _get_allowed_mcp_servers_from_mcp_server_names
+
+    servers: Final = {
+        "a-id": MCPServer(
+            server_id="a-id", name="a_docs", server_name="a_docs", alias="docs", transport=MCPTransport.http
+        ),
+        "d-id": MCPServer(server_id="d-id", name="docs", server_name="docs", transport=MCPTransport.http),
+        "g1": MCPServer(server_id="g1", name="GitHub", server_name="GitHub", transport=MCPTransport.http),
+        "g2": MCPServer(server_id="g2", name="github", server_name="github", transport=MCPTransport.http),
+        "p-id": MCPServer(server_id="p-id", name="p", server_name="p", alias="shared", transport=MCPTransport.http),
+        "m-id": MCPServer(server_id="m-id", name="m", server_name="m", transport=MCPTransport.http),
+    }
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry.update({server_id: servers[server_id] for server_id in registry})
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+            "MCPRequestHandler._get_mcp_servers_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=["m-id"],
+        ) as groups:
+            selected: Final = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=[scope], allowed_mcp_servers=[servers[server_id] for server_id in granted]
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert [s.server_id for s in selected] == expected
+    groups.assert_not_awaited()
+
+
+def test_get_mcp_server_answering_to_among_applies_the_registry_pass_order_and_ip_hiding():
+    manager: Final = MCPServerManager()
+    by_alias: Final = MCPServer(server_id="a-id", name="a", server_name="a", alias="svc", transport=MCPTransport.http)
+    by_server_name: Final = MCPServer(server_id="b-id", name="b", server_name="svc", transport=MCPTransport.http)
+    by_name: Final = MCPServer(server_id="c-id", name="svc", server_name="c", transport=MCPTransport.http)
+    by_id: Final = MCPServer(server_id="svc", name="d", server_name="d", transport=MCPTransport.http)
+    folded: Final = MCPServer(server_id="e-id", name="e", server_name="SVC", transport=MCPTransport.http)
+    hidden: Final = MCPServer(
+        server_id="h-id",
+        name="h",
+        server_name="h",
+        alias="svc",
+        transport=MCPTransport.http,
+        available_on_public_internet=False,
+    )
+
+    assert manager.get_mcp_server_answering_to("svc", among=[by_name, by_server_name, by_alias]) is by_alias
+    assert manager.get_mcp_server_answering_to("svc", among=[by_name, by_server_name]) is by_server_name
+    assert manager.get_mcp_server_answering_to("svc", among=[by_id, by_name]) is by_name
+    assert manager.get_mcp_server_answering_to("svc", among=[folded, by_id]) is by_id
+    assert manager.get_mcp_server_answering_to("svc", among=[folded]) is folded
+    assert manager.get_mcp_server_answering_to("E-ID", among=[folded]) is folded
+    assert manager.get_mcp_server_answering_to("svc", among=()) is None
+    assert manager.get_mcp_server_answering_to("svc", client_ip="203.0.113.7", among=[hidden, folded]) is None
+    assert manager.get_mcp_server_answering_to("svc", client_ip="10.0.0.7", among=[hidden, folded]) is hidden
+    assert manager.get_mcp_server_answering_to("svc", client_ip="203.0.113.7", among=[folded]) is folded
+    assert manager.get_mcp_server_answering_to("svc") is None
+
+    manager.registry = {"e-id": folded, "b-id": by_server_name, "a-id": by_alias}
+
+    assert manager.get_mcp_server_answering_to("svc") is by_alias
+    assert manager.get_mcp_server_answering_to("svc") is manager.get_mcp_server_answering_to(
+        "svc", among=tuple(manager.registry.values())
+    )
+
+
+class _GrantedServerSignInGuardrail(CustomGuardrail):
+    """Requires caller sign-in on one server only and records every server it is asked about."""
+
+    def __init__(self, *args, gated_server_id: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._gated_server_id = gated_server_id
+        self.asked_about = []  # mutable-ok: call recorder
+
+    def caller_sign_in(self, server, user_api_key_auth):
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import CallerSignIn
+
+        self.asked_about.append(server.server_id)
+        if server.server_id != self._gated_server_id:
+            return None
+        return CallerSignIn(issuers=("https://idp.test",), scopes=("scope-a",))
+
+    async def preflight_caller_sign_in(self, server, user_api_key_auth, subject_token):
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import SignedIn
+
+        return SignedIn()
+
+
+class TestConnectPreflightRoutesLikeTheScopedRouter:
+    """A granted key connecting to ``/mcp/{name}`` is pre-flighted for the server the scoped router routes
+    it to, so an ungranted server holding the name as an alias neither hides the granted server's sign-in
+    challenge nor skips its connect-time exchange."""
+
+    @staticmethod
+    def _register_alias_collision() -> None:
+        alias_holder: Final = MCPServer(
+            server_id="a-id",
+            name="a_docs",
+            server_name="a_docs",
+            alias="docs",
+            url="https://a.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+        granted: Final = MCPServer(
+            server_id="d-id",
+            name="docs",
+            server_name="docs",
+            url="https://d.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+        mcp_operations.global_mcp_server_manager.registry.update({"a-id": alias_holder, "d-id": granted})
+
+    @staticmethod
+    async def _connect_to_docs() -> None:
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        await server_module._raise_preemptive_401_for_unauthenticated_servers(
+            scope={"type": "http", "method": "POST", "path": "/mcp/docs", "headers": []},
+            mcp_servers=["docs"],
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-granted-docs", user_id="u-1"),
+            client_ip=None,
+            raw_headers={"x-litellm-api-key": "sk-granted-docs"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_exchange_runs_for_the_granted_server_not_the_alias_holder(self):
+        self._register_alias_collision()
+
+        async def refuse_exchange(server, **kwargs):
+            raise HTTPException(
+                status_code=401, detail=f"exchange refused for {server.server_id} as {kwargs['connected_as']}"
+            )
+
+        with (
+            patch.object(  # test-quality-ok: the key's grant list lives in the DB; the real router runs on it
+                mcp_operations.global_mcp_server_manager, "get_allowed_mcp_servers", AsyncMock(return_value=["d-id"])
+            ),
+            patch.object(  # test-quality-ok: a real exchanger would call an IdP; this one reports which server it ran for
+                mcp_operations.global_mcp_server_manager, "preflight_token_exchange", refuse_exchange
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await self._connect_to_docs()
+
+        assert exc.value.status_code == 401
+        assert exc.value.detail == "exchange refused for d-id as docs"
+
+    @pytest.mark.asyncio
+    async def test_sign_in_challenge_names_the_granted_server_not_the_alias_holder(self, monkeypatch):
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        self._register_alias_collision()
+        guardrail: Final = _GrantedServerSignInGuardrail(guardrail_name="sign-in-stub", gated_server_id="d-id")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with (
+                patch.object(  # test-quality-ok: the key's grant list lives in the DB; the real router runs on it
+                    mcp_operations.global_mcp_server_manager,
+                    "get_allowed_mcp_servers",
+                    AsyncMock(return_value=["d-id"]),
+                ),
+                pytest.raises(HTTPException) as exc,
+            ):
+                await self._connect_to_docs()
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert exc.value.status_code == 401
+        assert ((exc.value.headers or {}).get("WWW-Authenticate") or "").startswith(
+            'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/docs"'
+        )
+        assert guardrail.asked_about == ["d-id"]
 
 
 @pytest.mark.asyncio
@@ -9836,7 +10030,7 @@ async def test_aggregate_listing_reports_per_server_outcomes():
     mock_manager.get_mcp_server_by_id = lambda server_id: (
         working_server if server_id == "working_server" else broken_server
     )
-    mock_manager.get_mcp_server_answering_to = lambda name, client_ip=None: None
+    mock_manager.get_mcp_server_answering_to = MCPServerManager().get_mcp_server_answering_to
     mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(server, **kwargs):
@@ -10351,9 +10545,7 @@ class TestOboPreflightScopedToAllowedServers:
         requested = _make_obo_server("obo_tools")
         key = UserAPIKeyAuth(api_key="sk-plain-only")
 
-        allowed_lookup, preflight = await self._run(
-            requested, allowed=[_make_obo_server("plain_tools")], user_api_key_auth=key
-        )
+        allowed_lookup, preflight = await self._run(requested, allowed=[], user_api_key_auth=key)
 
         preflight.assert_not_awaited()
         allowed_lookup.assert_awaited_once_with(

@@ -1603,7 +1603,24 @@ if MCP_AVAILABLE:
         a server it will be 403'd on immediately after authentication.
         """
         for server_name in mcp_servers or []:
-            server = operations.global_mcp_server_manager.get_mcp_server_answering_to(server_name, client_ip=client_ip)
+            registry_pick = operations.global_mcp_server_manager.get_mcp_server_answering_to(
+                server_name, client_ip=client_ip
+            )
+            obo_without_subject = (
+                registry_pick is not None
+                and registry_pick.auth_type == MCPAuth.oauth2_token_exchange
+                and not oauth2_headers
+            )
+            allowed_single = (
+                await operations._get_allowed_mcp_servers(
+                    user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
+                )
+                if registry_pick and not obo_without_subject and mcp_servers is not None and len(mcp_servers) == 1
+                else ()
+            )
+            granted = next(iter(allowed_single), None)
+            server = granted if granted is not None else registry_pick
+            granted_single = granted is not None
             if server is not None and allowed_server_ids is not None and server.server_id not in allowed_server_ids:
                 # Caller's narrowed scope excludes this server — skip the
                 # preemptive challenge and let downstream authorization
@@ -1703,7 +1720,7 @@ if MCP_AVAILABLE:
             # JSON-RPC error and the WWW-Authenticate header is lost. OBO keeps its connect gate;
             # guardrail-only gates fire only on a single-server connect the key's grant admits, so a
             # key without access gets the grant's 403 instead of a sign-in it could not use. The one
-            # admission lookup below serves the challenge, the sign-in preflight and the exchange.
+            # admission lookup above serves the challenge, the sign-in preflight and the exchange.
             sign_in = caller_sign_in_for(server, user_api_key_auth) if server is not None else None
             subject_token = (
                 operations.global_mcp_server_manager._extract_subject_token(  # pyright: ignore[reportPrivateUsage]  # the manager owns the subject/admission filter shared with the preflight
@@ -1711,19 +1728,6 @@ if MCP_AVAILABLE:
                 )
                 if server is not None
                 else None
-            )
-            obo_without_subject = (
-                server is not None and server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers
-            )
-            allowed_single = (
-                await operations._get_allowed_mcp_servers(
-                    user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
-                )
-                if server and not obo_without_subject and mcp_servers is not None and len(mcp_servers) == 1
-                else ()
-            )
-            granted_single = server is not None and any(
-                allowed.server_id == server.server_id for allowed in allowed_single
             )
             if server and sign_in is not None and subject_token is None and (obo_without_subject or granted_single):
                 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph

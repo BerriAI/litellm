@@ -7199,12 +7199,18 @@ class MCPServerManager:
                 return server
         return None
 
-    def get_mcp_server_answering_to(self, name: str, client_ip: str | None = None) -> MCPServer | None:
+    def get_mcp_server_answering_to(
+        self, name: str, client_ip: str | None = None, *, among: Sequence[MCPServer] | None = None
+    ) -> MCPServer | None:
         """The one server a ``/mcp/{name}`` segment denotes, shared by the connect preflight, the scoped
         router, and RFC 9728 discovery so all three name the same server: the exact ``get_mcp_server_by_name``
         priority first, then the exact ``server_id``, then the name priority case-insensitively, then any prefix
         form routing accepts. A name that denotes a server hidden from ``client_ip`` resolves to ``None`` at the
-        pass that found it: it never falls through to a looser pass that could name another server."""
+        pass that found it: it never falls through to a looser pass that could name another server. ``among``
+        runs the same passes over those servers alone instead of the registry, which is how the scoped router
+        picks the caller's granted server answering to ``name``."""
+        if among is not None:
+            return self._server_among_answering_to(name, tuple(among), client_ip)
         exact: Final = self.get_mcp_server_by_name(name)
         if exact is not None:
             return exact if self._is_server_accessible_from_ip(exact, client_ip) else None
@@ -7226,6 +7232,33 @@ class MCPServerManager:
                 server
                 for server in self.get_filtered_registry(client_ip).values()
                 if server_answers_to_name(server, name)
+            ),
+            None,
+        )
+
+    def _server_among_answering_to(
+        self, name: str, servers: Sequence[MCPServer], client_ip: str | None
+    ) -> MCPServer | None:
+        """``get_mcp_server_answering_to`` over ``servers`` instead of the registry: the same passes in the
+        same order, with a server hidden from ``client_ip`` resolving to ``None`` at the pass that found it."""
+        requested: Final = name.lower()
+        passes: Final[tuple[Callable[[MCPServer], bool], ...]] = (
+            lambda server: server.alias == name,
+            lambda server: server.server_name == name,
+            lambda server: server.name == name,
+            lambda server: server.server_id == name,
+            lambda server: (server.alias or "").lower() == requested,
+            lambda server: (server.server_name or "").lower() == requested,
+            lambda server: (server.name or "").lower() == requested,
+        )
+        for matches in passes:
+            if (found := next((server for server in servers if matches(server)), None)) is not None:
+                return found if self._is_server_accessible_from_ip(found, client_ip) else None
+        return next(
+            (
+                server
+                for server in servers
+                if self._is_server_accessible_from_ip(server, client_ip) and server_answers_to_name(server, name)
             ),
             None,
         )
