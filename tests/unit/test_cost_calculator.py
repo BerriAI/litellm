@@ -3793,6 +3793,42 @@ def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():
     assert combined_pair.prompt_tokens_details.cache_creation_tokens == 100
 
 
+def test_select_model_name_selects_character_priced_deployment(_local_model_cost_map):
+    """
+    A deployment whose only rate is input_cost_per_character must be selected
+    by router_model_id: the aspeech cost path resolves its price through the
+    deployment entry, and a character-only entry failing the "prices anything"
+    check silently produced spend = 0 (issue #44200).
+    """
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    router_model_id = "openai/qwen-audio-3.1-tts-flash-uuid"
+    litellm.model_cost[router_model_id] = {
+        "input_cost_per_character": 1e-8,
+        "output_cost_per_character": 0.0,
+        "litellm_provider": "openai",
+    }
+
+    selected = _select_model_name_for_cost_calc(
+        model="qwen-audio-3.1-tts-flash",
+        completion_response=None,
+        custom_pricing=True,
+        custom_llm_provider="openai",
+        router_model_id=router_model_id,
+    )
+
+    assert selected == router_model_id
+
+
+def test_cost_map_entry_prices_anything_recognizes_character_rates():
+    from litellm.cost_calculator import _cost_map_entry_prices_anything
+
+    assert _cost_map_entry_prices_anything({"input_cost_per_character": 1e-8}) is True
+    assert _cost_map_entry_prices_anything({"output_cost_per_character": 0.0}) is True
+    assert _cost_map_entry_prices_anything({"input_cost_per_token": 1e-6}) is True
+    assert _cost_map_entry_prices_anything({"mode": "audio_speech"}) is False
+
+
 def test_select_model_name_strips_unregistered_alias_prefix(_local_model_cost_map):
     """A router-facing model_name alias containing "/" whose leading segment is NOT a
     registered provider must not be double-prefixed into a non-existent cost key.
