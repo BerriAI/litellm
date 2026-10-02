@@ -1,5 +1,6 @@
 "use client";
 
+import { Page } from "@/components/shared/Page";
 import React from "react";
 import { Calculator, RefreshCw } from "lucide-react";
 
@@ -218,7 +219,7 @@ export default function ROICalculatorView({
   const syncedAt = syncIsUpToDate ? summary?.synced_at : null;
 
   return (
-    <main className="w-full space-y-6 p-8">
+    <Page>
       <PageHeader
         icon={<Calculator />}
         title="ROI Calculator"
@@ -372,6 +373,6 @@ export default function ROICalculatorView({
           onSave={updateIdentity}
         />
       )}
-    </main>
+    </Page>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { Page } from "@/components/shared/Page";
 import React from "react";
 import { Bar, BarChart, CartesianGrid, Treemap, XAxis, YAxis } from "recharts";
 import { ArrowDownRight, ArrowUpRight, BarChart3, Layers, Minus } from "lucide-react";
@@ -210,7 +211,7 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
   ) satisfies ChartConfig;
 
   return (
-    <main className="w-full space-y-6 p-8">
+    <Page>
       <PageHeader
         icon={<BarChart3 />}
         title="Model Leaderboard"
@@ -375,6 +376,6 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
           </p>
         </CardContent>
       </Card>
-    </main>
+    </Page>
   );
 }

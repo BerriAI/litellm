@@ -23,7 +23,7 @@ import {
 } from "./log_filter_logic";
 import { useLogDetailRouting } from "./logDetailRouting";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
-import { LiveTailBanner, LogsTableToolbar } from "./LogsTableToolbar";
+import { LogsTableToolbar } from "./LogsTableToolbar";
 import { RequestLogsTable } from "./RequestLogsTable";
 
 const PAGE_SIZE = DEFAULT_PAGE_SIZE_OPTIONS[0];
@@ -288,12 +288,6 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   return (
     <AutoRouterModelGroupsProvider>
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold">Request Logs</h1>
-      </div>
-
-      {isLiveTail && pagination.pageIndex === 0 && <LiveTailBanner onStop={() => setIsLiveTail(false)} />}
-
       <RequestLogsTable
         data={rows}
         rowCount={rowCount}
@@ -324,6 +318,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
             selectedTimeInterval={selectedTimeInterval}
             onSelectedTimeIntervalChange={setSelectedTimeInterval}
             isLiveTail={isLiveTail}
+            isAutoRefreshing={isLiveTail && pagination.pageIndex === 0}
             onIsLiveTailChange={setIsLiveTail}
             excludeInternalHealthChecks={excludeInternalHealthChecks}
             onExcludeInternalHealthChecksChange={handleExcludeInternalHealthChecksChange}

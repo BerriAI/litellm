@@ -22,6 +22,7 @@ interface LogsTableToolbarProps {
   selectedTimeInterval: { value: number; unit: string };
   onSelectedTimeIntervalChange: (value: { value: number; unit: string }) => void;
   isLiveTail: boolean;
+  isAutoRefreshing: boolean;
   onIsLiveTailChange: (value: boolean) => void;
   excludeInternalHealthChecks: boolean;
   onExcludeInternalHealthChecksChange: (value: boolean) => void;
@@ -39,6 +40,7 @@ export function LogsTableToolbar({
   selectedTimeInterval,
   onSelectedTimeIntervalChange,
   isLiveTail,
+  isAutoRefreshing,
   onIsLiveTailChange,
   excludeInternalHealthChecks,
   onExcludeInternalHealthChecksChange,
@@ -130,6 +132,11 @@ export function LogsTableToolbar({
       <div className="flex items-center gap-2">
         <span className="text-sm font-medium">Live Tail</span>
         <Switch checked={isLiveTail} onCheckedChange={onIsLiveTailChange} aria-label="Live Tail" />
+        {isAutoRefreshing && (
+          <span role="status" className="whitespace-nowrap text-xs text-muted-foreground">
+            Refreshing every 15s
+          </span>
+        )}
       </div>
 
       <div className="flex items-center gap-2">
@@ -144,17 +151,6 @@ export function LogsTableToolbar({
       <Button variant="outline" size="sm" onClick={onResetFilters}>
         Reset Filters
       </Button>
-    </div>
-  );
-}
-
-export function LiveTailBanner({ onStop }: { onStop: () => void }) {
-  return (
-    <div className="mb-4 flex items-center justify-between rounded-md border border-success/20 bg-success/10 px-4 py-2">
-      <span className="text-sm text-success">Auto-refreshing every 15 seconds</span>
-      <button type="button" onClick={onStop} className="text-sm text-success hover:text-success/80">
-        Stop
-      </button>
     </div>
   );
 }

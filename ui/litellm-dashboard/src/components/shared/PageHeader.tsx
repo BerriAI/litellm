@@ -30,7 +30,7 @@ export function PageHeader({ title, subtitle, icon, primaryAction, tabs, utiliti
   const hasControlRow = primaryAction != null || tabs != null || utilities != null;
 
   return (
-    <div>
+    <div className="shrink-0">
       <div className="flex items-center gap-2.5">
         <span
           aria-hidden="true"
