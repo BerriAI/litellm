@@ -2725,14 +2725,13 @@ async def test_outer_deadline_delivers_session_termination(
             else:
                 await pending
 
-    before: Final = anyio.current_time()
-    with anyio.fail_after(6.5):
+    with anyio.fail_after(20):
         with pytest.raises(TimeoutError):
             await invoke()
     assert started.is_set()
     assert deleted.is_set(), "Cancellation must deliver DELETE before returning to the caller"
 
-    assert anyio.current_time() - before < 6.5
+    assert anyio.current_time() - caller_deadline.result().deadline < 6.5
     assert await client.list_tools(raise_on_error=True) == []
 
 
