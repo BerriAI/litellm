@@ -16,6 +16,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
+    ChatCompletionFileObject,
     ChatCompletionImageObject,
     ChatCompletionSystemMessage,
     ChatCompletionTextObject,
@@ -24,6 +25,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolMessage,
     ChatCompletionToolParam,
     ChatCompletionUserMessage,
+    ChatCompletionVideoObject,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
@@ -73,6 +75,8 @@ class _GenAIRequestFunctionCall(TypedDict, total=False):
 class _GenAIContentPart(TypedDict, total=False):
     text: ReadOnly[str]
     inline_data: ReadOnly[Mapping[str, str]]
+    fileData: ReadOnly[Mapping[str, str]]
+    file_data: ReadOnly[Mapping[str, str]]
     functionResponse: ReadOnly[_GenAIFunctionResponse]
     functionCall: ReadOnly[_GenAIRequestFunctionCall]
 
@@ -101,6 +105,35 @@ class _GenAISystemInstruction(TypedDict, total=False):
 
 
 _EMPTY_STR_MAPPING: Final[Mapping[str, str]] = MappingProxyType({})
+_YOUTUBE_HOSTS: Final = ("youtube.com/", "youtu.be/")
+_UserContentPart: TypeAlias = (
+    ChatCompletionTextObject | ChatCompletionImageObject | ChatCompletionVideoObject | ChatCompletionFileObject
+)
+
+
+def _file_data_to_content_part(file_data: Mapping[str, str]) -> _UserContentPart | None:
+    """Map a Gemini fileData part (a URI the model fetches itself) to the matching OpenAI content part
+
+    Images go to image_url and videos (by mime type, or a YouTube link with no mime type) go to video_url,
+    which is what OpenRouter and other OpenAI-compatible providers accept for remote media. Anything else
+    goes to a file part that keeps the URI and mime type
+    """
+    uri: Final = file_data.get("fileUri") or file_data.get("file_uri")
+    if not uri:
+        return None
+    mime_type: Final = file_data.get("mimeType") or file_data.get("mime_type")
+    if mime_type is not None and mime_type.startswith("image/"):
+        return ChatCompletionImageObject(type="image_url", image_url={"url": uri})
+    if (mime_type is not None and mime_type.startswith("video/")) or (
+        mime_type is None and any(host in uri for host in _YOUTUBE_HOSTS)
+    ):
+        return ChatCompletionVideoObject(type="video_url", video_url={"url": uri})
+    file_part: Final = ChatCompletionFileObject(type="file", file={"file_data": uri})
+    if mime_type is not None:
+        file_part["file"]["format"] = mime_type
+    return file_part
+
+
 _RESPONSE_MIME_TYPE_KEYS: Final = ("responseMimeType", "response_mime_type")
 _RESPONSE_SCHEMA_KEYS: Final = ("responseJsonSchema", "response_json_schema", "responseSchema", "response_schema")
 _TOOL_PARAMETERS_KEYS: Final = ("parametersJsonSchema", "parameters")
@@ -488,7 +521,7 @@ class GoogleGenAIAdapter:
 
             if role == "user":
                 # Handle user messages with potential function responses
-                content_parts: list[ChatCompletionTextObject | ChatCompletionImageObject] = []
+                content_parts: list[_UserContentPart] = []
                 tool_messages: list[ChatCompletionToolMessage] = []
 
                 for part in parts:
@@ -514,6 +547,11 @@ class GoogleGenAIAdapter:
                                     },
                                 )
                             )
+                        elif "fileData" in part or "file_data" in part:
+                            # Handle URI references (YouTube links, Files API URIs, gs:// or https:// media)
+                            file_part = _file_data_to_content_part(part.get("fileData") or part.get("file_data") or {})
+                            if file_part is not None:
+                                content_parts.append(file_part)
                         elif "functionResponse" in part:
                             # Transform function response to tool message
                             func_response = part["functionResponse"]
