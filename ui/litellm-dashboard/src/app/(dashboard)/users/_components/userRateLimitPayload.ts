@@ -13,5 +13,5 @@ export const isValidRateLimitInput = (value: string | number | null | undefined)
     return true;
   }
   const number = Number(value);
-  return Number.isFinite(number) && Number.isInteger(number) && number >= 0;
+  return Number.isSafeInteger(number) && number >= 0;
 };

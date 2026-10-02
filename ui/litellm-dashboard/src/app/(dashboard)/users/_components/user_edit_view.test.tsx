@@ -520,7 +520,7 @@ describe("UserEditView", () => {
       expect(typeof onSubmit.mock.calls[0][0].rpm_limit).toBe("number");
     });
 
-    it.each(["-1", "1.5"])("rejects an invalid TPM limit of %s", async (value) => {
+    it.each(["-1", "1.5", "1e30", "9007199254740992"])("rejects an invalid TPM limit of %s", async (value) => {
       const onSubmit = vi.fn();
       renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} onSubmit={onSubmit} />);
 
@@ -535,7 +535,7 @@ describe("UserEditView", () => {
       fireEvent.submit(form);
 
       expect(
-        await screen.findByText("Enter a non-negative whole number, or leave empty for unlimited"),
+        await screen.findByText("Enter a whole number from 0 to 9007199254740991, or leave empty for unlimited"),
       ).toBeInTheDocument();
       expect(onSubmit).not.toHaveBeenCalled();
     });
