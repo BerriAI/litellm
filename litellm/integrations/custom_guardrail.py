@@ -177,7 +177,7 @@ _REALTIME_STREAMING_HOOKS: Final = frozenset({GuardrailEventHooks.realtime_input
 
 
 def without_server_streaming_classification(data: Mapping[str, object]) -> dict[str, object]:
-    return {  # mutable-ok: return a standalone mutable dict required by guardrail hooks
+    return {
         key: value
         for key, value in data.items()
         if key != SERVER_STREAMING_CLASSIFICATION_KEY or value is not SERVER_STREAMING_CLASSIFICATION_MARKER

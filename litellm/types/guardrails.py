@@ -966,8 +966,8 @@ def stored_stream_scope(value: object) -> GuardrailStreamScope | dict[str, Guard
 
 def with_tolerated_stream_scope(params: Mapping[str, object]) -> dict[str, object]:
     if "stream_scope" not in params:
-        return dict(params)  # mutable-ok: Pydantic kwargs need a copy of stored params
-    return {  # mutable-ok: Pydantic kwargs need a copy with the normalized scope
+        return dict(params)
+    return {
         **params,
         "stream_scope": stored_stream_scope(params["stream_scope"]),
     }
