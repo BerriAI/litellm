@@ -134,9 +134,6 @@ upstream_pid=$!
 if [ "$suite" = cost ]; then
   export INTEGRATION_WORKERS=8
 fi
-if [ "$suite" = security ]; then
-  export INTEGRATION_WORKERS=2
-fi
 if [ "$suite" = mcp ]; then
   export INTEGRATION_WORKERS=4 INTEGRATION_COVERAGE=1
 fi

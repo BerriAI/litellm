@@ -412,14 +412,11 @@ def sweep_routes(
     )
     who: Final = callers if callers is not None else {"admin": gateway.key}
     base_url: Final = str(gateway.client.base_url)
-    verification: Final = httpx.create_ssl_context(trust_env=False) if httpx.URL(base_url).scheme == "http" else True
 
     def call(route: str, label: str, key: str, path: str) -> _RouteCall:
         location: Final = f"GET {path} as {label}"
         try:
-            with httpx.Client(
-                base_url=base_url, timeout=_ROUTE_TIMEOUT, trust_env=False, verify=verification
-            ) as client:
+            with httpx.Client(base_url=base_url, timeout=_ROUTE_TIMEOUT, trust_env=False) as client:
                 response = client.get(path, headers={"Authorization": f"Bearer {key}"})
         except httpx.HTTPError as error:
             return _RouteCall((), (), None, f"{location}: {type(error).__name__}", location)
