@@ -1067,6 +1067,38 @@ def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
     assert cost == pytest.approx(3 * 0.001)
 
 
+def test_per_character_priced_speech_deployment_bills_its_own_rate(_local_model_cost_map: None) -> None:
+    from litellm import Router
+
+    rate: Final = 1e-8
+    prompt: Final = "abcdefghijklm"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "custom-tts",
+                "litellm_params": {
+                    "model": "openai/custom-tts-unmapped",
+                    "api_key": "sk-fake",
+                    "input_cost_per_character": rate,
+                },
+            },
+        ]
+    )
+    router_model_id: Final = router.model_list[0]["model_info"]["id"]
+
+    cost: Final = completion_cost(
+        completion_response=None,
+        model="openai/custom-tts-unmapped",
+        custom_llm_provider="openai",
+        call_type="speech",
+        prompt=prompt,
+        custom_pricing=True,
+        router_model_id=router_model_id,
+    )
+
+    assert cost == pytest.approx(len(prompt) * rate)
+
+
 def test_azure_realtime_cost_calculator(_local_model_cost_map):
 
     cost = handle_realtime_stream_cost_calculation(
