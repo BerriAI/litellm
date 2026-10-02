@@ -126,7 +126,7 @@ litellm/proxy/proxy_server.py _gather_team_accessible_model_ids prisma model_nam
 litellm/proxy/proxy_server.py get_all_team_models prisma team_id.in `user_teams` 0
 litellm/proxy/spend_tracking/ptu_flat_cost_rollup.py _prune_filter prisma model.in `chunk` 0
 litellm/proxy/spend_tracking/log_visibility_dependencies.py load_permitted_log_team_ids prisma team_id.in `user_obj.teams` 0
-litellm/proxy/spend_tracking/spend_management_endpoints.py _read_scope_where prisma team_id.in `list(team_scope.team_ids)` 0
+litellm/proxy/spend_tracking/spend_management_endpoints.py _read_scope_where prisma team_id.in `list(team_ids)` 0
 litellm/proxy/ui_crud_endpoints/proxy_setting_endpoints.py _validate_default_teams_exist prisma team_id.in `list(team_ids)` 0
 litellm/proxy/utils.py PrismaClient.check_view_exists raw-sql viewname.IN `IN ( {expected_views_str} )` 0
 litellm/proxy/utils.py PrismaClient.delete_data prisma team_id.in `team_id_list` 0

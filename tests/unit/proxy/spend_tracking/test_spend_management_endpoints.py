@@ -6,14 +6,17 @@ import json
 import re
 import sqlite3
 from datetime import timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, Field
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm.proxy.spend_tracking.log_visibility import AllLogs, LogReadScope, TeamLogs, UserLogs, any_of
 from litellm.proxy.spend_tracking.log_visibility_dependencies import get_log_team_lookup
 
 
@@ -1747,6 +1750,62 @@ async def test_permitted_team_scope_falls_back_to_own_user_when_lookup_fails():
     prisma = _make_payload_lookup_prisma(rows)
     query, params = spend_management_endpoints._spend_log_payload_query("shared", scope)
     assert await prisma.db.query_raw(query, *params) == [rows[0]]
+
+
+@pytest.mark.parametrize("next_param", [1, 7])
+@pytest.mark.parametrize(
+    ("scope", "user_filter", "expected"),
+    [
+        (AllLogs(), None, ("foreign", "own", "ownerless", "team-1", "team-2", "team-ownerless")),
+        (UserLogs("caller"), None, ("own",)),
+        (TeamLogs("first"), None, ("team-1", "team-ownerless")),
+        (any_of(), None, ()),
+        (any_of(UserLogs("caller")), None, ("own",)),
+        (any_of(TeamLogs("first"), TeamLogs("second")), None, ("team-1", "team-2", "team-ownerless")),
+        (
+            any_of(UserLogs("caller"), TeamLogs("first"), TeamLogs("second")),
+            None,
+            ("own", "team-1", "team-2", "team-ownerless"),
+        ),
+        (any_of(TeamLogs("first"), UserLogs("caller")), None, ("own", "team-1", "team-ownerless")),
+        (any_of(UserLogs("caller"), UserLogs("other")), None, ("foreign", "own", "team-1")),
+        (any_of(TeamLogs("first"), TeamLogs("first")), None, ("team-1", "team-ownerless")),
+        (any_of(UserLogs(None)), None, ()),
+        (any_of(UserLogs(None), TeamLogs("first")), None, ("team-1", "team-ownerless")),
+        (any_of(UserLogs("caller"), TeamLogs("first"), TeamLogs("second")), "other", ("team-1",)),
+        (TeamLogs("first' OR TRUE --"), None, ()),
+    ],
+)
+def test_composed_log_scope_selects_union_and_intersects_explicit_user_filter(
+    scope: LogReadScope, user_filter: str | None, expected: tuple[str, ...], next_param: int
+) -> None:
+    clause, scope_params = spend_management_endpoints._read_scope_sql(scope, next_param)
+    placeholder_sql: Final = re.sub(r"\$(\d+)", r":p\1", clause or "TRUE")
+    sqlite_sql: Final = re.sub(
+        r"= ANY\((:p\d+)::text\[\]\)", r"IN (SELECT value FROM json_each(\1))", placeholder_sql
+    )
+    parameters: Final = {
+        f"p{next_param + index}": json.dumps(value) if isinstance(value, tuple) else value
+        for index, value in enumerate(scope_params)
+    }
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute('CREATE TABLE logs (request_id TEXT, "user" TEXT, team_id TEXT)')
+        connection.executemany(
+            "INSERT INTO logs VALUES (?, ?, ?)",
+            (
+                ("own", "caller", None),
+                ("team-1", "other", "first"),
+                ("team-2", "third", "second"),
+                ("foreign", "other", "outside"),
+                ("ownerless", None, None),
+                ("team-ownerless", None, "first"),
+            ),
+        )
+        assert connection.execute(
+            f'SELECT request_id FROM logs WHERE ({sqlite_sql}) AND (:filter IS NULL OR "user" = :filter) '
+            "ORDER BY request_id",
+            {**parameters, "filter": user_filter},
+        ).fetchall() == [(request_id,) for request_id in expected]
 
 
 @pytest.mark.asyncio
@@ -8070,3 +8129,50 @@ async def test_management_team_lookup_without_memberships_keeps_own_user_scope(m
     scope = await resolve_log_read_scope(auth.user_id, lookup)
     query, params = spend_management_endpoints._spend_log_payload_query("shared", scope)
     assert await prisma.db.query_raw(query, *params) == [rows[0]]
+
+
+class _LogTeamIdsFilter(BaseModel):
+    values: tuple[str, ...] = Field(alias="in")
+
+
+class _LogWhereFilter(BaseModel):
+    user: str | None = None
+    team_id: str | _LogTeamIdsFilter | None = None
+    grants: tuple["_LogWhereFilter", ...] | None = Field(default=None, alias="OR")
+
+    def matches(self, user_id: str | None, team_id: str | None) -> bool:
+        user_matches: Final = "user" not in self.model_fields_set or self.user == user_id
+        team_matches: Final = (
+            self.team_id is None
+            or self.team_id == team_id
+            or isinstance(self.team_id, _LogTeamIdsFilter)
+            and team_id in self.team_id.values
+        )
+        union_matches: Final = self.grants is None or any(grant.matches(user_id, team_id) for grant in self.grants)
+        return user_matches and team_matches and union_matches
+
+
+@pytest.mark.parametrize(
+    ("scope", "expected"),
+    [
+        (AllLogs(), ("foreign", "ownerless", "own", "team-1", "team-2")),
+        (UserLogs("caller"), ("own",)),
+        (TeamLogs("first"), ("team-1",)),
+        (any_of(), ()),
+        (any_of(UserLogs("caller"), UserLogs("other")), ("foreign", "own", "team-1")),
+        (any_of(TeamLogs("first"), TeamLogs("second")), ("team-1", "team-2")),
+        (any_of(UserLogs("caller"), TeamLogs("first"), TeamLogs("second")), ("own", "team-1", "team-2")),
+        (UserLogs(None), ("ownerless",)),
+        (any_of(UserLogs(None), TeamLogs("first")), ("ownerless", "team-1")),
+    ],
+)
+def test_composed_log_scope_counts_only_matching_owners(scope: LogReadScope, expected: tuple[str, ...]) -> None:
+    where: Final = _LogWhereFilter.model_validate(spend_management_endpoints._read_scope_where(scope))
+    rows: Final = (
+        ("foreign", "other", "outside"),
+        ("ownerless", None, None),
+        ("own", "caller", None),
+        ("team-1", "other", "first"),
+        ("team-2", "third", "second"),
+    )
+    assert tuple(request_id for request_id, user_id, team_id in rows if where.matches(user_id, team_id)) == expected

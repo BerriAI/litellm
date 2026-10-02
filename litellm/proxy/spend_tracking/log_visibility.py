@@ -18,24 +18,35 @@ class UserLogs:
 
 
 @dataclass(frozen=True, slots=True)
-class UserAndTeamLogs:
-    user_id: str | None
-    team_ids: tuple[str, ...]
+class TeamLogs:
+    team_id: str
 
 
-LogReadScope: TypeAlias = AllLogs | UserLogs | UserAndTeamLogs
+LogGrant: TypeAlias = UserLogs | TeamLogs
+
+
+@dataclass(frozen=True, slots=True)
+class AnyOf:
+    grants: tuple[LogGrant, ...]
+
+
+LogReadScope: TypeAlias = AllLogs | LogGrant | AnyOf
+
+
+def any_of(*grants: LogGrant) -> AnyOf:
+    return AnyOf(grants)
 
 
 async def resolve_log_read_scope(
     user_id: str | None,
     permitted_team_lookup: Callable[[], Awaitable[Sequence[str]]],
-) -> UserLogs | UserAndTeamLogs:
+) -> UserLogs | AnyOf:
     """Resolve own-user and permitted-team reads, falling back to own-user on lookup failure."""
     try:
         team_ids: Final = tuple(await permitted_team_lookup())
     except Exception:  # noqa: BLE001  # preserve spend-log own-user fallback for every permission lookup failure
         return UserLogs(user_id)
-    return UserAndTeamLogs(user_id, team_ids) if team_ids else UserLogs(user_id)
+    return any_of(UserLogs(user_id), *(TeamLogs(team_id) for team_id in team_ids)) if team_ids else UserLogs(user_id)
 
 
 def can_read_team_logs(auth: UserAPIKeyAuth, team: LiteLLM_TeamTable) -> bool:

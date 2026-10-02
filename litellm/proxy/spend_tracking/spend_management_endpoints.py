@@ -41,8 +41,9 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.log_visibility import (
     AllLogs,
+    AnyOf,
     LogReadScope,
-    UserAndTeamLogs,
+    TeamLogs,
     UserLogs,
     can_read_log_owner,
     can_read_team_logs,
@@ -4903,12 +4904,18 @@ def _read_scope_sql(scope: LogReadScope, next_param: int) -> tuple[str, tuple[ob
             return ("", ())
         case UserLogs(user_id=user_id):
             return (f'"user" = ${next_param}', (user_id,))
+        case TeamLogs(team_id=team_id):
+            return (f"team_id = ${next_param}", (team_id,))
         case _:
-            team_scope: Final[UserAndTeamLogs] = scope
-            return (
-                f'("user" = ${next_param} OR team_id = ANY(${next_param + 1}::text[]))',
-                (team_scope.user_id, team_scope.team_ids),
+            combined: Final[AnyOf] = scope
+            user_ids: Final = tuple(grant.user_id for grant in combined.grants if isinstance(grant, UserLogs))
+            team_ids: Final = tuple(grant.team_id for grant in combined.grants if isinstance(grant, TeamLogs))
+            user_conditions: Final = tuple(f'"user" = ${next_param + index}' for index, _ in enumerate(user_ids))
+            conditions: Final = user_conditions + (
+                (f"team_id = ANY(${next_param + len(user_ids)}::text[])",) if team_ids else ()
             )
+            params: Final[tuple[object, ...]] = user_ids + ((team_ids,) if team_ids else ())
+            return (f"({' OR '.join(conditions)})" if conditions else "FALSE", params)
 
 
 def _read_scope_where(scope: LogReadScope) -> Mapping[str, object]:
@@ -4917,9 +4924,16 @@ def _read_scope_where(scope: LogReadScope) -> Mapping[str, object]:
             return {}
         case UserLogs(user_id=user_id):
             return {"user": user_id}
+        case TeamLogs(team_id=team_id):
+            return {"team_id": team_id}
         case _:
-            team_scope: Final[UserAndTeamLogs] = scope
-            return {"OR": [{"user": team_scope.user_id}, {"team_id": {"in": list(team_scope.team_ids)}}]}
+            combined: Final[AnyOf] = scope
+            user_conditions: Final = tuple(
+                {"user": grant.user_id} for grant in combined.grants if isinstance(grant, UserLogs)
+            )
+            team_ids: Final = tuple(grant.team_id for grant in combined.grants if isinstance(grant, TeamLogs))
+            conditions: Final = user_conditions + (({"team_id": {"in": list(team_ids)}},) if team_ids else ())
+            return {"OR": list(conditions)}
 
 
 def _spend_log_payload_query(request_id: str, scope: LogReadScope) -> tuple[str, tuple[object, ...]]:
