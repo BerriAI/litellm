@@ -1236,6 +1236,7 @@ def _project_update_mocks(monkeypatch, stored_metadata: dict) -> mock.MagicMock:
     mock_prisma.jsonify_object = lambda data: data
     mock_prisma.db.litellm_projecttable.find_unique = mock.AsyncMock(return_value=existing_row)
     mock_prisma.db.litellm_projecttable.update = mock.AsyncMock(return_value=mock.MagicMock())
+    mock_prisma.writer_db = mock_prisma.db
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
     monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
@@ -1270,12 +1271,14 @@ async def test_update_project_rejects_move_when_attached_teamless_key_exists(
     mock_prisma.db.litellm_teamtable.find_unique = mock.AsyncMock(
         return_value=LiteLLM_TeamTable(team_id=destination_team_id)
     )
+    mock_prisma.db.litellm_verificationtoken.count = mock.AsyncMock(return_value=0)
+    mock_prisma.writer_db = mock.MagicMock()
 
     async def count_teamless_keys(*, where: Mapping[str, object]) -> int:
         conditions: Final = where.get("OR")
         return int(isinstance(conditions, list) and {"team_id": None} in conditions)
 
-    mock_prisma.db.litellm_verificationtoken.count = mock.AsyncMock(side_effect=count_teamless_keys)
+    mock_prisma.writer_db.litellm_verificationtoken.count = mock.AsyncMock(side_effect=count_teamless_keys)
 
     with pytest.raises(ProxyException) as error:
         await _run_project_update(project_id, team_id=destination_team_id)
@@ -1288,7 +1291,8 @@ async def test_update_project_rejects_move_when_attached_teamless_key_exists(
     }
     assert error.value.code == "400"
     assert expected_detail["error"] in error.value.message
-    mock_prisma.db.litellm_verificationtoken.count.assert_awaited_once()
+    mock_prisma.writer_db.litellm_verificationtoken.count.assert_awaited_once()
+    mock_prisma.db.litellm_verificationtoken.count.assert_not_awaited()
     mock_prisma.db.litellm_projecttable.update.assert_not_awaited()
 
 

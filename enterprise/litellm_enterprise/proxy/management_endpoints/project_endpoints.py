@@ -22,6 +22,7 @@ from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import delete_cached_project_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.management.teams.access import is_team_admin
 from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
 from litellm.proxy.management_endpoints.team_admin_field_permissions import team_admin_may_manage_projects
@@ -768,11 +769,14 @@ async def update_project(
                 )
 
         if data.team_id is not None and data.team_id != existing_project.team_id:
-            mismatched_key_count: Final = await _verification_token_table(prisma_client).count(
-                where={
-                    "project_id": data.project_id,
-                    "OR": [{"team_id": {"not": data.team_id}}, {"team_id": None}],
-                }
+            mismatched_key_count: Final = await bounded_db_lookup(
+                prisma_client.writer_db.litellm_verificationtoken.count(
+                    where={
+                        "project_id": data.project_id,
+                        "OR": [{"team_id": {"not": data.team_id}}, {"team_id": None}],
+                    }
+                ),
+                name="project_key_ownership",
             )
             if mismatched_key_count > 0:
                 raise HTTPException(

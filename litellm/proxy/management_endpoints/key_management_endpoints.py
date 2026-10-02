@@ -42,6 +42,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.credentials import CredentialItem
+from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._experimental.mcp_server.db import (
     rotate_mcp_server_credentials_master_key,
     rotate_mcp_user_credentials_master_key,
@@ -83,6 +84,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.management.teams.access import TEAM_ADMIN_ONLY, TEAM_OR_ORG_ADMIN, is_team_admin
@@ -133,13 +135,12 @@ from litellm.proxy.utils import (
     handle_exception_on_proxy,
     is_valid_api_key,
 )
-from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.base_repository import BaseRepository, record_to_dict
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigParam, ConfigRepository
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.prisma_protocols import TableActions
-from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     DeletedVerificationTokenRepository,
     DeprecatedVerificationTokenRepository,
@@ -1817,7 +1818,15 @@ async def _check_key_project_team(
     key_team_id: str | None,
     prisma_client: PrismaClient,
 ) -> None:
-    project_obj: Final = await ProjectRepository(prisma_client).find_by_id(project_id)
+    project_record: Final = await bounded_db_lookup(
+        prisma_client.writer_db.litellm_projecttable.find_unique(where={"project_id": project_id}),
+        name="project",
+    )
+    project_obj: Final = (
+        LiteLLM_ProjectTable.model_validate(record_to_dict(project_record))
+        if project_record is not None
+        else None
+    )
 
     if project_obj is None:
         raise HTTPException(
