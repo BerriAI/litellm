@@ -22,6 +22,7 @@ from collections.abc import (
     Awaitable,
     Callable,
     Collection,
+    Iterator,
     Mapping,
     MutableMapping,
     Sequence,
@@ -19004,6 +19005,11 @@ def _configured_callback_names(value: object) -> tuple[object, ...]:
     return ()
 
 
+def _remaining_callback_names(settings: Mapping[str, object]) -> Iterator[object]:
+    for key in _CALLBACK_LIST_KEYS:
+        yield from _configured_callback_names(settings.get(key))
+
+
 def _is_callback_name(entry: object, callback_name: str) -> bool:
     return isinstance(entry, str) and entry.lower() == callback_name
 
@@ -19090,9 +19096,7 @@ async def delete_callback(
         return {
             "message": f"Successfully deleted callback: {callback_name}",
             "removed_callback": callback_name,
-            "remaining_callbacks": [
-                entry for key in _CALLBACK_LIST_KEYS for entry in _configured_callback_names(updated_settings.get(key))
-            ],
+            "remaining_callbacks": list(_remaining_callback_names(updated_settings)),
             "deleted_at": datetime.now().isoformat(),
         }
 
