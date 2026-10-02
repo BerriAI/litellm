@@ -335,6 +335,13 @@ def _workers(process: subprocess.Popen[bytes]) -> tuple[psutil.Process, ...]:
     return tuple(psutil.Process(process.pid).children(recursive=True))
 
 
+def _process_tree_line(process: psutil.Process) -> str:
+    try:
+        return f"{process.pid} {' '.join(process.cmdline())}"
+    except psutil.Error:
+        return f"{process.pid} <exited>"
+
+
 def _worker_alive(worker: psutil.Process) -> bool:
     try:
         return worker.is_running() and worker.status() != psutil.STATUS_ZOMBIE
@@ -395,7 +402,7 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
             assert probe.status_code == 200, probe.text
             process_root: Final = psutil.Process(owned.process.pid)
             processes: Final = (process_root, *process_root.children(recursive=True))
-            process_tree: Final = "\n".join(f"{process.pid} {' '.join(process.cmdline())}" for process in processes)
+            process_tree: Final = "\n".join(_process_tree_line(process) for process in processes)
             record_property("owned_proxy_process_tree", process_tree)
             workers: Final = eventually(
                 lambda: _workers(owned.process),
