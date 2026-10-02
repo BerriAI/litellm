@@ -1672,6 +1672,11 @@ async def test_generate_content_sends_response_schema_and_tool_parameters_to_the
             id="pdf-uri-keeps-mime-type",
         ),
         pytest.param(
+            {"fileData": {"fileUri": "https://example.com/docs/Report.PDF?v=2"}},
+            {"type": "file", "file": {"file_id": "https://example.com/docs/Report.PDF?v=2"}},
+            id="pdf-url-without-mime-type",
+        ),
+        pytest.param(
             {"fileData": {"fileUri": "https://generativelanguage.googleapis.com/v1beta/files/abc"}},
             {"type": "file", "file": {"file_id": "https://generativelanguage.googleapis.com/v1beta/files/abc"}},
             id="files-api-uri-without-mime-type",
@@ -1738,6 +1743,34 @@ def test_malformed_file_data_is_rejected_as_bad_request(file_data):
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 
     with pytest.raises(BadRequestError, match="fileData must be an object"):
+        GoogleGenAIAdapter().translate_generate_content_to_completion(
+            model="openrouter/google/gemini-3.8-flash",
+            contents=[{"role": "user", "parts": [{"fileData": file_data}, {"text": "hi"}]}],
+        )
+
+
+@pytest.mark.parametrize(
+    "file_data",
+    [
+        pytest.param(
+            {"fileUri": "https://example.com/notes.docx", "mimeType": "application/msword"},
+            id="non-pdf-document-would-be-labelled-pdf",
+        ),
+        pytest.param({"fileUri": "https://example.com/notes.txt"}, id="non-pdf-url-without-mime-type"),
+        pytest.param(
+            {"fileUri": "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCxhYmM", "mimeType": "application/pdf"},
+            id="opaque-managed-file-id",
+        ),
+        pytest.param({"fileUri": "file-abc123"}, id="opaque-provider-file-id"),
+    ],
+)
+def test_file_data_that_downstream_would_mishandle_is_rejected(file_data):
+    """Non-PDF documents would be downloaded and renamed my_file.pdf downstream, and opaque IDs would be
+    resolved as managed files without the proxy's ownership check, so neither may become a file_id"""
+    from litellm.exceptions import BadRequestError
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    with pytest.raises(BadRequestError, match="fileData on this model supports"):
         GoogleGenAIAdapter().translate_generate_content_to_completion(
             model="openrouter/google/gemini-3.8-flash",
             contents=[{"role": "user", "parts": [{"fileData": file_data}, {"text": "hi"}]}],

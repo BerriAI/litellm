@@ -2,6 +2,7 @@ import json
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypeVar, cast
+from urllib.parse import urlparse
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
@@ -12,6 +13,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types, normalize_tool_schema
 from litellm.litellm_core_utils.prompt_templates.common_utils import filter_value_from_dict
+from litellm.llms.vertex_ai.gemini.transformation import GEMINI_FILES_API_URI_PREFIX
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -107,17 +109,30 @@ class _GenAISystemInstruction(TypedDict, total=False):
 _EMPTY_STR_MAPPING: Final[Mapping[str, str]] = MappingProxyType({})
 _YOUTUBE_HOSTS: Final = ("youtube.com/", "youtu.be/")
 _FILE_DATA_FIELDS: Final = TypeAdapter(Mapping[str, str])
+_PDF_MIME_TYPE: Final = "application/pdf"
 _UserContentPart: TypeAlias = (
     ChatCompletionTextObject | ChatCompletionImageObject | ChatCompletionVideoObject | ChatCompletionFileObject
 )
+
+
+def _is_fetchable_document_uri(uri: str, mime_type: str | None) -> bool:
+    if uri.startswith(GEMINI_FILES_API_URI_PREFIX):
+        return True
+    if not uri.startswith(("https://", "http://", "gs://")):
+        return False
+    if mime_type is not None:
+        return mime_type == _PDF_MIME_TYPE
+    return urlparse(uri).path.lower().endswith(".pdf")
 
 
 def _file_data_to_content_part(file_data: object) -> _UserContentPart | None:
     """Map a Gemini fileData part (a URI the model fetches itself) to the matching OpenAI content part
 
     Images go to image_url and videos (by mime type, or a YouTube link with no mime type) go to video_url,
-    which is what OpenRouter and other OpenAI-compatible providers accept for remote media. Anything else
-    goes to a file part with the URI as file_id, so downstream transforms can fetch it
+    which is what OpenRouter and other OpenAI-compatible providers accept for remote media. PDF URLs and
+    Gemini Files API URIs go to a file part with the URI as file_id, so downstream transforms can fetch it.
+    Anything else is rejected: other documents would be fetched and labelled as PDFs downstream, and opaque
+    IDs would be resolved as managed files without the proxy's ownership check
     """
     fields: Final = _validated(_FILE_DATA_FIELDS, file_data)
     if fields is None:
@@ -136,6 +151,15 @@ def _file_data_to_content_part(file_data: object) -> _UserContentPart | None:
         mime_type is None and any(host in uri for host in _YOUTUBE_HOSTS)
     ):
         return ChatCompletionVideoObject(type="video_url", video_url={"url": uri})
+    if not _is_fetchable_document_uri(uri, mime_type):
+        raise BadRequestError(
+            message=(
+                "fileData on this model supports image, video and YouTube URIs, PDF URLs, and Gemini Files API "
+                f"URIs. Got fileUri={uri!r} mimeType={mime_type!r}"
+            ),
+            model=None,
+            llm_provider="google_genai",
+        )
     return ChatCompletionFileObject(
         type="file",
         file={"file_id": uri, "format": mime_type} if mime_type is not None else {"file_id": uri},
