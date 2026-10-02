@@ -2892,6 +2892,15 @@ def test_build_completion_continuation_input_folds_into_existing_prefill():
     assert twice[-1] == {"role": "assistant", "content": "part one part two", "prefix": True}
 
 
+def test_build_completion_continuation_input_folds_into_trailing_plain_assistant_turn():
+    """A request that already ends in an assistant message takes the partial as its prefill
+    instead of gaining a second assistant turn, which prefill providers reject."""
+    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "Sure, "}]
+    built = litellm.Router._build_completion_continuation_input(messages, "here it is")
+    assert [m["role"] for m in built] == ["user", "assistant"]
+    assert built[-1] == {"role": "assistant", "content": "Sure, here it is", "prefix": True}
+
+
 def test_continuation_output_ceilings_reduces_by_emitted_tokens():
     """A continuation must complete within the caller's original allowance, so each
     output ceiling is reduced by the tokens already emitted."""

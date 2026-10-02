@@ -3246,10 +3246,11 @@ class Router:
         messages: Sequence[Mapping[str, str]],
         generated_content: str,
     ) -> Sequence[Mapping[str, object]]:
-        """Append the partial output as an assistant prefill, extending an existing trailing prefill in place."""
+        """Append the partial output as an assistant prefill, or extend a trailing assistant turn in place so the
+        request never ends in two assistant messages."""
         last: Final = messages[-1] if messages else None
-        if last is not None and last.get("role") == "assistant" and last.get("prefix"):
-            merged: Final = {**last, "content": str(last.get("content") or "") + generated_content}
+        if last is not None and last.get("role") == "assistant":
+            merged: Final = {**last, "content": str(last.get("content") or "") + generated_content, "prefix": True}
             return [*messages[:-1], merged]
         prefill: Final = {"role": "assistant", "content": generated_content, "prefix": True}
         return [*messages, prefill]
