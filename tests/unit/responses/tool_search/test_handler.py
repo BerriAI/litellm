@@ -116,7 +116,12 @@ async def test_the_next_turn_replays_the_search_as_function_items_with_the_loade
         input=[
             {"role": "user", "content": "add a meeting"},
             {"type": "tool_search_call", "call_id": "call_search", "execution": "client", "arguments": {"query": "x"}},
-            {"type": "tool_search_output", "call_id": "call_search", "execution": "client", "tools": [loaded_namespace]},
+            {
+                "type": "tool_search_output",
+                "call_id": "call_search",
+                "execution": "client",
+                "tools": [loaded_namespace],
+            },
         ],
     )
 

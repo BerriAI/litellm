@@ -1,5 +1,4 @@
 import json
-import uuid
 from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Final, Literal, Protocol
 
@@ -39,7 +38,7 @@ class _FunctionCall(BaseModel):
     name: str
     namespace: str | None = None
     id: str | None = None
-    call_id: str | None = None
+    call_id: str
     arguments: str = ""
 
 
@@ -80,8 +79,6 @@ def _search_arguments(arguments: str) -> dict[str, object]:
 
 def _tool_search_call_item_id(call: _FunctionCall) -> str:
     source: Final = call.id or call.call_id
-    if source is None:
-        return f"{_TOOL_SEARCH_CALL_ID_PREFIX}{uuid.uuid4().hex}"
     return f"{_TOOL_SEARCH_CALL_ID_PREFIX}{source.partition('_')[2] or source}"
 
 

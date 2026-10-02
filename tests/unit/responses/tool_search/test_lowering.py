@@ -42,12 +42,18 @@ CALENDAR_NAMESPACE: Final = {
         }
     ],
 }
+LIST_INSTRUMENTS: Final = {
+    "type": "function",
+    "name": "list_instruments",
+    "description": "List the lab instruments",
+    "defer_loading": True,
+}
 SEARCH_OUTPUT: Final = {
     "type": "tool_search_output",
     "call_id": "call_search",
     "execution": "client",
     "status": "completed",
-    "tools": [CALENDAR_NAMESPACE],
+    "tools": [CALENDAR_NAMESPACE, LIST_INSTRUMENTS],
 }
 
 
@@ -128,8 +134,14 @@ def test_replayed_search_output_loads_its_tools_for_the_model():
     assert isinstance(function_output, dict)
     assert function_output["type"] == "function_call_output"
     assert function_output["call_id"] == "call_search"
+    loaded_function: Final = {
+        "type": "function",
+        "name": "list_instruments",
+        "description": "List the lab instruments",
+        "parameters": {"type": "object", "properties": {}},
+    }
     assert json.loads(function_output["output"]) == {
-        "tools": [{"type": "namespace", "name": "calendar", "description": "Calendar tools"}]
+        "tools": [{"type": "namespace", "name": "calendar", "description": "Calendar tools"}, loaded_function]
     }
     namespace: Final = _tool_named(lowered.tools, "calendar")
     assert namespace["tools"] == [
@@ -140,6 +152,7 @@ def test_replayed_search_output_loads_its_tools_for_the_model():
             "parameters": {"type": "object", "properties": {"title": {"type": "string"}}},
         }
     ]
+    assert _tool_named(lowered.tools, "list_instruments") == loaded_function
 
 
 def test_loaded_members_join_a_namespace_the_request_already_declares():

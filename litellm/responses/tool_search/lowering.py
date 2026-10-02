@@ -116,15 +116,19 @@ def _lowered_tool(tool: object) -> object:
     }
 
 
-def _loaded_tool(tool: dict[str, object]) -> dict[str, object]:
+def _loaded_definition(tool: dict[str, object]) -> dict[str, object]:
     loaded: Final = {key: value for key, value in tool.items() if key != "defer_loading"}
     kind: Final = _parsed(_Typed, tool)
     if kind is not None and kind.type == "function":
         return {**loaded, "parameters": _object_schema(tool.get("parameters"))}
+    return loaded
+
+
+def _loaded_tool(tool: dict[str, object]) -> dict[str, object]:
     namespace: Final = _parsed(_Namespace, tool)
     if namespace is None:
-        return loaded
-    return {**loaded, "tools": [_loaded_tool(member) for member in namespace.tools]}
+        return _loaded_definition(tool)
+    return {**_loaded_definition(tool), "tools": [_loaded_definition(member) for member in namespace.tools]}
 
 
 def _visible_loaded_tool(tool: dict[str, object]) -> dict[str, object]:

@@ -1,5 +1,7 @@
 from collections.abc import Mapping, Sequence
-from typing import Final, assert_never
+from typing import Final
+
+from typing_extensions import assert_never
 
 import litellm
 from litellm._internal_context import is_internal_call
