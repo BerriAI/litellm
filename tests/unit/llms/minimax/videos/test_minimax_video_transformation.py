@@ -11,14 +11,14 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
-from litellm.exceptions import UnsupportedParamsError
+from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.minimax.videos.transformation import (
+    MinimaxVideoConfig,
+    MinimaxVideoError,
     _MiniMaxTask,
-    _TaskContent,
     _TaskError,
     _video_url_from_task,
-    MinimaxVideoConfig,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.utils import (
@@ -95,14 +95,72 @@ class TestMinimaxVideoCreateRequest:
         assert "seconds" not in mapped
         assert "size" not in mapped
 
-    def test_map_openai_params_drops_fields_minimax_rejects(self):
+    def test_map_openai_params_drops_fields_minimax_never_takes(self):
         mapped = MinimaxVideoConfig().map_openai_params(
-            video_create_optional_params={"user": "u1", "characters": [{"id": "c"}], "prompt": "p"},
+            video_create_optional_params={"user": "u1", "prompt": "p"},
             model="MiniMax-H3",
             drop_params=False,
         )
 
         assert mapped == {}
+
+    @pytest.mark.parametrize("param,value", [("characters", [{"id": "c"}]), ("image", {"gcsUri": "gs://b/i.png"})])
+    def test_unsupported_param_is_rejected_unless_drop_params(self, param, value):
+        """Silently dropping a param the caller asked for hides that it had no
+        effect; only drop_params opts into that."""
+        config = MinimaxVideoConfig()
+
+        with pytest.raises(UnsupportedParamsError, match="drop_params") as raised:
+            config.map_openai_params(video_create_optional_params={param: value}, model="MiniMax-H3", drop_params=False)
+        assert raised.value.status_code == 400
+
+        assert (
+            config.map_openai_params(video_create_optional_params={param: value}, model="MiniMax-H3", drop_params=True)
+            == {}
+        )
+
+    @pytest.mark.parametrize("size", ["0x0", "1280x0", "0x720", "0:9", "16:0", "wide", "1280*720", "1280x720x3", ""])
+    def test_invalid_size_is_a_bad_request(self, size):
+        """A zero side would divide by zero in the ratio reduction; anything
+        unparseable used to vanish and silently fall back to 16:9."""
+        with pytest.raises(BadRequestError, match="size") as raised:
+            MinimaxVideoConfig().map_openai_params(
+                video_create_optional_params={"size": size}, model="MiniMax-H3", drop_params=False
+            )
+
+        assert raised.value.status_code == 400
+
+    def test_ratio_size_passes_through_reduced(self):
+        mapped = MinimaxVideoConfig().map_openai_params(
+            video_create_optional_params={"size": "32:18"}, model="MiniMax-H3", drop_params=False
+        )
+
+        assert mapped["ratio"] == "16:9"
+
+    @pytest.mark.parametrize("seconds", ["0", "-5", "abc", "5.5", "", True, 0, -3, 5.0])
+    def test_invalid_seconds_is_a_bad_request(self, seconds):
+        """An unparseable duration used to fall back to the 5 s default, so
+        the caller got and paid for a video of a length they never asked for."""
+        with pytest.raises(BadRequestError, match="seconds") as raised:
+            MinimaxVideoConfig().map_openai_params(
+                video_create_optional_params={"seconds": seconds}, model="MiniMax-H3", drop_params=False
+            )
+
+        assert raised.value.status_code == 400
+
+    @pytest.mark.parametrize("duration", ["ten", 0, -1, True])
+    def test_invalid_duration_override_is_a_bad_request(self, duration):
+        """duration can also arrive through extra_body or parameters, past the
+        seconds mapping; it is what gets billed, so it is checked again."""
+        with pytest.raises(BadRequestError, match="seconds"):
+            MinimaxVideoConfig().transform_video_create_request(
+                model="MiniMax-H3",
+                prompt="p",
+                api_base=API_BASE,
+                video_create_optional_request_params={"duration": duration},
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
 
     def test_map_openai_params_explicit_ratio_wins_over_size(self):
         mapped = MinimaxVideoConfig().map_openai_params(
@@ -389,11 +447,104 @@ class TestMinimaxVideoStatus:
 
         assert url == f"{API_BASE}/v2/query/video_generation/424010985738629"
 
-    def test_video_url_from_task_pending_and_failed_raise(self):
-        with pytest.raises(ValueError, match="still processing"):
-            _video_url_from_task(_MiniMaxTask(status="running"))
-        with pytest.raises(ValueError, match="sensitive content"):
-            _video_url_from_task(_MiniMaxTask(status="failed", error=_TaskError(message="sensitive content")))
+    def test_video_url_from_task_pending_and_failed_are_client_errors(self):
+        """A not-ready or failed task is the caller's state, so it must be a
+        4xx; a bare ValueError surfaced as a 500 that the router retried."""
+        with pytest.raises(MinimaxVideoError, match="still processing") as pending:
+            _video_url_from_task(_MiniMaxTask(id="t1", status="running"))
+        with pytest.raises(MinimaxVideoError, match="sensitive content") as failed:
+            _video_url_from_task(_MiniMaxTask(id="t1", status="failed", error=_TaskError(message="sensitive content")))
+
+        assert pending.value.status_code == 400
+        assert failed.value.status_code == 400
+
+    def test_not_ready_message_survives_the_handler_error_path(self):
+        """The video handlers rebuild provider errors from response.text, so
+        the message must ride on the response or it reaches the caller empty."""
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        with pytest.raises(MinimaxVideoError) as pending:
+            _video_url_from_task(_MiniMaxTask(id="t1", status="queued"))
+        with pytest.raises(MinimaxVideoError) as rebuilt:
+            BaseLLMHTTPHandler()._handle_error(e=pending.value, provider_config=MinimaxVideoConfig())
+
+        assert rebuilt.value.status_code == 400
+        assert "still processing" in rebuilt.value.message
+
+    def test_unknown_status_fails_loud_instead_of_reporting_queued(self):
+        """Defaulting an unmapped status to queued would have callers poll a
+        task that will never progress."""
+        with pytest.raises(MinimaxVideoError, match="expired") as raised:
+            MinimaxVideoConfig().transform_video_status_retrieve_response(
+                raw_response=_query_response({"id": "t1", "status": "expired"}),
+                logging_obj=None,
+                custom_llm_provider="minimax",
+            )
+
+        assert raised.value.status_code == 502
+
+    @pytest.mark.parametrize(
+        "payload",
+        [{}, {"task_id": ""}, {"task_id": None}, {"base_resp": {"status_code": 1004, "status_msg": "auth failed"}}],
+    )
+    def test_create_without_a_task_id_fails_closed(self, payload):
+        """Without a task id there is nothing to poll or download, so a
+        queued object with an empty id must not be returned (or billed)."""
+        with pytest.raises(MinimaxVideoError) as raised:
+            MinimaxVideoConfig().transform_video_create_response(
+                model="MiniMax-H3",
+                raw_response=_mock_response(payload),
+                logging_obj=None,
+                custom_llm_provider="minimax",
+                request_data={"resolution": "768P", "duration": 5},
+            )
+
+        assert raised.value.status_code == 502
+
+    @pytest.mark.parametrize("payload", [{}, {"task": None}, {"task": {"status": "running"}}, {"task": {"id": ""}}])
+    def test_status_without_a_task_fails_closed(self, payload):
+        with pytest.raises(MinimaxVideoError) as raised:
+            MinimaxVideoConfig().transform_video_status_retrieve_response(
+                raw_response=_query_response(payload["task"]) if "task" in payload else _mock_response(payload),
+                logging_obj=None,
+                custom_llm_provider="minimax",
+            )
+
+        assert raised.value.status_code == 502
+
+    def test_delete_without_a_task_id_fails_closed(self):
+        with pytest.raises(MinimaxVideoError):
+            MinimaxVideoConfig().transform_video_delete_response(
+                raw_response=_mock_response({"status": "cancelled"}),
+                logging_obj=None,
+            )
+
+
+class TestMinimaxVideoContentDownload:
+    """The download URL comes out of MiniMax's response, so it is fetched
+    through safe_get like any other URL litellm did not choose itself."""
+
+    @pytest.mark.parametrize("url", ["http://169.254.169.254/latest/meta-data/", "http://127.0.0.1:8080/x.mp4"])
+    def test_sync_download_refuses_internal_addresses(self, url):
+        from litellm.litellm_core_utils.url_utils import SSRFError
+
+        with pytest.raises(SSRFError):
+            MinimaxVideoConfig().transform_video_content_response(
+                raw_response=_query_response({"id": "t1", "status": "succeeded", "content": {"url": url}}),
+                logging_obj=None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_async_download_refuses_internal_addresses(self):
+        from litellm.litellm_core_utils.url_utils import SSRFError
+
+        with pytest.raises(SSRFError):
+            await MinimaxVideoConfig().async_transform_video_content_response(
+                raw_response=_query_response(
+                    {"id": "t1", "status": "succeeded", "content": {"url": "http://169.254.169.254/x.mp4"}}
+                ),
+                logging_obj=None,
+            )
 
 
 class TestMinimaxVideoList:

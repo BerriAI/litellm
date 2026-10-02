@@ -4,20 +4,25 @@ only upscales a finished 768P task to 2K and ignores the prompt, so it is not ex
 """
 
 import base64
+import re
 from collections.abc import Mapping, Sequence
 from io import BufferedReader, BytesIO
 from math import gcd
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, TypeVar
 
 import httpx
 from httpx._types import RequestFiles
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 import litellm
-from litellm.exceptions import UnsupportedParamsError
+from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.images.utils import ImageEditRequestUtils
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import (
+    async_safe_get,
+    encode_url_path_segment,
+    safe_get,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
@@ -83,9 +88,9 @@ class _CallerMediaItem(BaseModel, frozen=True, extra="forbid"):
 
 
 class _MiniMaxTask(BaseModel, frozen=True):
-    id: str = ""
+    id: str = Field(min_length=1)
     model: str | None = None
-    status: str = ""
+    status: str
     error: _TaskError | None = None
     created_at: int | None = None
     updated_at: int | None = None
@@ -99,11 +104,11 @@ class _MiniMaxTask(BaseModel, frozen=True):
 
 
 class _TaskIdResponse(BaseModel, frozen=True):
-    task_id: str = ""
+    task_id: str = Field(min_length=1)
 
 
 class _TaskResponse(BaseModel, frozen=True):
-    task: _MiniMaxTask | None = None
+    task: _MiniMaxTask
 
 
 class _ListResponse(BaseModel, frozen=True):
@@ -112,8 +117,8 @@ class _ListResponse(BaseModel, frozen=True):
 
 
 class _DeleteResponse(BaseModel, frozen=True):
-    task_id: str = ""
-    status: str = ""
+    task_id: str = Field(min_length=1)
+    status: str
 
 
 MINIMAX_VIDEO_DEFAULT_API_BASE: Final = "https://api.minimax.io"
@@ -146,13 +151,13 @@ _DROP_FROM_CREATE_BODY: Final = frozenset(
         "model",
         "prompt",
         "user",
-        "characters",
-        "image",
         "extra_headers",
         "extra_query",
         "extra_body",
     }
 )
+
+_UNSUPPORTED_CREATE_PARAMS: Final = frozenset({"characters", "image"})
 
 _CREATE_BODY_KEYS: Final = (
     "resolution",
@@ -163,17 +168,40 @@ _CREATE_BODY_KEYS: Final = (
     "extra",
 )
 
+_ParsedT = TypeVar("_ParsedT")
+
+
+def _minimax_error(status_code: int, message: str) -> MinimaxVideoError:
+    """
+    The video handlers rebuild provider errors from ``response.text``, so the message has to ride on the
+    response as well or it reaches the caller empty.
+    """
+    request: Final = httpx.Request(method="GET", url=MINIMAX_VIDEO_DEFAULT_API_BASE)
+    return MinimaxVideoError(
+        status_code=status_code,
+        message=message,
+        request=request,
+        response=httpx.Response(status_code=status_code, text=message, request=request),
+    )
+
+
+def _parse_response(adapter: TypeAdapter[_ParsedT], raw_response: httpx.Response) -> _ParsedT:
+    try:
+        return adapter.validate_python(raw_response.json())
+    except ValueError as e:
+        raise _minimax_error(502, f"Unexpected MiniMax video response: {raw_response.text}") from e
+
 
 def _parse_task_response(raw_response: httpx.Response) -> _MiniMaxTask:
-    return _TASK_RESPONSE_ADAPTER.validate_python(raw_response.json()).task or _MiniMaxTask()
+    return _parse_response(_TASK_RESPONSE_ADAPTER, raw_response).task
 
 
 def _parse_task_id_response(raw_response: httpx.Response) -> str:
-    return _TASK_ID_RESPONSE_ADAPTER.validate_python(raw_response.json()).task_id
+    return _parse_response(_TASK_ID_RESPONSE_ADAPTER, raw_response).task_id
 
 
 def _parse_delete_response(raw_response: httpx.Response) -> tuple[str, str]:
-    deleted: Final = _DELETE_RESPONSE_ADAPTER.validate_python(raw_response.json())
+    deleted: Final = _parse_response(_DELETE_RESPONSE_ADAPTER, raw_response)
     return deleted.task_id, deleted.status
 
 
@@ -190,29 +218,38 @@ def _normalized_api_base(api_base: str) -> str:
     return trimmed[: -len(matched)] if matched else trimmed
 
 
-def _ratio_from_size(size: str) -> str | None:
-    if ":" in size:
-        return size
-    width_str, separator, height_str = size.partition("x")
-    if not separator or not (width_str.isdigit() and height_str.isdigit()):
-        return None
-    width: Final = int(width_str)
-    height: Final = int(height_str)
+def _invalid_param(param: str, value: object, expected: str, model: str) -> BadRequestError:
+    return BadRequestError(
+        message=f"Invalid {param} {value!r} for MiniMax video generation: expected {expected}.",
+        model=model,
+        llm_provider="minimax",
+    )
+
+
+_SIZE_OR_RATIO: Final = re.compile(r"(\d+)[x:](\d+)")
+
+
+def _ratio_from_size(size: object, model: str) -> str:
+    """OpenAI ``size`` is ``WIDTHxHEIGHT``; MiniMax takes the reduced ``W:H`` ratio, which is also accepted as is."""
+    matched: Final = _SIZE_OR_RATIO.fullmatch(size) if isinstance(size, str) else None
+    width: Final = int(matched.group(1)) if matched else 0
+    height: Final = int(matched.group(2)) if matched else 0
+    if width <= 0 or height <= 0:
+        raise _invalid_param("size", size, "WIDTHxHEIGHT or W:H with positive integers, e.g. 1280x720", model)
     divisor: Final = gcd(width, height)
     return f"{width // divisor}:{height // divisor}"
 
 
-def _duration_param(seconds: object) -> int | None:
-    if isinstance(seconds, bool):
-        return None
-    if isinstance(seconds, int):
-        return seconds
-    if not isinstance(seconds, str):
-        return None
-    try:
-        return int(float(seconds))
-    except ValueError:
-        return None
+def _duration_param(seconds: object, model: str) -> int:
+    if isinstance(seconds, int) and not isinstance(seconds, bool):
+        parsed = seconds
+    elif isinstance(seconds, str) and seconds.isdigit():
+        parsed = int(seconds)
+    else:
+        parsed = 0
+    if parsed <= 0:
+        raise _invalid_param("seconds", seconds, "a positive whole number of seconds", model)
+    return parsed
 
 
 def _read_all_bytes(file_obj: object) -> bytes:
@@ -272,7 +309,9 @@ def _is_text_only_content(content: object) -> bool:
 
 
 def _video_object_from_task(task: _MiniMaxTask) -> VideoObject:
-    status: Final = _STATUS_MAP.get(task.status, "queued")
+    status: Final = _STATUS_MAP.get(task.status)
+    if status is None:
+        raise _minimax_error(502, f"MiniMax returned unknown video task status {task.status!r} for task {task.id}")
     usage_dump: Final = task.usage.model_dump(exclude_none=True) if task.usage is not None else None
     return VideoObject(
         id=task.id,
@@ -310,14 +349,17 @@ def _create_cost_usd(model: str, duration: float, resolution: str | None, input_
 
 
 def _video_url_from_task(task: _MiniMaxTask) -> str:
+    """A task with no video yet is the caller's state to fix, so it is a 4xx the router does not retry."""
     if task.content is not None and task.content.url:
         return task.content.url
 
     if task.status in ("queued", "running"):
-        raise ValueError(f"Video is still processing (status: {task.status}). Please wait and try again.")
+        raise _minimax_error(
+            400, f"Video is still processing (status: {task.status}). Poll the video until it is completed."
+        )
     if task.error is not None:
-        raise ValueError(f"Video generation failed: {task.error.message or 'unknown error'}")
-    raise ValueError("Video URL not found in task response. The task may not have succeeded yet.")
+        raise _minimax_error(400, f"Video generation failed: {task.error.message or 'unknown error'}")
+    raise _minimax_error(400, f"Video has no downloadable content (status: {task.status}).")
 
 
 class MinimaxVideoConfig(BaseVideoConfig):
@@ -350,19 +392,26 @@ class MinimaxVideoConfig(BaseVideoConfig):
         for key, value in video_create_optional_params.items():
             if value is None or key in _DROP_FROM_CREATE_BODY:
                 continue
+            if key in _UNSUPPORTED_CREATE_PARAMS:
+                if drop_params:
+                    continue
+                raise UnsupportedParamsError(
+                    message=(
+                        f"MiniMax video generation does not support {key!r}. "
+                        "Set litellm.drop_params=True to drop it, or remove it from the request."
+                    ),
+                    model=model,
+                    llm_provider="minimax",
+                )
             if key == "seconds":
-                duration = _duration_param(value)
-                if duration is not None:
-                    mapped_params["duration"] = duration
+                mapped_params["duration"] = _duration_param(value, model)
             elif key == "size":
-                ratio = _ratio_from_size(value) if isinstance(value, str) else None
-                if ratio is not None:
-                    mapped_params.setdefault("ratio", ratio)
+                mapped_params.setdefault("ratio", _ratio_from_size(value, model))
             elif key == "parameters":
                 try:
                     mapped_params.update(_RESPONSE_ADAPTER.validate_python(value))
                 except ValidationError as e:
-                    raise ValueError("parameters must be an object of MiniMax request fields") from e
+                    raise _invalid_param("parameters", value, "an object of MiniMax request fields", model) from e
             else:
                 mapped_params[key] = value
         return mapped_params
@@ -430,7 +479,9 @@ class MinimaxVideoConfig(BaseVideoConfig):
                 request_data[key] = video_create_optional_request_params[key]
 
         request_data.setdefault("resolution", MINIMAX_VIDEO_DEFAULT_RESOLUTION)
-        request_data.setdefault("duration", MINIMAX_VIDEO_DEFAULT_DURATION_SECONDS)
+        request_data["duration"] = _duration_param(
+            request_data.get("duration", MINIMAX_VIDEO_DEFAULT_DURATION_SECONDS), model
+        )
         if "ratio" not in request_data and _is_text_only_content(content):
             request_data["ratio"] = MINIMAX_TEXT_TO_VIDEO_DEFAULT_RATIO
 
@@ -556,7 +607,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         video_url: Final = _video_url_from_task(task)
 
         httpx_client: Final = _get_httpx_client()
-        video_response: Final = httpx_client.get(video_url)  # pyright: ignore[reportUnknownMemberType]  # HTTPHandler.get stub leaves params/headers untyped
+        video_response: Final = safe_get(httpx_client, video_url)
         video_response.raise_for_status()
 
         return video_response.content
@@ -572,7 +623,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         async_httpx_client: Final = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.MINIMAX,
         )
-        video_response: Final = await async_httpx_client.get(video_url)  # pyright: ignore[reportUnknownMemberType]  # HTTPHandler.get stub leaves params/headers untyped
+        video_response: Final = await async_safe_get(async_httpx_client, video_url)
         video_response.raise_for_status()
 
         return video_response.content
