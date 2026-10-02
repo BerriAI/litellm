@@ -72,7 +72,10 @@ def _export(*spans: Span, service: str = "svc", scope: str = "test", agent_name:
         ("research_agent._execute_core", {"openinference.span.kind": "AGENT", "graph.node.id": "research_agent"}),
         ("agent", {"openinference.span.kind": "AGENT", "gen_ai.agent.name": "research_agent"}),
         ("openclaw.harness.run", {"openclaw.agent": "research_agent"}),
-        ("invoke_agent research_agent", {"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "research_agent"}),
+        (
+            "invoke_agent research_agent",
+            {"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "research_agent"},
+        ),
     ],
     ids=["deepagents", "langgraph", "crewai", "hermes", "openclaw", "genai"],
 )
