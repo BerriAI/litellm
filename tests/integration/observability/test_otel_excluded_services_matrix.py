@@ -348,6 +348,11 @@ def _db_systems(spans: tuple[Span, ...]) -> set[str]:
     }
 
 
+def _post_auth_datastore_spans(spans: tuple[Span, ...]) -> tuple[Span, ...]:
+    auth_ids: Final = frozenset(span["span_id"] for span in spans if span["name"].startswith("auth "))
+    return tuple(span for span in spans if _db_systems((span,)) and span["parent_span_id"] not in auth_ids)
+
+
 def _names(spans: tuple[Span, ...]) -> list[str]:
     return sorted(span["name"] for span in spans)
 
@@ -766,15 +771,45 @@ def test_unconfigured_cache_hit_twin_keeps_datastore_spans(unconfigured_rig: Rig
     assert unconfigured_rig.upstream_hits(marker) == 1
     _assert_kept(unconfigured_rig, first, cursors)
     hit_cursors: Final = unconfigured_rig.cursors()
-    trace_id, hit = eventually(
-        lambda: _traced_raw(unconfigured_rig, endpoint, marker),
-        lambda sent: unconfigured_rig.upstream_hits(marker) == 0,
-        seconds=20,
+
+    def read_hit() -> tuple[str, Sent, tuple[Span, ...]]:
+        trace_id, sent = _traced_raw(unconfigured_rig, endpoint, marker)
+        return trace_id, sent, _operator_trace_by_id(unconfigured_rig, trace_id, hit_cursors)
+
+    trace_id, hit, operator = eventually(
+        read_hit,
+        lambda result: (
+            unconfigured_rig.upstream_hits(marker) == 0
+            and "redis" in _db_systems(_post_auth_datastore_spans(result[2]))
+        ),
+        seconds=60,
     )
     assert hit.text == REPLY_TEXT, hit
-    operator: Final = _operator_trace_by_id(unconfigured_rig, trace_id, hit_cursors)
-    tenant: Final = _tenant_mirror(unconfigured_rig, operator, hit_cursors)
+    post_auth_datastore: Final = _post_auth_datastore_spans(operator)
+    post_auth_span_ids: Final = frozenset(span["span_id"] for span in post_auth_datastore)
+    non_datastore_names: Final = frozenset(span["name"] for span in operator if not _db_systems((span,)))
+    tenant: Final = eventually(
+        lambda: spans_for_trace(recorded_spans(unconfigured_rig.sinks.tenant, hit_cursors.tenant)[1], trace_id),
+        lambda spans: (
+            non_datastore_names <= frozenset(span["name"] for span in spans)
+            and post_auth_span_ids <= frozenset(span["span_id"] for span in spans)
+        ),
+        seconds=40,
+        return_last_on_timeout=True,
+    )
+    tenant_span_ids: Final = frozenset(span["span_id"] for span in tenant)
+    missing_post_auth_names: Final = tuple(
+        span["name"] for span in post_auth_datastore if span["span_id"] not in tenant_span_ids
+    )
     assert sum(1 for span in tenant if span["kind"] == SERVER) == 1, _names(tenant)
+    assert "redis" in _db_systems(tenant), (
+        f"operator datastore systems={sorted(_db_systems(post_auth_datastore))}; "
+        f"tenant datastore systems={sorted(_db_systems(tenant))}; tenant spans={_names(tenant)}"
+    )
+    assert not missing_post_auth_names, (
+        f"missing post-auth datastore span names={missing_post_auth_names}; "
+        f"operator={_names(post_auth_datastore)}; tenant={_names(tenant)}"
+    )
 
 
 @pytest.mark.timeout(120)
