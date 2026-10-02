@@ -25,7 +25,7 @@ def _synthetic_cost_map_entries() -> None:
     litellm.get_model_info.cache_clear()
 
 
-def _deployment(model: str, dep_id: str) -> dict:
+def _deployment(model: str, dep_id: str) -> dict[str, object]:
     return {"litellm_params": {"model": model}, "model_info": {"id": dep_id}}
 
 
