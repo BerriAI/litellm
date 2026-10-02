@@ -12,13 +12,14 @@ import anthropic
 import httpx
 import openai
 import pytest
-from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
+from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
+from pydantic import JsonValue, TypeAdapter
+
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from pydantic import JsonValue, TypeAdapter
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 REDACTED: Final = "REDACTED_BY_LITELM"
@@ -92,6 +93,25 @@ def _stored_row(response_id: str, *, responses_api: bool = False) -> dict[str, J
     )
     assert rows[0]["request_id"] == request_id
     return rows[0]
+
+
+def _stored_cache_hit_row(response_id: str) -> dict[str, JsonValue]:
+    request_id_prefix: Final = f"{response_id}_cache_hit"
+    rows: Final = eventually(
+        lambda: read_rows(
+            'SELECT request_id, proxy_server_request, response, status, cache_hit FROM "LiteLLM_SpendLogs" '
+            "WHERE LEFT(request_id, LENGTH(%s)) = %s",
+            (request_id_prefix, request_id_prefix),
+        ),
+        lambda values: len(values) == 1,
+        seconds=70,
+    )
+    row: Final = rows[0]
+    assert string_value(row["request_id"]).startswith(request_id_prefix), row
+    assert row["cache_hit"] == "True", row
+    assert row["proxy_server_request"] is not None, row
+    assert row["response"] is not None, row
+    return row
 
 
 def _stored_rows(response_ids: tuple[str, ...], *, responses_api: bool = False) -> tuple[dict[str, JsonValue], ...]:
@@ -1294,6 +1314,9 @@ def test_chat_cache_hit_keeps_logprob_tokens(gateway: Gateway, tmp_path: Path) -
             "messages": [{"role": "user", "content": "cache logprob control"}],
             "logprobs": True,
             "top_logprobs": 1,
+            "prompt_cache_key": "tenant-42-cache",
+            "aws_secret_access_key": "AKIAEXAMPLESECRET",
+            "secret_fields": {"raw_headers": {"authorization": "Bearer secret-cache"}},
         }
         first: Final = isolated.request("POST", "/v1/chat/completions", body)
         second: Final = isolated.request("POST", "/v1/chat/completions", body)
@@ -1301,9 +1324,14 @@ def test_chat_cache_hit_keeps_logprob_tokens(gateway: Gateway, tmp_path: Path) -
         assert second.status_code == 200, second.text
         first_id: Final = string_value(_json_object(first.content)["id"])
         second_id: Final = string_value(_json_object(second.content)["id"])
-        second_row: Final = _stored_row(second_id)
+        second_row: Final = _stored_cache_hit_row(second_id)
+        stored_request: Final = object_value(second_row["proxy_server_request"])
         stored_response: Final = object_value(second_row["response"])
         assert [entry["token"] for entry in stored_response["choices"][0]["logprobs"]["content"]] == ["sort", "_key"]
+        assert stored_request["prompt_cache_key"] == REDACTED
+        assert stored_request["aws_secret_access_key"] == REDACTED
+        assert "secret_fields" not in stored_request
+        assert stored_response["system_fingerprint"] == REDACTED
         assert len(wire.drain()) == 1
         assert len(_stored_rows((first_id,))) == 1
 
@@ -1331,6 +1359,8 @@ def test_messages_cache_hit_keeps_tool_input(gateway: Gateway, tmp_path: Path) -
         body: Final = {
             "model": model,
             "max_tokens": 64,
+            "aws_secret_access_key": "AKIAEXAMPLESECRET",
+            "secret_fields": {"raw_headers": {"authorization": "Bearer secret-cache"}},
             "messages": [
                 {"role": "user", "content": "cache tool control"},
                 {
@@ -1345,9 +1375,11 @@ def test_messages_cache_hit_keeps_tool_input(gateway: Gateway, tmp_path: Path) -
         assert second.status_code == 200, second.text
         first_id: Final = string_value(_json_object(first.content)["id"])
         second_id: Final = string_value(_json_object(second.content)["id"])
-        second_row: Final = _stored_row(second_id)
+        second_row: Final = _stored_cache_hit_row(second_id)
         stored_request: Final = object_value(second_row["proxy_server_request"])
         assert stored_request["messages"][1]["content"][0]["input"] == tool_input
+        assert stored_request["aws_secret_access_key"] == REDACTED
+        assert "secret_fields" not in stored_request
         assert len(wire.drain()) == 1
         assert len(_stored_rows((first_id,))) == 1
 
