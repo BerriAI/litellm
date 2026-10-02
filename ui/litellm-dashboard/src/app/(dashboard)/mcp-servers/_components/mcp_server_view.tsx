@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-import { MCPServer, handleTransport, handleAuth } from "@/components/mcp_tools/types";
+import { MCPServer, TRANSPORT, handleTransport, handleAuth } from "@/components/mcp_tools/types";
 // TODO: Move Tools viewer from index file
 import { MCPToolsViewer } from ".";
 import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
@@ -15,6 +15,7 @@ import { MCPServerUserCredentialsPanel } from "./MCPServerUserCredentialsPanel";
 import { getSecureItem } from "@/utils/secureStorage";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import MCPServerCostDisplay from "./mcp_server_cost_display";
+import { StdioDisabledBanner } from "./StdioAvailability";
 import { getMaskedAndFullUrl, getMCPNetworkAccess } from "./utils";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
@@ -145,6 +146,10 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         </div>
         {mcpServer.description && <p className="mt-2 text-sm text-muted-foreground">{mcpServer.description}</p>}
       </div>
+
+      {mcpServer.transport === TRANSPORT.STDIO && !stdioEnabled && !(selectedTabIndex === 2 && editing && canEdit) && (
+        <StdioDisabledBanner />
+      )}
 
       <Tabs value={String(selectedTabIndex)} onValueChange={(v: unknown) => setSelectedTabIndex(Number(v))}>
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
