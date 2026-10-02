@@ -46,8 +46,12 @@ from litellm.proxy.spend_tracking.log_visibility import (
     UserLogs,
     can_read_log_owner,
     can_read_team_logs,
-    permitted_log_team_ids,
     resolve_log_read_scope,
+)
+from litellm.proxy.spend_tracking.log_visibility_dependencies import (
+    LogTeamLookup,
+    LogTeamLookupDependency,
+    load_permitted_log_team_ids,
 )
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     ProviderBillingCredentialMissing,
@@ -411,11 +415,6 @@ async def _count_spend_logs(prisma_client: PrismaClient, where: Mapping[str, obj
 async def _find_team_row(prisma_client: PrismaClient, team_id: str) -> _SupportsModelDump | None:
     """Read a single team row as a Prisma model instance."""
     return await _team_table(prisma_client).find_unique(where={"team_id": team_id})
-
-
-async def _find_team_rows(prisma_client: PrismaClient, team_ids: Sequence[str]) -> Sequence[_SupportsModelDump]:
-    """Read team rows as Prisma model instances."""
-    return await _team_table(prisma_client).find_many(where={"team_id": {"in": team_ids}})
 
 
 @router.get(
@@ -2484,6 +2483,7 @@ def _build_spend_log_search_condition(
 )
 async def ui_view_spend_logs(
     request: Request,
+    log_team_lookup: LogTeamLookupDependency,
     api_key: str | None = fastapi.Query(
         default=None,
         description="Get spend logs based on api key",
@@ -2786,7 +2786,7 @@ async def ui_view_spend_logs(
             and (is_request_id_lookup or _can_user_view_spend_log(user_api_key_dict=user_api_key_dict))
         )
         read_scope: Final = (
-            await _spend_log_read_scope(prisma_client, user_api_key_dict) if user_scope_applies else AllLogs()
+            await _spend_log_read_scope(user_api_key_dict, log_team_lookup) if user_scope_applies else AllLogs()
         )
         if not is_admin_view:
             if team_id is not None:
@@ -3370,6 +3370,7 @@ async def _resolve_request_response_payload(
 )
 async def ui_view_request_response_for_request_id(
     request_id: str,
+    log_team_lookup: LogTeamLookupDependency,
     start_date: str | None = fastapi.Query(
         default=None,
         description="Time from which to start viewing key spend",
@@ -3422,6 +3423,7 @@ async def ui_view_request_response_for_request_id(
             user_api_key_dict=user_api_key_dict,
             request_id=request_id,
             caller_is_admin=caller_is_admin,
+            log_team_lookup=log_team_lookup,
         )
     )
     stored_request_id: Final = _stored_request_id(spend_log_row, request_id)
@@ -4492,6 +4494,7 @@ async def ui_get_spend_by_tags(
     },
 )
 async def ui_view_session_spend_logs(
+    log_team_lookup: LogTeamLookupDependency,
     session_id: str = fastapi.Query(
         description="Get all spend logs for a particular session",
     ),
@@ -4532,7 +4535,7 @@ async def ui_view_session_spend_logs(
         read_scope: Final = (
             AllLogs()
             if _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
-            else await _spend_log_read_scope(prisma_client, user_api_key_dict)
+            else await _spend_log_read_scope(user_api_key_dict, log_team_lookup)
             if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
             else UserLogs(user_api_key_dict.user_id)
         )
@@ -4887,10 +4890,10 @@ async def _assert_user_can_view_request_id(
     raise _spend_log_forbidden(request_id)
 
 
-async def _spend_log_read_scope(prisma_client: PrismaClient, user_api_key_dict: UserAPIKeyAuth) -> LogReadScope:
+async def _spend_log_read_scope(user_api_key_dict: UserAPIKeyAuth, log_team_lookup: LogTeamLookup) -> LogReadScope:
     return await resolve_log_read_scope(
         user_api_key_dict.user_id,
-        partial(_get_permitted_team_ids_for_spend_logs, prisma_client, user_api_key_dict),
+        partial(log_team_lookup, user_api_key_dict),
     )
 
 
@@ -4944,6 +4947,7 @@ async def _resolve_spend_log_payload_row(
     user_api_key_dict: UserAPIKeyAuth,
     request_id: str,
     caller_is_admin: bool,
+    log_team_lookup: LogTeamLookup,
 ) -> Mapping[str, object] | None:
     """
     Resolve an id lookup to the caller's own spend-log row before any payload
@@ -4952,7 +4956,7 @@ async def _resolve_spend_log_payload_row(
     that id is only the caller's ``litellm_call_id``; the row's stored
     ``request_id`` is the key that names the caller's own request.
     """
-    scope: Final = AllLogs() if caller_is_admin else await _spend_log_read_scope(prisma_client, user_api_key_dict)
+    scope: Final = AllLogs() if caller_is_admin else await _spend_log_read_scope(user_api_key_dict, log_team_lookup)
     sql_query, sql_params = _spend_log_payload_query(request_id, scope)
     rows: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(prisma_client, sql_query, *sql_params)
     if not rows:
@@ -5035,29 +5039,13 @@ async def _get_permitted_team_ids_for_spend_logs(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> list[str]:
-    """
-    Return team IDs where the user is either a team admin or has the
-    ``/spend/logs`` permission, allowing them to view team-wide spend logs.
-    """
-    # Imported here to avoid circular import: proxy_server imports this module.
-    from litellm.proxy.auth.auth_checks import get_user_object
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
-    user_obj: Final = await get_user_object(
-        user_id=user_api_key_dict.user_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        user_id_upsert=False,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-    if user_obj is None or not user_obj.teams:
-        return []
-
-    team_rows: Final = await _find_team_rows(prisma_client, user_obj.teams)
-
     return list(
-        permitted_log_team_ids(
+        await load_permitted_log_team_ids(
             user_api_key_dict,
-            (LiteLLM_TeamTable.model_validate(team_row.model_dump()) for team_row in team_rows),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
         )
     )

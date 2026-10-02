@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm.proxy.spend_tracking.log_visibility_dependencies import get_log_team_lookup
 
 
 def _default_date_range():
@@ -1656,10 +1657,7 @@ async def test_ui_view_spend_logs_explicit_user_filter_cannot_escape_own_scope(c
         "litellm.proxy.proxy_server.prisma_client",
         make_ui_spend_logs_mock_prisma([caller_log], lambda _where: [], query_observer=observe_query),
     )
-    monkeypatch.setattr(
-        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-        AsyncMock(return_value=[]),
-    )
+    monkeypatch.setitem(app.dependency_overrides, get_log_team_lookup, lambda: AsyncMock(return_value=()))
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller@example.com"
     )
@@ -1715,10 +1713,7 @@ async def test_ui_view_spend_logs_without_user_filter_includes_permitted_team_sc
         "litellm.proxy.proxy_server.prisma_client",
         make_ui_spend_logs_mock_prisma([caller_log, member_log, outside_log], filter_by_scope),
     )
-    monkeypatch.setattr(
-        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-        AsyncMock(return_value=["team-9"]),
-    )
+    monkeypatch.setitem(app.dependency_overrides, get_log_team_lookup, lambda: AsyncMock(return_value=("team-9",)))
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin@example.com"
     )
@@ -1875,10 +1870,7 @@ async def test_ui_view_spend_logs_user_filter_intersects_permitted_team_scope(cl
         "litellm.proxy.proxy_server.prisma_client",
         make_ui_spend_logs_mock_prisma([member_log, other_team_log], filter_by_user_and_scope),
     )
-    monkeypatch.setattr(
-        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-        AsyncMock(return_value=["team-9"]),
-    )
+    monkeypatch.setitem(app.dependency_overrides, get_log_team_lookup, lambda: AsyncMock(return_value=("team-9",)))
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"
     )
@@ -2162,10 +2154,7 @@ async def test_ui_view_session_spend_logs_scopes_non_admin_to_own_logs(client, m
             raise RuntimeError("team lookup failed")
         return []
 
-    monkeypatch.setattr(
-        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-        no_permitted_teams,
-    )
+    monkeypatch.setitem(app.dependency_overrides, get_log_team_lookup, lambda: no_permitted_teams)
 
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1"
@@ -2224,10 +2213,7 @@ async def test_ui_view_session_spend_logs_includes_permitted_team_logs(client, m
     async def permitted_teams(*args, **kwargs):
         return ["team-9"]
 
-    monkeypatch.setattr(
-        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-        permitted_teams,
-    )
+    monkeypatch.setitem(app.dependency_overrides, get_log_team_lookup, lambda: permitted_teams)
 
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1"
@@ -3164,10 +3150,7 @@ async def test_ui_view_spend_logs_search_keeps_non_admin_scope(client, monkeypat
         "litellm.proxy.proxy_server.prisma_client",
         make_ui_spend_logs_mock_prisma(logs, _search_filter_fn(logs, captured)),
     )
-    monkeypatch.setattr(
-        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-        AsyncMock(return_value=[]),
-    )
+    monkeypatch.setitem(app.dependency_overrides, get_log_team_lookup, lambda: AsyncMock(return_value=()))
     ownership_check = AsyncMock()
     monkeypatch.setattr(
         "litellm.proxy.spend_tracking.spend_management_endpoints._assert_user_can_view_request_id",
@@ -7955,7 +7938,8 @@ async def test_shared_read_scope_returns_only_owned_or_permitted_rows(monkeypatc
         {**_payload_row("foreign", "foreign-call", "other", "foreign payload"), "team_id": "outside"},
     )
     prisma = _make_payload_lookup_prisma(rows, team_table=TeamTable())
-    scope = await spend_management_endpoints._spend_log_read_scope(prisma, auth)
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+    scope = await spend_management_endpoints._spend_log_read_scope(auth, await get_log_team_lookup())
     returned = []
     for row in rows:
         query, params = spend_management_endpoints._spend_log_payload_query(row["request_id"], scope)
@@ -8017,3 +8001,45 @@ async def test_payload_scope_filters_colliding_foreign_request_id(lookup_failure
     prisma = _make_payload_lookup_prisma(rows)
     query, params = spend_management_endpoints._spend_log_payload_query("collision", scope)
     assert await prisma.db.query_raw(query, *params) == [rows[1]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("params", "expected_status"),
+    [
+        ({"start_date": "invalid", "end_date": "invalid"}, 400),
+        ({"request_id": "foreign"}, 403),
+    ],
+)
+async def test_log_team_dependency_preserves_checks_before_permission_lookup(
+    client, monkeypatch, params, expected_status
+):
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    team_reads = []
+
+    class TeamTable:
+        async def find_many(self, where):
+            team_reads.append(where)
+            return []
+
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="caller", value=LiteLLM_UserTable(user_id="caller", teams=["team"]), model_type=LiteLLM_UserTable
+    )
+    prisma = _make_payload_lookup_prisma(
+        [_payload_row("foreign", "foreign-call", "other", "foreign payload")], team_table=TeamTable()
+    )
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        ps.user_api_key_auth,
+        lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller"),
+    )
+
+    response = client.get("/spend/logs/ui", params=params, headers={"Authorization": "Bearer sk-test"})
+
+    assert response.status_code == expected_status, response.text
+    assert team_reads == []
