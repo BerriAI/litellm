@@ -4455,6 +4455,7 @@ dependencies = [
  "base64 0.22.1",
  "criterion",
  "flate2",
+ "futures-util",
  "hmac 0.12.1",
  "indexmap 2.14.0",
  "litellm-http",
@@ -4472,6 +4473,7 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "tokio",
+ "url",
  "wiremock",
 ]
 

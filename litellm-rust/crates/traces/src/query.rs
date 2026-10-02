@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use futures_util::future::{join_all, try_join_all};
 use litellm_http::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -14,6 +15,8 @@ const MAX_DEPTH: usize = 16;
 const METADATA_SQL: &str = "SELECT metadata FROM spend_logs FINAL \
     WHERE start_time >= now() - INTERVAL 7 DAY AND length(metadata) <= 8192 \
     LIMIT 201";
+const METADATA_SCOPE: &str = "Up to 200 unordered rows from the last 7 days, excluding metadata larger than 8192 bytes; up to 200 paths and 16 levels. Missing paths may exist outside this sample. Array indexes are 1-based and describe sampled positions, not a fixed schema";
+const ATTRIBUTE_SCOPE: &str = "Distinct keys from up to 200 unordered spans in the last 7 days; up to 200 keys per map. Missing keys may exist outside this sample";
 
 #[derive(Deserialize)]
 struct Rows<T> {
@@ -173,15 +176,17 @@ fn discover(
 }
 
 fn metadata_catalog(sample: &[MetadataRow]) -> MetadataCatalog {
-    let mut fields = BTreeMap::new();
-    let mut limited = sample.len() > SAMPLE_ROWS;
-    let mut invalid_rows = 0;
-    for row in sample.iter().take(SAMPLE_ROWS) {
-        match serde_json::from_str::<Value>(&row.metadata) {
-            Ok(value) => limited |= discover(&value, Vec::new(), &mut fields),
-            Err(_) => invalid_rows += 1,
-        }
-    }
+    let (fields, limited, invalid_rows) = sample.iter().take(SAMPLE_ROWS).fold(
+        (BTreeMap::new(), sample.len() > SAMPLE_ROWS, 0),
+        |(fields, limited, invalid_rows), row| match serde_json::from_str::<Value>(&row.metadata) {
+            Ok(value) => {
+                let mut fields = fields;
+                let limited = limited | discover(&value, Vec::new(), &mut fields);
+                (fields, limited, invalid_rows)
+            }
+            Err(_) => (fields, limited, invalid_rows + 1),
+        },
+    );
     let fields: Vec<_> = fields
         .into_iter()
         .map(|(path, types)| MetadataField {
@@ -199,20 +204,27 @@ fn metadata_catalog(sample: &[MetadataRow]) -> MetadataCatalog {
         truncated: limited,
         sample_sql: METADATA_SQL,
         error: None,
-        scope: "Up to 200 unordered rows from the last 7 days, excluding metadata larger than 8192 bytes; up to 200 paths and 16 levels. Missing paths may exist outside this sample. Array indexes are 1-based and describe sampled positions, not a fixed schema",
+        scope: METADATA_SCOPE,
     }
 }
 
 pub async fn query_help(client: &Client, connection: &Connection) -> Result<String, Error> {
-    let mut tables = Vec::new();
-    for table in ["otel_traces", "agent_traces_by_key", "spend_logs"] {
-        let columns =
-            rows::<ColumnSchema>(client, connection, &format!("DESCRIBE TABLE {table}")).await?;
-        tables.push(TableSchema {
-            name: table,
-            columns,
-        });
-    }
+    let tables = try_join_all(
+        ["otel_traces", "agent_traces_by_key", "spend_logs"]
+            .into_iter()
+            .map(|table| async move {
+                Ok::<_, Error>(TableSchema {
+                    name: table,
+                    columns: rows::<ColumnSchema>(
+                        client,
+                        connection,
+                        &format!("DESCRIBE TABLE {table}"),
+                    )
+                    .await?,
+                })
+            }),
+    )
+    .await?;
     let metadata = match rows::<MetadataRow>(client, connection, METADATA_SQL).await {
         Ok(sample) => metadata_catalog(&sample),
         Err(error) => MetadataCatalog {
@@ -221,32 +233,38 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Stri
             ..metadata_catalog(&[])
         },
     };
-    let mut attributes = Vec::new();
-    for column in ["SpanAttributes", "ResourceAttributes"] {
-        let sql = format!(
-            "SELECT DISTINCT arrayJoin(mapKeys({column})) AS key FROM \
+    let attributes = join_all(["SpanAttributes", "ResourceAttributes"].into_iter().map(
+        |column| async move {
+            let sql = format!(
+                "SELECT DISTINCT arrayJoin(mapKeys({column})) AS key FROM \
              (SELECT {column} FROM otel_traces WHERE Timestamp >= now() - INTERVAL 7 DAY \
              LIMIT 200) ORDER BY key LIMIT 201"
-        );
-        let (keys, error) = match rows::<AttributeRow>(client, connection, &sql).await {
-            Ok(keys) => (keys, None),
-            Err(error) => (Vec::new(), Some(error.to_string())),
-        };
-        let fields = keys
-            .iter()
-            .take(MAX_FIELDS)
-            .map(|row| AttributeField {
-                key: row.key.clone(),
-                kind: "String",
-                expression: format!("{column}[{}]", literal(&row.key)),
-            })
-            .collect();
-        attributes.push(AttributeCatalog {
-            table: "otel_traces", column, fields,
-            truncated: error.is_some() || keys.len() > MAX_FIELDS, discovery_sql: sql, error,
-            scope: "Distinct keys from up to 200 unordered spans in the last 7 days; up to 200 keys per map. Missing keys may exist outside this sample",
-        });
-    }
+            );
+            let (keys, error) = match rows::<AttributeRow>(client, connection, &sql).await {
+                Ok(keys) => (keys, None),
+                Err(error) => (Vec::new(), Some(error.to_string())),
+            };
+            let fields = keys
+                .iter()
+                .take(MAX_FIELDS)
+                .map(|row| AttributeField {
+                    key: row.key.clone(),
+                    kind: "String",
+                    expression: format!("{column}[{}]", literal(&row.key)),
+                })
+                .collect();
+            AttributeCatalog {
+                table: "otel_traces",
+                column,
+                fields,
+                truncated: error.is_some() || keys.len() > MAX_FIELDS,
+                discovery_sql: sql,
+                scope: ATTRIBUTE_SCOPE,
+                error,
+            }
+        },
+    ))
+    .await;
     let guide = guide::QueryGuide {
         tables: &tables,
         normalized_fields: &NORMALIZED_FIELD_DEFINITIONS,

@@ -9,6 +9,7 @@ repository.workspace = true
 askama.workspace = true
 base64.workspace = true
 flate2.workspace = true
+futures-util.workspace = true
 hmac = "0.12.1"
 indexmap = { version = "2", features = ["serde"] }
 moka.workspace = true
@@ -24,6 +25,7 @@ serde_json.workspace = true
 strum.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
