@@ -22,7 +22,9 @@ from litellm.constants import OTLP_RETRY_AFTER_SECONDS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
+from litellm.proxy.spend_tracking.log_visibility import log_visibility
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
+from litellm.rust_bridge.trace_query_responses import TraceQueryHelp, TraceSQLResponse
 from litellm.rust_bridge.traces import ClickHouseStorage, QueryScope
 from litellm.tracing import (
     Tenant,
@@ -30,6 +32,7 @@ from litellm.tracing import (
     TracingPayloadTooLargeError,
 )
 from litellm.tracing.decode import InvalidOTLPPayloadError, encode_otlp_response
+from litellm.tracing.store import AmbiguousTraceError
 from litellm.tracing.types import SpanDetail, SpanErrorPage, Trace, TracePage, TraceScope
 
 router = APIRouter(tags=["agent tracing"])
@@ -59,18 +62,27 @@ async def provide_trace_access(
     auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
 ) -> TraceAccessContext:
-    tenant: Final = Tenant(team_id=auth.team_id or "", api_key_hash=auth.token or "", org_id=auth.org_id or "")
-    match auth.user_role:
-        case LitellmUserRoles.PROXY_ADMIN:
-            return TraceAccessContext(tracing, TraceScope(team_ids=(), api_key_hash=""), tenant)
-        case LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
-            return TraceAccessContext(tracing, TraceScope(team_ids=(), api_key_hash=""), None)
-        case _ if auth.team_id:
-            return TraceAccessContext(tracing, TraceScope(team_ids=(auth.team_id,), api_key_hash=""), tenant)
-        case _ if auth.token:
-            return TraceAccessContext(tracing, TraceScope(team_ids=("",), api_key_hash=auth.token), tenant)
-        case _:
-            return TraceAccessContext(tracing, None, tenant)
+    tenant: Final = Tenant(
+        team_id=auth.team_id or "", api_key_hash=auth.token or "", org_id=auth.org_id or "", user_id=auth.user_id or ""
+    )
+    write_tenant: Final = None if auth.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY else tenant
+    if (
+        not auth.user_id
+        and not auth.token
+        and auth.user_role not in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+    ):
+        return TraceAccessContext(tracing, None, write_tenant)
+    visibility: Final = await log_visibility(auth)
+    return TraceAccessContext(
+        tracing,
+        TraceScope(
+            all_teams=1 if visibility.all_teams else 0,
+            user_id=visibility.user_id,
+            team_ids=visibility.team_ids,
+            api_key_hash=visibility.api_key_hash,
+        ),
+        write_tenant,
+    )
 
 
 def otlp_error_response(
@@ -160,18 +172,16 @@ def provide_trace_query_secret() -> str:
     return master_key
 
 
-def trace_query_scope(auth: UserAPIKeyAuth) -> QueryScope:
-    if auth.user_role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
+async def trace_query_scope(auth: UserAPIKeyAuth) -> QueryScope:
+    visibility: Final = await log_visibility(auth)
+    if visibility.all_teams:
         return {"kind": "admin"}
-    if auth.project_id and auth.token:
-        return {"kind": "key", "team_id": auth.team_id or "", "api_key_hash": auth.token}
-    if auth.project_id:
-        raise HTTPException(status_code=403, detail="Project trace SQL queries require a project key")
-    if auth.team_id:
-        return {"kind": "team", "team_id": auth.team_id}
-    if auth.token:
-        return {"kind": "key", "team_id": "", "api_key_hash": auth.token}
-    raise HTTPException(status_code=403, detail="Trace SQL queries require an authenticated trace scope")
+    return {
+        "kind": "logs",
+        "user_id": visibility.user_id,
+        "team_ids": visibility.team_ids,
+        "api_key_hash": visibility.api_key_hash,
+    }
 
 
 async def provide_trace_query_access(
@@ -179,18 +189,16 @@ async def provide_trace_query_access(
     tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
     secret: Annotated[str, Depends(provide_trace_query_secret)],
 ) -> TraceQueryAccess:
-    return TraceQueryAccess(require_receiver(tracing).store.storage, trace_query_scope(auth), secret)
+    return TraceQueryAccess(require_receiver(tracing).store.storage, await trace_query_scope(auth), secret)
 
 
-@router.post("/v1/traces/query")
+@router.post("/v1/traces/query", response_model=TraceSQLResponse, response_model_exclude_unset=True)
 async def query_agent_traces(
     body: TraceQueryRequest,
     access: Annotated[TraceQueryAccess, Depends(provide_trace_query_access)],
-) -> Response:
+) -> TraceSQLResponse:
     try:
-        return Response(
-            content=await access.storage.query_sql(body.sql, access.scope, access.secret), media_type="application/json"
-        )
+        return await access.storage.query_sql(body.sql, access.scope, access.secret)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error:
@@ -198,14 +206,12 @@ async def query_agent_traces(
         raise HTTPException(status_code=503, detail="Trace SQL query failed or exceeded reader limits") from error
 
 
-@router.get("/v1/traces/query/help")
+@router.get("/v1/traces/query/help", response_model=TraceQueryHelp, response_model_exclude_unset=True)
 async def help_agent_trace_queries(
     access: Annotated[TraceQueryAccess, Depends(provide_trace_query_access)],
-) -> Response:
+) -> TraceQueryHelp:
     try:
-        return Response(
-            content=await access.storage.query_help(access.scope, access.secret), media_type="application/json"
-        )
+        return await access.storage.query_help(access.scope, access.secret)
     except RuntimeError as error:
         verbose_proxy_logger.warning("Trace query help unavailable: %s", error)
         raise HTTPException(status_code=503, detail="Trace query help is temporarily unavailable") from error
@@ -218,7 +224,10 @@ async def get_agent_trace(
     trace_ref: Annotated[str, Query()] = "",
 ) -> Trace:
     tracing, scope = context.reader()
-    trace: Final = await tracing.get_trace(trace_id, scope, trace_ref)
+    try:
+        trace: Final = await tracing.get_trace(trace_id, scope, trace_ref)
+    except AmbiguousTraceError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     if trace is None:
         raise HTTPException(status_code=404, detail=f"Trace {trace_id} not found")
     return trace
@@ -232,7 +241,10 @@ async def get_agent_trace_span(
     trace_ref: Annotated[str, Query()] = "",
 ) -> SpanDetail:
     tracing, scope = context.reader()
-    span: Final = await tracing.get_span(trace_id, span_id, scope, trace_ref)
+    try:
+        span: Final = await tracing.get_span(trace_id, span_id, scope, trace_ref)
+    except AmbiguousTraceError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     if span is None:
         raise HTTPException(status_code=404, detail=f"Span {span_id} not found")
     return span

@@ -4156,6 +4156,7 @@ dependencies = [
  "litellm-storage-clickhouse",
  "litellm-token-counter",
  "litellm-traces",
+ "litellm-traces-clickhouse",
  "litellm-tracing",
  "prost",
  "pyo3",
@@ -4369,6 +4370,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "url",
+ "wiremock",
 ]
 
 [[package]]
@@ -4451,19 +4453,30 @@ dependencies = [
 name = "litellm-traces"
 version = "0.1.0"
 dependencies = [
- "askama",
- "base64 0.22.1",
  "criterion",
+ "indexmap 2.14.0",
+ "opentelemetry-proto",
+ "prost",
+ "rstest",
+ "serde",
+ "serde_json",
+ "strum",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "litellm-traces-clickhouse"
+version = "0.1.0"
+dependencies = [
+ "askama",
  "flate2",
  "futures-util",
  "hmac 0.12.1",
- "indexmap 2.14.0",
  "litellm-http",
  "litellm-migrate",
  "litellm-storage-clickhouse",
+ "litellm-traces",
  "moka",
- "opentelemetry-proto",
- "prost",
  "rstest",
  "serde",
  "serde_json",
