@@ -10458,17 +10458,16 @@ class TestPreemptive401ModeAware:
             server = _make_oauth2_server(alias, oauth2_flow="authorization_code", delegate_auth_to_upstream=delegate)
             manager.registry[server.server_id] = server
 
-        with patch.object(manager, "has_user_oauth_token", new_callable=AsyncMock, return_value=False) as tokens:
-            await server_module._raise_preemptive_401_for_unauthenticated_servers(
-                scope={"type": "http", "method": "POST", "path": "/mcp", "headers": [(b"host", b"testserver")]},
-                mcp_servers=None,
-                oauth2_headers=None,
-                mcp_server_auth_headers=None,
-                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
-                client_ip=None,
-            )
+        outcome = await server_module._raise_preemptive_401_for_unauthenticated_servers(
+            scope={"type": "http", "method": "POST", "path": "/mcp", "headers": [(b"host", b"testserver")]},
+            mcp_servers=None,
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
+            client_ip=None,
+        )
 
-        assert tokens.await_count == 0, "an unselected aggregate connect must not probe any server for a token"
+        assert outcome is None, "an unselected aggregate connect must pass without a sign-in challenge"
 
     @pytest.mark.asyncio
     async def test_deferred_discovery_runs_before_delegate_challenge(self):

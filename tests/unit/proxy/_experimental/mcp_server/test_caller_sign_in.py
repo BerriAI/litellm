@@ -105,9 +105,7 @@ def test_provider_returning_none_contributes_nothing(registered):
 
 def test_obo_server_contributes_jwt_issuers_and_own_scopes(monkeypatch):
     monkeypatch.setenv("JWT_ISSUER", "https://jwt-idp.test")
-    sign_in: Final = caller_sign_in_for(
-        _server(auth_type=MCPAuth.oauth2_token_exchange, scopes=["read"]), None
-    )
+    sign_in: Final = caller_sign_in_for(_server(auth_type=MCPAuth.oauth2_token_exchange, scopes=["read"]), None)
     assert sign_in == CallerSignIn(issuers=("https://jwt-idp.test",), scopes=("read",))
 
 
