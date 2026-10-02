@@ -413,11 +413,13 @@ def sweep_routes(
     who: Final = callers if callers is not None else {"admin": gateway.key}
     base_url: Final = str(gateway.client.base_url)
 
-    def call(route: str, label: str, key: str, path: str) -> _RouteCall:
+    def call(client: httpx.Client, route: str, label: str, key: str, path: str) -> _RouteCall:
         location: Final = f"GET {path} as {label}"
         try:
-            with httpx.Client(base_url=base_url, timeout=_ROUTE_TIMEOUT, trust_env=False) as client:
-                response = client.get(path, headers={"Authorization": f"Bearer {key}"})
+            request: Final = httpx.Request(
+                "GET", client.base_url.join(path), headers={**client.headers, "Authorization": f"Bearer {key}"}
+            )
+            response: Final = client.send(request)
         except httpx.HTTPError as error:
             return _RouteCall((), (), None, f"{location}: {type(error).__name__}", location)
         headers = "\n".join(f"{name}: {value}" for name, value in response.headers.items())
@@ -439,8 +441,11 @@ def sweep_routes(
         for route, path, _ in targets
         for query in _route_queries(route, ids, since)
     )
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        results: Final = tuple(pool.map(lambda job: call(*job), jobs))
+    with (
+        httpx.Client(base_url=base_url, timeout=_ROUTE_TIMEOUT, trust_env=False) as client,
+        ThreadPoolExecutor(max_workers=8) as pool,
+    ):
+        results: Final = tuple(pool.map(lambda job: call(client, *job), jobs))
     supplied: Final = {
         route
         for route, _, _ in targets
