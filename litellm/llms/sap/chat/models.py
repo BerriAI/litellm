@@ -869,3 +869,92 @@ class OrchestrationConfig(BaseModel):
 class OrchestrationRequest(BaseModel):
     config: OrchestrationConfig
     placeholder_values: dict[str, str] | None = None
+
+
+# ---------------------------------------------------------------------------
+# Partial config models — used by the config_ref request variants.
+# All fields are optional so callers only supply what they want to override.
+# ---------------------------------------------------------------------------
+
+
+class PartialPromptTemplatingModuleConfig(BaseModel):
+    """Partial prompt-templating override for config_ref requests.
+
+    Both fields are optional: omit ``prompt`` to keep the referenced template,
+    omit ``model`` to keep the referenced model.
+    """
+
+    prompt: Template | None = None
+    model: LLMModelDetails | None = None
+
+
+class PartialModuleConfigs(BaseModel):
+    """Partial module configuration for config_ref overrides.
+
+    Only specify the modules you want to override; the remaining configuration
+    is taken from the referenced orchestration config.
+    """
+
+    prompt_templating: PartialPromptTemplatingModuleConfig | None = None
+    filtering: FilteringModuleConfig | None = None
+    masking: MaskingModuleConfig | None = None
+    grounding: GroundingModuleConfig | None = None
+    translation: TranslationModuleConfig | None = None
+
+
+class PartialOrchestrationConfig(BaseModel):
+    """Partial orchestration configuration for config_ref overrides.
+
+    All fields are optional.  Supply only the parts that should be overridden;
+    the rest is taken from the referenced configuration stored in SAP AI Core.
+    """
+
+    modules: PartialModuleConfigs | None = None
+    stream: GlobalStreamOptions | None = None
+
+
+# ---------------------------------------------------------------------------
+# config_ref discriminated shapes (spec: CompletionPostRequest oneOf variants)
+# ---------------------------------------------------------------------------
+
+
+class CompletionRequestConfigurationReferenceByIdConfigRef(BaseModel):
+    """Reference an SAP AI Core orchestration configuration by its UUID."""
+
+    id: str
+
+
+class CompletionRequestConfigurationReferenceById(BaseModel):
+    """POST /v2/completion body variant: reference a saved config by ID.
+
+    The optional ``config`` field carries a partial override that is merged
+    on top of the referenced configuration.  ``placeholder_values`` and
+    ``messages_history`` work the same as in the full-config variant.
+    """
+
+    config_ref: CompletionRequestConfigurationReferenceByIdConfigRef
+    config: PartialOrchestrationConfig | None = None
+    placeholder_values: dict[str, str] | None = None
+    messages_history: list[ChatMessage] | None = None
+
+
+class CompletionRequestConfigurationReferenceByNameScenarioVersionConfigRef(BaseModel):
+    """Reference an SAP AI Core orchestration configuration by name + scenario + version."""
+
+    scenario: str
+    name: str
+    version: str
+
+
+class CompletionRequestConfigurationReferenceByNameScenarioVersion(BaseModel):
+    """POST /v2/completion body variant: reference a saved config by name/scenario/version.
+
+    The optional ``config`` field carries a partial override that is merged
+    on top of the referenced configuration.  ``placeholder_values`` and
+    ``messages_history`` work the same as in the full-config variant.
+    """
+
+    config_ref: CompletionRequestConfigurationReferenceByNameScenarioVersionConfigRef
+    config: PartialOrchestrationConfig | None = None
+    placeholder_values: dict[str, str] | None = None
+    messages_history: list[ChatMessage] | None = None

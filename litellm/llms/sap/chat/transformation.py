@@ -34,7 +34,12 @@ from .handler import (
 )
 from .models import (
     ChatCompletionTool,
+    CompletionRequestConfigurationReferenceById,
+    CompletionRequestConfigurationReferenceByIdConfigRef,
+    CompletionRequestConfigurationReferenceByNameScenarioVersion,
+    CompletionRequestConfigurationReferenceByNameScenarioVersionConfigRef,
     OrchestrationRequest,
+    PartialOrchestrationConfig,
     ResponseFormat,
     ResponseFormatJSONSchema,
     SAPAssistantMessage,
@@ -312,6 +317,76 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             **optional_modules,
         }
 
+    def _build_config_ref_body(
+        self,
+        config_ref: dict,
+        optional_params: dict,
+        messages: list[AllMessageValues],
+    ) -> dict:
+        """Build a config_ref request body (ById or ByNameScenarioVersion variant).
+
+        The discriminator is duck-typed from the keys present in ``config_ref``:
+
+        * ``{"id": "<uuid>"}``                         → ById variant
+        * ``{"scenario": ..., "name": ..., "version": ...}`` → ByNameScenarioVersion variant
+
+        ``optional_params`` may carry:
+        * ``placeholder_values`` (dict[str, str]) — forwarded as-is.
+        * ``messages_history``   (list of message dicts) — forwarded as-is.
+        * ``config``             (dict matching PartialOrchestrationConfig) — partial override.
+
+        Any keys not consumed here are silently ignored so that LiteLLM's standard
+        optional-params machinery does not break.
+        """
+        # --- discriminate on config_ref shape -----------------------------------
+        if "id" in config_ref:
+            validated_ref = CompletionRequestConfigurationReferenceByIdConfigRef(
+                **config_ref
+            )
+            model_cls = CompletionRequestConfigurationReferenceById
+        elif "scenario" in config_ref or "name" in config_ref or "version" in config_ref:
+            validated_ref = CompletionRequestConfigurationReferenceByNameScenarioVersionConfigRef(
+                **config_ref
+            )
+            model_cls = CompletionRequestConfigurationReferenceByNameScenarioVersion
+        else:
+            raise ValueError(
+                "config_ref must contain either 'id' (ById) or 'scenario'/'name'/'version' "
+                "(ByNameScenarioVersion)."
+            )
+
+        # --- optional fields ----------------------------------------------------
+        placeholder_values: Final = optional_params.pop("placeholder_values", None)
+        messages_history_raw: Final = optional_params.pop("messages_history", None)
+        partial_config_raw: Final = optional_params.pop("config", None)
+
+        partial_config: PartialOrchestrationConfig | None = None
+        if partial_config_raw is not None:
+            partial_config = PartialOrchestrationConfig(**partial_config_raw)
+
+        messages_history = None
+        if messages_history_raw is not None:
+            messages_history = _messages_to_sap_template(messages_history_raw)
+        elif messages:
+            # When messages are provided through the standard LiteLLM path but
+            # no explicit messages_history override was given, treat them as the
+            # history so that the caller does not have to duplicate the payload.
+            messages_history = _messages_to_sap_template(messages)
+
+        # --- assemble and validate the full body --------------------------------
+        body_kwargs: dict = {
+            "config_ref": validated_ref,
+        }
+        if partial_config is not None:
+            body_kwargs["config"] = partial_config
+        if placeholder_values is not None:
+            body_kwargs["placeholder_values"] = placeholder_values
+        if messages_history is not None:
+            body_kwargs["messages_history"] = messages_history
+
+        validated = model_cls(**body_kwargs)
+        return validated.model_dump(by_alias=True, exclude_unset=True)
+
     def transform_request(
         self,
         model: str,
@@ -322,6 +397,19 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     ) -> dict:
         optional_params = dict(optional_params)
         optional_params.pop("deployment_url", None)
+
+        # --- config_ref routing -------------------------------------------------
+        # When the caller supplies a `config_ref` key the request targets a
+        # pre-saved SAP AI Core orchestration configuration.  We build the
+        # alternative body shape and return early, bypassing the full-config path.
+        config_ref: Final = optional_params.pop("config_ref", None)
+        if config_ref is not None:
+            return self._build_config_ref_body(
+                config_ref=dict(config_ref),
+                optional_params=optional_params,
+                messages=messages,
+            )
+        # ------------------------------------------------------------------------
 
         template: Final = _messages_to_sap_template(messages)
 
