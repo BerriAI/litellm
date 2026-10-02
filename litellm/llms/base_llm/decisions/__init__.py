@@ -1,3 +1,3 @@
-from .transformation import DecisionsEndpoint
+from .transformation import DecisionsProviderConfig, JevCompatibleDecisionsEndpoint
 
-__all__ = ["DecisionsEndpoint"]
+__all__ = ["DecisionsProviderConfig", "JevCompatibleDecisionsEndpoint"]

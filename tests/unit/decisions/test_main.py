@@ -49,6 +49,20 @@ _RESPONSE: Final[Mapping[str, object]] = {
     },
     "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": _OUTPUT_TOKENS},
 }
+_STRANDS_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "strands-decider-2B-hobson-v19",
+    "answers": {
+        "severity": {
+            "type": "score",
+            "score": 1,
+            "confidence": 0.7,
+            "legend": {"0": "none", "1": "low", "2": "high"},
+            "probabilities": {"0": 0.1, "1": 0.8, "2": 0.1},
+        }
+    },
+    "usage": {"input_tokens": 216, "output_tokens": 3},
+    "latency_ms": 3722.17,
+}
 _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
     (
         "perplexity",
@@ -354,3 +368,224 @@ def test_server_key_is_not_sent_to_an_untrusted_api_base(
         )
 
     assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ("cloudflare/clef", "cloudflare/@cf/cloudflare/clef"))
+@pytest.mark.parametrize("wrapped", (False, True))
+async def test_cloudflare_clef_resolves_model_and_response_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    model: str,
+    wrapped: bool,
+) -> None:
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
+    monkeypatch.setenv("CLOUDFLARE_API_KEY", "cloudflare-key")
+    monkeypatch.delenv("CLOUDFLARE_API_BASE", raising=False)
+    response_body: Final[Mapping[str, object]] = (
+        {"result": _RESPONSE, "success": True, "errors": [], "messages": []} if wrapped else _RESPONSE
+    )
+    route: Final = respx_mock.post(
+        "https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef"
+    ).respond(json=response_body)
+
+    response: Final = await litellm.adecisions(
+        model=model,
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    )
+
+    assert route.called
+    request: Final = respx_mock.calls[0].request
+    assert request.headers["authorization"] == "Bearer cloudflare-key"
+    assert json.loads(request.content) == {
+        "model": "clef",
+        "state": "review",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert response.answers == DecisionsResponse.model_validate(_RESPONSE).answers
+    assert response._hidden_params["model"] == "cloudflare/@cf/cloudflare/clef"
+
+
+@pytest.mark.asyncio
+async def test_cloudflare_clef_flash_uses_flash_endpoint_and_request_model(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
+    monkeypatch.setenv("CLOUDFLARE_API_KEY", "cloudflare-key")
+    monkeypatch.delenv("CLOUDFLARE_API_BASE", raising=False)
+    route: Final = respx_mock.post(
+        "https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef-flash"
+    ).respond(json=_RESPONSE)
+
+    await litellm.adecisions(
+        model="cloudflare/clef-flash",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    )
+
+    assert route.called
+    assert json.loads(respx_mock.calls[0].request.content)["model"] == "clef-flash"
+
+
+@pytest.mark.asyncio
+async def test_cloudflare_api_base_from_env_uses_workers_ai_run_path(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("CLOUDFLARE_API_BASE", "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1")
+    monkeypatch.setenv("CLOUDFLARE_API_KEY", "cloudflare-key")
+    monkeypatch.delenv("CLOUDFLARE_ACCOUNT_ID", raising=False)
+    route: Final = respx_mock.post(
+        "https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef"
+    ).respond(json=_RESPONSE)
+
+    await litellm.adecisions(
+        model="cloudflare/clef",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    )
+
+    assert route.called
+
+
+@pytest.mark.asyncio
+async def test_cloudflare_requires_account_id_or_api_base_before_http(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("CLOUDFLARE_ACCOUNT_ID", raising=False)
+    monkeypatch.delenv("CLOUDFLARE_API_BASE", raising=False)
+    monkeypatch.setenv("CLOUDFLARE_API_KEY", "cloudflare-key")
+
+    with pytest.raises(litellm.BadRequestError, match="CLOUDFLARE_ACCOUNT_ID|api_base"):
+        await litellm.adecisions(
+            model="cloudflare/clef",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_cloudflare_clef_cost_uses_the_model_cost_map(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
+    monkeypatch.setenv("CLOUDFLARE_API_KEY", "cloudflare-key")
+    monkeypatch.delenv("CLOUDFLARE_API_BASE", raising=False)
+    respx_mock.post("https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef").respond(
+        json=_RESPONSE
+    )
+
+    response: Final = await litellm.adecisions(
+        model="cloudflare/clef",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    )
+
+    cost: Final = litellm.completion_cost(completion_response=response)
+    clef_cost: Final = litellm.model_cost["cloudflare/@cf/cloudflare/clef"]
+    expected_cost: Final = _INPUT_TOKENS * float(clef_cost["input_cost_per_token"]) + _OUTPUT_TOKENS * float(
+        clef_cost["output_cost_per_token"]
+    )
+
+    assert expected_cost > 0
+    assert cost == pytest.approx(expected_cost)
+
+
+@pytest.mark.asyncio
+async def test_strands_decider_requires_api_base_before_http(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_BASE", raising=False)
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+
+    with pytest.raises(litellm.BadRequestError, match="api_base is required"):
+        await litellm.adecisions(
+            model="strands_decider/strands-decider-2B-hobson-v19",
+            state="review",
+            questions={"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_strands_decider_without_key_preserves_response_extras(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_BASE", raising=False)
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    route: Final = respx_mock.post("https://strands.example/v1/systemone").respond(json=_STRANDS_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="strands_decider/strands-decider-2B-hobson-v19",
+        state="review",
+        questions={"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+        api_base="https://strands.example",
+    )
+
+    assert route.called
+    assert "authorization" not in respx_mock.calls[0].request.headers
+    assert response.model_extra["latency_ms"] == _STRANDS_RESPONSE["latency_ms"]
+    severity: Final = response.answers["severity"]
+    assert isinstance(severity, ScoreAnswer)
+    assert severity.legend == {"0": "none", "1": "low", "2": "high"}
+
+
+@pytest.mark.asyncio
+async def test_strands_decider_uses_key_from_matching_environment_base(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("STRANDS_DECIDER_API_BASE", "https://strands.example")
+    monkeypatch.setenv("STRANDS_DECIDER_API_KEY", "strands-key")
+    route: Final = respx_mock.post("https://strands.example/v1/systemone").respond(json=_STRANDS_RESPONSE)
+
+    await litellm.adecisions(
+        model="strands_decider/strands-decider-2B-hobson-v19",
+        state="review",
+        questions={"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+        api_base="https://strands.example",
+    )
+
+    assert route.called
+    assert respx_mock.calls[0].request.headers["authorization"] == "Bearer strands-key"
+
+
+@pytest.mark.asyncio
+async def test_strands_decider_provider_resolution_and_router_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_BASE", raising=False)
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    provider_resolution: Final = litellm.get_llm_provider("strands_decider/strands-decider-2B-hobson-v19")
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "strands",
+                "litellm_params": {
+                    "model": "strands_decider/strands-decider-2B-hobson-v19",
+                    "api_base": "https://strands.example",
+                },
+            }
+        ]
+    )
+    route: Final = respx_mock.post("https://strands.example/v1/systemone").respond(json=_STRANDS_RESPONSE)
+
+    response: Final = await router.adecisions(
+        model="strands",
+        state="review",
+        questions={"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+    )
+
+    assert provider_resolution[:2] == ("strands-decider-2B-hobson-v19", "strands_decider")
+    assert route.called
+    assert response.model == _STRANDS_RESPONSE["model"]

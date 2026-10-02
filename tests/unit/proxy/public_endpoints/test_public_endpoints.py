@@ -436,6 +436,7 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "sagemaker_nova",
         "scaleway",
         "stability",
+        "strands_decider",
         "synthetic",
         "tensormesh",
         "text-completion-inception",

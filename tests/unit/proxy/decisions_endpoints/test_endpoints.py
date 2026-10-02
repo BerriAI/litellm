@@ -26,6 +26,14 @@ _RESPONSE: Final[Mapping[str, object]] = {
     },
     "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": _OUTPUT_TOKENS},
 }
+_STRANDS_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "strands-decider-2B-hobson-v19",
+    "answers": {
+        "is_defect": {"type": "noul", "noul": 0.9},
+    },
+    "usage": {"input_tokens": 216, "output_tokens": 3},
+    "latency_ms": 3722.17,
+}
 _REQUEST: Final[Mapping[str, object]] = {
     "model": "decider",
     "state": {"source": "proxy-test"},
@@ -171,3 +179,44 @@ def test_proxy_decisions_missing_required_field_is_a_client_error(
 
     assert response.status_code == 400, response.text
     assert not upstream.called
+
+
+def test_proxy_decisions_dispatches_unpriced_strands_decider(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_BASE", raising=False)
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "strands",
+                "litellm_params": {
+                    "model": "strands_decider/strands-decider-2B-hobson-v19",
+                    "api_base": "https://strands.example",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    upstream: Final = respx_mock.post("https://strands.example/v1/systemone").respond(json=_STRANDS_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "strands",
+            "state": {"source": "proxy-test"},
+            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == _STRANDS_RESPONSE["answers"]
+    assert upstream.called
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "strands-decider-2B-hobson-v19",
+        "state": {"source": "proxy-test"},
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert "authorization" not in upstream.calls[0].request.headers

@@ -9,10 +9,12 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.decisions.transformation import DecisionsEndpoint
+from litellm.llms.base_llm.decisions.transformation import DecisionsProviderConfig
+from litellm.llms.cloudflare.decisions.transformation import CLOUDFLARE_DECISIONS_ENDPOINT
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client, get_async_httpx_client
 from litellm.llms.openrouter.decisions.transformation import OPENROUTER_DECISIONS_ENDPOINT
 from litellm.llms.perplexity.decisions.transformation import PERPLEXITY_DECISIONS_ENDPOINT
+from litellm.llms.strands_decider.decisions.transformation import STRANDS_DECIDER_DECISIONS_ENDPOINT
 from litellm.llms.typesafe.decisions.transformation import TYPESAFE_DECISIONS_ENDPOINT
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
@@ -23,23 +25,28 @@ from litellm.types.decisions import (
 )
 from litellm.utils import client
 
-DECISIONS_ENDPOINTS: Final[Mapping[str, DecisionsEndpoint]] = MappingProxyType(
+DECISIONS_ENDPOINTS: Final[Mapping[str, DecisionsProviderConfig]] = MappingProxyType(
     {
         "perplexity": PERPLEXITY_DECISIONS_ENDPOINT,
         "typesafe": TYPESAFE_DECISIONS_ENDPOINT,
         "openrouter": OPENROUTER_DECISIONS_ENDPOINT,
+        "cloudflare": CLOUDFLARE_DECISIONS_ENDPOINT,
+        "strands_decider": STRANDS_DECIDER_DECISIONS_ENDPOINT,
     }
 )
 
 _DECISIONS_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequest]] = TypeAdapter(DecisionsRequest)
+_DECISIONS_PAYLOAD_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
+_DECISIONS_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter(DecisionsResponse)
 
 
 @dataclass(frozen=True, slots=True, repr=False)
 class _PreparedDecisionsRequest:
+    config: DecisionsProviderConfig
     provider: str
     upstream_model: str
     url: str
-    api_key: str = field(repr=False)
+    api_key: str | None = field(repr=False)
     headers: Mapping[str, str] = field(repr=False)
     body: Mapping[str, object] = field(repr=False)
 
@@ -67,11 +74,11 @@ def _resolve_api_key(
     *,
     provider: str,
     model: str,
-    endpoint: DecisionsEndpoint,
+    endpoint: DecisionsProviderConfig,
     api_key: str | None,
     api_base: str | None,
     resolved_api_base: str,
-) -> str:
+) -> str | None:
     if api_key is not None:
         return api_key
 
@@ -80,6 +87,8 @@ def _resolve_api_key(
         None,
     )
     if server_api_key is None:
+        if not endpoint.api_key_required:
+            return None
         raise litellm.AuthenticationError(
             message=f"Missing API key for Decisions provider '{provider}'",
             model=model,
@@ -89,7 +98,7 @@ def _resolve_api_key(
     destination: Final = urlsplit(resolved_api_base)
     trusted_hosts: Final = frozenset(
         urlsplit(base).netloc.lower()
-        for base in (endpoint.default_api_base, get_secret_str(endpoint.api_base_env))
+        for base in (endpoint.default_api_base(), get_secret_str(endpoint.api_base_env))
         if base
     )
     if api_base is not None and (
@@ -132,7 +141,20 @@ def _prepare_request(
 
     endpoint: Final = DECISIONS_ENDPOINTS[provider]
     env_api_base: Final = get_secret_str(endpoint.api_base_env)
-    resolved_api_base: Final = api_base or env_api_base or endpoint.default_api_base
+    default_api_base: Final = endpoint.default_api_base()
+    resolved_api_base: Final = api_base or env_api_base or default_api_base
+    if resolved_api_base is None:
+        message: Final = (
+            "Missing CLOUDFLARE_ACCOUNT_ID - set CLOUDFLARE_ACCOUNT_ID or pass api_base explicitly"
+            if provider == "cloudflare"
+            else f"api_base is required for Decisions provider '{provider}'"
+        )
+        raise litellm.BadRequestError(
+            message=message,
+            model=model,
+            llm_provider=provider,
+        )
+
     resolved_api_key: Final = _resolve_api_key(
         provider=provider,
         model=model,
@@ -142,6 +164,7 @@ def _prepare_request(
         resolved_api_base=resolved_api_base,
     )
 
+    canonical_model: Final = endpoint.canonical_model(upstream_model)
     outbound_headers: Final = MappingProxyType(
         {
             **{
@@ -149,13 +172,13 @@ def _prepare_request(
                 for name, value in (extra_headers or {}).items()
                 if name.lower() not in {"authorization", "content-type"}
             },
-            "Authorization": f"Bearer {resolved_api_key}",
+            **({"Authorization": f"Bearer {resolved_api_key}"} if resolved_api_key is not None else {}),
             "Content-Type": "application/json",
         }
     )
     body: Final = MappingProxyType(
         {
-            "model": upstream_model,
+            "model": endpoint.request_model(canonical_model),
             "state": validated_request.state,
             "questions": {
                 name: question.model_dump(mode="json", exclude_none=True)
@@ -164,9 +187,10 @@ def _prepare_request(
         }
     )
     return _PreparedDecisionsRequest(
+        config=endpoint,
         provider=provider,
-        upstream_model=upstream_model,
-        url=f"{resolved_api_base.rstrip('/').removesuffix('/v1')}{endpoint.path}",
+        upstream_model=canonical_model,
+        url=endpoint.endpoint_url(resolved_api_base, canonical_model),
         api_key=resolved_api_key,
         headers=outbound_headers,
         body=body,
@@ -209,11 +233,13 @@ def _parse_response(
     prepared: _PreparedDecisionsRequest,
 ) -> DecisionsResponse:
     response.raise_for_status()
-    result: Final = DecisionsResponse.model_validate_json(response.content)
+    payload: Final[object] = _DECISIONS_PAYLOAD_ADAPTER.validate_json(response.content)
+    result: Final = _DECISIONS_RESPONSE_ADAPTER.validate_python(prepared.config.unwrap_response(payload))
     result._hidden_params.update(
         {
             "model": f"{prepared.provider}/{prepared.upstream_model}",
             "custom_llm_provider": prepared.provider,
+            "provider_response_model": f"{prepared.provider}/{prepared.upstream_model}",
         }
     )
     return result

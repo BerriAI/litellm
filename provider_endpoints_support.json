@@ -82,7 +82,8 @@
         "batches": false,
         "rerank": false,
         "a2a": true,
-        "interactions": true
+        "interactions": true,
+        "systemone": true
       }
     },
     "ai21": {
@@ -2562,6 +2563,13 @@
     "typesafe": {
       "display_name": "TypeSafe (`typesafe`)",
       "url": "https://docs.typesafe.ai/models",
+      "endpoints": {
+        "systemone": true
+      }
+    },
+    "strands_decider": {
+      "display_name": "Strands Decider (`strands_decider`)",
+      "url": "https://docs.litellm.ai/docs/providers",
       "endpoints": {
         "systemone": true
       }
