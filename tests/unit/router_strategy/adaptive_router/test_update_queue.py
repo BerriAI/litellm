@@ -305,3 +305,107 @@ async def test_queue_high_water_mark_includes_restored_rows_and_new_keys(queue, 
     sizes = await queue.queue_size()
     assert sizes[f"{kind}_pending"] == 3
     assert sizes[f"max_{kind}_seen"] == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_field", ["session_id", "router_name", "model_name"])
+async def test_session_keys_that_postgres_cannot_store_are_not_queued(queue, mock_prisma, invalid_field):
+    key = {"session_id": "session", "router_name": "router", "model_name": "model"}
+    key[invalid_field] += "\0"
+
+    await queue.add_session_state(**key, state_dict={"turn_count": 1})
+
+    assert (await queue.queue_size())["session_pending"] == 0
+    assert await queue.flush_session_to_db(mock_prisma) == 0
+    mock_prisma.db.litellm_adaptiveroutersession.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failed_session_retention_keeps_only_the_newest_rows(queue, mock_prisma, monkeypatch):
+    monkeypatch.setattr(
+        "litellm.router_strategy.adaptive_router.update_queue._MAX_SESSION_RETRY_ENTRIES", 3, raising=False
+    )
+    table = mock_prisma.db.litellm_adaptiveroutersession
+    table.upsert.side_effect = RuntimeError("database unavailable")
+    for index in range(6):
+        await queue.add_session_state(f"session-{index}", "router", "model", {"turn_count": index})
+    await queue.add_session_state("session-0", "router", "model", {"turn_count": 9})
+
+    assert await queue.flush_session_to_db(mock_prisma) == 0
+    assert (await queue.queue_size())["session_pending"] == 3
+    table.reset_mock()
+    table.upsert.side_effect = None
+
+    assert await queue.flush_session_to_db(mock_prisma) == 3
+    assert [
+        (call.kwargs["data"]["create"]["session_id"], call.kwargs["data"]["update"]["turn_count"])
+        for call in table.upsert.await_args_list
+    ] == [("session-0", 9), ("session-4", 4), ("session-5", 5)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_session_retention_prioritizes_new_snapshots_during_a_failed_flush(
+    queue, mock_prisma, monkeypatch, cancelled
+):
+    monkeypatch.setattr(
+        "litellm.router_strategy.adaptive_router.update_queue._MAX_SESSION_RETRY_ENTRIES", 2, raising=False
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fail_write(**kwargs):
+        started.set()
+        await release.wait()
+        raise RuntimeError("database unavailable")
+
+    table = mock_prisma.db.litellm_adaptiveroutersession
+    table.upsert.side_effect = fail_write
+    for session in ("a", "b", "c"):
+        await queue.add_session_state(session, "router", "model", {"turn_count": 1})
+    task = asyncio.create_task(queue.flush_session_to_db(mock_prisma))
+    await started.wait()
+    await queue.add_session_state("a", "router", "model", {"turn_count": 2})
+    await queue.add_session_state("d", "router", "model", {"turn_count": 3})
+    if cancelled:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        release.set()
+        assert await task == 0
+    assert (await queue.queue_size())["session_pending"] == 2
+    table.reset_mock()
+    table.upsert.side_effect = None
+    assert await queue.flush_session_to_db(mock_prisma) == 2
+    assert [
+        (call.kwargs["data"]["create"]["session_id"], call.kwargs["data"]["update"]["turn_count"])
+        for call in table.upsert.await_args_list
+    ] == [("a", 2), ("d", 3)]
+
+
+@pytest.mark.asyncio
+async def test_successful_flush_does_not_cap_newly_queued_sessions(queue, mock_prisma, monkeypatch):
+    monkeypatch.setattr(
+        "litellm.router_strategy.adaptive_router.update_queue._MAX_SESSION_RETRY_ENTRIES", 1, raising=False
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def write(**kwargs):
+        started.set()
+        await release.wait()
+
+    table = mock_prisma.db.litellm_adaptiveroutersession
+    table.upsert.side_effect = write
+    await queue.add_session_state("old", "router", "model", {"turn_count": 1})
+    task = asyncio.create_task(queue.flush_session_to_db(mock_prisma))
+    await started.wait()
+    for session in ("a", "b"):
+        await queue.add_session_state(session, "router", "model", {"turn_count": 1})
+    release.set()
+
+    assert await task == 1
+    assert (await queue.queue_size())["session_pending"] == 2
+    table.upsert.side_effect = None
+    assert await queue.flush_session_to_db(mock_prisma) == 2

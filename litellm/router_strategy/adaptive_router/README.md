@@ -68,7 +68,8 @@ Callers may pass header `x-litellm-min-quality-tier: 3` (or metadata key
   `SIGNAL_GATE_MIN_MESSAGES` messages.
 - **Persistence.** Bandit cells: aggregated deltas, eventually consistent.
   Session rows: last-write-wins snapshots. Failed or cancelled flushes retain
-  unacknowledged rows for the next flush. Retried deltas merge with new feedback;
+  unacknowledged rows for the next flush within the retention limit below.
+  Retried deltas merge with new feedback;
   a newer queued session snapshot replaces a failed older snapshot. Flushes of
   the same queue are serialized within one process, and their return values
   count acknowledged writes only
@@ -80,8 +81,12 @@ Callers may pass header `x-litellm-min-quality-tier: 3` (or metadata key
   to distinguish that outcome from a failed write. The queues are in memory,
   so process termination still loses pending updates. Session write ordering
   across workers, or server queries continuing after client cancellation, is
-  not guaranteed. A prolonged database outage retains pending session keys
-  in memory until a later flush succeeds
+  not guaranteed. Failed or cancelled session batches retain at most 1,024
+  snapshots, prioritizing snapshots queued during the flush, then the most
+  recently queued failed rows. Older snapshots beyond that bound are dropped.
+  Successful flushes do not impose this retention limit on newly queued rows.
+  Session keys containing NUL characters are discarded before enqueueing because
+  PostgreSQL cannot store them in text columns
 
 - **Latency is not in the score.** Quality + cost only. A pathologically slow
   model can still be picked.

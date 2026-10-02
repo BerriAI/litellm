@@ -30,6 +30,7 @@ from litellm.repositories.table_repositories import (
 
 StateKey = tuple[str, str, str]  # (router_name, request_type, model_name)
 SessionKey = tuple[str, str, str]  # (session_id, router_name, model_name)
+_MAX_SESSION_RETRY_ENTRIES: Final[int] = 1024
 
 
 class AdaptiveRouterUpdateQueue:
@@ -87,8 +88,12 @@ class AdaptiveRouterUpdateQueue:
         SessionState (signals counts + bookkeeping fields). The flusher will
         upsert this into LiteLLM_AdaptiveRouterSession.
         """
+        if any("\0" in part for part in (session_id, router_name, model_name)):
+            verbose_router_logger.warning("AdaptiveRouterUpdateQueue: session key cannot be stored in PostgreSQL")
+            return
         key: Final[SessionKey] = (session_id, router_name, model_name)
         async with self._lock:
+            self._session_agg.pop(key, None)
             self._session_agg[key] = state_dict
             self._max_session_size_seen = max(self._max_session_size_seen, len(self._session_agg))
 
@@ -228,8 +233,14 @@ class AdaptiveRouterUpdateQueue:
             self._max_state_size_seen = max(self._max_state_size_seen, len(self._state_agg))
 
     async def _restore_session_batch(self, pending: Mapping[SessionKey, Mapping[str, object]]) -> None:
+        if not pending:
+            return
         async with self._lock:
-            self._session_agg = {**pending, **self._session_agg}
+            restored: Final = dict(pending)
+            for key in self._session_agg:
+                restored.pop(key, None)
+            merged: Final = {**restored, **self._session_agg}
+            self._session_agg = dict(tuple(merged.items())[-_MAX_SESSION_RETRY_ENTRIES:])
             self._max_session_size_seen = max(self._max_session_size_seen, len(self._session_agg))
 
     # ---- Observability ---------------------------------------------------
