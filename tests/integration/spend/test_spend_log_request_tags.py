@@ -8,6 +8,8 @@ from typing import Final
 
 import anthropic
 import httpx
+from collections.abc import Mapping, Sequence
+from itertools import chain
 import openai
 import pytest
 import yaml
@@ -403,9 +405,10 @@ def test_pass_through_tags_reach_generic_api_sink(gateway: Gateway, tmp_path: Pa
             assert len(wire.drain()) == 1
             batches: Final[list[Request]] = []  # mutable-ok: drain consumes the queue between polls
 
-            def delivered() -> list[dict]:
+            def delivered() -> Sequence[Mapping]:
                 batches.extend(endpoint.drain())
-                return [event for batch in batches for event in json.loads(batch.body) if event.get("id") == request_id]
+                events: Final = chain.from_iterable(json.loads(batch.body) for batch in batches)
+                return [event for event in events if event.get("id") == request_id]
 
             events: Final = eventually(delivered, lambda values: len(values) == 1, seconds=30)
             assert events[0]["request_tags"] == EXPECTED_TAGS
@@ -904,7 +907,7 @@ def test_repeated_requests_each_record_tags(gateway: Gateway, tmp_path: Path, ro
             )
             key: Final = scenario.key()
 
-            def repeat(_: int):
+            def repeat(_: int) -> httpx.Response:
                 return candidate.request(
                     "POST",
                     route,
@@ -963,10 +966,9 @@ def test_guardrail_mode_tag_decider_is_unchanged_on_pass_through(gateway: Gatewa
             },
         )
         with (
-            owned_proxy_process(gateway, tmp_path, provider_env(wire.url), config=config, workers=2) as owned,
-            owned.gateway.scenario() as scenario,
+            owned_proxy(gateway, tmp_path, provider_env(wire.url), config=config, workers=2) as candidate,
+            candidate.scenario() as scenario,
         ):
-            candidate: Final = owned.gateway
             model: Final = scenario.model(model=f"openai/{OPENAI_MODEL}", api_base=f"{wire.url}/v1")
             key: Final = scenario.key(allowed_passthrough_routes=["/custom-anthropic"])
             body: Final = {"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "bananablock"}]}
@@ -984,20 +986,17 @@ def test_guardrail_mode_tag_decider_is_unchanged_on_pass_through(gateway: Gatewa
             assert len(wire.drain()) == 0, "tag-matched guardrail should have blocked before the upstream"
             digest: Final = sha256(key.encode()).hexdigest()
 
-            def blocked_rows() -> list[dict]:
-                return read_rows(
-                    'SELECT metadata, litellm_call_id FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
-                    (digest,),
-                )
+            def blocked_rows() -> Sequence[Mapping]:
+                return [
+                    row
+                    for row in read_rows(
+                        'SELECT metadata FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
+                        (digest,),
+                    )
+                    if "Content blocked: keyword 'bananablock' detected" in json.dumps(row["metadata"])
+                    and row["metadata"].get("status") == "failure"
+                ]
 
-            spend_row: Final = eventually(
-                blocked_rows,
-                lambda rows: any("bananablock" in json.dumps(row["metadata"]) for row in rows),
-                seconds=30,
-                return_last_on_timeout=True,
+            assert eventually(blocked_rows, lambda rows: len(rows) == 1, seconds=70), (
+                "guardrail block was not recorded on the key's spend row"
             )
-            if not any("bananablock" in json.dumps(row["metadata"]) for row in spend_row):
-                log_text: Final = owned.log.read_text()
-                assert "Content blocked: keyword 'bananablock' detected" in log_text, (
-                    "guardrail block text not in spend row or proxy log"
-                )
