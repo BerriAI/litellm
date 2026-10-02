@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-_SIZE_TO_ASPECT_RATIO: Final = {  # mutable-ok: provider JSON body and base-class dict signature
+_SIZE_TO_ASPECT_RATIO: Final = {
     "1024x1024": "1:1",
     "1792x1024": "16:9",
     "1024x1792": "9:16",
@@ -38,7 +38,7 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> list[OpenAIImageGenerationOptionalParams]:  # mutable-ok: provider JSON body and base-class dict signature
-        return ["n", "response_format", "size", "user"]  # mutable-ok: provider JSON body and base-class dict signature
+        return ["n", "response_format", "size", "user"]
 
     def map_openai_params(
         self,
@@ -58,15 +58,15 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
             )
 
         pairs: Final = ((k, v) for k, v in non_default_params.items() if k in allowed)
-        native: Final = dict(pairs)  # mutable-ok: provider JSON body and base-class dict signature
-        merged: Final = {**optional_params, **native}  # mutable-ok: provider JSON body and base-class dict signature
+        native: Final = dict(pairs)
+        merged: Final = {**optional_params, **native}
         size: Final = merged.get("size")
         aspect_ratio: Final = merged.get("aspect_ratio") or (
             _SIZE_TO_ASPECT_RATIO.get(str(size), "1:1") if size else None
         )
         n: Final = merged.get("n")
         fields: Final = (("aspect_ratio", aspect_ratio), ("n", int(n) if n is not None else None))
-        return {key: value for key, value in fields if value is not None}  # mutable-ok: base class returns a dict
+        return {key: value for key, value in fields if value is not None}
 
     def get_complete_url(
         self,
@@ -141,13 +141,13 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
     ) -> dict:  # mutable-ok: provider JSON body and base-class dict signature
         n: Final = optional_params.get("n")
         requested_ratio: Final = optional_params.get("aspect_ratio")
-        aspect: Final = {"aspect_ratio": requested_ratio} if requested_ratio is not None else None  # fmt: skip  # mutable-ok: provider JSON body
-        count: Final = {"n": int(n)} if n is not None else None  # mutable-ok: provider JSON body
-        return {  # mutable-ok: provider JSON body and base-class dict signature
+        aspect: Final = {"aspect_ratio": requested_ratio} if requested_ratio is not None else None  # fmt: skip
+        count: Final = {"n": int(n)} if n is not None else None
+        return {
             "model": XAIModelInfo.get_base_model(model) or model,
             "prompt": prompt,
-            **(aspect or {}),  # mutable-ok: provider JSON body and base-class dict signature
-            **(count or {}),  # mutable-ok: provider JSON body and base-class dict signature
+            **(aspect or {}),
+            **(count or {}),
         }
 
     def transform_image_generation_response(
@@ -175,7 +175,7 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
         logging_obj.post_call(
             input=request_data.get("prompt", ""),
             api_key=api_key,
-            additional_args={"complete_input_dict": request_data},  # mutable-ok: provider JSON body
+            additional_args={"complete_input_dict": request_data},
             original_response=response_data,
         )
 
@@ -193,5 +193,5 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
-        model_response.data = list(images)  # mutable-ok: provider JSON body and base-class dict signature
+        model_response.data = list(images)
         return model_response
