@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Final, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
@@ -1881,10 +1881,11 @@ async def test_health_check_not_called_when_disabled(monkeypatch):
         }
     },
 )
-def test_custom_openapi(mock_get_openapi_schema):
-    from litellm.proxy.proxy_server import custom_openapi
+def test_custom_openapi(mock_get_openapi_schema: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.proxy_server import app, custom_openapi
 
-    openapi_schema = custom_openapi()
+    monkeypatch.setattr(app, "openapi_schema", None)
+    openapi_schema: Final = custom_openapi()
     assert openapi_schema is not None
 
 
