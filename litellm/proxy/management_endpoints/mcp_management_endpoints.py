@@ -44,6 +44,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 try:
@@ -137,6 +138,7 @@ if MCP_AVAILABLE:
         def validate_tool_name(name: str) -> _ToolNameValidationResult:
             return _ToolNameValidationResult()
 
+    from litellm.proxy._experimental.mcp_server.contracts import TargetCatalog
     from litellm.proxy._experimental.mcp_server.db import (
         McpIdentifierConflict,
         approve_mcp_server,
@@ -178,6 +180,7 @@ if MCP_AVAILABLE:
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.server_resolution import (
+        MCPServerTargetCatalog,
         authorize_mcp_server,
         resolve_mcp_server,
     )
@@ -237,7 +240,9 @@ if MCP_AVAILABLE:
         MCPCredentials,
         MCPGatewaySessionsResponse,
         MCPGatewaySessionsTerminateResponse,
+        MCPUpstreamProtocol,
         normalize_upstream_header_name,
+        validate_mcp_protocol_transport,
     )
     from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
 
@@ -2185,18 +2190,16 @@ if MCP_AVAILABLE:
         from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
         client_ip: Final = IPAddressUtils.get_mcp_client_ip(request) if request is not None else None
-        resolved: Final = await resolve_mcp_server(
-            server_id,
+        catalog: Final[TargetCatalog] = MCPServerTargetCatalog(
             manager=global_mcp_server_manager,
             temp_lookup=get_cached_temporary_mcp_server,
             id_client_ip=None,
             name_client_ip=client_ip,
             match_name=True,
         )
-        authorized: Final = await authorize_mcp_server(
-            resolved,
+        authorized: Final = await catalog.resolve(
+            server_id,
             user_api_key_dict,
-            manager=global_mcp_server_manager,
             is_admin_view=_user_has_admin_view(user_api_key_dict),
             not_found_detail={"error": f"MCP server {server_id} not found"},
             forbidden_detail={"error": f"Access denied to MCP server {server_id}"},
@@ -2739,15 +2742,13 @@ if MCP_AVAILABLE:
         404, so server ids can't be enumerated), using the same allowed-server
         resolution the MCP gateway enforces on tool calls.
         """
-        resolved: Final = await resolve_mcp_server(
-            server_id,
+        catalog: Final[TargetCatalog] = MCPServerTargetCatalog(
             manager=global_mcp_server_manager,
             db_lookup=lambda sid: get_mcp_server(prisma_client, sid),
         )
-        authorized: Final = await authorize_mcp_server(
-            resolved,
+        authorized: Final = await catalog.resolve(
+            server_id,
             user_api_key_dict,
-            manager=global_mcp_server_manager,
             is_admin_view=_user_has_admin_view(user_api_key_dict),
             not_found_detail={"error": f"MCP Server {server_id} not found"},
             forbidden_detail={
@@ -2938,6 +2939,32 @@ if MCP_AVAILABLE:
                 statuses.append(status_obj)
         return statuses
 
+    def _validate_mcp_protocol_update(
+        payload: UpdateMCPServerRequest,
+        fields_set: set[str],
+        stored: LiteLLM_MCPServerTable | None,
+        read_failed: bool,
+    ) -> None:
+        if not {"transport", "mcp_info"}.intersection(fields_set):
+            return
+        if read_failed:
+            raise HTTPException(
+                status_code=503, detail="Cannot validate MCP configuration while stored state is unavailable"
+            )
+        if stored is None:
+            return
+        effective_transport: Final = payload.transport if "transport" in fields_set else stored.transport
+        effective_info: Final = payload.mcp_info if "mcp_info" in fields_set else stored.mcp_info
+        try:
+            validate_mcp_protocol_transport(
+                TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
+                    (effective_info or {}).get("protocol_version", "auto")
+                ),
+                effective_transport,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @router.put(
         "/server",
         description="Allows deleting mcp serves in the db",
@@ -2986,9 +3013,9 @@ if MCP_AVAILABLE:
                 },
             )
 
-        # Snapshot the pre-update identity so we can detect a mint-relevant change below. The read is
-        # advisory (it only feeds the stale-token purge decision), so a failure skips the purge with a
-        # warning instead of failing the edit, whose primary job is the update itself.
+        # Snapshot stored configuration for protocol validation and mint-relevant changes below.
+        # Protocol or transport edits require this read; other edits may continue on read failure
+        # while skipping the best-effort stale-token purge.
         try:
             old_server_record = await get_mcp_server(prisma_client, payload.server_id)
             old_server_record_read_failed = False
@@ -3000,6 +3027,8 @@ if MCP_AVAILABLE:
             )
             old_server_record = None
             old_server_record_read_failed = True
+
+        _validate_mcp_protocol_update(payload, payload_fields_set, old_server_record, old_server_record_read_failed)
 
         if payload.per_server_oauth_discovery and (old_server_record is not None or old_server_record_read_failed):
             relay_eligible: Final = old_server_record is not None and is_per_server_oauth_discovery_eligible(

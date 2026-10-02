@@ -136,7 +136,7 @@ async def test_prompt_sampling_receives_explicit_operation_caller_headers_and_ip
     sampling = AsyncMock()
     with (
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[upstream])),
-        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient", return_value=client) as factory,
+        patch("litellm.proxy._experimental.mcp_server.upstream.MCPClient", return_value=client) as factory,
         patch("litellm.proxy._experimental.mcp_server.sampling_handler.handle_sampling_create_message", sampling),
     ):
         result = await GatewayOperations().execute(

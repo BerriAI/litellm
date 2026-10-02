@@ -851,3 +851,28 @@ def test_the_openapi_arm_keeps_the_shared_client_when_no_guard_is_needed(resolve
         assert not client.client.event_hooks.get("request")
     finally:
         _request_resolved_auth_headers.reset(token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+@pytest.mark.parametrize("per_server", [None, "Bearer per-server"])
+async def test_openapi_passthrough_preparation_preserves_credential_precedence(
+    mode: MCPAuth, per_server: str | None,
+) -> None:
+    from typing import Final
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    server: Final = MCPServer(
+        server_id="openapi-passthrough", name="openapi-passthrough", transport=MCPTransport.http,
+        url="https://upstream.example", spec_path="https://upstream.example/openapi.json", auth_type=mode,
+    )
+    headers: Final = {"authorization": "Bearer forwarded", "X-Trace": "trace"}
+    resolved, remaining = await MCPServerManager().resolve_openapi_upstream_auth(
+        mcp_server=server, oauth2_headers=None, raw_headers=None,
+        mcp_auth_header=per_server, user_api_key_auth=UserAPIKeyAuth(user_id="alice"),
+        forwarded_headers=headers,
+    )
+    assert resolved == {"Authorization": per_server or "Bearer forwarded"}
+    assert remaining == {"X-Trace": "trace"}
+    assert headers == {"authorization": "Bearer forwarded", "X-Trace": "trace"}
