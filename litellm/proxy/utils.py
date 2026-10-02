@@ -524,7 +524,7 @@ class _UpstreamStreamBoundary(Generic[_T]):
 
 @runtime_checkable
 class _ClosableAsyncIterator(Protocol):
-    async def aclose(self) -> object: ...
+    def aclose(self) -> object: ...
 
 
 class _StreamIteratorHook(Protocol[_T]):
@@ -2772,7 +2772,9 @@ class ProxyLogging:
                     yield chunk
             finally:
                 if isinstance(guarded, _ClosableAsyncIterator):
-                    await guarded.aclose()
+                    closing: Final = guarded.aclose()
+                    if inspect.isawaitable(closing):
+                        await closing
         except Exception as e:
             if e is not upstream.failure:
                 enrich_http_exception_with_guardrail_context(e, callback)
