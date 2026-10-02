@@ -252,7 +252,7 @@ def get_chatgpt_default_instructions() -> str:
     return os.getenv("CHATGPT_DEFAULT_INSTRUCTIONS") or CHATGPT_DEFAULT_INSTRUCTIONS
 
 
-def _normalize_litellm_params(litellm_params: Any | None) -> dict:
+def _normalize_litellm_params(litellm_params: Any | None) -> dict[str, object]:
     if litellm_params is None:
         return {}
     if isinstance(litellm_params, dict):
@@ -274,8 +274,9 @@ def get_chatgpt_session_id(litellm_params: object) -> str | None:
     params: Final = _normalize_litellm_params(litellm_params)
     metadata: Final = params.get("metadata")
     generated: Final = any(
-        isinstance(params.get(name), dict) and params[name].get(SESSION_ID_GENERATED_METADATA_KEY)
-        for name in ("metadata", "litellm_metadata")
+        True
+        for session_metadata in (metadata, params.get("litellm_metadata"))
+        if isinstance(session_metadata, dict) and session_metadata.get(SESSION_ID_GENERATED_METADATA_KEY)
     )
     if not generated:
         for key in ("litellm_session_id", "session_id"):
@@ -286,7 +287,7 @@ def get_chatgpt_session_id(litellm_params: object) -> str | None:
             value = metadata.get("session_id")
             if value:
                 return str(value)
-    prompt_cache_key: Final = params.get("prompt_cache_key")
+    prompt_cache_key: Final[object] = params.get("prompt_cache_key")
     if prompt_cache_key:
         key = str(prompt_cache_key)
         safe = _safe_header_value(key)
