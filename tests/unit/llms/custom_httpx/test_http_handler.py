@@ -853,11 +853,13 @@ def test_init_held_sync_handler_recreates_closed_client():
     handler.close()
 
 
-def test_caller_supplied_sync_client_is_not_replaced_when_closed():
+def test_caller_supplied_sync_client_keeps_identity_and_is_not_closed():
     supplied = httpx.Client()
     handler = HTTPHandler(client=supplied)
-    supplied.close()
     assert handler.client is supplied
+    handler.close()
+    assert not supplied.is_closed
+    supplied.close()
 
 
 @pytest.mark.asyncio

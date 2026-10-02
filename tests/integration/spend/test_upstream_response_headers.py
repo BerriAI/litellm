@@ -182,15 +182,7 @@ def test_upstream_headers_survive_routes_streaming_and_spend_log_readback(
     "attribute_attempts",
     (
         pytest.param(False, id="full-history"),
-        pytest.param(
-            True,
-            id="attempt-attribution",
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=AmbiguousFallbackAttempt,
-                reason="PR #44053: failed and serving routing attempts share an attempt_id",
-            ),
-        ),
+        pytest.param(True, id="attempt-attribution"),
     ),
 )
 def test_fallback_spend_log_retains_history_and_attributes_attempts(

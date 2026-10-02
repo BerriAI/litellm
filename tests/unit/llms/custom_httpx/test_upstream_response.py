@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Iterator, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Final, Literal
 
@@ -14,13 +15,125 @@ from httpx._types import (
     RequestFiles,
     TimeoutTypes,
 )
-from openai import APIConnectionError, AsyncOpenAI, OpenAI
+from openai import AsyncOpenAI, AzureOpenAI, OpenAI
 
-from litellm.litellm_core_utils.upstream_response_capture import UpstreamResponseCapture
+from litellm.litellm_core_utils.upstream_response_capture import UpstreamResponseCapture, upstream_attempt
+from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import blocked_cookie_jar
-from litellm.llms.custom_httpx.upstream_response import capture_async_openai_client, capture_openai_client
+from litellm.llms.custom_httpx.upstream_response import (
+    install_openai_capture_hook,
+)
+from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.openai.openai import OpenAIChatCompletion
 
 BODY: Final = b'{"id":"chatcmpl-probe","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}'
+
+
+def test_openai_client_acquisition_is_idempotent_and_keeps_hook_order() -> None:
+    capture: Final = UpstreamResponseCapture()
+    hooks_observed_capture: list[bool] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"x-request-id": "visible"}, content=BODY)
+
+    def response_hook(response: httpx.Response) -> None:
+        hooks_observed_capture.append(bool(capture.responses))
+
+    with httpx.Client(
+        transport=httpx.MockTransport(upstream),
+        event_hooks={"response": [response_hook]},
+    ) as borrowed:
+        client: Final = OpenAI(api_key="synthetic", http_client=borrowed, max_retries=0)
+        getter: Final = OpenAIChatCompletion()
+        first: Final = getter._get_openai_client(is_async=False, api_key="synthetic", client=client, max_retries=0)
+        second: Final = getter._get_openai_client(is_async=False, api_key="synthetic", client=client, max_retries=0)
+        assert first is client
+        assert second is client
+
+        assert client.chat.completions.create(model="probe", messages=[]).choices[0].message.content == "ok"
+        assert capture.responses == ()
+        with upstream_attempt(capture, "attempt"):
+            assert client.chat.completions.create(model="probe", messages=[]).choices[0].message.content == "ok"
+
+        assert tuple(hooks_observed_capture) == (False, True)
+        assert tuple(response.status_code for response in capture.responses) == (200,)
+        assert tuple(dict(response.headers)["x-request-id"] for response in capture.responses) == ("visible",)
+        assert not borrowed.is_closed
+
+
+def test_azure_client_acquisition_keeps_identity_and_captures_headers() -> None:
+    capture: Final = UpstreamResponseCapture()
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"x-request-id": "azure-visible"}, content=BODY)
+
+    with httpx.Client(transport=httpx.MockTransport(upstream)) as borrowed:
+        client: Final = AzureOpenAI(
+            api_key="synthetic",
+            azure_endpoint="https://upstream.invalid",
+            api_version="2024-02-01-preview",
+            http_client=borrowed,
+            max_retries=0,
+        )
+        returned: Final = BaseAzureLLM().get_azure_openai_client(
+            api_key="synthetic",
+            api_base="https://upstream.invalid",
+            api_version="2024-02-01-preview",
+            client=client,
+            model="probe",
+        )
+        assert returned is client
+        with upstream_attempt(capture, "attempt"):
+            assert client.chat.completions.create(model="probe", messages=[]).choices[0].message.content == "ok"
+        assert tuple(response.status_code for response in capture.responses) == (200,)
+        assert tuple(dict(response.headers)["x-request-id"] for response in capture.responses) == ("azure-visible",)
+        assert not borrowed.is_closed
+
+
+@pytest.mark.asyncio
+async def test_async_openai_client_acquisition_is_idempotent_and_keeps_hook_order() -> None:
+    capture: Final = UpstreamResponseCapture()
+    hooks_observed_capture: list[bool] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"x-request-id": "visible"}, content=BODY)
+
+    async def response_hook(response: httpx.Response) -> None:
+        hooks_observed_capture.append(bool(capture.responses))
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(upstream),
+        event_hooks={"response": [response_hook]},
+    ) as borrowed:
+        client: Final = AsyncOpenAI(api_key="synthetic", http_client=borrowed, max_retries=0)
+        getter: Final = OpenAIChatCompletion()
+        first: Final = getter._get_openai_client(is_async=True, api_key="synthetic", client=client, max_retries=0)
+        second: Final = getter._get_openai_client(is_async=True, api_key="synthetic", client=client, max_retries=0)
+        assert first is client
+        assert second is client
+
+        assert (await client.chat.completions.create(model="probe", messages=[])).choices[0].message.content == "ok"
+        assert capture.responses == ()
+        with upstream_attempt(capture, "attempt"):
+            assert (
+                await client.chat.completions.create(model="probe", messages=[])
+            ).choices[0].message.content == "ok"
+
+        assert tuple(hooks_observed_capture) == (False, True)
+        assert tuple(response.status_code for response in capture.responses) == (200,)
+        assert tuple(dict(response.headers)["x-request-id"] for response in capture.responses) == ("visible",)
+        assert not borrowed.is_closed
+
+
+def test_base_llm_does_not_close_a_borrowed_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    with httpx.Client() as borrowed:
+        monkeypatch.setattr("litellm.client_session", borrowed)
+        llm: Final = BaseLLM()
+        session: Final = llm.create_client_session()
+        assert session is borrowed
+        llm._client_session = session
+        llm.__exit__()
+        assert not borrowed.is_closed
 
 
 class Body(httpx.SyncByteStream, httpx.AsyncByteStream):
@@ -64,14 +177,13 @@ def test_sdk_capture_preserves_request_settings_and_borrowed_client_ownership() 
         timeout=11,
     ) as borrowed:
         client: Final = OpenAI(api_key="synthetic", base_url="https://upstream.invalid/v1", http_client=borrowed)
-        captured: Final = capture_openai_client(client, capture, "attempt")
-        response: Final = captured.chat.completions.create(model="probe", messages=[])
+        install_openai_capture_hook(client)
+        with upstream_attempt(capture, "attempt"):
+            response: Final = client.chat.completions.create(model="probe", messages=[])
         assert response.choices[0].message.content == "ok"
-        captured.close()
-        with pytest.raises(APIConnectionError):
-            captured.with_options(max_retries=0).chat.completions.create(model="probe", messages=[])
         assert not borrowed.is_closed
         assert client.chat.completions.create(model="probe", messages=[]).choices[0].message.content == "ok"
+        assert len(capture.responses) == 1
     assert body.closed
     assert capture.snapshot() == (
         {
@@ -99,14 +211,13 @@ async def test_sdk_async_retries_are_captured_without_closing_borrowed_client() 
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as borrowed:
         client: Final = AsyncOpenAI(api_key="synthetic", http_client=borrowed, max_retries=1)
-        captured: Final = capture_async_openai_client(client, capture, "attempt")
-        response: Final = await captured.chat.completions.create(model="probe", messages=[])
+        install_openai_capture_hook(client)
+        with upstream_attempt(capture, "attempt"):
+            response: Final = await client.chat.completions.create(model="probe", messages=[])
         assert response.choices[0].message.content == "ok"
-        await captured.close()
-        with pytest.raises(APIConnectionError):
-            await captured.with_options(max_retries=0).chat.completions.create(model="probe", messages=[])
         assert not borrowed.is_closed
         assert (await client.chat.completions.create(model="probe", messages=[])).choices[0].message.content == "ok"
+        assert len(capture.responses) == 2
     assert body.closed
     assert tuple(item.status_code for item in capture.responses) == (429, 200)
     assert tuple(dict(item.headers)["x-request-id"] for item in capture.responses) == ("retry", "success")
@@ -231,11 +342,15 @@ def run_sync_contract(enabled: bool, signing: bool, redirects: bool) -> Compatib
         event_hooks={"request": [upstream.request_hook], "response": [upstream.response_hook]},
     ) as borrowed:
         original: Final = OpenAI(api_key="synthetic", http_client=borrowed, max_retries=1)
-        used: Final = capture_openai_client(original, capture, "attempt") if enabled else original
-        assert used.chat.completions.create(model="probe", messages=[]).choices[0].message.content == "ok"
         if enabled:
-            used.close()
+            install_openai_capture_hook(original)
+        used: Final = original
+        if enabled:
+            with upstream_attempt(capture, "attempt"):
+                assert used.chat.completions.create(model="probe", messages=[]).choices[0].message.content == "ok"
             assert not borrowed.is_closed
+        else:
+            assert used.chat.completions.create(model="probe", messages=[]).choices[0].message.content == "ok"
         statuses: Final = (307, 429, 307, 200) if redirects else (429, 200)
         assert tuple(item.status_code for item in capture.responses) == (statuses if enabled else ())
         return CompatibilityResult(upstream.requests, upstream.hooks, tuple(borrowed.cookies.items()))
@@ -260,11 +375,19 @@ async def run_async_contract(enabled: bool, signing: bool, redirects: bool) -> C
         event_hooks={"request": [upstream.async_request_hook], "response": [upstream.async_response_hook]},
     ) as borrowed:
         original: Final = AsyncOpenAI(api_key="synthetic", http_client=borrowed, max_retries=1)
-        used: Final = capture_async_openai_client(original, capture, "attempt") if enabled else original
-        assert (await used.chat.completions.create(model="probe", messages=[])).choices[0].message.content == "ok"
         if enabled:
-            await used.close()
+            install_openai_capture_hook(original)
+        used: Final = original
+        if enabled:
+            with upstream_attempt(capture, "attempt"):
+                assert (
+                    await used.chat.completions.create(model="probe", messages=[])
+                ).choices[0].message.content == "ok"
             assert not borrowed.is_closed
+        else:
+            assert (
+                await used.chat.completions.create(model="probe", messages=[])
+            ).choices[0].message.content == "ok"
         statuses: Final = (307, 429, 307, 200) if redirects else (429, 200)
         assert tuple(item.status_code for item in capture.responses) == (statuses if enabled else ())
         return CompatibilityResult(upstream.requests, upstream.hooks, tuple(borrowed.cookies.items()))
@@ -314,11 +437,16 @@ def test_sdk_failure_contract(enabled: bool, failure: Literal["status", "read", 
 
     with httpx.Client(transport=httpx.MockTransport(upstream)) as borrowed:
         original: Final = OpenAI(api_key="synthetic", http_client=borrowed, max_retries=0)
-        used: Final = capture_openai_client(original, capture, "attempt") if enabled else original
-        with pytest.raises(AuthenticationError if failure == "status" else APIConnectionError):
-            used.chat.completions.create(model="probe", messages=[])
         if enabled:
-            used.close()
+            install_openai_capture_hook(original)
+        used: Final = original
+        if enabled:
+            with upstream_attempt(capture, "attempt"):
+                with pytest.raises(AuthenticationError if failure == "status" else APIConnectionError):
+                    used.chat.completions.create(model="probe", messages=[])
+        else:
+            with pytest.raises(AuthenticationError if failure == "status" else APIConnectionError):
+                used.chat.completions.create(model="probe", messages=[])
         assert not borrowed.is_closed
     assert body.closed == (failure == "read")
     expected_status: Final = (401 if failure == "status" else 200,) if enabled and failure != "connect" else ()
@@ -343,11 +471,16 @@ async def test_async_sdk_failure_contract(enabled: bool, failure: Literal["statu
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as borrowed:
         original: Final = AsyncOpenAI(api_key="synthetic", http_client=borrowed, max_retries=0)
-        used: Final = capture_async_openai_client(original, capture, "attempt") if enabled else original
-        with pytest.raises(AuthenticationError if failure == "status" else APIConnectionError):
-            await used.chat.completions.create(model="probe", messages=[])
         if enabled:
-            await used.close()
+            install_openai_capture_hook(original)
+        used: Final = original
+        if enabled:
+            with upstream_attempt(capture, "attempt"):
+                with pytest.raises(AuthenticationError if failure == "status" else APIConnectionError):
+                    await used.chat.completions.create(model="probe", messages=[])
+        else:
+            with pytest.raises(AuthenticationError if failure == "status" else APIConnectionError):
+                await used.chat.completions.create(model="probe", messages=[])
         assert not borrowed.is_closed
     assert body.closed == (failure == "read")
     expected_status: Final = (401 if failure == "status" else 200,) if enabled and failure != "connect" else ()
@@ -381,8 +514,12 @@ async def test_async_sdk_cancellation_closes_stream_without_buffering(enabled: b
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as borrowed:
         original: Final = AsyncOpenAI(api_key="synthetic", http_client=borrowed, max_retries=0)
-        used: Final = capture_async_openai_client(original, capture, "attempt") if enabled else original
-        response: Final = await used.chat.completions.create(model="probe", messages=[], stream=True)
+        if enabled:
+            install_openai_capture_hook(original)
+        used: Final = original
+        attempt_context: Final = upstream_attempt(capture, "attempt") if enabled else nullcontext()
+        with attempt_context:
+            response: Final = await used.chat.completions.create(model="probe", messages=[], stream=True)
         assert not waiting.is_set()
         assert bool(capture.responses) == enabled
 
@@ -396,8 +533,6 @@ async def test_async_sdk_cancellation_closes_stream_without_buffering(enabled: b
             await task
         assert closed.is_set()
         assert not borrowed.is_closed
-        if enabled:
-            await used.close()
     assert tuple(item.status_code for item in capture.responses) == ((200,) if enabled else ())
 
 
@@ -424,13 +559,15 @@ def test_sync_sdk_stream_is_lazy_and_closes_without_closing_pool(enabled: bool) 
 
     with httpx.Client(transport=httpx.MockTransport(upstream)) as borrowed:
         original: Final = OpenAI(api_key="synthetic", http_client=borrowed)
-        used: Final = capture_openai_client(original, capture, "attempt") if enabled else original
-        with used.chat.completions.with_streaming_response.create(model="probe", messages=[]) as response:
-            assert body.reads == 0
-            assert bool(capture.responses) == enabled
-            assert response.parse().choices[0].message.content == "ok"
-            assert body.reads == 1
-        assert body.closed
         if enabled:
-            used.close()
+            install_openai_capture_hook(original)
+        used: Final = original
+        scope: Final = upstream_attempt(capture, "attempt") if enabled else nullcontext()
+        with scope:
+            with used.chat.completions.with_streaming_response.create(model="probe", messages=[]) as response:
+                assert body.reads == 0
+                assert bool(capture.responses) == enabled
+                assert response.parse().choices[0].message.content == "ok"
+                assert body.reads == 1
+        assert body.closed
         assert not borrowed.is_closed

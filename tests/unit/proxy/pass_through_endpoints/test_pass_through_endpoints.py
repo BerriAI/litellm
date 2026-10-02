@@ -27,6 +27,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.custom_httpx.upstream_response import with_capture_hooks
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
@@ -5159,7 +5160,11 @@ class _FakeUpstreamTransport(httpx.AsyncBaseTransport):
         )
 
 
-def _inject_fake_passthrough_client(transport, timeout):
+def _inject_fake_passthrough_client(
+    transport: httpx.AsyncBaseTransport,
+    timeout: float | None,
+    capture_upstream_response: bool = False,
+) -> tuple[httpx.AsyncClient, Callable[[], None]]:
     """Dependency-inject a fake upstream via the client cache that
     get_async_httpx_client resolves passthrough clients from (no monkeypatching
     of the HTTP layer). The cache entry is located by calling the production
@@ -5184,10 +5189,13 @@ def _inject_fake_passthrough_client(transport, timeout):
         "PassThroughEndpoint client not found in in_memory_llm_clients_cache; "
         "get_async_httpx_client may not be caching this provider."
     )
-    fake_client = httpx.AsyncClient(transport=transport)
+    fake_client = httpx.AsyncClient(
+        transport=transport,
+        event_hooks=with_capture_hooks(None, is_async=True) if capture_upstream_response else None,
+    )
     cache.cache_dict[cache_key] = SimpleNamespace(client=fake_client)
 
-    def _cleanup():
+    def _cleanup() -> None:
         cache.cache_dict.pop(cache_key, None)
 
     return fake_client, _cleanup
@@ -5218,6 +5226,50 @@ def _relay_client_request(method="GET"):
     mock_request.headers = Headers({})
     mock_request.query_params = QueryParams({})
     return mock_request
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_captures_upstream_response_headers() -> None:
+    upstream_headers: Final = (
+        ("x-request-id", "pass-through-probe"),
+        ("x-probe", "first"),
+        ("x-probe", "second"),
+    )
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers=upstream_headers, json={"ok": True}, request=request)
+
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        httpx.MockTransport(upstream),
+        timeout=None,
+        capture_upstream_response=True,
+    )
+    try:
+        with ExitStack() as stack:
+            success_handler: Final = _enter_relay_logging_mocks(stack, {})[1]
+            response: Final = await pass_through_request(
+                request=_relay_client_request(method="POST"),
+                target="https://internal-api.test/v1/generate",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            )
+            success_call: Final = success_handler.call_args
+            assert success_call is not None
+            logging_obj: Final = success_call.kwargs["logging_obj"]
+            assert isinstance(logging_obj, LiteLLMLoggingObj)
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    captured: Final = logging_obj.upstream_response_capture.snapshot()
+    assert response.status_code == 200
+    assert len(captured) == 1
+    assert captured[0]["attempt_id"] == logging_obj.litellm_call_id
+    assert captured[0]["status_code"] == 200
+    assert tuple(header for header in captured[0]["headers"] if header[0] == "x-probe") == (
+        ("x-probe", "first"),
+        ("x-probe", "second"),
+    )
 
 
 @pytest.mark.asyncio

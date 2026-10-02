@@ -1,11 +1,17 @@
+from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import aiohttp
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 
 import litellm
 from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+from litellm.litellm_core_utils.upstream_response_capture import UpstreamResponseCapture, upstream_attempt
+from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
+from litellm.llms.openai.common_utils import OpenAIError
 
 
 class TestBaseLLMAIOHTTPHandler:
@@ -451,3 +457,44 @@ class TestBaseLLMAIOHTTPHandler:
         # Should use transport, not connector
         mock_transport._get_valid_client_session.assert_called_once()
         assert result is mock_session_from_transport
+
+
+@pytest.mark.asyncio
+async def test_aiohttp_handler_captures_status_and_multivalue_headers() -> None:
+    application: Final = web.Application()
+
+    async def upstream(_request: web.Request) -> web.Response:
+        response: Final = web.Response(status=429, text="busy")
+        response.headers.add("X-Probe", "first")
+        response.headers.add("X-Probe", "second")
+        return response
+
+    application.router.add_post("/probe", upstream)
+    capture: Final = UpstreamResponseCapture()
+    handler: Final = BaseLLMAIOHTTPHandler()
+
+    try:
+        async with TestServer(application) as server:
+            async with aiohttp.ClientSession() as session:
+                with upstream_attempt(capture, "aiohttp"):
+                    with pytest.raises(OpenAIError):
+                        await handler._make_common_async_call(
+                            async_client_session=session,
+                            provider_config=OpenAITextCompletionConfig(),
+                            api_base=str(server.make_url("/probe")),
+                            headers={},
+                            data={},
+                            timeout=10.0,
+                            litellm_params={},
+                        )
+    finally:
+        await handler.close()
+
+    captured: Final = capture.snapshot()
+    assert len(captured) == 1
+    assert captured[0]["attempt_id"] == "aiohttp"
+    assert captured[0]["status_code"] == 429
+    assert tuple(header for header in captured[0]["headers"] if header[0] == "x-probe") == (
+        ("x-probe", "first"),
+        ("x-probe", "second"),
+    )
