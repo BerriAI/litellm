@@ -400,100 +400,97 @@ def test_sync_guardrail_from_db_marks_source_db_when_unchanged():
     assert handler.get_source("collide") == "db"
 
 
-def test_sync_guardrail_from_db_keeps_the_loaded_guardrail_when_db_params_do_not_decrypt():
-    handler = InMemoryGuardrailHandler()
-    loaded = _make_guardrail("rotated")
-    handler.IN_MEMORY_GUARDRAILS["rotated"] = loaded
-    undecryptable = {
-        **loaded,
-        "litellm_params": {**dict(loaded["litellm_params"]), "api_key": "litellm_enc::sealed-under-the-new-key"},
-    }
-
-    with patch.object(handler, "reinitialize_guardrail") as reinitialize:
-        synced = handler.sync_guardrail_from_db(undecryptable)
-
-    reinitialize.assert_not_called()
-    assert synced is loaded
-    assert handler.IN_MEMORY_GUARDRAILS["rotated"] is loaded
+@pytest.fixture
+def rotation_handler():
+    registry_module = _register_mode_following_initializer("rotation_test")
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        yield InMemoryGuardrailHandler()
+    finally:
+        registry_module.guardrail_initializer_registry.pop("rotation_test", None)
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
 
 
-def test_sync_guardrail_from_db_applies_other_edits_and_keeps_the_loaded_value_that_does_not_decrypt():
-    handler = InMemoryGuardrailHandler()
-    loaded_params = {"guardrail": "g", "mode": "pre_call", "default_on": True, "api_key": "gk-loaded"}
-    handler.IN_MEMORY_GUARDRAILS["rotated"] = Guardrail(
-        guardrail_id="rotated", guardrail_name="g", litellm_params=LitellmParams(**loaded_params)
-    )
-    edited_on_another_pod = Guardrail(
-        guardrail_id="rotated",
-        guardrail_name="g",
-        litellm_params={**loaded_params, "mode": "post_call", "api_key": "litellm_enc::sealed-under-the-new-key"},
-    )
-
-    with patch.object(handler, "reinitialize_guardrail") as reinitialize:
-        handler.sync_guardrail_from_db(edited_on_another_pod)
-
-    synced_params = reinitialize.call_args.kwargs["guardrail"]["litellm_params"]
-    assert synced_params["mode"] == "post_call"
-    assert synced_params["api_key"] == "gk-loaded"
+def _rotation_row(litellm_params) -> Guardrail:
+    return Guardrail(guardrail_id="rotated", guardrail_name="mode-following", litellm_params=litellm_params)
 
 
-def test_sync_guardrail_from_db_keeps_the_loaded_guardrail_when_an_undecryptable_param_has_no_loaded_value():
-    handler = InMemoryGuardrailHandler()
-    loaded_params = {"guardrail": "g", "mode": "pre_call", "default_on": True}
-    loaded = Guardrail(guardrail_id="rotated", guardrail_name="g", litellm_params=LitellmParams(**loaded_params))
-    handler.IN_MEMORY_GUARDRAILS["rotated"] = loaded
-    credential_added_on_another_pod = Guardrail(
-        guardrail_id="rotated",
-        guardrail_name="g",
-        litellm_params={**loaded_params, "mode": "post_call", "api_key": "litellm_enc::sealed-under-the-new-key"},
+_LOADED_PARAMS = {"guardrail": "rotation_test", "mode": "pre_call", "default_on": True, "api_key": "gk-loaded"}
+
+
+def test_sync_guardrail_from_db_keeps_the_loaded_guardrail_when_db_params_do_not_decrypt(rotation_handler):
+    rotation_handler.initialize_guardrail(guardrail=_rotation_row(dict(_LOADED_PARAMS)), source="db")
+    live_instance = rotation_handler.guardrail_id_to_custom_guardrail["rotated"]
+
+    rotation_handler.sync_guardrail_from_db(
+        _rotation_row({**_LOADED_PARAMS, "api_key": "litellm_enc::sealed-under-the-new-key"})
     )
 
-    with patch.object(handler, "reinitialize_guardrail") as reinitialize:
-        synced = handler.sync_guardrail_from_db(credential_added_on_another_pod)
-
-    reinitialize.assert_not_called()
-    assert synced is loaded
+    assert rotation_handler.guardrail_id_to_custom_guardrail["rotated"] is live_instance
+    assert rotation_handler.IN_MEMORY_GUARDRAILS["rotated"]["litellm_params"].api_key == "gk-loaded"
 
 
-def test_sync_guardrail_from_db_keeps_the_loaded_value_when_a_patch_passes_litellm_params_as_a_model():
-    handler = InMemoryGuardrailHandler()
-    loaded_params = {"guardrail": "g", "mode": "pre_call", "default_on": True, "api_key": "gk-loaded"}
-    handler.IN_MEMORY_GUARDRAILS["rotated"] = Guardrail(
-        guardrail_id="rotated", guardrail_name="g", litellm_params=LitellmParams(**loaded_params)
-    )
-    patched = Guardrail(
-        guardrail_id="rotated",
-        guardrail_name="g",
-        litellm_params=LitellmParams(**{**loaded_params, "default_on": False, "api_key": "litellm_enc::sealed"}),
+def test_sync_guardrail_from_db_applies_other_edits_and_keeps_the_loaded_value_that_does_not_decrypt(
+    rotation_handler,
+):
+    rotation_handler.initialize_guardrail(guardrail=_rotation_row(dict(_LOADED_PARAMS)), source="db")
+
+    rotation_handler.sync_guardrail_from_db(
+        _rotation_row({**_LOADED_PARAMS, "mode": "post_call", "api_key": "litellm_enc::sealed-under-the-new-key"})
     )
 
-    with patch.object(handler, "reinitialize_guardrail") as reinitialize:
-        handler.sync_guardrail_from_db(patched)
+    synced_params = rotation_handler.IN_MEMORY_GUARDRAILS["rotated"]["litellm_params"]
+    assert synced_params.mode == "post_call"
+    assert synced_params.api_key == "gk-loaded"
+    live_instance = rotation_handler.guardrail_id_to_custom_guardrail["rotated"]
+    assert live_instance.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is True
 
-    synced_params = reinitialize.call_args.kwargs["guardrail"]["litellm_params"]
-    assert synced_params["default_on"] is False
-    assert synced_params["api_key"] == "gk-loaded"
 
+def test_sync_guardrail_from_db_keeps_the_loaded_guardrail_when_an_undecryptable_param_has_no_loaded_value(
+    rotation_handler,
+):
+    loaded_params = {key: value for key, value in _LOADED_PARAMS.items() if key != "api_key"}
+    rotation_handler.initialize_guardrail(guardrail=_rotation_row(dict(loaded_params)), source="db")
+    live_instance = rotation_handler.guardrail_id_to_custom_guardrail["rotated"]
 
-def test_sync_guardrail_from_db_applies_an_edit_to_a_guardrail_loaded_with_an_undecryptable_value():
-    handler = InMemoryGuardrailHandler()
-    stale_params = {"guardrail": "g", "mode": "pre_call", "default_on": True, "api_key": "litellm_enc::stale"}
-    handler.IN_MEMORY_GUARDRAILS["stale"] = Guardrail(
-        guardrail_id="stale", guardrail_name="g", litellm_params=LitellmParams(**stale_params)
-    )
-    edited = Guardrail(
-        guardrail_id="stale",
-        guardrail_name="g",
-        litellm_params={**stale_params, "mode": "post_call", "default_on": False},
+    rotation_handler.sync_guardrail_from_db(
+        _rotation_row({**loaded_params, "mode": "post_call", "api_key": "litellm_enc::sealed-under-the-new-key"})
     )
 
-    with patch.object(handler, "reinitialize_guardrail") as reinitialize:
-        handler.sync_guardrail_from_db(edited)
+    assert rotation_handler.guardrail_id_to_custom_guardrail["rotated"] is live_instance
+    synced_params = rotation_handler.IN_MEMORY_GUARDRAILS["rotated"]["litellm_params"]
+    assert synced_params.mode == "pre_call"
+    assert synced_params.api_key is None
 
-    synced_params = reinitialize.call_args.kwargs["guardrail"]["litellm_params"]
-    assert synced_params["mode"] == "post_call"
-    assert synced_params["default_on"] is False
-    assert synced_params["api_key"] == "litellm_enc::stale"
+
+def test_sync_guardrail_from_db_keeps_the_loaded_value_when_a_patch_passes_litellm_params_as_a_model(
+    rotation_handler,
+):
+    rotation_handler.initialize_guardrail(guardrail=_rotation_row(dict(_LOADED_PARAMS)), source="db")
+
+    rotation_handler.sync_guardrail_from_db(
+        _rotation_row(LitellmParams(**{**_LOADED_PARAMS, "default_on": False, "api_key": "litellm_enc::sealed"}))
+    )
+
+    synced_params = rotation_handler.IN_MEMORY_GUARDRAILS["rotated"]["litellm_params"]
+    assert synced_params.default_on is False
+    assert synced_params.api_key == "gk-loaded"
+
+
+def test_sync_guardrail_from_db_applies_an_edit_to_a_guardrail_loaded_with_an_undecryptable_value(
+    rotation_handler,
+):
+    stale_params = {**_LOADED_PARAMS, "api_key": "litellm_enc::stale"}
+    rotation_handler.initialize_guardrail(guardrail=_rotation_row(dict(stale_params)), source="db")
+
+    rotation_handler.sync_guardrail_from_db(_rotation_row({**stale_params, "mode": "post_call", "default_on": False}))
+
+    synced_params = rotation_handler.IN_MEMORY_GUARDRAILS["rotated"]["litellm_params"]
+    assert synced_params.mode == "post_call"
+    assert synced_params.default_on is False
+    assert synced_params.api_key == "litellm_enc::stale"
 
 
 def _db_litellm_params() -> dict:
