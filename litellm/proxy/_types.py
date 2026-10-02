@@ -411,6 +411,12 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/threads/{thread_id}/messages",
         "/threads/{thread_id}/runs",
         "/v1/threads/{thread_id}/runs",
+        "/v1/skills",
+        "/v1/skills/{skill_id}",
+        "/v1/skills/{skill_id}/content",
+        "/v1/skills/{skill_id}/versions",
+        "/v1/skills/{skill_id}/versions/{version}",
+        "/v1/skills/{skill_id}/versions/{version}/content",
         # models
         "/models",
         "/v1/models",

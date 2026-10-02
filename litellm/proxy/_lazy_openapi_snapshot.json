@@ -6436,25 +6436,6 @@
   "anthropic_skills": {
     "components": {
       "schemas": {
-        "DeleteSkillResponse": {
-          "description": "Response from deleting a skill",
-          "properties": {
-            "id": {
-              "title": "Id",
-              "type": "string"
-            },
-            "type": {
-              "default": "skill_deleted",
-              "title": "Type",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id"
-          ],
-          "title": "DeleteSkillResponse",
-          "type": "object"
-        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -6466,117 +6447,6 @@
             }
           },
           "title": "HTTPValidationError",
-          "type": "object"
-        },
-        "ListSkillsResponse": {
-          "description": "Response from listing skills",
-          "properties": {
-            "data": {
-              "items": {
-                "$ref": "#/components/schemas/Skill"
-              },
-              "title": "Data",
-              "type": "array"
-            },
-            "has_more": {
-              "default": false,
-              "title": "Has More",
-              "type": "boolean"
-            },
-            "next_page": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Next Page"
-            }
-          },
-          "required": [
-            "data"
-          ],
-          "title": "ListSkillsResponse",
-          "type": "object"
-        },
-        "Skill": {
-          "description": "Represents a skill from the Anthropic Skills API",
-          "properties": {
-            "created_at": {
-              "title": "Created At",
-              "type": "string"
-            },
-            "description": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Description"
-            },
-            "display_title": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Display Title"
-            },
-            "id": {
-              "title": "Id",
-              "type": "string"
-            },
-            "latest_version": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Latest Version"
-            },
-            "search_score": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Search Score"
-            },
-            "source": {
-              "title": "Source",
-              "type": "string"
-            },
-            "type": {
-              "default": "skill",
-              "title": "Type",
-              "type": "string"
-            },
-            "updated_at": {
-              "title": "Updated At",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "created_at",
-            "source",
-            "updated_at"
-          ],
-          "title": "Skill",
           "type": "object"
         },
         "ValidationError": {
@@ -6731,9 +6601,7 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ListSkillsResponse"
-                  }
+                  "schema": {}
                 }
               },
               "description": "Successful Response"
@@ -6785,9 +6653,7 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/Skill"
-                  }
+                  "schema": {}
                 }
               },
               "description": "Successful Response"
@@ -6850,9 +6716,7 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/DeleteSkillResponse"
-                  }
+                  "schema": {}
                 }
               },
               "description": "Successful Response"
@@ -6913,9 +6777,7 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/Skill"
-                  }
+                  "schema": {}
                 }
               },
               "description": "Successful Response"
@@ -6937,6 +6799,39 @@
             }
           ],
           "summary": "Get Skill",
+          "tags": [
+            "anthropic_skills"
+          ]
+        },
+        "post": {
+          "description": "Native skill operation: update",
+          "operationId": "update_skill_v1_skills__skill_id__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "skill_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Update Skill",
           "tags": [
             "anthropic_skills"
           ]
@@ -6980,6 +6875,226 @@
             }
           },
           "summary": "Agent Skills Archive",
+          "tags": [
+            "anthropic_skills"
+          ]
+        }
+      },
+      "/v1/skills/{skill_id}/content": {
+        "get": {
+          "description": "Native skill operation: content",
+          "operationId": "content_skill_v1_skills__skill_id__content_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "skill_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Content Skill",
+          "tags": [
+            "anthropic_skills"
+          ]
+        }
+      },
+      "/v1/skills/{skill_id}/versions": {
+        "get": {
+          "description": "Native skill operation: list versions",
+          "operationId": "list_versions_skill_v1_skills__skill_id__versions_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "skill_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Versions Skill",
+          "tags": [
+            "anthropic_skills"
+          ]
+        },
+        "post": {
+          "description": "Native skill operation: create version",
+          "operationId": "create_version_skill_v1_skills__skill_id__versions_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "skill_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Version Skill",
+          "tags": [
+            "anthropic_skills"
+          ]
+        }
+      },
+      "/v1/skills/{skill_id}/versions/{version}": {
+        "delete": {
+          "description": "Native skill operation: delete version",
+          "operationId": "delete_version_skill_v1_skills__skill_id__versions__version__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "skill_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "in": "path",
+              "name": "version",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Version Skill",
+          "tags": [
+            "anthropic_skills"
+          ]
+        },
+        "get": {
+          "description": "Native skill operation: version",
+          "operationId": "version_skill_v1_skills__skill_id__versions__version__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "skill_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "in": "path",
+              "name": "version",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Version Skill",
+          "tags": [
+            "anthropic_skills"
+          ]
+        }
+      },
+      "/v1/skills/{skill_id}/versions/{version}/content": {
+        "get": {
+          "description": "Native skill operation: version content",
+          "operationId": "version_content_skill_v1_skills__skill_id__versions__version__content_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "skill_id",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "in": "path",
+              "name": "version",
+              "required": true,
+              "schema": {
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Version Content Skill",
           "tags": [
             "anthropic_skills"
           ]
