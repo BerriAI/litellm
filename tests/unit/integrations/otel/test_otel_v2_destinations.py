@@ -10,7 +10,7 @@ from types import MappingProxyType
 
 import pytest
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import Status, StatusCode
@@ -55,6 +55,7 @@ from litellm.integrations.otel.plumbing.providers import (
     build_tracer_provider,
     deliverable_destinations,
     operator_sink_scopes,
+    register_exporter_factory,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache, get_tracer
 from litellm.integrations.otel.presets.arize import arize_preset
@@ -3467,7 +3468,7 @@ INHERITING_DEST = OtelDestination(
 )
 
 
-def mapped(data) -> Mapping[str, object]:
+def mapped(data: LLMCallSpanData | MCPToolCallSpanData) -> Mapping[str, object]:
     """What the configured mappers write on the span, the way the logger stamps it."""
     return MappingProxyType(reduce(lambda acc, mapper: {**acc, **mapper.map(data)}, resolve_mappers(_ALL_MAPPERS), {}))
 
@@ -3485,11 +3486,11 @@ def model_call_tree(provider: TracerProvider, attributes: Mapping[str, object]) 
             llm.add_event("gen_ai.content.first_chunk", {"gen_ai.response.model": "gpt-4o-2024"})
 
 
-def by_name(exporter: InMemorySpanExporter):
+def by_name(exporter: InMemorySpanExporter) -> dict[str, ReadableSpan]:
     return {span.name: span for span in exporter.get_finished_spans()}
 
 
-def carries_content(span) -> bool:
+def carries_content(span: ReadableSpan) -> bool:
     return any(_SECRET in str(value) for value in span.attributes.values())
 
 
@@ -3506,8 +3507,10 @@ class TestCaptureMessageContent:
         return provider
 
     @staticmethod
-    def _run(provider, destinations, attributes):
-        def run():
+    def _run(
+        provider: TracerProvider, destinations: tuple[OtelDestination, ...], attributes: Mapping[str, object]
+    ) -> None:
+        def run() -> None:
             set_request_destinations(destinations)
             model_call_tree(provider, attributes)
 
@@ -3636,11 +3639,12 @@ class TestCaptureMessageContent:
     def test_an_operator_collector_on_the_teams_account_does_not_bypass_no_content(self, monkeypatch, mode):
         monkeypatch.setattr(litellm, "otel_tenant_destination_mode", mode, raising=False)
         shared = InMemorySpanExporter()
-        monkeypatch.setattr(otel_providers, "_exporter_from_spec", lambda _spec: shared)
+        kind = f"lit8244_collector_{mode}"
+        register_exporter_factory(kind, lambda _spec: shared)
         config = OpenTelemetryV2Config(
             exporters=[
                 ExporterSpec(
-                    kind="otlp_http",
+                    kind=kind,
                     endpoint=TestRoutingMode.OPERATOR_SINK[0],
                     headers="authorization=Basic op",
                 )
@@ -3669,24 +3673,21 @@ class TestCaptureMessageContent:
     @pytest.mark.parametrize(
         ("setting", "content_exported"), [("no_content", False), ("span_only", True), (None, True)]
     )
-    def test_a_request_routed_to_the_teams_credentials_honors_the_setting(self, monkeypatch, setting, content_exported):
+    def test_a_request_routed_to_the_teams_credentials_honors_the_setting(self, setting, content_exported):
         """A failure-only entry, or a destination the fan-out could not deliver, leaves the
         model call on the per-request tracer route with the team's credentials."""
-        exporters = {}
-        monkeypatch.setattr(
-            otel_providers,
-            "_exporter_from_spec",
-            lambda spec: exporters.setdefault(spec.owner, InMemorySpanExporter()),
-        )
+        exporters: dict[ExporterOwner | None, InMemorySpanExporter] = {}
+        kind = f"lit8244_routed_{setting}"
+        register_exporter_factory(kind, lambda spec: exporters.setdefault(spec.owner, InMemorySpanExporter()))
         config = OpenTelemetryV2Config(
             exporters=[
                 ExporterSpec(
-                    kind="otlp_http",
+                    kind=kind,
                     endpoint="http://op.local",
                     owner=ExporterOwner.LANGFUSE_OTEL,
                     use_simple_processor=True,
                 ),
-                ExporterSpec(kind="in_memory"),
+                ExporterSpec(kind=kind),
             ]
         )
         cache = TenantTracerCache(config, "langfuse_otel", "litellm")

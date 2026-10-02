@@ -15,8 +15,6 @@ _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
 _LANGFUSE_OTEL_CALLBACK: Final = "langfuse_otel"
 _LANGFUSE_SPAN_SCOPE_VAR: Final = "langfuse_span_scope"
 _CAPTURE_MESSAGE_CONTENT_VAR: Final = "capture_message_content"
-#: Options every entry of one team or key shares, because the entries are flattened
-#: into one set of callback vars before a request reads them.
 _SHARED_OPTION_VARS: Final = (_LANGFUSE_SPAN_SCOPE_VAR, _CAPTURE_MESSAGE_CONTENT_VAR)
 _ARIZE_CALLBACK: Final = "arize"
 _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(

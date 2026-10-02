@@ -1178,6 +1178,19 @@ def build_resource(config: OpenTelemetryV2Config) -> Resource:
     return Resource.create(attributes)
 
 
+def _spec_processor(
+    spec: ExporterSpec, use_simple_processor: bool | None, content_redacted_owner: str | None
+) -> SpanProcessor:
+    exporting: Final = _processor_for(
+        _exporter_from_spec(spec),
+        (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
+    )
+    redacts: Final = (
+        content_redacted_owner is not None and spec.owner is not None and spec.owner.value == content_redacted_owner
+    )
+    return _MessageContentFilter(exporting) if redacts else exporting
+
+
 def build_tracer_provider(
     config: OpenTelemetryV2Config,
     exporter: SpanExporter | None = None,
@@ -1220,13 +1233,7 @@ def build_tracer_provider(
     for spec in config.exporters:
         if spec.requires_headers and not spec.headers:
             continue
-        exp = _exporter_from_spec(spec)
-        processor = _processor_for(
-            exp,
-            (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
-        )
-        if content_redacted_owner is not None and spec.owner is not None and spec.owner.value == content_redacted_owner:
-            processor = _MessageContentFilter(processor)
+        processor = _spec_processor(spec, use_simple_processor, content_redacted_owner)
         owner = spec.owner.value if tenant_overrides and spec.owner is not None else None
         scope = _operator_scope(config, spec)
         sink = _sink_key(spec.endpoint, parse_headers(spec.headers)) if _exports_to_the_wire(spec) else None
