@@ -5,10 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useMutation } from "@tanstack/react-query";
-import { Code, Info, LoaderCircle, Send } from "lucide-react";
+import { Code, Info, LoaderCircle, RotateCcw, Send } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { makeSystemOneRequest } from "../../llm_calls/system_one";
-import { SYSTEM_ONE_PRESETS } from "./system_one_presets";
+import { SYSTEM_ONE_EXAMPLE } from "./system_one_example";
 import type { SystemOneRequest } from "./system_one_schemas";
 import SystemOneJsonEditor from "./SystemOneJsonEditor";
 import SystemOneQuestionBreakdown from "./SystemOneQuestionBreakdown";
@@ -28,7 +28,7 @@ interface SystemOneSendVariables {
   signal: AbortSignal;
 }
 
-const INITIAL_PRESET = SYSTEM_ONE_PRESETS[0];
+const EXAMPLE_PAYLOAD = JSON.stringify(SYSTEM_ONE_EXAMPLE, null, 2);
 
 function getCustomProxyBaseUrl(): string | undefined {
   return typeof window === "undefined" ? undefined : window.sessionStorage.getItem("customProxyBaseUrl") || undefined;
@@ -37,8 +37,7 @@ function getCustomProxyBaseUrl(): string | undefined {
 export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation = false }: SystemOneUIProps) {
   const [apiKeySource, setApiKeySource] = useState<ApiKeySource>(disabledPersonalKeyCreation ? "custom" : "session");
   const [customApiKey, setCustomApiKey] = useState("");
-  const [selectedPresetId, setSelectedPresetId] = useState(INITIAL_PRESET.id);
-  const [rawPayload, setRawPayload] = useState(() => JSON.stringify(INITIAL_PRESET.payload, null, 2));
+  const [rawPayload, setRawPayload] = useState(EXAMPLE_PAYLOAD);
   const activeController = useRef<AbortController | null>(null);
   const validation = useMemo(() => validateSystemOnePayload(rawPayload), [rawPayload]);
   const effectiveApiKey = apiKeySource === "session" ? accessToken || "" : customApiKey.trim();
@@ -63,15 +62,6 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
       clearRequestState();
       setRawPayload(value);
     }
-  }
-
-  function handlePresetChange(value: string | null) {
-    const preset = SYSTEM_ONE_PRESETS.find((entry) => entry.id === value);
-    if (!preset) {
-      return;
-    }
-    handlePayloadChange(JSON.stringify(preset.payload, null, 2));
-    setSelectedPresetId(preset.id);
   }
 
   function handleFormatJson() {
@@ -130,22 +120,15 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
               />
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium text-muted-foreground">Preset</span>
-            <Select value={selectedPresetId} onValueChange={handlePresetChange}>
-              <SelectTrigger className="min-w-56" aria-label="System One preset">
-                <SelectValue>{SYSTEM_ONE_PRESETS.find((preset) => preset.id === selectedPresetId)?.name}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {SYSTEM_ONE_PRESETS.map((preset) => (
-                  <SelectItem key={preset.id} value={preset.id}>
-                    {preset.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
           <div className="ml-auto flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => handlePayloadChange(EXAMPLE_PAYLOAD)}
+              disabled={rawPayload === EXAMPLE_PAYLOAD}
+            >
+              <RotateCcw />
+              Reset example
+            </Button>
             <Button variant="outline" onClick={handleFormatJson} disabled={!rawPayload.trim() || hasSyntaxError}>
               <Code />
               Format JSON

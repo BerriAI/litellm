@@ -47,16 +47,20 @@ describe("SystemOneUI integration", () => {
     sessionStorage.clear();
   });
 
-  it("updates the request editor when a preset is selected", async () => {
+  it("restores the example after the request is edited", async () => {
     const user = userEvent.setup();
     render(<SystemOneUI accessToken="session-key" />);
+    const editor = screen.getByRole("textbox", { name: "System One JSON payload" });
+    const example = (editor as HTMLTextAreaElement).value;
+    const resetButton = screen.getByRole("button", { name: "Reset example" });
+    expect(resetButton).toBeDisabled();
 
-    await user.click(screen.getByRole("combobox", { name: "System One preset" }));
-    await user.click(await screen.findByRole("option", { name: "Choice: Support routing" }));
+    fireEvent.change(editor, { target: { value: "{}" } });
+    expect(resetButton).toBeEnabled();
+    await user.click(resetButton);
 
-    expect((screen.getByRole("textbox", { name: "System One JSON payload" }) as HTMLTextAreaElement).value).toContain(
-      '"department"',
-    );
+    expect(editor).toHaveValue(example);
+    expect(resetButton).toBeDisabled();
   });
 
   it("flags the tab as a TypeSafe-only beta without announcing it as an alert", () => {
@@ -96,7 +100,7 @@ describe("SystemOneUI integration", () => {
     expect(Object.values(options?.headers as Record<string, string>)).toContain("Bearer session-key");
     expect(JSON.parse(options?.body as string)).toMatchObject({
       model: "jev-latest",
-      questions: { needs_human: { type: "noul" } },
+      questions: { would_buy_again: { type: "noul" } },
     });
   });
 

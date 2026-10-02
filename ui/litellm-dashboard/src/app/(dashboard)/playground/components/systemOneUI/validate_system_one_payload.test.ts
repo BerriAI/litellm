@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SYSTEM_ONE_PRESETS } from "./system_one_presets";
+import { SYSTEM_ONE_EXAMPLE } from "./system_one_example";
 import { validateSystemOnePayload } from "./validate_system_one_payload";
 
 const requestWith = (fields: Record<string, unknown> = {}) =>
@@ -236,7 +236,7 @@ describe("validateSystemOnePayload", () => {
     expect(result.payload).toMatchObject({ temperature: 0, questions: { category: { weight: 2 } } });
   });
 
-  it.each(SYSTEM_ONE_PRESETS)("validates the $name preset", ({ payload }) => {
-    expect(validateSystemOnePayload(JSON.stringify(payload)).isValid).toBe(true);
+  it("accepts the built-in example without issues", () => {
+    expect(validateSystemOnePayload(JSON.stringify(SYSTEM_ONE_EXAMPLE))).toMatchObject({ isValid: true, issues: [] });
   });
 });
