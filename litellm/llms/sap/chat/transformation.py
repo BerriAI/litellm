@@ -216,7 +216,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "extra_headers",
             "parallel_tool_calls",
             "response_format",
-            "timeout",
             "reasoning_effort",
             "thinking",
         ]
@@ -392,11 +391,17 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
+        dropped_params = raw_response.headers.get("X-Orchestration-Dropped-Model-Params")
         logging_obj.post_call(
             input=messages,
             api_key=api_key,
             original_response=raw_response.text,
-            additional_args={"complete_input_dict": request_data},
+            additional_args={
+                "complete_input_dict": request_data,
+                **({
+                    "x_orchestration_dropped_model_params": dropped_params
+                } if dropped_params else {}),
+            },
         )
         final_result = normalize_reasoning_content(raw_response.json()["final_result"])
         response = ModelResponse.model_validate(final_result)
