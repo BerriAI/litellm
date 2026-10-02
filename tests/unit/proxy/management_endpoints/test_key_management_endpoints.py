@@ -20600,17 +20600,26 @@ async def test_prepare_key_update_data_includes_new_project_assignment():
 async def test_project_assignment_write_requires_row_still_unassigned():
     database = MagicMock()
     database.jsonify_object = lambda data: dict(data)
-    database.db.litellm_verificationtoken.update_many = AsyncMock(return_value=1)
+    tx: Final = database.tx.return_value.__aenter__.return_value
+    tx.litellm_verificationtoken.update_many = AsyncMock(return_value=1)
     row = MagicMock()
     row.model_dump = MagicMock(return_value={"project_id": "project-orbit"})
-    database.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=row)
-
-    result: Final = await _update_key_row_assigning_project(
-        prisma_client=database, key="sk-assign", update_values={"project_id": "project-orbit"}
+    tx.litellm_verificationtoken.find_unique = AsyncMock(return_value=row)
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-assign-token", project_id=None, team_id="team-lit-5823", models=["model-orbit"]
     )
 
-    update_where: Final = database.db.litellm_verificationtoken.update_many.await_args.kwargs["where"]
+    result: Final = await _update_key_row_assigning_project(
+        prisma_client=database,
+        key="sk-assign",
+        non_default_values={"project_id": "project-orbit"},
+        existing_key_row=existing,
+    )
+
+    update_where: Final = tx.litellm_verificationtoken.update_many.await_args.kwargs["where"]
     assert update_where["project_id"] is None
+    assert update_where["team_id"] == "team-lit-5823"
+    assert update_where["models"] == {"equals": ["model-orbit"]}
     assert update_where["token"] == result["token"]
     assert result["data"] == {"project_id": "project-orbit"}
 
@@ -20619,16 +20628,54 @@ async def test_project_assignment_write_requires_row_still_unassigned():
 async def test_project_assignment_write_rejects_when_row_gained_project():
     database = MagicMock()
     database.jsonify_object = lambda data: dict(data)
-    database.db.litellm_verificationtoken.update_many = AsyncMock(return_value=0)
+    tx: Final = database.tx.return_value.__aenter__.return_value
+    tx.litellm_verificationtoken.update_many = AsyncMock(return_value=0)
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-assign-token", project_id=None, team_id="team-lit-5823", models=["model-orbit"]
+    )
 
     with pytest.raises(HTTPException) as exc:
         await _update_key_row_assigning_project(
-            prisma_client=database, key="sk-assign", update_values={"project_id": "project-orbit"}
+            prisma_client=database,
+            key="sk-assign",
+            non_default_values={"project_id": "project-orbit"},
+            existing_key_row=existing,
         )
 
     assert exc.value.status_code == 400
-    assert "reassignment" in str(exc.value.detail)
-    database.db.litellm_verificationtoken.find_unique.assert_not_called()
+    assert "concurrently" in str(exc.value.detail)
+    tx.litellm_verificationtoken.find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_project_assignment_write_upserts_object_permission_in_same_tx():
+    database = MagicMock()
+    database.jsonify_object = lambda data: dict(data)
+    database.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=None)
+    tx: Final = database.tx.return_value.__aenter__.return_value
+    tx.litellm_verificationtoken.update_many = AsyncMock(return_value=1)
+    permission_row = MagicMock()
+    permission_row.object_permission_id = "perm-lit-01"
+    tx.litellm_objectpermissiontable.upsert = AsyncMock(return_value=permission_row)
+    row = MagicMock()
+    row.model_dump = MagicMock(return_value={"project_id": "project-orbit"})
+    tx.litellm_verificationtoken.find_unique = AsyncMock(return_value=row)
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-assign-token", project_id=None, team_id="team-lit-5823"
+    )
+
+    result: Final = await _update_key_row_assigning_project(
+        prisma_client=database,
+        key="sk-assign",
+        non_default_values={"project_id": "project-orbit", "object_permission": {"agents": ["agent-a"]}},
+        existing_key_row=existing,
+    )
+
+    tx.litellm_objectpermissiontable.upsert.assert_awaited_once()
+    update_data: Final = tx.litellm_verificationtoken.update_many.await_args.kwargs["data"]
+    assert update_data["object_permission_id"] == "perm-lit-01"
+    assert "object_permission" not in update_data
+    assert result["data"] == {"project_id": "project-orbit"}
 
 
 @pytest.mark.asyncio

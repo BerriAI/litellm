@@ -116,6 +116,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
     invalidate_cached_object_permissions,
+    prepare_object_permission_upsert,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
     validate_key_vector_stores_against_team,
@@ -242,6 +243,9 @@ class _KeyUpdateTx(Protocol):
 
     @property
     def litellm_budgettable(self) -> "TableActions[prisma_models.LiteLLM_BudgetTable]": ...
+
+    @property
+    def litellm_objectpermissiontable(self) -> "TableActions[prisma_models.LiteLLM_ObjectPermissionTable]": ...
 
 
 class _ConfigTableActions(Protocol):
@@ -2471,19 +2475,64 @@ async def _apply_soft_budget_update(
     return remaining
 
 
+async def _apply_object_permission_update(
+    data_json: dict[str, object],
+    existing_object_permission_id: str | None,
+    prisma_client: PrismaClient,
+    table: "TableActions[prisma_models.LiteLLM_ObjectPermissionTable]",
+) -> None:
+    """Upsert the requested object permission row inside the caller's writer transaction."""
+    new_object_permission: Final = data_json.pop("object_permission", None)
+    if new_object_permission is None:
+        return
+    loaded: Final[object] = (
+        json.loads(new_object_permission) if isinstance(new_object_permission, str) else new_object_permission
+    )
+    grants: Final[Mapping[str, object]] = (
+        cast(  # cast-ok: object_permission payloads are grant-name to grant-list mappings
+            "Mapping[str, object]", loaded
+        )
+        if isinstance(loaded, dict)
+        else MappingProxyType({})
+    )
+    upsert: Final = await prepare_object_permission_upsert(
+        new_object_permission=grants,
+        existing_object_permission_id=existing_object_permission_id,
+        prisma_client=prisma_client,
+    )
+    row: Final = await table.upsert(
+        where={"object_permission_id": upsert.object_permission_id},
+        data={"create": upsert.record, "update": upsert.record},
+    )
+    data_json["object_permission_id"] = row.object_permission_id
+
+
 async def _write_guarded_project_assignment(
     table: "TableActions[_KeyRowDumpable]",
     hashed_token: str,
+    existing_key_row: LiteLLM_VerificationToken,
     data: Mapping[str, object],
 ) -> "_KeyRowDumpable | None":
+    validated_models: Final[list[str]] = (
+        cast(  # cast-ok: LiteLLM_VerificationToken.models is a bare list
+            "list[str] | None", existing_key_row.models
+        )
+        or []
+    )
     updated_count: Final = await table.update_many(
-        where={"token": hashed_token, "project_id": None},
+        where={
+            "token": hashed_token,
+            "project_id": None,
+            "team_id": existing_key_row.team_id,
+            "models": {"equals": validated_models},
+            "max_budget": existing_key_row.max_budget,
+        },
         data=data,
     )
     if updated_count == 0:
         raise HTTPException(
             status_code=400,
-            detail="Project reassignment is not supported. Use null to detach the key.",
+            detail="Project assignment failed because the key was updated concurrently. Retry the request.",
         )
     return await table.find_unique(
         where={"token": hashed_token},
@@ -2494,17 +2543,30 @@ async def _write_guarded_project_assignment(
 async def _update_key_row_assigning_project(
     prisma_client: PrismaClient,
     key: str,
-    update_values: Mapping[str, object],
+    non_default_values: Mapping[str, object],
+    existing_key_row: LiteLLM_VerificationToken,
 ) -> _KeyUpdateResult:
-    """Write a key update that assigns a project only while the row still has none."""
+    """Assign a project in one writer transaction, guarded on the key's validated state."""
     hashed_token: Final = _hash_token_if_needed(key)
-    updated_row: Final = await _write_guarded_project_assignment(
-        table=_prisma_table(VerificationTokenRepository(prisma_client)),
-        hashed_token=hashed_token,
-        data=with_settings_updated_at(
-            prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
-        ),
-    )
+    async with prisma_client.tx() as tx_ctx:
+        tx: Final[_KeyUpdateTx] = cast(  # cast-ok: the transaction object exposes the same table actions
+            "_KeyUpdateTx", tx_ctx
+        )
+        update_values: Final[dict[str, object]] = dict(non_default_values)
+        await _apply_object_permission_update(
+            data_json=update_values,
+            existing_object_permission_id=existing_key_row.object_permission_id,
+            prisma_client=prisma_client,
+            table=tx.litellm_objectpermissiontable,
+        )
+        updated_row: Final = await _write_guarded_project_assignment(
+            table=tx.litellm_verificationtoken,
+            hashed_token=hashed_token,
+            existing_key_row=existing_key_row,
+            data=with_settings_updated_at(
+                prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
+            ),
+        )
     updated_data: Final[Mapping[str, object]] = (
         updated_row.model_dump() if updated_row is not None else MappingProxyType({})
     )
@@ -2525,9 +2587,17 @@ async def _update_key_row_with_soft_budget(
     key_where: Final[_KeyRowWhere] = {"token": hashed_token}
     tx: _KeyUpdateTx
     async with prisma_client.tx() as tx:
+        update_input: Final[dict[str, object]] = dict(non_default_values)
+        if expect_unassigned_project:
+            await _apply_object_permission_update(
+                data_json=update_input,
+                existing_object_permission_id=existing_key_row.object_permission_id,
+                prisma_client=prisma_client,
+                table=tx.litellm_objectpermissiontable,
+            )
         update_values: Final = await _apply_soft_budget_update(
             data=data,
-            non_default_values=non_default_values,
+            non_default_values=update_input,
             db=tx,
             existing_key_row=existing_key_row,
             changed_by=changed_by,
@@ -2540,6 +2610,7 @@ async def _update_key_row_with_soft_budget(
             await _write_guarded_project_assignment(
                 table=tx.litellm_verificationtoken,
                 hashed_token=hashed_token,
+                existing_key_row=existing_key_row,
                 data=update_payload,
             )
             if expect_unassigned_project
@@ -3625,13 +3696,22 @@ async def update_key_fn(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        update_values: Final[Mapping[str, object]] = await _handle_update_object_permission(
-            data_json=non_default_values,
-            existing_key_row=existing_key_row,
-            prisma_client=prisma_client,
+        is_project_assignment: Final = data.project_id is not None and existing_key_row.project_id is None
+        update_values: Final[Mapping[str, object]] = (
+            cast(  # cast-ok: prepare_key_update_data returns a bare dict
+                "Mapping[str, object]", non_default_values
+            )
+            if is_project_assignment
+            else cast(  # cast-ok: _handle_update_object_permission returns a bare dict
+                "Mapping[str, object]",
+                await _handle_update_object_permission(
+                    data_json=non_default_values,
+                    existing_key_row=existing_key_row,
+                    prisma_client=prisma_client,
+                ),
+            )
         )
         changed_by: Final = user_api_key_dict.user_id or litellm_proxy_admin_name
-        is_project_assignment: Final = data.project_id is not None and existing_key_row.project_id is None
         response: Final = (
             await _update_key_row_with_soft_budget(
                 prisma_client=prisma_client,
@@ -3646,9 +3726,10 @@ async def update_key_fn(
             else await _update_key_row_assigning_project(
                 prisma_client=prisma_client,
                 key=key,
-                update_values=cast(  # cast-ok: _handle_update_object_permission returns a bare dict
-                    "Mapping[str, object]", update_values
+                non_default_values=cast(  # cast-ok: prepare_key_update_data returns a bare dict
+                    "Mapping[str, object]", non_default_values
                 ),
+                existing_key_row=existing_key_row,
             )
             if is_project_assignment
             else await prisma_client.update_data(token=key, data=MappingProxyType({**update_values, "token": key}))
