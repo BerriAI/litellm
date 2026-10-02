@@ -179,6 +179,7 @@ def _span_row(span: DecodedSpan) -> SpanRow:
         ApiKeyHash="",
         ObservationType=normalized.observation_type,
         AgentName=normalized.agent_name,
+        Framework=normalized.framework,
         Model=normalized.model,
         LiteLLMRequestId=attributes.get("gen_ai.response.id") or normalized.litellm_request_id,
         InputTokens=normalized.input_tokens,
