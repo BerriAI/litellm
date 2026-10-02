@@ -387,3 +387,23 @@ class TestWordFormBudgetDurations(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_budget_schedule_keys_agree_for_equivalent_scheduler_inputs() -> None:
+    from litellm.litellm_core_utils.duration_parser import budget_reset_schedule_key
+
+    for alias, canonical in (
+        ("hourly", "1h"), ("daily", "24h"), ("weekly", "7d"),
+        ("1w", "7d"), ("2w", "14d"), ("monthly", "30d"), ("1mo", "30d"),
+    ):
+        assert budget_reset_schedule_key(alias) == budget_reset_schedule_key(canonical)
+        assert get_next_standardized_reset_time(alias, datetime(2026, 2, 18, 10, tzinfo=timezone.utc), "UTC") == (
+            get_next_standardized_reset_time(canonical, datetime(2026, 2, 18, 10, tzinfo=timezone.utc), "UTC")
+        )
+
+
+def test_budget_schedule_keys_keep_daily_clock_and_rolling_hours_distinct() -> None:
+    from litellm.litellm_core_utils.duration_parser import budget_reset_schedule_key
+
+    assert budget_reset_schedule_key("1d") != budget_reset_schedule_key("24h")
+    assert budget_reset_schedule_key(None) != budget_reset_schedule_key("30d")

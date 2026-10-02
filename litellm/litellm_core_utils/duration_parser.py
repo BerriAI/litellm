@@ -26,6 +26,22 @@ def _normalize_duration(duration: str) -> str:
     return _BUDGET_DURATION_WORD_ALIASES.get(duration.strip().lower(), duration)
 
 
+def budget_reset_schedule_key(duration: str | None) -> str | None:
+    if duration is None:
+        return None
+    normalized: Final = _normalize_duration(duration)
+    parsed: Final = re.fullmatch(r"(\d+)(mo|[smhdw])", normalized)
+    if parsed is None:
+        return normalized
+    digits, unit = parsed.groups()
+    value: Final = int(digits)
+    if unit == "w":
+        return f"{value * 7}d"
+    if unit == "mo" and value == 1:
+        return "30d"
+    return f"{value}{unit}"
+
+
 def _extract_from_regex(duration: str) -> tuple[int, str]:
     match: Final = re.match(r"(\d+)(mo|[smhdw]?)", duration)
 

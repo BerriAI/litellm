@@ -39736,6 +39736,11 @@ export interface components {
             team_member_budget?: number | null;
             /** Team Member Budget Duration */
             team_member_budget_duration?: string | null;
+            /**
+             * Team Member Budget Update Mode
+             * @description Atomically save the member default and clear matching permanent amount overrides. Raise selects smaller amounts, lower selects larger amounts, both selects unequal amounts, and keep preserves overrides. Only matching reset periods are eligible. Requires a positive default.
+             */
+            team_member_budget_update_mode?: ("keep" | "raise" | "lower" | "both") | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
             /** Team Member Rpm Limit */
@@ -47550,6 +47555,11 @@ export interface components {
             team_member_budget?: number | null;
             /** Team Member Budget Duration */
             team_member_budget_duration?: string | null;
+            /**
+             * Team Member Budget Update Mode
+             * @description Atomically save the member default and clear matching permanent amount overrides. Raise selects smaller amounts, lower selects larger amounts, both selects unequal amounts, and keep preserves overrides. Only matching reset periods are eligible. Requires a positive default.
+             */
+            team_member_budget_update_mode?: ("keep" | "raise" | "lower" | "both") | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
             /** Team Member Rpm Limit */

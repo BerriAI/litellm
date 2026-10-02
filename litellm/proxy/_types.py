@@ -2254,6 +2254,14 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     object_permission: LiteLLM_ObjectPermissionBase | None = None
     disable_global_guardrails: bool | None = None
     team_member_budget: float | None = None
+    team_member_budget_update_mode: Literal["keep", "raise", "lower", "both"] | None = Field(
+        default=None,
+        description=(
+            "Atomically save the member default and clear matching permanent amount overrides. "
+            "Raise selects smaller amounts, lower selects larger amounts, both selects unequal amounts, "
+            "and keep preserves overrides. Only matching reset periods are eligible. Requires a positive default."
+        ),
+    )
     team_member_budget_duration: str | None = None
     team_member_rpm_limit: int | None = None
     team_member_tpm_limit: int | None = None

@@ -202,10 +202,18 @@ async def bulk_update_team_member_budgets(
         )
 
     user_ids: Final = sorted(user_id for _, user_id in applied)
-    default_budget_id: Final = _team_default_budget_id(team)
     team_members_filter: Final = _team_users_filter(team_id, user_ids)
 
     async with prisma_client.tx(timeout=_BATCH_TX_TIMEOUT) as tx:
+        from litellm.proxy.management_helpers.team_member_budget_update import lock_team_member_budgets
+
+        await lock_team_member_budgets(tx, team_id)
+        current_team: Final = await tx.litellm_teamtable.find_unique(where={"team_id": team_id})
+        default_budget_id: Final = (
+            _team_default_budget_id(LiteLLM_TeamTable.model_validate(current_team.model_dump()))
+            if current_team is not None
+            else None
+        )
         memberships: Final = await _membership_tx_db(tx).find_many(where=team_members_filter, include=_WITH_BUDGET)
         budget_id_of: Final = MappingProxyType({m.user_id: m.budget_id for m in memberships})
         shared: Final = await _shared_budget_ids(

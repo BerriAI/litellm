@@ -15556,6 +15556,8 @@ async def test_team_member_update_invalidates_team_member_spend_state_when_budge
     monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache)
 
     mock_tx = AsyncMock()
+    mock_tx.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_tx.litellm_teammembership.find_unique = AsyncMock(return_value=team_info_response["team_memberships"][0])
     mock_prisma_client.tx.return_value.__aenter__ = AsyncMock(return_value=mock_tx)
     mock_prisma_client.tx.return_value.__aexit__ = AsyncMock(return_value=None)
 

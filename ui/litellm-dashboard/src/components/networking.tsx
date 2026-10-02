@@ -2684,7 +2684,7 @@ export const teamUpdateCall = async (
       toast.fromError("Failed to update team settings: " + unwrapProxyErrorMessage(errorData));
       throw new Error(errorData);
     }
-    const data = (await response.json()) as { data: Team; team_id: string };
+    const data = (await response.json()) as { data: Team; team_id: string; member_budgets_updated?: number };
     return data;
     // Handle success - you might want to update some state or UI based on the updated team
   } catch (error) {
