@@ -271,10 +271,13 @@ describe("AgentTracesSection", () => {
     expect(rows[0]).toHaveTextContent("Should we store OTEL agent spans");
   });
 
-  it("labels the OTEL service as the agent and filters runs by it", async () => {
+  it("uses recorded agent names for the column and filter even when services are shared", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({
       ...(traceList as TracePage),
-      data: [...runs.slice(1), { ...runs[0], service: "billing-agent" }],
+      data: [
+        ...runs.slice(1).map((run) => ({ ...run, service: "shared-app", agent_names: ["research-agent"] })),
+        { ...runs[0], service: "shared-app", agent_names: ["billing-agent", "review-agent"] },
+      ],
     });
     const user = userEvent.setup();
     renderSection();
@@ -288,6 +291,10 @@ describe("AgentTracesSection", () => {
     const rows = screen.getAllByTestId("agent-trace-row");
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent("billing-agent");
+    expect(rows[0]).not.toHaveTextContent("shared-app");
+
+    await chooseSelectOption(user, agentFilter, "review-agent");
+    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(1);
 
     await chooseSelectOption(user, agentFilter, "All agents");
     expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);

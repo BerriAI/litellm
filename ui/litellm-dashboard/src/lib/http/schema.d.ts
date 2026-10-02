@@ -1350,9 +1350,10 @@ export interface paths {
          *
          *     Reads session rollups folded once per request at spend-write time, so this endpoint
          *     never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
-         *     internal user when written; older key-only history remains outside user views. A session
-         *     is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
-         *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
+         *     internal user when written; older key-only history remains outside user views. Money counts
+         *     only requests on the selected UTC days, and the all-router savings headline is the same daily
+         *     total the Overall view reads. Session shape and caching cover every session that overlaps the
+         *     window, whole. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
          *     over that bucket's turns.
          *
          *     The rollup supplies the measures, never the list. Which routers appear comes from the
@@ -26169,12 +26170,21 @@ export interface components {
          * @description One auto-router's slice of the benchmarks.
          */
         AutoRouterBenchmarkGroup: {
-            /** Avg Session Seconds */
-            avg_session_seconds: number;
-            /** Avg Tokens Per Session */
-            avg_tokens_per_session: number;
-            /** Avg Turns Per Session */
-            avg_turns_per_session: number;
+            /**
+             * Avg Session Seconds
+             * @description Lifetime seconds per overlapping session; null as above
+             */
+            avg_session_seconds: number | null;
+            /**
+             * Avg Tokens Per Session
+             * @description Lifetime tokens per overlapping session; null as above
+             */
+            avg_tokens_per_session: number | null;
+            /**
+             * Avg Turns Per Session
+             * @description Lifetime turns per overlapping session; null when the window has routed requests but no session rows for this router type, such as an alias whose router type changed mid-session
+             */
+            avg_turns_per_session: number | null;
             /**
              * Baseline Spend
              * @description Estimated single-model cost: compared actual spend plus recorded savings; null when traffic has no recorded savings
@@ -26202,13 +26212,8 @@ export interface components {
              */
             saved_pct: number | null;
             /**
-             * Saved Per Session
-             * @description Recorded savings per session, including historical estimates
-             */
-            saved_per_session: number | null;
-            /**
              * Saved Spend
-             * @description Recorded historical savings plus newer estimates; null when traffic has no recorded savings estimates
+             * @description Recorded savings on the selected UTC days; null when traffic has no recorded savings estimates. On totals this is the same daily figure the Overall savings view reports
              */
             saved_spend: number | null;
             /**
@@ -26226,11 +26231,14 @@ export interface components {
              * @description Requests compared against the baseline: every request on complexity routers that recorded savings
              */
             savings_estimated_turns: number;
-            /** Sessions */
+            /**
+             * Sessions
+             * @description Sessions overlapping the window, counted whole
+             */
             sessions: number;
             /**
              * Spend
-             * @description What the routed traffic actually cost
+             * @description What the selected days' routed traffic actually cost
              */
             spend: number;
             /**
@@ -26240,20 +26248,38 @@ export interface components {
             tier_turns?: {
                 [key: string]: number;
             };
-            /** Turns */
+            /**
+             * Turns
+             * @description Auto-routed requests on the selected UTC days
+             */
             turns: number;
+            /**
+             * Unattributed Saved Spend
+             * @description Part of saved_spend no router's daily rows account for, such as history recorded before per-router daily tracking; when set, baseline_spend and saved_pct are null
+             */
+            unattributed_saved_spend?: number | null;
         };
         /**
          * AutoRouterBenchmarkTotals
-         * @description Session-shape and savings aggregates over auto-routed traffic in the window.
+         * @description Auto-routed traffic in the window. Turns, spend and savings count requests on the selected UTC days;
+         *     the session averages and cache stats describe every session overlapping the window, whole.
          */
         AutoRouterBenchmarkTotals: {
-            /** Avg Session Seconds */
-            avg_session_seconds: number;
-            /** Avg Tokens Per Session */
-            avg_tokens_per_session: number;
-            /** Avg Turns Per Session */
-            avg_turns_per_session: number;
+            /**
+             * Avg Session Seconds
+             * @description Lifetime seconds per overlapping session; null as above
+             */
+            avg_session_seconds: number | null;
+            /**
+             * Avg Tokens Per Session
+             * @description Lifetime tokens per overlapping session; null as above
+             */
+            avg_tokens_per_session: number | null;
+            /**
+             * Avg Turns Per Session
+             * @description Lifetime turns per overlapping session; null when the window has routed requests but no session rows for this router type, such as an alias whose router type changed mid-session
+             */
+            avg_turns_per_session: number | null;
             /**
              * Baseline Spend
              * @description Estimated single-model cost: compared actual spend plus recorded savings; null when traffic has no recorded savings
@@ -26271,13 +26297,8 @@ export interface components {
              */
             saved_pct: number | null;
             /**
-             * Saved Per Session
-             * @description Recorded savings per session, including historical estimates
-             */
-            saved_per_session: number | null;
-            /**
              * Saved Spend
-             * @description Recorded historical savings plus newer estimates; null when traffic has no recorded savings estimates
+             * @description Recorded savings on the selected UTC days; null when traffic has no recorded savings estimates. On totals this is the same daily figure the Overall savings view reports
              */
             saved_spend: number | null;
             /**
@@ -26295,19 +26316,30 @@ export interface components {
              * @description Requests compared against the baseline: every request on complexity routers that recorded savings
              */
             savings_estimated_turns: number;
-            /** Sessions */
+            /**
+             * Sessions
+             * @description Sessions overlapping the window, counted whole
+             */
             sessions: number;
             /**
              * Spend
-             * @description What the routed traffic actually cost
+             * @description What the selected days' routed traffic actually cost
              */
             spend: number;
-            /** Turns */
+            /**
+             * Turns
+             * @description Auto-routed requests on the selected UTC days
+             */
             turns: number;
+            /**
+             * Unattributed Saved Spend
+             * @description Part of saved_spend no router's daily rows account for, such as history recorded before per-router daily tracking; when set, baseline_spend and saved_pct are null
+             */
+            unattributed_saved_spend?: number | null;
         };
         /**
          * AutoRouterBenchmarksResponse
-         * @description Benchmarks for the auto-router dashboard, aggregated from the per-session rollup.
+         * @description Benchmarks for the auto-router dashboard, aggregated from the per-session and per-day rollups.
          */
         AutoRouterBenchmarksResponse: {
             /**
@@ -46886,6 +46918,8 @@ export interface components {
             agent_count: number;
             /** Agent Invocations */
             agent_invocations: number;
+            /** Agent Names */
+            agent_names?: string[];
             /** Duration Ms */
             duration_ms: number;
             /** Error Count */
