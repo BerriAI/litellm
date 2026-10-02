@@ -6,6 +6,10 @@ import pytest
 from litellm.proxy.common_utils.registry_read_through import RegistryReadThrough
 
 
+def nothing_loaded(_key: str) -> bool:
+    return False
+
+
 class ResyncSpy:
     def __init__(self, found: bool = True, error: Exception | None = None) -> None:
         self.found = found
@@ -22,7 +26,7 @@ class ResyncSpy:
 @pytest.mark.asyncio
 async def test_attempt_returns_true_when_resync_finds_object():
     spy: Final = ResyncSpy(found=True)
-    read_through: Final = RegistryReadThrough(resync=spy)
+    read_through: Final = RegistryReadThrough(resync=spy, is_loaded=nothing_loaded)
 
     assert await read_through.attempt("new-model") is True
     assert spy.calls == ["new-model"]
@@ -31,7 +35,7 @@ async def test_attempt_returns_true_when_resync_finds_object():
 @pytest.mark.asyncio
 async def test_attempt_found_key_is_not_negative_cached():
     spy: Final = ResyncSpy(found=True)
-    read_through: Final = RegistryReadThrough(resync=spy)
+    read_through: Final = RegistryReadThrough(resync=spy, is_loaded=nothing_loaded)
 
     assert await read_through.attempt("new-model") is True
     assert await read_through.attempt("new-model") is True
@@ -41,7 +45,7 @@ async def test_attempt_found_key_is_not_negative_cached():
 @pytest.mark.asyncio
 async def test_missing_key_is_negative_cached_within_ttl():
     spy: Final = ResyncSpy(found=False)
-    read_through: Final = RegistryReadThrough(resync=spy, miss_ttl_seconds=60.0)
+    read_through: Final = RegistryReadThrough(resync=spy, is_loaded=nothing_loaded, miss_ttl_seconds=60.0)
 
     assert await read_through.attempt("ghost-model") is False
     assert await read_through.attempt("ghost-model") is False
@@ -51,7 +55,7 @@ async def test_missing_key_is_negative_cached_within_ttl():
 @pytest.mark.asyncio
 async def test_negative_cache_expires_and_resync_runs_again():
     spy: Final = ResyncSpy(found=False)
-    read_through: Final = RegistryReadThrough(resync=spy, miss_ttl_seconds=0.05)
+    read_through: Final = RegistryReadThrough(resync=spy, is_loaded=nothing_loaded, miss_ttl_seconds=0.05)
 
     assert await read_through.attempt("ghost-model") is False
     await asyncio.sleep(0.1)
@@ -62,7 +66,7 @@ async def test_negative_cache_expires_and_resync_runs_again():
 @pytest.mark.asyncio
 async def test_resync_exception_returns_false_without_negative_caching():
     spy: Final = ResyncSpy(error=RuntimeError("db down"))
-    read_through: Final = RegistryReadThrough(resync=spy)
+    read_through: Final = RegistryReadThrough(resync=spy, is_loaded=nothing_loaded)
 
     assert await read_through.attempt("new-model") is False
     assert await read_through.attempt("new-model") is False
@@ -77,7 +81,7 @@ async def test_concurrent_attempts_for_missing_key_resync_once():
             return await super().__call__(key)
 
     spy: Final = SlowResyncSpy(found=False)
-    read_through: Final = RegistryReadThrough(resync=spy, miss_ttl_seconds=60.0)
+    read_through: Final = RegistryReadThrough(resync=spy, is_loaded=nothing_loaded, miss_ttl_seconds=60.0)
 
     results: Final = await asyncio.gather(*(read_through.attempt("ghost-model") for _ in range(5)))
     assert results == [False] * 5
@@ -87,7 +91,7 @@ async def test_concurrent_attempts_for_missing_key_resync_once():
 @pytest.mark.asyncio
 async def test_distinct_keys_do_not_share_negative_cache():
     spy: Final = ResyncSpy(found=False)
-    read_through: Final = RegistryReadThrough(resync=spy, miss_ttl_seconds=60.0)
+    read_through: Final = RegistryReadThrough(resync=spy, is_loaded=nothing_loaded, miss_ttl_seconds=60.0)
 
     assert await read_through.attempt("ghost-a") is False
     assert await read_through.attempt("ghost-b") is False
@@ -98,7 +102,11 @@ async def test_distinct_keys_do_not_share_negative_cache():
 async def test_resync_budget_exhausted_blocks_resync_without_negative_caching():
     spy: Final = ResyncSpy(found=False)
     read_through: Final = RegistryReadThrough(
-        resync=spy, miss_ttl_seconds=60.0, max_resyncs_per_window=2, resync_window_seconds=60.0
+        resync=spy,
+        is_loaded=nothing_loaded,
+        miss_ttl_seconds=60.0,
+        max_resyncs_per_window=2,
+        resync_window_seconds=60.0,
     )
 
     assert await read_through.attempt("ghost-a") is False
@@ -109,9 +117,37 @@ async def test_resync_budget_exhausted_blocks_resync_without_negative_caching():
 
 
 @pytest.mark.asyncio
+async def test_requests_queued_behind_a_successful_resync_spend_no_budget():
+    loaded: Final[set[str]] = set()
+    calls: Final[list[str]] = []
+
+    async def loading_resync(key: str) -> bool:
+        calls.append(key)
+        await asyncio.sleep(0.05)
+        loaded.add(key)
+        return True
+
+    read_through: Final = RegistryReadThrough(
+        resync=loading_resync,
+        is_loaded=loaded.__contains__,
+        max_resyncs_per_window=2,
+        resync_window_seconds=60.0,
+    )
+
+    results: Final = await asyncio.gather(*(read_through.attempt("new-model") for _ in range(25)))
+
+    assert results == [True] * 25
+    assert calls == ["new-model"]
+    assert await read_through.attempt("other-model") is True
+    assert calls == ["new-model", "other-model"]
+
+
+@pytest.mark.asyncio
 async def test_resync_budget_replenishes_after_window():
     spy: Final = ResyncSpy(found=True)
-    read_through: Final = RegistryReadThrough(resync=spy, max_resyncs_per_window=1, resync_window_seconds=0.05)
+    read_through: Final = RegistryReadThrough(
+        resync=spy, is_loaded=nothing_loaded, max_resyncs_per_window=1, resync_window_seconds=0.05
+    )
 
     assert await read_through.attempt("model-a") is True
     assert await read_through.attempt("model-b") is False
@@ -551,3 +587,27 @@ async def test_agent_read_through_hydrates_identity_binding(lookup, clean_agent_
     assert agent.identity is not None
     assert agent.identity.model_dump(include=set(binding)) == binding
     assert clean_agent_registry.get_agent_by_id(agent_id="agent-id").identity == agent.identity
+
+
+def test_model_is_loaded_matches_router_model_names_and_deployment_ids(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm import Router
+    from litellm.proxy.common_utils.registry_read_through import _model_is_loaded
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "loaded-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                "model_info": {"id": "loaded-deployment-id"},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    assert _model_is_loaded("loaded-model") is True
+    assert _model_is_loaded("loaded-deployment-id") is True
+    assert _model_is_loaded("model-created-on-a-sibling") is False
+
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    assert _model_is_loaded("loaded-model") is False
