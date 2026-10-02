@@ -46849,6 +46849,8 @@ export interface components {
             agent_count: number;
             /** Agent Invocations */
             agent_invocations: number;
+            /** Agent Names */
+            agent_names?: string[];
             /** Duration Ms */
             duration_ms: number;
             /** Error Count */

@@ -364,6 +364,111 @@ async fn keyed_rollup_keeps_same_trace_ids_separate_by_api_key(
 
 #[rstest]
 #[tokio::test]
+async fn listed_agent_names_preserve_scope_and_cursor(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    for (team, key, trace, agent, span, parent) in [
+        ("alpha", "one", "shared", "research_agent", "root", ""),
+        ("alpha", "one", "shared", "reviewer", "child", "root"),
+        ("alpha", "one", "shared", "reviewer", "repeated", "root"),
+        ("alpha", "one", "shared", "", "unnamed", "root"),
+        ("alpha", "one", "second", "support_agent", "root", ""),
+        ("alpha", "two", "shared", "private_agent", "root", ""),
+        ("beta", "one", "shared", "other_agent", "root", ""),
+    ] {
+        insert_rows(
+            &database,
+            "otel_traces",
+            vec![serde_json::from_value(serde_json::json!({
+                "Timestamp": timestamp, "TraceId": trace, "SpanId": span, "ParentSpanId": parent,
+                "ServiceName": "shared-app", "SpanName": "operation", "AgentName": agent,
+                "ResourceAttributes": {"litellm.team_id": team, "litellm.api_key_hash": key}
+            }))?],
+        )
+        .await?;
+    }
+    let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let parameters = BTreeMap::from([
+        ("team_ids".into(), Parameter::Strings(vec!["alpha".into()])),
+        ("api_key_hash".into(), Parameter::Text("one".into())),
+        (
+            "start_ms".into(),
+            Parameter::Integer(timestamp / 1_000_000 - 1000),
+        ),
+        (
+            "end_ms".into(),
+            Parameter::Integer(timestamp / 1_000_000 + 1000),
+        ),
+        ("cursor_ms".into(), Parameter::Integer(0)),
+        ("cursor_trace_id".into(), Parameter::Text(String::new())),
+        ("limit".into(), Parameter::Integer(1)),
+    ]);
+    let first: serde_json::Value = serde_json::from_str(
+        &execute_named_read(
+            &database.client,
+            &connection,
+            ReadQuery::ListTraces,
+            &parameters,
+        )
+        .await?,
+    )?;
+    let cursor = first["data"][0]["trace_ref"]
+        .as_str()
+        .ok_or("missing cursor")?;
+    let next_parameters = parameters
+        .into_iter()
+        .chain([
+            (
+                "cursor_ms".into(),
+                Parameter::Integer(timestamp / 1_000_000),
+            ),
+            ("cursor_trace_id".into(), Parameter::Text(cursor.into())),
+        ])
+        .collect();
+    let second: serde_json::Value = serde_json::from_str(
+        &execute_named_read(
+            &database.client,
+            &connection,
+            ReadQuery::ListTraces,
+            &next_parameters,
+        )
+        .await?,
+    )?;
+    assert_eq!(
+        first["data"].as_array().ok_or("missing first page")?.len(),
+        1
+    );
+    assert_eq!(
+        second["data"]
+            .as_array()
+            .ok_or("missing second page")?
+            .len(),
+        1
+    );
+    assert_ne!(first["data"][0]["trace_id"], second["data"][0]["trace_id"]);
+    let names = [&first["data"][0], &second["data"][0]]
+        .into_iter()
+        .map(|row| {
+            (
+                row["trace_id"].as_str().unwrap(),
+                row["agent_names"].clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        names["shared"],
+        serde_json::json!(["research_agent", "reviewer"])
+    );
+    assert_eq!(names["second"], serde_json::json!(["support_agent"]));
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
 async fn rollup_merges_spans_across_days_without_losing_root_fields(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {

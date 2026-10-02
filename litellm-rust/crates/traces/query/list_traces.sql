@@ -1,3 +1,4 @@
+WITH page AS (
 SELECT TraceId AS trace_id,
        hex(SHA256(concat(TeamId, char(0), ApiKeyHash, char(0), TraceId))) AS trace_ref,
        TeamId AS team_id, ApiKeyHash AS api_key_hash,
@@ -21,3 +22,17 @@ HAVING min(StartTs) >= fromUnixTimestamp64Milli({start_ms:Int64})
         < ({cursor_ms:Int64}, {cursor_trace_id:String}))
 ORDER BY start_ms DESC, trace_ref DESC
 LIMIT {limit:UInt32}
+)
+SELECT page.*, identities.agent_names AS agent_names
+FROM page
+LEFT JOIN (
+    SELECT TeamId, ApiKeyHash, TraceId, arraySort(groupUniqArray(AgentName)) AS agent_names
+    FROM otel_traces
+    WHERE AgentName != ''
+      AND TraceId IN (SELECT trace_id FROM page)
+      AND (TeamId, ApiKeyHash, TraceId) IN (SELECT team_id, api_key_hash, trace_id FROM page)
+    GROUP BY TeamId, ApiKeyHash, TraceId
+) AS identities
+ON page.team_id = identities.TeamId AND page.api_key_hash = identities.ApiKeyHash
+   AND page.trace_id = identities.TraceId
+ORDER BY page.start_ms DESC, page.trace_ref DESC

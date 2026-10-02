@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::DecodeError;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -148,6 +148,63 @@ fn usage_tokens(attributes: &BTreeMap<String, String>) -> Result<(u32, u32), Dec
     ))
 }
 
+#[derive(Default, Deserialize)]
+struct AgentMetadata {
+    #[serde(default)]
+    lc_agent_name: String,
+    #[serde(default)]
+    ls_integration: String,
+}
+
+fn recorded_agent_name(
+    scope_name: &str,
+    name: &str,
+    attributes: &BTreeMap<String, String>,
+    span: &NormalizedSpan,
+) -> String {
+    let explicit = [
+        span.agent_name.as_str(),
+        attr(attributes, "gen_ai.agent.name"),
+        attr(attributes, "agent.name"),
+        attr(attributes, "openclaw.agent"),
+    ]
+    .into_iter()
+    .find(|value| !value.is_empty());
+    if let Some(value) = explicit {
+        return value.to_owned();
+    }
+    let metadata =
+        serde_json::from_str::<AgentMetadata>(attr(attributes, "metadata")).unwrap_or_default();
+    if !metadata.lc_agent_name.is_empty() {
+        return metadata.lc_agent_name;
+    }
+    if span.observation_type == ObservationType::Agent {
+        let node = attr(attributes, "graph.node.id");
+        if !node.is_empty() {
+            return node.to_owned();
+        }
+        if metadata.ls_integration == "langgraph"
+            || scope_name == "openinference.instrumentation.langchain"
+        {
+            return name.to_owned();
+        }
+    }
+    String::new()
+}
+
+fn is_middleware(name: &str) -> bool {
+    [
+        ".wrap_model_call",
+        ".wrap_tool_call",
+        ".before_agent",
+        ".after_agent",
+        ".before_model",
+        ".after_model",
+    ]
+    .iter()
+    .any(|suffix| name.ends_with(suffix))
+}
+
 pub fn normalize(
     scope_name: &str,
     name: &str,
@@ -163,8 +220,23 @@ pub fn normalize(
         .into_iter()
         .find(|normalizer| normalizer.matches(scope_name, attributes))
         .expect("GenAI fallback always matches");
+    let span = normalizer.normalize(name, parent_span_id, attributes)?;
+    let agent_name = recorded_agent_name(scope_name, name, attributes, &span);
+    let observation_type = if !parent_span_id.is_empty()
+        && scope_name == "openinference.instrumentation.langchain"
+        && is_middleware(name)
+        && !agent_name.is_empty()
+    {
+        ObservationType::Framework
+    } else {
+        span.observation_type
+    };
     Ok(Normalization {
-        span: normalizer.normalize(name, parent_span_id, attributes)?,
+        span: NormalizedSpan {
+            agent_name,
+            observation_type,
+            ..span
+        },
         consumed_attributes: normalizer.consumed_attributes(attributes),
     })
 }
