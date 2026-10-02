@@ -123,6 +123,8 @@ def provider_reply(request: Request) -> Reply:
                 {"error": {"type": "invalid_request_error", "message": "model: claude-nonexistent-model"}}
             ).encode(),
         )
+    if request.target == "/v1/models" or request.target.startswith("/v1/models/"):
+        return Reply(body=json.dumps({"object": "list", "data": []}).encode())
     if request.target == "/v1/messages":
         identity: Final = _message_id()
         if body.get("stream") is True:

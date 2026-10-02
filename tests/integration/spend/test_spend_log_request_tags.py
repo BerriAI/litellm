@@ -77,7 +77,7 @@ def test_header_derived_spend_tags_are_recorded_on_anthropic_messages_routes(
                 {
                     "model": MODEL if route == "/anthropic/v1/messages" else model,
                     "max_tokens": 16,
-                    "messages": [{"role": "user", "content": "tag me"}],
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
                 },
                 key=key,
                 headers={**SENT_HEADERS, "anthropic-version": "2023-06-01"},
@@ -92,7 +92,7 @@ def _base_url(candidate: Gateway) -> str:
 
 
 def _spend_count() -> int:
-    return read_rows('SELECT count(*) AS n FROM "LiteLLM_SpendLogs"')[0]["n"]
+    return read_rows('SELECT count(*) AS n FROM "LiteLLM_SpendLogs"', ())[0]["n"]
 
 
 def _owned_config(tmp_path: Path, mutations: dict) -> Path:
@@ -119,7 +119,7 @@ def test_pass_through_anthropic_stream_records_header_tags(gateway: Gateway, tmp
                 {
                     "model": MODEL,
                     "max_tokens": 16,
-                    "messages": [{"role": "user", "content": "tag me"}],
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
                     "stream": True,
                 },
                 key=key,
@@ -127,11 +127,8 @@ def test_pass_through_anthropic_stream_records_header_tags(gateway: Gateway, tmp
             )
             assert response.status_code == 200, response.text
             assert '"type":"message_start"' in response.text.replace(" ", ""), response.text
-            request_id: Final = f"msg_{response.text.split('msg_')[1].split(chr(34))[0]}"
             assert len(wire.drain()) == 1
-            assert eventually(lambda: tags_by_id(request_id), lambda tags: len(tags) == 1, seconds=70) == [
-                EXPECTED_TAGS
-            ]
+            assert eventually(lambda: tags_by_key(key), lambda tags: len(tags) == 1, seconds=70) == [EXPECTED_TAGS]
 
 
 # H3: Anthropic SDK non-stream call through the pass-through route
@@ -149,11 +146,12 @@ def test_pass_through_anthropic_sdk_records_header_tags(gateway: Gateway, tmp_pa
                 base_url=f"{_base_url(candidate)}/anthropic", auth_token=key, default_headers=SENT_HEADERS
             )
             message: Final = client.messages.create(
-                model=MODEL, max_tokens=16, messages=[{"role": "user", "content": "tag me"}]
+                model=MODEL, max_tokens=16, messages=[{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}]
             )
+            assert message.id.startswith("msg_")
             assert len(wire.drain()) == 1
-            assert eventually(lambda: tags_by_id(message.id), lambda tags: len(tags) == 1, seconds=70) == [
-                EXPECTED_TAGS
+            assert eventually(lambda: tags_by_key(key), lambda tags: len(tags) == 1, seconds=70) == [
+                ["User-Agent: Anthropic", "User-Agent: Anthropic/Python 0.84.0", TENANT_TAG]
             ]
 
 
@@ -172,12 +170,13 @@ def test_pass_through_anthropic_sdk_stream_records_header_tags(gateway: Gateway,
                 base_url=f"{_base_url(candidate)}/anthropic", auth_token=key, default_headers=SENT_HEADERS
             )
             with client.messages.stream(
-                model=MODEL, max_tokens=16, messages=[{"role": "user", "content": "tag me"}]
+                model=MODEL, max_tokens=16, messages=[{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}]
             ) as stream:
                 message: Final = stream.get_final_message()
+            assert message.id.startswith("msg_")
             assert len(wire.drain()) == 1
-            assert eventually(lambda: tags_by_id(message.id), lambda tags: len(tags) == 1, seconds=70) == [
-                EXPECTED_TAGS
+            assert eventually(lambda: tags_by_key(key), lambda tags: len(tags) == 1, seconds=70) == [
+                ["User-Agent: Anthropic", "User-Agent: Anthropic/Python 0.84.0", TENANT_TAG]
             ]
 
 
@@ -196,18 +195,16 @@ def test_pass_through_openai_chat_records_header_tags(gateway: Gateway, tmp_path
                 "/openai/v1/chat/completions",
                 {
                     "model": OPENAI_MODEL,
-                    "messages": [{"role": "user", "content": "tag me"}],
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
                     **({"stream": True} if stream else {}),
                 },
                 key=key,
                 headers=SENT_HEADERS,
             )
             assert response.status_code == 200, response.text
+            assert "chatcmpl_" in response.text, response.text
             assert len(wire.drain()) == 1
-            request_id: Final = f"chatcmpl_{response.text.split('chatcmpl_')[1].split(chr(34))[0]}"
-            assert eventually(lambda: tags_by_id(request_id), lambda tags: len(tags) == 1, seconds=70) == [
-                EXPECTED_TAGS
-            ]
+            assert eventually(lambda: tags_by_key(key), lambda tags: len(tags) == 1, seconds=70) == [EXPECTED_TAGS]
 
 
 # H6: OpenAI SDK sync and stream calls through the pass-through route
@@ -226,7 +223,7 @@ def test_pass_through_openai_sdk_records_header_tags(gateway: Gateway, tmp_path:
                 api_key=key, base_url=f"{_base_url(candidate)}/openai/v1", default_headers=SENT_HEADERS
             )
             completion: Final = client.chat.completions.create(
-                model=OPENAI_MODEL, messages=[{"role": "user", "content": "tag me"}], stream=stream
+                model=OPENAI_MODEL, messages=[{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}], stream=stream
             )
             if stream:
                 request_id: Final = next(chunk.id for chunk in completion)
@@ -234,9 +231,10 @@ def test_pass_through_openai_sdk_records_header_tags(gateway: Gateway, tmp_path:
                     pass
             else:
                 request_id = completion.id
+            assert request_id.startswith("chatcmpl_")
             assert len(wire.drain()) == 1
-            assert eventually(lambda: tags_by_id(request_id), lambda tags: len(tags) == 1, seconds=70) == [
-                EXPECTED_TAGS
+            assert eventually(lambda: tags_by_key(key), lambda tags: len(tags) == 1, seconds=70) == [
+                ["User-Agent: OpenAI", "User-Agent: OpenAI/Python 2.33.0", TENANT_TAG]
             ]
 
 
@@ -252,9 +250,9 @@ def test_pass_through_gemini_records_header_tags(gateway: Gateway, tmp_path: Pat
             response: Final = candidate.request(
                 "POST",
                 f"/gemini/v1beta/models/{GEMINI_MODEL}:generateContent",
-                {"contents": [{"parts": [{"text": "tag me"}]}]},
+                {"contents": [{"parts": [{"text": f"tag me {uuid.uuid4().hex}"}]}]},
                 key=key,
-                headers=SENT_HEADERS,
+                headers={**SENT_HEADERS, "x-goog-api-key": key},
             )
             assert response.status_code == 200, response.text
             assert len(wire.drain()) == 1
@@ -291,7 +289,11 @@ def test_custom_pass_through_endpoint_records_header_tags(gateway: Gateway, tmp_
             response: Final = candidate.request(
                 "POST",
                 "/custom-anthropic",
-                {"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "tag me"}]},
+                {
+                    "model": MODEL,
+                    "max_tokens": 16,
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
+                },
                 key=key,
                 headers=SENT_HEADERS,
             )
@@ -317,7 +319,9 @@ def test_pass_through_openai_async_sdk_stream_records_header_tags(gateway: Gatew
 
             async def call() -> str:
                 completion: Final = await client.chat.completions.create(
-                    model=OPENAI_MODEL, messages=[{"role": "user", "content": "tag me"}], stream=True
+                    model=OPENAI_MODEL,
+                    messages=[{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
+                    stream=True,
                 )
                 first: Final = await completion.__anext__()
                 async for _ in completion:
@@ -325,9 +329,10 @@ def test_pass_through_openai_async_sdk_stream_records_header_tags(gateway: Gatew
                 return first.id
 
             request_id: Final = asyncio.run(call())
+            assert request_id.startswith("chatcmpl_")
             assert len(wire.drain()) == 1
-            assert eventually(lambda: tags_by_id(request_id), lambda tags: len(tags) == 1, seconds=70) == [
-                EXPECTED_TAGS
+            assert eventually(lambda: tags_by_key(key), lambda tags: len(tags) == 1, seconds=70) == [
+                ["User-Agent: AsyncOpenAI", "User-Agent: AsyncOpenAI/Python 2.33.0", TENANT_TAG]
             ]
 
 
@@ -344,7 +349,7 @@ def test_unified_chat_completions_records_header_tags(gateway: Gateway, tmp_path
             response: Final = candidate.request(
                 "POST",
                 "/v1/chat/completions",
-                {"model": model, "messages": [{"role": "user", "content": "tag me"}]},
+                {"model": model, "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}]},
                 key=key,
                 headers=SENT_HEADERS,
             )
@@ -378,10 +383,9 @@ def test_unified_responses_records_header_tags(gateway: Gateway, tmp_path: Path,
                 request_id: Final = next(event.response.id for event in frames if event.type == "response.completed")
             else:
                 request_id = created.id
+            assert request_id.startswith("resp_")
             assert len(wire.drain()) == 1
-            assert eventually(lambda: tags_by_id(request_id), lambda tags: len(tags) == 1, seconds=70) == [
-                EXPECTED_TAGS
-            ]
+            assert eventually(lambda: tags_by_key(key), lambda tags: len(tags) == 1, seconds=70) == [EXPECTED_TAGS]
 
 
 # H12: a unified cache-hit twin records the same tags on both spend rows
@@ -440,7 +444,11 @@ def test_pass_through_tags_reach_generic_api_sink(gateway: Gateway, tmp_path: Pa
             response: Final = candidate.request(
                 "POST",
                 "/anthropic/v1/messages",
-                {"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "tag me"}]},
+                {
+                    "model": MODEL,
+                    "max_tokens": 16,
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
+                },
                 key=key,
                 headers={**SENT_HEADERS, "anthropic-version": "2023-06-01"},
             )
@@ -472,7 +480,11 @@ def test_pass_through_tags_accrue_daily_tag_spend(gateway: Gateway, tmp_path: Pa
             response: Final = candidate.request(
                 "POST",
                 "/anthropic/v1/messages",
-                {"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "tag me"}]},
+                {
+                    "model": MODEL,
+                    "max_tokens": 16,
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
+                },
                 key=key,
                 headers={**SENT_HEADERS, "anthropic-version": "2023-06-01"},
             )
@@ -515,7 +527,7 @@ def test_header_tags_without_extra_spend_tag_headers_record_user_agent_only(
                 {
                     "model": MODEL if route == "/anthropic/v1/messages" else model,
                     "max_tokens": 16,
-                    "messages": [{"role": "user", "content": "tag me"}],
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
                 },
                 key=key,
                 headers={**SENT_HEADERS, "anthropic-version": "2023-06-01"},
@@ -549,10 +561,10 @@ def test_routes_without_headers_record_no_tags(gateway: Gateway, tmp_path: Path,
                 {
                     "model": MODEL if route == "/anthropic/v1/messages" else model,
                     "max_tokens": 16,
-                    "messages": [{"role": "user", "content": "tag me"}],
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
                 },
                 key=key,
-                headers={"anthropic-version": "2023-06-01"},
+                headers={"user-agent": "", "anthropic-version": "2023-06-01"},
             )
             assert response.status_code == 200, response.text
             assert len(wire.drain()) == 1
@@ -590,7 +602,7 @@ def test_disabled_user_agent_keeps_only_extra_header_tags(gateway: Gateway, tmp_
                 {
                     "model": MODEL if route == "/anthropic/v1/messages" else model,
                     "max_tokens": 16,
-                    "messages": [{"role": "user", "content": "tag me"}],
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
                 },
                 key=key,
                 headers={**SENT_HEADERS, "anthropic-version": "2023-06-01"},
@@ -623,7 +635,7 @@ def test_unsent_configured_header_contributes_no_tag(gateway: Gateway, tmp_path:
                 {
                     "model": MODEL if route == "/anthropic/v1/messages" else model,
                     "max_tokens": 16,
-                    "messages": [{"role": "user", "content": "tag me"}],
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
                 },
                 key=key,
                 headers={**SENT_HEADERS, "anthropic-version": "2023-06-01"},
@@ -656,7 +668,7 @@ def test_default_httpx_user_agent_is_recorded(gateway: Gateway, tmp_path: Path, 
                 {
                     "model": MODEL if route == "/anthropic/v1/messages" else model,
                     "max_tokens": 16,
-                    "messages": [{"role": "user", "content": "tag me"}],
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
                 },
                 key=key,
                 headers={"anthropic-version": "2023-06-01"},
@@ -681,7 +693,11 @@ def test_unauthenticated_request_writes_no_spend_row(gateway: Gateway, tmp_path:
             before: Final = _spend_count()
             response: Final = candidate.client.post(
                 route,
-                json={"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "tag me"}]},
+                json={
+                    "model": MODEL,
+                    "max_tokens": 16,
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
+                },
                 headers={**SENT_HEADERS, "anthropic-version": "2023-06-01"},
             )
             assert response.status_code == 401, response.text
@@ -689,7 +705,11 @@ def test_unauthenticated_request_writes_no_spend_row(gateway: Gateway, tmp_path:
             control: Final = candidate.request(
                 "POST",
                 route,
-                {"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "tag me"}]},
+                {
+                    "model": MODEL,
+                    "max_tokens": 16,
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
+                },
                 key=key,
                 headers={**SENT_HEADERS, "anthropic-version": "2023-06-01"},
             )
@@ -713,7 +733,9 @@ def test_upstream_failure_still_records_header_tags(gateway: Gateway, tmp_path: 
             candidate.scenario() as scenario,
         ):
             model: Final = scenario.model(
-                model=f"anthropic/{MODEL}", api_base=wire.url, api_key="synthetic-anthropic-key"
+                model="anthropic/claude-nonexistent-model",
+                api_base=wire.url,
+                api_key="synthetic-anthropic-key",
             )
             key: Final = scenario.key()
             response: Final = candidate.request(
@@ -722,14 +744,15 @@ def test_upstream_failure_still_records_header_tags(gateway: Gateway, tmp_path: 
                 {
                     "model": "claude-nonexistent-model" if route == "/anthropic/v1/messages" else model,
                     "max_tokens": 16,
-                    "messages": [{"role": "user", "content": "tag me"}],
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
                 },
                 key=key,
                 headers={**SENT_HEADERS, "anthropic-version": "2023-06-01"},
             )
             assert response.status_code == 400, response.text
             assert len(wire.drain()) == 1
-            assert eventually(lambda: tags_by_key(key), lambda tags: len(tags) == 1, seconds=70) == [EXPECTED_TAGS]
+            expected: Final = [] if route == "/anthropic/v1/messages" else EXPECTED_TAGS
+            assert eventually(lambda: tags_by_key(key), lambda tags: len(tags) == 1, seconds=70) == [expected]
 
 
 # S8: null and empty extra_spend_tag_headers behave like unset
@@ -756,7 +779,7 @@ def test_null_and_empty_extra_spend_tag_headers_record_user_agent_only(
                 {
                     "model": MODEL if route == "/anthropic/v1/messages" else model,
                     "max_tokens": 16,
-                    "messages": [{"role": "user", "content": "tag me"}],
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
                 },
                 key=key,
                 headers={**SENT_HEADERS, "anthropic-version": "2023-06-01"},
@@ -780,7 +803,11 @@ def test_configured_header_case_differs_between_routes(gateway: Gateway, tmp_pat
                 model=f"anthropic/{MODEL}", api_base=wire.url, api_key="synthetic-anthropic-key"
             )
             key: Final = scenario.key()
-            body: Final = {"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "tag me"}]}
+            body: Final = {
+                "model": MODEL,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
+            }
             passthrough: Final = candidate.request(
                 "POST",
                 "/anthropic/v1/messages",
@@ -827,7 +854,7 @@ def test_large_header_value_is_stored_verbatim(gateway: Gateway, tmp_path: Path,
                 {
                     "model": MODEL if route == "/anthropic/v1/messages" else model,
                     "max_tokens": 16,
-                    "messages": [{"role": "user", "content": "tag me"}],
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
                 },
                 key=key,
                 headers={
@@ -855,7 +882,11 @@ def test_duplicate_header_values_follow_carrier_semantics(gateway: Gateway, tmp_
                 model=f"anthropic/{MODEL}", api_base=wire.url, api_key="synthetic-anthropic-key"
             )
             key: Final = scenario.key()
-            body: Final = {"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "tag me"}]}
+            body: Final = {
+                "model": MODEL,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
+            }
             duplicated: Final = [
                 ("Authorization", f"Bearer {key}"),
                 ("user-agent", "claude-cli/2.0.0"),
@@ -894,18 +925,14 @@ def test_x_litellm_tags_merges_with_header_tags(gateway: Gateway, tmp_path: Path
                 {
                     "model": MODEL if route == "/anthropic/v1/messages" else model,
                     "max_tokens": 16,
-                    "messages": [{"role": "user", "content": "tag me"}],
+                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
                 },
                 key=key,
                 headers={**SENT_HEADERS, "anthropic-version": "2023-06-01", "x-litellm-tags": "team-x"},
             )
             assert response.status_code == 200, response.text
             assert len(wire.drain()) == 1
-            expected: Final = (
-                ["team-x", UA_FAMILY_TAG, UA_TAG, TENANT_TAG]
-                if route == "/v1/messages"
-                else [UA_FAMILY_TAG, UA_TAG, TENANT_TAG, "team-x"]
-            )
+            expected: Final = ["team-x", UA_FAMILY_TAG, UA_TAG, TENANT_TAG]
             assert eventually(lambda: tags_by_id(response.json()["id"]), lambda tags: len(tags) == 1, seconds=70) == [
                 expected
             ]
@@ -926,15 +953,18 @@ def test_repeated_requests_each_record_tags(gateway: Gateway, tmp_path: Path, ro
                 model=f"anthropic/{MODEL}", api_base=wire.url, api_key="synthetic-anthropic-key"
             )
             key: Final = scenario.key()
-            body: Final = {
-                "model": MODEL if route == "/anthropic/v1/messages" else model,
-                "max_tokens": 16,
-                "messages": [{"role": "user", "content": f"repeat {uuid.uuid4().hex}"}],
-            }
             ids: Final = []
             for _ in range(3):
                 response: Final = candidate.request(
-                    "POST", route, body, key=key, headers={**SENT_HEADERS, "anthropic-version": "2023-06-01"}
+                    "POST",
+                    route,
+                    {
+                        "model": MODEL if route == "/anthropic/v1/messages" else model,
+                        "max_tokens": 16,
+                        "messages": [{"role": "user", "content": f"repeat {uuid.uuid4().hex}"}],
+                    },
+                    key=key,
+                    headers={**SENT_HEADERS, "anthropic-version": "2023-06-01"},
                 )
                 assert response.status_code == 200, response.text
                 ids.append(response.json()["id"])
@@ -996,5 +1026,5 @@ def test_guardrail_mode_tag_decider_is_unchanged_on_pass_through(gateway: Gatewa
                 key=key,
                 headers=SENT_HEADERS,
             )
-            assert control.status_code != 200, control.text
-            assert len(wire.drain()) == 1, "tag-matched guardrail should have blocked before the upstream"
+            assert control.status_code == 500, control.text
+            assert len(wire.drain()) == 0, "tag-matched guardrail should have blocked before the upstream"

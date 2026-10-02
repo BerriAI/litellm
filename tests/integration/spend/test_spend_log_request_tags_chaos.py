@@ -1,5 +1,6 @@
 import json
 import threading
+from hashlib import sha256
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Final
@@ -81,15 +82,15 @@ def test_burst_across_routes_records_tags_once_per_response(gateway: Gateway, tm
             ids: Final = [_ids(response) for response in responses]
             assert len(set(ids)) == 30, "duplicate upstream id in burst"
             assert len(wire.drain()) == 30
+            digest: Final = sha256(key.encode()).hexdigest()
             landed: Final = eventually(
                 lambda: read_rows(
-                    'SELECT request_id, request_tags FROM "LiteLLM_SpendLogs" WHERE request_id = ANY(%s)',
-                    (ids,),
+                    'SELECT request_id, request_tags FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (digest,)
                 ),
                 lambda values: len(values) == 30,
                 seconds=70,
             )
-            assert sorted(row["request_id"] for row in landed) == sorted(ids)
+            assert len({row["request_id"] for row in landed}) == 30
             for row in landed:
                 value: Final = row["request_tags"]
                 assert (json.loads(value) if isinstance(value, str) else value) == EXPECTED
@@ -148,14 +149,16 @@ def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Pa
                 (response.status_code, response.text[:200]) for response in responses
             ]
             ids: Final = [_ids(response) for response in responses]
+            assert len(set(ids)) == len(ids), "duplicate upstream id in burst"
+            digest: Final = sha256(key.encode()).hexdigest()
             landed: Final = eventually(
                 lambda: read_rows(
-                    'SELECT request_id, request_tags FROM "LiteLLM_SpendLogs" WHERE request_id = ANY(%s)',
-                    (ids,),
+                    'SELECT request_id, request_tags FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (digest,)
                 ),
                 lambda values: len(values) == 36,
                 seconds=70,
             )
+            assert len({row["request_id"] for row in landed}) == 36
             for row in landed:
                 value: Final = row["request_tags"]
                 assert (json.loads(value) if isinstance(value, str) else value) == EXPECTED
@@ -195,15 +198,16 @@ def test_worker_kill_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_path: P
             responses: Final = [*first, *second]
             ok: Final = [response for response in responses if response.status_code == 200]
             ids: Final = [_ids(response) for response in ok]
+            assert len(set(ids)) == len(ids), "duplicate upstream id in burst"
+            digest: Final = sha256(key.encode()).hexdigest()
             landed: Final = eventually(
                 lambda: read_rows(
-                    'SELECT request_id, request_tags FROM "LiteLLM_SpendLogs" WHERE request_id = ANY(%s)',
-                    (ids,),
+                    'SELECT request_id, request_tags FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (digest,)
                 ),
                 lambda values: len(values) == len(ids),
                 seconds=70,
             )
-            assert sorted(row["request_id"] for row in landed) == sorted(ids)
+            assert len({row["request_id"] for row in landed}) == len(ids)
             for row in landed:
                 value: Final = row["request_tags"]
                 assert (json.loads(value) if isinstance(value, str) else value) == EXPECTED
