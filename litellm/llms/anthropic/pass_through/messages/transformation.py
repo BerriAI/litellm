@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import httpx
 
@@ -336,7 +336,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     status_code=400,
                 )
             existing_output_config: Final = optional_params.get("output_config")
-            explicit_effort: Final = AnthropicMessagesConfig._explicit_output_config_effort(existing_output_config)
+            explicit_effort: Final = AnthropicMessagesConfig._explicit_output_config_effort(
+                cast(object, existing_output_config)  # cast-ok: optional_params is an untyped dict
+            )
             resolved_effort: Final = (
                 explicit_effort
                 if explicit_effort is not None
