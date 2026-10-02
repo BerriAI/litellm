@@ -287,6 +287,19 @@ describe("payload helpers", () => {
     expect(messageText(image)).toBe(image);
     expect(messageText("[not json")).toBe("[not json");
   });
+
+  it("reads GenAI message parts and native content arrays without crashing previews", () => {
+    const question = "What is an agent trace?";
+    const parts = [{ type: "text", content: question }];
+    const input = JSON.stringify([{ role: "user", parts }]);
+    expect(parseMessages(input)).toEqual([{ role: "user", parts, content: question }]);
+    expect(previewText(input)).toBe(question);
+    expect(
+      parseMessages(JSON.stringify({ role: "assistant", content: [{ type: "text", text: "An execution record" }] })),
+    ).toEqual([{ role: "assistant", content: "An execution record" }]);
+    expect(parseMessages('[{"role":"assistant","tool_calls":[]}]')).toBeNull();
+    expect(parseMessages('[{"role":"user","content":42}]')).toBeNull();
+  });
 });
 
 describe("treeGuides", () => {

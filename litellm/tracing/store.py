@@ -119,6 +119,7 @@ def trace_summary_from_row(row: dict[str, Any], spend_rows: Sequence[_SpendRow] 
         trace_ref=row.get("trace_ref", ""),
         name=row["name"],
         service=row["service"],
+        agent_names=tuple(row.get("agent_names") or ()),
         input_preview=row["input_preview"],
         start_time=_iso(int(row["start_ms"])),
         duration_ms=float(row["duration_ms"]),
@@ -169,8 +170,8 @@ def _parent_agent_of(span: Span, by_id: Mapping[str, Span]) -> str | None:
         if parent_id is None or parent_id not in by_id or parent_id == span["span_id"]:
             return None
         parent = by_id[parent_id]
-        if parent["type"] == "agent" and parent["name"] != span["name"]:
-            return parent["name"]
+        if parent["type"] == "agent" and (parent["agent"] or parent["name"]) != (span["agent"] or span["name"]):
+            return parent["agent"] or parent["name"]
         parent_id = parent["parent_span_id"]
     return None
 
@@ -183,9 +184,9 @@ def agent_nodes(spans: Sequence[Span]) -> tuple[AgentNode, ...]:
         if span["type"] != "agent":
             continue
         node = agents.setdefault(
-            span["name"],
+            span["agent"] or span["name"],
             AgentNode(
-                name=span["name"],
+                name=span["agent"] or span["name"],
                 parent_agent=_parent_agent_of(span, by_id),
                 invocations=0,
                 llm_calls=0,
@@ -250,6 +251,7 @@ def trace_from_rows(
             trace_ref=trace_ref,
             name=root["name"],
             service=rows[0]["service"],
+            agent_names=tuple(sorted(frozenset(s["agent"] for s in spans if s["agent"]))),
             input_preview=root["input_preview"],
             start_time=_iso(trace_start_ns // NANOS_PER_MS),
             duration_ms=(trace_end_ns - trace_start_ns) / NANOS_PER_MS,

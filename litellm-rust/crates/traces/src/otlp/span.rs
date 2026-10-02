@@ -133,7 +133,18 @@ fn decoded_span(
         &parent_span_id,
         &span_attributes,
     )?;
-    let normalized = normalization.span;
+    let resource_agent_name = resource_attributes
+        .get("gen_ai.agent.name")
+        .filter(|name| !name.is_empty());
+    let agent_name = match (resource_agent_name, normalization.span.agent_name.as_str()) {
+        (Some(name), "") => name.clone(),
+        (Some(name), "hermes-agent") if scope_name.as_ref() == "hermes-otel-plugin" => name.clone(),
+        (_, name) => name.to_owned(),
+    };
+    let normalized = crate::normalize::NormalizedSpan {
+        agent_name,
+        ..normalization.span
+    };
     budget.consume(
         normalized.input.len()
             + normalized.output.len()
