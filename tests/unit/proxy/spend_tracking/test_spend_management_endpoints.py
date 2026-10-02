@@ -16,8 +16,8 @@ from pydantic import BaseModel, Field
 
 import litellm
 import litellm.proxy.proxy_server as ps
-from litellm.proxy.auth.authorization import AllLogs, LogReadScope, TeamLogs, UserLogs, any_of
-from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
+from litellm.proxy.auth.authorization import AllLogs, LogReadScope, OwnedLogs
+from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup, load_permitted_log_team_ids
 
 
 def _default_date_range():
@@ -1757,33 +1757,22 @@ async def test_permitted_team_scope_falls_back_to_own_user_when_lookup_fails():
     ("scope", "user_filter", "expected"),
     [
         (AllLogs(), None, ("foreign", "own", "ownerless", "team-1", "team-2", "team-ownerless")),
-        (UserLogs("caller"), None, ("own",)),
-        (TeamLogs("first"), None, ("team-1", "team-ownerless")),
-        (any_of(), None, ()),
-        (any_of(UserLogs("caller")), None, ("own",)),
-        (any_of(TeamLogs("first"), TeamLogs("second")), None, ("team-1", "team-2", "team-ownerless")),
-        (
-            any_of(UserLogs("caller"), TeamLogs("first"), TeamLogs("second")),
-            None,
-            ("own", "team-1", "team-2", "team-ownerless"),
-        ),
-        (any_of(TeamLogs("first"), UserLogs("caller")), None, ("own", "team-1", "team-ownerless")),
-        (any_of(UserLogs("caller"), UserLogs("other")), None, ("foreign", "own", "team-1")),
-        (any_of(TeamLogs("first"), TeamLogs("first")), None, ("team-1", "team-ownerless")),
-        (any_of(UserLogs(None)), None, ()),
-        (any_of(UserLogs(None), TeamLogs("first")), None, ("team-1", "team-ownerless")),
-        (any_of(UserLogs("caller"), TeamLogs("first"), TeamLogs("second")), "other", ("team-1",)),
-        (TeamLogs("first' OR TRUE --"), None, ()),
+        (OwnedLogs("caller"), None, ("own",)),
+        (OwnedLogs(None), None, ()),
+        (OwnedLogs(None, ("first",)), None, ("team-1", "team-ownerless")),
+        (OwnedLogs(None, ("first", "second")), None, ("team-1", "team-2", "team-ownerless")),
+        (OwnedLogs("caller", ("first",)), None, ("own", "team-1", "team-ownerless")),
+        (OwnedLogs("caller", ("first", "second")), None, ("own", "team-1", "team-2", "team-ownerless")),
+        (OwnedLogs("caller", ("first", "second")), "other", ("team-1",)),
+        (OwnedLogs(None, ("first' OR TRUE --",)), None, ()),
     ],
 )
 def test_composed_log_scope_selects_union_and_intersects_explicit_user_filter(
     scope: LogReadScope, user_filter: str | None, expected: tuple[str, ...], next_param: int
 ) -> None:
-    clause, scope_params = spend_management_endpoints._read_scope_sql(scope, next_param)
+    clause, scope_params = spend_management_endpoints.read_scope_sql(scope, next_param)
     placeholder_sql: Final = re.sub(r"\$(\d+)", r":p\1", clause or "TRUE")
-    sqlite_sql: Final = re.sub(
-        r"= ANY\((:p\d+)::text\[\]\)", r"IN (SELECT value FROM json_each(\1))", placeholder_sql
-    )
+    sqlite_sql: Final = re.sub(r"= ANY\((:p\d+)::text\[\]\)", r"IN (SELECT value FROM json_each(\1))", placeholder_sql)
     parameters: Final = {
         f"p{next_param + index}": json.dumps(value) if isinstance(value, tuple) else value
         for index, value in enumerate(scope_params)
@@ -8105,7 +8094,7 @@ async def test_log_team_dependency_preserves_checks_before_permission_lookup(
 
 
 @pytest.mark.asyncio
-async def test_management_team_lookup_without_memberships_keeps_own_user_scope(monkeypatch):
+async def test_management_team_lookup_without_memberships_keeps_own_user_scope():
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.auth.authorization import resolve_log_read_scope
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -8114,7 +8103,6 @@ async def test_management_team_lookup_without_memberships_keeps_own_user_scope(m
     await cache.async_set_cache(
         key="caller", value=LiteLLM_UserTable(user_id="caller", teams=[]), model_type=LiteLLM_UserTable
     )
-    monkeypatch.setattr(ps, "user_api_key_cache", cache)
     auth = UserAPIKeyAuth(user_id="caller", user_role=LitellmUserRoles.INTERNAL_USER)
     rows = (
         _payload_row("own", "shared", "caller", "own payload"),
@@ -8123,9 +8111,11 @@ async def test_management_team_lookup_without_memberships_keeps_own_user_scope(m
     prisma = _make_payload_lookup_prisma(rows)
 
     async def lookup():
-        return await spend_management_endpoints._get_permitted_team_ids_for_spend_logs(prisma, auth)
+        return await load_permitted_log_team_ids(
+            auth, prisma_client=prisma, user_api_key_cache=cache, proxy_logging_obj=ps.proxy_logging_obj
+        )
 
-    assert await lookup() == []
+    assert await lookup() == ()
     scope = await resolve_log_read_scope(auth.user_id, lookup)
     query, params = spend_management_endpoints._spend_log_payload_query("shared", scope)
     assert await prisma.db.query_raw(query, *params) == [rows[0]]
@@ -8156,14 +8146,11 @@ class _LogWhereFilter(BaseModel):
     ("scope", "expected"),
     [
         (AllLogs(), ("foreign", "ownerless", "own", "team-1", "team-2")),
-        (UserLogs("caller"), ("own",)),
-        (TeamLogs("first"), ("team-1",)),
-        (any_of(), ()),
-        (any_of(UserLogs("caller"), UserLogs("other")), ("foreign", "own", "team-1")),
-        (any_of(TeamLogs("first"), TeamLogs("second")), ("team-1", "team-2")),
-        (any_of(UserLogs("caller"), TeamLogs("first"), TeamLogs("second")), ("own", "team-1", "team-2")),
-        (UserLogs(None), ("ownerless",)),
-        (any_of(UserLogs(None), TeamLogs("first")), ("ownerless", "team-1")),
+        (OwnedLogs("caller"), ("own",)),
+        (OwnedLogs(None), ()),
+        (OwnedLogs(None, ("first",)), ("team-1",)),
+        (OwnedLogs(None, ("first", "second")), ("team-1", "team-2")),
+        (OwnedLogs("caller", ("first", "second")), ("own", "team-1", "team-2")),
     ],
 )
 def test_composed_log_scope_counts_only_matching_owners(scope: LogReadScope, expected: tuple[str, ...]) -> None:

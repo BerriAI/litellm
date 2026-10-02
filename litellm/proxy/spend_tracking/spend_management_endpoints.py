@@ -39,11 +39,8 @@ from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.authorization import (
     AllLogs,
-    AnyOf,
-    LogGrant,
     LogReadScope,
-    TeamLogs,
-    UserLogs,
+    OwnedLogs,
     can_read_log_owner,
     can_read_team_logs,
     resolve_log_read_scope,
@@ -51,7 +48,6 @@ from litellm.proxy.auth.authorization import (
 from litellm.proxy.auth.authorization_dependencies import (
     LogTeamLookup,
     LogTeamLookupDependency,
-    load_permitted_log_team_ids,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
@@ -2862,8 +2858,8 @@ async def ui_view_spend_logs(
             sql_params.append(request_id_filter)
             p += 1
 
-        scope_clause, scope_params = _read_scope_sql(read_scope, p)
-        if scope_clause and not (read_scope == UserLogs(None) and user_id is None):
+        scope_clause, scope_params = read_scope_sql(read_scope, p)
+        if scope_clause:
             sql_conditions.append(scope_clause)
             sql_params.extend(scope_params)
             p += len(scope_params)
@@ -4539,9 +4535,9 @@ async def ui_view_session_spend_logs(
             if _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
             else await _spend_log_read_scope(user_api_key_dict, log_team_lookup)
             if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
-            else UserLogs(user_api_key_dict.user_id)
+            else OwnedLogs(user_api_key_dict.user_id)
         )
-        scope_clause, scope_params = _read_scope_sql(read_scope, 4)
+        scope_clause, scope_params = read_scope_sql(read_scope, 4)
         scope_sql: Final = f" AND {scope_clause}" if scope_clause else ""
         where_conditions: Final = {"session_id": session_id, **_read_scope_where(read_scope)}
 
@@ -4892,55 +4888,35 @@ async def _assert_user_can_view_request_id(
     raise _spend_log_forbidden(request_id)
 
 
-async def _spend_log_read_scope(
-    user_api_key_dict: UserAPIKeyAuth, log_team_lookup: LogTeamLookup
-) -> UserLogs | AnyOf[LogGrant]:
+async def _spend_log_read_scope(user_api_key_dict: UserAPIKeyAuth, log_team_lookup: LogTeamLookup) -> OwnedLogs:
     return await resolve_log_read_scope(
         user_api_key_dict.user_id,
         partial(log_team_lookup, user_api_key_dict),
     )
 
 
-def _read_scope_sql(scope: LogReadScope, next_param: int) -> tuple[str, tuple[object, ...]]:
-    match scope:
-        case AllLogs():
-            return ("", ())
-        case UserLogs(user_id=user_id):
-            return (f'"user" = ${next_param}', (user_id,))
-        case TeamLogs(team_id=team_id):
-            return (f"team_id = ${next_param}", (team_id,))
-        case AnyOf():
-            combined: Final[AnyOf[LogGrant]] = scope
-            user_ids: Final = tuple(grant.user_id for grant in combined.grants if isinstance(grant, UserLogs))
-            team_ids: Final = tuple(grant.team_id for grant in combined.grants if isinstance(grant, TeamLogs))
-            user_conditions: Final = tuple(f'"user" = ${next_param + index}' for index, _ in enumerate(user_ids))
-            conditions: Final = user_conditions + (
-                (f"team_id = ANY(${next_param + len(user_ids)}::text[])",) if team_ids else ()
-            )
-            params: Final[tuple[object, ...]] = user_ids + ((team_ids,) if team_ids else ())
-            return (f"({' OR '.join(conditions)})" if conditions else "FALSE", params)
-        case _:
-            assert_never(scope)
+def read_scope_sql(scope: LogReadScope, next_param: int) -> tuple[str, tuple[object, ...]]:
+    if isinstance(scope, AllLogs):
+        return ("", ())
+    user_grant: Final[tuple[tuple[str, object], ...]] = (
+        (('"user" = ${}', scope.user_id),) if scope.user_id is not None else ()
+    )
+    team_grant: Final = (("team_id = ANY(${}::text[])", scope.team_ids),) if scope.team_ids else ()
+    grants: Final = user_grant + team_grant
+    if not grants:
+        return ("FALSE", ())
+    clauses: Final = tuple(template.format(next_param + index) for index, (template, _) in enumerate(grants))
+    sql: Final = clauses[0] if len(clauses) == 1 else f"({' OR '.join(clauses)})"
+    return (sql, tuple(param for _, param in grants))
 
 
 def _read_scope_where(scope: LogReadScope) -> Mapping[str, object]:
-    match scope:
-        case AllLogs():
-            return {}
-        case UserLogs(user_id=user_id):
-            return {"user": user_id}
-        case TeamLogs(team_id=team_id):
-            return {"team_id": team_id}
-        case AnyOf():
-            combined: Final[AnyOf[LogGrant]] = scope
-            user_conditions: Final = tuple(
-                {"user": grant.user_id} for grant in combined.grants if isinstance(grant, UserLogs)
-            )
-            team_ids: Final = tuple(grant.team_id for grant in combined.grants if isinstance(grant, TeamLogs))
-            conditions: Final = user_conditions + (({"team_id": {"in": list(team_ids)}},) if team_ids else ())
-            return {"OR": list(conditions)}
-        case _:
-            assert_never(scope)
+    if isinstance(scope, AllLogs):
+        return {}
+    user_grant: Final = ({"user": scope.user_id},) if scope.user_id is not None else ()
+    team_grant: Final = ({"team_id": {"in": list(scope.team_ids)}},) if scope.team_ids else ()
+    grants: Final = user_grant + team_grant
+    return grants[0] if len(grants) == 1 else {"OR": list(grants)}
 
 
 def _spend_log_payload_query(request_id: str, scope: LogReadScope) -> tuple[str, tuple[object, ...]]:
@@ -4949,7 +4925,7 @@ def _spend_log_payload_query(request_id: str, scope: LogReadScope) -> tuple[str,
     match over rows that merely carry the id as their client-set ``litellm_call_id``.
     A non-admin viewer only ever gets rows they own or rows of a team they may view.
     """
-    scope_clause, scope_params = _read_scope_sql(scope, 2)
+    scope_clause, scope_params = read_scope_sql(scope, 2)
     scope_sql: Final = f" AND {scope_clause}" if scope_clause else ""
     return (
         f"""
@@ -5054,19 +5030,3 @@ async def _assert_user_owns_cold_storage_payload(
     owner_user, owner_team_id = _cold_storage_payload_owner(payload)
     if not await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, owner_user, owner_team_id):
         raise _spend_log_forbidden(request_id)
-
-
-async def _get_permitted_team_ids_for_spend_logs(
-    prisma_client: PrismaClient,
-    user_api_key_dict: UserAPIKeyAuth,
-) -> list[str]:
-    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
-
-    return list(
-        await load_permitted_log_team_ids(
-            user_api_key_dict,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    )

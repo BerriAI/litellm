@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
-from litellm.proxy.auth.authorization import ApiKeyLogs, TeamLogs, TraceReadScope, UserLogs, any_of
+from litellm.proxy.auth.authorization import OwnedLogs, OwnedTraces, TraceReadScope
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
@@ -738,17 +738,13 @@ def test_composed_trace_permissions_reach_read_and_sql_boundaries(
 @pytest.mark.parametrize(
     ("scope", "expected"),
     (
-        (UserLogs(None), ("", (), "")),
-        (TeamLogs("team"), ("", ("team",), "")),
-        (ApiKeyLogs("key"), ("", (), "key")),
-        (any_of(), ("", (), "")),
-        (any_of(TeamLogs("a"), UserLogs("user"), ApiKeyLogs("key"), TeamLogs("b")), ("user", ("a", "b"), "key")),
-        (any_of(UserLogs(None), UserLogs("later"), ApiKeyLogs(""), ApiKeyLogs("later")), ("", (), "")),
-        (any_of(UserLogs("first"), UserLogs("later"), ApiKeyLogs("first"), ApiKeyLogs("later")), ("first", (), "first")),
-        (any_of(TeamLogs("a"), TeamLogs("a")), ("", ("a", "a"), "")),
+        (OwnedTraces(OwnedLogs(None), None), ("", (), "")),
+        (OwnedTraces(OwnedLogs(None), "key"), ("", (), "key")),
+        (OwnedTraces(OwnedLogs("user"), None), ("user", (), "")),
+        (OwnedTraces(OwnedLogs("user", ("a", "b")), "key"), ("user", ("a", "b"), "key")),
     ),
 )
-def test_trace_storage_permissions_preserve_first_identity_and_all_team_grants(
+def test_trace_storage_permissions_map_owned_traces(
     scope: TraceReadScope,
     expected: tuple[str, tuple[str, ...], str],
 ) -> None:
