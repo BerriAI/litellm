@@ -3,7 +3,7 @@ import io
 from collections.abc import Sequence
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, get_type_hints
+from typing import Final, cast, get_type_hints  # noqa: TID251  # untyped JSON request bodies need cast
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status

@@ -3,7 +3,7 @@ import contextvars
 import json
 from collections.abc import Coroutine
 from functools import partial
-from typing import Final, Literal, overload
+from typing import Final, Literal, cast, overload  # noqa: TID251  # untyped kwargs need cast
 
 from httpx._types import FileContent
 
@@ -336,7 +336,11 @@ def video_content(
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
-        custom_llm_provider = _provider_for_video_id(video_id, custom_llm_provider, kwargs.get("model"))
+        custom_llm_provider = _provider_for_video_id(
+            video_id,
+            custom_llm_provider,
+            cast(object, kwargs.get("model")),  # cast-ok: kwargs is untyped
+        )
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -428,7 +432,11 @@ async def avideo_content(
         loop: Final = asyncio.get_event_loop()
         kwargs["async_call"] = True
 
-        custom_llm_provider = _provider_for_video_id(video_id, custom_llm_provider, kwargs.get("model"))
+        custom_llm_provider = _provider_for_video_id(
+            video_id,
+            custom_llm_provider,
+            cast(object, kwargs.get("model")),  # cast-ok: kwargs is untyped
+        )
 
         func: Final = partial(
             video_content,
@@ -982,7 +990,7 @@ def video_status(
 def video_status(
     video_id: str,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: dict[str, object] | None = None,
@@ -1032,7 +1040,11 @@ def video_status(
             response: Final = VideoObject(**mock_response)
             return response
 
-        custom_llm_provider = _provider_for_video_id(video_id, custom_llm_provider, kwargs.get("model"))
+        custom_llm_provider = _provider_for_video_id(
+            video_id,
+            custom_llm_provider,
+            cast(object, kwargs.get("model")),  # cast-ok: kwargs is untyped
+        )
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)

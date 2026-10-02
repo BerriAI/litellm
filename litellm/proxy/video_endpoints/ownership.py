@@ -50,7 +50,8 @@ def _video_id_of(item: object) -> str | None:
             return video_id
         case object(id=str(video_id)) if video_id:
             return video_id
-    return None
+        case _:
+            return None
 
 
 def _is_object_mapping(value: object) -> TypeIs[Mapping[str, object]]:  # guard-ok: provider JSON objects have str keys
