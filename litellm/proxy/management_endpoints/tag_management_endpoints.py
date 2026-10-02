@@ -725,10 +725,17 @@ async def list_tags(
         )
 
         used_tag_names: Final = [row["tag"] for row in dynamic_tag_rows if row["tag"]]
-        if tag_scope is not None and not used_tag_names:
+        if tag_scope is not None and not used_tag_names and user_api_key_dict.team_id is None:
             return []
 
-        stored_tag_where: Final = {"tag_name": {"in": used_tag_names}} if tag_scope is not None else None
+        stored_tag_where: Final = (
+            {
+                "OR": [{"tag_name": {"in": used_tag_names}}]
+                + ([{"team_id": user_api_key_dict.team_id}] if user_api_key_dict.team_id is not None else [])
+            }
+            if tag_scope is not None and user_api_key_dict.team_id is not None
+            else ({"tag_name": {"in": used_tag_names}} if tag_scope is not None else None)
+        )
 
         ## QUERY STORED TAGS ##
         tag_records: Final = await _table(TagRepository(prisma_client)).find_many(

@@ -1636,9 +1636,12 @@ class _EmptyFindMany:
 
 
 class _EmptyGroupBy:
+    def __init__(self, rows=()):
+        self._rows = list(rows)
+
     async def group_by(self, *args: object, **kwargs: object) -> list:
         inspect.signature(LiteLLM_DailyTagSpendActions.group_by).bind(None, *args, **kwargs)
-        return []
+        return [dict(row) for row in self._rows]
 
 
 class _TagRecord(SimpleNamespace):
@@ -1659,6 +1662,7 @@ class FakeTagOwnershipDb:
         )
         self.litellm_proxymodeltable = _EmptyFindMany(LiteLLM_ProxyModelTableActions.find_many)
         self.litellm_dailytagspend = _EmptyGroupBy()
+        self.litellm_verificationtoken = _EmptyFindMany(LiteLLM_VerificationTokenActions.find_many)
 
 
 @contextmanager
@@ -2087,3 +2091,50 @@ async def test_regular_team_member_cannot_delete_tag():
         response = client.post("/tag/delete", json={"name": "team-tag"}, headers=_ADMIN_HEADERS)
         assert response.status_code == 403, response.text
         assert "team-tag" in fake_db.tag_rows
+
+
+def _scoped_team_auth(team_id: str = "team-a") -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="team-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_id=team_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_scoped_team_user_list_includes_own_team_tags_without_usage():
+    fake_db = _team_a_db()
+    fake_db.tag_rows["team-a-tag"] = _new_tag_row(tag_name="team-a-tag", team_id="team-a")
+    fake_db.tag_rows["team-b-tag"] = _new_tag_row(tag_name="team-b-tag", team_id="team-b")
+    fake_db.tag_rows["unowned-tag"] = _new_tag_row(tag_name="unowned-tag")
+    with _tag_ownership_gateway(fake_db, _scoped_team_auth()):
+        response = client.get("/tag/list", headers=_ADMIN_HEADERS)
+        assert response.status_code == 200, response.text
+        entries = response.json()
+        assert [entry["name"] for entry in entries] == ["team-a-tag"]
+        assert entries[0]["team_id"] == "team-a"
+
+
+@pytest.mark.asyncio
+async def test_scoped_team_user_list_dedupes_used_team_tag():
+    fake_db = _team_a_db()
+    fake_db.tag_rows["team-a-tag"] = _new_tag_row(tag_name="team-a-tag", team_id="team-a")
+    fake_db.litellm_dailytagspend = _EmptyGroupBy(
+        ({"tag": "team-a-tag", "_min": {}, "_max": {}},)
+    )
+    with _tag_ownership_gateway(fake_db, _scoped_team_auth()):
+        response = client.get("/tag/list", headers=_ADMIN_HEADERS)
+        assert response.status_code == 200, response.text
+        assert [entry["name"] for entry in response.json()] == ["team-a-tag"]
+
+
+@pytest.mark.asyncio
+async def test_scoped_user_without_team_keeps_empty_list_without_usage():
+    fake_db = _team_a_db()
+    fake_db.tag_rows["team-a-tag"] = _new_tag_row(tag_name="team-a-tag", team_id="team-a")
+    with _tag_ownership_gateway(
+        fake_db, UserAPIKeyAuth(api_key="lone-key", user_role=LitellmUserRoles.INTERNAL_USER)
+    ):
+        response = client.get("/tag/list", headers=_ADMIN_HEADERS)
+        assert response.status_code == 200, response.text
+        assert response.json() == []
