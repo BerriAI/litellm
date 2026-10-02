@@ -19082,10 +19082,10 @@ async def delete_callback(
             for key in matching_keys
         }
         updated_settings: Final = {**litellm_settings, **after_callbacks}
-        config["litellm_settings"] = updated_settings
+        updated_config: Final = {**config, "litellm_settings": updated_settings}
 
         # Save the updated configuration
-        await proxy_config.save_config(new_config=config)
+        await proxy_config.save_config(new_config=updated_config)
 
         asyncio.create_task(
             create_config_audit_log(
