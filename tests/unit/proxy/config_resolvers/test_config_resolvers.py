@@ -58,6 +58,7 @@ def test_sso_descriptor_mapping_is_single_sourced():
     # The write path and read path both consume this mapping; it must cover every
     # env-backed SSO field and map to the uppercase env var.
     assert SSO_FIELD_ENV_VARS["generic_client_id"] == "GENERIC_CLIENT_ID"
+    assert SSO_FIELD_ENV_VARS["generic_authorization_params"] == "GENERIC_AUTHORIZATION_PARAMS"
     assert SSO_SECRET_FIELDS == frozenset(
         {"google_client_secret", "microsoft_client_secret", "generic_client_secret"}
     )

@@ -152,6 +152,13 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         default=None,
         description="Space-separated OAuth scopes requested from the generic provider, e.g. 'openid email profile'",
     )
+    generic_authorization_params: str | None = Field(
+        default=None,
+        description=(
+            "Extra query parameters for the generic provider's authorization request, in query-string form, "
+            "e.g. 'resource=https://litellm.example.com' so AD FS issues tokens for that Web API"
+        ),
+    )
 
     # SAML SSO
     saml_idp_metadata_url: str | None = Field(
