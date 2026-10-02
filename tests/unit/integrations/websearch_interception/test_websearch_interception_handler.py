@@ -899,3 +899,50 @@ async def test_pre_request_hook_syncs_forced_tool_choice():
         "type": "tool",
         "name": LITELLM_WEB_SEARCH_TOOL_NAME,
     }
+
+
+_DOMAIN_FILTER_URLS = ("https://www.example.com/a", "https://docs.example.org/b", "https://example.net/c")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("domain_field", "expected_urls", "expected_provider_filter"),
+    [
+        ("allowed_domains", ["https://docs.example.org/b"], ["example.org"]),
+        ("blocked_domains", ["https://www.example.com/a", "https://docs.example.org/b"], None),
+    ],
+)
+async def test_messages_web_search_honors_the_native_tool_domain_filter(
+    monkeypatch: pytest.MonkeyPatch,
+    domain_field: str,
+    expected_urls: list[str],
+    expected_provider_filter: list[str] | None,
+):
+    import litellm
+    from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
+    from litellm.llms.base_llm.search.transformation import SearchResult
+    from litellm.proxy import proxy_server
+
+    domain = {"allowed_domains": "example.org", "blocked_domains": "example.net"}[domain_field]
+    mock_asearch = AsyncMock(
+        return_value=SearchResponse(
+            object="search",
+            results=[SearchResult(title=url, url=url, snippet="snippet") for url in _DOMAIN_FILTER_URLS],
+        )
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", _perplexity_router())
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["bedrock"])])
+
+    response = await anthropic_messages(
+        max_tokens=512,
+        messages=[{"role": "user", "content": "litellm"}],
+        model="bedrock/converse/test-model",
+        custom_llm_provider="bedrock",
+        tools=[{"type": "web_search_20250305", "name": "web_search", domain_field: [domain]}],
+    )
+
+    text = next(block["text"] for block in response["content"] if block["type"] == "text")
+    returned_urls = [url for url in _DOMAIN_FILTER_URLS if url in text]
+    assert returned_urls == expected_urls
+    assert mock_asearch.await_args.kwargs.get("search_domain_filter") == expected_provider_filter

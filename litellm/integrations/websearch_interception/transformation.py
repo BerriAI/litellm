@@ -7,6 +7,7 @@ Transforms between Anthropic/OpenAI tool_use format and LiteLLM search format.
 import json
 from collections.abc import Sequence
 from typing import Any, Final
+from urllib.parse import urlsplit
 
 from typing_extensions import assert_never
 
@@ -18,8 +19,32 @@ from litellm.types.integrations.websearch_interception import (
     SearchFailed,
     SearchOutcome,
     SearchSucceeded,
+    WebSearchDomainFilter,
     WebSearchToolResultErrorCode,
 )
+
+
+def _split_domain(domain: str) -> tuple[str, str]:
+    rule: Final = urlsplit(domain if "://" in domain else f"//{domain}")
+    return (rule.hostname or "").lower(), rule.path.rstrip("/")
+
+
+def domain_host(domain: str) -> str:
+    return _split_domain(domain)[0]
+
+
+def _url_matches_domain(url: str, domain: str) -> bool:
+    """Anthropic web_search domain semantics: subdomains are included and an optional path is a prefix."""
+    target: Final = urlsplit(url)
+    host: Final = (target.hostname or "").lower()
+    rule_host, rule_path = _split_domain(domain)
+    host_matches: Final = host == rule_host or host.endswith(f".{rule_host}")
+    return host_matches and target.path.startswith(rule_path)
+
+
+def _url_passes_domain_filter(url: str, domains: WebSearchDomainFilter) -> bool:
+    allowed: Final = not domains.allowed or any(_url_matches_domain(url, domain) for domain in domains.allowed)
+    return allowed and not any(_url_matches_domain(url, domain) for domain in domains.blocked)
 
 
 class WebSearchTransformation:
@@ -526,6 +551,13 @@ class WebSearchTransformation:
                 return f"Search failed: {message}"
             case _:
                 assert_never(outcome)
+
+    @staticmethod
+    def filter_search_response(result: SearchResponse, domains: WebSearchDomainFilter) -> SearchResponse:
+        """Drop results outside ``allowed_domains`` or inside ``blocked_domains``, whatever the provider honored."""
+        return result.model_copy(
+            update={"results": [r for r in result.results if _url_passes_domain_filter(r.url, domains)]}
+        )
 
     @staticmethod
     def format_search_response(result: SearchResponse) -> str:

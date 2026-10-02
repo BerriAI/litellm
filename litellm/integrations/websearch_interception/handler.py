@@ -11,9 +11,11 @@ import math
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, cast
 
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import Never, ReadOnly
 
 import litellm
@@ -32,6 +34,7 @@ from litellm.integrations.websearch_interception.tools import (
 )
 from litellm.integrations.websearch_interception.transformation import (
     WebSearchTransformation,
+    domain_host,
 )
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
@@ -49,6 +52,7 @@ from litellm.types.integrations.websearch_interception import (
     RichWebSearchInput,
     SearchFailed,
     SearchOutcome,
+    WebSearchDomainFilter,
     WebSearchInterceptionConfig,
 )
 from litellm.types.llms.anthropic import AnthropicThinkingParam
@@ -90,6 +94,8 @@ WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: Final = "_websearch_interception_emit_native_b
 # ``web_search_tool_result`` blocks to inject into the final response.
 WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY: Final = "websearch_native_blocks"
 
+WEBSEARCH_DOMAIN_FILTER_KEY: Final = "_litellm_websearch_domain_filter"
+
 _RESPONSE_CONTENT_FIELD: Final = "content"
 
 _ResponseT: Final = TypeVar("_ResponseT")
@@ -126,6 +132,10 @@ class _DeploymentCallKwargsView(TypedDict):
     model: ReadOnly[str]
 
 
+class _RequestToolsView(TypedDict):
+    tools: ReadOnly[object]
+
+
 class _AcreateNamedParams(TypedDict, total=False):
     metadata: ReadOnly[Never]
     stop_sequences: ReadOnly[Never]
@@ -142,7 +152,7 @@ class _AcreateNamedParams(TypedDict, total=False):
 
 class _AsearchNamedParams(TypedDict, total=False):
     max_results: ReadOnly[int | None]
-    search_domain_filter: ReadOnly[Never]
+    search_domain_filter: ReadOnly[list[str] | None]
     max_tokens_per_page: ReadOnly[int | None]
     country: ReadOnly[str | None]
     api_key: ReadOnly[str | None]
@@ -198,6 +208,31 @@ class _AcompletionNamedParams(TypedDict, total=False):
 
 _NO_ACREATE_NAMED: Final[_AcreateNamedParams] = {}
 _NO_ASEARCH_NAMED: Final[_AsearchNamedParams] = {}
+
+
+_TOOLS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_DOMAINS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+
+
+def _domain_entries(value: object) -> tuple[str, ...]:
+    try:
+        entries: Final = _DOMAINS_ADAPTER.validate_python(value or ())
+    except ValidationError:
+        return ()
+    return tuple(entry.strip() for entry in entries if entry.strip())
+
+
+def _web_search_domain_filter(tools: object) -> WebSearchDomainFilter | None:
+    try:
+        validated_tools: Final = _TOOLS_ADAPTER.validate_python(tools)
+    except ValidationError:
+        return None
+    native_tools: Final = tuple(tool for tool in validated_tools if is_anthropic_native_web_search_tool(tool))
+    domain_filter: Final = WebSearchDomainFilter(
+        allowed=tuple(chain.from_iterable(_domain_entries(tool.get("allowed_domains")) for tool in native_tools)),
+        blocked=tuple(chain.from_iterable(_domain_entries(tool.get("blocked_domains")) for tool in native_tools)),
+    )
+    return domain_filter if domain_filter.allowed or domain_filter.blocked else None
 
 
 def _as_str_mapping(value: object) -> Mapping[str, object] | None:
@@ -467,6 +502,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         # so flagging here ensures the signal isn't lost regardless of order.
         if any(is_anthropic_native_web_search_tool(t) for t in tools):
             kwargs[WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY] = True
+        deployment_domain_filter: Final = _web_search_domain_filter(tools)
+        if deployment_domain_filter is not None:
+            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = deployment_domain_filter
 
         # Convert native/custom web_search tools to LiteLLM standard
         converted_tools: Final = []
@@ -642,6 +680,10 @@ class WebSearchInterceptionLogger(CustomLogger):
         # prefix ensures it is stripped before the follow-up call kwargs.
         if any(is_anthropic_native_web_search_tool(t) for t in tools):
             kwargs[WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY] = True
+        requested_tools: Final[_RequestToolsView] = {"tools": tools}
+        domain_filter: Final = _web_search_domain_filter(requested_tools["tools"])
+        if domain_filter is not None:
+            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filter
 
         # Convert native web search tools to LiteLLM standard
         converted_tools: Final[list[dict[str, object]]] = []
@@ -1598,18 +1640,28 @@ class WebSearchInterceptionLogger(CustomLogger):
             search_kwargs: Final = MappingProxyType(
                 {**configured_search_kwargs, **parent_correlation.as_search_kwargs()}
             )
-            result: Final = (
-                await litellm.asearch(
-                    query=query_arg, search_provider=search_provider, **_NO_ASEARCH_NAMED, **search_kwargs
-                )
+            requested_domains: Final = None if kwargs is None else kwargs.get(WEBSEARCH_DOMAIN_FILTER_KEY)
+            domains: Final = requested_domains if isinstance(requested_domains, WebSearchDomainFilter) else None
+            named_params: Final[_AsearchNamedParams] = (
+                {"search_domain_filter": list(dict.fromkeys(domain_host(domain) for domain in domains.allowed))}
+                if domains is not None and domains.allowed and "search_domain_filter" not in configured_search_kwargs
+                else _NO_ASEARCH_NAMED
+            )
+            unfiltered_result: Final = (
+                await litellm.asearch(query=query_arg, search_provider=search_provider, **named_params, **search_kwargs)
                 if search_metadata is None
                 else await litellm.asearch(
                     query=query_arg,
                     search_provider=search_provider,
                     litellm_metadata=search_metadata,
-                    **_NO_ASEARCH_NAMED,
+                    **named_params,
                     **search_kwargs,
                 )
+            )
+            result: Final = (
+                unfiltered_result
+                if domains is None
+                else WebSearchTransformation.filter_search_response(unfiltered_result, domains)
             )
 
             # Format using transformation function
