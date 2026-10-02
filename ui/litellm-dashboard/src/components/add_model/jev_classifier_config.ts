@@ -1,7 +1,11 @@
 import { z } from "zod";
+import type { ClassifierType } from "./classifier_types";
+
+export const LAYA_MODELS = ["english", "multilingual", "typed-decisions"] as const;
 
 const jevClassifierConfigFields = {
-  model: z.string().trim().min(1).default("jev-latest"),
+  provider: z.preprocess((value) => (value === "typesafe" ? "jev" : value), z.enum(["jev", "laya"]).optional()),
+  model: z.string().trim().min(1).optional(),
   timeout_ms: z.number().int().positive().default(3000),
   instructions: z
     .string()
@@ -11,15 +15,39 @@ const jevClassifierConfigFields = {
   circuit_breaker_cooldown_seconds: z.number().finite().positive().optional(),
 };
 
-export const jevClassifierConfigSchema = z.object(jevClassifierConfigFields);
+export const jevClassifierConfigSchema = z
+  .object(jevClassifierConfigFields)
+  .transform((config) => ({
+    ...config,
+    model: config.model ?? (config.provider === "laya" ? "english" : "jev-latest"),
+  }))
+  .refine((config) => config.provider !== "laya" || LAYA_MODELS.some((model) => model === config.model), {
+    message: "Select a supported Laya model",
+    path: ["model"],
+  });
 
 export type JevClassifierConfig = z.infer<typeof jevClassifierConfigSchema>;
 
-export const defaultJevClassifierConfig = (): JevClassifierConfig => jevClassifierConfigSchema.parse({});
+export const defaultJevClassifierConfig = (provider: "jev" | "laya" = "jev"): JevClassifierConfig =>
+  jevClassifierConfigSchema.parse({ provider });
+
+export const hydrateOssClassifier = (config: {
+  classifier_type?: ClassifierType | "oss_classifier";
+  opensource_classifier_config?: unknown;
+  jev_classifier_config?: unknown;
+}): { classifier_type: ClassifierType; jev_classifier_config?: JevClassifierConfig } => ({
+  classifier_type: config.classifier_type === "oss_classifier" ? "jev" : config.classifier_type ?? "heuristic",
+  jev_classifier_config:
+    config.classifier_type === "oss_classifier" || config.classifier_type === "jev"
+      ? jevClassifierConfigSchema.safeParse(config.opensource_classifier_config ?? config.jev_classifier_config ?? {})
+          .data ?? defaultJevClassifierConfig()
+      : undefined,
+});
 
 export const normalizeJevClassifierConfig = (
   config: JevClassifierConfig = defaultJevClassifierConfig(),
 ): JevClassifierConfig => ({
+  provider: config.provider ?? "jev",
   model: config.model.trim(),
   timeout_ms: config.timeout_ms,
   ...(config.instructions?.trim() && { instructions: config.instructions.trim() }),

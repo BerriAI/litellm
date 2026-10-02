@@ -153,12 +153,13 @@ export interface StoredComplexityRouterConfig {
   heuristic_first_max_tier?: unknown;
   hybrid_boundary_margin?: unknown;
   tier_labels?: unknown;
-  classifier_type?: ClassifierType;
+  classifier_type?: ClassifierType | "oss_classifier";
   heuristic_v2_success_threshold?: unknown;
   capability_classifier_config?: unknown;
   llm_v2_config?: unknown;
   classifier_llm_config?: ClassifierLLMConfig;
   jev_classifier_config?: unknown;
+  opensource_classifier_config?: unknown;
   classifier_context_window_size?: unknown;
   classifier_context_budget_chars?: unknown;
   classifier_context_per_turn_chars?: unknown;
@@ -283,12 +284,13 @@ export interface ComplexityRouterConfigPayload {
   default_model?: string;
   plan_mode_min_tier?: string;
   tier_labels?: ComplexityTierLabels;
-  classifier_type: ClassifierType;
+  classifier_type: ClassifierType | "oss_classifier";
   heuristic_v2_success_threshold?: number;
   capability_classifier_config?: CapabilitySettings;
   llm_v2_config?: FuseSettings;
   classifier_llm_config?: ClassifierLLMConfig;
   jev_classifier_config?: JevClassifierConfig;
+  opensource_classifier_config?: JevClassifierConfig;
   classifier_context_window_size?: number;
   classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
@@ -438,7 +440,9 @@ export const getClassifierModelError = (
 ): string | null => {
   if (effectiveClassifierType(config) === "jev") {
     const parsed = jevClassifierConfigSchema.safeParse(config.jev_classifier_config ?? {});
-    return parsed.success ? null : "Enter a JEV model, a positive whole-number timeout and a positive cooldown";
+    return parsed.success
+      ? null
+      : "Enter a valid classifier model, a positive whole-number timeout and a positive cooldown";
   }
   if (!usesLlmClassifier(effectiveClassifierType(config)) || config.classifier_llm_config?.model) return null;
   return config.custom_tier_set
@@ -498,7 +502,7 @@ export const customTierWireFields = (
     tiers: Object.fromEntries(rows.map((row) => [activeTierName(row), row.models])),
     tier_definitions: tierDefinitionsFromRows(rows),
     ...(fallback && { fallback_tier: activeTierName(fallback) }),
-    classifier_type: classifierType === "jev" ? "jev" : "llm",
+    classifier_type: classifierType === "jev" ? "oss_classifier" : "llm",
     // Rebuilt from the fields an edited tier set allows. The backend rejects system_prompt and
     // classification_rubric beside tier_definitions, and both live inside this object rather than at
     // the top level the omit list covers. The opening instructions ride classification_prompt below.
@@ -769,8 +773,8 @@ export const buildComplexityRouterConfig = ({
     ...(defaultModel?.trim() && { default_model: defaultModel }),
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
-    classifier_type: classifierType,
-    ...(effectiveType === "jev" && { jev_classifier_config: normalizeJevClassifierConfig(jevClassifierConfig) }),
+    classifier_type: classifierType === "jev" ? "oss_classifier" : classifierType,
+    ...(effectiveType === "jev" && { opensource_classifier_config: normalizeJevClassifierConfig(jevClassifierConfig) }),
     ...(heuristicV2SuccessThreshold !== undefined && {
       heuristic_v2_success_threshold: heuristicV2SuccessThreshold,
     }),
