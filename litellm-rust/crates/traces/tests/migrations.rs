@@ -5,8 +5,8 @@ use std::{
 
 use litellm_http::Client;
 use litellm_traces::{
-    Connection, Error, InsertTable, Parameter, ReadQuery, encode_rows, ensure_schema,
-    execute_named_read, execute_read, schema_statements,
+    Connection, Error, InsertTable, NORMALIZED_FIELD_DEFINITIONS, Parameter, ReadQuery,
+    encode_rows, ensure_schema, execute_named_read, execute_read, schema_statements,
 };
 use rstest::{fixture, rstest};
 use testcontainers_modules::{
@@ -597,6 +597,43 @@ async fn trace_reads_apply_user_team_key_and_admin_visibility(
         span_ids(&admin_span_error),
         BTreeSet::from(["span-b".into()])
     );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn normalized_fields_match_clickhouse_catalog(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    ensure_schema(
+        &database.client,
+        &Connection::writer(&database.url)?,
+        "trace_test",
+        7,
+        14,
+    )
+    .await?;
+    let catalog = read_json(&database, "SELECT name, type FROM system.columns WHERE database = 'trace_test' AND table = 'otel_traces'").await?;
+    let columns: BTreeMap<&str, &str> = catalog["data"]
+        .as_array()
+        .expect("catalog rows")
+        .iter()
+        .map(|row| {
+            (
+                row["name"].as_str().expect("column name"),
+                row["type"].as_str().expect("column type"),
+            )
+        })
+        .collect();
+    for field in NORMALIZED_FIELD_DEFINITIONS {
+        assert_eq!(
+            columns.get(field.clickhouse_column).copied(),
+            Some(field.clickhouse_type),
+            "{}",
+            field.name
+        );
+    }
     Ok(())
 }
 
