@@ -18,9 +18,10 @@ from integration._support.wire import Reply, Request, wire_server
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import SamplingMessage, TextContent
+from mcp.types import InitializeRequestParams, InitializeResult, SamplingMessage, TextContent
 from mcp_tests.mcp_e2e_upstream_server import add, multiply
 from pydantic import BaseModel
 from sse_starlette.sse import AppStatus
@@ -43,13 +44,17 @@ class McpPeer:
     spec_path: Path | None = None
     consumed: list[int] = field(default_factory=lambda: [0])
 
-    def drain(self) -> tuple[dict[str, object], ...]:
+    def drain(self, *, include_negotiation: bool = False) -> tuple[dict[str, object], ...]:
         if self.record is not None:
             lines: Final = self.record.read_text().splitlines() if self.record.exists() else []
             fresh: Final = tuple(json.loads(line) for line in lines[self.consumed[0] :])
             self.consumed[0] = len(lines)
-            return fresh
-        return tuple(self.calls.get_nowait() for _ in range(self.calls.qsize()))
+            return tuple(item for item in fresh if include_negotiation or "negotiation" not in item)
+        return tuple(
+            item
+            for item in (self.calls.get_nowait() for _ in range(self.calls.qsize()))
+            if include_negotiation or "negotiation" not in item
+        )
 
     def registration(self) -> dict[str, object]:
         if self.transport == "stdio":
@@ -63,8 +68,23 @@ class Confirmation(BaseModel):
     confirmed: bool
 
 
-def math_service(name: str = "integration-math", *, rich: bool = False) -> MCPServer:
+def math_service(
+    name: str = "integration-math",
+    *,
+    rich: bool = False,
+    record: Callable[[dict[str, object]], None],
+) -> MCPServer:
     service: Final = MCPServer(name)
+
+    async def capture_negotiation(ctx: ServerRequestContext[object, object], call_next: CallNext) -> HandlerResult:
+        result: Final = await call_next(ctx)
+        if ctx.method == "initialize":
+            requested: Final = InitializeRequestParams.model_validate(ctx.params).protocol_version
+            returned: Final = InitializeResult.model_validate(result).protocol_version
+            record({"body": {}, "headers": {}, "negotiation": {"requested": requested, "returned": returned}})
+        return result
+
+    service.middleware.append(capture_negotiation)
     service.add_tool(add)
     service.add_tool(multiply)
 
@@ -184,14 +204,14 @@ def _draining_sse_watcher(app: Callable[[Scope, Receive, Send], object]):
 
 @contextmanager
 def mcp_peer(transport: Literal["http", "sse"] = "http", *, rich: bool = False) -> Iterator[McpPeer]:
-    service: Final = math_service(rich=rich)
+    observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
+    service: Final = math_service(rich=rich, record=observed.put)
     security: Final = TransportSecuritySettings(enable_dns_rebinding_protection=False)
     app: Final = (
         _draining_sse_watcher(service.sse_app(transport_security=security))
         if transport == "sse"
         else service.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
     )
-    observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
     with asgi_server(_capturing(app, observed), before_stop=_drain_sse_streams if transport == "sse" else None) as url:
         yield McpPeer(url + ("/sse" if transport == "sse" else "/mcp"), observed, transport)
 
@@ -199,12 +219,26 @@ def mcp_peer(transport: Literal["http", "sse"] = "http", *, rich: bool = False) 
 @contextmanager
 def stdio_peer(directory: Path, *, rich: bool = False) -> Iterator[McpPeer]:
     record: Final = directory / f"stdio-{os.getpid()}-{time.monotonic_ns()}.jsonl"
+    coverage_file: Final = os.environ.get("COVERAGE_FILE")
+    coverage_args: Final = (
+        (
+            "-c",
+            "import mcp.server.mcpserver, runpy, sys; "
+            "sys.argv = ['coverage', *sys.argv[1:]]; "
+            "runpy.run_module('coverage', run_name='__main__')",
+            "run",
+            f"--rcfile={STDIO_PEER.parent.parent / 'conformance_coverage.toml'}",
+            f"--data-file={Path(coverage_file).resolve()}",
+        )
+        if coverage_file and os.environ.get("COVERAGE_PROCESS_CONFIG")
+        else ()
+    )
     yield McpPeer(
         "",
         queue.Queue(),
         "stdio",
         sys.executable,
-        (str(STDIO_PEER), str(record), "rich" if rich else "plain"),
+        (*coverage_args, str(STDIO_PEER), str(record), "rich" if rich else "plain"),
         record,
     )
 

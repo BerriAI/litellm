@@ -1,12 +1,13 @@
 import json
 import queue
 import uuid
+from pathlib import Path
 from typing import Final
 
 import pytest
 
 from integration._support.client import Gateway
-from integration._support.mcp import McpPeer, call_tool, register_mcp, tool_names
+from integration._support.mcp import EntryPoint, McpPeer, call_tool, register_mcp, tool_names
 from integration._support.wire import Reply, Request, wire_server
 
 
@@ -112,14 +113,26 @@ def test_configured_revision_blocks_unadvertised_handshake_and_keeps_allowed_con
         with owned_proxy(gateway, tmp_path, {"DISABLE_SCHEMA_UPDATE": "true"}, config=config_path) as restricted:
             endpoint: Final = str(restricted.client.base_url).rstrip("/") + ("/mcp/sse" if ingress == "sse" else "/mcp")
             headers: Final = {"Authorization": f"Bearer {key}", "x-mcp-servers": identity}
-            denied: Final = MCPClient(server_url=endpoint, transport_type=MCPTransport(ingress), protocol_version="2025-11-25", extra_headers=headers)
-            allowed: Final = MCPClient(server_url=endpoint, transport_type=MCPTransport(ingress), protocol_version="2024-11-05", extra_headers=headers)
+            denied: Final = MCPClient(
+                server_url=endpoint,
+                transport_type=MCPTransport(ingress),
+                protocol_version="2025-11-25",
+                extra_headers=headers,
+            )
+            allowed: Final = MCPClient(
+                server_url=endpoint,
+                transport_type=MCPTransport(ingress),
+                protocol_version="2024-11-05",
+                extra_headers=headers,
+            )
 
             async def exercise() -> None:
                 with pytest.raises(MCPError, match="Unsupported MCP protocol version"):
                     await denied.list_tools(raise_on_error=True)
                 assert f"{alias}-add" in tuple(tool.name for tool in await allowed.list_tools(raise_on_error=True))
-                result: Final = await allowed.call_tool(CallToolRequestParams(name=f"{alias}-add", arguments={"a": 2, "b": 5}))
+                result: Final = await allowed.call_tool(
+                    CallToolRequestParams(name=f"{alias}-add", arguments={"a": 2, "b": 5})
+                )
                 assert result.is_error is False and result.content[0].text == "7"
 
             asyncio.run(exercise())
@@ -167,3 +180,28 @@ def test_omitted_tool_arguments_reach_the_upstream(gateway: Gateway) -> None:
         denied: Final = asyncio.run(invoke(aggregate, f"{alias}-fail", denied_key))
         assert denied.is_error is True and "not allowed" in denied.content[0].text.lower(), denied
         assert tool_calls(reference.drain()) == (), "Denied caller reached the upstream"
+
+
+@pytest.mark.parametrize("ingress", ("server_mcp", "sse"))
+def test_configured_origin_policy_rejects_before_tool_execution(
+    gateway: Gateway, tmp_path: Path, ingress: EntryPoint
+) -> None:
+    from integration._support.mcp import McpCaller, mcp_peer, tool_calls
+    from integration._support.process import owned_proxy
+
+    with mcp_peer() as reference, gateway.scenario() as scenario:
+        alias: Final = "origin" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, reference, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        with owned_proxy(gateway, tmp_path, {"LITELLM_CORS_ORIGINS": "https://allowed.example"}) as isolated:
+            reference.drain()
+            denied: Final = McpCaller(isolated, key, ingress, alias, {"Origin": "https://untrusted.example"}).call(
+                f"{alias}-add", {"a": 3, "b": 4}
+            )
+            assert denied.status == 403, denied
+            assert tool_calls(reference.drain()) == (), "Disallowed Origin executed a tool"
+            allowed: Final = McpCaller(isolated, key, ingress, alias, {"Origin": "https://allowed.example"}).call(
+                f"{alias}-add", {"a": 3, "b": 4}
+            )
+            assert allowed.ok and allowed.text == "7", allowed
+            assert len(tool_calls(reference.drain())) == 1

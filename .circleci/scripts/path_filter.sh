@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-category="${1:?usage: path_filter.sh <backend|client|provider-harness>}"
+category="${1:?usage: path_filter.sh <backend|client|provider-harness|mcp-integration>}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 run_full() {
@@ -24,7 +24,7 @@ done
 
 [ -n "$merge_base" ] || run_full "could not resolve a merge base against $candidate_bases"
 
-changed="$(git diff --name-only "$merge_base" HEAD 2>/dev/null)" || run_full "git diff failed"
+changed="$(git diff --name-only --no-renames "$merge_base" HEAD 2>/dev/null)" || run_full "git diff failed"
 [ -n "$changed" ] || run_full "no files changed vs $merge_base"
 
 echo "path-filter[$category]: changed files vs ${merge_base}:"
@@ -32,9 +32,11 @@ printf '%s\n' "$changed" | sed 's/^/  /' || true
 
 decision="$(printf '%s\n' "$changed" | bash "$here/classify_changes.sh" "$category")" || run_full "classify_changes.sh failed"
 
-if [ "$decision" = run ]; then
-  run_full "$category-relevant changes detected"
-fi
+case "$decision" in
+  run) run_full "$category-relevant changes detected" ;;
+  skip) : ;;
+  *) run_full "classify_changes.sh printed an unexpected decision: $decision" ;;
+esac
 
-echo "path-filter[$category]: only unrelated changes detected; halting job as successful"
+echo "path-filter[$category]: not applicable, only unrelated changes detected; halting job as successful"
 circleci-agent step halt

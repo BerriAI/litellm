@@ -1,0 +1,72 @@
+{
+  "revisions": [
+    "2024-11-05",
+    "2025-03-26",
+    "2025-06-18",
+    "2025-11-25"
+  ],
+  "ingress_transports": [
+    "http",
+    "sse"
+  ],
+  "upstream_transports": [
+    "http",
+    "sse",
+    "stdio"
+  ],
+  "official_scenarios": [
+    "server-initialize",
+    "server-sse-multiple-streams",
+    "ping",
+    "tools-list",
+    "tools-call-image",
+    "tools-call-audio",
+    "tools-call-embedded-resource",
+    "tools-call-mixed-content",
+    "tools-call-error",
+    "tools-call-with-progress",
+    "resources-list",
+    "resources-read-text",
+    "resources-read-binary",
+    "resources-templates-read",
+    "prompts-list",
+    "prompts-get-simple",
+    "prompts-get-with-args",
+    "prompts-get-embedded-resource",
+    "prompts-get-with-image"
+  ],
+  "capabilities": [
+    {
+      "revisions": [
+        "2024-11-05",
+        "2025-03-26",
+        "2025-06-18",
+        "2025-11-25"
+      ],
+      "operations": [
+        "tools/list",
+        "tools/call",
+        "prompts/list",
+        "prompts/get",
+        "resources/list",
+        "resources/read",
+        "resources/templates/list"
+      ],
+      "extensions": [],
+      "tests": [
+        "tests/integration/mcp/test_mcp_transports.py::test_pinned_revision_pairs_list_and_call_through_gateway"
+      ]
+    }
+  ],
+  "required_tests": [
+    "tests/integration/mcp/test_mcp_protocol_errors.py::test_omitted_tool_arguments_reach_the_upstream",
+    "tests/integration/mcp/test_mcp_protocol_errors.py::test_configured_origin_policy_rejects_before_tool_execution[server_mcp]",
+    "tests/integration/mcp/test_mcp_protocol_errors.py::test_configured_origin_policy_rejects_before_tool_execution[sse]",
+    "tests/integration/mcp/test_mcp_official_conformance.py::test_conformance_bridge_preserves_headers_payload_and_error_status[200]",
+    "tests/integration/mcp/test_mcp_official_conformance.py::test_conformance_bridge_preserves_headers_payload_and_error_status[403]",
+    "tests/integration/mcp/test_mcp_official_conformance.py::test_official_runner_rejects_unknown_scenario",
+    "tests/integration/mcp/test_mcp_official_conformance.py::test_official_gateway_session_lifecycle",
+    "tests/integration/mcp/test_mcp_official_conformance.py::test_stalled_reference_is_killed_and_cannot_report_clean_teardown",
+    "tests/integration/mcp/test_mcp_official_conformance.py::test_reference_children_are_stopped_after_the_root_exits"
+  ]
+}

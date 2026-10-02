@@ -1,13 +1,130 @@
 import hashlib
 import json
 import os
+import queue
 from pathlib import Path
 from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
-from tests.integration._support.conformance import read_checks, verify_archive, prefixed_request
+from tests.integration._support.conformance import (
+    is_initialization,
+    read_negotiation,
+    prefixed_request,
+    read_checks,
+    require_negotiations,
+    require_passes,
+    verify_archive,
+)
 from pydantic import ValidationError
+
+
+@pytest.mark.asyncio
+async def test_negotiation_records_preserve_the_peer_call_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
+    from integration._support.mcp import math_service
+    from integration.mcp.test_mcp_user_env_vars import UPSTREAM_CALLS
+    from mcp.server.context import ServerRequestContext
+    from mcp.types import InitializeResult
+
+    records: Final[list[dict[str, object]]] = []
+    service: Final = math_service(record=records.append)
+    context: Final = ServerRequestContext(
+        session=Mock(),
+        lifespan_context=None,
+        protocol_version="2025-03-26",
+        method="initialize",
+        params={"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "client", "version": "1"}},
+    )
+
+    async def initialize(request: ServerRequestContext[object, object]) -> InitializeResult:
+        return InitializeResult.model_validate(
+            {
+                "protocolVersion": request.protocol_version,
+                "capabilities": {},
+                "serverInfo": {"name": "peer", "version": "1"},
+            }
+        )
+
+    await service.middleware[-1](context, initialize)
+    calls: Final = UPSTREAM_CALLS.validate_python(tuple(records))
+    assert len(calls) == 1 and calls[0].headers == {} and calls[0].body == {}
+    assert records[0]["negotiation"] == {"requested": "2025-03-26", "returned": "2025-03-26"}
+
+
+@pytest.mark.parametrize("covered", (False, True))
+@pytest.mark.parametrize("has_data_file", (False, True))
+def test_stdio_coverage_preserves_default_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, covered: bool, has_data_file: bool
+) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
+    from integration._support.mcp import STDIO_PEER, stdio_peer
+
+    monkeypatch.delenv("COVERAGE_PROCESS_CONFIG", raising=False)
+    monkeypatch.delenv("COVERAGE_FILE", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-peer")
+    coverage_file: Final = tmp_path / "coverage data"
+    if has_data_file:
+        monkeypatch.setenv("COVERAGE_FILE", str(coverage_file))
+    if covered:
+        monkeypatch.setenv("COVERAGE_PROCESS_CONFIG", "coverage-config")
+    with stdio_peer(tmp_path) as peer:
+        assert peer.registration() == {
+            "transport": "stdio",
+            "command": peer.command,
+            "args": [
+                *(
+                    [
+                        "-c",
+                        "import mcp.server.mcpserver, runpy, sys; "
+                        "sys.argv = ['coverage', *sys.argv[1:]]; "
+                        "runpy.run_module('coverage', run_name='__main__')",
+                        "run",
+                        f"--rcfile={STDIO_PEER.parent.parent / 'conformance_coverage.toml'}",
+                        f"--data-file={coverage_file}",
+                    ]
+                    if covered and has_data_file
+                    else []
+                ),
+                str(STDIO_PEER),
+                str(peer.record),
+                "plain",
+            ],
+        }
+
+
+@pytest.mark.parametrize("file_backed", (False, True))
+def test_peer_drain_preserves_received_requests(
+    tmp_path: Path, file_backed: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
+    from integration._support.mcp import McpPeer
+
+    request: Final = {"body": {"method": "tools/call"}, "headers": {"authorization": "synthetic"}}
+    negotiation: Final = {
+        "body": {},
+        "headers": {},
+        "negotiation": {"requested": "2025-03-26", "returned": "2025-03-26"},
+    }
+    records: Final = (request, negotiation)
+    observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
+    path: Final = tmp_path / "peer.jsonl" if file_backed else None
+    if path is not None:
+        path.write_text("".join(json.dumps(record) + "\n" for record in records))
+    else:
+        for record in records:
+            observed.put(record)
+    peer: Final = McpPeer("http://peer", observed, record=path)
+    assert peer.drain() == (request,)
+    assert peer.drain() == ()
+    if path is not None:
+        with path.open("a") as sink:
+            sink.write("".join(json.dumps(record) + "\n" for record in records))
+    else:
+        for record in records:
+            observed.put(record)
+    assert peer.drain(include_negotiation=True) == records
+    assert peer.drain(include_negotiation=True) == ()
 
 
 @pytest.mark.parametrize("explicit", (False, True))
@@ -35,6 +152,42 @@ def test_owned_proxy_isolates_automatic_coverage_unless_requested(
             assert child["COVERAGE_PROCESS_START"] == ""
             assert child["LITELLM_MASTER_KEY"] == gateway.key
     assert os.environ["COVERAGE_PROCESS_CONFIG"] == "parent-config"
+
+
+@pytest.mark.parametrize("selected", ("test_mcp_transports.py", "test_mcp_credentials.py", ""))
+@pytest.mark.parametrize("missing_required", (False, True))
+def test_runner_requires_conformance_for_selected_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selected: str, missing_required: bool
+) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
+    from integration import run
+    from integration._support.conformance import required_conformance_nodes
+
+    files: Final = tuple(
+        str(path.relative_to(Path.cwd()))
+        for path in sorted((Path.cwd() / "tests/integration/mcp").glob("test_*.py"))
+        if not selected or path.name == selected
+    )
+    required: Final = tuple(node for node in required_conformance_nodes() if node.split("::")[0] in files)
+    collected: Final = required + tuple(f"{path}::other" for path in files)
+    omitted: Final = required[:1] if missing_required else ()
+    (tmp_path / "execution.json").write_text(
+        json.dumps(
+            {
+                "collected": collected,
+                "passed": tuple(n for n in collected if n not in omitted),
+                "skipped": omitted,
+                "complete": True,
+            }
+        )
+    )
+    monkeypatch.setattr("sys.argv", ["run.py", "mcp", "--results", str(tmp_path), *(files if selected else ())])
+    with patch("integration.run.subprocess.call", return_value=0):
+        if omitted:
+            with pytest.raises(AssertionError, match="conformance"):
+                run.main()
+        else:
+            assert run.main() == 0
 
 
 def test_changed_archive_is_rejected(tmp_path: Path) -> None:
@@ -161,6 +314,122 @@ def test_name_integration_preserves_other_requests(body: bytes) -> None:
     assert prefixed_request(body, "official") == body
 
 
+@pytest.mark.parametrize("observed", ((), (("2025-11-25", "2025-11-25"),), (("2025-03-26", "2025-11-25"),)))
+def test_wrong_or_missing_negotiation_cannot_pass(observed: tuple[tuple[str, str], ...]) -> None:
+    with pytest.raises(AssertionError, match="negotiation"):
+        require_negotiations("2025-03-26", observed)
+
+
+def test_actual_requested_and_returned_revision_are_required() -> None:
+    assert require_negotiations("2025-03-26", (("2025-03-26", "2025-03-26"),)) is None
+
+
+@pytest.mark.parametrize(
+    "collected,passed,skipped,complete",
+    (
+        ([], [], [], True),
+        (["one"], ["one"], [], True),
+        (["one", "two"], ["one"], ["two"], True),
+        (["one", "two"], ["one", "two"], [], False),
+    ),
+)
+def test_missing_skipped_or_incomplete_gate_cannot_pass(
+    tmp_path: Path, collected: list[str], passed: list[str], skipped: list[str], complete: bool
+) -> None:
+    (tmp_path / "execution.json").write_text(
+        json.dumps({"collected": collected, "passed": passed, "skipped": skipped, "complete": complete})
+    )
+    with pytest.raises(AssertionError, match="conformance"):
+        require_passes(tmp_path, ("one", "two"))
+
+
+def test_complete_gate_requires_every_declared_case(tmp_path: Path) -> None:
+    (tmp_path / "execution.json").write_text(
+        json.dumps(
+            {
+                "collected": ["one", "two", "unrelated"],
+                "passed": ["one", "two"],
+                "skipped": ["unrelated"],
+                "complete": True,
+            }
+        )
+    )
+    assert require_passes(tmp_path, ("one", "two")) is None
+
+
+@pytest.mark.parametrize("streamed", (False, True))
+def test_negotiation_evidence_reads_the_actual_reply(streamed: bool) -> None:
+    request: Final = json.dumps(
+        {
+            "id": 1,
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "1"},
+            },
+        }
+    ).encode()
+    result: Final = json.dumps(
+        {
+            "id": 1,
+            "result": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "serverInfo": {"name": "test", "version": "1"},
+            },
+        }
+    ).encode()
+    response: Final = b"data:\n\n: heartbeat\n\nevent: message\ndata: " + result + b"\n\n" if streamed else result
+    assert read_negotiation(request, response, "text/event-stream" if streamed else "application/json") == (
+        "2025-03-26",
+        "2025-11-25",
+    )
+
+
+def test_unrelated_rpc_response_cannot_supply_negotiation() -> None:
+    with pytest.raises(AssertionError, match="initialize response"):
+        read_negotiation(b'{"id":1}', b'{"id":2,"result":{}}', "application/json")
+
+
+@pytest.mark.parametrize(
+    "body,expected",
+    ((b"", False), (b"[]", False), (b'{"method":"tools/list"}', False), (b'{"method":"initialize"}', True)),
+)
+def test_only_initialize_is_captured(body: bytes, expected: bool) -> None:
+    assert is_initialization(body) is expected
+
+
+@pytest.mark.parametrize(
+    "scenario,identities",
+    (
+        (
+            "server-session-lifecycle",
+            (
+                "server-session-initialized-accepted",
+                "server-session-delete-accepted",
+                "server-session-terminated-returns-404",
+            ),
+        ),
+        (
+            "server-sse-multiple-streams",
+            ("server-accepts-multiple-post-streams", "server-sse-streams-functional"),
+        ),
+    ),
+)
+def test_complete_transport_checks_pass_and_missing_checks_fail(
+    tmp_path: Path, scenario: str, identities: tuple[str, ...]
+) -> None:
+    report: Final = tmp_path / "checks.json"
+    report.write_text(json.dumps([{"id": identity, "status": "SUCCESS"} for identity in identities]))
+    assert len(read_checks(tmp_path, scenario)) == len(identities)
+    for missing in identities:
+        report.write_text(
+            json.dumps([{"id": identity, "status": "SUCCESS"} for identity in identities if identity != missing])
+        )
+        with pytest.raises(AssertionError, match="required check"):
+            read_checks(tmp_path, scenario)
+
+
 @pytest.mark.parametrize(
     "scenario,identities",
     (
@@ -181,3 +450,139 @@ def test_missing_secondary_checks_cannot_report_complete_conformance(
             read_checks(tmp_path, scenario)
     report.write_text(json.dumps([{"id": identity, "status": "SUCCESS"} for identity in identities]))
     assert len(read_checks(tmp_path, scenario)) == len(identities)
+
+
+@pytest.mark.parametrize("removed", ("tools-list", "tools-call-with-progress"))
+def test_removing_official_scenario_cannot_shrink_required_baseline(
+    monkeypatch: pytest.MonkeyPatch, removed: str
+) -> None:
+    from tests.integration._support import conformance
+
+    expected: Final = conformance.required_conformance_nodes()
+    monkeypatch.setattr(
+        conformance, "OFFICIAL_SCENARIOS", tuple(s for s in conformance.OFFICIAL_SCENARIOS if s != removed)
+    )
+    assert conformance.required_conformance_nodes() == expected
+
+
+def test_removing_transport_cannot_shrink_required_baseline(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import replace
+
+    from tests.integration._support.conformance import required_conformance_nodes
+    from litellm.proxy._experimental.mcp_server import capabilities
+    from litellm.types.mcp import MCPTransport
+
+    expected: Final = required_conformance_nodes()
+    monkeypatch.setattr(
+        capabilities,
+        "REVISION_SUPPORT",
+        {
+            revision: replace(support, transports=support.transports - {MCPTransport.stdio})
+            for revision, support in capabilities.REVISION_SUPPORT.items()
+        },
+    )
+    assert required_conformance_nodes() == expected
+
+
+@pytest.mark.parametrize("kind", ("operations", "extensions"))
+def test_new_completed_capability_requires_mapped_tests(monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
+    from dataclasses import replace
+
+    from tests.integration._support.conformance import required_conformance_nodes
+    from litellm.proxy._experimental.mcp_server import capabilities
+
+    support: Final = capabilities.REVISION_SUPPORT["2025-11-25"]
+    expanded: Final = (
+        replace(support, operations=support.operations | {"resources/subscribe"})
+        if kind == "operations"
+        else replace(support, extensions=support.extensions | {"tasks"})
+    )
+    monkeypatch.setattr(capabilities, "REVISION_SUPPORT", {**capabilities.REVISION_SUPPORT, "2025-11-25": expanded})
+    with pytest.raises(AssertionError, match="capability"):
+        required_conformance_nodes()
+
+
+@pytest.mark.parametrize("missing", ("scenario", "file", "worker"))
+def test_required_execution_cannot_omit_part_of_baseline(tmp_path: Path, missing: str) -> None:
+    from tests.integration._support.conformance import required_conformance_nodes
+
+    required: Final = required_conformance_nodes()
+    omitted: Final = (
+        required[:1]
+        if missing == "scenario"
+        else tuple(node for node in required if "test_mcp_transports.py" in node)
+        if missing == "file"
+        else required[::4]
+    )
+    remaining: Final = tuple(node for node in required if node not in omitted)
+    (tmp_path / "execution.json").write_text(
+        json.dumps({"collected": remaining, "passed": remaining, "skipped": [], "complete": True})
+    )
+    with pytest.raises(AssertionError, match="not collected"):
+        require_passes(tmp_path, required)
+
+
+@pytest.mark.parametrize("invalid", ("revision", "test"))
+def test_capability_mapping_must_reference_required_coverage(invalid: str) -> None:
+    from tests.integration._support.conformance import (
+        CapabilityContract,
+        ConformanceBaseline,
+        require_capability_coverage,
+    )
+
+    baseline: Final = ConformanceBaseline(
+        revisions=("2025-11-25",),
+        ingress_transports=("http",),
+        upstream_transports=("http",),
+        official_scenarios=("tools-list",),
+        required_tests=("test_tools",),
+        capabilities=(
+            CapabilityContract(
+                revisions=("unknown" if invalid == "revision" else "2025-11-25",),
+                operations=("tools/list",),
+                extensions=(),
+                tests=("missing" if invalid == "test" else "test_tools",),
+            ),
+        ),
+    )
+    with pytest.raises(AssertionError, match="capability maps"):
+        require_capability_coverage(baseline, ("test_tools[http]",), {})
+
+
+def test_capability_can_activate_after_its_required_contract_is_added() -> None:
+    from dataclasses import replace
+
+    from tests.integration._support.conformance import (
+        CapabilityContract,
+        ConformanceBaseline,
+        require_capability_coverage,
+    )
+    from litellm.proxy._experimental.mcp_server.capabilities import REVISION_SUPPORT
+
+    baseline: Final = ConformanceBaseline(
+        revisions=("candidate",),
+        ingress_transports=("http",),
+        upstream_transports=("http",),
+        official_scenarios=("tools-list",),
+        required_tests=("test_subscription",),
+        capabilities=(
+            CapabilityContract(
+                revisions=("candidate",),
+                operations=("resources/subscribe",),
+                extensions=("subscriptions",),
+                tests=("test_subscription",),
+            ),
+        ),
+    )
+    support: Final = replace(
+        REVISION_SUPPORT["2025-11-25"],
+        operations=frozenset({"resources/subscribe"}),
+        extensions=frozenset({"subscriptions"}),
+    )
+    assert require_capability_coverage(baseline, ("test_subscription",), {"candidate": support}) is None
+    assert (
+        require_capability_coverage(baseline, ("test_subscription",), {"future": replace(support, completed=False)})
+        is None
+    )
+    with pytest.raises(AssertionError, match="coverage missing for revision"):
+        require_capability_coverage(baseline, ("test_subscription",), {"future": support})
