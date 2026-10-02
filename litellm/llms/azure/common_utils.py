@@ -440,7 +440,7 @@ def get_azure_request_auth_headers(
 
 
 def redact_azure_auth_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
-    return {  # mutable-ok: logging callbacks JSON-serialize this copy
+    return {
         name: (_REDACTED_AZURE_HEADER_VALUE if name.lower() in _AZURE_AUTH_HEADER_NAMES else value)
         for name, value in headers.items()
     }

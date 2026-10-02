@@ -4,6 +4,7 @@ from typing import Final
 
 from fastapi import APIRouter
 
+from litellm.proxy._experimental.mcp_server.stdio_gate import is_mcp_stdio_enabled
 from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
 from litellm.types.proxy.discovery_endpoints.ui_discovery_endpoints import (
     UiDiscoveryEndpoints,
@@ -41,4 +42,5 @@ async def get_ui_config():
         hide_default_credentials_hint=hide_default_credentials_hint,
         is_control_plane=is_control_plane,
         workers=proxy_config.worker_registry if is_control_plane else [],
+        mcp_stdio_enabled=is_mcp_stdio_enabled(),
     )

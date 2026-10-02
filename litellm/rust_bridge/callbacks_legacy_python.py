@@ -16,13 +16,13 @@ from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Final,
+    Literal,
     Protocol,
     cast,  # noqa: TID251  # bounded compatibility calls into legacy Python integrations
 )
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.types.utils import CredentialItem
 
 
 class MetadataUpdater(Protocol):
@@ -53,7 +53,7 @@ def setup(
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.utils import Rules, function_setup
 
-    arguments: Final = {  # mutable-ok: function_setup consumes an owned kwargs dict
+    arguments: Final = {
         "litellm_call_id": str(uuid.uuid4()),
         **kwargs,
     }
@@ -72,21 +72,6 @@ def _claim_budget_reservation(call_setup: CallSetup, asynchronous: bool) -> Call
     return call_setup
 
 
-def check_limits(kwargs: Mapping[str, object]) -> None:
-    from litellm import (
-        BudgetExceededError,
-        _current_cost,  # pyright: ignore[reportPrivateUsage]  # shared SDK budget counter has no public accessor
-        max_budget,
-        num_retries_per_request,
-    )
-    from litellm.litellm_core_utils.core_helpers import max_retries_per_request_hit
-
-    if max_budget and _current_cost > max_budget:
-        raise BudgetExceededError(current_cost=_current_cost, max_budget=max_budget)
-    if max_retries_per_request_hit(kwargs, num_retries_per_request):
-        raise RuntimeError("Max retries per request hit!")
-
-
 def finalize(
     response: object,
     logger: Logging,
@@ -101,9 +86,18 @@ def finalize(
         MetadataUpdater, response_metadata.update_response_metadata
     )
     update(response, logger, model if isinstance(model, str) else None, kwargs, start_time, end_time)
+    cache_key: Final = logger.model_call_details.get("cache_key")
+    if logger.model_call_details.get("cache_hit") is True and isinstance(cache_key, str):
+        from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+
+        hidden: Final = get_hidden_params_dict(response, create=True)
+        hidden.update({"cache_key": cache_key, "cache_hit": True})
 
 
 class LoggingSurface(Protocol):
+    @property
+    def model_call_details(self) -> Mapping[str, object]: ...
+
     @property
     def litellm_params(self) -> Mapping[str, object]: ...
 
@@ -130,7 +124,7 @@ class LoggingSurface(Protocol):
     ) -> object: ...
 
     def handle_sync_success_callbacks_for_async_calls(
-        self, result: object, start_time: datetime.datetime, end_time: datetime.datetime, cache_hit: object = None
+        self, result: object, start_time: datetime.datetime, end_time: datetime.datetime, cache_hit: bool | None = None
     ) -> None: ...
 
     def failure_handler(
@@ -238,10 +232,19 @@ def defer_success(logger: LoggingSurface, pending: object) -> None:
     setattr(logger, "_native_pending_logging", pending)
 
 
+def _cache_hit(logger: LoggingSurface) -> Literal[True] | None:
+    return True if logger.model_call_details.get("cache_hit") is True else None
+
+
 def sync_success_for_async_call(
     logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime
 ) -> None:
-    logger.handle_sync_success_callbacks_for_async_calls(result=response, start_time=start, end_time=end)
+    logger.handle_sync_success_callbacks_for_async_calls(
+        result=response,
+        start_time=start,
+        end_time=end,
+        cache_hit=_cache_hit(logger),
+    )
 
 
 def failure_handler(
@@ -261,13 +264,20 @@ def failure_handler(
 def submit_success(logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime) -> None:
     from litellm.litellm_core_utils.litellm_logging import executor
 
-    executor.submit(contextvars.copy_context().run, logger.success_handler, response, start, end)
+    executor.submit(
+        contextvars.copy_context().run,
+        logger.success_handler,
+        response,
+        start,
+        end,
+        cache_hit=_cache_hit(logger),
+    )
 
 
 def async_success_handler(
     logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime
 ) -> Coroutine[object, object, None]:
-    return logger.async_success_handler(response, start, end)
+    return logger.async_success_handler(response, start, end, cache_hit=_cache_hit(logger))
 
 
 def enqueue_logging(coroutine: Coroutine[object, object, None]) -> None:
@@ -297,22 +307,6 @@ def is_internal_call() -> bool:
     from litellm._internal_context import is_internal_call as internal
 
     return internal.get()
-
-
-def credential_list() -> list[CredentialItem]:
-    from litellm import credential_list as credentials
-
-    return credentials
-
-
-def warn_unknown_credential(name: str, loaded: int) -> None:
-    from litellm._logging import verbose_logger
-
-    verbose_logger.warning(
-        "litellm_credential_name=%s matched none of the %d loaded credentials; the request runs without it",
-        name,
-        loaded,
-    )
 
 
 def before_deployment_call(kwargs: dict[str, object], call_type: str) -> Awaitable[object]:
@@ -358,7 +352,7 @@ def stream_success(
     end: datetime.datetime,
     first_chunk: datetime.datetime | None,
 ) -> None:
-    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
         GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
     )
     from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
