@@ -4374,12 +4374,12 @@ def _translate_thinking_in_params(
         {key: value for key, value in thinking_values.items() if value is not None}
     )
     return (
-        {  # mutable-ok: get_optional_params keeps mutating passed_params downstream
+        {
             **passed_params,
             **thinking_values,
             "extra_body": thaw_mapping(translated.extra_body),
         },
-        {**untouched_non_default, **surviving_thinking_values},  # mutable-ok: _check_valid_arg pops unsupported keys
+        {**untouched_non_default, **surviving_thinking_values},
     )
 
 

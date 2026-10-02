@@ -131,7 +131,7 @@ def _thawed(value: object) -> object:
 
 
 def thaw_mapping(mapping: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: JSON request body
-    return {key: _thawed(item) for key, item in mapping.items()}  # mutable-ok: JSON request body
+    return {key: _thawed(item) for key, item in mapping.items()}
 
 
 def _map_thinking_to_extra_body(
