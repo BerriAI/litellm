@@ -4472,6 +4472,11 @@ async def delete_team(
         prisma_client=prisma_client,
     )
 
+    owned_tag_names: Final[tuple[str, ...]] = tuple(
+        row.tag_name
+        for row in await TagRepository(prisma_client).table.find_many(where={"team_id": {"in": data.team_ids}})
+    )
+
     ## DELETE TEAMS
     # Both the delete and the reconcile sweep run under every team's advisory lock
     # (TEAM_ADVISORY_LOCK_SQL, the same one /team/member_add takes before its own writes),
@@ -4480,11 +4485,6 @@ async def delete_team(
     # the lock before this transaction starts, in which case this sweep reaches what it wrote,
     # or is still waiting on the lock, in which case its own re-read happens after this commits
     # and sees the row gone before it writes anything.
-    owned_tag_names: Final[tuple[str, ...]] = tuple(
-        row.tag_name
-        for row in await TagRepository(prisma_client).table.find_many(where={"team_id": {"in": data.team_ids}})
-    )
-
     delete_filter: Final[_TeamIdInFilter] = {"team_id": {"in": data.team_ids}}
     async with prisma_client.tx() as tx:
         for team_id in sorted(data.team_ids):

@@ -15,6 +15,8 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from litellm._uuid import uuid
+from litellm.models.tag import LiteLLM_TagTable
+from litellm.proxy.auth.auth_checks import get_tag_object
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
@@ -23,6 +25,7 @@ from litellm.proxy._types import (
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
     LiteLLM_OrganizationTableWithMembers,
+    DeleteTeamRequest,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
@@ -39,6 +42,11 @@ from litellm.proxy._types import (
     TeamMemberUpdateRequest,
     UpdateTeamRequest,
     UserAPIKeyAuth,  # Import UserAPIKeyAuth
+)
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    tag_cache_key,
+    tag_registry_cache_key,
 )
 from litellm.proxy.management.teams.access import TeamAccess
 from litellm.proxy.management_endpoints.team_endpoints import (
@@ -9298,8 +9306,6 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
 def _wire_team_delete_with_owned_tags(mock_prisma_client, team_ids, tag_rows):
     """Tag rows the way Postgres presents them around a team delete: readable before the
     transaction, ``team_id`` nulled by ON DELETE SET NULL once the team row is gone."""
-    from litellm.proxy._types import LiteLLM_TeamTable
-
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
         side_effect=lambda where: (
             LiteLLM_TeamTable(
@@ -9366,14 +9372,6 @@ async def test_delete_team_evicts_owned_tag_cache_but_keeps_tags_registered(
     so only each tag's own cache key may be evicted. Evicting the tag registry would make the
     still-registered tags invisible to auth until the TTL expires.
     """
-    from litellm.models.tag import LiteLLM_TagTable
-    from litellm.proxy._types import DeleteTeamRequest
-    from litellm.proxy.common_utils.user_api_key_cache import (
-        UserApiKeyCache,
-        tag_cache_key,
-        tag_registry_cache_key,
-    )
-
     tag_rows = [
         LiteLLM_TagTable(tag_name="doomed-tag", team_id="team-doomed"),
         LiteLLM_TagTable(tag_name="other-tag", team_id="team-other"),
@@ -9424,8 +9422,6 @@ async def test_delete_team_evicts_owned_tag_cache_but_keeps_tags_registered(
     assert tag_rows[0].team_id is None
     assert tag_rows[1].team_id == "team-other"
 
-    from litellm.proxy.auth.auth_checks import get_tag_object
-
     found = await get_tag_object(
         tag_name="doomed-tag",
         prisma_client=mock_prisma_client,
@@ -9443,9 +9439,6 @@ async def test_delete_team_evicts_tags_across_every_deleted_team(
     disable_audit_logging_for_mocked_team,
 ):
     """A batch delete covers tags owned by any of the deleted teams, not just the first."""
-    from litellm.proxy._types import DeleteTeamRequest
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, tag_cache_key
-
     tag_rows = [
         SimpleNamespace(tag_name="tag-one", team_id="team-one"),
         SimpleNamespace(tag_name="tag-two", team_id="team-two"),
@@ -9497,9 +9490,6 @@ async def test_delete_team_failing_delete_leaves_tag_cache_alone(
 ):
     """Tag eviction runs after the delete transaction commits, so a rollback must not
     evict tag entries for owners that still exist."""
-    from litellm.proxy._types import DeleteTeamRequest
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, tag_cache_key
-
     tag_rows = [SimpleNamespace(tag_name="doomed-tag", team_id="team-doomed")]
     mock_prisma_client = AsyncMock()
     _wire_team_delete_with_owned_tags(mock_prisma_client, team_ids={"team-doomed"}, tag_rows=tag_rows)

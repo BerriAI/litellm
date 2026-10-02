@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import get_tag_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
@@ -2178,8 +2179,6 @@ def _tag_ownership_gateway_with_real_cache(fake_db: FakeTagOwnershipDb, auth: Us
 
 
 async def _lookup_tag(mock_prisma, cache, name: str):
-    from litellm.proxy.auth.auth_checks import get_tag_object
-
     return await get_tag_object(
         tag_name=name,
         prisma_client=mock_prisma,

@@ -26,6 +26,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     tag_registry_cache_key,
 )
+from litellm.proxy.management.teams.access import TEAM_ADMIN_ONLY
+from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     get_daily_activity,
@@ -167,9 +169,6 @@ async def _caller_administers_team(
     user_api_key_dict: UserAPIKeyAuth,
     team_id: str,
 ) -> bool:
-    from litellm.proxy.management.teams.access import TEAM_ADMIN_ONLY
-    from litellm.proxy.management.teams.dependencies import get_team_access
-
     team: Final = await TeamDomainRepository(prisma_client).find_by_id(team_id, id_field="team_id")
     if team is None:
         return False
@@ -267,6 +266,18 @@ async def _get_tag_list_scope(
         user_api_key_dict=user_api_key_dict,
     )
     return {"api_key": {"in": scoped_api_keys}}
+
+
+def _stored_tag_where(
+    tag_scope: Mapping[str, Mapping[str, Sequence[str]]] | None,
+    used_tag_names: Sequence[str],
+    team_id: str | None,
+) -> Mapping[str, object] | None:
+    if tag_scope is None:
+        return None
+    if team_id is not None:
+        return {"OR": [{"tag_name": {"in": used_tag_names}}, {"team_id": team_id}]}
+    return {"tag_name": {"in": used_tag_names}}
 
 
 async def get_tag_daily_activity_api_key_filter(
@@ -728,13 +739,10 @@ async def list_tags(
         if tag_scope is not None and not used_tag_names and user_api_key_dict.team_id is None:
             return []
 
-        stored_tag_where: Final = (
-            {
-                "OR": [{"tag_name": {"in": used_tag_names}}]
-                + ([{"team_id": user_api_key_dict.team_id}] if user_api_key_dict.team_id is not None else [])
-            }
-            if tag_scope is not None and user_api_key_dict.team_id is not None
-            else ({"tag_name": {"in": used_tag_names}} if tag_scope is not None else None)
+        stored_tag_where: Final = _stored_tag_where(
+            tag_scope=tag_scope,
+            used_tag_names=used_tag_names,
+            team_id=user_api_key_dict.team_id,
         )
 
         ## QUERY STORED TAGS ##
