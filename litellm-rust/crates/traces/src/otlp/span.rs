@@ -10,7 +10,7 @@ use super::{
     attributes::attributes,
     limits::{Budget, MAX_ATTRIBUTES, MAX_DECODED_SPAN_BYTES, MAX_EVENTS, MAX_SPANS},
 };
-use crate::{DecodeError, Shared};
+use crate::{DecodeError, Shared, normalize::normalize};
 
 pub(super) fn flatten(request: ExportTraceServiceRequest) -> Result<Vec<DecodedSpan>, DecodeError> {
     let mut budget = Budget::new(MAX_DECODED_SPAN_BYTES);
@@ -125,10 +125,26 @@ fn decoded_span(
     budget: &mut Budget,
 ) -> Result<DecodedSpan, DecodeError> {
     let status = span.status.unwrap_or_default();
+    let parent_span_id = hex_bytes(&span.parent_span_id);
+    let span_attributes = attributes(span.attributes, budget)?;
+    let normalization = normalize(
+        scope_name.as_ref(),
+        &span.name,
+        &parent_span_id,
+        &span_attributes,
+    )?;
+    let normalized = normalization.span;
+    budget.consume(
+        normalized.input.len()
+            + normalized.output.len()
+            + normalized.agent_name.len()
+            + normalized.litellm_request_id.len()
+            + normalized.model.len(),
+    )?;
     Ok(DecodedSpan {
         trace_id: hex_bytes(&span.trace_id),
         span_id: hex_bytes(&span.span_id),
-        parent_span_id: hex_bytes(&span.parent_span_id),
+        parent_span_id,
         trace_state: span.trace_state,
         name: span.name,
         kind: SpanKind::try_from(span.kind)
@@ -143,7 +159,7 @@ fn decoded_span(
         })?,
         scope_name: budget.clone_shared(scope_name, String::len)?,
         scope_version: budget.clone_shared(scope_version, String::len)?,
-        attributes: attributes(span.attributes, budget)?,
+        attributes: span_attributes,
         start_ns: span.start_time_unix_nano,
         end_ns: span.end_time_unix_nano,
         status_code: StatusCode::try_from(status.code)
@@ -162,5 +178,7 @@ fn decoded_span(
                 })
             })
             .collect::<Result<Vec<_>, DecodeError>>()?,
+        normalized,
+        consumed_attributes: normalization.consumed_attributes,
     })
 }

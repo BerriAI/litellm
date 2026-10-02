@@ -19,12 +19,14 @@ const run = (trace_id: string): TraceSummary => ({
   status: "ok",
   span_count: 1,
   agent_count: 1,
+  agent_invocations: 1,
   llm_calls: 0,
   tool_calls: 0,
   error_count: 0,
   input_tokens: 0,
   output_tokens: 0,
   models: [],
+  spend: null,
 });
 
 const mockReducedMotion = (reduce: boolean) =>

@@ -23,6 +23,7 @@ class ProcessReservedForForking(RuntimeError): ...
 
 def trace_decode_otlp(body: bytes, content_type: str | None) -> list[DecodedSpan]: ...
 def trace_encode_error(message: str) -> bytes: ...
+def trace_normalized_field_definitions() -> list[dict[str, str]]: ...
 
 @final
 class NativeTraceStorage:
@@ -353,6 +354,7 @@ __all__ = [
     "responses",
     "trace_decode_otlp",
     "trace_encode_error",
+    "trace_normalized_field_definitions",
     "transcription",
 ]
 

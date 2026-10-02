@@ -7,7 +7,7 @@ from typing import Final, Literal, TypeAlias
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-from litellm.tracing.normalizers.messages import MESSAGE_ROLES, ChatRole, content_text
+from litellm.tracing.messages import MESSAGE_ROLES, ChatRole, content_text
 
 
 class UIToolCall(TypedDict):

@@ -23,6 +23,37 @@ from litellm.tracing.types import TraceScope
 TEAM_KEY = UserAPIKeyAuth(
     token="hashed-key", team_id="team-research", org_id="org-1", user_role=LitellmUserRoles.INTERNAL_USER
 )
+TRACE_RESPONSE: Final = {
+    "summary": {
+        "trace_id": "t1",
+        "name": "trace",
+        "service": "test",
+        "input_preview": "",
+        "start_time": "2026-01-01T00:00:00Z",
+        "duration_ms": 0,
+        "status": "ok",
+        "span_count": 0,
+        "agent_count": 0,
+        "agent_invocations": 0,
+        "llm_calls": 0,
+        "tool_calls": 0,
+        "error_count": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "models": [],
+        "spend": None,
+    },
+    "agents": [],
+    "spans": [],
+}
+SPAN_DETAIL_RESPONSE: Final = {
+    "span_id": "s1",
+    "input": "",
+    "output": "",
+    "input_ui": {"kind": "text", "text": ""},
+    "output_ui": {"kind": "text", "text": ""},
+    "attributes": {},
+}
 
 
 @pytest.mark.parametrize(
@@ -171,17 +202,16 @@ def test_list_traces_defaults_to_last_24h(client, receiver):
 
 def test_get_trace_404_and_200(client, receiver):
     assert client.get("/v1/traces/missing").status_code == 404
-    trace = {"summary": {"trace_id": "t1"}, "agents": [], "spans": []}
-    receiver.get_trace.return_value = trace
+    receiver.get_trace.return_value = TRACE_RESPONSE
     response = client.get("/v1/traces/t1")
     assert response.status_code == 200
-    assert response.json() == trace
+    assert response.json() == TRACE_RESPONSE
     receiver.get_trace.assert_awaited_with("t1", {"team_ids": ("team-research",), "api_key_hash": ""}, "")
 
 
 def test_get_span_404_and_200(client, receiver):
     assert client.get("/v1/traces/t1/spans/s1").status_code == 404
-    receiver.get_span.return_value = {"span_id": "s1", "input": "", "output": "", "attributes": {}}
+    receiver.get_span.return_value = SPAN_DETAIL_RESPONSE
     response = client.get("/v1/traces/t1/spans/s1")
     assert response.status_code == 200
     assert response.json()["span_id"] == "s1"
@@ -207,7 +237,7 @@ def test_get_span_serves_ui_content_from_stored_payloads(client):
 
 
 def test_trace_detail_passes_scoped_reference(client, receiver):
-    receiver.get_trace.return_value = {"summary": {"trace_id": "t1"}, "agents": [], "spans": []}
+    receiver.get_trace.return_value = TRACE_RESPONSE
     assert client.get("/v1/traces/t1?trace_ref=run-one").status_code == 200
     receiver.get_trace.assert_awaited_with("t1", {"team_ids": ("team-research",), "api_key_hash": ""}, "run-one")
 

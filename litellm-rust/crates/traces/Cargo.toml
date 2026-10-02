@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 base64.workspace = true
 flate2.workspace = true
+indexmap = { version = "2", features = ["serde"] }
 opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "trace", "with-serde"] }
 prost.workspace = true
 time = { workspace = true, features = ["formatting"] }
