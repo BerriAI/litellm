@@ -10,7 +10,7 @@ import type { SystemOnePayloadValidation } from "./validate_system_one_payload";
 
 SyntaxHighlighter.registerLanguage("json", json);
 
-const EDITOR_TEXT = "m-0 whitespace-pre-wrap break-words py-3 font-mono text-xs leading-5 [scrollbar-gutter:stable]";
+const EDITOR_TEXT = "m-0 whitespace-pre-wrap wrap-anywhere py-3 font-mono text-xs leading-5 [scrollbar-gutter:stable]";
 const GUTTER_WIDTH = "w-11";
 const CONTENT_INSET = "pl-14 pr-3";
 const CODE_TAG_PROPS = { className: "language-json", style: { whiteSpace: "pre-wrap" } } as const;

@@ -149,7 +149,7 @@ export default function SystemOneResponseView({
   const model = response.model ?? fallbackModel;
 
   return (
-    <Card>
+    <Card className="wrap-anywhere">
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="grid gap-1">
@@ -190,7 +190,7 @@ export default function SystemOneResponseView({
             }
           />
           <CollapsibleContent>
-            <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
+            <pre className="whitespace-pre-wrap wrap-anywhere rounded-md bg-muted p-3 font-mono text-xs">
               {JSON.stringify(response, null, 2)}
             </pre>
           </CollapsibleContent>

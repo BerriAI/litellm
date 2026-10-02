@@ -77,7 +77,7 @@ export default function SystemOneQuestionBreakdown({ payload }: { payload?: Syst
         <CardTitle>Question breakdown</CardTitle>
         <CardDescription>Review the state and criteria that will be sent.</CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-4">
+      <CardContent className="grid gap-4 wrap-anywhere">
         <section
           aria-labelledby="system-one-state-heading"
           className={cn("grid gap-2 border-l-2 pl-3", ROOT_BLOCK_STYLES.state.accent)}
@@ -85,7 +85,7 @@ export default function SystemOneQuestionBreakdown({ payload }: { payload?: Syst
           <h3 id="system-one-state-heading" className="text-sm font-medium">
             State
           </h3>
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 font-mono text-xs">
+          <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-md bg-muted p-3 font-mono text-xs">
             {formatState(payload.state)}
           </pre>
         </section>
