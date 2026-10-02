@@ -1668,12 +1668,12 @@ async def test_generate_content_sends_response_schema_and_tool_parameters_to_the
         ),
         pytest.param(
             {"fileData": {"fileUri": "https://example.com/report.pdf", "mimeType": "application/pdf"}},
-            {"type": "file", "file": {"file_data": "https://example.com/report.pdf", "format": "application/pdf"}},
+            {"type": "file", "file": {"file_id": "https://example.com/report.pdf", "format": "application/pdf"}},
             id="pdf-uri-keeps-mime-type",
         ),
         pytest.param(
             {"fileData": {"fileUri": "https://generativelanguage.googleapis.com/v1beta/files/abc"}},
-            {"type": "file", "file": {"file_data": "https://generativelanguage.googleapis.com/v1beta/files/abc"}},
+            {"type": "file", "file": {"file_id": "https://generativelanguage.googleapis.com/v1beta/files/abc"}},
             id="files-api-uri-without-mime-type",
         ),
     ],
@@ -1705,3 +1705,40 @@ def test_file_data_part_without_uri_is_skipped():
     )
 
     assert completion_request["messages"] == [{"role": "user", "content": "hi"}]
+
+
+def test_pdf_file_data_reaches_openai_transform_as_a_fetchable_url():
+    """The OpenAI chat transform only downloads and base64-encodes PDF URLs passed as file_id"""
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
+    completion_request = GoogleGenAIAdapter().translate_generate_content_to_completion(
+        model="openrouter/google/gemini-3.8-flash",
+        contents=[
+            {
+                "role": "user",
+                "parts": [{"fileData": {"fileUri": "https://example.com/report.pdf", "mimeType": "application/pdf"}}],
+            }
+        ],
+    )
+
+    file_part = completion_request["messages"][0]["content"][0]
+    assert OpenAIGPTConfig().contains_pdf_url(file_part["file"])
+
+
+@pytest.mark.parametrize(
+    "file_data",
+    [
+        pytest.param("https://www.youtube.com/watch?v=abc123", id="string-instead-of-object"),
+        pytest.param({"fileUri": "https://example.com/a.pdf", "mimeType": 7}, id="non-string-mime-type"),
+    ],
+)
+def test_malformed_file_data_is_rejected_as_bad_request(file_data):
+    from litellm.exceptions import BadRequestError
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    with pytest.raises(BadRequestError, match="fileData must be an object"):
+        GoogleGenAIAdapter().translate_generate_content_to_completion(
+            model="openrouter/google/gemini-3.8-flash",
+            contents=[{"role": "user", "parts": [{"fileData": file_data}, {"text": "hi"}]}],
+        )

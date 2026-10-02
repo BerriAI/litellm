@@ -75,8 +75,8 @@ class _GenAIRequestFunctionCall(TypedDict, total=False):
 class _GenAIContentPart(TypedDict, total=False):
     text: ReadOnly[str]
     inline_data: ReadOnly[Mapping[str, str]]
-    fileData: ReadOnly[Mapping[str, str]]
-    file_data: ReadOnly[Mapping[str, str]]
+    fileData: ReadOnly[object]
+    file_data: ReadOnly[object]
     functionResponse: ReadOnly[_GenAIFunctionResponse]
     functionCall: ReadOnly[_GenAIRequestFunctionCall]
 
@@ -106,32 +106,40 @@ class _GenAISystemInstruction(TypedDict, total=False):
 
 _EMPTY_STR_MAPPING: Final[Mapping[str, str]] = MappingProxyType({})
 _YOUTUBE_HOSTS: Final = ("youtube.com/", "youtu.be/")
+_FILE_DATA_FIELDS: Final = TypeAdapter(Mapping[str, str])
 _UserContentPart: TypeAlias = (
     ChatCompletionTextObject | ChatCompletionImageObject | ChatCompletionVideoObject | ChatCompletionFileObject
 )
 
 
-def _file_data_to_content_part(file_data: Mapping[str, str]) -> _UserContentPart | None:
+def _file_data_to_content_part(file_data: object) -> _UserContentPart | None:
     """Map a Gemini fileData part (a URI the model fetches itself) to the matching OpenAI content part
 
     Images go to image_url and videos (by mime type, or a YouTube link with no mime type) go to video_url,
     which is what OpenRouter and other OpenAI-compatible providers accept for remote media. Anything else
-    goes to a file part that keeps the URI and mime type
+    goes to a file part with the URI as file_id, so downstream transforms can fetch it
     """
-    uri: Final = file_data.get("fileUri") or file_data.get("file_uri")
+    fields: Final = _validated(_FILE_DATA_FIELDS, file_data)
+    if fields is None:
+        raise BadRequestError(
+            message=f"fileData must be an object of string fields (fileUri, mimeType), got {file_data!r}",
+            model=None,
+            llm_provider="google_genai",
+        )
+    uri: Final = fields.get("fileUri") or fields.get("file_uri")
     if not uri:
         return None
-    mime_type: Final = file_data.get("mimeType") or file_data.get("mime_type")
+    mime_type: Final = fields.get("mimeType") or fields.get("mime_type")
     if mime_type is not None and mime_type.startswith("image/"):
         return ChatCompletionImageObject(type="image_url", image_url={"url": uri})
     if (mime_type is not None and mime_type.startswith("video/")) or (
         mime_type is None and any(host in uri for host in _YOUTUBE_HOSTS)
     ):
         return ChatCompletionVideoObject(type="video_url", video_url={"url": uri})
-    file_part: Final = ChatCompletionFileObject(type="file", file={"file_data": uri})
-    if mime_type is not None:
-        file_part["file"]["format"] = mime_type
-    return file_part
+    return ChatCompletionFileObject(
+        type="file",
+        file={"file_id": uri, "format": mime_type} if mime_type is not None else {"file_id": uri},
+    )
 
 
 _RESPONSE_MIME_TYPE_KEYS: Final = ("responseMimeType", "response_mime_type")
@@ -548,7 +556,6 @@ class GoogleGenAIAdapter:
                                 )
                             )
                         elif "fileData" in part or "file_data" in part:
-                            # Handle URI references (YouTube links, Files API URIs, gs:// or https:// media)
                             file_part = _file_data_to_content_part(part.get("fileData") or part.get("file_data") or {})
                             if file_part is not None:
                                 content_parts.append(file_part)
