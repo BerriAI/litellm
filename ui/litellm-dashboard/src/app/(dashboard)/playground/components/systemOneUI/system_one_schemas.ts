@@ -38,6 +38,7 @@ const noulQuestionSchema = z
         },
         { invalid_type_error: "Noul criteria, when provided, must be an object." },
       )
+      .passthrough()
       .optional(),
   })
   .passthrough();

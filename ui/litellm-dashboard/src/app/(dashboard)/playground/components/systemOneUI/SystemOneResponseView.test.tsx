@@ -46,6 +46,19 @@ describe("SystemOneResponseView", () => {
     expect(screen.getByText("378 input / 63 output tokens")).toBeInTheDocument();
   });
 
+  it("selects the score level nearest a fractional calibrated score", () => {
+    const fractional: SystemOneResponse = {
+      answers: {
+        severity: { type: "score", score: 2.39, probabilities: { "1": 0, "2": 0.62, "3": 0.38 } },
+      },
+    };
+    render(<SystemOneResponseView response={fractional} isLoading={false} />);
+
+    expect(screen.getByRole("meter", { name: "2 probability" })).toHaveAttribute("aria-valuetext", "62%, selected");
+    expect(screen.getByRole("meter", { name: "3 probability" })).toHaveAttribute("aria-valuetext", "38%");
+    expect(screen.getByRole("meter", { name: "1 probability" })).toHaveAttribute("aria-valuetext", "0%");
+  });
+
   it("shows an inline error message", () => {
     render(<SystemOneResponseView error="Upstream request failed" isLoading={false} />);
 

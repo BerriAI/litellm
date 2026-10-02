@@ -48,8 +48,15 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
       makeSystemOneRequest(payload, apiKey, getCustomProxyBaseUrl(), signal),
   });
   const isLoading = systemOne.isPending;
+  const { reset: resetSystemOne } = systemOne;
 
   useEffect(() => () => activeController.current?.abort(), []);
+
+  useEffect(() => {
+    activeController.current?.abort();
+    activeController.current = null;
+    resetSystemOne();
+  }, [effectiveApiKey, resetSystemOne]);
 
   function clearRequestState() {
     activeController.current?.abort();
@@ -90,7 +97,6 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
               value={apiKeySource}
               onValueChange={(value) => {
                 if (value === "session" || value === "custom") {
-                  clearRequestState();
                   setApiKeySource(value);
                 }
               }}
@@ -111,10 +117,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                 type="password"
                 aria-label="Virtual Key"
                 value={customApiKey}
-                onChange={(event) => {
-                  clearRequestState();
-                  setCustomApiKey(event.target.value);
-                }}
+                onChange={(event) => setCustomApiKey(event.target.value)}
                 placeholder="Enter Virtual Key"
                 className="w-56"
               />

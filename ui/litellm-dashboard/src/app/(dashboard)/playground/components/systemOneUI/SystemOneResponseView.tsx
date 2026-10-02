@@ -35,6 +35,7 @@ function ProbabilityMeter({
         role="meter"
         aria-label={`${label} probability`}
         aria-valuenow={percentage}
+        aria-valuetext={selected ? `${percentage}%, selected` : `${percentage}%`}
         aria-valuemin={0}
         aria-valuemax={100}
         className="h-2 overflow-hidden rounded-full bg-muted"
@@ -97,7 +98,7 @@ function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
               key={level}
               label={label}
               probability={probability}
-              selected={Number(level) === answer.score}
+              selected={Number(level) === Math.round(answer.score)}
             />
           );
         })}

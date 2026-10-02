@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitForElementToBeRemoved } from "@testing-library/react";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -200,6 +200,27 @@ describe("SystemOneUI integration", () => {
 
     expect(screen.queryByText("Selected choice")).not.toBeInTheDocument();
     expect(screen.queryByText("jev-1.13.0")).not.toBeInTheDocument();
+  });
+
+  it("clears the answer when the UI session key changes", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const view = rtlRender(
+      <QueryClientProvider client={queryClient}>
+        <SystemOneUI accessToken="session-key" />
+      </QueryClientProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Selected choice")).toBeInTheDocument();
+
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <SystemOneUI accessToken="new-session-key" />
+      </QueryClientProvider>,
+    );
+
+    await waitForElementToBeRemoved(() => screen.queryByText("Selected choice"));
   });
 
   it("aborts an in-flight request when cancelled", async () => {

@@ -230,10 +230,18 @@ describe("validateSystemOnePayload", () => {
     const result = validateSystemOnePayload(
       requestWith({
         temperature: 0,
-        questions: { category: { type: "choice", instructions: "Route", criteria: { support: "Help" }, weight: 2 } },
+        questions: {
+          category: { type: "choice", instructions: "Route", criteria: { support: "Help" }, weight: 2 },
+          escalate: { type: "noul", instructions: "Escalate?", criteria: { true: "Yes", unsure: "Maybe" } },
+        },
       }),
     );
     expect(result.payload).toMatchObject({ temperature: 0, questions: { category: { weight: 2 } } });
+    expect(result.payload?.questions.escalate).toEqual({
+      type: "noul",
+      instructions: "Escalate?",
+      criteria: { true: "Yes", unsure: "Maybe" },
+    });
   });
 
   it("accepts the built-in example without issues", () => {
