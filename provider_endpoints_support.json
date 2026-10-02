@@ -6,6 +6,7 @@
       "url": "Link to provider documentation",
       "endpoints": {
         "chat_completions": "Supports /chat/completions endpoint",
+        "systemone": "Supports native System One typed decisions",
         "messages": "Supports /messages endpoint (Anthropic format)",
         "responses": "Supports /responses endpoint (OpenAI/Anthropic unified)",
         "embeddings": "Supports /embeddings endpoint",
@@ -1474,6 +1475,13 @@
         "moderations": false,
         "batches": false,
         "rerank": false
+      }
+    },
+    "laya": {
+      "display_name": "Laya (`laya`)",
+      "url": "https://docs.litellm.ai/docs/auto_router/decision_classifiers",
+      "endpoints": {
+        "systemone": true
       }
     },
     "lambda_ai": {
@@ -3370,6 +3378,13 @@
       "leftnav_label": "/skills",
       "provider_json_field": "skills",
       "url": "https://docs.litellm.ai/docs/skills"
+    },
+    "systemone": {
+      "docs_label": "systemone",
+      "display_name": "System One Decision API",
+      "leftnav_label": "/laya/v1/systemone",
+      "provider_json_field": "systemone",
+      "url": "https://docs.litellm.ai/docs/auto_router/decision_classifiers"
     },
     "text_completion": {
       "docs_label": "text_completion",

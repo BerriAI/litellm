@@ -15,7 +15,8 @@ export default function LensPage() {
     parseAsStringLiteral(["traces", "investigations"]).withOptions({ history: "push" }),
   );
   const [lensId] = useQueryState("lens", parseAsString);
-  const activeTab = tab ?? (lensId ? "investigations" : "traces");
+  const defaultTab = isProxyAdminTierRole(userRole ?? "") || lensId ? "investigations" : "traces";
+  const activeTab = tab ?? defaultTab;
   if (!accessToken) return null;
   return (
     <main className="flex w-full min-w-0 flex-1 flex-col gap-5 p-6 md:p-8">
@@ -37,7 +38,12 @@ export default function LensPage() {
           </TabsTrigger>
         </TabsList>
         <TabsContent value="traces" keepMounted className="min-h-0">
-          <AgentTracesPage accessToken={accessToken} isActive={activeTab === "traces"} />
+          <AgentTracesPage
+            accessToken={accessToken}
+            isActive={activeTab === "traces"}
+            readOnly={isViewOnly}
+            canMintTracingKey={isProxyAdminRole(userRole ?? "")}
+          />
         </TabsContent>
         <TabsContent value="investigations">
           {isProxyAdminTierRole(userRole ?? "") ? (
