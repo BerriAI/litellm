@@ -1302,6 +1302,18 @@ describe("EntityUsage", () => {
     });
   });
 
+  it("requests the current UTC bucket for the entity view and its agent breakdown", async () => {
+    render(<EntityUsage {...defaultProps} entityType="team" />);
+
+    await waitFor(() => {
+      expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+      expect(mockAgentDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(mockTeamDailyActivityCall).toHaveBeenCalledWith(expect.objectContaining({ includeCurrentUtcDay: true }));
+    expect(mockAgentDailyActivityCall).toHaveBeenCalledWith(expect.objectContaining({ includeCurrentUtcDay: true }));
+  });
+
   it("does not scope the agent breakdown by the selected team ids", async () => {
     render(<EntityUsage {...defaultProps} entityType="team" />);
 

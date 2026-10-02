@@ -6,6 +6,7 @@ import {
   dailyActivityExportCall,
   dailyActivityKeySearchCall,
   dailyActivityModelTopKeysCall,
+  gatewayDailyActivityCall,
 } from "./networking";
 import type { DailyActivityEntity, DailyActivityRequest } from "./UsagePage/dailyActivityApi";
 
@@ -123,6 +124,19 @@ describe("dailyActivityAggregatedCall", () => {
     expect(requestedUrl(mockFetch).searchParams.get("include_current_utc_day")).toBe("true");
   });
 
+  it.each<[DailyActivityEntity]>([["team"], ["tag"], ["organization"], ["customer"], ["agent"]])(
+    "sends include_current_utc_day for %s when set",
+    async (entity) => {
+      const mockFetch = captureFetch();
+
+      await dailyActivityAggregatedCall(entity, req({ includeCurrentUtcDay: true }));
+      await dailyActivityAggregatedCall(entity, req());
+
+      expect(requestedUrl(mockFetch, 0).searchParams.get("include_current_utc_day")).toBe("true");
+      expect(requestedUrl(mockFetch, 1).searchParams.has("include_current_utc_day")).toBe(false);
+    },
+  );
+
   it("sends api_key_limit only when provided", async () => {
     const mockFetch = captureFetch();
 
@@ -220,5 +234,18 @@ describe("cacheLeakageKeysCall", () => {
     await cacheLeakageKeysCall(req(), 75);
 
     expect(requestedUrl(mockFetch).searchParams.get("limit")).toBe("75");
+  });
+});
+
+describe("gatewayDailyActivityCall", () => {
+  it("asks for the current UTC bucket alongside the caller's timezone", async () => {
+    const mockFetch = captureFetch();
+
+    await gatewayDailyActivityCall("sk-key", start, end);
+
+    const url = requestedUrl(mockFetch);
+    expect(url.pathname).toBe("/gateway/daily/activity");
+    expect(url.searchParams.get("timezone")).toBe(new Date().getTimezoneOffset().toString());
+    expect(url.searchParams.get("include_current_utc_day")).toBe("true");
   });
 });

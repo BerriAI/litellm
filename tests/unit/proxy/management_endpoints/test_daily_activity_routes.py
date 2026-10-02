@@ -563,6 +563,27 @@ def test_aggregated_routes_return_scoped_results(
 
 
 @pytest.mark.parametrize(("prefix", "query_name", "entity_id"), _ENTITY_CASES)
+@pytest.mark.parametrize(("flag_param", "expected_flag"), [({"include_current_utc_day": "true"}, True), ({}, False)])
+def test_every_entity_forwards_the_current_utc_day_opt_in(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    prefix: str,
+    query_name: str,
+    entity_id: str,
+    flag_param: dict[str, str],
+    expected_flag: bool,
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get(
+        f"{prefix}/daily/activity/aggregated",
+        params={**_entity_params(query_name, entity_id), "timezone": 480, **flag_param},
+    )
+    assert response.status_code == 200, response.text
+    scope: Final = repository.aggregated.call_args.args[0]
+    assert scope.timezone_offset_minutes == 480
+    assert scope.include_current_utc_day is expected_flag
+
+
+@pytest.mark.parametrize(("prefix", "query_name", "entity_id"), _ENTITY_CASES)
 def test_admin_aggregates_all_entities_when_filter_is_omitted(
     daily_activity_client: tuple[TestClient, _FakeRepository], prefix: str, query_name: str, entity_id: str
 ) -> None:

@@ -54,6 +54,17 @@ def frozen_clock():
         yield
 
 
+# Evening on 2023-03-15 for a viewer at UTC-7, after UTC has rolled into 2023-03-16
+_WEST_OF_UTC_EVENING = datetime(2023, 3, 16, 3, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def west_of_utc_evening_clock():
+    with patch("litellm.proxy.management_endpoints.gateway_request_endpoints.datetime") as clock:
+        clock.now.return_value = _WEST_OF_UTC_EVENING
+        yield
+
+
 def _row(
     date: str = "2026-08-04",
     category: str = "llm",
@@ -235,6 +246,7 @@ class TestGatewayDailyActivityEndpoint:
         assert response.by_date == ()
         assert response.by_route == ()
 
+
 class TestGatewayDailyActivityRoute:
     """
     Driven through the mounted route rather than by calling the handler.
@@ -269,6 +281,32 @@ class TestGatewayDailyActivityRoute:
         assert response.status_code == 200
         _, start, end = prisma.db.query_raw.call_args.args
         assert (start, end) == _FROZEN_RANGE
+
+    @pytest.mark.parametrize(
+        ("end_date", "expected_end"),
+        [("2023-03-15", "2023-03-16"), ("2023-03-14", "2023-03-14")],
+        ids=["local-today-reaches-current-utc-bucket", "historical-range-unchanged"],
+    )
+    def test_current_utc_day_opt_in_only_extends_ranges_ending_local_today(
+        self, west_of_utc_evening_clock, end_date, expected_end
+    ):
+        prisma = _prisma_returning([])
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[user_api_key_auth] = _admin
+        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+            response = TestClient(app).get(
+                "/gateway/daily/activity",
+                params={
+                    "start_date": "2023-03-01",
+                    "end_date": end_date,
+                    "timezone": 420,
+                    "include_current_utc_day": "true",
+                },
+            )
+        assert response.status_code == 200
+        _, start, end = prisma.db.query_raw.call_args.args
+        assert (start, end) == ("2023-03-01", expected_end)
 
     def test_serialized_response_carries_the_documented_shape(self):
         prisma = _prisma_returning(

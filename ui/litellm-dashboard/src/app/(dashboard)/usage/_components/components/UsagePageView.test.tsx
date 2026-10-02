@@ -977,6 +977,18 @@ describe("UsagePage", () => {
         expect.objectContaining({ accessToken: "test-token", entityIds: null }),
       );
     });
+
+    it("should request the current UTC bucket so spend after UTC midnight is included", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+        expect.objectContaining({ includeCurrentUtcDay: true }),
+      );
+    });
   });
 
   describe("user usage view", () => {

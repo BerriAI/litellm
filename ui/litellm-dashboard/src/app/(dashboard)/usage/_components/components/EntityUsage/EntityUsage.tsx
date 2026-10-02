@@ -116,6 +116,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             startTime: startTime as Date,
             endTime: endTime as Date,
             entityIds: selectedTags.length > 0 ? selectedTags : null,
+            includeCurrentUtcDay: true,
           }
         : null,
     [hasRequestWindow, accessToken, startTime, endTime, selectedTags],
@@ -128,6 +129,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             startTime: startTime as Date,
             endTime: endTime as Date,
             entityIds: null,
+            includeCurrentUtcDay: true,
           }
         : null,
     [hasRequestWindow, accessToken, startTime, endTime],

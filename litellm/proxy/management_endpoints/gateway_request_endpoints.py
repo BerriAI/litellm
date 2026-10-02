@@ -21,6 +21,7 @@ from pydantic import BaseModel, TypeAdapter
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.daily_activity_sql import adjust_dates_for_timezone
 from litellm.types.proxy.gateway_requests import (
     GatewayRequestActivityResponse,
     GatewayRequestBreakdownEntry,
@@ -100,6 +101,23 @@ async def get_gateway_daily_activity(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     start_date: str | None = Query(default=None, description="Start date in YYYY-MM-DD format"),
     end_date: str | None = Query(default=None, description="End date in YYYY-MM-DD format"),
+    timezone_offset_minutes: Annotated[
+        int | None,
+        Query(
+            alias="timezone",
+            description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
+            "Matches JavaScript's Date.getTimezoneOffset() convention.",
+        ),
+    ] = None,
+    include_current_utc_day: Annotated[
+        bool,
+        Query(
+            description="When the range ends on the caller's current local day, extend it to "
+            "today's UTC bucket so requests counted after the caller's local midnight (in UTC "
+            "terms) are included. Requires the timezone parameter. Historical ranges are "
+            "never extended.",
+        ),
+    ] = False,
 ) -> GatewayRequestActivityResponse:
     """
     Successful and failed gateway requests, counted at the ASGI edge.
@@ -122,10 +140,17 @@ async def get_gateway_daily_activity(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     default_start, default_end = _default_range()
-    raw_rows: Final = await prisma_client.db.query_raw(  # pyright: ignore[reportAny]  # untyped prisma client
-        _AGGREGATE_SQL,
+    query_start, query_end = adjust_dates_for_timezone(
         start_date or default_start,
         end_date or default_end,
+        timezone_offset_minutes,
+        include_current_utc_day,
+        utc_now=datetime.now(timezone.utc),
+    )
+    raw_rows: Final = await prisma_client.db.query_raw(  # pyright: ignore[reportAny]  # untyped prisma client
+        _AGGREGATE_SQL,
+        query_start,
+        query_end,
     )
     # Every downstream use is typed: the adapter returns _AggregateRow or raises.
     rows: Final = _ROWS_ADAPTER.validate_python(raw_rows or ())
