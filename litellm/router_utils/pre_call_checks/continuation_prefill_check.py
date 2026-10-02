@@ -1,10 +1,4 @@
-"""
-Mid-stream fallback continuation: keep the fallback on a deployment that can
-continue a prefilled assistant message. When the router marks a fallback
-re-entry as a continuation, deployments whose model does not support assistant
-prefill are dropped, so the partial text is continued rather than regenerated or
-rejected. Requests without the marker pass through untouched.
-"""
+"""Keeps a mid-stream continuation on deployments whose model supports assistant prefill."""
 
 from collections.abc import Mapping, Sequence
 from typing import Final
@@ -15,16 +9,11 @@ from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_assistant_prefill
 
-# The router marks a continuation re-entry by placing MID_STREAM_CONTINUATION_MARKER
-# under this key. Since the proxy can forward arbitrary request-body fields into the
-# router, the marker is a private object checked by type rather than a truthy value:
-# a JSON request body cannot construct one, so a client cannot forge the flag to steer
-# deployment selection toward prefill-capable deployments.
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 
 
 class _ContinuationMarker:
-    """Unforgeable sentinel; only the router can produce an instance."""
+    """Only the router constructs one, so a JSON request body cannot forge the continuation flag."""
 
 
 MID_STREAM_CONTINUATION_MARKER: Final = _ContinuationMarker()
@@ -37,16 +26,12 @@ def _deployment_supports_prefill(deployment: object) -> bool:
         deployment_map: Final = _STR_KEYED_DICT_ADAPTER.validate_python(deployment)
     except ValidationError:
         return False
-    # A per-deployment model_info override wins, so a model that is not in the cost
-    # map (or is registered generically) can still opt in or out explicitly with
-    # `model_info: {"supports_assistant_prefill": true|false}`.
     try:
         model_info: Final = _STR_KEYED_DICT_ADAPTER.validate_python(deployment_map.get("model_info"))
         declared: Final = model_info.get("supports_assistant_prefill")
         if isinstance(declared, bool):
             return declared
     except ValidationError:
-        # No usable model_info override; fall through to the cost-map lookup.
         pass
     try:
         litellm_params: Final = _STR_KEYED_DICT_ADAPTER.validate_python(deployment_map.get("litellm_params"))
@@ -69,4 +54,4 @@ class ContinuationPrefillDeploymentCheck(CustomLogger):
         if not isinstance(marker, _ContinuationMarker):
             return healthy_deployments
         eligible: Final = (deployment for deployment in healthy_deployments if _deployment_supports_prefill(deployment))
-        return list(eligible)  # mutable-ok: downstream deployment selection consumes a mutable list
+        return list(eligible)
