@@ -7,11 +7,8 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, copy
+import copy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 from litellm import Router
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
@@ -31,7 +28,7 @@ async def test_get_available_deployments():
         },
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "groq/llama-3.1-8b-instant"},
+            "litellm_params": {"model": "groq/openai/gpt-oss-20b"},
             "model_info": {"id": "groq-llama"},
         },
     ]

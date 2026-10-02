@@ -1,22 +1,23 @@
-import { Button, Space, Tag, Tooltip, Typography } from "antd";
-import { CloseOutlined, UpOutlined, DownOutlined } from "@ant-design/icons";
+import { useState } from "react";
+import { Check, ChevronDown, ChevronUp, Copy, X } from "lucide-react";
 import moment from "moment";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { LogEntry } from "../columns";
 import { AutoRouterTag } from "@/components/shared/table_cells";
+import { ClassifyTag } from "./ClassifyTag";
+import { SidebarToggle } from "./SidebarToggle";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
 import {
   DRAWER_HEADER_PADDING,
   COLOR_BORDER,
   COLOR_BACKGROUND,
   SPACING_MEDIUM,
-  SPACING_LARGE,
   FONT_SIZE_HEADER,
   FONT_SIZE_MEDIUM,
   FONT_FAMILY_MONO,
-  SPACING_SMALL,
 } from "./constants";
-
-const { Text } = Typography;
 
 interface DrawerHeaderProps {
   log: LogEntry;
@@ -26,6 +27,8 @@ interface DrawerHeaderProps {
   statusLabel: string;
   statusColor: "error" | "success";
   environment: string;
+  isSidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
 }
 
 /**
@@ -40,34 +43,64 @@ export function DrawerHeader({
   statusLabel,
   statusColor,
   environment,
+  isSidebarCollapsed,
+  onToggleSidebar,
 }: DrawerHeaderProps) {
   const provider = log.custom_llm_provider || "";
   const providerInfo = provider ? getProviderLogoAndName(provider) : null;
+  const showToggleWithProvider = isSidebarCollapsed && Boolean(providerInfo || log.model);
+  const showToggleWithRequestId = isSidebarCollapsed && !showToggleWithProvider;
+  const callId: string | null =
+    log.litellm_call_id && log.litellm_call_id !== log.request_id ? log.litellm_call_id : null;
 
   return (
     <div
+      className="z-chrome"
       style={{
         padding: DRAWER_HEADER_PADDING,
         borderBottom: `1px solid ${COLOR_BORDER}`,
         backgroundColor: COLOR_BACKGROUND,
         position: "sticky",
         top: 0,
-        zIndex: 10,
       }}
     >
       {/* Row 0: Model + Provider with Logo */}
-      <ModelProviderSection
-        model={log.model}
-        modelGroup={log.model_group}
-        providerLogo={providerInfo?.logo}
-        providerName={providerInfo?.displayName}
-      />
+      <div className="flex items-center gap-2" style={{ marginBottom: SPACING_MEDIUM }}>
+        {showToggleWithProvider && <SidebarToggle isCollapsed onToggle={onToggleSidebar} />}
+        <ModelProviderSection
+          model={log.model}
+          modelGroup={log.model_group}
+          internalCallOrigin={log.metadata?.internal_call_origin}
+          providerLogo={providerInfo?.logo}
+          providerName={providerInfo?.displayName}
+        />
+      </div>
 
       {/* Row 1: Request ID + Actions */}
       <div
-        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: SPACING_MEDIUM }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 4,
+          marginBottom: SPACING_MEDIUM,
+        }}
       >
-        <RequestIdSection requestId={log.request_id} />
+        {showToggleWithRequestId && <SidebarToggle isCollapsed onToggle={onToggleSidebar} />}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <CopyableId value={log.request_id} label="Request ID" fontSize={FONT_SIZE_HEADER} />
+          {callId && (
+            <div className="flex items-center gap-1">
+              <span
+                className="text-muted-foreground"
+                style={{ fontSize: FONT_SIZE_MEDIUM, fontFamily: FONT_FAMILY_MONO, whiteSpace: "nowrap" }}
+              >
+                x-litellm-call-id:
+              </span>
+              <CopyableId value={callId} label="x-litellm-call-id" fontSize={FONT_SIZE_MEDIUM} muted />
+            </div>
+          )}
+        </div>
         <NavigationSection onPrevious={onPrevious} onNext={onNext} onClose={onClose} />
       </div>
 
@@ -83,16 +116,18 @@ export function DrawerHeader({
 function ModelProviderSection({
   model,
   modelGroup,
+  internalCallOrigin,
   providerLogo,
   providerName,
 }: {
   model: string;
   modelGroup?: string;
+  internalCallOrigin?: string | null;
   providerLogo?: string;
   providerName?: string;
 }) {
   return (
-    <Space size={SPACING_MEDIUM} style={{ marginBottom: SPACING_MEDIUM }}>
+    <div className="flex min-w-0 items-center gap-2">
       {providerLogo && (
         <img
           src={providerLogo}
@@ -104,44 +139,76 @@ function ModelProviderSection({
           }}
         />
       )}
-      <Space size={SPACING_MEDIUM} direction="horizontal">
-        <Text strong style={{ fontSize: 14 }}>
+      <div className="flex items-center gap-2">
+        <span className="font-semibold" style={{ fontSize: 14 }}>
           {model}
-        </Text>
+        </span>
         {providerName && (
-          <Text type="secondary" style={{ fontSize: 12 }}>
+          <span className="text-muted-foreground" style={{ fontSize: 12 }}>
             {providerName}
-          </Text>
+          </span>
         )}
         <AutoRouterTag modelGroup={modelGroup} />
-      </Space>
-    </Space>
+        <ClassifyTag origin={internalCallOrigin} />
+      </div>
+    </div>
   );
 }
 
-/**
- * Request ID display with copy functionality
- */
-function RequestIdSection({ requestId }: { requestId: string }) {
+function CopyableId({
+  value,
+  label,
+  fontSize,
+  muted,
+}: {
+  value: string;
+  label: string;
+  fontSize: number;
+  muted?: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard unavailable in non-secure contexts */
+    }
+  };
+
   return (
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <Tooltip title={requestId}>
-        <Text
-          strong
-          copyable={{ text: requestId, tooltips: ["Copy Request ID", "Copied!"] }}
-          style={{
-            fontSize: FONT_SIZE_HEADER,
-            fontFamily: FONT_FAMILY_MONO,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            display: "block",
-          }}
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              className={muted ? "text-muted-foreground" : "font-semibold"}
+              style={{
+                fontSize,
+                fontFamily: FONT_FAMILY_MONO,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                display: "block",
+              }}
+            />
+          }
         >
-          {requestId}
-        </Text>
+          {value}
+          <button
+            type="button"
+            aria-label={copied ? "Copied!" : `Copy ${label}`}
+            onClick={handleCopy}
+            className="ml-1 align-middle text-muted-foreground hover:text-foreground"
+          >
+            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>{value}</TooltipContent>
       </Tooltip>
-    </div>
+    </TooltipProvider>
   );
 }
 
@@ -159,29 +226,37 @@ function NavigationSection({
   onClose: () => void;
 }) {
   const keyboardShortcutStyle = {
-    border: "1px solid #d9d9d9",
+    border: "1px solid var(--color-border)",
     borderRadius: 4,
     padding: "0 4px",
     fontSize: 12,
     fontFamily: "monospace",
     marginLeft: 4,
-    background: "#fafafa",
+    background: "var(--color-muted)",
   };
+  const splitStyle = { width: 1, height: 20, background: COLOR_BORDER };
 
   return (
-    <Space size={SPACING_SMALL} split={<div style={{ width: 1, height: 20, background: COLOR_BORDER }} />}>
-      <Button type="text" size="small" onClick={onPrevious}>
-        <UpOutlined />
+    <div className="flex items-center gap-1">
+      <Button variant="ghost" size="sm" onClick={onPrevious}>
+        <ChevronUp className="size-4" />
         <span style={keyboardShortcutStyle}>K</span>
       </Button>
-      <Button type="text" size="small" onClick={onNext}>
-        <DownOutlined />
+      <div style={splitStyle} />
+      <Button variant="ghost" size="sm" onClick={onNext}>
+        <ChevronDown className="size-4" />
         <span style={keyboardShortcutStyle}>J</span>
       </Button>
-      <Tooltip title="ESC to close">
-        <Button type="text" icon={<CloseOutlined />} onClick={onClose} />
-      </Tooltip>
-    </Space>
+      <div style={splitStyle} />
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger render={<Button variant="ghost" size="icon-sm" onClick={onClose} />}>
+            <X className="size-4" />
+          </TooltipTrigger>
+          <TooltipContent>ESC to close</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    </div>
   );
 }
 
@@ -200,17 +275,17 @@ function StatusBar({
   environment: string;
 }) {
   return (
-    <Space size={SPACING_LARGE}>
-      <Tag color={statusColor}>{statusLabel}</Tag>
-      <Tag>Env: {environment}</Tag>
-      <Space size={SPACING_MEDIUM}>
-        <Text type="secondary" style={{ fontSize: FONT_SIZE_MEDIUM }}>
+    <div className="flex items-center gap-3">
+      <Badge variant={statusColor === "error" ? "destructive" : "secondary"}>{statusLabel}</Badge>
+      <Badge variant="outline">Env: {environment}</Badge>
+      <div className="flex items-center gap-2">
+        <span className="text-muted-foreground" style={{ fontSize: FONT_SIZE_MEDIUM }}>
           {moment(log.startTime).format("MMM D, YYYY h:mm:ss A")}
-        </Text>
-        <Text type="secondary" style={{ fontSize: FONT_SIZE_MEDIUM }}>
+        </span>
+        <span className="text-muted-foreground" style={{ fontSize: FONT_SIZE_MEDIUM }}>
           ({moment(log.startTime).fromNow()})
-        </Text>
-      </Space>
-    </Space>
+        </span>
+      </div>
+    </div>
   );
 }

@@ -5,6 +5,8 @@ import { renderWithProviders } from "../../../tests/test-utils";
 import DeletedKeysPage from "./DeletedKeysPage";
 import { useDeletedKeys, DeletedKeyResponse } from "@/app/(dashboard)/hooks/keys/useKeys";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useDeletedKeys: vi.fn(),
 }));
@@ -20,6 +22,7 @@ const mockDeletedKey: DeletedKeyResponse = {
   key_name: "test-key",
   key_alias: "Test Key Alias",
   spend: 5.5,
+  total_spend: 5.5,
   max_budget: 100,
   expires: "2024-12-31T23:59:59Z",
   models: ["gpt-3.5-turbo"],
@@ -90,6 +93,15 @@ it("should render DeletedKeysPage component", () => {
   renderWithProviders(<DeletedKeysPage />);
 
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+});
+
+it("should show the enterprise notice for a non-premium user", () => {
+  renderWithProviders(<DeletedKeysPage />);
+
+  expect(screen.getByText("Coming soon to Enterprise")).toBeInTheDocument();
+  expect(
+    screen.getByText("Deleted key auditing is graduating from beta into our Enterprise audit & compliance suite."),
+  ).toBeInTheDocument();
 });
 
 it("should show skeleton rows while the initial load is pending", () => {

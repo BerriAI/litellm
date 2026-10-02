@@ -1,3 +1,6 @@
+from typing import Final
+
+
 def show_missing_vars_in_env():
     from fastapi.responses import HTMLResponse
 
@@ -20,7 +23,7 @@ def show_missing_vars_in_env():
 
 
 def missing_keys_form(missing_key_names: str):
-    missing_keys_html_form = """
+    missing_keys_html_form: Final = """
         <!DOCTYPE html>
         <html lang="en">
         <head>
@@ -70,7 +73,8 @@ def missing_keys_form(missing_key_names: str):
                 <h1>Environment Setup Instructions</h1>
                 <p>Please add the following variables to your environment variables:</p>
                 <pre>
-    <span class="env-var">LITELLM_MASTER_KEY="sk-1234"</span> <span class="comment"># Your master key for the proxy server. Can use this to send /chat/completion requests etc</span>
+    <span class="comment"># Generate one with: echo "LITELLM_MASTER_KEY=sk-$(openssl rand -hex 32)"</span>
+    <span class="env-var">LITELLM_MASTER_KEY=""</span> <span class="comment"># Your master key for the proxy server. Can use this to send /chat/completion requests etc</span>
     <span class="env-var">LITELLM_SALT_KEY="sk-XXXXXXXX"</span> <span class="comment"># Can NOT CHANGE THIS ONCE SET - It is used to encrypt/decrypt credentials stored in DB. If value of 'LITELLM_SALT_KEY' changes your models cannot be retrieved from DB</span>
     <span class="env-var">DATABASE_URL="postgres://..."</span> <span class="comment"># Need a postgres database? (Check out Supabase, Neon, etc)</span>
     <span class="comment">## OPTIONAL ##</span>
@@ -95,7 +99,7 @@ def missing_keys_form(missing_key_names: str):
 def admin_ui_disabled():
     from fastapi.responses import HTMLResponse
 
-    ui_disabled_html = """
+    ui_disabled_html: Final = """
         <!DOCTYPE html>
         <html lang="en">
         <head>

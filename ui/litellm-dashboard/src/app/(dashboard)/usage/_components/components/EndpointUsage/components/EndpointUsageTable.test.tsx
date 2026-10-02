@@ -1,35 +1,6 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { renderWithProviders, screen } from "@/../tests/test-utils";
+import { describe, expect, it } from "vitest";
 import EndpointUsageTable from "./EndpointUsageTable";
-
-vi.mock("antd", async () => {
-  const React = await import("react");
-
-  function Table({ columns, dataSource }: any) {
-    return React.createElement(
-      "div",
-      { "data-testid": "antd-table" },
-      columns?.map((col: any) =>
-        React.createElement("div", { key: col.key, "data-testid": `column-${col.key}` }, col.title),
-      ),
-      dataSource?.map((row: any) =>
-        React.createElement(
-          "div",
-          { key: row.key, "data-testid": `row-${row.key}` },
-          React.createElement("div", null, row.endpoint),
-        ),
-      ),
-    );
-  }
-  (Table as any).displayName = "Table";
-
-  function Progress({ percent }: any) {
-    return React.createElement("div", { "data-testid": "antd-progress", "data-percent": percent });
-  }
-  (Progress as any).displayName = "Progress";
-
-  return { Table, Progress };
-});
 
 describe("EndpointUsageTable", () => {
   it("should render", () => {
@@ -51,14 +22,18 @@ describe("EndpointUsageTable", () => {
       },
     };
 
-    render(<EndpointUsageTable endpointData={mockEndpointData} />);
+    renderWithProviders(<EndpointUsageTable endpointData={mockEndpointData} />);
 
-    expect(screen.getByTestId("antd-table")).toBeInTheDocument();
-    expect(screen.getByTestId("column-endpoint")).toBeInTheDocument();
-    expect(screen.getByTestId("column-requests")).toBeInTheDocument();
-    expect(screen.getByTestId("column-api_requests")).toBeInTheDocument();
-    expect(screen.getByTestId("column-successRate")).toBeInTheDocument();
-    expect(screen.getByTestId("column-total_tokens")).toBeInTheDocument();
-    expect(screen.getByTestId("column-spend")).toBeInTheDocument();
+    expect(screen.getAllByRole("columnheader").map((header) => header.textContent)).toEqual([
+      "Endpoint",
+      "Successful / Failed",
+      "Total Request",
+      "Success Rate",
+      "Total Tokens",
+      "Spend",
+    ]);
+    expect(screen.getByText("endpoint-1")).toBeInTheDocument();
+    expect(screen.getByText("95.00%")).toBeInTheDocument();
+    expect(screen.getByText("$100.50")).toBeInTheDocument();
   });
 });

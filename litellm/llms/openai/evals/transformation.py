@@ -3,6 +3,7 @@ OpenAI Evals API configuration and transformations
 """
 
 from collections.abc import Mapping
+from typing import Final
 
 import httpx
 
@@ -74,7 +75,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
             api_base = "https://api.openai.com"
 
         if eval_id:
-            encoded_eval_id = encode_url_path_segment(eval_id, field_name="eval_id")
+            encoded_eval_id: Final = encode_url_path_segment(eval_id, field_name="eval_id")
             return f"{api_base}/v1/evals/{encoded_eval_id}"
         return f"{api_base}/v1/{endpoint}"
 
@@ -88,7 +89,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         verbose_logger.debug("Transforming create eval request: %s", create_request)
 
         # OpenAI expects the request body directly
-        request_body = {k: v for k, v in create_request.items() if v is not None}
+        request_body: Final = {k: v for k, v in create_request.items() if v is not None}
 
         return request_body
 
@@ -98,7 +99,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> Eval:
         """Transform OpenAI response to Eval object"""
-        response_json = _parsed_response_json(raw_response)
+        response_json: Final = _parsed_response_json(raw_response)
         verbose_logger.debug("Transforming create eval response: %s", response_json)
 
         return Eval.model_validate(response_json)
@@ -114,10 +115,10 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         if litellm_params and litellm_params.api_base:
             api_base = litellm_params.api_base
 
-        url = self.get_complete_url(api_base=api_base, endpoint="evals")
+        url: Final = self.get_complete_url(api_base=api_base, endpoint="evals")
 
         # Build query parameters
-        query_params: dict[str, object] = {}
+        query_params: Final[dict[str, object]] = {}
         if "limit" in list_params and list_params["limit"]:
             query_params["limit"] = list_params["limit"]
         if "after" in list_params and list_params["after"]:
@@ -142,7 +143,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> ListEvalsResponse:
         """Transform OpenAI response to ListEvalsResponse"""
-        response_json = _parsed_response_json(raw_response)
+        response_json: Final = _parsed_response_json(raw_response)
         verbose_logger.debug("Transforming list evals response: %s", response_json)
 
         return ListEvalsResponse.model_validate(response_json)
@@ -155,7 +156,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> tuple[str, dict]:
         """Transform get eval request for OpenAI"""
-        url = self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id)
+        url: Final = self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id)
 
         verbose_logger.debug("Get eval request - URL: %s", url)
 
@@ -167,7 +168,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> Eval:
         """Transform OpenAI response to Eval object"""
-        response_json = _parsed_response_json(raw_response)
+        response_json: Final = _parsed_response_json(raw_response)
         verbose_logger.debug("Transforming get eval response: %s", response_json)
 
         return Eval.model_validate(response_json)
@@ -181,10 +182,10 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> tuple[str, dict, dict]:
         """Transform update eval request for OpenAI"""
-        url = self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id)
+        url: Final = self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id)
 
         # Build request body
-        request_body = {k: v for k, v in update_request.items() if v is not None}
+        request_body: Final = {k: v for k, v in update_request.items() if v is not None}
 
         verbose_logger.debug("Update eval request - URL: %s, body: %s", url, request_body)
 
@@ -196,7 +197,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> Eval:
         """Transform OpenAI response to Eval object"""
-        response_json = _parsed_response_json(raw_response)
+        response_json: Final = _parsed_response_json(raw_response)
         verbose_logger.debug("Transforming update eval response: %s", response_json)
 
         return Eval.model_validate(response_json)
@@ -209,7 +210,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> tuple[str, dict]:
         """Transform delete eval request for OpenAI"""
-        url = self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id)
+        url: Final = self.get_complete_url(api_base=api_base, endpoint="evals", eval_id=eval_id)
 
         verbose_logger.debug("Delete eval request - URL: %s", url)
 
@@ -221,7 +222,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> DeleteEvalResponse:
         """Transform OpenAI response to DeleteEvalResponse"""
-        response_json = _parsed_response_json(raw_response)
+        response_json: Final = _parsed_response_json(raw_response)
         verbose_logger.debug("Transforming delete eval response: %s", response_json)
 
         return DeleteEvalResponse.model_validate(response_json)
@@ -234,10 +235,10 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> tuple[str, dict, dict]:
         """Transform cancel eval request for OpenAI"""
-        url = f"{self.get_complete_url(api_base=api_base, endpoint='evals', eval_id=eval_id)}/cancel"
+        url: Final = f"{self.get_complete_url(api_base=api_base, endpoint='evals', eval_id=eval_id)}/cancel"
 
         # Empty body for cancel request
-        request_body: dict[str, object] = {}
+        request_body: Final[dict[str, object]] = {}
 
         verbose_logger.debug("Cancel eval request - URL: %s", url)
 
@@ -249,7 +250,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> CancelEvalResponse:
         """Transform OpenAI response to CancelEvalResponse"""
-        response_json = _parsed_response_json(raw_response)
+        response_json: Final = _parsed_response_json(raw_response)
         verbose_logger.debug("Transforming cancel eval response: %s", response_json)
 
         return CancelEvalResponse.model_validate(response_json)
@@ -267,11 +268,11 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         if litellm_params and litellm_params.api_base:
             api_base = litellm_params.api_base
 
-        encoded_eval_id = encode_url_path_segment(eval_id, field_name="eval_id")
-        url = f"{api_base}/v1/evals/{encoded_eval_id}/runs"
+        encoded_eval_id: Final = encode_url_path_segment(eval_id, field_name="eval_id")
+        url: Final = f"{api_base}/v1/evals/{encoded_eval_id}/runs"
 
         # Build request body
-        request_body = {k: v for k, v in create_request.items() if v is not None}
+        request_body: Final = {k: v for k, v in create_request.items() if v is not None}
 
         verbose_logger.debug("Create run request - URL: %s, body: %s", url, request_body)
 
@@ -283,7 +284,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> Run:
         """Transform OpenAI response to Run object"""
-        response_json = _parsed_response_json(raw_response)
+        response_json: Final = _parsed_response_json(raw_response)
         verbose_logger.debug("Transforming create run response: %s", response_json)
 
         return Run.model_validate(response_json)
@@ -300,11 +301,11 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         if litellm_params and litellm_params.api_base:
             api_base = litellm_params.api_base
 
-        encoded_eval_id = encode_url_path_segment(eval_id, field_name="eval_id")
-        url = f"{api_base}/v1/evals/{encoded_eval_id}/runs"
+        encoded_eval_id: Final = encode_url_path_segment(eval_id, field_name="eval_id")
+        url: Final = f"{api_base}/v1/evals/{encoded_eval_id}/runs"
 
         # Build query parameters
-        query_params: dict[str, object] = {}
+        query_params: Final[dict[str, object]] = {}
         if "limit" in list_params and list_params["limit"]:
             query_params["limit"] = list_params["limit"]
         if "after" in list_params and list_params["after"]:
@@ -327,7 +328,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> ListRunsResponse:
         """Transform OpenAI response to ListRunsResponse"""
-        response_json = _parsed_response_json(raw_response)
+        response_json: Final = _parsed_response_json(raw_response)
         verbose_logger.debug("Transforming list runs response: %s", response_json)
 
         return ListRunsResponse.model_validate(response_json)
@@ -341,9 +342,9 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> tuple[str, dict]:
         """Transform get run request for OpenAI"""
-        encoded_eval_id = encode_url_path_segment(eval_id, field_name="eval_id")
-        encoded_run_id = encode_url_path_segment(run_id, field_name="run_id")
-        url = f"{api_base}/v1/evals/{encoded_eval_id}/runs/{encoded_run_id}"
+        encoded_eval_id: Final = encode_url_path_segment(eval_id, field_name="eval_id")
+        encoded_run_id: Final = encode_url_path_segment(run_id, field_name="run_id")
+        url: Final = f"{api_base}/v1/evals/{encoded_eval_id}/runs/{encoded_run_id}"
 
         verbose_logger.debug("Get run request - URL: %s", url)
 
@@ -355,7 +356,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> Run:
         """Transform OpenAI response to Run object"""
-        response_json = _parsed_response_json(raw_response)
+        response_json: Final = _parsed_response_json(raw_response)
         verbose_logger.debug("Transforming get run response: %s", response_json)
 
         return Run.model_validate(response_json)
@@ -369,12 +370,12 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> tuple[str, dict, dict]:
         """Transform cancel run request for OpenAI"""
-        encoded_eval_id = encode_url_path_segment(eval_id, field_name="eval_id")
-        encoded_run_id = encode_url_path_segment(run_id, field_name="run_id")
-        url = f"{api_base}/v1/evals/{encoded_eval_id}/runs/{encoded_run_id}/cancel"
+        encoded_eval_id: Final = encode_url_path_segment(eval_id, field_name="eval_id")
+        encoded_run_id: Final = encode_url_path_segment(run_id, field_name="run_id")
+        url: Final = f"{api_base}/v1/evals/{encoded_eval_id}/runs/{encoded_run_id}/cancel"
 
         # Empty body for cancel request
-        request_body: dict[str, object] = {}
+        request_body: Final[dict[str, object]] = {}
 
         verbose_logger.debug("Cancel run request - URL: %s", url)
 
@@ -386,7 +387,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> CancelRunResponse:
         """Transform OpenAI response to CancelRunResponse"""
-        response_json = _parsed_response_json(raw_response)
+        response_json: Final = _parsed_response_json(raw_response)
         verbose_logger.debug("Transforming cancel run response: %s", response_json)
 
         return CancelRunResponse.model_validate(response_json)
@@ -400,12 +401,12 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         headers: dict,
     ) -> tuple[str, dict, dict]:
         """Transform delete run request for OpenAI"""
-        encoded_eval_id = encode_url_path_segment(eval_id, field_name="eval_id")
-        encoded_run_id = encode_url_path_segment(run_id, field_name="run_id")
-        url = f"{api_base}/v1/evals/{encoded_eval_id}/runs/{encoded_run_id}"
+        encoded_eval_id: Final = encode_url_path_segment(eval_id, field_name="eval_id")
+        encoded_run_id: Final = encode_url_path_segment(run_id, field_name="run_id")
+        url: Final = f"{api_base}/v1/evals/{encoded_eval_id}/runs/{encoded_run_id}"
 
         # Empty body for delete request
-        request_body: dict[str, object] = {}
+        request_body: Final[dict[str, object]] = {}
 
         verbose_logger.debug("Delete run request - URL: %s", url)
 
@@ -417,7 +418,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> RunDeleteResponse:
         """Transform OpenAI response to RunDeleteResponse"""
-        response_json = _parsed_response_json(raw_response)
+        response_json: Final = _parsed_response_json(raw_response)
         verbose_logger.debug("Transforming delete run response: %s", response_json)
 
         return RunDeleteResponse.model_validate(response_json)

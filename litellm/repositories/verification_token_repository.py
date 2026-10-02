@@ -3,9 +3,10 @@ VerificationToken repository for database operations on LiteLLM_VerificationToke
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from types import TracebackType
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm.models.verification_token import (
     LiteLLM_VerificationToken,
@@ -15,15 +16,48 @@ from litellm.repositories.base_repository import (
     DbRecord,
     record_to_dict,
 )
+from litellm.repositories.prisma_protocols import TableActions
 
 if TYPE_CHECKING:
+    from prisma.models import (
+        LiteLLM_DeletedVerificationToken as PrismaDeletedVerificationToken,
+    )
     from prisma.models import (
         LiteLLM_VerificationToken as PrismaVerificationToken,
     )
 
-    from litellm.proxy.utils import PrismaClient
 
-_JSON_ENCODED_TOKEN_FIELDS = (
+class _VerificationTokenTables(Protocol):
+    """The two verification token tables this repository reads and writes."""
+
+    @property
+    def litellm_verificationtoken(self) -> TableActions["PrismaVerificationToken"]: ...
+
+    @property
+    def litellm_deletedverificationtoken(self) -> TableActions["PrismaDeletedVerificationToken"]: ...
+
+
+class _VerificationTokenTransactionManager(Protocol):
+    async def __aenter__(self) -> _VerificationTokenTables: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None: ...
+
+
+class _PrismaVerificationTokenDb(_VerificationTokenTables, Protocol):
+    def tx(self) -> _VerificationTokenTransactionManager: ...
+
+
+class _PrismaClientView(Protocol):
+    @property
+    def db(self) -> _PrismaVerificationTokenDb: ...
+
+
+_JSON_ENCODED_TOKEN_FIELDS: Final = (
     "aliases",
     "config",
     "permissions",
@@ -40,17 +74,17 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
     """Repository for verification token (API key) database operations."""
 
     @property
-    def prisma_client(self) -> "PrismaClient":
-        prisma_client: PrismaClient = super().prisma_client
-        return prisma_client
+    def _db(self) -> _PrismaVerificationTokenDb:
+        client: Final[_PrismaClientView] = self.prisma_client
+        return client.db
 
     @property
-    def table(self) -> Any:
-        return self.prisma_client.db.litellm_verificationtoken
+    def table(self) -> TableActions["PrismaVerificationToken"]:
+        return self._db.litellm_verificationtoken
 
     @property
-    def deleted_table(self) -> Any:
-        return self.prisma_client.db.litellm_deletedverificationtoken
+    def deleted_table(self) -> TableActions["PrismaDeletedVerificationToken"]:
+        return self._db.litellm_deletedverificationtoken
 
     @property
     def model_class(self) -> type[LiteLLM_VerificationToken]:
@@ -61,12 +95,12 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         if record is None:
             return None
 
-        decoded = {
+        decoded: Final = {
             field: json.loads(value) if field in _JSON_ENCODED_TOKEN_FIELDS and isinstance(value, str) else value
             for field, value in record_to_dict(record).items()
         }
-        organization_id = decoded.get("organization_id")
-        data = (
+        organization_id: Final = decoded.get("organization_id")
+        data: Final = (
             decoded
             if decoded.get("org_id") is not None or organization_id is None
             else {**decoded, "org_id": organization_id}
@@ -79,29 +113,29 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
 
     async def find_by_alias(self, key_alias: str) -> LiteLLM_VerificationToken | None:
         """Find a token by key alias."""
-        records: list[PrismaVerificationToken] = await self.table.find_many(where={"key_alias": key_alias})
+        records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(where={"key_alias": key_alias})
         if records:
             return self._to_model(records[0])
         return None
 
     async def find_by_user_id(self, user_id: str) -> list[LiteLLM_VerificationToken]:
         """Find all tokens belonging to a user."""
-        records: list[PrismaVerificationToken] = await self.table.find_many(where={"user_id": user_id})
+        records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(where={"user_id": user_id})
         return self._to_model_list(records)
 
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_VerificationToken]:
         """Find all tokens belonging to a team."""
-        records: list[PrismaVerificationToken] = await self.table.find_many(where={"team_id": team_id})
+        records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(where={"team_id": team_id})
         return self._to_model_list(records)
 
     async def find_by_project_id(self, project_id: str) -> list[LiteLLM_VerificationToken]:
         """Find all tokens belonging to a project."""
-        records: list[PrismaVerificationToken] = await self.table.find_many(where={"project_id": project_id})
+        records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(where={"project_id": project_id})
         return self._to_model_list(records)
 
     async def find_active_tokens(self) -> list[LiteLLM_VerificationToken]:
         """Find all active (non-expired, non-blocked) tokens."""
-        records: list[PrismaVerificationToken] = await self.table.find_many(
+        records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(
             where={
                 "blocked": {"not": True},
                 "OR": [{"expires": None}, {"expires": {"gt": datetime.utcnow()}}],
@@ -138,13 +172,13 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         budget_id: str | None = None,
     ) -> dict[str, object]:
         """Build data dictionary for token creation."""
-        json_fields = {
+        json_fields: Final = {
             "aliases": aliases,
             "config": config,
             "metadata": metadata,
             "permissions": permissions,
         }
-        simple_fields = {
+        simple_fields: Final = {
             "token": token,
             "key_name": key_name,
             "key_alias": key_alias,
@@ -165,7 +199,7 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
             "access_group_ids": access_group_ids,
             "budget_id": budget_id,
         }
-        data: dict[str, object] = {k: v for k, v in simple_fields.items() if v is not None}
+        data: Final[dict[str, object]] = {k: v for k, v in simple_fields.items() if v is not None}
         for key, val in json_fields.items():
             if val is not None:
                 data[key] = json.dumps(val)
@@ -205,7 +239,7 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         budget_id: str | None = None,
     ) -> LiteLLM_VerificationToken:
         """Create a new verification token."""
-        data = self._build_token_data(
+        data: Final = self._build_token_data(
             token=token,
             key_name=key_name,
             key_alias=key_alias,
@@ -258,7 +292,7 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         access_group_ids: list[str] | None = None,
     ) -> LiteLLM_VerificationToken | None:
         """Update a verification token."""
-        data: dict[str, object] = {}
+        data: Final[dict[str, object]] = {}
         if updated_by is not None:
             data["updated_by"] = updated_by
         if key_name is not None:
@@ -311,17 +345,17 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
 
         Uses a transaction to ensure atomicity of the archive-then-delete operation.
         """
-        token_record = await self.find_by_id(token)
+        token_record: Final = await self.find_by_id(token)
         if token_record is None:
             return None
 
-        archive_data = self._build_archive_data(token_record)
+        archive_data: Final = self._build_archive_data(token_record)
         archive_data["deleted_by"] = deleted_by
         archive_data["deleted_by_api_key"] = deleted_by_api_key
         archive_data["litellm_changed_by"] = litellm_changed_by
         archive_data["deleted_at"] = datetime.utcnow()
 
-        async with self.prisma_client.db.tx() as tx:
+        async with self._db.tx() as tx:
             await tx.litellm_deletedverificationtoken.create(data=archive_data)
             await tx.litellm_verificationtoken.delete(where={"token": token})
 
@@ -334,15 +368,15 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         columns the same way the live table does) and maps ``org_id`` onto the
         ``organization_id`` column so the foreign key is preserved.
         """
-        data: dict[str, object] = token.model_dump(exclude_none=True)
+        data: Final[dict[str, object]] = token.model_dump(exclude_none=True)
         for field in ("object_permission", "litellm_budget_table", "budget_limits"):
             data.pop(field, None)
 
-        org_id = data.pop("org_id", None)
+        org_id: Final = data.pop("org_id", None)
         if org_id is not None:
             data["organization_id"] = org_id
 
-        json_fields = [
+        json_fields: Final = [
             "aliases",
             "config",
             "permissions",
@@ -366,14 +400,14 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
 
     async def block_token(self, token: str, updated_by: str | None = None) -> LiteLLM_VerificationToken | None:
         """Block a token."""
-        data: dict[str, object] = {"blocked": True}
+        data: Final[dict[str, object]] = {"blocked": True}
         if updated_by is not None:
             data["updated_by"] = updated_by
         return await self.update(token, data, id_field="token")
 
     async def unblock_token(self, token: str, updated_by: str | None = None) -> LiteLLM_VerificationToken | None:
         """Unblock a token."""
-        data: dict[str, object] = {"blocked": False}
+        data: Final[dict[str, object]] = {"blocked": False}
         if updated_by is not None:
             data["updated_by"] = updated_by
         return await self.update(token, data, id_field="token")

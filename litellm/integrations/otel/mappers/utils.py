@@ -6,7 +6,8 @@ they live in one place.
 """
 
 import json
-from typing import Callable, Final, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue
 from litellm.integrations.otel.model.payloads import LLMCallSpanData, ToolDefinition
@@ -38,7 +39,12 @@ def tool_attr_budget(vocabularies: int) -> int:
 
 def drop_none(values: Mapping[str, AttrValue | None]) -> AttributeMap:
     """Return ``values`` with ``None``-valued entries removed."""
-    return {k: v for k, v in values.items() if v is not None}
+    return drop_none_pairs(values.items())
+
+
+def drop_none_pairs(pairs: Iterable[tuple[str, AttrValue | None]]) -> AttributeMap:
+    """Return ``pairs`` as a map with ``None``-valued entries removed."""
+    return {k: v for k, v in pairs if v is not None}
 
 
 def tool_definition_attrs(
@@ -54,7 +60,7 @@ def tool_definition_attrs(
     always keeps its detail, so the family stays legible even when many
     vocabularies split the ceiling.
     """
-    max_tools = max(attr_budget // max(len(extractors), 1), 1)
+    max_tools: Final = max(attr_budget // max(len(extractors), 1), 1)
     return drop_none(
         {
             key_for(idx, suffix): extract(tool)
@@ -94,7 +100,7 @@ def stringify_message(message: object) -> str | None:
 
 def serialize_messages(messages: Sequence[object]) -> str | None:
     """Round-trip a sequence of message dicts through ``stringify_message``."""
-    serialized = [json.loads(s) for s in (stringify_message(m) for m in messages) if s is not None]
+    serialized: Final = [json.loads(s) for s in (stringify_message(m) for m in messages) if s is not None]
     return json.dumps(serialized) if serialized else None
 
 
@@ -102,7 +108,7 @@ def message_content(message: object) -> str | None:
     """Extract the textual ``content`` from a chat message dict."""
     if not isinstance(message, dict):
         return None
-    content = message.get("content")
+    content: Final = message.get("content")
     if isinstance(content, str):
         return content
     if isinstance(content, list):

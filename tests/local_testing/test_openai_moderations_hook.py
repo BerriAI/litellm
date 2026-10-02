@@ -9,11 +9,7 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm.proxy.enterprise.enterprise_hooks.openai_moderation import (
@@ -35,21 +31,19 @@ async def test_openai_moderation_error_raising(monkeypatch):
     from unittest.mock import AsyncMock, MagicMock
     from litellm.types.llms.openai import OpenAIModerationResponse
 
-    litellm.openai_moderations_model_name = "text-moderation-latest"
+    litellm.openai_moderations_model_name = "omni-moderation-latest"
     openai_mod = _ENTERPRISE_OpenAI_Moderation()
     _api_key = "sk-12345"
     _api_key = hash_token("sk-12345")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
-    from litellm.proxy.proxy_server import llm_router
-
     llm_router = litellm.Router(
         model_list=[
             {
-                "model_name": "text-moderation-latest",
+                "model_name": "omni-moderation-latest",
                 "litellm_params": {
-                    "model": "text-moderation-latest",
+                    "model": "omni-moderation-latest",
                     "api_key": os.environ.get("OPENAI_API_KEY", "fake-key"),
                 },
             }
@@ -65,9 +59,11 @@ async def test_openai_moderation_error_raising(monkeypatch):
 
     llm_router.amoderation = mock_amoderation
 
-    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+    import litellm.proxy.proxy_server as proxy_server
 
-    try:
+    monkeypatch.setattr(proxy_server, "llm_router", llm_router)
+
+    with pytest.raises(Exception, match="Violated content safety policy") as exc_info:
         await openai_mod.async_moderation_hook(
             data={
                 "messages": [
@@ -80,11 +76,9 @@ async def test_openai_moderation_error_raising(monkeypatch):
             user_api_key_dict=user_api_key_dict,
             call_type="completion",
         )
-        pytest.fail(f"Should have failed")
-    except Exception as e:
-        print("Got exception: ", e)
-        assert "Violated content safety policy" in str(e)
-        pass
+    e = exc_info.value
+    print("Got exception: ", e)
+    assert "Violated content safety policy" in str(e)
 
 
 @pytest.mark.asyncio
@@ -130,25 +124,26 @@ async def test_openai_moderation_responses_api_input_field():
         openai_mod, "async_make_request", return_value=mock_moderation_response
     ):
         # Test 1: Responses API / Embeddings with texts (string input)
-        try:
-            inputs = GenericGuardrailAPIInputs(texts=["I want to hurt people"])
+        inputs = GenericGuardrailAPIInputs(texts=["I want to hurt people"])
+
+        with pytest.raises(Exception, match="Violated OpenAI moderation policy") as exc_info:
             await openai_mod.apply_guardrail(
                 inputs=inputs,
                 request_data={"model": "gpt-4o", "input": "I want to hurt people"},
                 input_type="request",
             )
-            pytest.fail("Should have raised HTTPException for flagged content")
-        except Exception as e:
-            print("Got exception for texts input: ", e)
-            assert "Violated OpenAI moderation policy" in str(e)
+        e = exc_info.value
+        print("Got exception for texts input: ", e)
+        assert "Violated OpenAI moderation policy" in str(e)
 
         # Test 2: Responses API with structured_messages (list of message objects)
-        try:
-            inputs = GenericGuardrailAPIInputs(
-                structured_messages=[
-                    {"role": "user", "content": "I want to hurt people"}
-                ]
-            )
+        inputs = GenericGuardrailAPIInputs(
+            structured_messages=[
+                {"role": "user", "content": "I want to hurt people"}
+            ]
+        )
+
+        with pytest.raises(Exception, match="Violated OpenAI moderation policy") as exc_info:
             await openai_mod.apply_guardrail(
                 inputs=inputs,
                 request_data={
@@ -157,18 +152,18 @@ async def test_openai_moderation_responses_api_input_field():
                 },
                 input_type="request",
             )
-            pytest.fail("Should have raised HTTPException for flagged content")
-        except Exception as e:
-            print("Got exception for structured_messages input: ", e)
-            assert "Violated OpenAI moderation policy" in str(e)
+        e = exc_info.value
+        print("Got exception for structured_messages input: ", e)
+        assert "Violated OpenAI moderation policy" in str(e)
 
         # Test 3: Chat Completions with structured_messages
-        try:
-            inputs = GenericGuardrailAPIInputs(
-                structured_messages=[
-                    {"role": "user", "content": "I want to hurt people"}
-                ]
-            )
+        inputs = GenericGuardrailAPIInputs(
+            structured_messages=[
+                {"role": "user", "content": "I want to hurt people"}
+            ]
+        )
+
+        with pytest.raises(Exception, match="Violated OpenAI moderation policy") as exc_info:
             await openai_mod.apply_guardrail(
                 inputs=inputs,
                 request_data={
@@ -177,9 +172,8 @@ async def test_openai_moderation_responses_api_input_field():
                 },
                 input_type="request",
             )
-            pytest.fail("Should have raised HTTPException for flagged content")
-        except Exception as e:
-            print("Got exception for chat completions input: ", e)
-            assert "Violated OpenAI moderation policy" in str(e)
+        e = exc_info.value
+        print("Got exception for chat completions input: ", e)
+        assert "Violated OpenAI moderation policy" in str(e)
 
     print("✓ All Responses API moderation tests passed!")

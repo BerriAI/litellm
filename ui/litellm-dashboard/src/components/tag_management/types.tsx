@@ -41,7 +41,7 @@ export interface TagUpdateRequest {
   soft_budget?: number;
   tpm_limit?: number;
   rpm_limit?: number;
-  budget_duration?: string;
+  budget_duration?: string | null;
 }
 
 export interface TagDeleteRequest {

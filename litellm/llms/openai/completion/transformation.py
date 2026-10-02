@@ -2,7 +2,7 @@
 Support for gpt model family
 """
 
-from typing import List, Optional, Union
+from typing import Final
 
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
@@ -43,33 +43,33 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
     - `top_p` (number or null): An alternative to sampling with temperature, used for nucleus sampling.
     """
 
-    best_of: Optional[int] = None
-    echo: Optional[bool] = None
-    frequency_penalty: Optional[int] = None
-    logit_bias: Optional[dict] = None
-    logprobs: Optional[int] = None
-    max_tokens: Optional[int] = None
-    n: Optional[int] = None
-    presence_penalty: Optional[int] = None
-    stop: Optional[Union[str, list]] = None
-    suffix: Optional[str] = None
+    best_of: int | None = None
+    echo: bool | None = None
+    frequency_penalty: int | None = None
+    logit_bias: dict | None = None
+    logprobs: int | None = None
+    max_tokens: int | None = None
+    n: int | None = None
+    presence_penalty: int | None = None
+    stop: str | list | None = None
+    suffix: str | None = None
 
     def __init__(
         self,
-        best_of: Optional[int] = None,
-        echo: Optional[bool] = None,
-        frequency_penalty: Optional[int] = None,
-        logit_bias: Optional[dict] = None,
-        logprobs: Optional[int] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        stop: Optional[Union[str, list]] = None,
-        suffix: Optional[str] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
+        best_of: int | None = None,
+        echo: bool | None = None,
+        frequency_penalty: int | None = None,
+        logit_bias: dict | None = None,
+        logprobs: int | None = None,
+        max_tokens: int | None = None,
+        n: int | None = None,
+        presence_penalty: int | None = None,
+        stop: str | list | None = None,
+        suffix: str | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -80,14 +80,14 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
 
     def convert_to_chat_model_response_object(
         self,
-        response_object: Optional[TextCompletionResponse] = None,
-        model_response_object: Optional[ModelResponse] = None,
+        response_object: TextCompletionResponse | None = None,
+        model_response_object: ModelResponse | None = None,
     ):
         try:
             ## RESPONSE OBJECT
             if response_object is None or model_response_object is None:
                 raise ValueError("Error in response object format")
-            choice_list: List[Choices] = []
+            choice_list: Final[list[Choices]] = []
             for idx, choice in enumerate(response_object["choices"]):
                 message = Message(
                     content=choice["text"],
@@ -100,7 +100,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
                     logprobs=choice.get("logprobs", None),
                 )
                 choice_list.append(choice)
-            model_response_object.choices = choice_list  # type: ignore
+            model_response_object.choices = choice_list
 
             if "usage" in response_object:
                 setattr(model_response_object, "usage", response_object["usage"])
@@ -118,7 +118,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         except Exception as e:
             raise e
 
-    def get_supported_openai_params(self, model: str) -> List:
+    def get_supported_openai_params(self, model: str) -> list:
         return [
             "functions",
             "function_call",
@@ -146,11 +146,11 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
     def transform_text_completion_request(
         self,
         model: str,
-        messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
+        messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        prompt = _transform_prompt(messages)
+        prompt: Final = _transform_prompt(messages)
         return {
             "model": model,
             "prompt": prompt,

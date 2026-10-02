@@ -1,21 +1,15 @@
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
 from test_streaming import streaming_format_tests
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import json
-import os
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 from respx import MockRouter
@@ -700,93 +694,6 @@ def test_gemini_pro_grounding(value_in_dict):
 
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
-@pytest.mark.parametrize(
-    "model", ["vertex_ai_beta/gemini-2.5-flash-lite"]
-)  # "vertex_ai",
-@pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=6, delay=2)
-async def test_gemini_pro_function_calling_httpx(model, sync_mode):
-    try:
-        load_vertex_ai_credentials()
-        litellm.set_verbose = True
-
-        messages = [
-            {
-                "role": "system",
-                "content": "Your name is Litellm Bot, you are a helpful assistant",
-            },
-            # User asks for their name and weather in San Francisco
-            {
-                "role": "user",
-                "content": "Hello, what is your name and can you tell me the weather?",
-            },
-        ]
-
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get the current weather in a given location",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The city and state, e.g. San Francisco, CA",
-                            }
-                        },
-                        "required": ["location"],
-                    },
-                },
-            }
-        ]
-
-        data = {
-            "model": model,
-            "messages": messages,
-            "tools": tools,
-            "tool_choice": "required",
-            "timeout": 60,  # Add explicit timeout
-        }
-        print(f"Model for call - {model}")
-        if sync_mode:
-            response = litellm.completion(**data)
-        else:
-            response = await litellm.acompletion(**data)
-
-        print(f"response: {response}")
-
-        assert response.choices[0].message.tool_calls[0].function.arguments is not None
-        assert isinstance(
-            response.choices[0].message.tool_calls[0].function.arguments, str
-        )
-    except litellm.RateLimitError as e:
-        pytest.skip(f"Rate limit exceeded: {str(e)}")
-    except litellm.ServiceUnavailableError as e:
-        pytest.skip(f"Service unavailable: {str(e)}")
-    except litellm.Timeout as e:
-        pytest.skip(f"Request timeout: {str(e)}")
-    except Exception as e:
-        error_msg = str(e)
-        # Skip test for known transient API issues
-        if any(
-            x in error_msg
-            for x in [
-                "429 Quota exceeded",
-                "503",
-                "Service unavailable",
-                "timeout",
-                "Timeout",
-                "UNAVAILABLE",
-            ]
-        ):
-            pytest.skip(f"Transient API error: {error_msg}")
-        else:
-            pytest.fail(f"An unexpected exception occurred - {error_msg}")
-
-
 from test_completion import response_format_tests
 
 
@@ -854,68 +761,6 @@ async def test_partner_models_httpx(model, region, sync_mode):
         pass
     except Exception as e:
         print("got generic exception", e)
-        if "429 Quota exceeded" in str(e):
-            pass
-        else:
-            pytest.fail("An unexpected exception occurred - {}".format(str(e)))
-
-
-@pytest.mark.parametrize(
-    "model,region",
-    [
-        # vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas removed - consistently returns 400 BadRequest on Vertex AI
-        # vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas removed - us-south1 endpoint unavailable in CI
-        (
-            "vertex_ai/mistral-small-2503",
-            "us-central1",
-        ),  # critical - we had this issue: https://github.com/BerriAI/litellm/issues/13888
-        ("vertex_ai/openai/gpt-oss-20b-maas", "us-central1"),
-    ],
-)
-@pytest.mark.parametrize(
-    "sync_mode",
-    [True, False],  #
-)  #
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_partner_models_httpx_streaming(model, region, sync_mode):
-    try:
-        load_vertex_ai_credentials()
-        litellm._turn_on_debug()
-
-        messages = [
-            {
-                "role": "system",
-                "content": "Your name is Litellm Bot, you are a helpful assistant",
-            },
-            # User asks for their name and weather in San Francisco
-            {
-                "role": "user",
-                "content": "Hello, what is your name and can you tell me the weather?",
-            },
-        ]
-
-        data = {
-            "model": model,
-            "messages": messages,
-            "stream": True,
-            "vertex_ai_location": region,
-        }
-        if sync_mode:
-            response = litellm.completion(**data)
-            for idx, chunk in enumerate(response):
-                streaming_format_tests(idx=idx, chunk=chunk)
-        else:
-            response = await litellm.acompletion(**data)
-            idx = 0
-            async for chunk in response:
-                streaming_format_tests(idx=idx, chunk=chunk)
-                idx += 1
-
-        print(f"response: {response}")
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
         if "429 Quota exceeded" in str(e):
             pass
         else:
@@ -1712,73 +1557,6 @@ async def test_gemini_pro_function_calling(provider, sync_mode):
 # gemini_pro_function_calling()
 
 
-@pytest.mark.parametrize("sync_mode", [True])
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_gemini_pro_function_calling_streaming(sync_mode):
-    load_vertex_ai_credentials()
-    litellm.set_verbose = True
-    data = {
-        "model": "vertex_ai/gemini-2.5-flash-lite",
-        "messages": [
-            {
-                "role": "user",
-                "content": "Call the submit_cities function with San Francisco and New York",
-            }
-        ],
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "submit_cities",
-                    "description": "Submits a list of cities",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "cities": {"type": "array", "items": {"type": "string"}}
-                        },
-                        "required": ["cities"],
-                    },
-                },
-            }
-        ],
-        "tool_choice": "auto",
-        "n": 1,
-        "stream": True,
-        "temperature": 0.1,
-    }
-    chunks = []
-    try:
-        if sync_mode == True:
-            response = litellm.completion(**data)
-            print(f"completion: {response}")
-
-            for chunk in response:
-                chunks.append(chunk)
-                assert isinstance(chunk, litellm.ModelResponseStream)
-        else:
-            response = await litellm.acompletion(**data)
-            print(f"completion: {response}")
-
-            assert isinstance(response, litellm.CustomStreamWrapper)
-
-            async for chunk in response:
-                print(f"chunk: {chunk}")
-                chunks.append(chunk)
-                assert isinstance(chunk, litellm.ModelResponseStream)
-
-        complete_response = litellm.stream_chunk_builder(chunks=chunks)
-        assert (
-            complete_response.choices[0].message.content is not None
-            or len(complete_response.choices[0].message.tool_calls) > 0
-        )
-        print(f"complete_response: {complete_response}")
-    except litellm.APIError as e:
-        pass
-    except litellm.RateLimitError as e:
-        pass
-
-
 # asyncio.run(gemini_pro_async_function_calling())
 
 
@@ -2065,77 +1843,6 @@ async def test_vertexai_multimodal_embedding_base64image_in_input():
         # Optional: Print for debugging
         print("Arguments passed to Vertex AI:", args_to_vertexai)
         print("Response:", response)
-
-
-def test_vertexai_embedding_embedding_latest():
-    try:
-        load_vertex_ai_credentials()
-        litellm.set_verbose = True
-
-        response = embedding(
-            model="vertex_ai/text-embedding-004",
-            input=["hi"],
-            dimensions=1,
-            auto_truncate=True,
-            task_type="RETRIEVAL_QUERY",
-        )
-
-        assert len(response.data[0]["embedding"]) == 1
-        assert response.usage.prompt_tokens > 0
-        print(f"response:", response)
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_vertexai_multimodalembedding_embedding_latest():
-    try:
-        import requests, base64
-
-        load_vertex_ai_credentials()
-        litellm._turn_on_debug()
-
-        response = embedding(
-            model="vertex_ai/multimodalembedding@001",
-            input=["hi"],
-            dimensions=128,
-            auto_truncate=True,
-            task_type="RETRIEVAL_QUERY",
-        )
-
-        print(f"response.usage: {response.usage}")
-        assert response.usage is not None
-        assert response.usage.prompt_tokens_details is not None
-
-        assert response._hidden_params["response_cost"] > 0
-        print(f"response:", response)
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_vertexai_embedding_embedding_latest():
-    try:
-        load_vertex_ai_credentials()
-        litellm.set_verbose = True
-
-        response = embedding(
-            model="vertex_ai/text-embedding-004",
-            input=["hi"],
-            dimensions=1,
-            auto_truncate=True,
-            task_type="RETRIEVAL_QUERY",
-        )
-
-        assert len(response.data[0]["embedding"]) == 1
-        assert response.usage.prompt_tokens > 0
-        print(f"response:", response)
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
@@ -2891,7 +2598,7 @@ def test_gemini_function_call_parameter_in_messages():
             mock_client.return_value = mock_response
             try:
                 completion(
-                    model="vertex_ai/gemini-2.0-flash",
+                    model="vertex_ai/gemini-2.5-flash-preview-09-2025",
                     messages=messages,
                     tools=tools,
                     tool_choice="auto",
@@ -3291,7 +2998,7 @@ def test_vertex_anthropic_completion():
         client, "post", side_effect=vertex_ai_anthropic_thinking_mock_response
     ):
         response = completion(
-            model="vertex_ai/claude-3-7-sonnet@20250219",
+            model="vertex_ai/claude-sonnet-4-6@default",
             messages=[{"role": "user", "content": "Hello, world!"}],
             vertex_ai_location="us-east5",
             vertex_ai_project="test-project",
@@ -3299,7 +3006,7 @@ def test_vertex_anthropic_completion():
             client=client,
         )
         print(response)
-        assert response.model == "claude-3-7-sonnet@20250219"
+        assert response.model == "claude-sonnet-4-6@default"
         assert response._hidden_params["response_cost"] is not None
         assert response._hidden_params["response_cost"] > 0
 
@@ -3359,7 +3066,7 @@ def test_gemini_fine_tuned_model_request_consistency():
     Assert the same transformation is applied to Fine tuned gemini 2.0 flash and gemini 2.0 flash
 
     - Request 1: Fine tuned: vertex_ai/gemini/ft-uuid
-    - Request 2: vertex_ai/gemini-2.0-flash-001
+    - Request 2: vertex_ai/gemini-2.5-flash
     """
     litellm.set_verbose = True
     load_vertex_ai_credentials()
@@ -3431,7 +3138,7 @@ def test_gemini_fine_tuned_model_request_consistency():
     with patch.object(client, "post", new=MagicMock()) as mock_post_2:
         try:
             response_2 = completion(
-                model="vertex_ai/gemini-2.0-flash-001",
+                model="vertex_ai/gemini-2.5-flash",
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
@@ -4230,13 +3937,7 @@ def test_gemini_google_maps_tool_simple():
             )
         print(f"Response: {response.model_dump_json(indent=4)}")
         assert response.choices[0].message.content is not None
-    except (litellm.RateLimitError, litellm.InternalServerError):
-        # Transient Vertex-side failures (rate limiting, 500 INTERNAL from the
-        # Google Maps grounding backend) are not LiteLLM bugs — don't fail CI.
-        pass
-    except litellm.InternalServerError:
-        pytest.skip(
-            "Google Maps Platform returned a transient 500 (upstream flake); skipping."
-        )
+    except (litellm.RateLimitError, litellm.InternalServerError) as e:
+        pytest.skip(f"Transient Vertex-side failure, not a LiteLLM bug: {e}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

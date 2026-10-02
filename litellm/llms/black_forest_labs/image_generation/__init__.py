@@ -5,8 +5,8 @@ from .transformation import (
 )
 
 __all__ = [
-    "BlackForestLabsImageGenerationConfig",
-    "get_black_forest_labs_image_generation_config",
     "BlackForestLabsImageGeneration",
+    "BlackForestLabsImageGenerationConfig",
     "bfl_image_generation",
+    "get_black_forest_labs_image_generation_config",
 ]

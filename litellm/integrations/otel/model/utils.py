@@ -8,7 +8,13 @@ parsing lives in :mod:`litellm.integrations.otel.plumbing.providers` instead,
 because it delegates to the OTel SDK's own W3C Baggage parser.
 """
 
+from collections.abc import Mapping
 from datetime import datetime
+from typing import Final
+
+from pydantic import TypeAdapter, ValidationError
+
+_STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
 def as_str(value: object) -> str | None:
@@ -55,6 +61,13 @@ def as_bool(value: object) -> bool | None:
     return bool(value)
 
 
+def as_str_mapping(value: object) -> Mapping[str, object] | None:
+    try:
+        return _STR_MAPPING.validate_python(value)
+    except ValidationError:
+        return None
+
+
 def as_str_tuple(value: object) -> tuple[str, ...] | None:
     if value is None:
         return None
@@ -65,7 +78,7 @@ def as_str_tuple(value: object) -> tuple[str, ...] | None:
     return None
 
 
-def to_ns(value: datetime | float | int | None) -> int | None:
+def to_ns(value: datetime | float | None) -> int | None:
     """Coerce a datetime / epoch value to integer nanoseconds."""
     if value is None:
         return None
@@ -76,7 +89,7 @@ def to_ns(value: datetime | float | int | None) -> int | None:
     return None
 
 
-def to_seconds(value: datetime | float | int | str | None) -> float | None:
+def to_seconds(value: datetime | float | str | None) -> float | None:
     """Coerce a datetime / epoch / formatted-string value to epoch seconds."""
     if value is None:
         return None

@@ -9,7 +9,7 @@ import {
   type FieldValues,
 } from "react-hook-form";
 
-import { Field, FieldDescription, FieldError, FieldLabel } from "./field";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 
 export type FormFieldControlProps<
   TFieldValues extends FieldValues,

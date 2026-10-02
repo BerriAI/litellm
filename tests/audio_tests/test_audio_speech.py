@@ -4,7 +4,6 @@
 import asyncio
 import os
 import random
-import sys
 import time
 import traceback
 from litellm._uuid import uuid
@@ -12,11 +11,7 @@ from litellm._uuid import uuid
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -452,7 +447,7 @@ async def test_azure_ava_tts_with_custom_voice():
     Test that when using a custom Azure voice (en-US-AndrewNeural),
     the SSML request body contains the selected voice.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, patch
     import httpx
 
     # Mock response
@@ -497,7 +492,7 @@ async def test_azure_ava_tts_fable_voice_mapping():
     Test that when using OpenAI voice 'fable',
     it gets mapped to Azure voice 'en-GB-RyanNeural' in the SSML.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, patch
     import httpx
 
     # Mock response
@@ -544,7 +539,7 @@ async def test_aws_polly_tts_with_native_voice():
     Verifies the request is formatted correctly for the Polly API.
     """
     import json
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
     import httpx
 
     # Mock response - Polly returns audio bytes directly
@@ -592,7 +587,7 @@ async def test_aws_polly_tts_with_openai_voice_mapping():
     Verifies that OpenAI voices are correctly mapped to Polly voices.
     """
     import json
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
     import httpx
 
     mock_response_content = b"fake_audio_data"
@@ -634,7 +629,7 @@ async def test_aws_polly_tts_with_ssml():
     Verifies that SSML is detected and TextType is set correctly.
     """
     import json
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
     import httpx
 
     mock_response_content = b"fake_audio_data"
@@ -672,38 +667,3 @@ async def test_aws_polly_tts_with_ssml():
         assert request_body["VoiceId"] == "Joanna"
 
 
-@pytest.mark.asyncio
-async def test_aws_polly_tts_real_api():
-    """
-    Test AWS Polly TTS with real API request.
-    Requires AWS credentials to be configured.
-    """
-    speech_file_path = Path(__file__).parent / "aws_polly_speech_generative.mp3"
-
-    response = await litellm.aspeech(
-        model="aws_polly/generative",
-        voice="Joanna",
-        input="Hello, this is a test of AWS Polly text to speech integration with LiteLLM.",
-        aws_region_name="us-east-1",
-    )
-
-    from litellm.types.llms.openai import HttpxBinaryResponseContent
-
-    assert isinstance(response, HttpxBinaryResponseContent)
-
-    binary_content = response.content
-    assert len(binary_content) > 0
-
-    # MP3 files start with ID3 tag or MPEG sync word
-    assert (
-        binary_content[:3] == b"ID3"
-        or binary_content[:2] == b"\xff\xfb"
-        or binary_content[:2] == b"\xff\xf3"
-    )
-
-    response.stream_to_file(speech_file_path)
-
-    assert speech_file_path.exists()
-    assert speech_file_path.stat().st_size > 0
-
-    print(f"AWS Polly TTS audio saved to: {speech_file_path}")

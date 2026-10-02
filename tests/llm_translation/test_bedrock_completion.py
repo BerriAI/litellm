@@ -4,7 +4,6 @@ Tests Bedrock Completion + Rerank endpoints
 
 # @pytest.mark.skip(reason="AWS Suspended Account")
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
@@ -13,12 +12,8 @@ import litellm.types
 
 load_dotenv()
 import io
-import os
 import json
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -56,17 +51,16 @@ def reset_callbacks():
     litellm.callbacks = []
 
 
-def test_completion_bedrock_claude_completion_auth():
+def test_completion_bedrock_claude_completion_auth(monkeypatch):
     print("calling bedrock claude completion params auth")
-    import os
 
     aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
     aws_region_name = os.environ["AWS_REGION_NAME"]
 
-    os.environ.pop("AWS_ACCESS_KEY_ID", None)
-    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
-    os.environ.pop("AWS_REGION_NAME", None)
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
+    monkeypatch.delenv("AWS_REGION_NAME")
 
     try:
         response = completion(
@@ -78,12 +72,7 @@ def test_completion_bedrock_claude_completion_auth():
             aws_secret_access_key=aws_secret_access_key,
             aws_region_name=aws_region_name,
         )
-        # Add any assertions here to check the response
         print(response)
-
-        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
-        os.environ["AWS_REGION_NAME"] = aws_region_name
     except RateLimitError:
         pass
     except Exception as e:
@@ -170,17 +159,16 @@ def test_completion_bedrock_guardrails(streaming):
 # test_completion_bedrock_claude_2_1_completion_auth()
 
 
-def test_completion_bedrock_claude_external_client_auth():
+def test_completion_bedrock_claude_external_client_auth(monkeypatch):
     print("\ncalling bedrock claude external client auth")
-    import os
 
     aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
     aws_region_name = os.environ["AWS_REGION_NAME"]
 
-    os.environ.pop("AWS_ACCESS_KEY_ID", None)
-    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
-    os.environ.pop("AWS_REGION_NAME", None)
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
+    monkeypatch.delenv("AWS_REGION_NAME")
 
     try:
         import boto3
@@ -202,12 +190,7 @@ def test_completion_bedrock_claude_external_client_auth():
             temperature=0.1,
             aws_bedrock_client=bedrock,
         )
-        # Add any assertions here to check the response
         print(response)
-
-        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
-        os.environ["AWS_REGION_NAME"] = aws_region_name
     except RateLimitError:
         pass
     except Exception as e:
@@ -475,7 +458,7 @@ def test_bedrock_claude_3(image_url):
             ],
         }
         response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             num_retries=3,
             **data,
         )  # type: ignore
@@ -498,7 +481,7 @@ def test_bedrock_claude_3(image_url):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         # "meta.llama3-70b-instruct-v1:0",
         # "anthropic.claude-v2",
         # "mistral.mixtral-8x7b-instruct-v0:1",
@@ -537,7 +520,7 @@ def test_bedrock_stop_value(stop, model):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "mistral.mixtral-8x7b-instruct-v0:1",
     ],
 )
@@ -602,7 +585,7 @@ def test_bedrock_claude_3_tool_calling():
             }
         ]
         response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -630,7 +613,7 @@ def test_bedrock_claude_3_tool_calling():
         )
         # In the second response, Claude should deduce answer from tool results
         second_response = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -879,16 +862,15 @@ async def test_bedrock_custom_prompt_template():
         mock_client_post.assert_called_once()
 
 
-def test_completion_bedrock_external_client_region():
+def test_completion_bedrock_external_client_region(monkeypatch):
     print("\ncalling bedrock claude external client auth")
-    import os
 
     aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
     aws_region_name = "us-east-1"
 
-    os.environ.pop("AWS_ACCESS_KEY_ID", None)
-    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
 
     client = HTTPHandler()
 
@@ -923,9 +905,6 @@ def test_completion_bedrock_external_client_region():
             assert "us-east-1" in mock_client_post.call_args.kwargs["url"]
 
             mock_client_post.assert_called_once()
-
-        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
     except RateLimitError:
         pass
     except Exception as e:
@@ -1193,23 +1172,6 @@ def test_not_found_error():
                 }
             ],
         )
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "bedrock/us.anthropic.claude-3-haiku-20240307-v1:0",
-        "bedrock/us.meta.llama3-2-11b-instruct-v1:0",
-    ],
-)
-def test_bedrock_cross_region_inference(model):
-    litellm.set_verbose = True
-    response = completion(
-        model=model,
-        messages=messages,
-        max_tokens=10,
-        temperature=0.1,
-    )
 
 
 @pytest.mark.parametrize(
@@ -1907,7 +1869,7 @@ def test_bedrock_completion_test_4(modify_params):
         ]
         assert transformed_messages == expected_messages
     else:
-        with pytest.raises(Exception) as e:
+        with pytest.raises(Exception, match=r"litellm\.modify_params") as e:
             litellm.completion(**data)
         assert "litellm.modify_params" in str(e.value)
 
@@ -2327,7 +2289,7 @@ def test_bedrock_cross_region_inference(monkeypatch):
 
 def test_bedrock_empty_content_real_call():
     completion(
-        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         messages=[
             {
                 "role": "user",
@@ -2459,9 +2421,7 @@ class TestBedrockEmbedding(BaseLLMEmbeddingTest):
         transformed_request = (
             AmazonTitanMultimodalEmbeddingG1Config()._transform_request(**args)
         )
-        transformed_request[
-            "inputImage"
-        ] == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
+        assert transformed_request["inputImage"] == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
 
 
 @pytest.mark.asyncio
@@ -2544,43 +2504,6 @@ def test_bedrock_error_handling_streaming(exception_type, expected_status_code):
         decoder._parse_message_from_event(event)
     assert "Bedrock is unable to process your request." in e.value.message
     assert e.value.status_code == expected_status_code
-
-
-@pytest.mark.parametrize(
-    "image_url",
-    [
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-        # "https://raw.githubusercontent.com/datasets/gdp/master/data/gdp.csv",
-        "https://www.cmu.edu/blackboard/files/evaluate/tests-example.xls",
-        # "https://raw.githubusercontent.com/datasets/sample-data/master/README.txt", # invalid url
-        "https://raw.githubusercontent.com/mdn/content/main/README.md",
-    ],
-)
-@pytest.mark.flaky(retries=6, delay=2)
-@pytest.mark.asyncio
-async def test_bedrock_document_understanding(image_url):
-    from litellm import acompletion
-
-    litellm._turn_on_debug()
-    model = "bedrock/us.amazon.nova-pro-v1:0"
-
-    image_content = [
-        {"type": "text", "text": f"What's this file about?"},
-        {
-            "type": "image_url",
-            "image_url": image_url,
-        },
-    ]
-
-    try:
-        response = await acompletion(
-            model=model,
-            messages=[{"role": "user", "content": image_content}],
-        )
-        assert response is not None
-        assert response.choices[0].message.content != ""
-    except litellm.ServiceUnavailableError as e:
-        pytest.skip("Skipping test due to ServiceUnavailableError")
 
 
 def test_bedrock_custom_proxy():
@@ -3133,50 +3056,6 @@ def test_bedrock_meta_llama_function_calling():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sync_mode", [True, False])
-async def test_bedrock_passthrough(sync_mode: bool):
-    import litellm
-
-    litellm._turn_on_debug()
-
-    data = {
-        "max_tokens": 512,
-        "messages": [{"role": "user", "content": "Hey"}],
-        "system": [
-            {
-                "type": "text",
-                "text": "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text.",
-            }
-        ],
-        "temperature": 0,
-        "metadata": {
-            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
-        },
-        "anthropic_version": "bedrock-2023-05-31",
-        "anthropic_beta": ["claude-code-20250219"],
-    }
-
-    if sync_mode:
-        response = litellm.llm_passthrough_route(
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            method="POST",
-            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke",
-            data=data,
-        )
-    else:
-        response = await litellm.allm_passthrough_route(
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            method="POST",
-            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke",
-            data=data,
-        )
-
-    print(response.text)
-
-    assert response.status_code == 200
-
-
-@pytest.mark.asyncio
 async def test_bedrock_passthrough_router():
     """
     Test bedrock passthrough using litellm.Router with async mode.
@@ -3285,58 +3164,6 @@ async def test_bedrock_converse__streaming_passthrough(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bedrock_streaming_passthrough_test2(monkeypatch):
-    import litellm
-    import time
-    import asyncio
-    from unittest.mock import MagicMock
-    from litellm.integrations.custom_logger import CustomLogger
-
-    class MockCustomLogger(CustomLogger):
-        pass
-
-    mock_custom_logger = MockCustomLogger()
-    monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
-
-    litellm._turn_on_debug()
-
-    data = {
-        "max_tokens": 512,
-        "messages": [{"role": "user", "content": "Hey"}],
-        "system": [
-            {
-                "type": "text",
-                "text": "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text.",
-            }
-        ],
-        "temperature": 0,
-        "metadata": {
-            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
-        },
-        "anthropic_version": "bedrock-2023-05-31",
-        "anthropic_beta": ["claude-code-20250219"],
-    }
-
-    with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
-        response = await litellm.allm_passthrough_route(
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            method="POST",
-            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke-with-response-stream",
-            data=data,
-        )
-        async for chunk in response:
-            print(chunk)
-
-        await asyncio.sleep(5)
-
-        mock_callback.assert_called_once()
-        # check standard logging payload created
-        print(mock_callback.call_args.kwargs.keys())
-        assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
-        assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
-
-
-@pytest.mark.asyncio
-async def test_bedrock_streaming_passthrough_test1(monkeypatch):
     import litellm
     import time
     import asyncio

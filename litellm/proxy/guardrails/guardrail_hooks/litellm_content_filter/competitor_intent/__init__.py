@@ -14,8 +14,8 @@ from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_
 )
 
 __all__ = [
-    "BaseCompetitorIntentChecker",
     "AirlineCompetitorIntentChecker",
+    "BaseCompetitorIntentChecker",
     "normalize",
     "text_for_entity_matching",
 ]

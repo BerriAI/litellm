@@ -8,7 +8,9 @@ GET /router/fields - Get router settings field definitions without values (for U
 """
 
 import inspect
-from typing import Any, Dict, List, get_args
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Any, Final, get_args
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -16,6 +18,7 @@ from pydantic import BaseModel, Field
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.config_resolvers import FieldSource, SettingsStore, source_for
 from litellm.router import Router
 from litellm.types.management_endpoints import (
     ROUTER_SETTINGS_FIELDS,
@@ -23,35 +26,54 @@ from litellm.types.management_endpoints import (
     RouterSettingsField,
 )
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 class RouterSettingsResponse(BaseModel):
-    fields: List[RouterSettingsField] = Field(description="List of all configurable router settings with metadata")
-    current_values: Dict[str, Any] = Field(description="Current values of router settings")
-    routing_strategy_descriptions: Dict[str, str] = Field(description="Descriptions for each routing strategy option")
+    fields: list[RouterSettingsField] = Field(description="List of all configurable router settings with metadata")
+    current_values: dict[str, Any] = Field(description="Current values of router settings")
+    routing_strategy_descriptions: dict[str, str] = Field(description="Descriptions for each routing strategy option")
+    routing_group_strategies: tuple[str, ...] = Field(
+        description="Strategies supported when constructing a routing group"
+    )
+    source: dict[str, FieldSource] = Field(description="Source of each current router setting")
 
 
 class RouterFieldsResponse(BaseModel):
-    fields: List[RouterSettingsField] = Field(
+    fields: list[RouterSettingsField] = Field(
         description="List of all configurable router settings with metadata (without field values)"
     )
-    routing_strategy_descriptions: Dict[str, str] = Field(description="Descriptions for each routing strategy option")
+    routing_strategy_descriptions: dict[str, str] = Field(description="Descriptions for each routing strategy option")
+    routing_group_strategies: tuple[str, ...] = Field(
+        description="Strategies supported when constructing a routing group"
+    )
 
 
-def _get_routing_strategies_from_router_class() -> List[str]:
+def _router_setting_source(
+    settings: SettingsStore,
+    key: str,
+    current_value: object,
+    field_default: object,
+) -> FieldSource:
+    source: Final = source_for(settings, key, field_default)
+    if source != "unset":
+        return source
+    return "default" if current_value is not None else "unset"
+
+
+def _get_routing_strategies_from_router_class() -> list[str]:
     """
     Dynamically extract routing strategies from the Router class __init__ method.
     """
     # Get the __init__ signature
-    sig = inspect.signature(Router.__init__)
+    sig: Final = inspect.signature(Router.__init__)
 
     # Get the routing_strategy parameter
-    routing_strategy_param = sig.parameters.get("routing_strategy")
+    routing_strategy_param: Final = sig.parameters.get("routing_strategy")
 
     if routing_strategy_param and routing_strategy_param.annotation:
         # Extract Literal values using get_args
-        literal_values = get_args(routing_strategy_param.annotation)
+        literal_values: Final = get_args(routing_strategy_param.annotation)
         if literal_values:
             return list(literal_values)
 
@@ -79,10 +101,10 @@ async def get_router_settings(
 
     try:
         # Get available routing strategies dynamically from Router class
-        available_routing_strategies = _get_routing_strategies_from_router_class()
+        available_routing_strategies: Final = _get_routing_strategies_from_router_class()
 
         # Get router settings fields from types file
-        router_fields = [field.model_copy(deep=True) for field in ROUTER_SETTINGS_FIELDS]
+        router_fields: Final = [field.model_copy(deep=True) for field in ROUTER_SETTINGS_FIELDS]
 
         # Populate routing_strategy field with available options and descriptions
         for field in router_fields:
@@ -91,14 +113,17 @@ async def get_router_settings(
                 break
 
         # Try to get router settings from config
-        config = await proxy_config.get_config()
-        router_settings_from_config = config.get("router_settings", {})
+        config: Final = await proxy_config.get_config()
+        router_settings_from_config: Final = config.get("router_settings", {})
 
-        current_values: Dict[str, Any] = {}
+        current_values: Final[dict[str, Any]] = {}
         if llm_router is not None:
             # Router exposes routing groups as private `_routing_groups`; the
             # generic `hasattr` loop below would miss them.
-            current_values["routing_groups"] = [group.model_dump() for group in llm_router._routing_groups.values()]
+            current_values["routing_groups"] = [
+                group.model_dump(exclude=frozenset(("model_priorities",)) if group.model_priorities is None else None)
+                for group in llm_router._routing_groups.values()
+            ]
             for field in router_fields:
                 if field.field_name == "routing_groups":
                     continue
@@ -109,18 +134,33 @@ async def get_router_settings(
         # Merge with config values (config takes precedence)
         current_values.update(router_settings_from_config)
 
-        # Update field values with current values
         for field in router_fields:
             if field.field_name in current_values:
                 field.field_value = current_values[field.field_name]
 
+        field_defaults: Final[Mapping[str, object]] = MappingProxyType(
+            {field.field_name: field.field_default for field in router_fields}
+        )
+        source: Final[Mapping[str, FieldSource]] = MappingProxyType(
+            {
+                key: _router_setting_source(
+                    proxy_config.router_settings,
+                    key,
+                    current_values[key],
+                    field_defaults.get(key),
+                )
+                for key in current_values
+            }
+        )
         return RouterSettingsResponse(
             fields=router_fields,
             current_values=current_values,
             routing_strategy_descriptions=ROUTING_STRATEGY_DESCRIPTIONS,
+            routing_group_strategies=(*available_routing_strategies, "priority"),
+            source=source,
         )
     except Exception as e:
-        verbose_proxy_logger.error(f"Error fetching router settings: {str(e)}")
+        verbose_proxy_logger.error("Error fetching router settings: %s", e)
         raise
 
 
@@ -148,10 +188,10 @@ async def get_router_fields(
     """
     try:
         # Get available routing strategies dynamically from Router class
-        available_routing_strategies = _get_routing_strategies_from_router_class()
+        available_routing_strategies: Final = _get_routing_strategies_from_router_class()
 
         # Get router settings fields from types file
-        router_fields = [field.model_copy(deep=True) for field in ROUTER_SETTINGS_FIELDS]
+        router_fields: Final = [field.model_copy(deep=True) for field in ROUTER_SETTINGS_FIELDS]
 
         # Populate routing_strategy field with available options
         for field in router_fields:
@@ -166,7 +206,8 @@ async def get_router_fields(
         return RouterFieldsResponse(
             fields=router_fields,
             routing_strategy_descriptions=ROUTING_STRATEGY_DESCRIPTIONS,
+            routing_group_strategies=(*available_routing_strategies, "priority"),
         )
     except Exception as e:
-        verbose_proxy_logger.error(f"Error fetching router fields: {str(e)}")
+        verbose_proxy_logger.error("Error fetching router fields: %s", e)
         raise

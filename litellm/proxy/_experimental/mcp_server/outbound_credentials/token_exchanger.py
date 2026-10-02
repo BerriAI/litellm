@@ -22,11 +22,14 @@ from __future__ import annotations
 import hashlib
 import time
 from collections.abc import Awaitable, Callable
-from typing import Literal, Protocol
+from typing import Final, Literal, Protocol
 
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
+    build_token_endpoint_client_auth,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     InMemoryTokenCacheBackend,
     InProcessRefreshCoordinator,
@@ -39,9 +42,6 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Ok,
     Result,
 )
-from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
-    build_token_endpoint_client_auth,
-)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     CredError,
     ServerSpec,
@@ -51,20 +51,20 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
 # A token with no declared expiry is cached for this long; one with an expiry is cached until then
 # minus the skew buffer, floored at the minimum. Values mirror v1's MCP_OAUTH2_* constants; the
 # composition root injects the configured ones.
-_DEFAULT_TTL_SECONDS = 3600.0
-_MIN_TTL_SECONDS = 10.0
-_EXPIRY_BUFFER_SECONDS = 60.0
+_DEFAULT_TTL_SECONDS: Final = 3600.0
+_MIN_TTL_SECONDS: Final = 10.0
+_EXPIRY_BUFFER_SECONDS: Final = 60.0
 
-_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"
+_GRANT_TYPE: Final = "urn:ietf:params:oauth:grant-type:token-exchange"
 # Microsoft Entra On-Behalf-Of speaks the RFC 7523 jwt-bearer grant, not RFC 8693, and gates delegation
 # behind ``requested_token_use=on_behalf_of`` (a Microsoft extension present in neither RFC).
-_JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-bearer"
-_REQUESTED_TOKEN_USE_OBO = "on_behalf_of"
+_JWT_BEARER_GRANT_TYPE: Final = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+_REQUESTED_TOKEN_USE_OBO: Final = "on_behalf_of"
 
 # RFC 8693 3 token-type URNs that are not usable as an upstream Bearer access token. token_type
 # already rejects the common non-access case (N_A); this catches a malformed STS that mints one of
 # these but still labels it Bearer. An access_token / jwt / absent / unknown type is accepted (lenient).
-_NON_ACCESS_ISSUED_TOKEN_TYPES = frozenset(
+_NON_ACCESS_ISSUED_TOKEN_TYPES: Final = frozenset(
     {
         "urn:ietf:params:oauth:token-type:refresh_token",
         "urn:ietf:params:oauth:token-type:id_token",
@@ -128,8 +128,8 @@ def _cache_key(subject_token: str, tenant_id: str, config: TokenExchangeConfig) 
     forces a fresh exchange instead of serving a token minted for the old config until TTL. Everything
     is hashed, so no secret is held in the key.
     """
-    secret = config.client_secret.get_secret_value() if config.client_secret else ""
-    material = "\x00".join(
+    secret: Final = config.client_secret.get_secret_value() if config.client_secret else ""
+    material: Final = "\x00".join(
         (
             subject_token,
             tenant_id,
@@ -251,9 +251,9 @@ class OboTokenExchanger:
     async def exchange(
         self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig, *, tenant_id: str = ""
     ) -> Result[OAuthToken, CredError]:
-        endpoint = config.token_exchange_endpoint
-        client_id = config.client_id
-        client_secret = config.client_secret
+        endpoint: Final = config.token_exchange_endpoint
+        client_id: Final = config.client_id
+        client_secret: Final = config.client_secret
         if not endpoint:
             # No endpoint configured and none discoverable: fail closed (412) rather than guess an IdP
             # or fall back to a weaker source. The caller's token is never sent anywhere.
@@ -270,19 +270,19 @@ class OboTokenExchanger:
                 CredError.of_misconfigured("entra_obo token exchange requires a scope (e.g. api://<app-id>/.default)")
             )
 
-        cache_key = _cache_key(subject_token, tenant_id, config)
-        server_id = server.server_id
-        cached = await self._cache.get(cache_key, server_id)
+        cache_key: Final = _cache_key(subject_token, tenant_id, config)
+        server_id: Final = server.server_id
+        cached: Final = await self._cache.get(cache_key, server_id)
         if cached is not None:
             verbose_logger.debug("MCP token exchange cache hit for server %s", server_id)
             return Ok(cached)
 
-        client_auth = build_token_endpoint_client_auth(
+        client_auth: Final = build_token_endpoint_client_auth(
             auth_method=config.token_endpoint_auth_method,
             client_id=client_id,
             client_secret=client_secret.get_secret_value(),
         )
-        form = {
+        form: Final = {
             **_build_exchange_form(
                 profile=config.profile,
                 subject_token=subject_token,
@@ -294,16 +294,16 @@ class OboTokenExchanger:
         }
 
         async def run_exchange() -> OAuthToken | None:
-            fresh = await self._cache.get(cache_key, server_id)
+            fresh: Final = await self._cache.get(cache_key, server_id)
             if fresh is not None:
                 return fresh
             verbose_logger.debug(
                 "Exchanging token for MCP server %s at %s (audience=%s)", server_id, endpoint, config.audience
             )
-            body = await self._http_post(endpoint, form, client_auth.headers)
+            body: Final = await self._http_post(endpoint, form, client_auth.headers)
             if body is None:
                 return None
-            token = self._token_from_body(body)
+            token: Final = self._token_from_body(body)
             if token is None:
                 return None
             await self._cache.set(cache_key, server_id, token, self._ttl_seconds(token))
@@ -314,7 +314,7 @@ class OboTokenExchanger:
             return await self._cache.get(cache_key, server_id)
 
         try:
-            token = await self._coordinator.run(cache_key, server_id, refresh=run_exchange, reread=reread)
+            token: Final = await self._coordinator.run(cache_key, server_id, refresh=run_exchange, reread=reread)
         except SubjectTokenRejected as rejected:
             # The IdP rejected the subject token (4xx). This is non-retryable: the caller must
             # re-authenticate with the IdP, so it surfaces as a 401 (the OBO challenge), not a 503.
@@ -347,12 +347,12 @@ class OboTokenExchanger:
         await self._cache.delete(_cache_key(subject_token, tenant_id, config), server.server_id)
 
     def _token_from_body(self, body: dict[str, object]) -> OAuthToken | None:
-        access_token = body.get("access_token")
+        access_token: Final = body.get("access_token")
         if not isinstance(access_token, str) or not access_token:
             return None
         # token_type is forwarded downstream as Bearer, so a present-but-non-Bearer type (e.g. N_A)
         # must fail closed rather than be minted as a bogus Bearer; an absent type defaults to Bearer.
-        token_type = body.get("token_type")
+        token_type: Final = body.get("token_type")
         if isinstance(token_type, str) and token_type.strip().lower() != "bearer":
             verbose_logger.warning(
                 "MCP token exchange returned unusable token_type %r; refusing to forward it as Bearer", token_type
@@ -360,17 +360,17 @@ class OboTokenExchanger:
             return None
         # issued_token_type says what representation was minted; reject a clearly-non-access type
         # (refresh/id/saml) even if token_type claimed Bearer. access_token / jwt / absent / unknown pass.
-        issued_token_type = body.get("issued_token_type")
+        issued_token_type: Final = body.get("issued_token_type")
         if isinstance(issued_token_type, str) and issued_token_type in _NON_ACCESS_ISSUED_TOKEN_TYPES:
             return None
-        expires_in = _parse_expires_in(body.get("expires_in"))
-        expires_at = self._clock() + expires_in if expires_in is not None else None
+        expires_in: Final = _parse_expires_in(body.get("expires_in"))
+        expires_at: Final = self._clock() + expires_in if expires_in is not None else None
         return OAuthToken(access_token=access_token, expires_at=expires_at)
 
     def _ttl_seconds(self, token: OAuthToken) -> float:
         if token.expires_at is None:
             return self._default_ttl_seconds
-        lifetime = max(0.0, token.expires_at - self._clock())
+        lifetime: Final = max(0.0, token.expires_at - self._clock())
         # Floor at min_ttl, but never cache past the token's own expiry: a token whose remaining
         # lifetime is below the buffer (or even below min_ttl) must not be served stale upstream.
         return min(max(lifetime - self._expiry_buffer_seconds, self._min_ttl_seconds), lifetime)

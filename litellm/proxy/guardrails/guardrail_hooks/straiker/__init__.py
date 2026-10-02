@@ -1,6 +1,9 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final, Literal
+
+from pydantic import BaseModel, field_validator
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 from .straiker import StraikerGuardrail
@@ -8,7 +11,27 @@ from .straiker import StraikerGuardrail
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
-_OPTIONAL_INIT_FIELDS = (
+
+class _V3Routing(BaseModel):
+    api_version: Literal["v1", "v3"] | None = None
+    agent_ref: str | None = None
+    client: str | None = None
+    format_hint: Literal["anthropic.messages", "openai.chat"] | None = None
+
+    @field_validator("api_version", mode="before")
+    @classmethod
+    def _unknown_api_version_is_unset(cls, value: object) -> object:
+        if value is None or value in ("v1", "v3"):
+            return value
+        verbose_proxy_logger.warning(
+            "Straiker guardrail: ignoring api_version %r, expected 'v1', 'v3' or unset; "
+            "the route follows the api_key prefix",
+            value,
+        )
+        return None
+
+
+_OPTIONAL_INIT_FIELDS: Final = (
     "timeout",
     "max_retries",
     "initial_backoff",
@@ -34,27 +57,37 @@ def _get_config_value(litellm_params: "LitellmParams", optional_params: object, 
 
 
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
-    optional_params = getattr(litellm_params, "optional_params", None)
-    api_key = litellm_params.api_key
+    optional_params: Final = getattr(litellm_params, "optional_params", None)
+    api_key: Final = litellm_params.api_key
     if not api_key:
         raise ValueError("api_key is required for straiker")
 
-    api_base = litellm_params.api_base or "https://api.prod.straiker.ai"
-    default_app = getattr(litellm_params, "default_app", None) or getattr(litellm_params, "source", None)
-    source = default_app if isinstance(default_app, str) and default_app else "LiteLLM Gateway"
-    kwargs: dict[str, object] = {
+    api_base: Final = litellm_params.api_base or "https://api.prod.straiker.ai"
+    default_app: Final = getattr(litellm_params, "default_app", None) or getattr(litellm_params, "source", None)
+    source: Final = default_app if isinstance(default_app, str) and default_app else "LiteLLM Gateway"
+    kwargs: Final[dict[str, object]] = {
         field: value
         for field in _OPTIONAL_INIT_FIELDS
         for value in [_get_config_value(litellm_params, optional_params, field)]
         if value is not None
     }
-    _callback = StraikerGuardrail(
+    routing: Final = _V3Routing.model_validate(
+        {
+            field: _get_config_value(litellm_params, optional_params, field)
+            for field in ("api_version", "agent_ref", "client", "format_hint")
+        }
+    )
+    _callback: Final = StraikerGuardrail(
         api_key=api_key,
         api_base=api_base if isinstance(api_base, str) else "https://api.prod.straiker.ai",
         source=source,
         guardrail_name=guardrail.get("guardrail_name", "straiker"),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        api_version=routing.api_version,
+        agent_ref=routing.agent_ref,
+        client=routing.client,
+        format_hint=routing.format_hint,
         **kwargs,
     )
 
@@ -62,10 +95,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _callback
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.STRAIKER.value: initialize_guardrail,
 }
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.STRAIKER.value: StraikerGuardrail,
 }

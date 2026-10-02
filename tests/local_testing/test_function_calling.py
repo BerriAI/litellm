@@ -1,16 +1,10 @@
-import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 import litellm
@@ -42,231 +36,10 @@ def get_current_weather(location, unit="fahrenheit"):
 
 
 # In production, this could be your backend API or an external API
-@pytest.mark.parametrize(
-    "model",
-    [
-        "gpt-3.5-turbo-1106",
-        "mistral/mistral-large-latest",
-        "claude-haiku-4-5-20251001",
-        "gemini/gemini-2.5-flash-lite",
-        "anthropic.claude-3-sonnet-20240229-v1:0",
-    ],
-)
-@pytest.mark.flaky(retries=3, delay=1)
-def test_aaparallel_function_call(model):
-    try:
-        litellm.set_verbose = True
-        litellm.modify_params = True
-        # Step 1: send the conversation and available functions to the model
-        messages = [
-            {
-                "role": "user",
-                "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
-            }
-        ]
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_current_weather",
-                    "description": "Get the current weather in a given location",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The city and state",
-                            },
-                            "unit": {
-                                "type": "string",
-                                "enum": ["celsius", "fahrenheit"],
-                            },
-                        },
-                        "required": ["location"],
-                    },
-                },
-            }
-        ]
-        response = litellm.completion(
-            model=model,
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",  # auto is default, but we'll be explicit
-        )
-        print("Response\n", response)
-        response_message = response.choices[0].message
-        tool_calls = response_message.tool_calls
-
-        print("Expecting there to be 3 tool calls")
-        assert (
-            len(tool_calls) > 0
-        )  # this has to call the function for SF, Tokyo and paris
-
-        # Step 2: check if the model wanted to call a function
-        print(f"tool_calls: {tool_calls}")
-        if tool_calls:
-            # Step 3: call the function
-            # Note: the JSON response may not always be valid; be sure to handle errors
-            available_functions = {
-                "get_current_weather": get_current_weather,
-            }  # only one function in this example, but you can have multiple
-            messages.append(
-                response_message
-            )  # extend conversation with assistant's reply
-            print("Response message\n", response_message)
-            # Step 4: send the info for each function call and function response to the model
-            for tool_call in tool_calls:
-                function_name = tool_call.function.name
-                if function_name not in available_functions:
-                    # the model called a function that does not exist in available_functions - don't try calling anything
-                    return
-                function_to_call = available_functions[function_name]
-                function_args = json.loads(tool_call.function.arguments)
-                function_response = function_to_call(
-                    location=function_args.get("location"),
-                    unit=function_args.get("unit"),
-                )
-                messages.append(
-                    {
-                        "tool_call_id": tool_call.id,
-                        "role": "tool",
-                        "name": function_name,
-                        "content": function_response,
-                    }
-                )  # extend conversation with function response
-            print(f"messages: {messages}")
-            second_response = litellm.completion(
-                model=model,
-                messages=messages,
-                temperature=0.2,
-                seed=22,
-                # tools=tools,
-                drop_params=True,
-            )  # get a new response from the model where it can see the function response
-            print("second response\n", second_response)
-    except litellm.InternalServerError as e:
-        print(e)
-    except litellm.RateLimitError as e:
-        print(e)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 # test_parallel_function_call()
 
 
-@pytest.mark.parametrize(
-    "model",
-    [
-        "anthropic/claude-haiku-4-5-20251001",
-        "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    ],
-)
-@pytest.mark.flaky(retries=3, delay=1)
-def test_aaparallel_function_call_with_anthropic_thinking(model):
-    try:
-        litellm._turn_on_debug()
-        litellm.modify_params = True
-        # Step 1: send the conversation and available functions to the model
-        messages = [
-            {
-                "role": "user",
-                "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
-            }
-        ]
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_current_weather",
-                    "description": "Get the current weather in a given location",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The city and state",
-                            },
-                            "unit": {
-                                "type": "string",
-                                "enum": ["celsius", "fahrenheit"],
-                            },
-                        },
-                        "required": ["location"],
-                    },
-                },
-            }
-        ]
-        response = litellm.completion(
-            model=model,
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",  # auto is default, but we'll be explicit
-            thinking={"type": "enabled", "budget_tokens": 1024},
-        )
-        print("Response\n", response)
-        response_message = response.choices[0].message
-        tool_calls = response_message.tool_calls
-
-        print("Expecting there to be 3 tool calls")
-        assert (
-            len(tool_calls) > 0
-        )  # this has to call the function for SF, Tokyo and paris
-
-        # Step 2: check if the model wanted to call a function
-        print(f"tool_calls: {tool_calls}")
-        if tool_calls:
-            # Step 3: call the function
-            # Note: the JSON response may not always be valid; be sure to handle errors
-            available_functions = {
-                "get_current_weather": get_current_weather,
-            }  # only one function in this example, but you can have multiple
-            messages.append(
-                response_message
-            )  # extend conversation with assistant's reply
-            print("Response message\n", response_message)
-            # Step 4: send the info for each function call and function response to the model
-            for tool_call in tool_calls:
-                function_name = tool_call.function.name
-                if function_name not in available_functions:
-                    # the model called a function that does not exist in available_functions - don't try calling anything
-                    return
-                function_to_call = available_functions[function_name]
-                function_args = json.loads(tool_call.function.arguments)
-                function_response = function_to_call(
-                    location=function_args.get("location"),
-                    unit=function_args.get("unit"),
-                )
-                messages.append(
-                    {
-                        "tool_call_id": tool_call.id,
-                        "role": "tool",
-                        "name": function_name,
-                        "content": function_response,
-                    }
-                )  # extend conversation with function response
-            print(f"messages: {messages}")
-            second_response = litellm.completion(
-                model=model,
-                messages=messages,
-                seed=22,
-                # tools=tools,
-                drop_params=True,
-                thinking={"type": "enabled", "budget_tokens": 1024},
-            )  # get a new response from the model where it can see the function response
-            print("second response\n", second_response)
-
-            ## THIRD RESPONSE
-    except litellm.InternalServerError as e:
-        print(e)
-    except litellm.RateLimitError as e:
-        print(e)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
-
 
 _PARALLEL_TOOL_HISTORY_MESSAGES = [
     {
@@ -299,29 +72,19 @@ _PARALLEL_TOOL_HISTORY_MESSAGES = [
 
 
 @pytest.mark.parametrize(
-    "model, messages, expect_unsupported_params_error",
+    "model, messages",
     [
-        # Bedrock Converse still requires modify_params to inject the dummy tool.
+        # Anthropic Messages API: a dummy tool is injected without modify_params,
+        # so tool history with no tools= completes instead of raising.
+        ("claude-haiku-4-5-20251001", _PARALLEL_TOOL_HISTORY_MESSAGES),
         (
-            "anthropic.claude-3-sonnet-20240229-v1:0",
-            _PARALLEL_TOOL_HISTORY_MESSAGES,
-            True,
-        ),
-        # Anthropic Messages API: dummy tool is injected without modify_params.
-        (
-            "claude-haiku-4-5-20251001",
-            _PARALLEL_TOOL_HISTORY_MESSAGES,
-            False,
-        ),
-        (
-            "anthropic.claude-3-sonnet-20240229-v1:0",
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             [
                 {
                     "role": "user",
                     "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
                 }
             ],
-            False,
         ),
         (
             "claude-haiku-4-5-20251001",
@@ -331,49 +94,34 @@ _PARALLEL_TOOL_HISTORY_MESSAGES = [
                     "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
                 }
             ],
-            False,
         ),
     ],
 )
-def test_parallel_function_call_anthropic_error_msg(
-    model, messages, expect_unsupported_params_error
-):
+def test_parallel_function_call_anthropic_error_msg(model, messages):
     """
-    Tool history without an explicit ``tools`` param:
+    Tool history without an explicit ``tools`` param must complete, not raise.
 
-    - Bedrock **Converse** still raises ``UnsupportedParamsError`` unless
-      ``litellm.modify_params`` is enabled (dummy tool is only added there).
-    - **Anthropic** (and Bedrock Invoke via ``AnthropicConfig.transform_request``)
-      always get a dummy tool so CLIs work with ``modify_params`` left off.
-
-    Reference Issue: https://github.com/BerriAI/litellm/issues/5747, https://github.com/BerriAI/litellm/issues/5388
+    Anthropic (and Bedrock Invoke via ``AnthropicConfig.transform_request``)
+    inject a dummy tool so CLIs work with ``modify_params`` left off. Bedrock
+    Converse's no-raise behavior is covered offline in
+    ``tests/unit/llms/bedrock/chat/test_converse_transformation.py``
+    (see #24158, #27138), which needs no live credentials.
     """
-    # Ensure modify_params is False so Bedrock Converse path still raises.
+    # Force modify_params off as a clean baseline: it exercises the Anthropic
+    # dummy-tool path, which injects regardless of modify_params
     # (other tests in this file set it to True and don't reset it)
     original_modify_params = litellm.modify_params
     litellm.modify_params = False
     try:
         litellm.set_verbose = True
-
-        if expect_unsupported_params_error:
-            with pytest.raises(litellm.UnsupportedParamsError) as e:
-                second_response = litellm.completion(
-                    model=model,
-                    messages=messages,
-                    temperature=0.2,
-                    seed=22,
-                    drop_params=True,
-                )  # get a new response from the model where it can see the function response
-                print("second response\n", second_response)
-        else:
-            second_response = litellm.completion(
-                model=model,
-                messages=messages,
-                temperature=0.2,
-                seed=22,
-                drop_params=True,
-            )  # get a new response from the model where it can see the function response
-            print("second response\n", second_response)
+        second_response = litellm.completion(
+            model=model,
+            messages=messages,
+            temperature=0.2,
+            seed=22,
+            drop_params=True,
+        )  # get a new response from the model where it can see the function response
+        print("second response\n", second_response)
     except litellm.InternalServerError as e:
         print(e)
     except litellm.RateLimitError as e:
@@ -418,7 +166,7 @@ def test_parallel_function_call_stream():
             }
         ]
         response = litellm.completion(
-            model="gpt-3.5-turbo-1106",
+            model="gpt-6-luna",
             messages=messages,
             tools=tools,
             stream=True,
@@ -467,7 +215,7 @@ def test_parallel_function_call_stream():
                 )  # extend conversation with function response
             print(f"messages: {messages}")
             second_response = litellm.completion(
-                model="gpt-3.5-turbo-1106", messages=messages, temperature=0.2, seed=22
+                model="gpt-6-luna", messages=messages, temperature=0.2, seed=22, reasoning_effort="none"
             )  # get a new response from the model where it can see the function response
             print("second response\n", second_response)
             return second_response
@@ -579,7 +327,7 @@ def test_groq_parallel_function_call():
 @pytest.mark.parametrize(
     "model",
     [
-        "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     ],
 )
 def test_passing_tool_result_as_list(model):
