@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.url_utils import async_safe_get, encode_url_path
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
+    HTTPHandler,
     get_async_httpx_client,
 )
 from litellm.llms.xai.common_utils import XAIModelInfo
@@ -271,6 +272,7 @@ class XAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str | None = None,
+        client: HTTPHandler | None = None,
     ) -> VideoObject:
         response_data: Final = raw_response.json()
         status_raw: Final = str(response_data.get("status") or "processing").lower()
