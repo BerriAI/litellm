@@ -1142,7 +1142,7 @@ def test_messages_without_auth_create_no_spend_row(gateway: Gateway, tmp_path: P
         raise AssertionError("Unauthenticated requests must not reach the upstream")
 
     with (
-        wire_server(_answering_model_listing(respond)) as wire,
+        wire_server(respond) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
     ):
         response: Final = isolated.client.post(
@@ -1164,7 +1164,7 @@ def test_messages_without_auth_create_no_spend_row(gateway: Gateway, tmp_path: P
             return_last_on_timeout=True,
         )
         assert rows == []
-        assert _provider_calls(wire.drain()) == ()
+        assert wire.drain() == ()
 
 
 def test_messages_upstream_error_keeps_tool_input(gateway: Gateway, tmp_path: Path) -> None:
