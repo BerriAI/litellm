@@ -60,12 +60,16 @@ describe("RunView", () => {
     expect(header).not.toHaveTextContent("failed");
   });
 
-  it("shows the SDK logo and label in the run header instead of the generic agent icon", async () => {
-    renderRun({ ...research, summary: { ...research.summary, frameworks: ["claude-agent-sdk", "claude-code"] } });
+  it("shows the agent name with the SDK logo in the run header instead of the generic agent icon", async () => {
+    renderRun({
+      ...research,
+      summary: { ...research.summary, agent_names: ["research-bot"], frameworks: ["claude-agent-sdk", "claude-code"] },
+    });
 
     const header = await screen.findByRole("banner");
-    expect(within(header).getByTestId("run-framework")).toHaveTextContent(/^Claude Agent SDK$/);
-    expect(within(header).getByRole("img", { name: "Claude Agent SDK logo" })).toBeInTheDocument();
+    expect(within(header).getByTestId("run-framework")).toHaveTextContent(/^research-bot$/);
+    expect(within(header).getByTestId("run-framework")).toHaveAttribute("title", "Claude Agent SDK");
+    expect(within(header).getByRole("img", { name: "Claude Agent SDK logo", hidden: true })).toBeInTheDocument();
     expect(within(header).queryByTestId("span-icon")).not.toBeInTheDocument();
   });
 
