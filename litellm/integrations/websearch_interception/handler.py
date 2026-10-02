@@ -90,9 +90,49 @@ WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: Final = "_websearch_interception_emit_native_b
 # ``web_search_tool_result`` blocks to inject into the final response.
 WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY: Final = "websearch_native_blocks"
 
+# Key used to flag, on per-request kwargs, that the originating client sent
+# domain filters (``allowed_domains`` / ``blocked_domains``) on an
+# Anthropic-native ``web_search_*`` tool. The standard LiteLLM tool drops
+# them (the model must not see client policy), so they are stashed here and
+# applied to the downstream ``litellm.asearch()`` call as
+# ``search_domain_filter``.
+WEBSEARCH_DOMAIN_FILTER_KEY: Final = "_websearch_interception_domain_filter"
+
 _RESPONSE_CONTENT_FIELD: Final = "content"
 
 _ResponseT: Final = TypeVar("_ResponseT")
+
+
+def _extract_web_search_domain_filters(
+    tools: Sequence[dict[str, object]],
+) -> dict[str, list[str]] | None:
+    """Collect ``allowed_domains`` / ``blocked_domains`` from web search tools.
+
+    Anthropic-native ``web_search_*`` tools carry optional domain limits. The
+    standard LiteLLM tool deliberately drops them (client policy, not model
+    input), so they are collected here, stashed on the request kwargs, and
+    applied to the downstream ``litellm.asearch()`` call as
+    ``search_domain_filter``.
+
+    Returns None when no web search tool carries a domain limit.
+    """
+    allowed: list[str] = []
+    blocked: list[str] = []
+    for tool in tools:
+        if not is_web_search_tool(tool):
+            continue
+        for key, bucket in (("allowed_domains", allowed), ("blocked_domains", blocked)):
+            value = tool.get(key)
+            if isinstance(value, list):
+                bucket.extend(item for item in value if isinstance(item, str) and item)
+    if not allowed and not blocked:
+        return None
+    domain_filters: dict[str, list[str]] = {}
+    if allowed:
+        domain_filters["allowed_domains"] = allowed
+    if blocked:
+        domain_filters["blocked_domains"] = blocked
+    return domain_filters
 
 
 class _PlanMetadataView(TypedDict):
@@ -142,7 +182,7 @@ class _AcreateNamedParams(TypedDict, total=False):
 
 class _AsearchNamedParams(TypedDict, total=False):
     max_results: ReadOnly[int | None]
-    search_domain_filter: ReadOnly[Never]
+    search_domain_filter: ReadOnly[list[str] | None]
     max_tokens_per_page: ReadOnly[int | None]
     country: ReadOnly[str | None]
     api_key: ReadOnly[str | None]
@@ -377,6 +417,12 @@ class WebSearchInterceptionLogger(CustomLogger):
             None,
         )
 
+        # Apply any domain limits the client set on the native web search
+        # tool before the search executes.
+        domain_filters: Final = _extract_web_search_domain_filters(tools)
+        if domain_filters is not None and isinstance(kwargs, dict):
+            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filters
+
         outcome: Final = await self._short_circuit_search_outcome(query, kwargs=kwargs)
         search_result_text: Final = WebSearchTransformation.search_outcome_text(outcome)
 
@@ -467,6 +513,12 @@ class WebSearchInterceptionLogger(CustomLogger):
         # so flagging here ensures the signal isn't lost regardless of order.
         if any(is_anthropic_native_web_search_tool(t) for t in tools):
             kwargs[WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY] = True
+
+        # Same for domain limits: stash them before the native tool is
+        # replaced, so the downstream search can apply them.
+        domain_filters: Final = _extract_web_search_domain_filters(tools)
+        if domain_filters is not None:
+            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filters
 
         # Convert native/custom web_search tools to LiteLLM standard
         converted_tools: Final = []
@@ -642,6 +694,12 @@ class WebSearchInterceptionLogger(CustomLogger):
         # prefix ensures it is stripped before the follow-up call kwargs.
         if any(is_anthropic_native_web_search_tool(t) for t in tools):
             kwargs[WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY] = True
+
+        # Same for domain limits: stash them before the native tool is
+        # replaced, so the downstream search can apply them.
+        domain_filters: Final = _extract_web_search_domain_filters(tools)
+        if domain_filters is not None:
+            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filters
 
         # Convert native web search tools to LiteLLM standard
         converted_tools: Final[list[dict[str, object]]] = []
@@ -1595,17 +1653,39 @@ class WebSearchInterceptionLogger(CustomLogger):
                 rich_objective = rich.get("objective")
                 if rich_objective and "objective" not in configured_search_kwargs:
                     configured_search_kwargs["objective"] = rich_objective
+            # Domain limits stashed by the pre-call hooks from the client's
+            # native web_search tool. ``allowed_domains`` pass through as an
+            # allowlist and ``blocked_domains`` as '-'-prefixed exclusions —
+            # the convention litellm.asearch()'s providers (e.g. Perplexity)
+            # use for search_domain_filter.
+            search_domain_filter: list[str] | None = None
+            request_domain_filters: Final = kwargs.get(WEBSEARCH_DOMAIN_FILTER_KEY) if kwargs is not None else None
+            if isinstance(request_domain_filters, dict):
+                allowed: Final[list[str]] = [
+                    item for item in request_domain_filters.get("allowed_domains", []) if isinstance(item, str) and item
+                ]
+                blocked: Final[list[str]] = [
+                    item for item in request_domain_filters.get("blocked_domains", []) if isinstance(item, str) and item
+                ]
+                if allowed or blocked:
+                    search_domain_filter = allowed + [f"-{item}" for item in blocked]
+                    verbose_logger.debug("WebSearchInterception: Applying domain filter %s", search_domain_filter)
             search_kwargs: Final = MappingProxyType(
                 {**configured_search_kwargs, **parent_correlation.as_search_kwargs()}
             )
             result: Final = (
                 await litellm.asearch(
-                    query=query_arg, search_provider=search_provider, **_NO_ASEARCH_NAMED, **search_kwargs
+                    query=query_arg,
+                    search_provider=search_provider,
+                    search_domain_filter=search_domain_filter,
+                    **_NO_ASEARCH_NAMED,
+                    **search_kwargs,
                 )
                 if search_metadata is None
                 else await litellm.asearch(
                     query=query_arg,
                     search_provider=search_provider,
+                    search_domain_filter=search_domain_filter,
                     litellm_metadata=search_metadata,
                     **_NO_ASEARCH_NAMED,
                     **search_kwargs,
