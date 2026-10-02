@@ -1579,7 +1579,8 @@ class ProxyExtrasDBManager:
                                 raise
                         else:
                             logger.error(
-                                f"prisma migrate deploy failed with an error the resolver does not handle: {_redact_credentials(stderr)}"
+                                "prisma migrate deploy failed with an error the resolver does not handle: "
+                                f"{_redact_credentials(stderr)}"
                             )
                 else:
                     if ProxyExtrasDBManager.spend_logs_is_partitioned():
@@ -1611,7 +1612,9 @@ class ProxyExtrasDBManager:
                 stderr_detail: Final = (
                     f" stderr: {_redact_credentials(str(e.stderr))}" if e.stderr else ""
                 )
-                logger.error(f"The process failed to execute. Details: {_redact_command_error(e)}.{stderr_detail}{retry_msg}")
+                logger.error(
+                    f"The process failed to execute. Details: {_redact_command_error(e)}.{stderr_detail}{retry_msg}"
+                )
                 time.sleep(random.randrange(5, 15))
             finally:
                 os.chdir(original_dir)
