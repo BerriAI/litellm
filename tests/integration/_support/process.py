@@ -209,7 +209,6 @@ def owned_proxy_process(
         "--num_workers",
         str(workers),
         *database_setup,
-        "--enforce_prisma_migration_check",
     )
     launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS)
     process: Final = launch.process

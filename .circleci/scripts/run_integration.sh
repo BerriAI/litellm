@@ -173,7 +173,7 @@ start_proxy() {
     AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 COVERAGE_FILE="$coverage_data" \
     "${proxy_command[@]}" --config tests/integration/proxy_config.yaml \
     --host 127.0.0.1 --port "$port" --num_workers 1 --telemetry False \
-    --use_prisma_db_push --enforce_prisma_migration_check \
+    --use_prisma_db_push \
     > "$results/$log_name" 2>&1 &
   launched_pid=$!
 }

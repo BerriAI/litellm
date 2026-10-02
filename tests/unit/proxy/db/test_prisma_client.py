@@ -448,7 +448,7 @@ def test_db_push_without_the_prisma_runner_fails_the_migration_instead_of_crashi
 ):
     """
     An ImportError out of setup_database escapes the caller's RuntimeError handler and
-    kills boot, bypassing the operator's enforce_prisma_migration_check choice.
+    kills boot with a traceback instead of the failed-setup message and exit code.
     """
     monkeypatch.setitem(sys.modules, "litellm_proxy_extras.prisma_toolchain", None)
 
