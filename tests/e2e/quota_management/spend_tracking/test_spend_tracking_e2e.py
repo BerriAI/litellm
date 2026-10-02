@@ -21,10 +21,16 @@ from math import isclose
 from typing import Final
 
 import pytest
-from e2e_http import RateLimitedError, Success
+from e2e_http import RateLimitedError, Success, UnknownApiError
 from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
-from models import KeyGenerateBody, LiteLLMParamsBody, SpendLogs, SpendLogsParams
+from models import (
+    KeyGenerateBody,
+    LiteLLMParamsBody,
+    SpendLogs,
+    SpendLogsParams,
+    TeamNewBody,
+)
 from spend_e2e_client import (
     ClientAttributionHeaders,
     SpendClient,
@@ -504,6 +510,76 @@ def test_tag_spend_matches_sum_of_tagged_logs(
     )
     assert (entry.log_count or 0) == len(tagged), (
         f"/spend/tags log_count {entry.log_count} != tagged rows {len(tagged)}"
+    )
+
+
+@pytest.mark.covers("quota_management.spend_tracking.tags.owner_only_attribution")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        providers=(Provider.GEMINI,),
+        models=(GEMINI_MODEL,),
+        mode=Mode.NONSTREAM,
+    )
+)
+def test_team_owned_tag_attributes_spend_to_owner_only(
+    client: SpendClient, resources: ResourceManager
+) -> None:
+    marker = unique_marker()
+    team_a = client.proxy.create_team(TeamNewBody(team_alias=f"e2e-tag-owner-a-{marker}"))
+    resources.defer(lambda: client.proxy.delete_team(team_a))
+    team_b = client.proxy.create_team(TeamNewBody(team_alias=f"e2e-tag-owner-b-{marker}"))
+    resources.defer(lambda: client.proxy.delete_team(team_b))
+    key_a = client.proxy.generate_key(KeyGenerateBody(team_id=team_a))
+    resources.defer(lambda: client.proxy.delete_key(key_a))
+    key_b = client.proxy.generate_key(KeyGenerateBody(team_id=team_b))
+    resources.defer(lambda: client.proxy.delete_key(key_b))
+    tag = f"e2e-owned-{marker}"
+    client.create_tag(tag, team_id=team_a)
+    resources.defer(lambda: client.delete_tag(tag))
+
+    _ = unwrap(
+        client.chat(
+            key_a, GEMINI_MODEL, f"hi {unique_marker()}", tags=[tag], max_tokens=16
+        )
+    )
+
+    denied = client.chat(
+        key_b, GEMINI_MODEL, f"hi {unique_marker()}", tags=[tag], max_tokens=16
+    )
+    match denied:
+        case UnknownApiError(status_code=403, body=body):
+            assert "tag_ownership_denied" in body, denied
+            assert tag in body, denied
+        case other:
+            pytest.fail(f"expected tag_ownership_denied 403, got {other!r}")
+
+    rows = client.poll_logs_for_key(
+        key_a,
+        predicate=lambda rs: any(
+            tag in (r.request_tags or []) and (r.spend or 0) > 0 for r in rs
+        ),
+    )
+    tagged = [r for r in rows if tag in (r.request_tags or [])]
+    assert len(tagged) == 1, f"expected one tagged row, saw {_summarize(rows)}"
+    logs_total = sum(r.spend or 0 for r in tagged)
+    assert logs_total > 0
+
+    b_logs = client.poll_logs_for_key(
+        key_b, predicate=lambda rs: any(tag in (r.request_tags or []) for r in rs)
+    )
+    b_rows = [r for r in b_logs if tag in (r.request_tags or [])]
+    assert all((r.spend or 0) == 0 for r in b_rows), (
+        f"team B logged spend on a foreign tag: {_summarize(b_rows)}"
+    )
+
+    entry = client.poll_tag_spend(tag, minimum=logs_total * 0.999)
+    assert entry is not None, f"tag {tag!r} never appeared in /spend/tags"
+    assert _approx_equal(entry.total_spend or 0, logs_total), (
+        f"/spend/tags total_spend {entry} != sum of tagged rows {logs_total}"
+    )
+    assert (entry.log_count or 0) == len(tagged) + len(b_rows), (
+        f"/spend/tags log_count {entry.log_count} != tagged rows {len(tagged) + len(b_rows)}"
     )
 
 

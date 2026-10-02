@@ -50,6 +50,8 @@ from models import (
     SpendLogsPage,
     SpendLogsPageParams,
     SpendTagsResponse,
+    TagDeleteBody,
+    TagNewBody,
     TagSpend,
     TeamInfoParams,
     UserDeleteBody,
@@ -312,6 +314,26 @@ class SpendClient:
     ) -> list[SpendLogRow]:
         return self.proxy.poll_logs_for_key(
             key, min_rows=min_rows, predicate=predicate
+        )
+
+    def create_tag(self, name: str, *, team_id: str | None = None) -> None:
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/tag/new",
+                headers=self.proxy.transport.master,
+                json=TagNewBody(name=name, team_id=team_id),
+                response_type=NoBody,
+            )
+        )
+
+    def delete_tag(self, name: str) -> None:
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/tag/delete",
+                headers=self.proxy.transport.master,
+                json=TagDeleteBody(name=name),
+                response_type=NoBody,
+            )
         )
 
     def calculate_spend(self, model: str, content: str) -> float:

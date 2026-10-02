@@ -1634,6 +1634,7 @@ class OrgDeleteResponse(RootModel[tuple[OrgInfoResponse, ...]]):
 class TagNewBody(BaseModel):
     name: str
     description: str | None = None
+    team_id: str | None = None
 
 
 class TagDeleteBody(BaseModel):
