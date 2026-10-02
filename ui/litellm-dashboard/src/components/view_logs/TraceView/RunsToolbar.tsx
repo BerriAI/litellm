@@ -38,10 +38,7 @@ export function RunsToolbar({
   onStatusChange,
   children,
 }: RunsToolbarProps) {
-  const agentItems = [
-    { value: ALL_AGENTS, label: "All agents" },
-    ...agents.map((s) => ({ value: s, label: s })),
-  ];
+  const agentItems = [{ value: ALL_AGENTS, label: "All agents" }, ...agents.map((s) => ({ value: s, label: s }))];
   return (
     <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2">
       <div className="relative w-full max-w-[380px]">
