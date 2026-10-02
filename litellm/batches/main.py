@@ -31,6 +31,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.openai import OpenAIBatchesAPI
 from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
+from litellm.llms.xai.batches.handler import XAIBatchesHandler
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     CancelBatchRequest,
@@ -59,6 +60,7 @@ openai_batches_instance: Final = OpenAIBatchesAPI()
 azure_batches_instance: Final = AzureBatchesAPI()
 vertex_ai_batches_instance: Final = VertexAIBatchPrediction(gcs_bucket_name="")
 anthropic_batches_instance: Final = AnthropicBatchesHandler()
+xai_batches_instance: Final = XAIBatchesHandler()
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
@@ -105,9 +107,23 @@ def _resolve_timeout(
 @client
 async def acreate_batch(
     completion_window: Literal["24h"],
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses"],
+    endpoint: Literal[
+        "/v1/chat/completions",
+        "/v1/embeddings",
+        "/v1/completions",
+        "/v1/responses",
+        "/v1/ocr",
+        "/v1/images/generations",
+        "/v1/images/edits",
+        "/v1/videos/generations",
+        "/v1/videos",
+        "/v1/videos/edits",
+        "/v1/videos/extensions",
+    ],
     input_file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "mistral", "xai"
+    ] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
@@ -155,9 +171,23 @@ async def acreate_batch(
 @client
 def create_batch(
     completion_window: Literal["24h"],
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses"],
+    endpoint: Literal[
+        "/v1/chat/completions",
+        "/v1/embeddings",
+        "/v1/completions",
+        "/v1/responses",
+        "/v1/ocr",
+        "/v1/images/generations",
+        "/v1/images/edits",
+        "/v1/videos/generations",
+        "/v1/videos",
+        "/v1/videos/edits",
+        "/v1/videos/extensions",
+    ],
     input_file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "mistral", "xai"
+    ] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
@@ -239,6 +269,14 @@ def create_batch(
                 model=model,
             )
             return response
+        if custom_llm_provider == LlmProviders.XAI.value:
+            return xai_batches_instance.create_batch(
+                _is_async=_is_async,
+                create_batch_data=_create_batch_request,
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                timeout=timeout,
+            )
         api_base: str | None = None
         if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -319,6 +357,7 @@ def create_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 create_batch_data=_create_batch_request,
+                custom_endpoint=optional_params.get("custom_endpoint"),
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -340,7 +379,7 @@ def create_batch(
 async def aretrieve_batch(
     batch_id: str,
     custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic"
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic", "mistral", "xai"
     ] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
@@ -388,10 +427,18 @@ def _handle_retrieve_batch_providers_without_provider_config(
     _retrieve_batch_request: RetrieveBatchRequest,
     _is_async: bool,
     custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic"
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic", "mistral", "xai"
     ] = "openai",
-    logging_obj: Any | None = None,
+    logging_obj: LiteLLMLoggingObj | None = None,
 ):
+    if custom_llm_provider == LlmProviders.XAI.value:
+        return xai_batches_instance.retrieve_batch(
+            _is_async=_is_async,
+            batch_id=batch_id,
+            api_base=optional_params.api_base,
+            api_key=optional_params.api_key,
+            timeout=timeout,
+        )
     api_base: str | None = None
     if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
         # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -496,7 +543,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
             message=(
                 f"LiteLLM doesn't support custom_llm_provider={custom_llm_provider} for 'retrieve_batch' without a `model` kwarg. "
                 "Supported via this path: 'openai', 'azure', 'vertex_ai', 'anthropic'. "
-                "'bedrock' is supported but requires `model` to be passed so the provider config can be loaded."
+                "'bedrock' and 'mistral' are supported but require `model` to be passed so the provider config can be loaded."
             ),
             model="n/a",
             llm_provider=custom_llm_provider,
@@ -513,7 +560,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
 def retrieve_batch(
     batch_id: str,
     custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic"
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic", "mistral", "xai"
     ] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
@@ -736,6 +783,15 @@ def list_batches(
             timeout = 600.0
 
         _is_async: Final = kwargs.pop("alist_batches", False) is True
+        if custom_llm_provider == LlmProviders.XAI.value:
+            return xai_batches_instance.list_batches(
+                _is_async=_is_async,
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                timeout=timeout,
+                after=after,
+                limit=limit,
+            )
         if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
@@ -832,7 +888,7 @@ def list_batches(
 async def acancel_batch(
     batch_id: str,
     model: str | None = None,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "litellm_proxy"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "litellm_proxy", "xai"] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
@@ -878,7 +934,7 @@ async def acancel_batch(
 def cancel_batch(
     batch_id: str,
     model: str | None = None,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "litellm_proxy"] | str = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "litellm_proxy", "xai"] | str = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
@@ -928,6 +984,14 @@ def cancel_batch(
         )
 
         _is_async: Final = kwargs.pop("acancel_batch", False) is True
+        if custom_llm_provider == LlmProviders.XAI.value:
+            return xai_batches_instance.cancel_batch(
+                _is_async=_is_async,
+                batch_id=batch_id,
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                timeout=timeout,
+            )
         api_base: str | None = None
         if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             api_base = (

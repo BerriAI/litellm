@@ -404,10 +404,10 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 && !isConnected && (
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground/70 gap-3">
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
             <Volume2 className="size-12" />
             <span className="text-lg text-muted-foreground">Realtime Voice Playground</span>
-            <p className="text-sm text-muted-foreground/70 text-center max-w-md">
+            <p className="text-sm text-muted-foreground text-center max-w-md">
               Click <b>Connect</b> to start a realtime session. You can speak using your microphone or type messages.
               The AI will respond with voice and text.
             </p>
@@ -419,11 +419,13 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
             className={`flex ${msg.role === "user" ? "justify-end" : msg.role === "status" ? "justify-center" : "justify-start"}`}
           >
             {msg.role === "status" ? (
-              <div className="text-xs text-muted-foreground/70 italic px-3 py-1">{msg.content}</div>
+              <div className="text-xs text-muted-foreground italic px-3 py-1">{msg.content}</div>
             ) : (
               <div
                 className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${
-                  msg.role === "user" ? "bg-info text-white rounded-br-md" : "bg-muted text-foreground rounded-bl-md"
+                  msg.role === "user"
+                    ? "bg-info text-info-foreground rounded-br-md"
+                    : "bg-muted text-foreground rounded-bl-md"
                 }`}
               >
                 <div className="text-xs font-medium mb-0.5 opacity-70">{msg.role === "user" ? "You" : "AI"}</div>

@@ -1,5 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "../../../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
@@ -23,20 +22,16 @@ const providers = [
   { provider_name: "tavily", ui_friendly_name: "Tavily Search" },
 ];
 
-const renderModal = () => {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <CreateSearchTool
-        userRole="Admin"
-        accessToken="test-token"
-        onCreateSuccess={vi.fn()}
-        isModalVisible
-        setModalVisible={vi.fn()}
-      />
-    </QueryClientProvider>,
+const renderModal = () =>
+  renderWithProviders(
+    <CreateSearchTool
+      userRole="Admin"
+      accessToken="test-token"
+      onCreateSuccess={vi.fn()}
+      isModalVisible
+      setModalVisible={vi.fn()}
+    />,
   );
-};
 
 const pickProvider = async (user: ReturnType<typeof userEvent.setup>, label: string) => {
   await user.click(screen.getAllByRole("combobox")[0]);
@@ -45,6 +40,7 @@ const pickProvider = async (user: ReturnType<typeof userEvent.setup>, label: str
 
 describe("CreateSearchTools submit payload", () => {
   beforeEach(() => {
+    testQueryClient.clear();
     vi.clearAllMocks();
     vi.mocked(networking.fetchAvailableSearchProviders).mockResolvedValue({ providers });
     vi.mocked(networking.createSearchTool).mockResolvedValue({ search_tool_id: "st-1" });
@@ -69,9 +65,6 @@ describe("CreateSearchTools submit payload", () => {
       litellm_params: {
         search_provider: "perplexity",
         api_key: "sk-secret",
-        api_base: undefined,
-        timeout: undefined,
-        max_retries: undefined,
       },
       search_tool_info: { description: "finds things" },
     });
@@ -147,5 +140,25 @@ describe("CreateSearchTools submit payload", () => {
       await screen.findByText("Name can only contain letters, numbers, hyphens, and underscores"),
     ).toBeInTheDocument();
     expect(networking.createSearchTool).not.toHaveBeenCalled();
+  });
+
+  it("should block creation after clearing the required provider and accept a restored choice", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    fireEvent.change(await screen.findByLabelText(/Search Tool Name/), { target: { value: "synthetic-search" } });
+    await pickProvider(user, "Perplexity AI");
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    expect(networking.fetchAvailableSearchProviders).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Add Search Tool" }));
+    expect(await screen.findByText("Please select a search provider")).toBeInTheDocument();
+    expect(networking.createSearchTool).not.toHaveBeenCalled();
+    await pickProvider(user, "Tavily Search");
+    await user.click(screen.getByRole("button", { name: "Add Search Tool" }));
+    await waitFor(() =>
+      expect(networking.createSearchTool).toHaveBeenCalledWith("test-token", {
+        search_tool_name: "synthetic-search",
+        litellm_params: { search_provider: "tavily" },
+      }),
+    );
   });
 });

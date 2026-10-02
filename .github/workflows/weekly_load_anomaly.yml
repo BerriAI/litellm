@@ -47,6 +47,9 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Cache the Rust build
+        uses: ./.github/actions/cache-cargo-build
+
       - name: Install dependencies
         run: |
           .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra proxy

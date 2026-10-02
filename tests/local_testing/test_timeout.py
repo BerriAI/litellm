@@ -2,12 +2,8 @@
 #    This tests the timeout decorator
 
 import os
-import sys
 import traceback
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import time
 from litellm._uuid import uuid
 
@@ -16,35 +12,7 @@ import openai
 import pytest
 
 import litellm
-
-
-@pytest.mark.parametrize(
-    "model, provider",
-    [
-        ("gpt-3.5-turbo", "openai"),
-        ("azure/gpt-4.1-mini", "azure"),
-    ],
-)
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_httpx_timeout(model, provider, sync_mode):
-    """
-    Test if setting httpx.timeout works for completion calls
-    """
-    timeout_val = httpx.Timeout(10.0, connect=60.0)
-
-    messages = [{"role": "user", "content": "Hey, how's it going?"}]
-
-    if sync_mode:
-        response = litellm.completion(
-            model=model, messages=messages, timeout=timeout_val
-        )
-    else:
-        response = await litellm.acompletion(
-            model=model, messages=messages, timeout=timeout_val
-        )
-
-    print(f"response: {response}")
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 
 def test_timeout():
@@ -220,13 +188,16 @@ def test_timeout_streaming():
     litellm.set_verbose = False
     try:
         response = litellm.completion(
-            model="gpt-3.5-turbo",
+            model="openai/slow-endpoint",
             messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
-            timeout=0.0001,
+            api_base=FAKE_OPENAI_API_BASE,
+            api_key="fake-key",
+            timeout=0.5,
             stream=True,
         )
         for chunk in response:
             print(chunk)
+        pytest.fail("Did not raise error `openai.APITimeoutError`. The stream completed instead")
     except openai.APITimeoutError as e:
         print(
             "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e

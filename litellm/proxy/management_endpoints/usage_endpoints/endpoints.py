@@ -10,8 +10,13 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.sse_keepalive import (
+    SSE_COMMENT_PING,
+    wrap_sse_stream_with_keepalive_pings,
+)
 
 router: Final = APIRouter()
 
@@ -56,11 +61,15 @@ async def usage_ai_chat(
     messages: Final = [{"role": m.role, "content": m.content} for m in data.messages]
 
     return StreamingResponse(
-        stream_usage_ai_chat(
-            messages=messages,
-            model=data.model,
-            user_id=user_id,
-            is_admin=is_admin,
+        wrap_sse_stream_with_keepalive_pings(
+            stream_usage_ai_chat(
+                messages=messages,
+                model=data.model,
+                user_id=user_id,
+                is_admin=is_admin,
+            ),
+            ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
+            ping_chunk=SSE_COMMENT_PING,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

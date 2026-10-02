@@ -87,7 +87,7 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
             <button
               type="button"
               onClick={() => removeEntry(entry.id)}
-              className="absolute top-2 right-2 text-muted-foreground/70 hover:text-destructive transition-colors p-1"
+              className="absolute top-2 right-2 text-muted-foreground hover:text-destructive transition-colors p-1"
             >
               <X className="w-4 h-4" />
             </button>
@@ -96,10 +96,10 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
               <label className="block text-xs font-medium text-muted-foreground mb-1">Primary Model</label>
               <SearchSelect
                 options={availablePrimaryOptions.map((m) => ({ label: m, value: m }))}
-                value={entry.primaryModel ?? ""}
+                value={entry.primaryModel}
                 onValueChange={(v) => {
                   const newFallbacks = entry.fallbackModels.filter((m) => m !== v);
-                  updateEntry(entry.id, { primaryModel: v === "" ? null : v, fallbackModels: newFallbacks });
+                  updateEntry(entry.id, { primaryModel: v, fallbackModels: newFallbacks });
                 }}
                 placeholder="Select model"
                 emptyText="No models found"
@@ -125,7 +125,7 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
                 className="w-full"
               />
               {entry.fallbackModels.length > 1 && (
-                <div className="text-[10px] text-muted-foreground/70 mt-1 ml-1">
+                <div className="text-[10px] text-muted-foreground mt-1 ml-1">
                   Tried in order; first model still within its own budget is used
                 </div>
               )}

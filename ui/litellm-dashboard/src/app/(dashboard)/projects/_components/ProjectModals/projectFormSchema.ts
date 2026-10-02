@@ -5,24 +5,27 @@ export const ALL_TEAM_MODELS = "all-team-models";
 const repeatsEarlierValue = (values: readonly string[], index: number): boolean =>
   values[index] !== "" && values.indexOf(values[index]) !== index;
 
+const modelLimitSchema = z.object({
+  model: z.string().min(1, "Missing model"),
+  tpm: z.number().optional(),
+  rpm: z.number().optional(),
+  itpm: z.number().optional(),
+  otpm: z.number().optional(),
+});
+
 export const projectFormSchema = z
   .object({
     project_alias: z.string().min(1, "Please enter a project name"),
-    team_id: z.string().min(1, "Please select a team"),
+    team_id: z
+      .string()
+      .nullable()
+      .pipe(z.string({ error: "Please select a team" }).min(1, "Please select a team")),
     description: z.string().optional(),
     models: z.array(z.string()),
-    max_budget: z.number().optional(),
+    max_budget: z.number().nullish(),
     isBlocked: z.boolean(),
     guardrails: z.array(z.string()).optional(),
-    modelLimits: z
-      .array(
-        z.object({
-          model: z.string().min(1, "Missing model"),
-          tpm: z.number().optional(),
-          rpm: z.number().optional(),
-        }),
-      )
-      .optional(),
+    modelLimits: z.array(modelLimitSchema).optional(),
     metadata: z
       .array(
         z.object({
@@ -48,11 +51,12 @@ export const projectFormSchema = z
     });
   });
 
-export type ProjectFormValues = z.output<typeof projectFormSchema>;
+export type ProjectFormValues = z.input<typeof projectFormSchema>;
+export type ProjectSubmitValues = z.output<typeof projectFormSchema>;
 
 export const emptyProjectFormValues: ProjectFormValues = {
   project_alias: "",
-  team_id: "",
+  team_id: null,
   description: undefined,
   models: [],
   max_budget: undefined,

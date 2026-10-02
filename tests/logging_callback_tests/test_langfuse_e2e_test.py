@@ -1,145 +1,126 @@
 import asyncio
-import copy
 import json
 import logging
 import os
-import sys
 import threading
-from typing import Any, Optional
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+from opentelemetry.proto.common.v1.common_pb2 import AnyValue
 
 logging.basicConfig(level=logging.DEBUG)
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
-from litellm import completion
-from litellm.caching import InMemoryCache
+from litellm.integrations.langfuse.langfuse_sdk import resolve_observation_id, resolve_trace_id
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
 os.environ["LANGFUSE_DEBUG"] = "True"
-import time
 
 import pytest
 import pytest_asyncio
 
+LANGFUSE_EXPORT_POST: Final = "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
+LANGFUSE_EXPORT_PATH: Final = "/api/public/otel/v1/traces"
+
+_PER_RUN_ATTRIBUTES: Final = frozenset(
+    {
+        "langfuse.observation.completion_start_time",
+        "langfuse.observation.metadata.applied_guardrails",
+        "langfuse.observation.metadata.cache_hit",
+        "langfuse.observation.metadata.hidden_params",
+        "langfuse.observation.metadata.litellm_call_id",
+        "langfuse.observation.metadata.litellm_response_cost",
+        "langfuse.observation.metadata.requester_metadata",
+        "langfuse.observation.metadata.response_id",
+        "langfuse.observation.metadata.usage_object",
+    }
+)
+
+
+def _decode_attribute(value: AnyValue) -> object:
+    match value.WhichOneof("value"):
+        case "string_value":
+            try:
+                return json.loads(value.string_value)
+            except json.JSONDecodeError:
+                return value.string_value
+        case "bool_value":
+            return value.bool_value
+        case "int_value":
+            return value.int_value
+        case "double_value":
+            return value.double_value
+        case "array_value":
+            return [_decode_attribute(item) for item in value.array_value.values]
+        case _:
+            return None
+
+
+def _exported_spans(mock_post: MagicMock) -> list[dict[str, object]]:
+    spans: list[dict[str, object]] = []
+    for call in mock_post.call_args_list:
+        url: str = call.args[0] if call.args else call.kwargs["url"]
+        assert url.endswith(LANGFUSE_EXPORT_PATH), url
+        request = ExportTraceServiceRequest.FromString(call.kwargs["data"])
+        for resource_spans in request.resource_spans:
+            for scope_spans in resource_spans.scope_spans:
+                for span in scope_spans.spans:
+                    spans.append(
+                        {
+                            "name": span.name,
+                            "trace_id": span.trace_id.hex(),
+                            "span_id": span.span_id.hex(),
+                            "parent_span_id": span.parent_span_id.hex() or None,
+                            "attributes": {
+                                attribute.key: _decode_attribute(attribute.value) for attribute in span.attributes
+                            },
+                        }
+                    )
+    return spans
+
+
+def _comparable(span: Mapping[str, object]) -> dict[str, object]:
+    attributes = span["attributes"]
+    assert isinstance(attributes, dict)
+    return {
+        "name": span["name"],
+        "parent_span_id": span["parent_span_id"],
+        "attributes": {key: value for key, value in sorted(attributes.items()) if key not in _PER_RUN_ATTRIBUTES},
+    }
+
 
 def assert_langfuse_request_matches_expected(
-    actual_request_body: dict,
+    spans: list[dict[str, object]],
     expected_file_name: str,
-    trace_id: Optional[str] = None,
+    trace_id: str,
 ):
-    """
-    Helper function to compare actual Langfuse request body with expected JSON file.
-
-    Args:
-        actual_request_body (dict): The actual request body received from the API call
-        expected_file_name (str): Name of the JSON file containing expected request body (e.g., "transcription.json")
-    """
-    # Get the current directory and read the expected request body
+    """Compare the generation langfuse exported for ``trace_id`` with the expected JSON file."""
     pwd = os.path.dirname(os.path.realpath(__file__))
-    expected_body_path = os.path.join(
-        pwd, "langfuse_expected_request_body", expected_file_name
-    )
-
+    expected_body_path = os.path.join(pwd, "langfuse_expected_request_body", expected_file_name)
     with open(expected_body_path, "r") as f:
-        expected_request_body = json.load(f)
+        expected_generation = json.load(f)
 
-    # Filter out events that don't match the trace_id
-    if trace_id:
-        actual_request_body["batch"] = [
-            item
-            for item in actual_request_body["batch"]
-            if (item["type"] == "trace-create" and item["body"].get("id") == trace_id)
-            or (
-                item["type"] == "generation-create"
-                and item["body"].get("traceId") == trace_id
-            )
-        ]
-
-    # When aggregating from multiple flush cycles, deduplicate by keeping
-    # only one trace-create and one generation-create per trace_id.
-    seen_types: dict = {}
-    deduped_batch: list = []
-    for item in actual_request_body["batch"]:
-        item_type = item["type"]
-        if item_type not in seen_types:
-            seen_types[item_type] = True
-            deduped_batch.append(item)
-    actual_request_body["batch"] = deduped_batch
-
-    # Ensure canonical order: trace-create first, generation-create second
-    actual_request_body["batch"].sort(
-        key=lambda x: 0 if x["type"] == "trace-create" else 1
+    otel_trace_id: Final = resolve_trace_id(trace_id)
+    generations: Final = [
+        span
+        for span in spans
+        if span["trace_id"] == otel_trace_id and span["attributes"]["langfuse.observation.type"] == "generation"  # pyright: ignore[reportIndexIssue]  # built as dict in _exported_spans
+    ]
+    assert len(generations) == 1, (
+        f"Expected exactly one generation for trace_id={trace_id} ({otel_trace_id}), "
+        f"got {len(generations)}. Spans: {json.dumps(spans, indent=2)}"
     )
 
-    print(
-        "actual_request_body after filtering", json.dumps(actual_request_body, indent=4)
+    actual_generation: Final = _comparable(generations[0])
+    assert actual_generation == expected_generation, (
+        f"Difference in exported generation: {json.dumps(actual_generation, indent=2)} "
+        f"!= {json.dumps(expected_generation, indent=2)}"
     )
-
-    assert len(actual_request_body["batch"]) >= 2, (
-        f"Expected at least 2 batch items (trace-create + generation-create) "
-        f"after filtering by trace_id={trace_id}, "
-        f"but got {len(actual_request_body['batch'])}. "
-        f"Items: {json.dumps(actual_request_body['batch'], indent=2)}"
-    )
-
-    # Replace dynamic values in actual request body
-    for item in actual_request_body["batch"]:
-
-        # Replace IDs with expected IDs
-        if item["type"] == "trace-create":
-            item["id"] = expected_request_body["batch"][0]["id"]
-            item["body"]["id"] = expected_request_body["batch"][0]["body"]["id"]
-            item["timestamp"] = expected_request_body["batch"][0]["timestamp"]
-            item["body"]["timestamp"] = expected_request_body["batch"][0]["body"][
-                "timestamp"
-            ]
-        elif item["type"] == "generation-create":
-            item["id"] = expected_request_body["batch"][1]["id"]
-            item["body"]["id"] = expected_request_body["batch"][1]["body"]["id"]
-            item["timestamp"] = expected_request_body["batch"][1]["timestamp"]
-            item["body"]["startTime"] = expected_request_body["batch"][1]["body"][
-                "startTime"
-            ]
-            item["body"]["endTime"] = expected_request_body["batch"][1]["body"][
-                "endTime"
-            ]
-            item["body"]["completionStartTime"] = expected_request_body["batch"][1][
-                "body"
-            ]["completionStartTime"]
-            if trace_id is None:
-                print("popping traceId")
-                item["body"].pop("traceId")
-            else:
-                item["body"]["traceId"] = trace_id
-                expected_request_body["batch"][1]["body"]["traceId"] = trace_id
-
-    # Replace SDK version with expected version
-    actual_request_body["batch"][0]["body"].pop("release", None)
-    actual_request_body["metadata"]["sdk_version"] = expected_request_body["metadata"][
-        "sdk_version"
-    ]
-    # replace "public_key" with expected public key
-    actual_request_body["metadata"]["public_key"] = expected_request_body["metadata"][
-        "public_key"
-    ]
-    actual_request_body["batch"][1]["body"]["metadata"] = expected_request_body[
-        "batch"
-    ][1]["body"]["metadata"]
-    actual_request_body["metadata"]["sdk_integration"] = expected_request_body[
-        "metadata"
-    ]["sdk_integration"]
-    actual_request_body["metadata"]["batch_size"] = expected_request_body["metadata"][
-        "batch_size"
-    ]
-    # Assert the entire request body matches
-    assert (
-        actual_request_body == expected_request_body
-    ), f"Difference in request bodies: {json.dumps(actual_request_body, indent=2)} != {json.dumps(expected_request_body, indent=2)}"
 
 
 class TestLangfuseLogging:
@@ -147,22 +128,13 @@ class TestLangfuseLogging:
     async def mock_setup(self):
         """Common setup for Langfuse logging tests"""
         from litellm._uuid import uuid
-        from unittest.mock import AsyncMock, patch
-        import httpx
 
-        # Create a mock Response object
-        mock_response = AsyncMock(spec=httpx.Response)
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"status": "success"}
-
-        # Create mock for httpx.Client.post
-        mock_post = AsyncMock()
-        mock_post.return_value = mock_response
+        mock_post = MagicMock(return_value=MagicMock(ok=True, status_code=200))
 
         litellm.set_verbose = True
         litellm.success_callback = ["langfuse"]
 
-        return {"trace_id": f"litellm-test-{str(uuid.uuid4())}", "mock_post": mock_post}
+        return {"trace_id": f"litellm-test-{uuid.uuid4()!s}", "mock_post": mock_post}
 
     async def _verify_langfuse_call(
         self,
@@ -170,41 +142,16 @@ class TestLangfuseLogging:
         expected_file_name: str,
         trace_id: str,
     ):
-        """Helper method to verify Langfuse API calls"""
-        await asyncio.sleep(3)
+        """Wait for the batch processor to export, then compare the generation it shipped."""
+        otel_trace_id: Final = resolve_trace_id(trace_id)
+        for _ in range(100):
+            if any(span["trace_id"] == otel_trace_id for span in _exported_spans(mock_post)):
+                break
+            await asyncio.sleep(0.1)
 
-        # Verify at least one call was made
-        assert mock_post.call_count >= 1
-
-        # Aggregate batch items from ALL calls — the Langfuse SDK may split
-        # trace-create and generation-create across separate HTTP flushes.
-        langfuse_url = "https://us.cloud.langfuse.com/api/public/ingestion"
-        all_batch_items: list = []
-        metadata: Optional[dict] = None
-        for call in mock_post.call_args_list:
-            url = call[0][0]
-            if url != langfuse_url:
-                continue
-            request_body = call[1].get("content")
-            if request_body:
-                body = json.loads(request_body)
-                all_batch_items.extend(body.get("batch", []))
-                if metadata is None:
-                    metadata = body.get("metadata")
-
-        assert len(all_batch_items) > 0, "No Langfuse ingestion calls found"
-        assert metadata is not None, "No metadata found in Langfuse calls"
-
-        actual_request_body = {
-            "batch": all_batch_items,
-            "metadata": metadata,
-        }
-
-        print("\nMocked Request Details (aggregated from all calls):")
-        print(f"Request Body: {json.dumps(actual_request_body, indent=4)}")
-
+        assert mock_post.call_count >= 1, "langfuse exported nothing"
         assert_langfuse_request_matches_expected(
-            actual_request_body,
+            _exported_spans(mock_post),
             expected_file_name,
             trace_id,
         )
@@ -214,23 +161,21 @@ class TestLangfuseLogging:
     async def test_langfuse_logging_completion(self, mock_setup):
         """Test Langfuse logging for chat completion"""
         setup = mock_setup
-        with patch("httpx.Client.post", setup["mock_post"]):
+        with patch(LANGFUSE_EXPORT_POST, setup["mock_post"]):
             await litellm.acompletion(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": "Hello!"}],
                 mock_response="Hello! How can I assist you today?",
                 metadata={"trace_id": setup["trace_id"]},
             )
-            await self._verify_langfuse_call(
-                setup["mock_post"], "completion.json", setup["trace_id"]
-            )
+            await self._verify_langfuse_call(setup["mock_post"], "completion.json", setup["trace_id"])
 
     @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=1)
     async def test_langfuse_logging_completion_with_tags(self, mock_setup):
         """Test Langfuse logging for chat completion with tags"""
         setup = mock_setup
-        with patch("httpx.Client.post", setup["mock_post"]):
+        with patch(LANGFUSE_EXPORT_POST, setup["mock_post"]):
             await litellm.acompletion(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": "Hello!"}],
@@ -240,16 +185,14 @@ class TestLangfuseLogging:
                     "tags": ["test_tag", "test_tag_2"],
                 },
             )
-            await self._verify_langfuse_call(
-                setup["mock_post"], "completion_with_tags.json", setup["trace_id"]
-            )
+            await self._verify_langfuse_call(setup["mock_post"], "completion_with_tags.json", setup["trace_id"])
 
     @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=1)
     async def test_langfuse_logging_completion_with_tags_stream(self, mock_setup):
         """Test Langfuse logging for chat completion with tags"""
         setup = mock_setup
-        with patch("httpx.Client.post", setup["mock_post"]):
+        with patch(LANGFUSE_EXPORT_POST, setup["mock_post"]):
             await litellm.acompletion(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": "Hello!"}],
@@ -267,10 +210,31 @@ class TestLangfuseLogging:
 
     @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=1)
+    async def test_langfuse_generation_id_metadata_names_the_exported_observation(self, mock_setup):
+        """v2 let callers pick the generation id; v4 only has span ids, so the requested id must become one."""
+        setup = mock_setup
+        with patch(LANGFUSE_EXPORT_POST, setup["mock_post"]):
+            await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello!"}],
+                mock_response="Hello! How can I assist you today?",
+                metadata={"trace_id": setup["trace_id"], "generation_id": "my-generation"},
+            )
+            await self._verify_langfuse_call(setup["mock_post"], "completion.json", setup["trace_id"])
+
+        generation: Final = next(
+            span
+            for span in _exported_spans(setup["mock_post"])
+            if span["trace_id"] == resolve_trace_id(setup["trace_id"])
+        )
+        assert generation["span_id"] == resolve_observation_id("my-generation")
+
+    @pytest.mark.asyncio
+    @pytest.mark.flaky(retries=3, delay=1)
     async def test_langfuse_logging_completion_with_langfuse_metadata(self, mock_setup):
         """Test Langfuse logging for chat completion with metadata for langfuse"""
         setup = mock_setup
-        with patch("httpx.Client.post", setup["mock_post"]):
+        with patch(LANGFUSE_EXPORT_POST, setup["mock_post"]):
             await litellm.acompletion(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": "Hello!"}],
@@ -299,12 +263,12 @@ class TestLangfuseLogging:
     @pytest.mark.flaky(retries=3, delay=1)
     async def test_langfuse_logging_with_non_serializable_metadata(self, mock_setup):
         """Test Langfuse logging with metadata that requires preparation (Pydantic models, sets, etc)"""
-        from pydantic import BaseModel
-        from typing import Set
         import datetime
 
+        from pydantic import BaseModel
+
         class UserPreferences(BaseModel):
-            favorite_colors: Set[str]
+            favorite_colors: set[str]
             last_login: datetime.datetime
             settings: dict
 
@@ -327,8 +291,8 @@ class TestLangfuseLogging:
             "trace_id": setup["trace_id"],
         }
 
-        with patch("httpx.Client.post", setup["mock_post"]):
-            response = await litellm.acompletion(
+        with patch(LANGFUSE_EXPORT_POST, setup["mock_post"]):
+            await litellm.acompletion(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": "Hello!"}],
                 mock_response="Hello! How can I assist you today?",
@@ -377,18 +341,14 @@ class TestLangfuseLogging:
         ],
     )
     @pytest.mark.flaky(retries=6, delay=1)
-    async def test_langfuse_logging_with_various_metadata_types(
-        self, mock_setup, test_metadata, response_json_file
-    ):
+    async def test_langfuse_logging_with_various_metadata_types(self, mock_setup, test_metadata, response_json_file):
         """Test Langfuse logging with various metadata types including non-serializable objects"""
-        import threading
-
         setup = mock_setup
 
         if test_metadata is not None:
             test_metadata["trace_id"] = setup["trace_id"]
 
-        with patch("httpx.Client.post", setup["mock_post"]):
+        with patch(LANGFUSE_EXPORT_POST, setup["mock_post"]):
             await litellm.acompletion(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": "Hello!"}],
@@ -404,13 +364,11 @@ class TestLangfuseLogging:
 
     @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=1)
-    async def test_langfuse_logging_completion_with_malformed_llm_response(
-        self, mock_setup
-    ):
+    async def test_langfuse_logging_completion_with_malformed_llm_response(self, mock_setup):
         """Test Langfuse logging for chat completion with malformed LLM response"""
         setup = mock_setup
         litellm._turn_on_debug()
-        with patch("httpx.Client.post", setup["mock_post"]):
+        with patch(LANGFUSE_EXPORT_POST, setup["mock_post"]):
             mock_response = litellm.ModelResponse(
                 choices=[],
                 usage=litellm.Usage(
@@ -428,19 +386,15 @@ class TestLangfuseLogging:
                 mock_response=mock_response,
                 metadata={"trace_id": setup["trace_id"]},
             )
-            await self._verify_langfuse_call(
-                setup["mock_post"], "completion_with_no_choices.json", setup["trace_id"]
-            )
+            await self._verify_langfuse_call(setup["mock_post"], "completion_with_no_choices.json", setup["trace_id"])
 
     @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=1)
-    async def test_langfuse_logging_completion_with_bedrock_llm_response(
-        self, mock_setup
-    ):
+    async def test_langfuse_logging_completion_with_bedrock_llm_response(self, mock_setup):
         """Test Langfuse logging for chat completion with malformed LLM response"""
         setup = mock_setup
         litellm._turn_on_debug()
-        with patch("httpx.Client.post", setup["mock_post"]):
+        with patch(LANGFUSE_EXPORT_POST, setup["mock_post"]):
             mock_response = litellm.ModelResponse(
                 choices=[],
                 usage=litellm.Usage(
@@ -469,13 +423,11 @@ class TestLangfuseLogging:
 
     @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=1)
-    async def test_langfuse_logging_completion_with_vertex_llm_response(
-        self, mock_setup
-    ):
+    async def test_langfuse_logging_completion_with_vertex_llm_response(self, mock_setup):
         """Test Langfuse logging for chat completion with malformed LLM response"""
         setup = mock_setup
         litellm._turn_on_debug()
-        with patch("httpx.Client.post", setup["mock_post"]):
+        with patch(LANGFUSE_EXPORT_POST, setup["mock_post"]):
             mock_response = litellm.ModelResponse(
                 choices=[],
                 usage=litellm.Usage(
@@ -483,12 +435,12 @@ class TestLangfuseLogging:
                     completion_tokens=10,
                     total_tokens=20,
                 ),
-                model="vertex/gemini-2.0-flash-001",
+                model="vertex/gemini-3-flash-preview",
                 object="chat.completion",
                 created=1723081200,
             ).model_dump()
             await litellm.acompletion(
-                model="vertex_ai/gemini-2.0-flash-001",
+                model="vertex_ai/gemini-3-flash-preview",
                 messages=[{"role": "user", "content": "Hello!"}],
                 mock_response=mock_response,
                 metadata={"trace_id": setup["trace_id"]},
@@ -527,7 +479,7 @@ class TestLangfuseLogging:
         mock_async_client = AsyncHTTPHandler()
         mock_async_client.post = AsyncMock(return_value=mock_vllm_response)
 
-        with patch("httpx.Client.post", setup["mock_post"]):
+        with patch(LANGFUSE_EXPORT_POST, setup["mock_post"]):
             await litellm.aembedding(
                 model="hosted_vllm/BAAI/bge-small-en-v1.5",
                 input=["Hello from litellm!"],
@@ -541,9 +493,7 @@ class TestLangfuseLogging:
         actual_vllm_request = mock_async_client.post.call_args.kwargs["json"]
 
         pwd = os.path.dirname(os.path.realpath(__file__))
-        expected_body_path = os.path.join(
-            pwd, "langfuse_expected_request_body", "embedding_with_vllm.json"
-        )
+        expected_body_path = os.path.join(pwd, "langfuse_expected_request_body", "embedding_with_vllm.json")
         with open(expected_body_path, "r") as f:
             expected_vllm_request = json.load(f)
 
@@ -570,7 +520,7 @@ class TestLangfuseLogging:
                 }
             ]
         )
-        with patch("httpx.Client.post", mock_setup["mock_post"]):
+        with patch(LANGFUSE_EXPORT_POST, mock_setup["mock_post"]):
             mock_response = litellm.ModelResponse(
                 choices=[],
                 usage=litellm.Usage(

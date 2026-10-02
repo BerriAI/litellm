@@ -3,10 +3,13 @@ Base repository class with common functionality.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Hashable, Iterable, Mapping, Sequence
 from typing import Any, Final, Generic, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
+
+from litellm.repositories.chunked_in import find_many_in
+from litellm.repositories.prisma_protocols import TableActions
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -38,7 +41,7 @@ def record_to_dict(record: DbRecord) -> Mapping[str, object]:
 class BaseRepository(ABC, Generic[T]):
     """Abstract base class for all repositories."""
 
-    def __init__(self, prisma_client: Any):  # any-ok: PrismaClient is an untyped runtime wrapper
+    def __init__(self, prisma_client: object):
         self._prisma_client = prisma_client
 
     @property
@@ -49,7 +52,7 @@ class BaseRepository(ABC, Generic[T]):
 
     @property
     @abstractmethod
-    def table(self) -> Any:  # any-ok: Prisma table actions are reached through the untyped client wrapper
+    def table(self) -> TableActions[DbRecord]:
         """Return the Prisma table for this repository."""
         ...
 
@@ -76,33 +79,32 @@ class BaseRepository(ABC, Generic[T]):
 
     async def find_many(
         self,
-        where: dict[str, Any] | None = None,
+        where: Mapping[str, object] | None = None,
         skip: int | None = None,
         take: int | None = None,
-        order: dict[str, str] | None = None,
+        order: Mapping[str, str] | None = None,
     ) -> list[T]:
         """Find multiple records matching the criteria."""
-        kwargs: Final[dict[str, Any]] = {}
-        if where:
-            kwargs["where"] = where
-        if skip is not None:
-            kwargs["skip"] = skip
-        if take is not None:
-            kwargs["take"] = take
-        if order:
-            kwargs["order"] = order
-
-        records: Final = await self.table.find_many(**kwargs)
+        records: Final = await self.table.find_many(
+            take=take,
+            skip=skip,
+            where=where or None,
+            order=order or None,
+        )
         return self._to_model_list(records)
 
-    async def create(self, data: dict[str, Any]) -> T:
+    async def find_many_in(self, field: str, values: Iterable[Hashable]) -> list[T]:
+        """Records whose `field` is one of `values`, queried in chunks that stay under the bind-parameter cap."""
+        return self._to_model_list(await find_many_in(self.table, field, values))
+
+    async def create(self, data: Mapping[str, object]) -> T:
         """Create a new record."""
         record: Final = await self.table.create(data=data)
         model: Final = self._to_model(record)
         assert model is not None
         return model
 
-    async def update(self, id_value: str, data: dict[str, Any], id_field: str = "id") -> T | None:
+    async def update(self, id_value: str, data: Mapping[str, object], id_field: str = "id") -> T | None:
         """Update an existing record."""
         record: Final = await self.table.update(where={id_field: id_value}, data=data)
         return self._to_model(record)
@@ -112,7 +114,7 @@ class BaseRepository(ABC, Generic[T]):
         record: Final = await self.table.delete(where={id_field: id_value})
         return self._to_model(record)
 
-    async def count(self, where: dict[str, Any] | None = None) -> int:
+    async def count(self, where: Mapping[str, object] | None = None) -> int:
         """Count records matching the criteria."""
         return await self.table.count(where=where)
 
@@ -120,3 +122,13 @@ class BaseRepository(ABC, Generic[T]):
         """Check if a record exists."""
         record: Final = await self.table.find_unique(where={id_field: id_value})
         return record is not None
+
+
+def is_unique_violation(exc: BaseException) -> bool:
+    try:
+        from prisma.errors import UniqueViolationError
+    except ImportError:
+        return "P2002" in str(exc) or "unique constraint" in str(exc).lower()
+    if isinstance(exc, UniqueViolationError):
+        return True
+    return getattr(exc, "code", None) == "P2002"

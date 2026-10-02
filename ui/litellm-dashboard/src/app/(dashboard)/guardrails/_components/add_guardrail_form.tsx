@@ -25,7 +25,7 @@ import {
 } from "./guardrail_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { MultiSelect } from "@/components/shared/MultiSelect";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -144,7 +144,7 @@ const createEmptyToolPermissionConfig = (): ToolPermissionConfig => ({
 });
 
 const getStepIndicatorClass = (isDone: boolean, isCurrent: boolean): string => {
-  if (isDone) return "bg-info text-white";
+  if (isDone) return "bg-info text-info-foreground";
   if (isCurrent) return "bg-background text-info border-2 border-info";
   return "bg-muted text-muted-foreground border border-border";
 };

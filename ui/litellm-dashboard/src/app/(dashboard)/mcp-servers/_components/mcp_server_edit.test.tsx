@@ -242,6 +242,56 @@ describe("MCPServerEdit (stdio)", () => {
   });
 });
 
+describe("MCPServerEdit (stdio disabled on the proxy)", () => {
+  const stdioServer = {
+    server_id: "server-1",
+    server_name: "TestServer",
+    alias: "test",
+    transport: "stdio",
+    url: null,
+    auth_type: "none",
+    command: "npx",
+    args: ["-y", "@circleci/mcp-server-circleci"],
+    created_at: "2024-01-01T00:00:00Z",
+    created_by: "user-1",
+    updated_at: "2024-01-01T00:00:00Z",
+    updated_by: "user-1",
+    mcp_access_groups: [],
+  };
+  const renderEdit = (mcpServer: object, stdioEnabled: boolean) =>
+    render(
+      <MCPServerEdit
+        mcpServer={mcpServer as React.ComponentProps<typeof MCPServerEdit>["mcpServer"]}
+        accessToken={null}
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+        stdioEnabled={stdioEnabled}
+      />,
+    );
+
+  it("explains why an existing stdio server cannot run or be saved as stdio", () => {
+    renderEdit(stdioServer, false);
+
+    expect(screen.getByText("stdio is disabled on this proxy")).toBeInTheDocument();
+    expect(screen.getByText(/Set LITELLM_ENABLE_MCP_STDIO=true on the proxy and restart/)).toBeInTheDocument();
+  });
+
+  it("shows no banner for a stdio server once stdio is enabled", () => {
+    renderEdit(stdioServer, true);
+
+    expect(screen.getByLabelText("Command")).toBeInTheDocument();
+    expect(screen.queryByText("stdio is disabled on this proxy")).not.toBeInTheDocument();
+  });
+
+  it("shows no banner for a non-stdio server while stdio is disabled", () => {
+    renderEdit({ ...stdioServer, transport: "http", url: "https://mcp.example.com/mcp" }, false);
+
+    expect(screen.getByRole("tab", { name: "Server Configuration" })).toBeInTheDocument();
+    expect(screen.queryByText("stdio is disabled on this proxy")).not.toBeInTheDocument();
+  });
+});
+
 describe("MCPServerEdit (delegate auth)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -378,6 +428,44 @@ describe("MCPServerEdit (true passthrough warning)", () => {
     const payload = mockOauth.getTemporaryPayload!();
     expect(payload).toBeTruthy();
     expect(payload?.auth_type).toBe("true_passthrough");
+  });
+});
+
+describe("MCPServerEdit (OAuth authorize temp payload)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("forwards issuer/authorization_url/token_url/registration_url to the temp OAuth session payload", async () => {
+    // Without these fields the ephemeral server the temp OAuth session endpoint builds has no
+    // admin-configured OAuth endpoints on it, discovery falls back to (and fails against) the
+    // plain server url, and Authorize & Fetch Token 400s with "authorization url is not
+    // configured" even though the saved server (and the visible form) has all four fields filled in.
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          issuer: "https://github.com/login/oauth",
+          authorization_url: "https://github.com/login/oauth/authorize",
+          token_url: "https://github.com/login/oauth/access_token",
+          registration_url: "https://github.com/login/oauth/register",
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockOauth.getTemporaryPayload).toBeTruthy();
+    });
+    const payload = mockOauth.getTemporaryPayload!();
+    expect(payload).toBeTruthy();
+    expect(payload?.issuer).toBe("https://github.com/login/oauth");
+    expect(payload?.authorization_url).toBe("https://github.com/login/oauth/authorize");
+    expect(payload?.token_url).toBe("https://github.com/login/oauth/access_token");
+    expect(payload?.registration_url).toBe("https://github.com/login/oauth/register");
   });
 });
 

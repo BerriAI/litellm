@@ -1,11 +1,16 @@
 import base64
+from collections.abc import Mapping, Sequence
 from io import BufferedReader
+from types import MappingProxyType
 from typing import Any, Final
 
 from httpx._types import RequestFiles
 
 import litellm
-from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+from litellm.llms.azure_ai.common_utils import (
+    AzureFoundryModelInfo,
+    get_azure_ai_auth_headers,
+)
 from litellm.llms.azure_ai.image_generation.flux_transformation import (
     AzureFoundryFluxImageGenerationConfig,
 )
@@ -21,21 +26,12 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
     Azure AI Foundry FLUX 2 image edit config
 
     Supports FLUX 2 models (e.g., flux.2-pro) for image editing.
-    Uses the same /providers/blackforestlabs/v1/flux-2-pro endpoint as image generation,
+    Uses the model-specific /providers/blackforestlabs/v1/flux-2-* endpoint as image generation,
     with the image passed as base64 in JSON body.
     """
 
     def get_supported_openai_params(self, model: str) -> list:
-        """
-        FLUX 2 supports a subset of OpenAI image edit params
-        """
-        return [
-            "prompt",
-            "image",
-            "model",
-            "n",
-            "size",
-        ]
+        return AzureFoundryFluxImageGenerationConfig().get_supported_openai_params(model)
 
     def map_openai_params(
         self,
@@ -47,14 +43,14 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         Map OpenAI params to FLUX 2 params.
         FLUX 2 uses the same param names as OpenAI for supported params.
         """
-        mapped_params: Final[dict[str, Any]] = {}
-        supported_params: Final = self.get_supported_openai_params(model)
-
-        for key, value in dict(image_edit_optional_params).items():
-            if key in supported_params and value is not None:
-                mapped_params[key] = value
-
-        return mapped_params
+        return AzureFoundryFluxImageGenerationConfig().map_openai_params(
+            non_default_params=MappingProxyType(
+                {key: value for key, value in image_edit_optional_params.items() if value is not None}
+            ),
+            optional_params=MappingProxyType({}),
+            model=model,
+            drop_params=drop_params,
+        )
 
     def use_multipart_form_data(self) -> bool:
         """FLUX 2 uses JSON requests, not multipart/form-data."""
@@ -71,16 +67,13 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         """
         Validate Azure AI Foundry environment and set up authentication
         """
-        api_key = AzureFoundryModelInfo.get_api_key(api_key)
-
-        if not api_key:
-            raise ValueError(
-                f"Azure AI API key is required for model {model}. Set AZURE_AI_API_KEY environment variable or pass api_key parameter."
-            )
-
         headers.update(
             {
-                "Api-Key": api_key,
+                **get_azure_ai_auth_headers(
+                    api_key=AzureFoundryModelInfo.get_api_key(api_key),
+                    litellm_params=litellm_params,
+                    api_key_header="Api-Key",
+                ),
                 "Content-Type": "application/json",
             }
         )
@@ -90,7 +83,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes] | None,
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -107,29 +100,29 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         if image is None:
             raise ValueError("FLUX 2 image edit requires an image.")
 
-        image_b64: Final = self._convert_image_to_base64(image)
+        images: Final = tuple(image) if isinstance(image, list) else (image,)
+        if not images:
+            raise ValueError("FLUX 2 image edit requires at least one image.")
+        max_reference_images: Final = 10 if "flex" in model.lower() else 8
+        if len(images) > max_reference_images:
+            raise ValueError(f"{model} supports at most {max_reference_images} reference images.")
 
-        # Build request body with required params
+        reference_images: Final[Mapping[str, str]] = MappingProxyType(
+            {
+                "input_image" if index == 1 else f"input_image_{index}": self._convert_image_to_base64(reference_image)
+                for index, reference_image in enumerate(images, start=1)
+            }
+        )
         request_body: Final[dict[str, Any]] = {
             "prompt": prompt,
-            "image": image_b64,
             "model": model,
+            **reference_images,
+            **image_edit_optional_request_params,
         }
-
-        # Add mapped optional params (already filtered by map_openai_params)
-        request_body.update(image_edit_optional_request_params)
-
-        # Return JSON body and empty files list (FLUX 2 doesn't use multipart)
         return request_body, []
 
     def _convert_image_to_base64(self, image: Any) -> str:
         """Convert image file to base64 string"""
-        # Handle list of images (take first one)
-        if isinstance(image, list):
-            if len(image) == 0:
-                raise ValueError("Empty image list provided")
-            image = image[0]
-
         if isinstance(image, BufferedReader):
             image_bytes = image.read()
             image.seek(0)  # Reset file pointer for potential reuse
@@ -151,7 +144,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         """
         Constructs a complete URL for Azure AI Foundry FLUX 2 image edits.
 
-        Uses the same /providers/blackforestlabs/v1/flux-2-pro endpoint as image generation.
+        Uses the same model-specific BFL provider endpoint as image generation.
         """
         api_base = AzureFoundryModelInfo.get_api_base(api_base)
 

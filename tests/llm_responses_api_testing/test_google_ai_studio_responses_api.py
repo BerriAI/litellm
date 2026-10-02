@@ -1,9 +1,7 @@
 import os
-import sys
 import pytest
 from unittest.mock import patch, AsyncMock
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 import json
 from base_responses_api import BaseResponsesAPITest

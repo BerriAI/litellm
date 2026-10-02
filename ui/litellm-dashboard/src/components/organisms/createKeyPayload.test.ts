@@ -16,6 +16,7 @@ const baseInput: KeyCreateInput = {
   budgetLimits: [],
   tagRateLimits: [],
   budgetFallbacks: {},
+  modelMaxBudget: {},
 };
 
 const build = (formValues: Record<string, unknown>, overrides: Partial<KeyCreateInput> = {}): KeyPayloadResult =>
@@ -44,6 +45,7 @@ const DROPPED_AT_SERIALISATION = [
   "rpm_limit",
   "tags",
   "throttle_on_budget_exceeded",
+  "tpd_limit",
   "tpm_limit",
 ];
 
@@ -63,6 +65,7 @@ const OPTIONAL_SETTINGS_VALUES = {
   tpm_limit_type: "key",
   rpm_limit: undefined,
   rpm_limit_type: "key",
+  tpd_limit: undefined,
   throttle_on_budget_exceeded: undefined,
   enable_prompt_caching: undefined,
   guardrails: undefined,
@@ -300,6 +303,16 @@ describe("object_permission", () => {
     ).toStrictEqual(aliasOnly({ object_permission: { agents: ["a-1"], agent_access_groups: ["ag-1"] } }));
   });
 
+  it("moves the selected skills under object_permission and off the top level", () => {
+    expect(payloadOf(build({ key_alias: "my-key", allowed_skills: ["private-skill"] }))).toStrictEqual(
+      aliasOnly({ object_permission: { skills: ["private-skill"] } }),
+    );
+  });
+
+  it("sends no object_permission for an empty skill selection", () => {
+    expect(payloadOf(build({ key_alias: "my-key", allowed_skills: [] }))).toStrictEqual(aliasOnly());
+  });
+
   it("merges every source into a single object_permission", () => {
     const everySource = {
       key_alias: "my-key",
@@ -307,6 +320,7 @@ describe("object_permission", () => {
       allowed_mcp_servers_and_groups: { servers: ["s-1"], accessGroups: ["g-1"], toolsets: ["t-1"] },
       mcp_tool_permissions: { "s-1": ["read"] },
       allowed_agents_and_groups: { agents: ["a-1"], accessGroups: ["ag-1"] },
+      allowed_skills: ["private-skill"],
     };
     expect(payloadOf(build(everySource))).toStrictEqual(
       aliasOnly({
@@ -318,6 +332,7 @@ describe("object_permission", () => {
           mcp_tool_permissions: { "s-1": ["read"] },
           agents: ["a-1"],
           agent_access_groups: ["ag-1"],
+          skills: ["private-skill"],
         },
       }),
     );
@@ -443,6 +458,18 @@ describe("budget duration", () => {
   });
 });
 
+describe("tpd_limit", () => {
+  it("forwards the daily batch token budget alongside the minute limits", () => {
+    expect(payloadOf(build({ key_alias: "my-key", tpd_limit: 250000, rpm_limit: 5 }))).toStrictEqual(
+      aliasOnly({ tpd_limit: 250000, rpm_limit: 5 }),
+    );
+  });
+
+  it("keeps a zero tpd_limit rather than treating it as unset", () => {
+    expect(payloadOf(build({ key_alias: "my-key", tpd_limit: 0 }))).toStrictEqual(aliasOnly({ tpd_limit: 0 }));
+  });
+});
+
 describe("purity", () => {
   it("leaves the submitted form values untouched", () => {
     const values = {
@@ -486,9 +513,9 @@ describe("serialised wire shape", () => {
     expect(payloadOf(build({ ...CLOSED_SECTIONS_VALUES, team_id: "team-1" })).team_id).toBe("team-1");
   });
 
-  it("adds fifteen keys to the object and only the two limit types to the wire when Optional Settings opens", () => {
+  it("adds sixteen keys to the object and only the two limit types to the wire when Optional Settings opens", () => {
     const payload = payloadOf(build(OPTIONAL_SETTINGS_VALUES));
-    expect(Object.keys(payload)).toHaveLength(23);
+    expect(Object.keys(payload)).toHaveLength(24);
     expect(wireKeys(payload)).toStrictEqual([
       "team_id",
       "key_alias",
@@ -552,5 +579,29 @@ describe("endpoint", () => {
   ])("routes a %s key to the %s endpoint", (keyOwner, endpoint) => {
     const result = build({ key_alias: "my-key" }, { keyOwner });
     expect(result.kind === "ok" && result.endpoint).toBe(endpoint);
+  });
+});
+
+describe("model_max_budget", () => {
+  it("sends the per-model budgets in the shape the API stores", () => {
+    const payload = payloadOf(
+      build(
+        {},
+        {
+          modelMaxBudget: {
+            "claude-opus-4-8": { budget_limit: 200, time_period: "1mo" },
+            "gpt-4o": { budget_limit: 0.5, time_period: "30d" },
+          },
+        },
+      ),
+    );
+    expect(payload.model_max_budget).toEqual({
+      "claude-opus-4-8": { budget_limit: 200, time_period: "1mo" },
+      "gpt-4o": { budget_limit: 0.5, time_period: "30d" },
+    });
+  });
+
+  it("omits model_max_budget entirely when no model budget is set", () => {
+    expect(payloadOf(build({}))).not.toHaveProperty("model_max_budget");
   });
 });

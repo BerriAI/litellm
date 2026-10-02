@@ -4,7 +4,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 
 import GuardrailSelector from "../guardrails/GuardrailSelector";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
-import { Field, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";

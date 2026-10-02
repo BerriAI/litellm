@@ -45,7 +45,7 @@ const AutoRotationView: React.FC<AutoRotationViewProps> = ({
           <StatusBadge tone={autoRotate ? "success" : "neutral"} label={autoRotate ? "Enabled" : "Disabled"} />
           {autoRotate && rotationInterval && (
             <>
-              <p className="text-sm text-muted-foreground/70">•</p>
+              <p className="text-sm text-muted-foreground">•</p>
               <p className="text-sm text-muted-foreground">Every {rotationInterval}</p>
             </>
           )}
@@ -87,7 +87,7 @@ const AutoRotationView: React.FC<AutoRotationViewProps> = ({
 
       {!autoRotate && !lastRotationAt && !keyRotationAt && !nextRotationAt && (
         <div className="flex items-center gap-2 rounded-md border border-border bg-muted p-3">
-          <RefreshIcon className="h-4 w-4 text-muted-foreground/70" />
+          <RefreshIcon className="h-4 w-4 text-muted-foreground" />
           <p className="text-sm text-muted-foreground">Auto-rotation is not enabled for this key</p>
         </div>
       )}
