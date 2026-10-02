@@ -24,7 +24,8 @@ beforeAll(() => {
 });
 
 // Mock the networking module
-vi.mock("@/components/networking", () => ({
+vi.mock("@/components/networking", async (importOriginal) => ({
+  formatDate: (await importOriginal<typeof import("@/components/networking")>()).formatDate,
   userDailyActivityCall: vi.fn(),
   userDailyActivityAggregatedCall: vi.fn(),
   gatewayDailyActivityCall: vi.fn(),
@@ -167,10 +168,14 @@ describe("UsagePage", () => {
   const mockUseCurrentUser = vi.mocked(useCurrentUser);
   const mockUseInfiniteUsers = vi.mocked(useInfiniteUsers);
 
+  const now = new Date();
+  const today = networking.formatDate(now);
+  const yesterday = networking.formatDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+
   const mockSpendData = {
     results: [
       {
-        date: "2025-01-01",
+        date: today,
         metrics: {
           spend: 125.75,
           api_requests: 1500,
@@ -374,7 +379,7 @@ describe("UsagePage", () => {
       error: null,
     } as any);
     mockUserDailyActivityAggregatedCall.mockClear();
-    mockUserDailyActivityCall.mockClear();
+    mockUserDailyActivityCall.mockReset();
     mockTagListCall.mockClear();
     mockGatewayDailyActivityCall.mockClear();
     mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
@@ -548,7 +553,8 @@ describe("UsagePage", () => {
     const fills = new Set(spendBars().map((rect) => rect.getAttribute("fill")));
     expect(fills).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
 
-    expect(screen.getAllByText("2025-01-01").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(today).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(yesterday).length).toBeGreaterThan(0);
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
   });
 
@@ -1046,6 +1052,31 @@ describe("UsagePage", () => {
 
       // Should still render the data from the paginated fallback, which lands a render after the call
       expect(await screen.findByText("75,000")).toBeInTheDocument();
+    });
+
+    it("should not draw zero-spend days when both the aggregated and paginated reads fail", async () => {
+      mockUserDailyActivityAggregatedCall.mockRejectedValue(new Error("Aggregated endpoint not available"));
+      mockUserDailyActivityCall.mockRejectedValue(new Error("Paginated endpoint not available"));
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      expect(await screen.findByText(/failed before any of it arrived/)).toBeInTheDocument();
+      expect(screen.queryByText(yesterday)).not.toBeInTheDocument();
+    });
+
+    it("should not draw zero-spend days for pages that have not arrived yet", async () => {
+      mockUserDailyActivityAggregatedCall.mockRejectedValue(new Error("Aggregated endpoint not available"));
+      mockUserDailyActivityCall
+        .mockResolvedValueOnce({
+          ...mockSpendData,
+          metadata: { ...mockSpendData.metadata, total_pages: 2, page: 1 },
+        })
+        .mockReturnValueOnce(new Promise(() => {}));
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      expect((await screen.findAllByText(today)).length).toBeGreaterThan(0);
+      expect(screen.queryByText(yesterday)).not.toBeInTheDocument();
     });
 
     it("should stop showing the previous range's paginated pages while a new range is in flight", async () => {
