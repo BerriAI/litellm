@@ -143,7 +143,7 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
   {
     id: "max_input_tokens",
     accessorKey: "max_input_tokens",
-    meta: { title: "Tokens", className: "hidden lg:table-cell" },
+    meta: { title: "Tokens", className: "hidden lg:table-cell", numeric: true },
     header: ({ column }) => <DataTableSortHeader column={column} title="Tokens" />,
     size: 110,
     enableSorting: true,
@@ -165,7 +165,7 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
   {
     id: "input_cost_per_token",
     accessorKey: "input_cost_per_token",
-    meta: { title: "Cost/1M", skeleton: "twoLine" },
+    meta: { title: "Cost/1M", skeleton: "twoLine", numeric: true },
     header: ({ column }) => <DataTableSortHeader column={column} title="Cost/1M" />,
     size: 110,
     enableSorting: true,

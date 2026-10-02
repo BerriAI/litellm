@@ -58,8 +58,8 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     PathLike,
 )
-from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums
-from litellm.utils import get_llm_provider
+from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums, is_litellm_owned_kwarg
+from litellm.utils import get_llm_provider, get_optional_params
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
@@ -86,6 +86,14 @@ UPLOAD_CONTENT_LENGTH_PARAM: Final = "_s3_upload_content_length"
 
 def _frozen_mapping(items: Iterable[tuple[str, object]]) -> Mapping[str, object]:
     return MappingProxyType(dict(items))
+
+
+_LITELLM_PARAMS_THE_MAPPER_TAKES: Final = frozenset({"allowed_openai_params"})
+_MAPPED_PARAMS_THE_REQUEST_HANDLER_STRIPS: Final = frozenset({"json_mode"})
+
+
+def _invoke_route_model(model: str) -> str:
+    return f"invoke/{_strip_llm_routing_prefix(model).removeprefix('invoke/')}"
 
 
 def _strip_llm_routing_prefix(model: str) -> str:
@@ -891,16 +899,24 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             )
 
             config: Final = AmazonAnthropicClaudeConfig()
-            mapped_params = config.map_openai_params(
-                non_default_params={},
-                optional_params=optional_params,
-                model=model,
-                drop_params=False,
+            mapped_params = get_optional_params(
+                model=_invoke_route_model(model),
+                custom_llm_provider="bedrock",
+                messages=messages,
+                **MappingProxyType(
+                    {
+                        k: v
+                        for k, v in optional_params.items()
+                        if not is_litellm_owned_kwarg(k) or k in _LITELLM_PARAMS_THE_MAPPER_TAKES
+                    }
+                ),
             )
             return config.transform_request(
                 model=model,
                 messages=messages,
-                optional_params=mapped_params,
+                optional_params={
+                    k: v for k, v in mapped_params.items() if k not in _MAPPED_PARAMS_THE_REQUEST_HANDLER_STRIPS
+                },
                 litellm_params={},
                 headers={},
             )
@@ -1368,7 +1384,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             _listed_managed_file(entry, bucket_name, configured_bucket_name, allow_legacy_cloud_file_ids)
             for entry in listing.iterfind("{*}Contents")
         )
-        return [  # mutable-ok: the base files contract returns a list
+        return [
             listed_file
             for listed_file in listed_files
             if listed_file is not None and (purpose is None or listed_file.purpose == purpose)
@@ -1413,7 +1429,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             request_params=target.request_params,
         )
         litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM] = signed_headers  # rebind-ok: handed to validate_environment
-        return url, {}  # mutable-ok: the base files contract returns the query as a dict
+        return url, {}
 
     def _s3_request_target(
         self,
@@ -1430,7 +1446,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         )
         region_preference: Final = request_params.s3_region_name or request_params.aws_region_name
         aws_region_name: Final = self._get_aws_region_name(
-            optional_params={"aws_region_name": region_preference},  # mutable-ok: BaseAWSLLM takes a dict
+            optional_params={"aws_region_name": region_preference},
             model="",
         )
         endpoint_url: Final = (
@@ -1465,7 +1481,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         aws_request: Final = AWSRequest(  # any-ok: botocore AWSRequest is untyped
             method=method,
             url=api_base,
-            headers={"x-amz-content-sha256": empty_body_hash},  # mutable-ok: botocore AWSRequest takes a dict
+            headers={"x-amz-content-sha256": empty_body_hash},
         )
         auth: Final = S3SigV4Auth(credentials, "s3", aws_region_name)  # any-ok: botocore untyped
         auth.add_auth(aws_request)  # any-ok: botocore request mutation is untyped

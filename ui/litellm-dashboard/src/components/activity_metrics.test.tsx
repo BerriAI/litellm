@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { ActivityMetrics, formatKeyLabel, processActivityData, ResponseTimeTooltip } from "./activity_metrics";
@@ -120,7 +120,6 @@ const createMockModelActivityData = (label: string, overrides: Partial<ModelActi
   total_spend: 100.5,
   total_cache_read_input_tokens: 1000,
   total_cache_creation_input_tokens: 500,
-  top_api_keys: [],
   top_models: [],
   daily_data: [
     {
@@ -152,7 +151,6 @@ const GPT_35_MODEL_DATA: ModelActivityData = {
   total_spend: 25.25,
   total_cache_read_input_tokens: 500,
   total_cache_creation_input_tokens: 250,
-  top_api_keys: [],
   top_models: [],
   daily_data: [
     {
@@ -244,73 +242,135 @@ describe("ActivityMetrics", () => {
     expect(tokenElements.length).toBeGreaterThan(0);
   });
 
-  it("should not display Top Virtual Keys section when model has no top_api_keys", () => {
+  it("only fetches top keys for sections that have been expanded", async () => {
+    const fetchTopApiKeys = vi.fn().mockResolvedValue({
+      api_keys: [
+        {
+          api_key: "key-123",
+          metrics: { ...EMPTY_SPEND_METRICS, spend: 50.25, api_requests: 25, total_tokens: 12500 },
+          metadata: { key_alias: "Test Key", team_id: "team1" },
+        },
+      ],
+    });
+    render(
+      <ActivityMetrics
+        modelMetrics={{
+          "gpt-4": { ...mockModelMetrics["gpt-4"], total_spend: 100 },
+          "gpt-3.5": { ...GPT_35_MODEL_DATA, total_spend: 10 },
+        }}
+        fetchTopApiKeys={fetchTopApiKeys}
+      />,
+    );
+
+    expect(await screen.findAllByText("Test Key")).toHaveLength(1);
+    expect(fetchTopApiKeys).toHaveBeenCalledTimes(1);
+    expect(fetchTopApiKeys).toHaveBeenCalledWith("gpt-4");
+
+    fireEvent.click(screen.getAllByText("GPT-3.5")[0]);
+
+    await waitFor(() => expect(fetchTopApiKeys).toHaveBeenCalledWith("gpt-3.5"));
+    expect(await screen.findAllByText("Test Key")).toHaveLength(2);
+    expect(fetchTopApiKeys).toHaveBeenCalledTimes(2);
+  });
+
+  it("renders the keys the model_top_keys route returns", async () => {
+    const fetchTopApiKeys = vi.fn().mockResolvedValue({
+      api_keys: [
+        {
+          api_key: "key-123",
+          metrics: { ...EMPTY_SPEND_METRICS, spend: 50.25, api_requests: 25, total_tokens: 12500 },
+          metadata: { key_alias: "Test Key", team_id: "team1", user_email: "owner@example.com" },
+        },
+        {
+          api_key: "key-456",
+          metrics: { ...EMPTY_SPEND_METRICS, spend: 40.25, api_requests: 20, total_tokens: 10000 },
+          metadata: { key_alias: "Owner Alias", team_id: null, user_id: "Owner Alias" },
+        },
+        {
+          api_key: "key-7890123456",
+          metrics: { ...EMPTY_SPEND_METRICS, spend: 30, api_requests: 10, total_tokens: 5000 },
+          metadata: { key_alias: null, team_id: null, user_id: "owner-id-3" },
+        },
+      ],
+    });
+    render(<ActivityMetrics modelMetrics={mockModelMetrics} fetchTopApiKeys={fetchTopApiKeys} />);
+
+    expect(await screen.findByText("Top Virtual Keys by Spend")).toBeInTheDocument();
+    expect(await screen.findByText("Test Key")).toBeInTheDocument();
+    expect(screen.getByText(/Team: team1/)).toBeInTheDocument();
+    expect(screen.getByText("User: owner@example.com")).toBeInTheDocument();
+    expect(screen.getByText("Owner Alias")).toBeInTheDocument();
+    expect(screen.queryByText("User: Owner Alias")).not.toBeInTheDocument();
+    expect(screen.getByText(/key-789012/)).toBeInTheDocument();
+    expect(screen.getByText("User: owner-id-3")).toBeInTheDocument();
+    expect(fetchTopApiKeys).toHaveBeenCalledTimes(1);
+  });
+
+  it("refetches and shows loading again when the fetcher identity changes on an expanded model", async () => {
+    const firstFetch = vi.fn().mockResolvedValue({
+      api_keys: [
+        {
+          api_key: "key-old",
+          metrics: { ...EMPTY_SPEND_METRICS, spend: 10, api_requests: 5, total_tokens: 100 },
+          metadata: { key_alias: "Old Scope Key", team_id: null },
+        },
+      ],
+    });
+    const secondFetch = vi.fn().mockResolvedValue({
+      api_keys: [
+        {
+          api_key: "key-new",
+          metrics: { ...EMPTY_SPEND_METRICS, spend: 20, api_requests: 7, total_tokens: 200 },
+          metadata: { key_alias: "New Scope Key", team_id: null },
+        },
+      ],
+    });
+    const { rerender } = render(<ActivityMetrics modelMetrics={mockModelMetrics} fetchTopApiKeys={firstFetch} />);
+
+    expect(await screen.findByText("Old Scope Key")).toBeInTheDocument();
+    expect(firstFetch).toHaveBeenCalledWith("gpt-4");
+
+    rerender(<ActivityMetrics modelMetrics={mockModelMetrics} fetchTopApiKeys={secondFetch} />);
+
+    expect(screen.getByText("Loading top keys...")).toBeInTheDocument();
+    expect(screen.queryByText("Old Scope Key")).not.toBeInTheDocument();
+    expect(await screen.findByText("New Scope Key")).toBeInTheDocument();
+    expect(secondFetch).toHaveBeenCalledWith("gpt-4");
+  });
+
+  it("shows an error with Retry when the top keys request fails and refetches on retry", async () => {
+    const fetchTopApiKeys = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce({
+        api_keys: [
+          {
+            api_key: "key-retry",
+            metrics: { ...EMPTY_SPEND_METRICS, spend: 5, api_requests: 1, total_tokens: 10 },
+            metadata: { key_alias: "Retried Key", team_id: null },
+          },
+        ],
+      });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(<ActivityMetrics modelMetrics={mockModelMetrics} fetchTopApiKeys={fetchTopApiKeys} />);
+
+    expect(await screen.findByText(/Could not load top keys\./)).toBeInTheDocument();
+    expect(screen.getByText("Top Virtual Keys by Spend")).toBeInTheDocument();
+    expect(fetchTopApiKeys).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(screen.getByText("Loading top keys...")).toBeInTheDocument();
+    expect(await screen.findByText("Retried Key")).toBeInTheDocument();
+    expect(fetchTopApiKeys).toHaveBeenCalledTimes(2);
+    expect(fetchTopApiKeys).toHaveBeenLastCalledWith("gpt-4");
+    expect(screen.queryByText(/Could not load top keys\./)).not.toBeInTheDocument();
+    consoleError.mockRestore();
+  });
+
+  it("hides the top keys section without a fetcher", () => {
     render(<ActivityMetrics modelMetrics={mockModelMetrics} />);
     expect(screen.queryByText("Top Virtual Keys by Spend")).not.toBeInTheDocument();
-  });
-
-  it("should display top API keys section when present", () => {
-    const modelWithTopKeys: Record<string, ModelActivityData> = {
-      "gpt-4": {
-        ...mockModelMetrics["gpt-4"],
-        top_api_keys: [
-          {
-            api_key: "key-123",
-            key_alias: "Test Key",
-            team_id: "team1",
-            spend: 50.25,
-            requests: 25,
-            tokens: 12500,
-          },
-        ],
-      },
-    };
-
-    render(<ActivityMetrics modelMetrics={modelWithTopKeys} />);
-    expect(screen.getByText("Top Virtual Keys by Spend")).toBeInTheDocument();
-    expect(screen.getByText("Test Key")).toBeInTheDocument();
-  });
-
-  it("should display API key hash when alias is missing", () => {
-    const modelWithTopKeys: Record<string, ModelActivityData> = {
-      "gpt-4": {
-        ...mockModelMetrics["gpt-4"],
-        top_api_keys: [
-          {
-            api_key: "key-1234567890",
-            key_alias: null,
-            team_id: null,
-            spend: 50.25,
-            requests: 25,
-            tokens: 12500,
-          },
-        ],
-      },
-    };
-
-    render(<ActivityMetrics modelMetrics={modelWithTopKeys} />);
-    expect(screen.getByText(/key-123456/)).toBeInTheDocument();
-  });
-
-  it("should display team information for top API keys", () => {
-    const modelWithTopKeys: Record<string, ModelActivityData> = {
-      "gpt-4": {
-        ...mockModelMetrics["gpt-4"],
-        top_api_keys: [
-          {
-            api_key: "key-123",
-            key_alias: "Test Key",
-            team_id: "team1",
-            spend: 50.25,
-            requests: 25,
-            tokens: 12500,
-          },
-        ],
-      },
-    };
-
-    render(<ActivityMetrics modelMetrics={modelWithTopKeys} />);
-    expect(screen.getByText(/Team: team1/)).toBeInTheDocument();
   });
 
   it("should display Model Usage when model has top_models", () => {
@@ -371,7 +431,6 @@ describe("ActivityMetrics", () => {
 
     render(<ActivityMetrics modelMetrics={multipleModels} />);
 
-    // Only the highest-spend section is expanded initially, so only its body is mounted.
     const sectionsMounted = () => screen.getAllByText("Spend per day").length;
     expect(sectionsMounted()).toBe(1);
 
@@ -773,8 +832,6 @@ describe("processActivityData", () => {
     expect(Object.keys(result).sort()).toEqual(["gpt-5.2", "gpt-5.2-eu"]);
     expect(result["gpt-5.2-eu"].label).toBe("gpt-5.2-eu");
     expect(result["gpt-5.2-eu"].total_spend).toBe(7);
-    expect(result["gpt-5.2-eu"].top_api_keys).toHaveLength(1);
-    expect(result["gpt-5.2-eu"].top_api_keys[0].key_alias).toBe("eu-key");
     expect(result["gpt-5.2"].total_spend).toBe(3);
     expect(result["gpt-5.2"].total_requests).toBe(3);
   });
@@ -1056,6 +1113,8 @@ describe("processActivityData", () => {
                     metadata: {
                       key_alias: "test-key-1",
                       team_id: "team1",
+                      user_id: "owner-id-1",
+                      user_email: "owner-1@example.com",
                     },
                   },
                   "key-2": {
@@ -1073,6 +1132,7 @@ describe("processActivityData", () => {
                     metadata: {
                       key_alias: "test-key-2",
                       team_id: "team2",
+                      user_id: "owner-id-2",
                     },
                   },
                 },
@@ -1089,147 +1149,6 @@ describe("processActivityData", () => {
     };
 
     const result = processActivityData(dailyActivityWithBreakdown, "models");
-
-    expect(result["gpt-4"].top_api_keys).toHaveLength(2);
-    expect(result["gpt-4"].top_api_keys[0].spend).toBe(60.0);
-    expect(result["gpt-4"].top_api_keys[0].api_key).toBe("key-1");
-    expect(result["gpt-4"].top_api_keys[1].spend).toBe(40.5);
-  });
-
-  it("should limit top_api_keys to 5 entries", () => {
-    const dailyActivityWithManyKeys: { results: DailyData[] } = {
-      results: [
-        {
-          date: "2025-01-01",
-          metrics: {
-            spend: 100.5,
-            prompt_tokens: 30000,
-            completion_tokens: 20000,
-            total_tokens: 50000,
-            api_requests: 100,
-            successful_requests: 95,
-            failed_requests: 5,
-            cache_read_input_tokens: 1000,
-            cache_creation_input_tokens: 500,
-          },
-          breakdown: {
-            models: {
-              "gpt-4": {
-                metrics: {
-                  spend: 100.5,
-                  prompt_tokens: 30000,
-                  completion_tokens: 20000,
-                  total_tokens: 50000,
-                  api_requests: 100,
-                  successful_requests: 95,
-                  failed_requests: 5,
-                  cache_read_input_tokens: 1000,
-                  cache_creation_input_tokens: 500,
-                },
-                metadata: {},
-                api_key_breakdown: {
-                  "key-1": {
-                    metrics: {
-                      spend: 20.0,
-                      prompt_tokens: 6000,
-                      completion_tokens: 4000,
-                      total_tokens: 10000,
-                      api_requests: 20,
-                      successful_requests: 19,
-                      failed_requests: 1,
-                      cache_read_input_tokens: 200,
-                      cache_creation_input_tokens: 100,
-                    },
-                    metadata: { key_alias: "key-1", team_id: null },
-                  },
-                  "key-2": {
-                    metrics: {
-                      spend: 19.0,
-                      prompt_tokens: 5700,
-                      completion_tokens: 3800,
-                      total_tokens: 9500,
-                      api_requests: 19,
-                      successful_requests: 18,
-                      failed_requests: 1,
-                      cache_read_input_tokens: 190,
-                      cache_creation_input_tokens: 95,
-                    },
-                    metadata: { key_alias: "key-2", team_id: null },
-                  },
-                  "key-3": {
-                    metrics: {
-                      spend: 18.0,
-                      prompt_tokens: 5400,
-                      completion_tokens: 3600,
-                      total_tokens: 9000,
-                      api_requests: 18,
-                      successful_requests: 17,
-                      failed_requests: 1,
-                      cache_read_input_tokens: 180,
-                      cache_creation_input_tokens: 90,
-                    },
-                    metadata: { key_alias: "key-3", team_id: null },
-                  },
-                  "key-4": {
-                    metrics: {
-                      spend: 17.0,
-                      prompt_tokens: 5100,
-                      completion_tokens: 3400,
-                      total_tokens: 8500,
-                      api_requests: 17,
-                      successful_requests: 16,
-                      failed_requests: 1,
-                      cache_read_input_tokens: 170,
-                      cache_creation_input_tokens: 85,
-                    },
-                    metadata: { key_alias: "key-4", team_id: null },
-                  },
-                  "key-5": {
-                    metrics: {
-                      spend: 16.0,
-                      prompt_tokens: 4800,
-                      completion_tokens: 3200,
-                      total_tokens: 8000,
-                      api_requests: 16,
-                      successful_requests: 15,
-                      failed_requests: 1,
-                      cache_read_input_tokens: 160,
-                      cache_creation_input_tokens: 80,
-                    },
-                    metadata: { key_alias: "key-5", team_id: null },
-                  },
-                  "key-6": {
-                    metrics: {
-                      spend: 15.0,
-                      prompt_tokens: 4500,
-                      completion_tokens: 3000,
-                      total_tokens: 7500,
-                      api_requests: 15,
-                      successful_requests: 14,
-                      failed_requests: 1,
-                      cache_read_input_tokens: 150,
-                      cache_creation_input_tokens: 75,
-                    },
-                    metadata: { key_alias: "key-6", team_id: null },
-                  },
-                },
-              },
-            },
-            model_groups: {},
-            mcp_servers: {},
-            providers: {},
-            api_keys: {},
-            entities: {},
-          },
-        },
-      ],
-    };
-
-    const result = processActivityData(dailyActivityWithManyKeys, "models");
-
-    expect(result["gpt-4"].top_api_keys).toHaveLength(5);
-    expect(result["gpt-4"].top_api_keys[0].spend).toBe(20.0);
-    expect(result["gpt-4"].top_api_keys[4].spend).toBe(16.0);
   });
 
   it("should return empty object when results array is empty", () => {
@@ -1346,8 +1265,6 @@ describe("processActivityData", () => {
     };
 
     const result = processActivityData(dailyActivityWithBreakdown, "api_keys", MOCK_TEAMS);
-
-    expect(result["key-1"].top_api_keys).toEqual([]);
   });
 
   it("should handle missing cache tokens gracefully", () => {

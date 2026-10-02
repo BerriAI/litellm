@@ -24,7 +24,7 @@ from typing import (
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -32,11 +32,18 @@ from litellm.constants import (
     EMPTY_MAPPING,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+    SPEND_CAPTURE_RATE_MAX_RANGE_DAYS,
 )
 from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, classifier_input_snapshot
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.spend_tracking.spend_capture_rate import (
+    ProviderBillingCredentialMissing,
+    ProviderBillingRequestFailed,
+    capture_rate_report,
+)
 
 # NOTE: Avoid module-level import from common_utils: proxy_server imports this
 # module while common_utils may pull proxy_server during init, which can leave
@@ -52,6 +59,7 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+from litellm.types.proxy.spend_capture_rate import CaptureRateReport, SpendCaptureProvider
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -69,6 +77,11 @@ _SESSION_KEY_EXPR: Final = "COALESCE(NULLIF(session_id, ''), request_id)"
 _SESSION_GROUP_KEY_SQL: Final = f"{_SESSION_KEY_EXPR}, api_key"
 _MCP_CALL_TYPES_SQL: Final = "('call_mcp_tool', 'list_mcp_tools')"
 _AGENT_CALL_TYPE_SQL: Final = "'asend_message'"
+_SESSION_REPRESENTATIVE_ORDER_SQL: Final = (
+    f"(call_type = {_AGENT_CALL_TYPE_SQL}) DESC, "
+    f'CASE WHEN call_type = {_AGENT_CALL_TYPE_SQL} THEN "endTime" END DESC NULLS LAST, '
+    f'call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC, request_id'
+)
 _BATCH_CALL_TYPES_SQL: Final = "('acreate_batch', 'create_batch', 'aretrieve_batch', 'retrieve_batch')"
 _SPAN_TYPE_SQL_CONDITIONS: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -1184,6 +1197,84 @@ async def get_global_activity_exceptions(
 
 
 @router.get(
+    "/spend/capture_rate",
+    tags=["Budget & Spend Tracking"],
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=CaptureRateReport,
+)
+async def get_spend_capture_rate(
+    start_date: Annotated[date, fastapi.Query(description="First UTC day of the range, YYYY-MM-DD")],
+    end_date: Annotated[date, fastapi.Query(description="Last UTC day of the range, YYYY-MM-DD, inclusive")],
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    provider: Annotated[
+        SpendCaptureProvider,
+        fastapi.Query(description="Provider whose bill to compare against; needs OPENAI_ADMIN_KEY set on the proxy"),
+    ] = "openai",
+    threshold: Annotated[
+        float, fastapi.Query(gt=0, le=1, description="Ratio under which the report flags below_threshold")
+    ] = 0.9,
+    project_ids: Annotated[
+        list[str] | None,
+        fastapi.Query(
+            description=(
+                "Scope the OpenAI bill to these project ids; omit to compare against the whole organization. Captured "
+                "spend is never scoped, so pass every project LiteLLM's OpenAI keys belong to"
+            )
+        ),
+    ] = None,
+) -> CaptureRateReport:
+    """
+    Compare the spend LiteLLM captured for a provider against that provider's own bill, per UTC day.
+
+    Admin only. Reads the provider's billing API with the billing credential set on the proxy
+    (OpenAI: `OPENAI_ADMIN_KEY`) and sums `LiteLLM_DailyUserSpend` for the same days.
+
+    Example:
+    ```
+    curl -H "Authorization: Bearer sk-1234" \
+      "http://localhost:4000/spend/capture_rate?provider=openai&start_date=2026-09-17&end_date=2026-09-23"
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if not _is_admin_view_safe(user_api_key_dict):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only proxy admins can read the capture rate")
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=CommonProxyErrors.db_not_connected_error.value
+        )
+    if end_date < start_date:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="end_date must not be before start_date")
+    if (end_date - start_date).days >= SPEND_CAPTURE_RATE_MAX_RANGE_DAYS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Date range too large; maximum is {SPEND_CAPTURE_RATE_MAX_RANGE_DAYS} days",
+        )
+    result: Final = await capture_rate_report(
+        prisma_client,
+        provider=provider,
+        start_date=start_date,
+        end_date=end_date,
+        threshold=threshold,
+        openai_project_ids=tuple(project_ids or ()),
+    )
+    match result:
+        case ProviderBillingCredentialMissing(env_var=env_var):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"{env_var} is not set on the proxy, so the {provider} bill cannot be read",
+            )
+        case ProviderBillingRequestFailed(detail=detail):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Could not read the {provider} bill: {detail}"
+            )
+        case CaptureRateReport():
+            return result
+        case _:
+            assert_never(result)
+
+
+@router.get(
     "/global/spend/provider",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
@@ -1840,7 +1931,7 @@ async def get_key_spend_report(
     scoped_api_key = _resolve_spend_report_scope(
         user_api_key_dict=user_api_key_dict,
         requested=requested,
-        caller_value=user_api_key_dict.api_key,
+        caller_value=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
         scope_name="api_key",
     )
     db_response: Sequence[Mapping[str, object]] | None = await _query_raw_or_none(
@@ -2358,7 +2449,7 @@ def _build_spend_log_search_condition(
         f"(request_id = {raw} OR ("
         f"\"startTime\" >= ({window_start}::timestamptz AT TIME ZONE 'UTC') "
         f"AND \"startTime\" <= ({window_end}::timestamptz AT TIME ZONE 'UTC') "
-        f'AND (api_key = {raw} OR team_id = {raw} OR "user" = {raw} OR end_user = {raw} '
+        f'AND (litellm_call_id = {raw} OR api_key = {raw} OR team_id = {raw} OR "user" = {raw} OR end_user = {raw} '
         f"OR session_id = {raw} OR model_id = {raw})))"
     )
     return _SpendLogSearchCondition(sql=sql, params=(search, start_date, end_date))
@@ -2429,6 +2520,15 @@ async def ui_view_spend_logs(
         default=None,
         description="Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state",
     ),
+    used_client_oauth_token: Annotated[
+        bool | None,
+        fastapi.Query(
+            description=(
+                "Filter logs by the credential the upstream call used: true for a client-forwarded Anthropic OAuth "
+                "token, false for the deployment's configured key. Rows written before this flag existed match neither"
+            ),
+        ),
+    ] = None,
     span_type: str | None = fastapi.Query(
         default=None,
         description="Filter logs by span type: llm, agent, mcp, or batch",
@@ -2471,7 +2571,7 @@ async def ui_view_spend_logs(
     search: str | None = fastapi.Query(
         default=None,
         description=(
-            "Match a log whose request_id, api_key (hash), team_id, user, end_user, "
+            "Match a log whose request_id, litellm_call_id, api_key (hash), team_id, user, end_user, "
             "session_id, or model_id equals this value. request_id matches across all time; the other columns "
             "match inside start_date/end_date, which stay required"
         ),
@@ -2793,7 +2893,7 @@ async def ui_view_spend_logs(
             p += 1
 
         # Status filter
-        if status_filter is not None:
+        if status_filter is not None and not (group_by_session is True and not is_search_lookup):
             if status_filter == "success":
                 sql_conditions.append("(status = 'success' OR status IS NULL)")
             else:
@@ -2837,6 +2937,27 @@ async def ui_view_spend_logs(
         if error_message is not None:
             sql_conditions.append(f"metadata->'error_information'->>'error_message' LIKE ${p}")
             sql_params.append(f"%{error_message}%")
+            p += 1
+        if used_client_oauth_token is not None:
+            sql_conditions.append(f"metadata->>'used_client_oauth_token' = ${p}")
+            sql_params.append(json.dumps(used_client_oauth_token))
+            p += 1
+
+        if status_filter is not None and group_by_session is True and not is_search_lookup:
+            session_filter_conditions: Final = " AND ".join(sql_conditions) or "TRUE"
+            sql_conditions.append(
+                f"""({_SESSION_GROUP_KEY_SQL}) IN (
+                    SELECT session_key, api_key FROM (
+                        SELECT DISTINCT ON ({_SESSION_GROUP_KEY_SQL})
+                            {_SESSION_KEY_EXPR} AS session_key, api_key, status
+                        FROM "LiteLLM_SpendLogs"
+                        WHERE {session_filter_conditions}
+                        ORDER BY {_SESSION_GROUP_KEY_SQL}, {_SESSION_REPRESENTATIVE_ORDER_SQL}
+                    ) AS session_outcomes
+                    WHERE COALESCE(status, 'success') = ${p}
+                )"""
+            )
+            sql_params.append(status_filter)
             p += 1
 
         if (
@@ -2905,7 +3026,7 @@ async def ui_view_spend_logs(
                         {_SPEND_LOG_LIST_COLUMNS}
                     FROM "LiteLLM_SpendLogs"
                     WHERE {joined_conditions}
-                    ORDER BY {_SESSION_GROUP_KEY_SQL}, call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC
+                    ORDER BY {_SESSION_GROUP_KEY_SQL}, {_SESSION_REPRESENTATIVE_ORDER_SQL}
                 ) AS session_representatives
                 ORDER BY {exact_request_id_first}{_order_expr} {_sql_dir}{_nulls_clause}, request_id
                 LIMIT ${p} OFFSET ${p + 1}
@@ -2977,7 +3098,7 @@ async def _fetch_session_representatives(
     next_param_index: int,
     session_keys: Sequence[tuple[str, str]],
 ) -> list[dict[str, object]]:  # mutable-ok: _build_ui_spend_logs_response writes session counts onto each row
-    """Fetch the newest non-MCP row of each ``(session_key, api_key)`` session, in ``session_keys`` order."""
+    """Fetch the final agent outcome, or newest non-MCP row, of each ``(session_key, api_key)`` session, in ``session_keys`` order."""
     rep_query: Final = f"""
         SELECT * FROM (
             SELECT DISTINCT ON ({_SESSION_GROUP_KEY_SQL})
@@ -2987,20 +3108,20 @@ async def _fetch_session_representatives(
               AND ({_SESSION_GROUP_KEY_SQL}) IN (
                   SELECT * FROM unnest(${next_param_index}::text[], ${next_param_index + 1}::text[])
               )
-            ORDER BY {_SESSION_GROUP_KEY_SQL}, call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC
+            ORDER BY {_SESSION_GROUP_KEY_SQL}, {_SESSION_REPRESENTATIVE_ORDER_SQL}
         ) AS session_representatives
     """
     rep_rows: Final[Sequence[dict[str, object]]] = await _query_raw(  # mutable-ok: rows are enriched in place
         prisma_client,
         rep_query,
         *sql_params,
-        [session_key for session_key, _ in session_keys],  # mutable-ok: prisma serializes array params from a list
-        [api_key for _, api_key in session_keys],  # mutable-ok: prisma serializes array params from a list
+        [session_key for session_key, _ in session_keys],
+        [api_key for _, api_key in session_keys],
     )
     rep_by_key: Final[Mapping[tuple[str, str], dict[str, object]]] = MappingProxyType(  # mutable-ok: same rows
         {(str(row["session_id"] or row["request_id"]), str(row["api_key"])): row for row in rep_rows}
     )
-    return [rep_by_key[key] for key in session_keys if key in rep_by_key]  # mutable-ok: rows are enriched in place
+    return [rep_by_key[key] for key in session_keys if key in rep_by_key]
 
 
 async def _count_grouped_sessions(
@@ -3054,7 +3175,7 @@ async def _ui_session_grouped_spend_logs(
     page_size``, trimmed to the end of the ``SPEND_LOGS_PAGINATION_COUNT_CAP``
     window the capped ``total`` promises, so a page never runs past that total
     and one starting at or past it returns no rows without a query. Each session is represented
-    by its newest non-MCP row, enriched by ``_build_ui_spend_logs_response``
+    by its final agent outcome (or newest non-MCP row), enriched by ``_build_ui_spend_logs_response``
     exactly like the flat listing, and the response carries
     ``next_session_cursor`` / ``has_more`` while ``total`` counts sessions
     (capped like the flat total). A page that runs out of sessions while still
@@ -3123,7 +3244,7 @@ async def _ui_session_grouped_spend_logs(
             session_keys=session_keys,
         )
         if session_keys
-        else []  # mutable-ok: downstream enrichment mutates rows in place
+        else []
     )
     _hydrate_spend_log_metadata(data)
 
@@ -3138,7 +3259,7 @@ async def _ui_session_grouped_spend_logs(
         enrich_session_counts=True,
         total_is_capped=total_is_capped,
     )
-    return {**response, "next_session_cursor": next_cursor, "has_more": has_more}  # mutable-ok: FastAPI response body
+    return {**response, "next_session_cursor": next_cursor, "has_more": has_more}
 
 
 class RequestResponsePayload(NamedTuple):
@@ -3460,9 +3581,7 @@ async def view_spend_logs(
             start_date_iso: Final = start_date_obj.isoformat()
             end_date_iso: Final = end_date_obj.isoformat()
 
-            filter_query: Final[
-                dict[str, object]
-            ] = {  # mutable-ok: legacy filters are extended for optional parameters
+            filter_query: Final[dict[str, object]] = {
                 "startTime": {
                     "gte": start_date_iso,  # Greater than or equal to Start Date
                     "lte": end_date_iso,  # Less than or equal to End Date
@@ -4740,10 +4859,8 @@ async def _can_team_member_view_log(
     Returns True if the team exists and the user is either a team admin or
     a team member with the ``/spend/logs`` permission.
     """
-    from litellm.proxy.management_endpoints.common_utils import (
-        _is_user_team_admin,
-        _team_member_has_permission,
-    )
+    from litellm.proxy.management.teams.access import is_team_admin
+    from litellm.proxy.management_endpoints.common_utils import _team_member_has_permission
 
     if team_id is None:
         return False
@@ -4751,7 +4868,7 @@ async def _can_team_member_view_log(
     if team_row is None:
         return False
     team_obj: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
-    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+    if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
         return True
     return _team_member_has_permission(
         user_api_key_dict=user_api_key_dict,
@@ -4970,10 +5087,8 @@ async def _get_permitted_team_ids_for_spend_logs(
     """
     # Imported here to avoid circular import: proxy_server imports this module.
     from litellm.proxy.auth.auth_checks import get_user_object
-    from litellm.proxy.management_endpoints.common_utils import (
-        _is_user_team_admin,
-        _team_member_has_permission,
-    )
+    from litellm.proxy.management.teams.access import is_team_admin
+    from litellm.proxy.management_endpoints.common_utils import _team_member_has_permission
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
     user_obj: Final = await get_user_object(
@@ -4991,7 +5106,7 @@ async def _get_permitted_team_ids_for_spend_logs(
     permitted: Final[list[str]] = []
     for team_row in team_rows:
         team_obj = LiteLLM_TeamTable.model_validate(team_row.model_dump())
-        if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj) or _team_member_has_permission(
+        if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj) or _team_member_has_permission(
             user_api_key_dict=user_api_key_dict,
             team_obj=team_obj,
             permission=KeyManagementRoutes.SPEND_LOGS.value,

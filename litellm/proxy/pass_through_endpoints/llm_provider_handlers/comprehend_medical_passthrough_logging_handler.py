@@ -67,7 +67,7 @@ class ComprehendMedicalPassthroughLoggingHandler:
             )
             model_name: Final = f"comprehendmedical/{operation}"
 
-            updated_kwargs: Final = {  # mutable-ok: the logging pipeline requires a plain kwargs dict
+            updated_kwargs: Final = {
                 **kwargs,
                 "model": model_name,
                 "custom_llm_provider": "comprehendmedical",

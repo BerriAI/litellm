@@ -1526,9 +1526,7 @@ async def get_generic_sso_response(
             if generic_include_token_claims
             else response
         )
-        received_response = {  # mutable-ok: preserve the existing dict return contract
-            key: value for key, value in claims.items() if key not in _OAUTH_TOKEN_FIELDS
-        }
+        received_response = {key: value for key, value in claims.items() if key not in _OAUTH_TOKEN_FIELDS}
         return generic_response_convertor(
             response=claims,
             jwt_handler=jwt_handler,
@@ -1669,7 +1667,7 @@ async def get_generic_sso_response(
     return result or {}, received_response, access_token_payload, sso_assertion
 
 
-RetentionCheck: TypeAlias = Callable[[], Awaitable[bool]]  # mutable-ok: Callable parameter syntax
+RetentionCheck: TypeAlias = Callable[[], Awaitable[bool]]
 
 
 async def warn_if_id_jag_assertion_uncaptured(
@@ -1855,10 +1853,36 @@ def _should_use_role_from_sso_response(sso_role: str | None) -> bool:
     return True
 
 
+class _SsoUserNames(Protocol):
+    id: str | None
+    display_name: str | None
+    first_name: str | None
+    last_name: str | None
+
+
+def _get_sso_user_alias(result: _SsoUserNames | Mapping[str, object] | None) -> str | None:
+    """Display name the IdP sent for the user, falling back to the joined first/last name."""
+    if result is None:
+        return None
+    if isinstance(result, Mapping):
+        raw_names: tuple[object, ...] = tuple(
+            result.get(key) for key in ("id", "display_name", "first_name", "last_name")
+        )
+    else:
+        raw_names = (result.id, result.display_name, result.first_name, result.last_name)
+    user_id, display_name, first_name, last_name = (
+        name.strip() or None if isinstance(name, str) else None for name in raw_names
+    )
+    if display_name and display_name != user_id:
+        return display_name
+    return " ".join(part for part in (first_name, last_name) if part) or None
+
+
 def _build_sso_user_update_data(
-    result: Union["CustomOpenID", OpenID, dict] | None,
+    result: Union["CustomOpenID", OpenID, Mapping[str, object]] | None,
     user_email: str | None,
     user_id: str | None,
+    existing_user_alias: str | None = None,
 ) -> dict[str, object]:
     """
     Build the update data dictionary for SSO user upsert.
@@ -1867,14 +1891,19 @@ def _build_sso_user_update_data(
         result: The SSO response containing user information
         user_email: The user's email from SSO
         user_id: The user's ID for logging purposes
+        existing_user_alias: The user's current alias in the DB; only an empty alias is filled from SSO
 
     Returns:
-        dict: Update data containing user_email and optionally user_role if valid
+        dict: Update data containing user_email, user_alias when newly available, and user_role if valid
     """
-    update_data: Final[dict[str, object]] = {"user_email": normalize_email(user_email)}
+    sso_user_alias: Final = None if existing_user_alias else _get_sso_user_alias(result)
+    update_data: Final[dict[str, object]] = {
+        "user_email": normalize_email(user_email),
+        **({"user_alias": sso_user_alias} if sso_user_alias is not None else {}),
+    }
 
     # Get SSO role from result and include if valid
-    sso_role: Final = getattr(result, "user_role", None)
+    sso_role: Final = result.user_role if isinstance(result, CustomOpenID) else None
     if sso_role is not None:
         # Convert enum to string if needed
         sso_role_str: Final = sso_role.value if isinstance(sso_role, LitellmUserRoles) else sso_role
@@ -2313,6 +2342,11 @@ async def _complete_cli_sso_callback_session(
             status_code=500,
             detail="Could not resolve team model grants for this login. Please try again",
         )
+    from litellm.proxy.management_endpoints.sso.agent_subject_enrollment import enroll_microsoft_subject
+
+    await enroll_microsoft_subject(
+        request.scope.get("litellm_microsoft_interactive_subject"), user_info.user_id, prisma_client
+    )
     resolved_teams: Final = _cli_sso_session_teams(team_details)
     attribution_metadata: Final = build_cli_sso_attribution_metadata(result=result)
     if attribution_metadata:
@@ -2613,6 +2647,7 @@ async def insert_sso_user(
     new_user_request: Final = NewUserRequest(
         user_id=user_defined_values["user_id"],
         user_email=normalize_email(user_defined_values["user_email"]),
+        user_alias=_get_sso_user_alias(result_openid),
         user_role=user_defined_values["user_role"],
         max_budget=user_defined_values["max_budget"],
         budget_duration=user_defined_values["budget_duration"],
@@ -3246,6 +3281,7 @@ class SSOAuthenticationHandler:
                     result=result,
                     user_email=user_email,
                     user_id=user_id,
+                    existing_user_alias=user_info.user_alias if isinstance(user_info, LiteLLM_UserTable) else None,
                 )
 
                 await _user_meta_db(UserRepository(prisma_client)).update_many(
@@ -3277,7 +3313,7 @@ class SSOAuthenticationHandler:
         if user_info is None:
             verbose_proxy_logger.debug("User not found in LiteLLM DB, skipping team member addition")
             return
-        sso_teams: Final = getattr(result, "team_ids", [])
+        sso_teams: Final = result.team_ids if isinstance(result, CustomOpenID) else []
         await add_missing_team_member(user_info=user_info, sso_teams=sso_teams)
 
     @staticmethod
@@ -3630,6 +3666,12 @@ class SSOAuthenticationHandler:
                         "error": f"User not allowed to access proxy. User role={user_role}, proxy mode={ui_access_mode}"
                     },
                 )
+
+        from litellm.proxy.management_endpoints.sso.agent_subject_enrollment import enroll_microsoft_subject
+
+        await enroll_microsoft_subject(
+            request.scope.get("litellm_microsoft_interactive_subject"), user_id, prisma_client
+        )
 
         if isinstance(user_id, str) and user_id:
             await retain_sso_identity_assertion_for_ema(user_id=user_id, assertion=sso_assertion)
@@ -4300,6 +4342,22 @@ class MicrosoftSSOHandler:
             original_msft_result["app_roles"] = app_roles
             return original_msft_result or {}
 
+        from litellm.proxy.management_endpoints.sso.agent_subject_enrollment import microsoft_interactive_subject
+
+        request.scope["litellm_microsoft_interactive_subject"] = microsoft_interactive_subject(
+            microsoft_tenant,
+            original_msft_result,
+            MappingProxyType(
+                {
+                    name: os.getenv(name)
+                    for name in (
+                        "MICROSOFT_AUTHORIZATION_ENDPOINT",
+                        "MICROSOFT_TOKEN_ENDPOINT",
+                        "MICROSOFT_USERINFO_ENDPOINT",
+                    )
+                }
+            ),
+        )
         result: Final = MicrosoftSSOHandler.openid_from_response(
             response=original_msft_result,
             team_ids=user_team_ids,
@@ -4618,6 +4676,13 @@ class GoogleSSOHandler:
         return result or {}
 
 
+def _raise_if_sso_debug_disabled() -> None:
+    """The debug routes run the browser-redirect SSO flow, so they cannot carry a
+    bearer credential; an explicit opt-in flag is the only way to gate them."""
+    if get_secret_bool("ENABLE_SSO_DEBUG") is not True:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+
 @router.get("/sso/debug/login", tags=["experimental"], include_in_schema=False)
 async def debug_sso_login(request: Request):
     """
@@ -4625,6 +4690,8 @@ async def debug_sso_login(request: Request):
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
     Example:
     """
+    _raise_if_sso_debug_disabled()
+
     from litellm.proxy.proxy_server import premium_user
 
     microsoft_client_id: Final = os.getenv("MICROSOFT_CLIENT_ID", None)
@@ -4670,6 +4737,8 @@ async def debug_sso_callback(request: Request):
     """
     Returns the OpenID object returned by the SSO provider
     """
+    _raise_if_sso_debug_disabled()
+
     import json
 
     from fastapi.responses import HTMLResponse

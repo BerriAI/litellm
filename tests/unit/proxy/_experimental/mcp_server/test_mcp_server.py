@@ -1,7 +1,7 @@
 # Create server parameters for stdio connection
 import os
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from contextlib import asynccontextmanager
 
 
@@ -489,7 +489,7 @@ async def test_sse_mcp_handler_mock():
     )
 
     with (
-        patch("litellm.proxy._experimental.mcp_server.server.server.run", run),
+        patch("litellm.proxy._experimental.mcp_server.server.serve_loop", run),
         patch(
             "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
             True,
@@ -511,7 +511,7 @@ async def test_sse_mcp_handler_mock():
         # Call the handler
         await handle_sse_mcp(mock_scope, mock_receive, mock_send)
 
-        assert run.await_args.args[:2] == (read_stream, write_stream)
+        assert run.await_args.args[1:3] == (read_stream, write_stream)
         assert mock_sse.connect_sse.call_args.args[0]["path"] == "/mcp/sse"
 
 
@@ -962,6 +962,7 @@ async def test_get_tools_from_mcp_servers():
                 client_ip=None,
                 user_api_key_auth=None,
                 oauth2_headers=None,
+                proxy_logging_obj=None,
             ):
                 if server.server_id == "server1_id":
                     return [mock_tool_1]
@@ -1555,6 +1556,7 @@ async def test_add_update_server_with_alias():
     mock_mcp_server.args = []
     mock_mcp_server.env = None
     mock_mcp_server.spec_path = None
+    mock_mcp_server.pinned_tools = None
     # OAuth fields - set explicitly to None to avoid MagicMock objects
     mock_mcp_server.client_id = None
     mock_mcp_server.client_secret = None
@@ -1618,6 +1620,7 @@ async def test_add_update_server_without_alias():
     mock_mcp_server.args = []
     mock_mcp_server.env = None
     mock_mcp_server.spec_path = None
+    mock_mcp_server.pinned_tools = None
     # OAuth fields - set explicitly to None to avoid MagicMock objects
     mock_mcp_server.client_id = None
     mock_mcp_server.client_secret = None
@@ -1681,6 +1684,7 @@ async def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.args = []
     mock_mcp_server.env = None
     mock_mcp_server.spec_path = None
+    mock_mcp_server.pinned_tools = None
     # OAuth fields - set explicitly to None to avoid MagicMock objects
     mock_mcp_server.client_id = None
     mock_mcp_server.client_secret = None
@@ -1993,6 +1997,7 @@ async def test_get_tools_for_single_server():
             raw_headers=None,
             client_ip=None,
             user_api_key_auth=None,
+            proxy_logging_obj=ANY,
         )
 
         # Verify the result

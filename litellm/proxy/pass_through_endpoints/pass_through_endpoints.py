@@ -105,6 +105,8 @@ from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
+from litellm.types import utils as types_utils
+from litellm.types.litellm_params import ProxyRequestState, wire_names
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
@@ -132,6 +134,9 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
+
+_METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
+_KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 
 # Global registry to track registered pass-through routes and prevent memory leaks
 _registered_pass_through_routes: Final[dict[str, dict[str, str | bool | list[str] | Mapping[str, object]]]] = {}
@@ -372,8 +377,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         return return_headers
 
     @staticmethod
-    def get_endpoint_type(url: str) -> EndpointType:
+    def get_endpoint_type(url: str, custom_llm_provider: str | None = None) -> EndpointType:
         parsed_url: Final = urlparse(url)
+        if custom_llm_provider == "typesafe" and parsed_url.path.removesuffix("/").endswith("/v1/systemone"):
+            return EndpointType.DECISIONS
         if (
             ("generateContent") in url
             or ("streamGenerateContent") in url
@@ -578,21 +585,21 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         """
         Filter out litellm params from the request body
         """
-        from litellm.types.utils import all_litellm_params
-
         _parsed_body = _parsed_body or {}
 
-        litellm_params_in_body: Final = {}
-        for k in all_litellm_params:
-            if k in _parsed_body:
-                litellm_params_in_body[k] = _parsed_body.pop(k, None)
+        litellm_keys_in_body: Final = MappingProxyType(
+            {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}
+        )
+        litellm_params_in_body: Final = MappingProxyType(
+            {k: v for k, v in litellm_keys_in_body.items() if k not in _KEPT_OUT_OF_LITELLM_PARAMS}
+        )
 
         _metadata = dict(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
 
-        litellm_metadata: Final = litellm_params_in_body.pop("litellm_metadata", None)
-        metadata: Final = litellm_params_in_body.pop("metadata", None)
+        litellm_metadata: Final = litellm_keys_in_body.get("litellm_metadata")
+        metadata: Final = litellm_keys_in_body.get("metadata")
         if litellm_metadata:
             _metadata.update(litellm_metadata)
         if metadata:
@@ -607,7 +614,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         # body that mirrors them cannot clobber the authenticated key, the real
         # parent span, or the proxy's own session-id decision.
         _metadata.pop(SESSION_ID_OMITTED_METADATA_KEY, None)
-        _metadata["user_api_key"] = user_api_key_dict.api_key
+        _metadata["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
         _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
         _metadata["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
         _metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = user_api_key_dict.matched_model_access_groups
@@ -838,16 +845,16 @@ def _resolve_team_callback_wiring(
     logging_kwargs: Final = (
         None
         if not callback_vars
-        else {  # mutable-ok: Logging arg
+        else {
             **callback_vars,
             TRUSTED_CALLBACK_VARS_FIELD: callback_vars,
-            "metadata": {},  # mutable-ok: Logging arg
-            "model_info": {},  # mutable-ok: Logging arg
+            "metadata": {},
+            "model_info": {},
         }
     )
     return _TeamCallbackWiring(
-        success_callbacks=None if success_callbacks is None else [*success_callbacks],  # mutable-ok: Logging arg
-        failure_callbacks=None if failure_callbacks is None else [*failure_callbacks],  # mutable-ok: Logging arg
+        success_callbacks=None if success_callbacks is None else [*success_callbacks],
+        failure_callbacks=None if failure_callbacks is None else [*failure_callbacks],
         logging_kwargs=logging_kwargs,
     )
 
@@ -1088,7 +1095,9 @@ async def pass_through_request(
 
         requested_query_params: dict | None = query_params or dict(request.query_params) or None
 
-        endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(str(url))
+        endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(
+            str(url), custom_llm_provider
+        )
 
         # SigV4-signed callers (e.g. Bedrock) attach the exact bytes that were
         # signed via request.state; we must send those instead of re-encoding the
@@ -1175,6 +1184,7 @@ async def pass_through_request(
             user_api_key_dict=user_api_key_dict,
             data=_parsed_body,
             call_type="pass_through_endpoint",
+            endpoint_type=endpoint_type,
         )
         resolved_timeout: Final = resolve_pass_through_request_timeout(timeout)
         async_client_obj: Final = get_async_httpx_client(
@@ -2216,7 +2226,7 @@ def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Calla
     rewritten_model: Final = setup_model_rewriter(setup_model)
     if rewritten_model == setup_model:
         return text_data
-    return json.dumps({**message, "setup": {**setup, "model": rewritten_model}})  # mutable-ok: one-shot json payload
+    return json.dumps({**message, "setup": {**setup, "model": rewritten_model}})
 
 
 def _resolved_vertex_live_setup(
@@ -2285,14 +2295,14 @@ def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
     return upstream_close
 
 
-_WEBSOCKET_FORWARDED_HEADERS: Final = frozenset(("authorization", "x-api-key", "x-goog-user-project"))
+_WEBSOCKET_FORWARDED_HEADERS: Final = frozenset(("x-goog-user-project",))
 
 
 def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict[str, str]:
     try:
         from litellm.integrations.otel.plumbing.context import inject_trace_context
     except ImportError:
-        return dict(headers)  # mutable-ok: matches inject_trace_context's carrier return type
+        return dict(headers)
     return inject_trace_context(headers, parent_span=parent_span)
 
 
@@ -2338,7 +2348,7 @@ async def websocket_passthrough_request(
         await websocket.accept()
         verbose_proxy_logger.debug("WebSocket passthrough (%s): WebSocket connection accepted", endpoint)
 
-    forwarded_headers: Final = {  # mutable-ok: one-shot upstream header dict, read as a Mapping
+    forwarded_headers: Final = {
         **custom_headers,
         **{
             header_name: header_value

@@ -15,6 +15,7 @@ from litellm.integrations._types.open_inference import (
     SpanAttributes,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.langtrace import LANGTRACE_TRACE_PATH
 from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     OTEL_SEMCONV_STABILITY_OPT_IN_ENV,
     OTELGenAISemconvMixin,
@@ -25,7 +26,7 @@ from litellm.integrations.otel.mappers.utils import drop_none
 from litellm.integrations.otel.model.baggage import promoted_metadata
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.metadata import flatten_metadata
-from litellm.integrations.otel.model.semconv import Metric
+from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -784,6 +785,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         )
         for key, value in attributes.items():
             self.safe_set_attribute(span=span, key=key, value=value)
+        if payload.caller is not None:
+            self.safe_set_attribute(span=span, key=LiteLLM.SERVICE_CALLER, value=payload.caller)
         return span
 
     async def async_service_success_hook(
@@ -3330,6 +3333,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         # Splunk Observability Cloud OTLP/HTTP uses /v2/trace/otlp (not /v1/traces). Do not rewrite.
         if signal_type == "traces" and "/v2/trace/otlp" in endpoint:
+            return endpoint
+
+        if signal_type == "traces" and self.callback_name == "langtrace" and endpoint.endswith(LANGTRACE_TRACE_PATH):
             return endpoint
 
         # Check if endpoint already ends with the correct signal path

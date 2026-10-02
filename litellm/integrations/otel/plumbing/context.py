@@ -21,6 +21,7 @@ from opentelemetry.trace.propagation.tracecontext import (
     TraceContextTextMapPropagator,
 )
 
+from litellm._internal_context import in_post_response_phase
 from litellm.integrations.otel.model.semconv import HTTP
 
 if TYPE_CHECKING:
@@ -231,21 +232,28 @@ def resolve_service_span_context(
 ) -> tuple[Context, tuple[Link, ...]]:
     """Parent context + links for a service/DB span that ended at ``end_time_ns``.
 
-    A call that finished after its parent ended (post-response spend tracking)
-    starts its own root trace with a span link back to the parent instead of
-    stretching the parent's trace. Baggage stays on the returned context.
+    Work the caller did not wait for starts its own root trace with a span link
+    back to the parent instead of stretching the parent's trace: anything logged
+    from the post-response phase (success callbacks, the response-cache write,
+    see :func:`litellm._internal_context.post_response_phase`), whether or not
+    the server span has closed yet, and anything that finished after its parent
+    ended. Baggage stays on the returned context.
     """
     ctx: Final = resolve_parent_context(threaded)
     parent: Final = get_current_span(ctx)
-    if not _ended_before(parent, end_time_ns):
+    if not _is_post_response(parent, end_time_ns):
         return ctx, ()
     return set_span_in_context(INVALID_SPAN, ctx), (Link(parent.get_span_context()),)
 
 
-def _ended_before(span: Span, end_time_ns: int | None) -> bool:
-    if not isinstance(span, ReadableSpan) or span.end_time is None:
+def _is_post_response(parent: Span, end_time_ns: int | None) -> bool:
+    if not isinstance(parent, ReadableSpan):
         return False
-    return end_time_ns is None or end_time_ns > span.end_time
+    if in_post_response_phase():
+        return True
+    if parent.end_time is None:
+        return False
+    return end_time_ns is None or end_time_ns > parent.end_time
 
 
 def resolve_request_span_context() -> Context:
@@ -372,10 +380,8 @@ def inject_trace_context(headers: Mapping[str, str], parent_span: object = None)
     """
     context: Final = _outgoing_trace_context(parent_span)
     if context is None:
-        return dict(headers)  # mutable-ok: OpenTelemetry propagator requires a mutable carrier
-    carrier: Final = {  # mutable-ok: OpenTelemetry propagator requires a mutable carrier
-        key: value for key, value in headers.items() if key.lower() not in _W3C_TRACE_HEADERS
-    }
+        return dict(headers)
+    carrier: Final = {key: value for key, value in headers.items() if key.lower() not in _W3C_TRACE_HEADERS}
     _PROPAGATOR.inject(carrier, context=_propagated_context(headers, context))
     return carrier
 

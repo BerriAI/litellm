@@ -221,6 +221,7 @@ services = (
         "galileo",
         "newrelic",
         "pointfive",
+        "signoz",
         "sqs",
     ]
     | str
@@ -309,6 +310,7 @@ async def health_services_endpoint(
             "galileo",
             "newrelic",
             "pointfive",
+            "signoz",
             "sqs",
         ]:
             raise HTTPException(
@@ -395,7 +397,9 @@ async def health_services_endpoint(
             from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
             langfuse_logger: Final = LangFuseLogger()
-            langfuse_logger.Langfuse.auth_check()
+            auth_failure: Final = langfuse_logger.api_client.auth_check()
+            if auth_failure is not None:
+                raise ValueError(f"langfuse auth_check failed: {auth_failure.reason}")
             _ = litellm.completion(
                 model="openai/litellm-mock-response-model",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
@@ -551,7 +555,7 @@ async def health_services_endpoint(
             )
             ms_teams_response: Final = await proxy_logging_obj.slack_alerting_instance.async_http_handler.post(
                 url=ms_teams_webhook_url,
-                headers=dict(MS_TEAMS_ALERT_HEADERS),  # mutable-ok: async_http_handler.post only accepts dict headers
+                headers=dict(MS_TEAMS_ALERT_HEADERS),
                 data=json.dumps(build_ms_teams_payload(ms_teams_test_message)),
             )
             if ms_teams_response.status_code >= 400:

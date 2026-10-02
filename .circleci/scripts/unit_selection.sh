@@ -5,9 +5,14 @@ flag="${1:?usage: unit_selection.sh <codecov flag>}"
 
 legacy_flags=(
   caching-local
+  core-utils
   enterprise-package
   enterprise-routing
+  integrations
+  llm-other-providers
+  llm-vertex-ai
   mcp-integration
+  misc
   proxy-db-auth-checks
   proxy-db-budgets
   proxy-db-custom-logging
@@ -22,11 +27,13 @@ legacy_flags=(
   proxy-db-proxy-utils
   proxy-extras
   proxy-infra
+  responses-caching-types
 )
 
 legacy_paths() {
   case "$1" in
     caching-local) echo tests/unit/caching ;;
+    core-utils) echo tests/unit/litellm_core_utils ;;
     enterprise-package)
       echo tests/unit/enterprise/integrations
       echo tests/unit/enterprise/proxy/auth
@@ -36,6 +43,10 @@ legacy_paths() {
       echo tests/unit/enterprise/proxy/test_audit_logging_endpoints.py
       echo tests/unit/enterprise/enterprise_callbacks/test_prometheus_logging_callbacks.py ;;
     enterprise-routing)
+      echo tests/unit/google_genai
+      echo tests/unit/router_strategy
+      echo tests/unit/router_utils
+      echo tests/unit/proxy/common_utils/test_cache_aware_routing.py
       echo tests/unit/enterprise/enterprise_callbacks/send_emails
       echo tests/unit/enterprise/proxy/test_afile_retrieve_returns_unified_id.py
       echo tests/unit/enterprise/proxy/test_batch_retrieve_input_file_id.py
@@ -47,13 +58,39 @@ legacy_paths() {
       echo tests/unit/enterprise/proxy/test_file_deletion_blocking.py
       echo tests/unit/enterprise/proxy/test_managed_files_access_check.py
       echo tests/unit/enterprise/proxy/test_managed_files_hook.py ;;
+    integrations) echo tests/unit/integrations ;;
+    llm-other-providers) find tests/unit/llms -name 'test_*.py' -not -path 'tests/unit/llms/vertex_ai/*' ;;
+    llm-vertex-ai) echo tests/unit/llms/vertex_ai ;;
     mcp-integration)
+      echo tests/unit/experimental_mcp_client
       echo tests/unit/proxy/_experimental/mcp_server
       echo tests/unit/responses/mcp
       echo tests/mcp_tests/test_proxy_mcp_e2e.py ;;
+    misc)
+      find tests/unit -maxdepth 1 -name 'test_*.py'
+      echo tests/unit/test_router
+      echo tests/unit/a2a_protocol
+      echo tests/unit/batches
+      echo tests/unit/chat_completions
+      echo tests/unit/completion_extras
+      echo tests/unit/containers
+      echo tests/unit/embeddings
+      echo tests/unit/endpoints
+      echo tests/unit/files
+      echo tests/unit/harness
+      echo tests/unit/images
+      echo tests/unit/interactions
+      echo tests/unit/messages
+      echo tests/unit/rag
+      echo tests/unit/rerank_api
+      echo tests/unit/rust_bridge
+      echo tests/unit/secret_managers
+      echo tests/unit/vector_stores
+      echo tests/unit/videos ;;
     proxy-db-auth-checks)
       echo tests/unit/proxy/auth/test_auth_checks.py
       echo tests/unit/proxy/auth/test_user_api_key_auth.py
+      echo tests/unit/proxy/test_credential_slot_registry.py
       echo tests/unit/proxy/test_deprecated_key_grace_period.py ;;
     proxy-db-budgets)
       echo tests/unit/proxy/auth/test_default_end_user_budget_simple.py
@@ -71,6 +108,7 @@ legacy_paths() {
       echo tests/unit/proxy/test_update_spend.py
       echo tests/unit/skills/test_skills_db.py ;;
     proxy-db-endpoints-and-responses)
+      echo tests/unit/proxy/lens
       echo tests/unit/proxy/auth/test_models_fallback_endpoint.py
       echo tests/unit/proxy/common_utils/test_check_batch_cost.py
       echo tests/unit/proxy/common_utils/test_check_responses_cost.py
@@ -79,7 +117,7 @@ legacy_paths() {
       echo tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py
       echo tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py
       echo tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py
-      echo tests/unit/proxy/response_polling/test_response_polling_handler.py
+      echo tests/unit/proxy/response_polling
       echo tests/unit/proxy/test_custom_tokenizer_bug.py
       echo tests/unit/proxy/test_get_favicon.py
       echo tests/unit/proxy/test_get_image.py
@@ -108,11 +146,19 @@ legacy_paths() {
       echo tests/unit/proxy/test_proxy_token_counter.py
       echo tests/unit/proxy/test_server_root_path.py ;;
     proxy-db-proxy-server-core)
+      echo tests/unit/proxy/test__lazy_features.py
       echo tests/unit/proxy/test_aproxy_startup.py
       echo tests/unit/proxy/test_proxy_server.py ;;
     proxy-db-proxy-utils) echo tests/unit/proxy/test_proxy_utils.py ;;
     proxy-extras) echo tests/unit/litellm_proxy_extras ;;
-    proxy-infra) echo tests/unit/gateway ;;
+    proxy-infra)
+      echo tests/unit/gateway
+      echo tests/unit/proxy/management
+      echo tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
+      echo tests/unit/proxy/roi_calculator ;;
+    responses-caching-types)
+      find tests/unit/responses -name 'test_*.py' -not -path 'tests/unit/responses/mcp/*'
+      echo tests/unit/types ;;
     *) echo "unit_selection.sh: unknown flag $1" >&2; exit 1 ;;
   esac
 }
