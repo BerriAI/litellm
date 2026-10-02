@@ -953,6 +953,9 @@ class PrismaManager:
                         verbose_proxy_logger.error("\x1b[1;31mLiteLLM: Failed to import proxy extras. Got %s\x1b[0m", e)
                         return False
 
+                    from litellm_proxy_extras.utils import ProxyExtrasDBManager
+
+                    ProxyExtrasDBManager.raise_if_lens_rename_pending()
                     PrismaManager._raise_if_partitioned_spend_logs()
                     run_prisma(
                         [
@@ -980,6 +983,30 @@ class PrismaManager:
             finally:
                 os.chdir(original_dir)
         return False
+
+    @staticmethod
+    def build_request_log_indexes() -> bool:
+        """Build the request-log indexes the migrations leave out and wait for them, for the
+        migration job (`--skip_server_startup`) after `setup_database` succeeds. False when
+        an index could not be built, so the job exits non-zero and is rerun."""
+        try:
+            from litellm_proxy_extras.utils import ProxyExtrasDBManager
+        except ImportError as e:
+            verbose_proxy_logger.error("\x1b[1;31mLiteLLM: Failed to import proxy extras. Got %s\x1b[0m", e)
+            return False
+        return ProxyExtrasDBManager.build_request_log_indexes()
+
+    @staticmethod
+    def start_request_log_index_build() -> None:
+        """Build the request-log indexes on a daemon thread, for a serving proxy that ran the
+        migrations itself (`DISABLE_SCHEMA_UPDATE` unset), so a long build never delays
+        readiness. A build that could not finish is logged and retried on the next boot."""
+        try:
+            from litellm_proxy_extras.utils import ProxyExtrasDBManager
+        except ImportError as e:
+            verbose_proxy_logger.error("\x1b[1;31mLiteLLM: Failed to import proxy extras. Got %s\x1b[0m", e)
+            return
+        ProxyExtrasDBManager.start_request_log_index_build()
 
 
 def should_update_prisma_schema(

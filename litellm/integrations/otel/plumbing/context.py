@@ -380,10 +380,8 @@ def inject_trace_context(headers: Mapping[str, str], parent_span: object = None)
     """
     context: Final = _outgoing_trace_context(parent_span)
     if context is None:
-        return dict(headers)  # mutable-ok: OpenTelemetry propagator requires a mutable carrier
-    carrier: Final = {  # mutable-ok: OpenTelemetry propagator requires a mutable carrier
-        key: value for key, value in headers.items() if key.lower() not in _W3C_TRACE_HEADERS
-    }
+        return dict(headers)
+    carrier: Final = {key: value for key, value in headers.items() if key.lower() not in _W3C_TRACE_HEADERS}
     _PROPAGATOR.inject(carrier, context=_propagated_context(headers, context))
     return carrier
 
