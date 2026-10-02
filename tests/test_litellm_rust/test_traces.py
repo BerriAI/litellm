@@ -221,8 +221,8 @@ def test_trace_sql_endpoint_executes_for_admin_and_preserves_clickhouse_envelope
     from litellm.proxy.tracing_endpoints import provide_receiver, provide_trace_query_secret, router
 
     envelope: Final = {"meta": [{"name": "answer", "type": "UInt8"}], "data": [{"answer": 42}], "rows": 1}
-    recording_server.expected_requests = 11
-    for _ in range(10):
+    recording_server.expected_requests = 12
+    for _ in range(11):
         recording_server.enqueue(ResponseSpec(body=""))
     recording_server.enqueue(ResponseSpec(body=envelope))
     storage: Final = ClickHouseStorage("trace_test", recording_server.base_url, recording_server.base_url)
@@ -248,8 +248,8 @@ def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(recording
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.tracing_endpoints import provide_receiver, provide_trace_query_secret, router
 
-    recording_server.expected_requests = 16
-    for _ in range(10):
+    recording_server.expected_requests = 17
+    for _ in range(11):
         recording_server.enqueue(ResponseSpec(body=""))
     for response in (
         {"data": [{"name": "Model", "type": "String"}]},
@@ -293,8 +293,8 @@ def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.tracing_endpoints import provide_receiver, provide_trace_query_secret, router
 
-    recording_server.expected_requests = 12
-    for _ in range(10):
+    recording_server.expected_requests = 13
+    for _ in range(11):
         recording_server.enqueue(ResponseSpec(body=""))
     recording_server.enqueue(ResponseSpec(status=clickhouse_status, body=b"ClickHouse rejected the query"))
     envelope: Final = {"meta": [{"name": "answer", "type": "UInt8"}], "data": [{"answer": 42}], "rows": 1}
