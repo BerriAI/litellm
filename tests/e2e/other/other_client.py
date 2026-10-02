@@ -1,30 +1,52 @@
 """Client for the `other` holding-pen suite: the auth gate (master key vs an
-invalid key on an admin route) and the process-lifecycle health probes
-(liveness, public readiness, authenticated readiness diagnostics).
+invalid key on an admin route), JWT auth against the suite's Keycloak realm
+(idp.py), and the process-lifecycle health probes (liveness, public readiness,
+authenticated readiness diagnostics).
 
 Holds the shared ProxyClient so `resources` / `scoped_key` still clean up, and
 adds only the routes these behaviors need. The health probes deliberately send
 no auth header (public routes), so they go through the transport with an empty
-headers model rather than a bearer.
+headers model rather than a bearer. JWT tests reach the identity provider
+through `idp`, which provisions identities and mints tokens through Keycloak's
+own endpoints, so no test ever holds a signing key.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Final
 
-from e2e_http import NoBody, ProbeResult, Result
+from e2e_http import AnthropicHeaders, AuthHeaders, NoBody, ProbeResult, Result
+from idp import Keycloak, keycloak_from_env
 from models import (
+    ChatBody,
+    ChatResponse,
+    ModelsListParams,
+    ModelsListResponse,
     ReadinessDetailsResponse,
     ReadinessResponse,
     UserListParams,
     UserListResponse,
 )
 from proxy_client import ProxyClient
+from pydantic import Field
+
+
+class TeamHeaders(AuthHeaders):
+    """Bearer auth plus ``x-litellm-team-id``, the header a JWT caller sends to
+    pick one of the teams it belongs to."""
+
+    x_litellm_team_id: str = Field(serialization_alias="x-litellm-team-id")
 
 
 @dataclass(frozen=True, slots=True)
 class OtherClient:
     proxy: ProxyClient
+
+    @property
+    def idp(self) -> Keycloak:
+        """Resolved per use, so the suite's non-JWT tests never need the IdP env."""
+        return keycloak_from_env()
 
     def liveness(self) -> ProbeResult:
         """GET /health/liveliness. Unauthenticated; the probe returns status +
@@ -55,6 +77,29 @@ class OtherClient:
             headers=NoBody(),
             params=NoBody(),
             response_type=ReadinessDetailsResponse,
+        )
+
+    def chat_as_team(self, token: str, team: str, body: ChatBody) -> Result[ChatResponse]:
+        """POST /chat/completions under `token` with `x-litellm-team-id: team`."""
+        return self.proxy.transport.post(
+            "/chat/completions",
+            headers=TeamHeaders(
+                authorization=self.proxy.transport.bearer(token).authorization,
+                x_litellm_team_id=team,
+            ),
+            json=body,
+            response_type=ChatResponse,
+        )
+
+    def list_models_as(self, token: str, *, anthropic: bool = False) -> Result[ModelsListResponse]:
+        """GET /v1/models under `token`, in the OpenAI shape or, with `anthropic`, the
+        Anthropic Models API shape Claude Code reads. Both carry `data[].id`."""
+        bearer: Final = self.proxy.transport.bearer(token)
+        return self.proxy.transport.get(
+            "/v1/models",
+            headers=AnthropicHeaders(authorization=bearer.authorization) if anthropic else bearer,
+            params=ModelsListParams(return_wildcard_routes=False),
+            response_type=ModelsListResponse,
         )
 
     def list_users_as(self, key: str) -> Result[UserListResponse]:

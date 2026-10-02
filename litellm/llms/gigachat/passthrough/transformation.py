@@ -60,7 +60,6 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         """
         Set up headers with OAuth token.
         """
-        # Get access token
         access_token: Final = get_access_token(credentials=api_key, litellm_params=litellm_params)
 
         headers["Authorization"] = f"Bearer {access_token}"  # rebind-ok: mutating for OAuth setup
@@ -82,7 +81,6 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         from litellm.types.utils import LlmProviders, ModelResponse
         from litellm.utils import ProviderConfigManager
 
-        # cost tracking only for completions and embeddings
         if "completions" in endpoint:
             provider_chat_config: Final = ProviderConfigManager.get_provider_chat_config(
                 provider=LlmProviders(custom_llm_provider),
@@ -95,16 +93,14 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
             raw_messages: Final = request_data.get("messages")
             litellm_model_response: Final = provider_chat_config.transform_response(
                 model=model,
-                messages=list(raw_messages)
-                if isinstance(raw_messages, list)
-                else [],  # mutable-ok: transform_response wants a list
+                messages=list(raw_messages) if isinstance(raw_messages, list) else [],
                 raw_response=httpx_response,
                 model_response=ModelResponse(),
                 logging_obj=logging_obj,
-                optional_params={},  # mutable-ok: empty dict kwarg for transform_response
-                litellm_params={},  # mutable-ok: empty dict kwarg for transform_response
+                optional_params={},
+                litellm_params={},
                 api_key="",
-                request_data=dict(request_data),  # mutable-ok: transform_response wants a dict
+                request_data=dict(request_data),
                 encoding=encoding,
             )
 
@@ -125,10 +121,10 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
                     raw_response=httpx_response,
                     model_response=EmbeddingResponse(),
                     logging_obj=logging_obj,
-                    optional_params={},  # mutable-ok: empty dict kwarg for transform_embedding_response
+                    optional_params={},
                     api_key="",
-                    request_data=dict(request_data),  # mutable-ok: transform_embedding_response wants a dict
-                    litellm_params={},  # mutable-ok: empty dict kwarg for transform_embedding_response
+                    request_data=dict(request_data),
+                    litellm_params={},
                 )
             )
 

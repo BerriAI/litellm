@@ -142,21 +142,25 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "acancel_run": "/evals/{eval_id}/runs/{run_id}/cancel",
     "adelete_run": "/evals/{eval_id}/runs/{run_id}",
     "acreate_batch": "/batches",
+    "aretrieve_batch": "/batches",
 }
+
+
+_AVAILABLE_MODELS_HINT: Final = "Call `/v1/models` to view available models for your key."
 
 
 class ProxyModelNotFoundError(HTTPException):
     def __init__(self, route: str, model_name: str, retryable_with_model_read_through: bool = True):
         self.retryable_with_model_read_through: Final = retryable_with_model_read_through
-        detail: Final = {
-            "error": f"{route}: Invalid model name passed in model={model_name}. Call `/v1/models` to view available models for your key."
-        }
+        self.spend_log_error_message: Final = f"{route}: Invalid model name passed in. {_AVAILABLE_MODELS_HINT}"
+        detail: Final = {"error": f"{route}: Invalid model name passed in model={model_name}. {_AVAILABLE_MODELS_HINT}"}
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
 REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
     "acompletion": ("messages",),
     "aembedding": ("input",),
+    "aresponses": ("input",),
     "acreate_batch": ("input_file_id", "endpoint", "completion_window"),
 }
 
@@ -188,7 +192,7 @@ class MockTestingParamsDisabledError(HTTPException):
     def __init__(self, params: tuple[str, ...]):
         super().__init__(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={  # mutable-ok: HTTPException.detail has no immutable form; same shape as the sibling errors here
+            detail={
                 "error": (
                     f"Mock testing request params are disabled on this proxy: {', '.join(params)}. "
                     f"An admin can enable them by setting `general_settings.{MOCK_TESTING_CONFIG_KEY}: true` "

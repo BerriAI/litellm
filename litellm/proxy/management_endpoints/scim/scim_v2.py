@@ -46,6 +46,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import _delete_cache_key_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
@@ -263,6 +264,8 @@ scim_router: Final = APIRouter(
     tags=["✨ SCIM v2 (Enterprise Only)"],
     dependencies=[Depends(_premium_user_check)],
 )
+
+SCIM_MAX_PAGE_SIZE: Final = 100
 
 
 # Helper functions for common operations
@@ -579,7 +582,6 @@ async def _users_named_by_member_value(
     subject: Final = value.strip()
     email: Final[_CaseInsensitiveMatch] = {"equals": subject, "mode": "insensitive"}
     rows: Final = await _table(UserRepository(prisma_client)).find_many(
-        # mutable-ok: the Prisma serializer requires concrete dicts and a concrete list
         where={"OR": [{"sso_user_id": subject}, {"user_email": email}]},
         take=take,
     )
@@ -601,11 +603,11 @@ async def _accounts_named_by_member_value(value: str, prisma_client: PrismaClien
     email: Final[_CaseInsensitiveMatch] = {"equals": subject, "mode": "insensitive"}
     users: Final = _table(UserRepository(prisma_client))
     rows: Final = await users.find_many(
-        where={  # mutable-ok: Prisma filter
-            "OR": [  # mutable-ok: Prisma filter
-                {"user_id": value},  # mutable-ok: Prisma filter
-                {"sso_user_id": subject},  # mutable-ok: Prisma filter
-                {"user_email": email},  # mutable-ok: Prisma filter
+        where={
+            "OR": [
+                {"user_id": value},
+                {"sso_user_id": subject},
+                {"user_email": email},
             ],
         },
         take=2,
@@ -1123,13 +1125,15 @@ async def _create_user_if_not_exists(user_id: str, created_via: str = "scim_grou
             user_id=user_id,
             user_email=user_id,  # We don't have email from group membership
             user_alias=None,
-            teams=[],  # Teams will be added separately
             metadata={"created_via": created_via},
             auto_create_key=False,
             user_role=default_role,
         )
 
-        created_user: Final = await new_user(data=new_user_request)
+        created_user: Final = await new_user(
+            data=new_user_request,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
         verbose_proxy_logger.info("Created user %s via %s", user_id, created_via)
         return created_user
 
@@ -1570,12 +1574,13 @@ def _parse_scim_eq_filter(scim_filter: str) -> tuple[str, str] | None:
 )
 async def get_users(
     startIndex: int = Query(1, ge=1),
-    count: int = Query(10, ge=1, le=100),
+    count: int = Query(10, ge=0),
     filter: str | None = Query(None),
 ):
     """
     Get a list of users according to SCIM v2 protocol
     """
+    page_size: Final = min(count, SCIM_MAX_PAGE_SIZE)
     verbose_proxy_logger.debug(
         "SCIM GET USERS request: startIndex=%s count=%s filter=%s",
         startIndex,
@@ -1605,7 +1610,7 @@ async def get_users(
         users: Final[Sequence[LiteLLM_UserTable]] = await _table(UserRepository(prisma_client)).find_many(
             where=where_conditions,
             skip=(startIndex - 1),
-            take=count,
+            take=page_size,
             order={"created_at": "desc"},
         )
 
@@ -1621,7 +1626,7 @@ async def get_users(
         return SCIMListResponse(
             totalResults=total_count,
             startIndex=startIndex,
-            itemsPerPage=min(count, len(scim_users)),
+            itemsPerPage=len(scim_users),
             Resources=scim_users,
         )
 
@@ -1699,7 +1704,7 @@ async def create_user(
             user_id=user_id,
             user_email=user_data["user_email"],
             user_alias=user_data["user_alias"],
-            teams=user_data["teams"],
+            teams=user_data["teams"] or None,
             metadata=metadata,
             auto_create_key=False,
             user_role=resolved_role if admin_group is not None else default_role,
@@ -1717,6 +1722,7 @@ async def create_user(
 
         created_user: Final = await new_user(
             data=new_user_request,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
         )
 
         scim_user: Final = await ScimTransformations.transform_litellm_user_to_scim_user(user=created_user)
@@ -1771,22 +1777,25 @@ async def update_user(
             roles=user_data["roles"],
         )
 
+        # SCIM User.groups is readOnly (RFC 7643 4.1.2): IdPs sync membership via /Groups and send
+        # no groups or `groups: []` on profile PUTs, so empty means unspecified, not "remove from every team"
+        target_teams: Final = user_data["teams"] or existing_user.teams
         await _handle_team_membership_changes(
             user_id=user_id,
-            existing_teams=existing_user.teams or [],
-            new_teams=user_data["teams"],
+            existing_teams=existing_user.teams,
+            new_teams=target_teams,
         )
 
         update_data: Final = {
             "user_email": user_data["user_email"],
             "user_alias": user_data["user_alias"],
             "sso_user_id": user_data["sso_user_id"],
-            "teams": user_data["teams"],
+            "teams": target_teams,
             "metadata": safe_dumps(metadata),
         }
 
         admin_group: Final = await _get_scim_admin_group()
-        if admin_group is not None:
+        if admin_group is not None and user_data["teams"]:
             update_data["user_role"] = _resolve_scim_user_role(
                 user.groups or [], admin_group, _default_scim_user_role()
             )
@@ -1795,6 +1804,9 @@ async def update_user(
             where={"user_id": user_id},
             data=update_data,
         )
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        await evict_and_broadcast(cache_keys=(user_id,), user_api_key_cache=user_api_key_cache)
 
         if client_set_active:
             new_active: Final = _scim_active_value(metadata)
@@ -1857,6 +1869,10 @@ async def delete_user(
 
         # Delete user
         await _table(UserRepository(prisma_client)).delete(where={"user_id": user_id})
+
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        await evict_and_broadcast(cache_keys=(user_id,), user_api_key_cache=user_api_key_cache)
 
         return Response(status_code=204)
     except Exception as e:
@@ -2098,7 +2114,7 @@ def _handle_multi_valued_attribute_update(path: str, op_type: str, value: object
     except ValidationError:
         raise HTTPException(
             status_code=400,
-            detail={"error": f"Invalid value for {base}: expected a list of objects with a 'value' sub-attribute"},
+            detail={"error": f"Invalid value for {base}: expected a list of objects or strings"},
         )
 
     dumped: Final = [attr.model_dump(exclude_none=True) for attr in attrs]
@@ -2366,6 +2382,9 @@ async def patch_user(
             where={"user_id": user_id},
             data=update_data,
         )
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        await evict_and_broadcast(cache_keys=(user_id,), user_api_key_cache=user_api_key_cache)
 
         if new_active is not None and new_active != (True if prev_active is None else prev_active):
             await _set_user_keys_blocked(user_id=user_id, blocked=not new_active)
@@ -2393,12 +2412,13 @@ class _TeamWhereConditions(TypedDict, total=False):
 )
 async def get_groups(
     startIndex: int = Query(1, ge=1),
-    count: int = Query(10, ge=1, le=100),
+    count: int = Query(10, ge=0),
     filter: str | None = Query(None),
 ):
     """
     Get a list of groups according to SCIM v2 protocol
     """
+    page_size: Final = min(count, SCIM_MAX_PAGE_SIZE)
     verbose_proxy_logger.debug(
         "SCIM GET GROUPS request: startIndex=%s count=%s filter=%s",
         startIndex,
@@ -2419,7 +2439,7 @@ async def get_groups(
         teams: Final = await _table(TeamRepository(prisma_client)).find_many(
             where=where_conditions,
             skip=(startIndex - 1),
-            take=count,
+            take=page_size,
             order={"created_at": "desc"},
         )
 
@@ -2456,7 +2476,7 @@ async def get_groups(
         return SCIMListResponse(
             totalResults=total_count,
             startIndex=startIndex,
-            itemsPerPage=min(count, len(scim_groups)),
+            itemsPerPage=len(scim_groups),
             Resources=scim_groups,
         )
 
@@ -2912,7 +2932,7 @@ async def patch_group(
         if updated_team is None:
             raise HTTPException(
                 status_code=404,
-                detail={"error": f"Group not found with ID: {group_id}"},  # mutable-ok: FastAPI detail contract
+                detail={"error": f"Group not found with ID: {group_id}"},
             )
 
         # Convert to SCIM format and return

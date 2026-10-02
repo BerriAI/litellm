@@ -64,6 +64,7 @@ const RoutingGroupsTable: React.FC<RoutingGroupsTableProps> = ({
   return (
     <DataTable
       data={groups}
+      paginationMode="client"
       columns={columns}
       getRowId={(group) => group.group_name}
       sortingMode="client"

@@ -17,7 +17,10 @@ from typing import TYPE_CHECKING, Any, Final, Optional
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.base_translation import (
+    BaseTranslation,
+    StreamingScanKey,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -122,7 +125,7 @@ class A2AGuardrailHandler(BaseTranslation):
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> object:
         """
         Process A2A output response by applying guardrails to text content.
 
@@ -313,9 +316,14 @@ class A2AGuardrailHandler(BaseTranslation):
 
         return responses_so_far
 
+    def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        _, valid_parsed = self._parse_streaming_responses(responses_so_far)
+        combined_text, _ = self._collect_text_from_parsed_chunks(valid_parsed)
+        return StreamingScanKey(texts=(combined_text,))
+
     def _parse_streaming_responses(
         self,
-        responses_so_far: list[object],
+        responses_so_far: Sequence[object],
     ) -> tuple[list[dict[str, object] | None], list[tuple[int, dict[str, object]]]]:
         """Parse JSON-RPC items, returning aligned parsed list and valid entries."""
         parsed: Final[list[dict[str, object] | None]] = [None] * len(responses_so_far)
