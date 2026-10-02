@@ -395,6 +395,23 @@ def test_oversized_parts_keep_explicit_calls_without_duplicates():
     assert kept["content"].startswith("answer ")
 
 
+def test_oversized_empty_message_array_stays_valid_json():
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 400):
+        encoded = decode._truncate_payload("[" + " " * 1000 + "]")
+    assert encoded == "[]"
+
+
+def test_oversized_parts_history_keeps_first_and_latest_messages():
+    messages = [{"role": "user", "parts": [{"type": "text", "content": f"turn {i} " + "x" * 60}]} for i in range(12)]
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 400):
+        encoded = decode._truncate_payload(json.dumps(messages))
+    kept = json.loads(encoded)
+    assert len(encoded.encode()) <= 400
+    assert kept[0] == messages[0]
+    assert kept[-1] == messages[-1]
+    assert "earlier messages truncated" in kept[1]["content"]
+
+
 # ---------------------------------------------------------------- status / exceptions
 
 

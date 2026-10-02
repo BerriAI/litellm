@@ -122,24 +122,25 @@ def _truncate_payload(value: str) -> str:
         messages: Final = _MESSAGE_LIST.validate_json(value)
     except ValidationError:
         return _truncate(value)
-    if len(messages) == 1:
+    count: Final = len(messages)
+    if count == 1:
         single: Final = "[" + _shrunk_message(messages[0], OTLP_MAX_ATTRIBUTE_VALUE_BYTES - 2) + "]"
         return single if _size(single) <= OTLP_MAX_ATTRIBUTE_VALUE_BYTES else "[" + _elided(1) + "]"
-    if not messages:
-        return _truncate(value)
+    if count == 0:
+        return "[]"
     encoded: Final = tuple(json.dumps(m) for m in messages)
-    marker_budget: Final = _size(_elided(len(messages))) + 1
+    marker_budget: Final = _size(_elided(count)) + 1
     budget: Final = OTLP_MAX_ATTRIBUTE_VALUE_BYTES - 2 - _size(encoded[0]) - 1 - marker_budget
-    kept: Final = min(_newest_that_fit(encoded[1:], budget), len(messages) - 2)
+    kept: Final = min(_newest_that_fit(encoded[1:], budget), count - 2)
     if kept > 0:
-        tail: Final = encoded[len(encoded) - kept :]
-        return "[" + ", ".join((encoded[0], _elided(len(messages) - 1 - kept), *tail)) + "]"
+        tail: Final = encoded[count - kept :]
+        return "[" + ", ".join((encoded[0], _elided(count - 1 - kept), *tail)) + "]"
     half: Final = (OTLP_MAX_ATTRIBUTE_VALUE_BYTES - marker_budget - 4) // 2
-    middle: Final = (_elided(len(messages) - 2),) if len(messages) > 2 else ()
+    middle: Final = (_elided(count - 2),) if count > 2 else ()
     shrunk: Final = (
         "[" + ", ".join((_shrunk_message(messages[0], half), *middle, _shrunk_message(messages[-1], half))) + "]"
     )
-    return shrunk if _size(shrunk) <= OTLP_MAX_ATTRIBUTE_VALUE_BYTES else "[" + _elided(len(messages)) + "]"
+    return shrunk if _size(shrunk) <= OTLP_MAX_ATTRIBUTE_VALUE_BYTES else "[" + _elided(count) + "]"
 
 
 def decode_otlp(
