@@ -446,7 +446,7 @@ async def test_trace_receiver_reads_with_only_one_clickhouse_url(
 
 
 @pytest.mark.asyncio
-async def test_lens_query_uses_the_shared_native_read_path_and_returns_typed_rows(
+async def test_lens_read_uses_the_shared_native_query_and_returns_typed_rows(
     recording_server: RecordingServer,
 ) -> None:
     recording_server.enqueue(ResponseSpec(body={"data": [{"traces": 0, "requests": 1}]}))
