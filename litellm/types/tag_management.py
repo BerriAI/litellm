@@ -6,6 +6,7 @@ class TagBase(BaseModel):
     description: str | None = None
     models: list[str] | None = None
     model_info: dict[str, str] | None = None  # maps model_id to model_name
+    team_id: str | None = None
 
 
 class TagConfig(TagBase):

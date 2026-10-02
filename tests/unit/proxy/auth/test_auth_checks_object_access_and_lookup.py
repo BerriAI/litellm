@@ -3158,6 +3158,29 @@ async def test_tag_max_budget_check_still_enforces_registered_tag_over_budget():
 
 
 @pytest.mark.asyncio
+async def test_tag_cache_round_trip_preserves_team_ownership():
+    """A db tag row with team_id must survive the same CacheCodec path auth uses to serve it."""
+    from litellm.proxy._types import LiteLLM_TagTable
+    from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+
+    db_row = {
+        "tag_name": "owned-tag",
+        "description": None,
+        "models": [],
+        "model_info": {},
+        "spend": 0.0,
+        "budget_id": None,
+        "team_id": "team-a",
+        "created_by": "admin",
+    }
+    validated = LiteLLM_TagTable.model_validate(db_row)
+    payload = CacheCodec.serialize(validated, model_type=LiteLLM_TagTable)
+    restored = CacheCodec.deserialize(payload, model_type=LiteLLM_TagTable)
+    assert restored is not None
+    assert restored.team_id == "team-a"
+
+
+@pytest.mark.asyncio
 async def test_get_team_object_raises_404_when_not_found():
     from unittest.mock import AsyncMock, MagicMock
 

@@ -7,7 +7,13 @@ from typing import Mapping, Optional
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from prisma.actions import LiteLLM_VerificationTokenActions
+from prisma.actions import (
+    LiteLLM_DailyTagSpendActions,
+    LiteLLM_ProxyModelTableActions,
+    LiteLLM_TagTableActions,
+    LiteLLM_TeamTableActions,
+    LiteLLM_VerificationTokenActions,
+)
 
 
 from contextlib import contextmanager
@@ -105,6 +111,7 @@ async def test_create_and_get_tag():
             created_tag.created_at = datetime.now()
             created_tag.updated_at = datetime.now()
             created_tag.created_by = "test-user-123"
+            created_tag.team_id = None
             mock_db.litellm_tagtable.create = AsyncMock(return_value=created_tag)
 
             # Mock get_deployments_by_model to return empty list
@@ -138,6 +145,7 @@ async def test_create_and_get_tag():
             retrieved_tag.created_at = datetime.now()
             retrieved_tag.updated_at = datetime.now()
             retrieved_tag.created_by = "test-user-123"
+            retrieved_tag.team_id = None
             retrieved_tag.litellm_budget_table = None
             mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[retrieved_tag])
 
@@ -207,6 +215,7 @@ async def test_update_tag():
             updated_tag.created_at = datetime.now()
             updated_tag.updated_at = datetime.now()
             updated_tag.created_by = "user-123"
+            updated_tag.team_id = None
             mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
 
             # Update tag data
@@ -245,6 +254,7 @@ async def test_new_tag_persists_a_budget():
         created_at=datetime(2024, 1, 1),
         updated_at=datetime(2024, 1, 1),
         created_by="admin",
+        team_id=None,
     )
     mock_db = Mock()
     mock_prisma = SimpleNamespace(db=mock_db, jsonify_object=lambda data: dict(data))
@@ -314,6 +324,7 @@ async def test_update_tag_explicit_null_preserves_general_budget_fields(field):
         created_at=datetime(2024, 1, 1),
         updated_at=datetime(2024, 1, 1),
         created_by="admin",
+        team_id=None,
     )
     mock_db = Mock()
     mock_prisma = SimpleNamespace(db=mock_db)
@@ -368,6 +379,7 @@ async def test_update_tag_explicit_null_clears_budget_duration():
         created_at=datetime(2024, 1, 1),
         updated_at=datetime(2024, 1, 1),
         created_by="admin",
+        team_id=None,
     )
     mock_db = Mock()
     mock_prisma = SimpleNamespace(db=mock_db)
@@ -530,6 +542,7 @@ async def test_new_tag_invalidates_tag_and_registry_caches():
             created_tag.created_at = datetime.now()
             created_tag.updated_at = datetime.now()
             created_tag.created_by = "test-user-123"
+            created_tag.team_id = None
             mock_db.litellm_tagtable.create = AsyncMock(return_value=created_tag)
 
             response = client.post(
@@ -585,6 +598,7 @@ async def test_update_tag_invalidates_only_the_tag_cache():
             updated_tag.created_at = datetime.now()
             updated_tag.updated_at = datetime.now()
             updated_tag.created_by = "test-user-123"
+            updated_tag.team_id = None
             mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
 
             response = client.post(
@@ -671,6 +685,7 @@ async def test_list_tags_with_dynamic_tags():
             stored_tag.created_at = datetime(2025, 1, 1)
             stored_tag.updated_at = datetime(2025, 1, 1)
             stored_tag.created_by = "user-123"
+            stored_tag.team_id = None
             stored_tag.litellm_budget_table = None
             mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[stored_tag])
 
@@ -751,6 +766,7 @@ async def test_list_tags_no_dynamic_tags():
             stored_tag.created_at = datetime(2025, 1, 1)
             stored_tag.updated_at = datetime(2025, 1, 1)
             stored_tag.created_by = "user-123"
+            stored_tag.team_id = None
             stored_tag.litellm_budget_table = None
             mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[stored_tag])
 
@@ -821,6 +837,7 @@ async def test_internal_user_list_tags_only_returns_tags_used_by_their_keys():
             stored_tag.created_at = datetime(2025, 1, 1)
             stored_tag.updated_at = datetime(2025, 1, 1)
             stored_tag.created_by = "admin-user"
+            stored_tag.team_id = None
             stored_tag.litellm_budget_table = None
             mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[stored_tag])
 
@@ -1513,3 +1530,302 @@ async def test_add_tag_to_deployment_model_not_found():
 
         assert exc_info.value.status_code == 500
         assert "not found in database" in str(exc_info.value.detail)
+
+
+def _new_tag_row(**fields: object) -> dict[str, object]:
+    from datetime import datetime
+
+    now = datetime.now()
+    return {
+        "tag_name": "",
+        "description": None,
+        "models": [],
+        "model_info": "{}",
+        "spend": 0.0,
+        "budget_id": None,
+        "created_by": "admin",
+        "team_id": None,
+        "created_at": now,
+        "updated_at": now,
+        "litellm_budget_table": None,
+        **fields,
+    }
+
+
+class FakeTagTable:
+    """In-memory ``litellm_tagtable`` bound to the generated Actions signatures."""
+
+    def __init__(self, rows: dict[str, dict[str, object]]):
+        self._rows = rows
+
+    async def find_unique(self, **kwargs: object) -> SimpleNamespace | None:
+        inspect.signature(LiteLLM_TagTableActions.find_unique).bind(None, **kwargs)
+        row = self._rows.get(kwargs["where"]["tag_name"])
+        return SimpleNamespace(**row) if row is not None else None
+
+    async def create(self, **kwargs: object) -> SimpleNamespace:
+        inspect.signature(LiteLLM_TagTableActions.create).bind(None, **kwargs)
+        row = _new_tag_row(**kwargs["data"])
+        self._rows[row["tag_name"]] = row
+        return SimpleNamespace(**row)
+
+    async def update(self, **kwargs: object) -> SimpleNamespace | None:
+        inspect.signature(LiteLLM_TagTableActions.update).bind(None, **kwargs)
+        row = self._rows[kwargs["where"]["tag_name"]]
+        row.update(kwargs["data"])
+        return SimpleNamespace(**row)
+
+    async def find_many(self, **kwargs: object) -> list[SimpleNamespace]:
+        inspect.signature(LiteLLM_TagTableActions.find_many).bind(None, **kwargs)
+        where = kwargs.get("where") or {}
+        names = where.get("tag_name", {}).get("in") if isinstance(where.get("tag_name"), dict) else None
+        rows = self._rows.values() if names is None else (self._rows[n] for n in names if n in self._rows)
+        return [SimpleNamespace(**row) for row in rows]
+
+    async def delete(self, **kwargs: object) -> SimpleNamespace | None:
+        inspect.signature(LiteLLM_TagTableActions.delete).bind(None, **kwargs)
+        row = self._rows.pop(kwargs["where"]["tag_name"], None)
+        return SimpleNamespace(**row) if row is not None else None
+
+
+class FakeTeamTable:
+    """In-memory ``litellm_teamtable`` holding only the ids of existing teams."""
+
+    def __init__(self, team_ids):
+        self._team_ids = frozenset(team_ids)
+
+    async def find_unique(self, **kwargs: object) -> SimpleNamespace | None:
+        inspect.signature(LiteLLM_TeamTableActions.find_unique).bind(None, **kwargs)
+        team_id = kwargs["where"]["team_id"]
+        return SimpleNamespace(team_id=team_id) if team_id in self._team_ids else None
+
+
+class _EmptyFindMany:
+    def __init__(self, signature_of):
+        self._signature_of = signature_of
+
+    async def find_many(self, **kwargs: object) -> list:
+        inspect.signature(self._signature_of).bind(None, **kwargs)
+        return []
+
+
+class _EmptyGroupBy:
+    async def group_by(self, *args: object, **kwargs: object) -> list:
+        inspect.signature(LiteLLM_DailyTagSpendActions.group_by).bind(None, *args, **kwargs)
+        return []
+
+
+class FakeTagOwnershipDb:
+    """The prisma boundary these tests assert against: a tag store plus the set of existing team ids."""
+
+    def __init__(self, team_ids=()):
+        self.tag_rows: dict[str, dict[str, object]] = {}
+        self.litellm_tagtable = FakeTagTable(self.tag_rows)
+        self.litellm_teamtable = FakeTeamTable(team_ids)
+        self.litellm_proxymodeltable = _EmptyFindMany(LiteLLM_ProxyModelTableActions.find_many)
+        self.litellm_dailytagspend = _EmptyGroupBy()
+
+
+@contextmanager
+def _tag_ownership_gateway(fake_db: FakeTagOwnershipDb, auth: UserAPIKeyAuth):
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    app.dependency_overrides[user_api_key_auth] = lambda: auth
+    mock_prisma = SimpleNamespace(db=fake_db, jsonify_object=lambda data: dict(data))
+    try:
+        with (
+            _tag_cache_doubles(),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", object()),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        ):
+            yield
+    finally:
+        app.dependency_overrides.clear()
+
+
+_ADMIN_HEADERS = {"Authorization": "Bearer sk-1234"}
+
+
+def _proxy_admin_auth() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+
+def _internal_user_auth() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="internal-user-key",
+        user_id="internal-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        allowed_routes=["/tag/new", "/tag/update"],
+    )
+
+
+def _tag_info(name: str) -> dict:
+    response = client.post("/tag/info", json={"names": [name]}, headers=_ADMIN_HEADERS)
+    assert response.status_code == 200, response.text
+    return response.json()[name]
+
+
+def _stored_tag_list_entry(name: str) -> dict:
+    response = client.get("/tag/list", headers=_ADMIN_HEADERS)
+    assert response.status_code == 200, response.text
+    return next(entry for entry in response.json() if entry["name"] == name)
+
+
+def _persisted_tag_row(fake_db: FakeTagOwnershipDb, name: str) -> dict:
+    assert name in fake_db.tag_rows, f"expected a persisted tag row for {name}"
+    return fake_db.tag_rows[name]
+
+
+@pytest.mark.asyncio
+async def test_new_tag_persists_team_ownership():
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
+    with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
+        response = client.post(
+            "/tag/new",
+            json={"name": "owned-tag", "team_id": "team-a", "models": []},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["tag"]["team_id"] == "team-a"
+        assert _tag_info("owned-tag")["team_id"] == "team-a"
+        assert _stored_tag_list_entry("owned-tag")["team_id"] == "team-a"
+        assert _persisted_tag_row(fake_db, "owned-tag")["team_id"] == "team-a"
+
+
+@pytest.mark.asyncio
+async def test_new_tag_without_team_id_stays_unowned():
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
+    with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
+        response = client.post(
+            "/tag/new",
+            json={"name": "plain-tag", "description": "no owner", "models": []},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["tag"]["team_id"] is None
+        assert response.json()["tag"]["description"] == "no owner"
+        assert _tag_info("plain-tag")["team_id"] is None
+        assert _persisted_tag_row(fake_db, "plain-tag")["team_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_new_tag_with_unknown_team_is_rejected():
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
+    with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
+        response = client.post(
+            "/tag/new",
+            json={"name": "ghost-tag", "team_id": "team-ghost", "models": []},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 400, response.text
+        assert fake_db.tag_rows == {}
+
+
+@pytest.mark.asyncio
+async def test_update_tag_with_unknown_team_is_rejected():
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
+    fake_db.tag_rows["owned-tag"] = _new_tag_row(tag_name="owned-tag", team_id="team-a", description="original")
+    with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
+        response = client.post(
+            "/tag/update",
+            json={"name": "owned-tag", "team_id": "team-ghost", "description": "changed"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 400, response.text
+        row = _persisted_tag_row(fake_db, "owned-tag")
+        assert row["team_id"] == "team-a"
+        assert row["description"] == "original"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "update_body",
+    [{"description": None}, {"description": "changed"}],
+    ids=["name-only", "unrelated-description-update"],
+)
+async def test_update_tag_omitting_team_id_preserves_owner(update_body):
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
+    fake_db.tag_rows["owned-tag"] = _new_tag_row(tag_name="owned-tag", team_id="team-a")
+    with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
+        response = client.post(
+            "/tag/update",
+            json={"name": "owned-tag", **update_body},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["tag"]["team_id"] == "team-a"
+        assert _tag_info("owned-tag")["team_id"] == "team-a"
+        assert _persisted_tag_row(fake_db, "owned-tag")["team_id"] == "team-a"
+        if "description" in update_body and update_body["description"] is not None:
+            assert response.json()["tag"]["description"] == "changed"
+
+
+@pytest.mark.asyncio
+async def test_update_tag_explicit_null_releases_ownership():
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
+    fake_db.tag_rows["owned-tag"] = _new_tag_row(tag_name="owned-tag", team_id="team-a")
+    with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
+        response = client.post(
+            "/tag/update",
+            json={"name": "owned-tag", "team_id": None},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["tag"]["team_id"] is None
+        assert _tag_info("owned-tag")["team_id"] is None
+        assert _persisted_tag_row(fake_db, "owned-tag")["team_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_tag_changes_team_owner():
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a", "team-b"})
+    fake_db.tag_rows["owned-tag"] = _new_tag_row(tag_name="owned-tag", team_id="team-a")
+    with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
+        response = client.post(
+            "/tag/update",
+            json={"name": "owned-tag", "team_id": "team-b"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["tag"]["team_id"] == "team-b"
+        assert _tag_info("owned-tag")["team_id"] == "team-b"
+        assert _persisted_tag_row(fake_db, "owned-tag")["team_id"] == "team-b"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        ("new", {"name": "new-tag", "team_id": "team-a", "models": []}),
+        ("update", {"name": "unowned-tag", "team_id": "team-a"}),
+        ("update", {"name": "owned-tag", "team_id": "team-b"}),
+        ("update", {"name": "owned-tag", "team_id": None}),
+    ],
+    ids=["create-assign", "update-assign", "update-change", "update-release"],
+)
+async def test_non_admin_cannot_set_tag_team_ownership(case):
+    method, body = case
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a", "team-b"})
+    fake_db.tag_rows["unowned-tag"] = _new_tag_row(tag_name="unowned-tag")
+    fake_db.tag_rows["owned-tag"] = _new_tag_row(tag_name="owned-tag", team_id="team-a")
+    before = {name: dict(row) for name, row in fake_db.tag_rows.items()}
+    with _tag_ownership_gateway(fake_db, _internal_user_auth()):
+        response = client.post(f"/tag/{method}", json=body, headers=_ADMIN_HEADERS)
+        assert response.status_code == 403, response.text
+        assert fake_db.tag_rows == before
+
+
+@pytest.mark.asyncio
+async def test_non_admin_update_without_team_id_is_allowed():
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
+    fake_db.tag_rows["owned-tag"] = _new_tag_row(tag_name="owned-tag", team_id="team-a")
+    with _tag_ownership_gateway(fake_db, _internal_user_auth()):
+        response = client.post(
+            "/tag/update",
+            json={"name": "owned-tag", "description": "non-admin edit"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["tag"]["team_id"] == "team-a"
+        assert _persisted_tag_row(fake_db, "owned-tag")["team_id"] == "team-a"

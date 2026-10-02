@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     tag_registry_cache_key,
@@ -34,6 +35,7 @@ from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     DailyTagSpendRepository,
     TagRepository,
+    TeamRepository,
 )
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
@@ -50,6 +52,7 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_BudgetTable as PrismaBudgetTable
     from prisma.models import LiteLLM_ProxyModelTable as PrismaProxyModelTable
     from prisma.models import LiteLLM_TagTable as PrismaTagTable
+    from prisma.models import LiteLLM_TeamTable as PrismaTeamTable
     from prisma.models import LiteLLM_VerificationToken as PrismaVerificationToken
 
     from litellm import Router
@@ -65,6 +68,7 @@ class _TagRecord(Protocol):
     models: Sequence[str]
     model_info: object
     budget_id: str | None
+    team_id: str | None
     created_at: datetime
     updated_at: datetime
     created_by: str | None
@@ -89,6 +93,10 @@ class _TagTableClient(Protocol):
 
 class _ModelTableClient(Protocol):
     async def find_many(self, where: Mapping[str, object] | None = None) -> "Sequence[PrismaProxyModelTable]": ...
+
+
+class _TeamTableClient(Protocol):
+    async def find_unique(self, where: Mapping[str, object]) -> "PrismaTeamTable | None": ...
 
 
 class _VerificationTokenTableClient(Protocol):
@@ -127,14 +135,38 @@ def _table(repository: TagRepository) -> "_TagTableClient": ...
 
 
 @overload
+def _table(repository: TeamRepository) -> "_TeamTableClient": ...
+
+
+@overload
 def _table(repository: VerificationTokenRepository) -> "_VerificationTokenTableClient": ...
 
 
 def _table(
-    repository: DailyTagSpendRepository | ModelRepository | TagRepository | VerificationTokenRepository,
+    repository: DailyTagSpendRepository
+    | ModelRepository
+    | TagRepository
+    | TeamRepository
+    | VerificationTokenRepository,
 ) -> object:
     prisma_table: Final[object] = repository.table
     return prisma_table
+
+
+def _require_proxy_admin_for_tag_ownership(
+    tag: TagNewRequest | TagUpdateRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    if "team_id" in tag.model_fields_set and not is_proxy_admin(user_api_key_dict):
+        raise HTTPException(status_code=403, detail="Only proxy admins can set tag team ownership")
+
+
+async def _require_existing_team(prisma_client: "PrismaClient", team_id: str | None) -> None:
+    if (
+        team_id is not None
+        and await _table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id}) is None
+    ):
+        raise HTTPException(status_code=400, detail=f"Team {team_id} does not exist")
 
 
 async def _evict_tag_cache_keys(cache_keys: Sequence[str]) -> None:
@@ -282,10 +314,14 @@ async def new_tag(
     if llm_router is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.no_llm_router.value)
     try:
+        _require_proxy_admin_for_tag_ownership(tag=tag, user_api_key_dict=user_api_key_dict)
+
         # Check if tag already exists
         existing_tag: Final = await _table(TagRepository(prisma_client)).find_unique(where={"tag_name": tag.name})
         if existing_tag is not None:
             raise HTTPException(status_code=400, detail=f"Tag {tag.name} already exists")
+
+        await _require_existing_team(prisma_client, tag.team_id)
 
         # Handle budget creation/assignment using common helper
         budget_id: Final = await handle_budget_for_entity(
@@ -309,6 +345,7 @@ async def new_tag(
                 "spend": 0.0,
                 "budget_id": budget_id,
                 "created_by": user_api_key_dict.user_id,
+                "team_id": tag.team_id,
             }
         )
 
@@ -339,12 +376,15 @@ async def new_tag(
             created_at=new_tag_record.created_at.isoformat(),
             updated_at=new_tag_record.updated_at.isoformat(),
             created_by=new_tag_record.created_by,
+            team_id=new_tag_record.team_id,
         )
 
         return {
             "message": f"Tag {tag.name} created successfully",
             "tag": tag_config,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error creating tag: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -424,10 +464,15 @@ async def update_tag(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
+        _require_proxy_admin_for_tag_ownership(tag=tag, user_api_key_dict=user_api_key_dict)
+
         # Check if tag exists
         existing_tag: Final = await _table(TagRepository(prisma_client)).find_unique(where={"tag_name": tag.name})
         if existing_tag is None:
             raise HTTPException(status_code=404, detail=f"Tag {tag.name} not found")
+
+        if "team_id" in tag.model_fields_set:
+            await _require_existing_team(prisma_client, tag.team_id)
 
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
@@ -449,11 +494,9 @@ async def update_tag(
             "description": tag.description,
             "models": tag.models or [],
             "model_info": json.dumps(model_info),
+            **({"budget_id": budget_id} if budget_id != existing_tag.budget_id else {}),
+            **({"team_id": tag.team_id} if "team_id" in tag.model_fields_set else {}),
         }
-
-        # Add budget_id if it changed
-        if budget_id != existing_tag.budget_id:
-            update_data["budget_id"] = budget_id
 
         # Update tag in database
         updated_tag_record: Final = await _table(TagRepository(prisma_client)).update(
@@ -472,12 +515,15 @@ async def update_tag(
             created_at=updated_tag_record.created_at.isoformat(),
             updated_at=updated_tag_record.updated_at.isoformat(),
             created_by=updated_tag_record.created_by,
+            team_id=updated_tag_record.team_id,
         )
 
         return {
             "message": f"Tag {tag.name} updated successfully",
             "tag": tag_config,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error updating tag: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -535,6 +581,7 @@ async def info_tag(
                 "created_at": tag_record.created_at.isoformat(),
                 "updated_at": tag_record.updated_at.isoformat(),
                 "created_by": tag_record.created_by,
+                "team_id": tag_record.team_id,
             }
 
             # Add budget info if available
@@ -658,6 +705,7 @@ async def list_tags(
                 "created_at": tag_record.created_at.isoformat(),
                 "updated_at": tag_record.updated_at.isoformat(),
                 "created_by": tag_record.created_by,
+                "team_id": tag_record.team_id,
             }
 
             # Add budget info if available

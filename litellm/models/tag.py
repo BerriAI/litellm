@@ -21,6 +21,7 @@ class LiteLLM_TagTable(LiteLLMPydanticObjectBase):
     spend: float = 0.0
     budget_id: str | None = None
     litellm_budget_table: LiteLLM_BudgetTable | None = None
+    team_id: str | None = None
     created_at: datetime | None = None
     created_by: str | None = None
     updated_at: datetime | None = None

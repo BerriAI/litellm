@@ -45446,6 +45446,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Team Id */
+            team_id?: string | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -45505,6 +45507,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Team Id */
+            team_id?: string | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
