@@ -84,16 +84,16 @@ _CHAT_CONTENT_ITEM: Final = TypeAdapter(dict[str, object])
 def _strip_prompt_cache_breakpoint_from_content_block(value: object) -> object:
     if not isinstance(value, dict):
         return value
-    content_block: Final = cast(dict[str, object], value)
+    content_block: Final = cast(dict[str, object], value)  # cast-ok: isinstance confirms the content block is a mapping
     return {key: item for key, item in content_block.items() if key != "prompt_cache_breakpoint"}
 
 
 def _strip_prompt_cache_breakpoints_from_content(value: object) -> object:
     if isinstance(value, list):
-        list_content: Final = cast(list[object], value)
+        list_content: Final = cast(list[object], value)  # cast-ok: isinstance confirms a list of content blocks
         return [_strip_prompt_cache_breakpoint_from_content_block(item) for item in list_content]
     if isinstance(value, tuple):
-        tuple_content: Final = cast(tuple[object, ...], value)
+        tuple_content: Final = cast(tuple[object, ...], value)  # cast-ok: isinstance confirms a tuple of content blocks
         return tuple(_strip_prompt_cache_breakpoint_from_content_block(item) for item in tuple_content)
     return _strip_prompt_cache_breakpoint_from_content_block(value)
 
@@ -101,7 +101,7 @@ def _strip_prompt_cache_breakpoints_from_content(value: object) -> object:
 def _strip_prompt_cache_breakpoints_from_item(value: object) -> object:
     if not isinstance(value, dict):
         return value
-    input_item: Final = cast(dict[str, object], value)
+    input_item: Final = cast(dict[str, object], value)  # cast-ok: isinstance confirms a Responses input item mapping
     return {
         key: _strip_prompt_cache_breakpoints_from_content(item) if key in ("content", "output") else item
         for key, item in input_item.items()
