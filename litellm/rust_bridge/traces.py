@@ -1,4 +1,5 @@
 from collections.abc import Awaitable, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, TypedDict, cast
 
@@ -58,12 +59,34 @@ class DecodedSpan(TypedDict):
 ReadQueryName = Literal["list_traces", "trace_spans", "span_detail", "span_error", "spend_by_response_ids"]
 
 
-class NativeStore(Protocol):
-    def __init__(self, database: str, url: str, reader_url: str | None = None) -> None: ...
+class AdminQueryScope(TypedDict):
+    kind: ReadOnly[Literal["admin"]]
 
-    def ensure_schema(self, trace_retention_days: int, spend_log_retention_days: int) -> Awaitable[None]: ...
+
+class TeamQueryScope(TypedDict):
+    kind: ReadOnly[Literal["team"]]
+    team_id: ReadOnly[str]
+
+
+class KeyQueryScope(TypedDict):
+    kind: ReadOnly[Literal["key"]]
+    team_id: ReadOnly[str]
+    api_key_hash: ReadOnly[str]
+
+
+QueryScope = AdminQueryScope | TeamQueryScope | KeyQueryScope
+
+
+class NativeStore(Protocol):
+    def __init__(self, config: "NativeConfig") -> None: ...
+
+    def ensure_schema(self) -> Awaitable[None]: ...
 
     def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> Awaitable[None]: ...
+
+    def query_sql(self, sql: str, scope: QueryScope, secret: str) -> Awaitable[str]: ...
+
+    def query_help(self, scope: QueryScope, secret: str) -> Awaitable[str]: ...
 
     def lens_query(self, name: str, parameters: Mapping[str, str | int | Sequence[str]]) -> Awaitable[str]: ...
 
@@ -71,6 +94,7 @@ class NativeStore(Protocol):
 
 
 class NativeTraces(Protocol):
+    NativeTraceConfig: type["NativeConfig"]
     NativeTraceStorage: type[NativeStore]
 
     def trace_decode_otlp(
@@ -91,6 +115,17 @@ class QueryResponse(BaseModel):
 
 QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | list[str]])
 _FIELD_DEFINITIONS_ADAPTER: Final = TypeAdapter(tuple[NormalizedFieldDefinition, ...])
+
+
+class NativeConfig(Protocol):
+    def __init__(self, database: str, url: str, retention_days: int) -> None: ...
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class TraceStorageConfig:
+    url: str
+    database: str = "litellm"
+    retention_days: int = 14
 
 
 def _native() -> NativeTraces:
@@ -121,11 +156,17 @@ def encode_error(message: str) -> bytes:
 
 
 class ClickHouseStorage:
-    def __init__(self, database: str, url: str, reader_url: str | None = None) -> None:
-        self._native: Final = _native().NativeTraceStorage(database, url, reader_url)
+    def __init__(self, config: TraceStorageConfig) -> None:
+        native: Final = _native()
+        validated: Final = native.NativeTraceConfig(
+            config.database,
+            config.url,
+            config.retention_days,
+        )
+        self._native: Final = native.NativeTraceStorage(validated)
 
-    async def ensure_schema(self, trace_retention_days: int, spend_log_retention_days: int) -> None:
-        await self._native.ensure_schema(trace_retention_days, spend_log_retention_days)
+    async def ensure_schema(self) -> None:
+        await self._native.ensure_schema()
 
     async def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> None:
         await self._native.insert_rows(table, rows)
@@ -137,6 +178,12 @@ class ClickHouseStorage:
             name, QUERY_PARAMETERS.validate_python(parameters or MappingProxyType({}))
         )
         return QueryResponse.model_validate_json(result).data
+
+    async def query_sql(self, sql: str, scope: QueryScope, secret: str) -> str:
+        return await self._native.query_sql(sql, scope, secret)
+
+    async def query_help(self, scope: QueryScope, secret: str) -> str:
+        return await self._native.query_help(scope, secret)
 
     async def _lens_query(self, name: str, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
         result: Final = await self._native.lens_query(name, QUERY_PARAMETERS.validate_python(parameters))

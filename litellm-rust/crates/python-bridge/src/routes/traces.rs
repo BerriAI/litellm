@@ -2,8 +2,10 @@ use std::collections::BTreeMap;
 
 use litellm_host_python::{FromPythonCache, ToPythonCache};
 use litellm_http::ClientVariant;
-use litellm_storage_clickhouse::Storage;
-use litellm_traces::{Error, InsertTable, Parameter, ReadQuery, Shared};
+use litellm_traces::{
+    Config, Error, InsertTable, Parameter, QueryAccessError, QueryReaders, QueryScope, ReadQuery,
+    Shared,
+};
 use prost::Message;
 use pyo3::{
     exceptions::{PyOverflowError, PyRuntimeError, PyValueError},
@@ -46,42 +48,64 @@ fn map_error(error: Error) -> PyErr {
     }
 }
 
+fn map_sql_error(error: Error) -> PyErr {
+    match error {
+        Error::QueryFailed(400 | 404) => PyValueError::new_err(error.to_string()),
+        error => map_error(error),
+    }
+}
+
+fn map_query_access_error(error: QueryAccessError) -> PyErr {
+    match error {
+        QueryAccessError::Storage(error) => map_sql_error(error),
+        QueryAccessError::InvalidScope => PyValueError::new_err(error.to_string()),
+        error => PyRuntimeError::new_err(error.to_string()),
+    }
+}
+
+#[pyclass(frozen)]
+pub struct NativeTraceConfig {
+    inner: Config,
+}
+
+#[pymethods]
+impl NativeTraceConfig {
+    #[new]
+    fn new(database: String, url: &str, retention_days: u32) -> PyResult<Self> {
+        Ok(Self {
+            inner: Config::new(database, url, retention_days).map_err(map_error)?,
+        })
+    }
+}
+
 #[pyclass]
 pub struct NativeTraceStorage {
-    storage: Storage,
+    config: Config,
+    query_readers: QueryReaders,
 }
 
 #[pymethods]
 impl NativeTraceStorage {
     #[new]
-    #[pyo3(signature = (database, url, reader_url = None))]
-    fn new(database: String, url: &str, reader_url: Option<&str>) -> PyResult<Self> {
-        litellm_traces::schema_statements(&database, 1, 1).map_err(map_error)?;
+    fn new(config: PyRef<'_, NativeTraceConfig>) -> PyResult<Self> {
         Ok(Self {
-            storage: Storage::new(database, url, reader_url).map_err(map_error)?,
+            query_readers: QueryReaders::new(
+                config.inner.storage().writer().clone(),
+                config.inner.storage().database().to_owned(),
+            ),
+            config: config.inner.clone(),
         })
     }
 
-    fn ensure_schema<'py>(
-        &self,
-        py: Python<'py>,
-        trace_retention_days: u32,
-        spend_log_retention_days: u32,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn ensure_schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
-        let connection = self.storage.writer().clone();
-        let database = self.storage.database().to_owned();
+        let connection = self.config.storage().writer().clone();
+        let database = self.config.storage().database().to_owned();
+        let retention_days = self.config.retention_days();
         crate::execution::run_async(
             py,
             async move {
-                litellm_traces::ensure_schema(
-                    &client,
-                    &connection,
-                    &database,
-                    trace_retention_days,
-                    spend_log_retention_days,
-                )
-                .await
+                litellm_traces::ensure_schema(&client, &connection, &database, retention_days).await
             },
             map_error,
         )
@@ -95,8 +119,8 @@ impl NativeTraceStorage {
     ) -> PyResult<Bound<'py, PyAny>> {
         let table = InsertTable::parse(table).map_err(map_error)?;
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
-        let connection = self.storage.writer().clone();
-        let database = self.storage.database().to_owned();
+        let connection = self.config.storage().writer().clone();
+        let database = self.config.storage().database().to_owned();
         crate::execution::run_async(
             py,
             async move {
@@ -104,6 +128,52 @@ impl NativeTraceStorage {
                     .await
             },
             map_error,
+        )
+    }
+
+    fn query_sql<'py>(
+        &self,
+        py: Python<'py>,
+        sql: String,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
+        secret: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        if sql.trim().is_empty() {
+            return Err(map_error(Error::EmptySql));
+        }
+        let readers = self.query_readers.clone();
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        crate::execution::run_async(
+            py,
+            async move {
+                let _permit = readers.acquire()?;
+                let connection = readers.connection(&client, &scope, &secret).await?;
+                litellm_traces::query_sql(&client, &connection, &sql)
+                    .await
+                    .map_err(QueryAccessError::Storage)
+            },
+            map_query_access_error,
+        )
+    }
+
+    fn query_help<'py>(
+        &self,
+        py: Python<'py>,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
+        secret: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let readers = self.query_readers.clone();
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        crate::execution::run_async(
+            py,
+            async move {
+                let _permit = readers.acquire()?;
+                let connection = readers.connection(&client, &scope, &secret).await?;
+                litellm_traces::query_help(&client, &connection)
+                    .await
+                    .map_err(QueryAccessError::Storage)
+            },
+            map_query_access_error,
         )
     }
 
@@ -117,9 +187,7 @@ impl NativeTraceStorage {
         >,
     ) -> PyResult<Bound<'py, PyAny>> {
         let query = litellm_traces::LensQuery::parse(name).map_err(map_error)?;
-        let connection = self.storage.reader().cloned().ok_or_else(|| {
-            PyRuntimeError::new_err("Trace reads require a separate ClickHouse reader URL")
-        })?;
+        let connection = self.config.storage().reader().clone();
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         crate::execution::run_async(
             py,
@@ -140,9 +208,7 @@ impl NativeTraceStorage {
         >,
     ) -> PyResult<Bound<'py, PyAny>> {
         let query = ReadQuery::parse(query).map_err(map_error)?;
-        let connection = self.storage.reader().cloned().ok_or_else(|| {
-            PyRuntimeError::new_err("Trace reads require a separate ClickHouse reader URL")
-        })?;
+        let connection = self.config.storage().reader().clone();
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         crate::execution::run_async(
             py,

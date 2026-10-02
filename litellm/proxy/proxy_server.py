@@ -860,6 +860,7 @@ from litellm.secret_managers.main import (
     secret_manager_would_be_consulted,
     str_to_bool,
 )
+from litellm.tracing.config import is_clickhouse_tracing_enabled
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
@@ -1569,11 +1570,15 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
 
         register_scheduled_sync(scheduler)
 
-    tracing_settings: Final = general_settings.get("tracing")
-    tracing_enabled: Final = TypeAdapter(bool).validate_python(
-        isinstance(tracing_settings, dict) and tracing_settings.get("store") == "clickhouse"
+    tracing_settings: Final = cast(  # cast-ok: Pydantic validates the legacy untyped settings value
+        dict[str, object] | None,
+        TypeAdapter(dict[str, object] | None).validate_python(general_settings.get("tracing")),
     )
-    async with manage_tracing(enabled=tracing_enabled) as receiver:
+    tracing_enabled: Final = is_clickhouse_tracing_enabled(tracing_settings)
+    async with manage_tracing(
+        enabled=tracing_enabled,
+        settings=tracing_settings,
+    ) as receiver:
         state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
         yield state
 
@@ -3643,7 +3648,7 @@ async def _get_source_cache_base_spend(
 ) -> float:
     source_cache_keys: Final = [source_cache_key] if isinstance(source_cache_key, str) else source_cache_key
     for cache_key in source_cache_keys:
-        source = await user_api_key_cache.async_get_cache(key=cache_key)
+        source: object = await user_api_key_cache.async_get_cache(key=cache_key)
         if source is None:
             continue
         if isinstance(source, dict):
