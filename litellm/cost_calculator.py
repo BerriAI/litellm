@@ -927,7 +927,7 @@ def _get_response_model(completion_response: object) -> str | None:
 
 
 def _prices_only_via_capability_rule(model: str | None, custom_llm_provider: str | None) -> bool:
-    if model is None:
+    if model is None or model in litellm.model_cost or f"{custom_llm_provider}/{model}" in litellm.model_cost:
         return False
     try:
         return (
