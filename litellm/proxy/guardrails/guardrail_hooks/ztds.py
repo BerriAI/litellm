@@ -38,10 +38,10 @@ class ZTDSGuardrail(CustomGuardrail):
     and reverses tokens on completion return without external network egress.
     """
 
-    TOKEN_PATTERN: ClassVar[re.Pattern] = re.compile(r"\[[A-Z_]+_TOKEN_[a-zA-Z0-9_-]+\]")
+    TOKEN_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"\[[A-Z_]+_TOKEN_[a-zA-Z0-9_-]+\]")
 
     # Comprehensive zero-egress regex patterns for sensitive identifiers
-    PATTERNS: ClassVar[Mapping[str, re.Pattern]] = MappingProxyType(
+    PATTERNS: ClassVar[Mapping[str, re.Pattern[str]]] = MappingProxyType(
         {
             "EMAIL": re.compile(
                 r"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})*\.[A-Za-z]{2,24}\b"
@@ -145,9 +145,9 @@ class ZTDSGuardrail(CustomGuardrail):
         token_map = self._session_maps.get(session_id)
         if not token_map:
             return text
-        caller_tokens = self._caller_tokens.get(session_id, frozenset())
+        caller_tokens: frozenset[str] | set[str] = self._caller_tokens.get(session_id, frozenset())
 
-        def _replace_token(match: re.Match) -> str:
+        def _replace_token(match: re.Match[str]) -> str:
             tok = match.group(0)
             if tok in token_map and tok in caller_tokens:
                 return token_map[tok]
@@ -170,6 +170,27 @@ class ZTDSGuardrail(CustomGuardrail):
             self._caller_tokens[session_id].clear()
             del self._caller_tokens[session_id]
 
+    def _sanitize_messages(self, messages: list[object], session_id: str) -> None:
+        """
+        Sanitizes standard chat completion messages and multi-modal content chunks in place.
+        """
+        for message in messages:
+            if isinstance(message, dict) and "content" in message:
+                role = message.get("role", "user")
+                is_caller_visible = role not in ("system", "developer")
+                content = message["content"]
+                if isinstance(content, str):
+                    sanitized, _ = self.sanitize_text(content, session_id, is_caller_visible=is_caller_visible)
+                    message["content"] = sanitized
+                elif isinstance(content, list):
+                    for chunk in content:
+                        if isinstance(chunk, dict) and chunk.get("type") == "text":
+                            text_val = chunk.get("text")
+                            if isinstance(text_val, str):
+                                chunk["text"], _ = self.sanitize_text(
+                                    text_val, session_id, is_caller_visible=is_caller_visible
+                                )
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: object,
@@ -189,22 +210,7 @@ class ZTDSGuardrail(CustomGuardrail):
         # 1. Sanitize messages array (chat completions)
         messages = data.get("messages")
         if isinstance(messages, list):
-            for message in messages:
-                if isinstance(message, dict) and "content" in message:
-                    role = message.get("role", "user")
-                    # System and developer messages are hidden/trusted fields; user/assistant/tool are caller-visible
-                    is_caller_visible = role not in ("system", "developer")
-                    content = message["content"]
-                    if isinstance(content, str):
-                        sanitized, _ = self.sanitize_text(content, session_id, is_caller_visible=is_caller_visible)
-                        message["content"] = sanitized
-                    elif isinstance(content, list):
-                        # Multi-modal content chunks
-                        for chunk in content:
-                            if isinstance(chunk, dict) and chunk.get("type") == "text":
-                                chunk["text"], _ = self.sanitize_text(
-                                    chunk.get("text", ""), session_id, is_caller_visible=is_caller_visible
-                                )
+            self._sanitize_messages(messages, session_id)
 
         # 2. Sanitize prompt field (legacy completions: caller-visible)
         if "prompt" in data:
@@ -258,21 +264,25 @@ class ZTDSGuardrail(CustomGuardrail):
             if self.reverse_on_output:
                 caller_response = copy.deepcopy(response)
                 # Process standard ModelResponse object
-                if hasattr(caller_response, "choices") and caller_response.choices:
-                    for choice in caller_response.choices:
-                        if (
-                            hasattr(choice, "message")
-                            and hasattr(choice.message, "content")
-                            and isinstance(choice.message.content, str)
-                        ):
-                            choice.message.content = self.restore_text(choice.message.content, session_id)
-                # Process dictionary response fallback
-                elif isinstance(caller_response, dict) and "choices" in caller_response:
-                    for choice in caller_response["choices"]:
-                        if isinstance(choice, dict) and "message" in choice and isinstance(choice["message"], dict):
-                            content = choice["message"].get("content")
+                choices = getattr(caller_response, "choices", None)
+                if choices and isinstance(choices, (list, tuple)):
+                    for choice in choices:
+                        message = getattr(choice, "message", None)  # pyright: ignore[reportUnknownArgumentType]  # dynamic duck-typing inspection
+                        if message is not None:
+                            content = getattr(message, "content", None)
                             if isinstance(content, str):
-                                choice["message"]["content"] = self.restore_text(content, session_id)
+                                message.content = self.restore_text(content, session_id)
+                # Process dictionary response fallback
+                elif isinstance(caller_response, dict):
+                    raw_choices = caller_response.get("choices")
+                    if isinstance(raw_choices, list):
+                        for choice in raw_choices:
+                            if isinstance(choice, dict):
+                                msg = choice.get("message")
+                                if isinstance(msg, dict):
+                                    content = msg.get("content")
+                                    if isinstance(content, str):
+                                        msg["content"] = self.restore_text(content, session_id)
                 return caller_response
         finally:
             # Theorem 2: Guarantee RAM zeroization even if reverse_on_output is False or response handling fails
@@ -289,7 +299,7 @@ class ZTDSGuardrail(CustomGuardrail):
         """
         LiteLLM post-call failure hook: ensures volatile RAM zeroization when upstream provider calls fail.
         """
-        session_id = data.get("_ztds_session_id") if isinstance(data, dict) else None
+        session_id = data.get("_ztds_session_id")
         if session_id and isinstance(session_id, str):
             self.zeroize_session(session_id)
 
@@ -304,21 +314,29 @@ class ZTDSGuardrail(CustomGuardrail):
         and guarantees Theorem 2 zeroization upon stream completion or error.
         Deep-copies chunk before unmasking so upstream completion cache retains sanitized surrogates.
         """
-        session_id = request_data.get("_ztds_session_id") if isinstance(request_data, dict) else None
+        session_id = request_data.get("_ztds_session_id")
         try:
             async for chunk in response:
                 if session_id and isinstance(session_id, str) and self.reverse_on_output:
                     caller_chunk = copy.deepcopy(chunk)
-                    if hasattr(caller_chunk, "choices") and caller_chunk.choices:
-                        for choice in caller_chunk.choices:
-                            delta = getattr(choice, "delta", None)
-                            if delta and hasattr(delta, "content") and isinstance(delta.content, str):
-                                delta.content = self.restore_text(delta.content, session_id)
-                    elif isinstance(caller_chunk, dict) and "choices" in caller_chunk:
-                        for choice in caller_chunk["choices"]:
-                            delta = choice.get("delta") if isinstance(choice, dict) else None
-                            if delta and isinstance(delta, dict) and isinstance(delta.get("content"), str):
-                                delta["content"] = self.restore_text(delta["content"], session_id)
+                    choices = getattr(caller_chunk, "choices", None)
+                    if choices and isinstance(choices, (list, tuple)):
+                        for choice in choices:
+                            delta = getattr(choice, "delta", None)  # pyright: ignore[reportUnknownArgumentType]  # dynamic duck-typing inspection
+                            if delta is not None:
+                                content = getattr(delta, "content", None)
+                                if isinstance(content, str):
+                                    delta.content = self.restore_text(content, session_id)
+                    elif isinstance(caller_chunk, dict):
+                        raw_choices = caller_chunk.get("choices")
+                        if isinstance(raw_choices, list):
+                            for choice in raw_choices:
+                                if isinstance(choice, dict):
+                                    delta = choice.get("delta")
+                                    if isinstance(delta, dict):
+                                        content = delta.get("content")
+                                        if isinstance(content, str):
+                                            delta["content"] = self.restore_text(content, session_id)
                     yield caller_chunk
                 else:
                     yield chunk
