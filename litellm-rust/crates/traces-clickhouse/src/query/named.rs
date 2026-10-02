@@ -233,6 +233,16 @@ impl Query for SpendByResponseIds {
     const SQL: &'static str = include_str!("../../query/spend_by_response_ids.sql");
 }
 
+pub use contracts::{TraceIdentityParams, TraceIdentityRow};
+
+pub struct TraceIdentity;
+
+impl Query for TraceIdentity {
+    type Params = TraceIdentityParams;
+    type Row = TraceIdentityRow;
+    const SQL: &'static str = include_str!("../../query/trace_identity.sql");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,14 +311,4 @@ mod tests {
             quoted,
         );
     }
-}
-
-pub use contracts::{TraceIdentityParams, TraceIdentityRow};
-
-pub struct TraceIdentity;
-
-impl Query for TraceIdentity {
-    type Params = TraceIdentityParams;
-    type Row = TraceIdentityRow;
-    const SQL: &'static str = include_str!("../../query/trace_identity.sql");
 }
