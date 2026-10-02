@@ -5168,6 +5168,7 @@ def test_eager_input_streaming_tool_reaches_bedrock_converse_as_beta():
     assert data["additionalModelRequestFields"]["anthropic_beta"] == ["fine-grained-tool-streaming-2025-05-14"]
     assert data["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"] == EAGER_INPUT_SCHEMA
 
+
 def test_translate_anthropic_to_openai_rejects_all_unrecognized_content_blocks():
     request = {
         "model": "openai/gpt-4o",
