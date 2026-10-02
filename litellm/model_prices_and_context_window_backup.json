@@ -64014,6 +64014,7 @@
         ]
     },
     "xai/grok-voice-transcribe-1.0": {
+        "deprecation_date": "2026-10-02",
         "input_cost_per_second": 2.778e-05,
         "litellm_provider": "xai",
         "metadata": {
