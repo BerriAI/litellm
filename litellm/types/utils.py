@@ -4079,6 +4079,7 @@ class LlmProviders(str, Enum):
     FRIENDLIAI = "friendliai"
     FEATHERLESS_AI = "featherless_ai"
     WATSONX = "watsonx"
+    SCALEDOWN = "scaledown"
     WATSONX_TEXT = "watsonx_text"
     TRITON = "triton"
     PREDIBASE = "predibase"

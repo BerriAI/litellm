@@ -263,6 +263,7 @@ LLM_CONFIG_NAMES: Final = (
     "NvidiaNimConfig",
     "NvidiaNimEmbeddingConfig",
     "FeatherlessAIConfig",
+    "ScaleDownChatConfig",
     "CerebrasConfig",
     "NadirConfig",
     "BasetenConfig",
@@ -1060,6 +1061,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "FeatherlessAIConfig": (
         ".llms.featherless_ai.chat.transformation",
         "FeatherlessAIConfig",
+    ),
+    "ScaleDownChatConfig": (
+        ".llms.scaledown.chat.transformation",
+        "ScaleDownChatConfig",
     ),
     "CerebrasConfig": (".llms.cerebras.chat", "CerebrasConfig"),
     "NadirConfig": (".llms.nadir.chat.transformation", "NadirConfig"),

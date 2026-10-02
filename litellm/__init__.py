@@ -2009,6 +2009,9 @@ if TYPE_CHECKING:
     from .llms.featherless_ai.chat.transformation import (
         FeatherlessAIConfig as FeatherlessAIConfig,
     )
+    from .llms.scaledown.chat.transformation import (
+        ScaleDownChatConfig as ScaleDownChatConfig,
+    )
     from .llms.cerebras.chat import CerebrasConfig as CerebrasConfig
     from .llms.nadir.chat.transformation import NadirConfig as NadirConfig
     from .llms.baseten.chat import BasetenConfig as BasetenConfig

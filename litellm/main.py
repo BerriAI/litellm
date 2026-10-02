@@ -1953,6 +1953,62 @@ def _complete_together_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     return response
 
 
+def _complete_scaledown(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    """ScaleDown: domain tasks on /v1/chat/completions, decisions on /v1/scaledown.
+
+    Routed through the HTTP handler (not the OpenAI passthrough) because the
+    provider authenticates with x-api-key and the classify/decisions models use
+    a non-chat request body.
+    """
+    acompletion: Final = ctx.acompletion
+    api_base: Final = ctx.api_base
+    api_key: Final = ctx.api_key
+    client: Final = _dispatch_client_http(ctx)
+    custom_llm_provider: Final = ctx.custom_llm_provider
+    headers: Final = ctx.headers
+    litellm_params: Final = ctx.litellm_params
+    logging: Final = ctx.logging
+    messages: Final = ctx.messages
+    model: Final = ctx.model
+    model_response: Final = ctx.model_response
+    optional_params: Final = ctx.optional_params
+    provider_config: Final = ctx.provider_config
+    shared_session: Final = ctx.shared_session
+    stream: Final = ctx.stream
+    timeout: Final = ctx.timeout
+
+    try:
+        response: Final = base_llm_http_handler.completion(
+            model=model,
+            messages=messages,
+            headers=headers,
+            model_response=model_response,
+            api_key=api_key,
+            api_base=api_base,
+            acompletion=acompletion,
+            logging_obj=logging,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            shared_session=shared_session,
+            timeout=timeout,
+            client=client,
+            custom_llm_provider=custom_llm_provider,
+            encoding=_get_encoding(),
+            stream=stream,
+            provider_config=provider_config,
+        )
+    except Exception as e:
+        logging.post_call(
+            input=messages,
+            api_key=api_key,
+            original_response=str(e),
+            additional_args={"headers": headers},
+        )
+        raise e
+
+    return response
+
+
 def _complete_heroku(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
@@ -5877,6 +5933,8 @@ def completion(
             response = _complete_together_ai(_dispatch_ctx)
         elif custom_llm_provider == "heroku":
             response = _complete_heroku(_dispatch_ctx)
+        elif custom_llm_provider == "scaledown":
+            response = _complete_scaledown(_dispatch_ctx)
 
         elif custom_llm_provider == "ragflow":
             ## COMPLETION CALL - RAGFlow uses HTTP handler to support custom URL paths
