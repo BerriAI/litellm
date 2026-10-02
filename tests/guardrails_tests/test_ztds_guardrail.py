@@ -261,6 +261,55 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
         restored = self.guardrail.restore_text(sanitized, session_id)
         self.assertEqual(restored, raw)
 
+    def test_anthropic_and_hyphenated_api_keys(self):
+        """Verify detection of Anthropic sk-ant- keys and hyphenated API tokens."""
+        session_id = "test-session-anthropic"
+        secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456"
+        raw = f"Anthropic token: {secret}"
+        sanitized, _ = self.guardrail.sanitize_text(raw, session_id)
+        self.assertNotIn(secret, sanitized)
+        self.assertIn("[API_SECRET_TOKEN_1]", sanitized)
+
+    def test_high_volume_linear_tokenization_performance(self):
+        """Verify that 2,000 distinct email tokens execute in linear time (< 0.5s)."""
+        import time
+
+        session_id = "test-session-scale"
+        payload = " ".join(f"user_{i}@enterprise-corp.com" for i in range(2000))
+        t0 = time.perf_counter()
+        sanitized, token_map = self.guardrail.sanitize_text(payload, session_id)
+        elapsed = time.perf_counter() - t0
+
+        self.assertLess(elapsed, 0.5, f"Quadratic tokenization regression: took {elapsed:.4f}s")
+        self.assertEqual(len(token_map), 2000)
+        self.assertNotIn("user_0@enterprise-corp.com", sanitized)
+
+    async def test_streaming_chunk_deepcopy_preserves_cache_immutability(self):
+        """Veria AI security fix: stream chunk deepcopy ensures upstream cache retains surrogates."""
+        session_id = "test-session-stream-cache"
+        self.guardrail.sanitize_text("user@corp.com", session_id)
+
+        original_chunk = MockStreamChunk("Here is [EMAIL_TOKEN_1]")
+
+        async def _generator():
+            yield original_chunk
+
+        request_data = {"_ztds_session_id": session_id}
+        stream_iter = self.guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict={},
+            response=_generator(),
+            request_data=request_data,
+        )
+
+        chunks_received = []
+        async for c in stream_iter:
+            chunks_received.append(c)
+
+        # Caller receives restored cleartext
+        self.assertEqual(chunks_received[0].choices[0].delta.content, "Here is user@corp.com")
+        # Original chunk object retains sanitized surrogate for completion cache
+        self.assertEqual(original_chunk.choices[0].delta.content, "Here is [EMAIL_TOKEN_1]")
+
 
 if __name__ == "__main__":
     unittest.main()
