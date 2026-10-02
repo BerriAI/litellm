@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { formatBudgetReset } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { SimpleTooltip } from "@/components/ui/tooltip";
@@ -31,7 +32,9 @@ const formatRateLimit = (value: number | null | undefined): string => {
 };
 
 export default function MyUserTab({ teamId }: MyUserTabProps) {
-  const { data, isLoading, error } = useMyTeamMember(teamId);
+  const isLoadingQuery = useMyTeamMember(teamId);
+  const { data, error } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   if (isLoading) {
     return (

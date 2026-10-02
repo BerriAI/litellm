@@ -9,7 +9,7 @@ const tagKeys = createQueryKeys("tags");
 export const useTags = (): UseQueryResult<TagListResponse> => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<TagListResponse>({
-    queryKey: tagKeys.list({}),
+    queryKey: [...tagKeys.list({}), accessToken],
     queryFn: async () => await tagListCall(accessToken!),
     enabled: Boolean(accessToken && userId && userRole),
   });

@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -99,7 +100,7 @@ describe("TeamMembersComponent", () => {
     vi.clearAllMocks();
     vi.mocked(useUISettings).mockReturnValue({
       data: { values: { disable_team_admin_delete_team_user: false } },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
       error: null,
       isSuccess: true,
@@ -471,7 +472,7 @@ describe("TeamMembersComponent", () => {
     vi.mocked(isUserTeamAdminForSingleTeam).mockReturnValue(true);
     vi.mocked(useUISettings).mockReturnValue({
       data: { values: { disable_team_admin_delete_team_user: true } },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
       error: null,
       isSuccess: true,

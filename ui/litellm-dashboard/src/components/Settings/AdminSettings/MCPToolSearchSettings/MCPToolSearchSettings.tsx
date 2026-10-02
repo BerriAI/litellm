@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import {
   useMCPToolSearchSettings,
   useUpdateMCPToolSearchSettings,
@@ -48,7 +49,9 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
 );
 
 export default function MCPToolSearchSettings({ accessToken }: MCPToolSearchSettingsProps) {
-  const { data, isLoading, isError, error } = useMCPToolSearchSettings();
+  const isLoadingQuery = useMCPToolSearchSettings();
+  const { data, isError, error } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const { mutate: updateSettings, isPending: isUpdating } = useUpdateMCPToolSearchSettings();
   const form = useForm<ToolSearchFormValues>({ defaultValues: DEFAULT_FORM_VALUES });
   const isDirty = form.formState.isDirty;

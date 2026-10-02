@@ -46,7 +46,7 @@ export default function EditFallbacks({
   const [isSaving, setIsSaving] = useState(false);
 
   const { data: modelGroups = [] } = useQuery({
-    queryKey: ["availableModels", "fallbacks"],
+    queryKey: ["availableModels", "fallbacks", accessToken],
     queryFn: () => fetchAvailableModels(accessToken),
     enabled: Boolean(accessToken),
   });

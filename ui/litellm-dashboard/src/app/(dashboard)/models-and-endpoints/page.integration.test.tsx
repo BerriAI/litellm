@@ -1,3 +1,4 @@
+import { queryState } from "../../../../tests/queryState";
 /* @vitest-environment jsdom */
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -75,38 +76,70 @@ vi.mock("@/components/utils/dataUtils", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeamMetadataSchema", () => ({
-  useTeamMetadataSchema: vi.fn(() => ({ data: [], isLoading: false })),
+  useTeamMetadataSchema: vi.fn(() => ({
+    data: [],
+    ...queryState(false),
+  })),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
-  useUISettings: vi.fn(() => ({ data: { values: {} }, isLoading: false })),
+  useUISettings: vi.fn(() => ({
+    data: { values: {} },
+    ...queryState(false),
+  })),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
-  useAllProxyModels: vi.fn(() => ({ data: { data: [] }, isLoading: false })),
+  useAllProxyModels: vi.fn(() => ({
+    data: { data: [] },
+    ...queryState(false),
+  })),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
-  useTeams: vi.fn(() => ({ data: [], isLoading: false })),
-  useTeam: vi.fn(() => ({ data: undefined, isLoading: false })),
+  useTeams: vi.fn(() => ({
+    data: [],
+    ...queryState(false),
+  })),
+  useTeam: vi.fn(() => ({
+    data: undefined,
+    ...queryState(false),
+  })),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   organizationKeys: { all: ["organizations"] },
-  useOrganization: vi.fn(() => ({ data: undefined, isLoading: false })),
-  useOrganizations: vi.fn().mockReturnValue({ data: [], isLoading: false }),
+  useOrganization: vi.fn(() => ({
+    data: undefined,
+    ...queryState(false),
+  })),
+  useOrganizations: vi.fn().mockReturnValue({
+    data: [],
+    ...queryState(false),
+  }),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
-  useCurrentUser: vi.fn(() => ({ data: { models: [] }, isLoading: false })),
+  useCurrentUser: vi.fn(() => ({
+    data: { models: [] },
+    ...queryState(false),
+  })),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
-  useMCPServers: vi.fn(() => ({ data: [], isLoading: false, isError: false })),
+  useMCPServers: vi.fn(() => ({
+    data: [],
+    ...queryState(false),
+    isError: false,
+  })),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPToolsets", () => ({
-  useMCPToolsets: vi.fn(() => ({ data: [], isLoading: false, isError: false })),
+  useMCPToolsets: vi.fn(() => ({
+    data: [],
+    ...queryState(false),
+    isError: false,
+  })),
 }));
 
 vi.mock("@/components/mcp_server_management/MCPServerSelector", () => ({
@@ -138,7 +171,11 @@ vi.mock("@/components/common_components/ModelAliasManager", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
-  useAccessGroups: vi.fn().mockReturnValue({ data: [], isLoading: false, isError: false }),
+  useAccessGroups: vi.fn().mockReturnValue({
+    data: [],
+    ...queryState(false),
+    isError: false,
+  }),
 }));
 
 vi.mock("@/components/common_components/AccessGroupSelector", () => ({

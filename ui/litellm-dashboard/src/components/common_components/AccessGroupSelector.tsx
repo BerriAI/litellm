@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React from "react";
 import { Users } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -32,7 +33,9 @@ const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
   showLabel = false,
   labelText = "Access Group",
 }) => {
-  const { data: accessGroups, isLoading, isError } = useAccessGroups();
+  const isLoadingQuery = useAccessGroups();
+  const { data: accessGroups, isError } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   // ── Loading skeleton ─────────────────────────────────────────────────────
   if (isLoading) {

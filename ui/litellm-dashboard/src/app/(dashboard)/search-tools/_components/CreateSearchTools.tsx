@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { isAdminRole } from "@/utils/roles";
 import { useQuery } from "@tanstack/react-query";
 import { CircleHelp } from "lucide-react";
@@ -114,14 +115,16 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
     name: ["search_provider", "api_key"],
   });
 
-  const { data: providersResponse, isLoading: isLoadingProviders } = useQuery({
-    queryKey: ["searchProviders"],
+  const isLoadingProvidersQuery = useQuery<{ providers: AvailableSearchProvider[] }>({
+    queryKey: ["searchProviders", accessToken],
     queryFn: () => {
       if (!accessToken) throw new Error("Access Token required");
       return fetchAvailableSearchProviders(accessToken);
     },
     enabled: !!accessToken && isModalVisible,
-  }) as { data: { providers: AvailableSearchProvider[] }; isLoading: boolean };
+  });
+  const { data: providersResponse } = isLoadingProvidersQuery;
+  const isLoadingProviders = isQueryPending(isLoadingProvidersQuery);
 
   const availableProviders = providersResponse?.providers;
   const providerNames = useMemo(

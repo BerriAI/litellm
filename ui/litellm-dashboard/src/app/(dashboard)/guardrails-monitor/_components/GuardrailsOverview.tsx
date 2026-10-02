@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import type { ColumnDef, OnChangeFn, SortingState } from "@tanstack/react-table";
 import { CircleDollarSign, Download, HeartPulse, Settings, TrendingUp, TriangleAlert } from "lucide-react";
 import React, { useMemo, useState } from "react";
@@ -122,11 +123,9 @@ export function GuardrailsOverview({
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
 
-  const {
-    data: guardrailsData,
-    isLoading: guardrailsLoading,
-    error: guardrailsError,
-  } = useGuardrailsUsageOverview({ accessToken, startDate, endDate });
+  const guardrailsLoadingQuery = useGuardrailsUsageOverview({ accessToken, startDate, endDate });
+  const { data: guardrailsData, error: guardrailsError } = guardrailsLoadingQuery;
+  const guardrailsLoading = isQueryPending(guardrailsLoadingQuery);
 
   const activeData: GuardrailUsageOverviewRow[] = useMemo(() => guardrailsData?.rows ?? [], [guardrailsData]);
   const metrics = useMemo(() => {

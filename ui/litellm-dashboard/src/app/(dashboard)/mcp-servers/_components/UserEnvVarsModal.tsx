@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React from "react";
 import { CircleAlert, Info } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -113,16 +114,14 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
     setConfirmingClear(false);
     onClose();
   };
-  const queryKey = ["mcpUserEnvVars", server?.server_id];
-  const {
-    data: status,
-    isLoading,
-    isError,
-  } = useQuery<MCPUserEnvVarsStatus>({
+  const queryKey = ["mcpUserEnvVars", server?.server_id, accessToken];
+  const isLoadingQuery = useQuery<MCPUserEnvVarsStatus>({
     queryKey,
     queryFn: () => getMCPUserEnvVars(accessToken!, server!.server_id),
     enabled: open && !!server && !!accessToken,
   });
+  const { data: status, isError } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const saveMutation = useMutation({
     mutationFn: (values: Record<string, string>) => storeMCPUserEnvVars(accessToken!, server!.server_id, values),

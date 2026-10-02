@@ -10,7 +10,7 @@ const BUDGET_OPTIONS_PATH = "/budget/list";
 
 export const useBudgetOptions = (accessToken: string | null, enabled = true): UseQueryResult<budgetItem[]> => {
   const queryOptions = {
-    queryKey: [...budgetKeys.all, "options"],
+    queryKey: [...budgetKeys.all, "options", accessToken],
     queryFn: () => apiClient.get<budgetItem[]>(BUDGET_OPTIONS_PATH, { accessToken }),
     enabled: Boolean(accessToken) && enabled,
     staleTime: 60_000,

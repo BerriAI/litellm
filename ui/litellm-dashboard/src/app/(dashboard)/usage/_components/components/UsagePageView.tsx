@@ -6,6 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { ChevronDown, ChevronRight, Download, Info, Sparkles, X } from "lucide-react";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -38,10 +39,14 @@ import { ChartLoader } from "@/components/shared/chart_loader";
 import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
 import ViewUserSpend from "@/components/view_user_spend";
-import { useAggregatedDailyActivity } from "../hooks/useAggregatedDailyActivity";
+import {
+  modelTopKeysQueryOptions,
+  useAggregatedDailyActivity,
+} from "@/app/(dashboard)/hooks/dailyActivity/dailyActivityQueries";
 import { ENTITY_API } from "./EntityUsage/entityFetchFns";
 import {
   EMPTY_DAILY_ACTIVITY_METADATA,
+  EMPTY_DAILY_ACTIVITY_RESPONSE,
   toDailyData,
   type DailyActivityRequest,
 } from "@/components/UsagePage/dailyActivityApi";
@@ -187,15 +192,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         : null,
     [accessToken, startTime, endTime, effectiveUserId],
   );
-  const {
-    data: aggregatedRaw,
-    loading: aggregatedLoading,
-    failed: aggregatedFailed,
-  } = useAggregatedDailyActivity({
-    fetch: () => ENTITY_API.user.aggregated(dailyActivityRequest as DailyActivityRequest),
-    enabled: dailyActivityRequest !== null,
-    deps: [accessToken, startTime, endTime, effectiveUserId],
-  });
+  const aggregatedQuery = useAggregatedDailyActivity("user", dailyActivityRequest);
+  const aggregatedRaw = aggregatedQuery.data ?? EMPTY_DAILY_ACTIVITY_RESPONSE;
+  const aggregatedLoading = isQueryPending(aggregatedQuery);
+  const aggregatedFailed = aggregatedQuery.isError;
 
   // Gateway request counts (SGR). Admin-only: the source table is
   // deployment-wide, so a non-admin must not see it.
@@ -413,9 +413,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     [userSpendData, teams],
   );
 
-  const fetchTopApiKeys = useCallback(
+  const topKeysQuery = useCallback(
     (model: string) =>
-      ENTITY_API.user.modelTopKeys(dailyActivityRequest as DailyActivityRequest, model, modelViewType === "groups"),
+      modelTopKeysQueryOptions("user", dailyActivityRequest as DailyActivityRequest, model, modelViewType === "groups"),
     [dailyActivityRequest, modelViewType],
   );
   const searchKeys = useCallback(
@@ -870,7 +870,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   </div>
                   <ActivityMetrics
                     modelMetrics={modelMetrics}
-                    fetchTopApiKeys={dailyActivityRequest ? fetchTopApiKeys : undefined}
+                    topKeysQuery={dailyActivityRequest ? topKeysQuery : undefined}
                   />
                 </TabsContent>
                 <TabsContent value="keys" keepMounted>

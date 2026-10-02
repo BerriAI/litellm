@@ -1,4 +1,5 @@
 "use client";
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
@@ -221,8 +222,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const canViewPolicies = useCan("viewPolicies");
   const canViewPrompts = useCan("viewPrompts");
-  const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
-  const { data: projects, isLoading: isProjectsLoading } = useProjects();
+  const isOrganizationsLoadingQuery = useOrganizations();
+  const { data: organizations } = isOrganizationsLoadingQuery;
+  const isOrganizationsLoading = isQueryPending(isOrganizationsLoadingQuery);
+  const isProjectsLoadingQuery = useProjects();
+  const { data: projects } = isProjectsLoadingQuery;
+  const isProjectsLoading = isQueryPending(isProjectsLoadingQuery);
   const { data: uiSettingsData } = useUISettings();
   const { data: tagsData } = useTags();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);

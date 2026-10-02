@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { getProxyBaseUrl } from "@/components/networking";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
@@ -9,7 +10,9 @@ import { effectiveSessionRole, formatUserRole, isViewOnlySessionRole } from "@/u
 import { useUIConfig } from "./uiConfig/useUIConfig";
 
 const useAuthorized = () => {
-  const { data: uiConfig, isLoading: isUIConfigLoading } = useUIConfig();
+  const isUIConfigLoadingQuery = useUIConfig();
+  const { data: uiConfig } = isUIConfigLoadingQuery;
+  const isUIConfigLoading = isQueryPending(isUIConfigLoadingQuery);
 
   const token = typeof document !== "undefined" ? getCookie("token") : null;
 

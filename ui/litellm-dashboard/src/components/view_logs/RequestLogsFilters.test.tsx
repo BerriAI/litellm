@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
@@ -34,7 +35,7 @@ const emptyInfiniteQuery = {
   fetchNextPage: vi.fn(),
   hasNextPage: false,
   isFetchingNextPage: false,
-  isLoading: false,
+  ...queryState(false),
 };
 
 const LOGS_WINDOW = { start_date: "2026-07-23 00:00:00", end_date: "2026-07-24 00:00:00" };

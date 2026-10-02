@@ -24,7 +24,7 @@ export const updateMCPToolSearchSettings = (
 export const useMCPToolSearchSettings = () => {
   const { accessToken } = useAuthorized();
   return useQuery<MCPToolSearchSettingsResponse>({
-    queryKey: mcpToolSearchSettingsKeys.list({}),
+    queryKey: [...mcpToolSearchSettingsKeys.list({}), accessToken],
     queryFn: () => getMCPToolSearchSettings(accessToken),
     enabled: !!accessToken,
   });

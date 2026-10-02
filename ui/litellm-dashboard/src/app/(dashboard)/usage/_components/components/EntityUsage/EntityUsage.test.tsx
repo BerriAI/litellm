@@ -1,4 +1,6 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { queryState } from "../../../../../../../tests/queryState";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -14,6 +16,14 @@ import type {
 } from "@/components/UsagePage/types";
 import EntityUsage from "./EntityUsage";
 import { getGlobalTopKeys, getTopAPIKeys } from "./entityUsageAggregations";
+
+const render = (ui: ReactNode) => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  return rtlRender(ui, { wrapper });
+};
 
 const emptySpendMetrics: SpendMetrics = {
   spend: 0,
@@ -70,18 +80,18 @@ vi.mock("@/components/activity_metrics", () => ({
     modelMetrics,
     summaryMetrics,
     summaryTitle = "Overall Usage",
-    fetchTopApiKeys,
+    topKeysQuery,
   }: {
     modelMetrics?: { __source?: string };
     summaryMetrics?: ModelActivityData;
     summaryTitle?: string;
-    fetchTopApiKeys?: (model: string) => Promise<unknown>;
+    topKeysQuery?: (model: string) => unknown;
   }) => (
     <div>
       <span>Activity Metrics</span>
       <span>{`metrics-source:${modelMetrics?.__source ?? "none"}`}</span>
       {summaryMetrics !== undefined && <span>{summaryTitle}</span>}
-      {fetchTopApiKeys !== undefined && <span>{`top-keys-fetcher:${modelMetrics?.__source ?? "none"}`}</span>}
+      {topKeysQuery !== undefined && <span>{`top-keys-fetcher:${modelMetrics?.__source ?? "none"}`}</span>}
     </div>
   ),
   processActivityData: (_data: unknown, key: string) => ({ __source: key }),
@@ -180,7 +190,7 @@ describe("EntityUsage", () => {
       fetchNextPage: vi.fn(),
       hasNextPage: false,
       isFetchingNextPage: false,
-      isLoading: false,
+      ...queryState(false),
     }) as unknown as ReturnType<typeof useInfiniteUsers>;
 
   const mockSpendData = {
@@ -555,7 +565,7 @@ describe("EntityUsage", () => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();
     });
 
-    expect(screen.getByText("Tag Spend Overview")).toBeInTheDocument();
+    expect(await screen.findByText("Tag Spend Overview")).toBeInTheDocument();
     expect(screen.getByText("Total Spend")).toBeInTheDocument();
 
     await waitFor(() => {
@@ -574,7 +584,7 @@ describe("EntityUsage", () => {
     });
 
     // Check that it shows team-specific label
-    expect(screen.getByText("Team Spend Overview")).toBeInTheDocument();
+    expect(await screen.findByText("Team Spend Overview")).toBeInTheDocument();
 
     await waitFor(() => {
       const spendElements = screen.getAllByText("$100.50");
@@ -609,7 +619,7 @@ describe("EntityUsage", () => {
       expect(mockOrganizationDailyActivityCall).toHaveBeenCalled();
     });
 
-    expect(screen.getByText("Organization Spend Overview")).toBeInTheDocument();
+    expect(await screen.findByText("Organization Spend Overview")).toBeInTheDocument();
 
     await waitFor(() => {
       const spendElements = screen.getAllByText("$100.50");
@@ -624,7 +634,7 @@ describe("EntityUsage", () => {
       expect(mockCustomerDailyActivityCall).toHaveBeenCalled();
     });
 
-    expect(screen.getByText("Customer Spend Overview")).toBeInTheDocument();
+    expect(await screen.findByText("Customer Spend Overview")).toBeInTheDocument();
 
     await waitFor(() => {
       const spendElements = screen.getAllByText("$100.50");
@@ -639,7 +649,7 @@ describe("EntityUsage", () => {
       expect(mockAgentDailyActivityCall).toHaveBeenCalled();
     });
 
-    expect(screen.getByText("Agent Spend Overview")).toBeInTheDocument();
+    expect(await screen.findByText("Agent Spend Overview")).toBeInTheDocument();
 
     await waitFor(() => {
       const spendElements = screen.getAllByText("$444.30");
@@ -654,7 +664,7 @@ describe("EntityUsage", () => {
       expect(mockUserDailyActivityCall).toHaveBeenCalled();
     });
 
-    expect(screen.getByText("User Spend Overview")).toBeInTheDocument();
+    expect(await screen.findByText("User Spend Overview")).toBeInTheDocument();
 
     await waitFor(() => {
       const spendElements = screen.getAllByText("$100.50");
@@ -669,7 +679,7 @@ describe("EntityUsage", () => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();
     });
 
-    expect(screen.getByText("Tag Spend Overview")).toBeInTheDocument();
+    expect(await screen.findByText("Tag Spend Overview")).toBeInTheDocument();
 
     const modelActivityTab = screen.getByText("Model Activity");
     act(() => {
@@ -752,7 +762,7 @@ describe("EntityUsage", () => {
       fireEvent.click(screen.getByText(tabLabel));
     });
 
-    expect(showingCount(marker)).toBeGreaterThan(0);
+    await waitFor(() => expect(showingCount(marker)).toBeGreaterThan(0));
     for (const [otherLabel, otherMarker] of NON_TEAM_PANELS) {
       if (otherLabel === tabLabel) continue;
       expect(showingCount(otherMarker)).toBe(0);
@@ -778,7 +788,7 @@ describe("EntityUsage", () => {
       fireEvent.click(screen.getByText(tabLabel));
     });
 
-    expect(showingCount(marker)).toBeGreaterThan(0);
+    await waitFor(() => expect(showingCount(marker)).toBeGreaterThan(0));
     for (const [otherLabel, otherMarker] of TEAM_PANELS) {
       if (otherLabel === tabLabel) continue;
       expect(showingCount(otherMarker)).toBe(0);
@@ -838,7 +848,7 @@ describe("EntityUsage", () => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();
     });
 
-    expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
+    expect(await screen.findByText("Top Public Model Names")).toBeInTheDocument();
   });
 
   it("defaults Model Activity to public model names and toggles to litellm models", async () => {
@@ -874,7 +884,7 @@ describe("EntityUsage", () => {
       expect(mockAgentDailyActivityCall).toHaveBeenCalled();
     });
 
-    expect(screen.getByText("Top Agents")).toBeInTheDocument();
+    expect(await screen.findByText("Top Agents")).toBeInTheDocument();
   });
 
   it("should use entityList label when entityList is provided and entity exists", async () => {
@@ -967,7 +977,7 @@ describe("EntityUsage", () => {
       expect(mockTeamDailyActivityCall).toHaveBeenCalled();
     });
 
-    expect(screen.getByText("Top Agents Driving Spend")).toBeInTheDocument();
+    expect(await screen.findByText("Top Agents Driving Spend")).toBeInTheDocument();
   });
 
   it("should not display Top Agents Driving Spend card for non-team entity types", async () => {
@@ -1028,9 +1038,9 @@ describe("EntityUsage", () => {
       resolveSpend(mockSpendData);
     });
 
+    expect(await screen.findByText("Total Spend")).toBeInTheDocument();
     expect(screen.queryByText("Loading chart data...")).not.toBeInTheDocument();
     expect(screen.getByText("Overall Usage")).toBeInTheDocument();
-    expect(screen.getByText("Total Spend")).toBeInTheDocument();
     expect(screen.getAllByText("$100.50").length).toBeGreaterThan(0);
   });
 
@@ -1206,7 +1216,7 @@ describe("EntityUsage", () => {
       await waitFor(() => {
         expect(mockTeamDailyActivityCall).toHaveBeenCalled();
       });
-      expect(screen.getByText("Team Spend Overview")).toBeInTheDocument();
+      expect(await screen.findByText("Team Spend Overview")).toBeInTheDocument();
 
       expect(mockAgentDailyActivityCall).not.toHaveBeenCalled();
       expect(screen.queryByText("Agent Activity")).not.toBeInTheDocument();
@@ -1219,7 +1229,7 @@ describe("EntityUsage", () => {
       await waitFor(() => {
         expect(mockTagDailyActivityCall).toHaveBeenCalled();
       });
-      expect(screen.getByText("Tag Spend Overview")).toBeInTheDocument();
+      expect(await screen.findByText("Tag Spend Overview")).toBeInTheDocument();
     });
   });
 
@@ -1388,7 +1398,12 @@ describe("EntityUsage", () => {
 
     it("refetches daily activity for the picked user and drops the filter when cleared", async () => {
       const user = userEvent.setup();
+      mockUserDailyActivityCall.mockResolvedValueOnce(mockSpendData).mockResolvedValueOnce({
+        ...mockSpendData,
+        metadata: { ...mockSpendData.metadata, total_spend: 42.25 },
+      });
       await renderUserUsage();
+      expect(await screen.findAllByText("$100.50")).not.toHaveLength(0);
 
       expect(mockUserDailyActivityCall).toHaveBeenCalledWith(
         expect.objectContaining({ accessToken: "test-token", entityIds: null }),
@@ -1403,14 +1418,13 @@ describe("EntityUsage", () => {
         );
       });
 
+      expect(await screen.findAllByText("$42.25")).not.toHaveLength(0);
       mockUserDailyActivityCall.mockClear();
       await user.click(userDropdown().querySelector('[data-slot="combobox-clear"]') as HTMLElement);
 
-      await waitFor(() => {
-        expect(mockUserDailyActivityCall).toHaveBeenCalledWith(
-          expect.objectContaining({ accessToken: "test-token", entityIds: null }),
-        );
-      });
+      expect(await screen.findAllByText("$100.50")).not.toHaveLength(0);
+      expect(screen.queryByText("$42.25")).not.toBeInTheDocument();
+      expect(mockUserDailyActivityCall).not.toHaveBeenCalled();
     });
   });
 });

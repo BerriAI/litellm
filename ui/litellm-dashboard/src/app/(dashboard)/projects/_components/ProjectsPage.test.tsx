@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
 import type { UrlUpdateEvent } from "nuqs/adapters/testing";
@@ -75,11 +76,17 @@ const mockProjects: ProjectResponse[] = [
 describe("ProjectsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUseTeams.mockReturnValue({ data: [], isLoading: false });
+    mockUseTeams.mockReturnValue({
+      data: [],
+      ...queryState(false),
+    });
   });
 
   it("should render the Projects heading", () => {
-    mockUseProjects.mockReturnValue({ data: [], isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: [],
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />);
     expect(screen.getByRole("heading", { name: /projects/i })).toBeInTheDocument();
     expect(screen.getByText("Manage projects within your teams")).toBeInTheDocument();
@@ -87,20 +94,29 @@ describe("ProjectsPage", () => {
   });
 
   it("should show a 'Create Project' button", () => {
-    mockUseProjects.mockReturnValue({ data: [], isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: [],
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />);
     expect(screen.getByRole("button", { name: /create project/i })).toBeInTheDocument();
   });
 
   it("should render the projects table", () => {
-    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: mockProjects,
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />);
     expect(screen.getByText("Alpha Project")).toBeInTheDocument();
     expect(screen.getByText("Beta Project")).toBeInTheDocument();
   });
 
   it("should show the model count for each project", () => {
-    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: mockProjects,
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />);
     // proj-1 has 2 models, proj-2 has 0
     expect(screen.getByText("2")).toBeInTheDocument();
@@ -108,20 +124,29 @@ describe("ProjectsPage", () => {
   });
 
   it("should display 'Active' tag for non-blocked projects", () => {
-    mockUseProjects.mockReturnValue({ data: [mockProjects[0]], isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: [mockProjects[0]],
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />);
     expect(screen.getByText("Active")).toBeInTheDocument();
   });
 
   it("should display 'Blocked' tag for blocked projects", () => {
-    mockUseProjects.mockReturnValue({ data: [mockProjects[1]], isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: [mockProjects[1]],
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />);
     expect(screen.getByText("Blocked")).toBeInTheDocument();
   });
 
   it("should open the create modal when 'Create Project' is clicked", async () => {
     const user = userEvent.setup();
-    mockUseProjects.mockReturnValue({ data: [], isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: [],
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />);
     await user.click(screen.getByRole("button", { name: /create project/i }));
     expect(screen.getByTestId("create-modal")).toBeInTheDocument();
@@ -129,7 +154,10 @@ describe("ProjectsPage", () => {
 
   it("should show the project detail view when a project ID is clicked", async () => {
     const user = userEvent.setup();
-    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: mockProjects,
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />);
     await user.click(screen.getByText("proj-1"));
     expect(screen.getByTestId("project-detail")).toHaveTextContent("proj-1");
@@ -137,7 +165,10 @@ describe("ProjectsPage", () => {
 
   it("should filter displayed projects when the search input has a value", async () => {
     const user = userEvent.setup();
-    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: mockProjects,
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />);
     fireEvent.change(screen.getByPlaceholderText(/search projects/i), { target: { value: "Alpha" } });
     await waitFor(() => {
@@ -147,26 +178,38 @@ describe("ProjectsPage", () => {
   });
 
   it("should show the total project count in the pagination", () => {
-    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: mockProjects,
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />);
     expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-2 of 2");
   });
 
   it("should show skeleton rows while projects are loading", () => {
-    mockUseProjects.mockReturnValue({ data: undefined, isLoading: true });
+    mockUseProjects.mockReturnValue({
+      data: undefined,
+      ...queryState(true),
+    });
     renderWithProviders(<ProjectsPage />);
     expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
   });
 
   it("should show the empty state when there are no projects", () => {
-    mockUseProjects.mockReturnValue({ data: [], isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: [],
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />);
     expect(screen.getByText("No projects yet")).toBeInTheDocument();
   });
 
   it("should show the filtered empty state when a search matches nothing", async () => {
     const user = userEvent.setup();
-    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: mockProjects,
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />);
     fireEvent.change(screen.getByPlaceholderText(/search projects/i), { target: { value: "zzz-no-match" } });
     await waitFor(() => {
@@ -176,7 +219,10 @@ describe("ProjectsPage", () => {
 
   it("should sort by name when the Name header is clicked", async () => {
     const user = userEvent.setup();
-    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: mockProjects,
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />);
 
     await user.click(screen.getByRole("button", { name: /^name$/i }));
@@ -196,7 +242,10 @@ describe("ProjectsPage", () => {
       project_id: `proj-${i + 1}`,
       project_alias: `Project ${String(i + 1).padStart(2, "0")}`,
     }));
-    mockUseProjects.mockReturnValue({ data: manyProjects, isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: manyProjects,
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />, { onUrlUpdate });
 
     await user.click(screen.getByTestId("pagination-next"));
@@ -213,7 +262,10 @@ describe("ProjectsPage", () => {
   });
 
   it("should restore the search box and filtered list from a ?project_search= deep link", () => {
-    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: mockProjects,
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />, { searchParams: "?project_search=Beta" });
 
     expect(screen.getByPlaceholderText(/search projects/i)).toHaveValue("Beta");
@@ -224,7 +276,10 @@ describe("ProjectsPage", () => {
   it("should remove ?project_search= when the search is cleared", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
-    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: mockProjects,
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />, { searchParams: "?project_search=Beta", onUrlUpdate });
 
     await user.click(screen.getByRole("button", { name: /clear search/i }));
@@ -235,7 +290,10 @@ describe("ProjectsPage", () => {
   });
 
   it("should open the detail view directly from a ?project= deep link", () => {
-    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: mockProjects,
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />, { searchParams: "?project=proj-2" });
 
     expect(screen.getByTestId("project-detail")).toHaveTextContent("proj-2");
@@ -245,7 +303,10 @@ describe("ProjectsPage", () => {
   it("should push ?project= as a new history entry when a project is opened", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
-    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: mockProjects,
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />, { onUrlUpdate });
 
     await user.click(screen.getByText("proj-1"));
@@ -263,7 +324,10 @@ describe("ProjectsPage", () => {
   it("should clear ?project= and return to the list when the detail view is closed", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
-    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: mockProjects,
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />, { searchParams: "?project=proj-1", onUrlUpdate });
 
     await user.click(screen.getByRole("button", { name: /back to projects/i }));
@@ -279,7 +343,10 @@ describe("ProjectsPage", () => {
   it("should drop the project's key table state but keep the list's search and page when the detail view is closed", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
-    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: mockProjects,
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />, {
       searchParams:
         "?page=2&project_search=Project&project=proj-1&keys_page=3&keys_page_size=10&keys_search=prod&keys_sort_by=spend&keys_sort_order=asc",
@@ -297,9 +364,12 @@ describe("ProjectsPage", () => {
   it("should resolve team alias from the teams list in the Team column", () => {
     mockUseTeams.mockReturnValue({
       data: [{ team_id: "team-1", team_alias: "Engineering", models: [] }],
-      isLoading: false,
+      ...queryState(false),
     });
-    mockUseProjects.mockReturnValue({ data: [mockProjects[0]], isLoading: false });
+    mockUseProjects.mockReturnValue({
+      data: [mockProjects[0]],
+      ...queryState(false),
+    });
     renderWithProviders(<ProjectsPage />);
     expect(screen.getByText("Engineering")).toBeInTheDocument();
   });

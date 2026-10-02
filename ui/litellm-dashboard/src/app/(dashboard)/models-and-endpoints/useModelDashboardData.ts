@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useMemo } from "react";
 import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 
@@ -9,7 +10,9 @@ export interface ModelDashboardData {
 }
 
 export function useModelDashboardData(): ModelDashboardData {
-  const { data: modelDataResponse, isLoading } = useModelsInfo();
+  const isLoadingQuery = useModelsInfo();
+  const { data: modelDataResponse } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const availableModelGroups = useMemo(() => {
     const groups = new Set<string>(modelDataResponse?.data?.map((model) => model.model_name) ?? []);

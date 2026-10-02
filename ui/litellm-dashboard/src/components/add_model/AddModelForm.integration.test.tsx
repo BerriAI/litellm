@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { renderHook, screen, waitFor, renderWithProviders } from "../../../tests/test-utils";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -57,7 +58,7 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
         credential_fields: [],
       },
     ],
-    isLoading: false,
+    ...queryState(false),
     error: null,
   }),
 }));
@@ -82,7 +83,7 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
     fetchNextPage: vi.fn(),
     hasNextPage: false,
     isFetchingNextPage: false,
-    isLoading: false,
+    ...queryState(false),
   }),
 }));
 
@@ -93,7 +94,7 @@ vi.mock("@/app/(dashboard)/hooks/guardrails/useGuardrails", () => ({
       globalGuardrailNames: new Set<string>(),
       optionalGuardrailNames: new Set<string>(["test-guardrail"]),
     },
-    isLoading: false,
+    ...queryState(false),
     error: null,
   }),
 }));
@@ -101,7 +102,7 @@ vi.mock("@/app/(dashboard)/hooks/guardrails/useGuardrails", () => ({
 vi.mock("@/app/(dashboard)/hooks/tags/useTags", () => ({
   useTags: vi.fn().mockReturnValue({
     data: { tag1: ["model1", "model2"] },
-    isLoading: false,
+    ...queryState(false),
     error: null,
   }),
 }));

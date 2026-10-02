@@ -34,7 +34,7 @@ const guardrailKeys = createQueryKeys("guardrails");
 export const useGuardrails = (): UseQueryResult<GuardrailsListData> => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<GuardrailsListResponse, Error, GuardrailsListData>({
-    queryKey: guardrailKeys.list({}),
+    queryKey: [...guardrailKeys.list({}), accessToken],
     queryFn: async () => getGuardrailsList(accessToken!),
     enabled: Boolean(accessToken && userId && userRole),
     select: (data) => {

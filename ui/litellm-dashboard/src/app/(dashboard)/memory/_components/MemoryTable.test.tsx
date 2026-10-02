@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { PaginationState } from "@tanstack/react-table";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -23,7 +24,7 @@ const makeMemory = (overrides: Partial<MemoryRow> = {}): MemoryRow => ({
 
 const baseProps = {
   data: [makeMemory()],
-  isLoading: false,
+  ...queryState(false),
   rowCount: 1,
   pagination: { pageIndex: 0, pageSize: 50 } as PaginationState,
   onPaginationChange: vi.fn(),

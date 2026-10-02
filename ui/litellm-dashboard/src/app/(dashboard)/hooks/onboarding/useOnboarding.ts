@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { claimOnboardingToken, getOnboardingCredentials } from "@/components/networking";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useUIConfig } from "../uiConfig/useUIConfig";
@@ -11,7 +12,8 @@ export interface OnboardingCredentials {
 }
 
 export const useOnboardingCredentials = (inviteId: string | null) => {
-  const { isLoading: isUIConfigLoading } = useUIConfig();
+  const isUIConfigLoadingQuery = useUIConfig();
+  const isUIConfigLoading = isQueryPending(isUIConfigLoadingQuery);
   return useQuery<OnboardingCredentials>({
     queryKey: onboardingKeys.detail(inviteId ?? ""),
     queryFn: async () => {

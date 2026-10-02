@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Settings, Shield, TriangleAlert } from "lucide-react";
 import React, { useMemo, useState } from "react";
@@ -34,13 +35,11 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
   const [logsPage] = useState(1);
   const logsPageSize = 50;
 
-  const {
-    data: detailData,
-    isLoading: detailLoading,
-    error: detailError,
-  } = useGuardrailsUsageDetail(guardrailId, { accessToken, startDate, endDate });
-  const { data: logsData, isLoading: logsLoading } = useQuery({
-    queryKey: ["guardrails-usage-logs", guardrailId, logsPage, logsPageSize],
+  const detailLoadingQuery = useGuardrailsUsageDetail(guardrailId, { accessToken, startDate, endDate });
+  const { data: detailData, error: detailError } = detailLoadingQuery;
+  const detailLoading = isQueryPending(detailLoadingQuery);
+  const logsLoadingQuery = useQuery({
+    queryKey: ["guardrails-usage-logs", guardrailId, logsPage, logsPageSize, accessToken, startDate, endDate],
     queryFn: () =>
       getGuardrailsUsageLogs(accessToken!, {
         guardrailId,
@@ -51,6 +50,8 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
       }),
     enabled: !!accessToken && !!guardrailId,
   });
+  const { data: logsData } = logsLoadingQuery;
+  const logsLoading = isQueryPending(logsLoadingQuery);
 
   const logs: LogEntry[] = useMemo(() => {
     const list = logsData?.logs ?? [];

@@ -1,4 +1,5 @@
 import js from "@eslint/js";
+import pluginQuery from "@tanstack/eslint-plugin-query";
 import tseslint from "typescript-eslint";
 import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
 import prettier from "eslint-config-prettier/flat";
@@ -15,6 +16,7 @@ const eslintConfig = [
   ...tseslint.configs.recommended,
   ...nextCoreWebVitals,
   prettier,
+  ...pluginQuery.configs["flat/recommended"],
   {
     plugins: { "unused-imports": unusedImports, local },
     rules: {
@@ -62,6 +64,12 @@ const eslintConfig = [
         },
       ],
     },
+  },
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/**/*.test.*", "src/**/*.spec.*", "src/**/*.d.ts"],
+    languageOptions: { parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname } },
+    rules: { "local/no-query-is-loading": "error" },
   },
   {
     files: ["src/**/*.tsx"],

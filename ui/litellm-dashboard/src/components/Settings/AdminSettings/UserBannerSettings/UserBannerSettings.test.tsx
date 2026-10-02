@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { renderWithProviders, screen } from "../../../../../tests/test-utils";
 import { fireEvent } from "@testing-library/react";
 import { vi } from "vitest";
@@ -27,7 +28,10 @@ const publishedBanner: UserBanner = {
 };
 
 const mockHooks = (banner: UserBanner | undefined, mutate = vi.fn()) => {
-  vi.mocked(useUserBanner).mockReturnValue({ data: banner, isLoading: false } as any);
+  vi.mocked(useUserBanner).mockReturnValue({
+    data: banner,
+    ...queryState(false),
+  } as any);
   vi.mocked(useUpdateUserBanner).mockReturnValue({ mutate, isPending: false } as any);
   return mutate;
 };

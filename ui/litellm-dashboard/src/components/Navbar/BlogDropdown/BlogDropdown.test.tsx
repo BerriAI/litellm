@@ -1,3 +1,4 @@
+import { queryState } from "../../../../tests/queryState";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../../tests/test-utils";
@@ -8,11 +9,13 @@ let mockRefetch = vi.fn();
 let mockUseBlogPostsResult: {
   data: { posts: { title: string; date: string; description: string; url: string }[] } | null | undefined;
   isLoading: boolean;
+  isPending: boolean;
+  isEnabled: boolean;
   isError: boolean;
   refetch: () => void;
 } = {
   data: undefined,
-  isLoading: false,
+  ...queryState(false),
   isError: false,
   refetch: mockRefetch,
 };
@@ -46,7 +49,7 @@ describe("BlogDropdown", () => {
     mockRefetch = vi.fn();
     mockUseBlogPostsResult = {
       data: undefined,
-      isLoading: false,
+      ...queryState(false),
       isError: false,
       refetch: mockRefetch,
     };
@@ -97,7 +100,7 @@ describe("BlogDropdown", () => {
 
     describe("loading state", () => {
       it("should show a loading spinner", async () => {
-        mockUseBlogPostsResult = { ...mockUseBlogPostsResult, isLoading: true };
+        mockUseBlogPostsResult = { ...mockUseBlogPostsResult, isLoading: true, isPending: true };
         renderWithProviders(<BlogDropdown />);
 
         await openDropdown();

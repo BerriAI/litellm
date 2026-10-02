@@ -5,8 +5,11 @@ import filenamePascalCase from "./filename-pascal-case.mjs";
 import noNoopHoverVariant from "./no-noop-hover-variant.mjs";
 import noAdHocZIndex from "./no-ad-hoc-z-index.mjs";
 
+import noQueryIsLoading from "./no-query-is-loading.mjs";
+
 const plugin = {
   rules: {
+    "no-query-is-loading": noQueryIsLoading,
     "no-large-inline-object-arg": noLargeInlineObjectArg,
     "no-long-condition-chain": noLongConditionChain,
     "no-complex-jsx-arrow": noComplexJsxArrow,

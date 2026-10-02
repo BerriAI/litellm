@@ -6,7 +6,7 @@ export const userBannerKeys = createQueryKeys("userBanner");
 
 export const useUserBanner = (accessToken: string | null) => {
   const queryOptions: UseQueryOptions<UserBanner> = {
-    queryKey: userBannerKeys.list({}),
+    queryKey: [...userBannerKeys.list({}), accessToken],
     queryFn: async () => {
       if (!accessToken) {
         throw new Error("Access token is required");

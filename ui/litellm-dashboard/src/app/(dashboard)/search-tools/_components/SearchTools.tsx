@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { isAdminRole } from "@/utils/roles";
 import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
@@ -46,27 +47,27 @@ type EditSearchToolFormValues = z.infer<typeof editSearchToolSchema>;
 const EMPTY_EDIT_VALUES: EditSearchToolFormValues = { search_tool_name: "", search_provider: "" };
 
 const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID }) => {
-  const {
-    data: searchTools,
-    isLoading: isLoadingTools,
-    refetch,
-  } = useQuery({
-    queryKey: ["searchTools"],
+  const isLoadingToolsQuery = useQuery<SearchTool[]>({
+    queryKey: ["searchTools", accessToken],
     queryFn: () => {
       if (!accessToken) throw new Error("Access Token required");
       return fetchSearchTools(accessToken).then((res) => res.search_tools || []);
     },
     enabled: !!accessToken,
-  }) as { data: SearchTool[]; isLoading: boolean; refetch: () => void };
+  });
+  const { data: searchTools, refetch } = isLoadingToolsQuery;
+  const isLoadingTools = isQueryPending(isLoadingToolsQuery);
 
-  const { data: providersResponse, isLoading: isLoadingProviders } = useQuery({
-    queryKey: ["searchProviders"],
+  const isLoadingProvidersQuery = useQuery<{ providers: AvailableSearchProvider[] }>({
+    queryKey: ["searchProviders", accessToken],
     queryFn: () => {
       if (!accessToken) throw new Error("Access Token required");
       return fetchAvailableSearchProviders(accessToken);
     },
     enabled: !!accessToken,
-  }) as { data: { providers: AvailableSearchProvider[] }; isLoading: boolean };
+  });
+  const { data: providersResponse } = isLoadingProvidersQuery;
+  const isLoadingProviders = isQueryPending(isLoadingProvidersQuery);
 
   const availableProviders = providersResponse?.providers || [];
 

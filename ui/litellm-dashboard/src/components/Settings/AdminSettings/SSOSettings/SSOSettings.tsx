@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { Copy, Edit, Shield, Trash2 } from "lucide-react";
 import { useState } from "react";
 
@@ -53,7 +54,9 @@ function EndpointValue({ value }: { value?: string | null }) {
 }
 
 export default function SSOSettings() {
-  const { data: ssoSettings, refetch, isLoading } = useSSOSettings();
+  const isLoadingQuery = useSSOSettings();
+  const { data: ssoSettings, refetch } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);

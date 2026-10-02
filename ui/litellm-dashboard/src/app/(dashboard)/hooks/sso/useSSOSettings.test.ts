@@ -291,20 +291,20 @@ describe("useSSOSettings", () => {
     expect(result.current.data).toBeUndefined();
   });
 
-  it("should use correct query key", async () => {
-    (getSSOSettings as any).mockResolvedValue(mockSSOSettingsResponse);
+  it("does not reuse SSO settings after the session changes", async () => {
+    vi.mocked(getSSOSettings).mockResolvedValue(mockSSOSettingsResponse);
+    const { result, rerender } = renderHook(() => useSSOSettings(), { wrapper });
+    await waitFor(() => expect(result.current.data).toEqual(mockSSOSettingsResponse));
 
-    const { result } = renderHook(() => useSSOSettings(), { wrapper });
-
-    await waitFor(() => {
-      expect(result.current.isSuccess).toBe(true);
+    vi.mocked(getSSOSettings).mockImplementation(() => new Promise(() => {}));
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "another-session",
+      userId: "another-user",
+      userRole: "Admin",
     });
+    rerender();
 
-    const queryCache = queryClient.getQueryCache();
-    const queries = queryCache.findAll();
-    const ssoQuery = queries.find((q) => q.queryKey[0] === "sso");
-
-    expect(ssoQuery).toBeDefined();
-    expect(ssoQuery?.queryKey).toEqual(["sso", "detail", "settings"]);
+    expect(result.current.data).toBeUndefined();
+    await waitFor(() => expect(getSSOSettings).toHaveBeenCalledWith("another-session"));
   });
 });

@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import type { components } from "@/lib/http/schema";
 import { useEffect, useState } from "react";
 import { parseAsString, useQueryState } from "nuqs";
@@ -131,8 +132,8 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
     return () => window.removeEventListener("popstate", restoreLocation);
   }, []);
   const lenses = [...(query.data?.lenses ?? [])].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
-  const showEmpty = !query.isLoading && !query.error && lenses.length === 0;
-  const loaded = !query.isLoading && !query.error;
+  const showEmpty = !isQueryPending(query) && !query.error && lenses.length === 0;
+  const loaded = !isQueryPending(query) && !query.error;
   const showActions = !readOnly && !!query.data && !showEmpty;
   const showReadiness = loaded && !showEmpty && !readOnly;
   const missingSelection = !!selected && loaded;
@@ -278,7 +279,7 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
           </Button>
         </div>
       )}
-      {query.isLoading && (
+      {isQueryPending(query) && (
         <p role="status" className="py-8 text-sm text-muted-foreground">
           Loading investigations…
         </p>
@@ -664,7 +665,7 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
           defaultSource={!tracesReady && requestsReady ? "requests" : "traces"}
           models={models.data?.data.map((m) => m.id) ?? []}
           modelDetails={modelDetails.data?.data ?? []}
-          modelsLoading={models.isLoading}
+          modelsLoading={isQueryPending(models)}
           modelsError={models.error?.message}
           accessToken={accessToken}
           onClose={() => setEditing(null)}
@@ -735,7 +736,7 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
             <SheetDescription>Original logged input and output</SheetDescription>
           </SheetHeader>
           <div className="p-4 space-y-3">
-            {requestEvidence.isLoading && <p role="status">Loading request…</p>}
+            {isQueryPending(requestEvidence) && <p role="status">Loading request…</p>}
             {requestEvidence.error && <p role="alert">{requestEvidence.error.message}</p>}
             {requestEvidence.data?.parts.map((p) => (
               <pre className="whitespace-pre-wrap break-words text-xs" key={p.span_id}>

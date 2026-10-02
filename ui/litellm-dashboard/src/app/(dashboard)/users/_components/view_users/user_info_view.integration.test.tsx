@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../../tests/queryState";
 import {
   act,
   fireEvent,
@@ -82,13 +83,22 @@ vi.mock("@/components/networking", async (importOriginal) => {
 });
 
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
-  useMCPServers: () => ({ data: [MCP_SERVER], isLoading: false }),
+  useMCPServers: () => ({
+    data: [MCP_SERVER],
+    ...queryState(false),
+  }),
 }));
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPAccessGroups", () => ({
-  useMCPAccessGroups: () => ({ data: ["dev-group"], isLoading: false }),
+  useMCPAccessGroups: () => ({
+    data: ["dev-group"],
+    ...queryState(false),
+  }),
 }));
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPToolsets", () => ({
-  useMCPToolsets: () => ({ data: [], isLoading: false }),
+  useMCPToolsets: () => ({
+    data: [],
+    ...queryState(false),
+  }),
 }));
 describe("UserInfoView add-to-team form", () => {
   const defaultProps = {

@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import {
   DeleteProxyConfigFieldRequest,
   useDeleteProxyConfigField,
@@ -84,7 +85,7 @@ describe("LoggingSettings", () => {
           stored_in_db: true,
         },
       ],
-      isLoading: false,
+      ...queryState(false),
       refetch: mockRefetch,
     } as unknown as ReturnType<typeof useProxyConfig>);
 
@@ -108,7 +109,7 @@ describe("LoggingSettings", () => {
     } as any);
     mockUseProxyConfig.mockReturnValue({
       data: [],
-      isLoading: false,
+      ...queryState(false),
       refetch: mockRefetch,
     } as any);
     mockParseErrorMessage.mockImplementation((error: any) => error?.message || String(error));
@@ -428,7 +429,7 @@ describe("LoggingSettings", () => {
           field_default_value: "30s",
         },
       ],
-      isLoading: false,
+      ...queryState(false),
       refetch: mockRefetch,
     } as any);
 
@@ -448,7 +449,7 @@ describe("LoggingSettings", () => {
   it("should reflect persisted values that arrive after the initial loading render", async () => {
     mockUseProxyConfig.mockReturnValue({
       data: undefined,
-      isLoading: true,
+      ...queryState(true),
       refetch: mockRefetch,
     } as unknown as ReturnType<typeof useProxyConfig>);
 
@@ -475,7 +476,7 @@ describe("LoggingSettings", () => {
           field_default_value: undefined,
         },
       ],
-      isLoading: false,
+      ...queryState(false),
       refetch: mockRefetch,
     } as unknown as ReturnType<typeof useProxyConfig>);
 
@@ -490,7 +491,7 @@ describe("LoggingSettings", () => {
   it("should show skeleton loaders when config is loading", () => {
     mockUseProxyConfig.mockReturnValue({
       data: undefined,
-      isLoading: true,
+      ...queryState(true),
       refetch: mockRefetch,
     } as any);
 

@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { AutoRouterAvailabilityContext, useAutoRouterAvailability } from "./AutoRouterAvailability";
 import AutoRouterClassifierTabs from "./AutoRouterClassifierTabs";
 import { getForecastConfigError, isForecastClassifier } from "../add_model/forecast_classifier_config";
@@ -248,22 +249,21 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     fetchModelAccessGroups();
   }, [accessToken]);
 
-  const {
-    data,
-    isLoading: groupsLoading,
-    isError: modelsError,
-    refetch: refetchModels,
-  } = useQuery({
+  const groupsLoadingQuery = useQuery({
     queryKey: ["availableModels", "autoRouter", accessToken, ...(isMemberManaged ? [watchedTeamId] : [])],
     queryFn: () =>
       isMemberManaged ? fetchAutoRouterModels(accessToken, watchedTeamId) : fetchAvailableModels(accessToken),
     enabled: Boolean(accessToken && (!isMemberManaged || watchedTeamId)),
   });
-  const { data: deployments, isLoading: deploymentsLoading } = useQuery({
-    queryKey: autoRouterListKey(userId ?? "", userRole),
+  const { data, isError: modelsError, refetch: refetchModels } = groupsLoadingQuery;
+  const groupsLoading = isQueryPending(groupsLoadingQuery);
+  const deploymentsLoadingQuery = useQuery({
+    queryKey: [...autoRouterListKey(userId ?? "", userRole), accessToken],
     queryFn: () => fetchAllModelDeployments(accessToken, userId ?? "", userRole),
     enabled: Boolean(accessToken),
   });
+  const { data: deployments } = deploymentsLoadingQuery;
+  const deploymentsLoading = isQueryPending(deploymentsLoadingQuery);
   const modelsLoading = groupsLoading || deploymentsLoading;
   const modelInfo = React.useMemo(() => data ?? [], [data]);
   const {

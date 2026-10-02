@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useState, useCallback } from "react";
 import { z } from "zod/v4";
 import { SortingState } from "@tanstack/react-table";
@@ -377,7 +378,9 @@ function ToolsetUsageGuide() {
 
 export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
   const queryClient = useQueryClient();
-  const { data: toolsets = [], isLoading } = useMCPToolsets();
+  const isLoadingQuery = useMCPToolsets();
+  const { data: toolsets = [] } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const { data: mcpServers = [] } = useMCPServers();
   const [createOpen, setCreateOpen] = useState(false);
   const [editToolset, setEditToolset] = useState<MCPToolset | null>(null);

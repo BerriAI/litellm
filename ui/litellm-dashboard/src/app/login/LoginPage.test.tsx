@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -82,7 +83,7 @@ describe("LoginPage", () => {
         proxy_base_url: null,
         sso_configured: false,
       },
-      isLoading: false,
+      ...queryState(false),
     });
     (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
 
@@ -107,7 +108,7 @@ describe("LoginPage", () => {
         proxy_base_url: null,
         sso_configured: false,
       },
-      isLoading: false,
+      ...queryState(false),
     });
     (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(validToken);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(false);
@@ -133,7 +134,7 @@ describe("LoginPage", () => {
         proxy_base_url: null,
         sso_configured: true,
       },
-      isLoading: false,
+      ...queryState(false),
     });
     (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(invalidToken);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
@@ -159,7 +160,7 @@ describe("LoginPage", () => {
         proxy_base_url: null,
         sso_configured: false,
       },
-      isLoading: false,
+      ...queryState(false),
     });
     (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(invalidToken);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
@@ -188,7 +189,7 @@ describe("LoginPage", () => {
         proxy_base_url: null,
         sso_configured: true,
       },
-      isLoading: false,
+      ...queryState(false),
     });
     (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(validToken);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(false);
@@ -215,7 +216,7 @@ describe("LoginPage", () => {
         proxy_base_url: null,
         sso_configured: false,
       },
-      isLoading: false,
+      ...queryState(false),
     });
     (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
 
@@ -243,7 +244,7 @@ describe("LoginPage", () => {
         proxy_base_url: null,
         sso_configured: true,
       },
-      isLoading: false,
+      ...queryState(false),
     });
     (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
@@ -270,7 +271,7 @@ describe("LoginPage", () => {
         proxy_base_url: null,
         sso_configured: false,
       },
-      isLoading: false,
+      ...queryState(false),
     });
     (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
@@ -322,7 +323,7 @@ describe("LoginPage", () => {
           proxy_base_url: null,
           sso_configured: false,
         },
-        isLoading: false,
+        ...queryState(false),
       });
       (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
       (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(false);
@@ -350,7 +351,7 @@ describe("LoginPage", () => {
           proxy_base_url: null,
           sso_configured: false,
         },
-        isLoading: false,
+        ...queryState(false),
       });
       (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue("legitimate-session-jwt");
       (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(false);

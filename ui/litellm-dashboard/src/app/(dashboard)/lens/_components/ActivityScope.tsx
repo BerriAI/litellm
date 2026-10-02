@@ -1,5 +1,7 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
+
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, X, ChevronRight, RotateCw } from "lucide-react";
@@ -119,7 +121,7 @@ export function ActivityScope({
     lookback_hours: value.lookback_hours,
   };
   const discoveryOptions = {
-    queryKey: ["lens-activity-options", value.source, value.lookback_hours, asOf, accessToken],
+    queryKey: ["lens-activity-options", value.source, value.lookback_hours, asOf, accessToken, discoveryScope],
     queryFn: () => load(discoveryScope),
     staleTime: 60000,
     enabled: validWindow,
@@ -157,7 +159,7 @@ export function ActivityScope({
     onChange({ ...value, [value.source === "requests" ? "service" : "agent_name"]: name, execution_ids: [] });
   const attributes = runs.flatMap((r) => r.metadata ?? []);
   const keys = [...new Set(attributes.map((a) => a.key).filter((key) => !key.startsWith("litellm.")))].sort();
-  const pending = serialized !== JSON.stringify(scope) || preview.isFetching;
+  const pending = serialized !== JSON.stringify(scope) || isQueryPending(preview) || preview.isFetching;
   const ready = !pending && valid;
   const hasSelection = !manualSelection || !!value.execution_ids?.length;
   const hasMatches = !preview.error && (preview.data?.selected ?? 0) > 0;
@@ -207,7 +209,9 @@ export function ActivityScope({
                 />
                 <ComboboxContent>
                   <ComboboxEmpty>
-                    {agents.isFetching ? "Loading agents…" : "No matches. You can enter a recorded name."}
+                    {isQueryPending(agents) || agents.isFetching
+                      ? "Loading agents…"
+                      : "No matches. You can enter a recorded name."}
                   </ComboboxEmpty>
                   <ComboboxList>
                     {(name: string) => (

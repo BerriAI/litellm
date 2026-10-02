@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Unplug } from "lucide-react";
@@ -260,12 +261,14 @@ export function MCPGatewaySessionsTab({ accessToken, canTerminate }: MCPGatewayS
   const queryClient = useQueryClient();
   const [pendingSelector, setPendingSelector] = useState<MCPGatewaySessionSelector | null>(null);
   const queryOptions = {
-    queryKey: mcpGatewaySessionKeys.lists(),
+    queryKey: [...mcpGatewaySessionKeys.lists(), accessToken],
     queryFn: () => fetchMCPGatewaySessions(accessToken!),
     enabled: !!accessToken,
     refetchInterval: REFETCH_INTERVAL_MS,
   };
-  const { data, error, isLoading, isFetching, refetch } = useQuery<MCPGatewaySessionsResponse, Error>(queryOptions);
+  const isLoadingQuery = useQuery<MCPGatewaySessionsResponse, Error>(queryOptions);
+  const { data, error, isFetching, refetch } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const terminate = useMutation<MCPGatewaySessionsTerminateResponse, Error, MCPGatewaySessionSelector>({
     mutationFn: (selector) => terminateMCPGatewaySessions(accessToken!, selector),
     onSettled: () => queryClient.invalidateQueries({ queryKey: mcpGatewaySessionKeys.lists() }),

@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { type UrlUpdateEvent } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
@@ -80,8 +81,16 @@ describe("GuardrailsMonitorView", () => {
   beforeEach(() => {
     testQueryClient.clear();
     vi.clearAllMocks();
-    mockUseGuardrailsUsageOverview.mockReturnValue({ data: emptyOverview, isLoading: false, error: null });
-    mockUseGuardrailsUsageDetail.mockReturnValue({ data: piiDetail, isLoading: false, error: null });
+    mockUseGuardrailsUsageOverview.mockReturnValue({
+      data: emptyOverview,
+      ...queryState(false),
+      error: null,
+    });
+    mockUseGuardrailsUsageDetail.mockReturnValue({
+      data: piiDetail,
+      ...queryState(false),
+      error: null,
+    });
     mockGetGuardrailsUsageLogs.mockResolvedValue({ logs: [], total: 0 });
   });
 
@@ -118,7 +127,7 @@ describe("GuardrailsMonitorView", () => {
       const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
       mockUseGuardrailsUsageOverview.mockReturnValue({
         data: { ...emptyOverview, rows: [piiRow] },
-        isLoading: false,
+        ...queryState(false),
         error: null,
       });
       renderWithProviders(<GuardrailsMonitorView accessToken="test-token" />, { onUrlUpdate });

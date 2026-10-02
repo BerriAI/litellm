@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import type { ProxyModel } from "@/app/(dashboard)/hooks/models/useModels";
 import type { Organization } from "@/components/networking";
 import { screen } from "@testing-library/react";
@@ -72,19 +73,19 @@ describe("ModelSelect", () => {
     vi.clearAllMocks();
     mockUseAllProxyModels.mockReturnValue({
       data: { data: mockProxyModels },
-      isLoading: false,
+      ...queryState(false),
     } as any);
     mockUseTeam.mockReturnValue({
       data: undefined,
-      isLoading: false,
+      ...queryState(false),
     } as any);
     mockUseOrganization.mockReturnValue({
       data: undefined,
-      isLoading: false,
+      ...queryState(false),
     } as any);
     mockUseCurrentUser.mockReturnValue({
       data: { models: [] },
-      isLoading: false,
+      ...queryState(false),
     } as any);
   });
 
@@ -118,7 +119,7 @@ describe("ModelSelect", () => {
     loadingScenarios.forEach(({ hook, context, props = {} }) => {
       hook.mockReturnValue({
         data: undefined,
-        isLoading: true,
+        ...queryState(true),
       } as any);
 
       const { unmount } = renderWithProviders(<ModelSelect onChange={mockOnChange} context={context} {...props} />);
@@ -161,7 +162,7 @@ describe("ModelSelect", () => {
     const user = userEvent.setup();
     mockUseOrganization.mockReturnValue({
       data: createMockOrganization(["all-proxy-models"]),
-      isLoading: false,
+      ...queryState(false),
     } as any);
 
     renderWithProviders(
@@ -207,7 +208,7 @@ describe("ModelSelect", () => {
         setup: () => {
           mockUseCurrentUser.mockReturnValue({
             data: { models: ["gpt-4"] },
-            isLoading: false,
+            ...queryState(false),
           } as any);
         },
         expectedVisible: ["gpt-4"],
@@ -220,7 +221,7 @@ describe("ModelSelect", () => {
         setup: () => {
           mockUseCurrentUser.mockReturnValue({
             data: { models: ["gpt-4"] },
-            isLoading: false,
+            ...queryState(false),
           } as any);
         },
         expectedVisible: [],
@@ -234,11 +235,11 @@ describe("ModelSelect", () => {
         setup: () => {
           mockUseTeam.mockReturnValue({
             data: { team_id: "team-1", team_alias: "Test Team", models: [] },
-            isLoading: false,
+            ...queryState(false),
           } as any);
           mockUseOrganization.mockReturnValue({
             data: undefined,
-            isLoading: false,
+            ...queryState(false),
           } as any);
         },
         expectedVisible: ["gpt-4", "claude-3"],
@@ -252,11 +253,11 @@ describe("ModelSelect", () => {
         setup: () => {
           mockUseTeam.mockReturnValue({
             data: { team_id: "team-1", team_alias: "Test Team", models: [] },
-            isLoading: false,
+            ...queryState(false),
           } as any);
           mockUseOrganization.mockReturnValue({
             data: createMockOrganization(["all-proxy-models"]),
-            isLoading: false,
+            ...queryState(false),
           } as any);
         },
         expectedVisible: ["gpt-4", "claude-3"],
@@ -270,11 +271,11 @@ describe("ModelSelect", () => {
         setup: () => {
           mockUseTeam.mockReturnValue({
             data: { team_id: "team-1", team_alias: "Test Team", models: [] },
-            isLoading: false,
+            ...queryState(false),
           } as any);
           mockUseOrganization.mockReturnValue({
             data: createMockOrganization(["gpt-4"]),
-            isLoading: false,
+            ...queryState(false),
           } as any);
         },
         expectedVisible: ["gpt-4"],
@@ -288,7 +289,7 @@ describe("ModelSelect", () => {
         setup: () => {
           mockUseOrganization.mockReturnValue({
             data: createMockOrganization(["gpt-4"]),
-            isLoading: false,
+            ...queryState(false),
           } as any);
         },
         expectedVisible: ["gpt-4", "claude-3"],
@@ -324,7 +325,7 @@ describe("ModelSelect", () => {
       vi.clearAllMocks();
       mockUseAllProxyModels.mockReturnValue({
         data: { data: mockProxyModels },
-        isLoading: false,
+        ...queryState(false),
       } as any);
     }
   });
@@ -346,7 +347,7 @@ describe("ModelSelect", () => {
         setup: () => {
           mockUseOrganization.mockReturnValue({
             data: createMockOrganization(["all-proxy-models"]),
-            isLoading: false,
+            ...queryState(false),
           } as any);
         },
         shouldShow: true,
@@ -359,7 +360,7 @@ describe("ModelSelect", () => {
         setup: () => {
           mockUseOrganization.mockReturnValue({
             data: createMockOrganization([]),
-            isLoading: false,
+            ...queryState(false),
           } as any);
         },
         shouldShow: true,
@@ -379,7 +380,7 @@ describe("ModelSelect", () => {
         setup: () => {
           mockUseOrganization.mockReturnValue({
             data: createMockOrganization(["gpt-4"]),
-            isLoading: false,
+            ...queryState(false),
           } as any);
         },
         shouldShow: false,
@@ -410,7 +411,7 @@ describe("ModelSelect", () => {
       vi.clearAllMocks();
       mockUseAllProxyModels.mockReturnValue({
         data: { data: mockProxyModels },
-        isLoading: false,
+        ...queryState(false),
       } as any);
     }
   });
@@ -443,10 +444,13 @@ describe("ModelSelect", () => {
     for (const testCase of testCases) {
       const user = userEvent.setup();
       // A team admin gets a 403 from /organization/info, so the org query never resolves.
-      mockUseOrganization.mockReturnValue({ data: undefined, isLoading: false } as any);
+      mockUseOrganization.mockReturnValue({
+        data: undefined,
+        ...queryState(false),
+      } as any);
       mockUseTeam.mockReturnValue({
         data: { team_id: "team-1", organization_models: testCase.organizationModels },
-        isLoading: false,
+        ...queryState(false),
       } as any);
 
       const { unmount } = renderWithProviders(
@@ -474,10 +478,13 @@ describe("ModelSelect", () => {
   });
 
   it("should stay in the loading state while a list-seeded team is still fetching its org ceiling", () => {
-    mockUseOrganization.mockReturnValue({ data: undefined, isLoading: false } as any);
+    mockUseOrganization.mockReturnValue({
+      data: undefined,
+      ...queryState(false),
+    } as any);
     mockUseTeam.mockReturnValue({
       data: { team_id: "team-1", models: [] },
-      isLoading: false,
+      ...queryState(false),
       isFetching: true,
     } as any);
 
@@ -496,10 +503,13 @@ describe("ModelSelect", () => {
 
   it("should not hold the loading state on a background refetch once the org ceiling is known", async () => {
     const user = userEvent.setup();
-    mockUseOrganization.mockReturnValue({ data: undefined, isLoading: false } as any);
+    mockUseOrganization.mockReturnValue({
+      data: undefined,
+      ...queryState(false),
+    } as any);
     mockUseTeam.mockReturnValue({
       data: { team_id: "team-1", organization_models: ["all-proxy-models"] },
-      isLoading: false,
+      ...queryState(false),
       isFetching: true,
     } as any);
 
@@ -525,8 +535,15 @@ describe("ModelSelect", () => {
 
     for (const testCase of testCases) {
       const user = userEvent.setup();
-      mockUseOrganization.mockReturnValue({ data: undefined, isLoading: false } as any);
-      mockUseTeam.mockReturnValue({ data: testCase.team, isLoading: false, isFetching: false } as any);
+      mockUseOrganization.mockReturnValue({
+        data: undefined,
+        ...queryState(false),
+      } as any);
+      mockUseTeam.mockReturnValue({
+        data: testCase.team,
+        ...queryState(false),
+        isFetching: false,
+      } as any);
 
       const { unmount } = renderWithProviders(
         <ModelSelect
@@ -565,12 +582,12 @@ describe("ModelSelect", () => {
     const user = userEvent.setup();
     mockUseTeam.mockReturnValue({
       data: { team_id: "team-1", team_alias: "Test Team", models: [] },
-      isLoading: false,
+      ...queryState(false),
     } as any);
 
     mockUseOrganization.mockReturnValue({
       data: createMockOrganization([]),
-      isLoading: false,
+      ...queryState(false),
     } as any);
 
     renderWithProviders(<ModelSelect onChange={mockOnChange} context="team" teamID="team-1" organizationID="org-1" />);
@@ -621,7 +638,7 @@ describe("ModelSelect", () => {
           { id: "gpt-4", object: "model", created: 1234567890, owned_by: "openai" },
         ],
       },
-      isLoading: false,
+      ...queryState(false),
     } as any);
 
     renderWithProviders(
@@ -643,7 +660,7 @@ describe("ModelSelect", () => {
 
     mockUseAllProxyModels.mockReturnValue({
       data: { data: manyModels },
-      isLoading: false,
+      ...queryState(false),
     } as any);
 
     renderWithProviders(

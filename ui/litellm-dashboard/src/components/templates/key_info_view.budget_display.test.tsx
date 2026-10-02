@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -25,7 +26,10 @@ vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({ default: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({ useOrganizations: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
-  useProjects: vi.fn().mockReturnValue({ data: [], isLoading: false }),
+  useProjects: vi.fn().mockReturnValue({
+    data: [],
+    ...queryState(false),
+  }),
 }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys", () => ({
   useApplyUserBudgetToTeamKeys: vi.fn(() => false),

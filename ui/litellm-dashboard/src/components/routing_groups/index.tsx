@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,7 +19,9 @@ import { groupNameByModel } from "./modelOwnership";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const RoutingGroups: React.FC = () => {
-  const { data, isLoading, refetch, isFetching } = useRoutingGroups();
+  const isLoadingQuery = useRoutingGroups();
+  const { data, refetch, isFetching } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const { data: routerFields } = useRouterFields();
   const { data: modelHub } = useModelHub();
   const { accessToken } = useAuthorized();

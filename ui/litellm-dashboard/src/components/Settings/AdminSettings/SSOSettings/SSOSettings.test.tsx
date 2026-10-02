@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -75,7 +76,7 @@ describe("SSOSettings", () => {
     vi.clearAllMocks();
     mockUseSSOSettings.mockReturnValue({
       data: null,
-      isLoading: false,
+      ...queryState(false),
       refetch: vi.fn(),
     });
   });
@@ -90,7 +91,7 @@ describe("SSOSettings", () => {
   it("shows the local google logo asset for a google-configured settings payload", () => {
     mockUseSSOSettings.mockReturnValue({
       data: { values: googleConfiguredValues },
-      isLoading: false,
+      ...queryState(false),
       refetch: vi.fn(),
     });
 
@@ -103,7 +104,7 @@ describe("SSOSettings", () => {
   it("renders a SAML configuration as configured instead of the empty placeholder", () => {
     mockUseSSOSettings.mockReturnValue({
       data: { values: samlConfiguredValues },
-      isLoading: false,
+      ...queryState(false),
       refetch: vi.fn(),
     });
 

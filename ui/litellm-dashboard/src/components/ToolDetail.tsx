@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { ArrowLeft, History, Wrench } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback, useMemo, useState } from "react";
@@ -67,31 +68,29 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
 
   const logsDateRange = useMemo(() => getDefaultLogsDateRange(), []);
 
-  const {
-    data: detail,
-    isLoading: detailLoading,
-    error: detailError,
-  } = useQuery({
-    queryKey: [TOOL_DETAIL_QUERY_KEY, toolName],
+  const detailLoadingQuery = useQuery({
+    queryKey: [TOOL_DETAIL_QUERY_KEY, toolName, accessToken],
     queryFn: () => fetchToolDetail(accessToken!, toolName),
     enabled: !!accessToken && !!toolName,
   });
+  const { data: detail, error: detailError } = detailLoadingQuery;
+  const detailLoading = isQueryPending(detailLoadingQuery);
 
   const { data: policyOptions } = useQuery({
-    queryKey: ["tool-policy-options"],
+    queryKey: ["tool-policy-options", accessToken],
     queryFn: () => fetchToolPolicyOptions(accessToken!),
     enabled: !!accessToken,
     staleTime: 60_000,
   });
 
   const { data: keysData } = useQuery({
-    queryKey: ["keys-list-tool-detail"],
+    queryKey: ["keys-list-tool-detail", accessToken],
     queryFn: () => keyListCall(accessToken!, null, null, null, null, null, 1, 100),
     enabled: !!accessToken,
   });
 
-  const { data: logsData, isLoading: logsLoading } = useQuery({
-    queryKey: ["tool-usage-logs", toolName, logsDateRange.start, logsDateRange.end],
+  const logsLoadingQuery = useQuery({
+    queryKey: ["tool-usage-logs", toolName, logsDateRange.start, logsDateRange.end, accessToken],
     queryFn: () =>
       getToolUsageLogs(accessToken!, toolName, {
         page: 1,
@@ -101,6 +100,8 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
       }),
     enabled: !!accessToken && !!toolName,
   });
+  const { data: logsData } = logsLoadingQuery;
+  const logsLoading = isQueryPending(logsLoadingQuery);
 
   const logs: LogEntry[] = useMemo(() => {
     const list = logsData?.logs ?? [];

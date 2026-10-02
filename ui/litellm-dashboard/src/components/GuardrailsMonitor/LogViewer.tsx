@@ -83,7 +83,7 @@ export function LogViewer({
     : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
   const { data: fullLogResponse } = useQuery({
-    queryKey: ["spend-log-by-request", selectedRequestId, startTime, endTime],
+    queryKey: ["spend-log-by-request", selectedRequestId, startTime, endTime, accessToken],
     queryFn: async () => {
       if (!accessToken || !selectedRequestId) return null;
       const res = await uiSpendLogsCall({

@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { ConfigType, useProxyConfig } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConfig";
 import { StoreModelInDBParams, useStoreModelInDB } from "@/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB";
 import { toast } from "@/lib/toast";
@@ -33,7 +34,9 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
 
 const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCancel, onSuccess }) => {
   const { mutateAsync, isPending } = useStoreModelInDB();
-  const { data: proxyConfigData, isLoading: isLoadingConfig, refetch } = useProxyConfig(ConfigType.GENERAL_SETTINGS);
+  const isLoadingConfigQuery = useProxyConfig(ConfigType.GENERAL_SETTINGS);
+  const { data: proxyConfigData, refetch } = isLoadingConfigQuery;
+  const isLoadingConfig = isQueryPending(isLoadingConfigQuery);
 
   // Refetch config when modal opens to ensure we have the latest values
   useEffect(() => {

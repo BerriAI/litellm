@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useEffect, useMemo, useState } from "react";
 import { Bot, Check, Copy, Sparkles, Wrench } from "lucide-react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -127,7 +128,7 @@ export function LogDetailsDrawer({
   const [copiedLeftPanelId, setCopiedLeftPanelId] = useState(false);
 
   const { data: sessionData } = useQuery({
-    queryKey: ["sessionLogs", sessionId],
+    queryKey: ["sessionLogs", sessionId, accessToken],
     queryFn: async () => {
       if (!sessionId || !accessToken) return { logs: [] as LogEntry[], total: 0 };
 
@@ -245,7 +246,7 @@ export function LogDetailsDrawer({
   // This fetches data for a single log on-demand instead of prefetching all 50.
   const logDetails = useLogDetails(currentLog?.request_id, startTime, open && !!currentLog?.request_id);
   const detailsData = logDetails.data as any;
-  const isLoadingDetails = logDetails.isLoading;
+  const isLoadingDetails = isQueryPending(logDetails);
   const { data: logUser } = useUserLookup(open && currentLog?.user ? currentLog.user : null);
 
   // Build an enriched log entry that merges lazy-loaded details.

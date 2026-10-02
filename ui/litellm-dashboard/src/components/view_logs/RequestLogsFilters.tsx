@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useMemo, useState } from "react";
 
 import { useInfiniteSpendLogEndUsers } from "@/app/(dashboard)/hooks/spendLogs/useSpendLogEndUsers";
@@ -99,11 +100,9 @@ function KeyAliasFilterField({
   teamId: string;
 }) {
   const [search, setSearch] = useState("");
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteKeyAliases(
-    PAGE_SIZE,
-    emptyToUndefined(search),
-    emptyToUndefined(teamId),
-  );
+  const isLoadingQuery = useInfiniteKeyAliases(PAGE_SIZE, emptyToUndefined(search), emptyToUndefined(teamId));
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const options = useMemo<SearchSelectOption[]>(() => {
     const seen = new Set<string>();
@@ -136,10 +135,9 @@ function KeyAliasFilterField({
 
 function ModelFilterField({ value, onChange }: { value: string; onChange: (value: string | undefined) => void }) {
   const [search, setSearch] = useState("");
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteModelInfo(
-    PAGE_SIZE,
-    emptyToUndefined(search),
-  );
+  const isLoadingQuery = useInfiniteModelInfo(PAGE_SIZE, emptyToUndefined(search));
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const options = useMemo<SearchSelectOption[]>(() => {
     const seen = new Set<string>();
@@ -182,11 +180,9 @@ function UserIdFilterField({
   logsWindow: LogsWindow;
 }) {
   const [search, setSearch] = useState("");
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteSpendLogUsers(
-    logsWindow,
-    PAGE_SIZE,
-    emptyToUndefined(search),
-  );
+  const isLoadingQuery = useInfiniteSpendLogUsers(logsWindow, PAGE_SIZE, emptyToUndefined(search));
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const options = useMemo<SearchSelectOption[]>(() => {
     const seen = new Set<string>();
@@ -227,11 +223,9 @@ function EndUserFilterField({
   logsWindow: LogsWindow;
 }) {
   const [search, setSearch] = useState("");
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteSpendLogEndUsers(
-    logsWindow,
-    PAGE_SIZE,
-    emptyToUndefined(search),
-  );
+  const isLoadingQuery = useInfiniteSpendLogEndUsers(logsWindow, PAGE_SIZE, emptyToUndefined(search));
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const options = useMemo<SearchSelectOption[]>(() => {
     const seen = new Set<string>();

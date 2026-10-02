@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Trash2, Link } from "lucide-react";
@@ -69,11 +70,13 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
   const queryClient = useQueryClient();
   const [revoking, setRevoking] = useState<Set<string>>(new Set());
 
-  const { data: credentials = [], isLoading: loading } = useQuery({
+  const loadingQuery = useQuery({
     queryKey: [MCP_CREDENTIALS_QUERY_KEY, accessToken],
     queryFn: () => listMCPUserCredentials(accessToken),
     enabled: !!accessToken,
   });
+  const { data: credentials = [] } = loadingQuery;
+  const loading = isQueryPending(loadingQuery);
 
   const handleRevoke = async (serverId: string) => {
     setRevoking((prev) => new Set(prev).add(serverId));

@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useCloudZeroSettings } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroSettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Card, CardContent } from "@/components/ui/card";
@@ -10,7 +11,9 @@ import { CloudZeroIntegrationSettings } from "./CloudZeroIntegrationSettings";
 
 export default function CloudZeroCostTracking() {
   const { accessToken } = useAuthorized();
-  const { data: settings, isLoading, error } = useCloudZeroSettings(accessToken);
+  const isLoadingQuery = useCloudZeroSettings(accessToken);
+  const { data: settings, error } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const queryClient = useQueryClient();
   const cloudZeroSettingsKeys = createQueryKeys("cloudZeroSettings");
 

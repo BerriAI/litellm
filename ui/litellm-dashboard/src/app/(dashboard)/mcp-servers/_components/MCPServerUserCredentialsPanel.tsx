@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, ShieldOff } from "lucide-react";
@@ -127,12 +128,14 @@ export function MCPServerUserCredentialsPanel({
 }: MCPServerUserCredentialsPanelProps) {
   const queryClient = useQueryClient();
   const [pendingItem, setPendingItem] = useState<MCPServerUserCredentialListItem | null>(null);
-  const queryKey = mcpServerUserCredentialKeys.detail(serverId);
-  const { data, error, isLoading, isFetching, refetch } = useQuery<MCPServerUserCredentialListItem[], Error>({
+  const queryKey = [...mcpServerUserCredentialKeys.detail(serverId), accessToken];
+  const isLoadingQuery = useQuery<MCPServerUserCredentialListItem[], Error>({
     queryKey,
     queryFn: () => fetchMCPServerUserCredentials(accessToken!, serverId),
     enabled: !!accessToken,
   });
+  const { data, error, isFetching, refetch } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const revoke = useMutation<void, Error, MCPServerUserCredentialListItem>({
     mutationFn: (item) => revokeMCPServerUserCredential(accessToken!, serverId, item.user_id, item.credential_type),
     onSettled: () => queryClient.invalidateQueries({ queryKey }),

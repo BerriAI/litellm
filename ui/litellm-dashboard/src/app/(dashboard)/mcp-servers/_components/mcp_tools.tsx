@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
@@ -89,17 +90,18 @@ const MCPToolsViewer = ({
   // authorization_code servers list tools using a per-user token the backend stores in the DB;
   // check whether the current user has a valid one so we can prompt them to
   // authorize when they don't (otherwise the backend silently returns no tools).
-  const {
-    data: authorizationCodeCredStatus,
-    isLoading: isLoadingAuthorizationCodeCred,
-    isError: isAuthorizationCodeCredError,
-    refetch: refetchAuthorizationCodeCred,
-  } = useQuery({
-    queryKey: ["mcpOauthUserCredStatus", serverId, userID],
+  const isLoadingAuthorizationCodeCredQuery = useQuery({
+    queryKey: ["mcpOauthUserCredStatus", serverId, userID, accessToken],
     queryFn: () => getMCPOAuthUserCredentialStatus(accessToken ?? "", serverId),
     enabled: !!accessToken && isAuthorizationCode,
     staleTime: 30000,
   });
+  const {
+    data: authorizationCodeCredStatus,
+    isError: isAuthorizationCodeCredError,
+    refetch: refetchAuthorizationCodeCred,
+  } = isLoadingAuthorizationCodeCredQuery;
+  const isLoadingAuthorizationCodeCred = isQueryPending(isLoadingAuthorizationCodeCredQuery);
 
   // A stored credential is sufficient: the backend proactively refreshes an
   // expired or near-expiry token from the stored refresh_token on the next list
@@ -149,13 +151,8 @@ const MCPToolsViewer = ({
   };
 
   // Query to fetch MCP tools
-  const {
-    data: mcpToolsResponse,
-    isLoading: isLoadingTools,
-    error: mcpToolsError,
-    refetch: refetchTools,
-  } = useQuery({
-    queryKey: ["mcpTools", serverId, passthroughHeaders, oauthToken],
+  const isLoadingToolsQuery = useQuery({
+    queryKey: ["mcpTools", serverId, passthroughHeaders, oauthToken, accessToken, userID],
     queryFn: async () => {
       if (!accessToken) throw new Error("Access Token required");
       const result = await listMCPTools(accessToken, serverId, buildCustomHeaders());
@@ -191,6 +188,8 @@ const MCPToolsViewer = ({
       return failureCount < 2;
     },
   });
+  const { data: mcpToolsResponse, error: mcpToolsError, refetch: refetchTools } = isLoadingToolsQuery;
+  const isLoadingTools = isQueryPending(isLoadingToolsQuery);
 
   // authorization_code authorize: same redirect+exchange flow as the admin "Authorize & Fetch"
   // and the chat "Connect" button, but persists the token to the per-user DB.

@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useProjectDetails } from "@/app/(dashboard)/hooks/projects/useProjectDetails";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { BarChart } from "@/components/shared/charts";
@@ -22,7 +23,9 @@ interface ProjectDetailProps {
 const utilisationTone = (percent: number) => (percent >= 90 ? "over" : percent >= 70 ? "warning" : "default");
 
 export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
-  const { data: project, isLoading } = useProjectDetails(projectId);
+  const isLoadingQuery = useProjectDetails(projectId);
+  const { data: project } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const { data: teamInfo } = useTeam(project?.team_id ?? undefined);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
 

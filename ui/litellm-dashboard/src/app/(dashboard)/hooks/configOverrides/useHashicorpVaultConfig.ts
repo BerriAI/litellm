@@ -9,7 +9,7 @@ export const useHashicorpVaultConfig = () => {
   const { accessToken } = useAuthorized();
 
   return useQuery<Record<string, any>>({
-    queryKey: hashicorpVaultKeys.list({}),
+    queryKey: [...hashicorpVaultKeys.list({}), accessToken],
     queryFn: async () => {
       if (!accessToken) {
         throw new Error("Access token is required");

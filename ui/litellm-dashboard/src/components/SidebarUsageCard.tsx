@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useLicenseInfo } from "@/app/(dashboard)/hooks/license/useLicenseInfo";
 import { formatExpirationStatus } from "@/utils/licenseUtils";
 import { Button } from "@/components/ui/button";
@@ -69,7 +70,9 @@ const buildMeters = (data: RemainingUsage | null): MeterData[] => {
  */
 export default function SidebarUsageCard({ accessToken, collapsed, onExpandRail }: SidebarUsageCardProps) {
   const licenseInfo = useLicenseInfo(accessToken).data ?? null;
-  const { data: usageData, isLoading } = useQuery(remainingUsersQuery(accessToken));
+  const isLoadingQuery = useQuery(remainingUsersQuery(accessToken));
+  const { data: usageData } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const data = usageData ?? null;
 
   const hasData = data !== null && (data.total_users !== null || data.total_teams !== null);

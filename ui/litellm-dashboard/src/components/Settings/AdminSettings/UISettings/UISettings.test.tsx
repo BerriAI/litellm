@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import UISettings from "./UISettings";
@@ -42,7 +43,7 @@ const buildSettingsResponse = (overrides?: Partial<Record<string, unknown>>) => 
       require_auth_for_public_ai_hub: false,
     },
   },
-  isLoading: false,
+  ...queryState(false),
   isError: false,
   error: null,
   ...overrides,

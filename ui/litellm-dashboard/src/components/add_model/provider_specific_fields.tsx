@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Input } from "@/components/ui/input";
@@ -93,7 +94,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
       }
     };
 
-  const { data: providerMetadata, isLoading, error: loadError } = useProviderFields();
+  const isLoadingQuery = useProviderFields();
+  const { data: providerMetadata, error: loadError } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   // Memoize the expensive cache computation
   const cacheEntries = React.useMemo(() => {

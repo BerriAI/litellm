@@ -9,7 +9,7 @@ const mcpToolsetKeys = createQueryKeys("mcpToolsets");
 export const useMCPToolsets = () => {
   const { accessToken } = useAuthorized();
   return useQuery<MCPToolset[]>({
-    queryKey: mcpToolsetKeys.list(),
+    queryKey: [...mcpToolsetKeys.list(), accessToken],
     queryFn: async () => await fetchMCPToolsets(accessToken!),
     enabled: !!accessToken,
   });

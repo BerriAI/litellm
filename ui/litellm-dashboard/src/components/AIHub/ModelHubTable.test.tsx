@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import * as networking from "@/components/networking";
 import userEvent from "@testing-library/user-event";
 import { act } from "@testing-library/react";
@@ -81,7 +82,7 @@ describe("ModelHubTable", () => {
           require_auth_for_public_ai_hub: requireAuth,
         },
       },
-      isLoading: false,
+      ...queryState(false),
     });
     mockGetCookie.mockReturnValue(tokenValue);
     mockCheckTokenValidity.mockReturnValue(isTokenValid);
@@ -144,7 +145,7 @@ describe("ModelHubTable", () => {
     });
     mockUseUISettings.mockReturnValue({
       data: { values: {} },
-      isLoading: false,
+      ...queryState(false),
     });
 
     renderWithProviders(
@@ -162,7 +163,7 @@ describe("ModelHubTable", () => {
     });
     mockUseUISettings.mockReturnValue({
       data: { values: {} },
-      isLoading: false,
+      ...queryState(false),
     });
 
     renderWithProviders(<ModelHubTable accessToken={null} publicPage={false} premiumUser={false} userRole={null} />);
@@ -188,7 +189,7 @@ describe("ModelHubTable", () => {
     });
     mockUseUISettings.mockReturnValue({
       data: { values: {} },
-      isLoading: false,
+      ...queryState(false),
     });
 
     renderWithProviders(<ModelHubTable accessToken={null} publicPage={true} premiumUser={false} userRole={null} />);
@@ -213,7 +214,10 @@ describe("ModelHubTable", () => {
       vi.mocked(networking.getAgentsList).mockResolvedValue({ agents });
       vi.mocked(networking.fetchMCPServers).mockReturnValue(mcpServers);
       vi.mocked(networking.getUiSettings).mockResolvedValue({ values: {} });
-      mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
+      mockUseUISettings.mockReturnValue({
+        data: { values: {} },
+        ...queryState(false),
+      });
 
       const user = userEvent.setup();
       renderWithProviders(

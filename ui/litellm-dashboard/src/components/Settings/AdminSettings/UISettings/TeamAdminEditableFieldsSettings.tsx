@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { Controller } from "react-hook-form";
 import { z } from "zod/v4";
 
@@ -25,7 +26,9 @@ type SaveEditableFields = ReturnType<typeof useUpdateUISettings>["mutate"];
 
 export default function TeamAdminEditableFieldsSettings() {
   const { accessToken } = useAuthorized();
-  const { data, isLoading } = useUISettings();
+  const isLoadingQuery = useUISettings();
+  const { data } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const { mutate: saveSettings, isPending } = useUpdateUISettings(accessToken);
   const supportedFields = parseSupportedTeamAdminEditableFields(data?.field_schema);
   const savedFields = parseTeamAdminEditableFields(data?.values);

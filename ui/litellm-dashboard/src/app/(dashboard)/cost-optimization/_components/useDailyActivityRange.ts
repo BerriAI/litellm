@@ -1,15 +1,16 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useMemo, useState } from "react";
 
-import { dailyActivityAggregatedCall } from "@/components/networking";
 import {
   EMPTY_DAILY_ACTIVITY_METADATA,
+  EMPTY_DAILY_ACTIVITY_RESPONSE,
   toDailyData,
   type DailyActivityMetadata,
   type DailyActivityRequest,
 } from "@/components/UsagePage/dailyActivityApi";
 import { DailyData } from "@/components/UsagePage/types";
 import { spendScopeUserId } from "@/utils/roles";
-import { useAggregatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/useAggregatedDailyActivity";
+import { useAggregatedDailyActivity } from "@/app/(dashboard)/hooks/dailyActivity/dailyActivityQueries";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -50,6 +51,18 @@ export interface ScopedActivityInput {
   apiKey?: string | null;
 }
 
+export const buildDailyActivityRequest = (scope: DailyActivityScope): DailyActivityRequest | null =>
+  scope.accessToken && scope.startTime && scope.endTime
+    ? {
+        accessToken: scope.accessToken,
+        startTime: scope.startTime,
+        endTime: scope.endTime,
+        entityIds: scope.userId ? [scope.userId] : null,
+        apiKey: scope.apiKey,
+        includeCurrentUtcDay: true,
+      }
+    : null;
+
 export const useScopedDailyActivityRange = (
   accessToken: string | null,
   scope: ScopedActivityInput,
@@ -59,35 +72,24 @@ export const useScopedDailyActivityRange = (
   const endTime = dateValue.to ?? null;
   const { userId, apiKey = null } = scope;
 
-  const request = useMemo<DailyActivityRequest | null>(
-    () =>
-      accessToken && startTime && endTime
-        ? {
-            accessToken,
-            startTime,
-            endTime,
-            entityIds: userId ? [userId] : null,
-            apiKey,
-            includeCurrentUtcDay: true,
-          }
-        : null,
+  const activityScope = useMemo<DailyActivityScope>(
+    () => ({ accessToken, startTime, endTime, userId, apiKey }),
     [accessToken, startTime, endTime, userId, apiKey],
   );
 
-  const { data, loading, failed } = useAggregatedDailyActivity({
-    fetch: () => dailyActivityAggregatedCall("user", request as DailyActivityRequest),
-    enabled: request !== null,
-    deps: [accessToken, startTime, endTime, userId, apiKey],
-  });
+  const request = useMemo<DailyActivityRequest | null>(() => buildDailyActivityRequest(activityScope), [activityScope]);
+
+  const query = useAggregatedDailyActivity("user", request);
+  const data = query.data ?? EMPTY_DAILY_ACTIVITY_RESPONSE;
 
   return {
     dateValue,
     onDateChange,
     results: toDailyData(data),
     metadata: data.metadata ?? EMPTY_DAILY_ACTIVITY_METADATA,
-    loading,
-    failed,
-    scope: { accessToken, startTime, endTime, userId, apiKey },
+    loading: isQueryPending(query),
+    failed: query.isError,
+    scope: activityScope,
   };
 };
 

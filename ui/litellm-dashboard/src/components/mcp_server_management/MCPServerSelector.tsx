@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useMCPAccessGroups } from "@/app/(dashboard)/hooks/mcpServers/useMCPAccessGroups";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
@@ -34,9 +35,15 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   allowNoMcpServers = false,
   allowAllProxyMcpServers = false,
 }) => {
-  const { data: mcpServers = [], isLoading: serversLoading } = useMCPServers(teamId);
-  const { data: accessGroups = [], isLoading: groupsLoading } = useMCPAccessGroups();
-  const { data: toolsets = [], isLoading: toolsetsLoading } = useMCPToolsets();
+  const serversLoadingQuery = useMCPServers(teamId);
+  const { data: mcpServers = [] } = serversLoadingQuery;
+  const serversLoading = isQueryPending(serversLoadingQuery);
+  const groupsLoadingQuery = useMCPAccessGroups();
+  const { data: accessGroups = [] } = groupsLoadingQuery;
+  const groupsLoading = isQueryPending(groupsLoadingQuery);
+  const toolsetsLoadingQuery = useMCPToolsets();
+  const { data: toolsets = [] } = toolsetsLoadingQuery;
+  const toolsetsLoading = isQueryPending(toolsetsLoadingQuery);
 
   const loading = serversLoading || groupsLoading || toolsetsLoading;
 

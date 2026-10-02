@@ -35,7 +35,7 @@ export const useProjectDetails = (projectId?: string) => {
   const queryClient = useQueryClient();
 
   return useQuery<ProjectResponse>({
-    queryKey: projectKeys.detail(projectId!),
+    queryKey: [...projectKeys.detail(projectId!), accessToken],
     queryFn: async () => fetchProjectDetails(accessToken!, projectId!),
     enabled: Boolean(accessToken && projectId) && all_admin_roles.includes(userRole || ""),
 
@@ -43,7 +43,7 @@ export const useProjectDetails = (projectId?: string) => {
     initialData: () => {
       if (!projectId) return undefined;
 
-      const projects = queryClient.getQueryData<ProjectResponse[]>(projectKeys.list({}));
+      const projects = queryClient.getQueryData<ProjectResponse[]>([...projectKeys.list({}), accessToken]);
 
       return projects?.find((p) => p.project_id === projectId);
     },

@@ -95,6 +95,19 @@ describe("useCredentials", () => {
     expect(credentialListCall).toHaveBeenCalledTimes(1);
   });
 
+  it("does not reuse credentials when the authorization scope changes", async () => {
+    vi.mocked(credentialListCall).mockResolvedValue(mockCredentialsResponse);
+    const { result, rerender } = renderHook(() => useCredentials(), { wrapper });
+    await waitFor(() => expect(result.current.data).toEqual(mockCredentialsResponse));
+
+    vi.mocked(credentialListCall).mockImplementation(() => new Promise(() => {}));
+    mockUseAuthorized.mockReturnValue({ accessToken: "another-session" });
+    rerender();
+
+    expect(result.current.data).toBeUndefined();
+    await waitFor(() => expect(credentialListCall).toHaveBeenCalledWith("another-session"));
+  });
+
   it("should handle error when credentialListCall fails", async () => {
     const errorMessage = "Failed to fetch credentials";
     const testError = new Error(errorMessage);

@@ -17,7 +17,7 @@ export const coordinationRedisKeys = createQueryKeys("coordinationRedis");
 export const useCoordinationRedisSettings = (): UseQueryResult<CoordinationRedisSettingsResponse> => {
   const { accessToken } = useAuthorized();
   return useQuery<CoordinationRedisSettingsResponse>({
-    queryKey: coordinationRedisKeys.list({}),
+    queryKey: [...coordinationRedisKeys.list({}), accessToken],
     queryFn: async () => getCoordinationRedisSettingsCall(accessToken!),
     enabled: Boolean(accessToken),
   });

@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import React from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -106,7 +107,10 @@ beforeEach(() => {
 });
 
 test("renders organization view after loading data", async () => {
-  mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
+  mockUseOrganization.mockReturnValue({
+    data: mockOrg,
+    ...queryState(false),
+  } as any);
 
   renderWithProviders(
     <OrganizationInfoView
@@ -124,7 +128,10 @@ test("renders organization view after loading data", async () => {
 });
 
 test("should display empty state when organization has no members", async () => {
-  mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
+  mockUseOrganization.mockReturnValue({
+    data: mockOrg,
+    ...queryState(false),
+  } as any);
 
   const user = userEvent.setup();
   renderWithProviders(
@@ -154,7 +161,10 @@ test("should display team aliases when teams are available", async () => {
     ...mockOrg,
     teams: [{ team_id: "team_123" }, { team_id: "team_456" }],
   };
-  mockUseOrganization.mockReturnValue({ data: orgWithTeams, isLoading: false } as any);
+  mockUseOrganization.mockReturnValue({
+    data: orgWithTeams,
+    ...queryState(false),
+  } as any);
 
   renderWithProviders(
     <OrganizationInfoView
@@ -187,7 +197,10 @@ test("should display team ID as fallback when alias is not found", async () => {
     ...mockOrg,
     teams: [{ team_id: "team_999" }],
   };
-  mockUseOrganization.mockReturnValue({ data: orgWithUnknownTeam, isLoading: false } as any);
+  mockUseOrganization.mockReturnValue({
+    data: orgWithUnknownTeam,
+    ...queryState(false),
+  } as any);
 
   renderWithProviders(
     <OrganizationInfoView
@@ -210,7 +223,10 @@ test("links each team badge to that team's detail page", async () => {
     ...mockOrg,
     teams: [{ team_id: "team_123" }, { team_id: "team_456" }],
   };
-  mockUseOrganization.mockReturnValue({ data: orgWithTeams, isLoading: false } as any);
+  mockUseOrganization.mockReturnValue({
+    data: orgWithTeams,
+    ...queryState(false),
+  } as any);
 
   renderWithProviders(
     <OrganizationInfoView
@@ -236,7 +252,10 @@ test("links each team badge to that team's detail page", async () => {
 });
 
 test("model badges stay non-clickable", async () => {
-  mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
+  mockUseOrganization.mockReturnValue({
+    data: mockOrg,
+    ...queryState(false),
+  } as any);
 
   renderWithProviders(
     <OrganizationInfoView
@@ -256,7 +275,10 @@ test("model badges stay non-clickable", async () => {
 });
 
 test("should keep unsaved settings edits when switching tabs and back", async () => {
-  mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
+  mockUseOrganization.mockReturnValue({
+    data: mockOrg,
+    ...queryState(false),
+  } as any);
 
   const user = userEvent.setup();
   renderWithProviders(
@@ -289,9 +311,10 @@ test("renders a tpm/rpm limit of 0 as 0 in the overview and settings tabs, never
     ...mockOrg,
     litellm_budget_table: { ...mockOrg.litellm_budget_table, tpm_limit: 0, rpm_limit: 0 },
   };
-  mockUseOrganization.mockReturnValue({ data: zeroLimitOrg, isLoading: false } as unknown as ReturnType<
-    typeof useOrganization
-  >);
+  mockUseOrganization.mockReturnValue({
+    data: zeroLimitOrg,
+    ...queryState(false),
+  } as unknown as ReturnType<typeof useOrganization>);
 
   const user = userEvent.setup();
   renderWithProviders(
@@ -332,9 +355,10 @@ const lastSearchParams = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => onUrlUpdate
 
 describe("organization detail tab in the URL (?org_tab=)", () => {
   beforeEach(() => {
-    mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as unknown as ReturnType<
-      typeof useOrganization
-    >);
+    mockUseOrganization.mockReturnValue({
+      data: mockOrg,
+      ...queryState(false),
+    } as unknown as ReturnType<typeof useOrganization>);
   });
 
   test("opens on the tab named by ?org_tab=", () => {

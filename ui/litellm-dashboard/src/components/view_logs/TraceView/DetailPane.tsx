@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { PanelRightClose } from "lucide-react";
 import { useState } from "react";
 
@@ -156,7 +157,7 @@ function SpanPane({
             traceId={traceId}
             span={span}
             attributes={detailQuery.data?.attributes}
-            isLoading={detailQuery.isLoading}
+            isLoading={isQueryPending(detailQuery)}
           />
         )}
       </div>

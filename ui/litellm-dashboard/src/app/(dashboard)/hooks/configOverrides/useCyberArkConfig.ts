@@ -9,7 +9,7 @@ export const useCyberArkConfig = () => {
   const { accessToken } = useAuthorized();
 
   const queryOptions = {
-    queryKey: cyberArkKeys.list({}),
+    queryKey: [...cyberArkKeys.list({}), accessToken],
     queryFn: async () => {
       if (!accessToken) {
         throw new Error("Access token is required");

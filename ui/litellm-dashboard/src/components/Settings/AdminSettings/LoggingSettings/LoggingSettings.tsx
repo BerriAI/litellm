@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import {
   ConfigType,
   GeneralSettingsFieldName,
@@ -231,7 +232,9 @@ const LoggingSettingsForm: React.FC<LoggingSettingsFormProps> = ({
 const LoggingSettings: React.FC = () => {
   const { mutate, isPending } = useStoreRequestInSpendLogs();
   const { mutate: deleteField, isPending: isDeletingField } = useDeleteProxyConfigField();
-  const { data: proxyConfigData, isLoading: isLoadingConfig } = useProxyConfig(ConfigType.GENERAL_SETTINGS);
+  const isLoadingConfigQuery = useProxyConfig(ConfigType.GENERAL_SETTINGS);
+  const { data: proxyConfigData } = isLoadingConfigQuery;
+  const isLoadingConfig = isQueryPending(isLoadingConfigQuery);
 
   const describeField = (name: string, fallback: string) =>
     proxyConfigData?.find((field) => field.field_name === name)?.field_description || fallback;

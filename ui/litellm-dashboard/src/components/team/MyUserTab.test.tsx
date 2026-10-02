@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen } from "../../../tests/test-utils";
 import MyUserTab from "./MyUserTab";
@@ -13,7 +14,9 @@ describe("MyUserTab", () => {
   });
 
   it("should render", () => {
-    vi.mocked(useMyTeamMember).mockReturnValue({ isLoading: true } as ReturnType<typeof useMyTeamMember>);
+    vi.mocked(useMyTeamMember).mockReturnValue({
+      ...queryState(true),
+    } as ReturnType<typeof useMyTeamMember>);
 
     renderWithProviders(<MyUserTab teamId="team-1" />);
 
@@ -36,7 +39,7 @@ describe("MyUserTab", () => {
           allowed_models: ["model-one"],
         },
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     } as ReturnType<typeof useMyTeamMember>);
 

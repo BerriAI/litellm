@@ -27,7 +27,7 @@ export const useTeamMetadataSchema = () => {
   const { accessToken } = useAuthorized();
 
   return useQuery<TeamMetadataField[]>({
-    queryKey: teamMetadataSchemaKeys.list({}),
+    queryKey: [...teamMetadataSchemaKeys.list({}), accessToken],
     queryFn: async () => await fetchTeamMetadataSchema(accessToken!),
     enabled: Boolean(accessToken),
     staleTime: TWENTY_FOUR_HOURS_MS,

@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,10 +36,16 @@ const optionByLabel = (label: string): HTMLElement | undefined =>
 const setupMcpMocks = () => {
   mockUseMCPServers.mockReturnValue({
     data: [{ server_id: "srv-1", server_name: "Server One" }],
-    isLoading: false,
+    ...queryState(false),
   } as any);
-  mockUseMCPAccessGroups.mockReturnValue({ data: [], isLoading: false } as any);
-  mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false } as any);
+  mockUseMCPAccessGroups.mockReturnValue({
+    data: [],
+    ...queryState(false),
+  } as any);
+  mockUseMCPToolsets.mockReturnValue({
+    data: [],
+    ...queryState(false),
+  } as any);
 };
 
 describe("MCPServerSelector no-mcp-servers option", () => {

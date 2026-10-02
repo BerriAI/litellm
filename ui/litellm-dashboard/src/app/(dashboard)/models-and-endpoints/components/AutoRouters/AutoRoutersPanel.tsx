@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -36,7 +37,9 @@ export function AutoRoutersPanel({
   createScope,
 }: AutoRoutersPanelProps) {
   const canCreate = createScope !== "forbidden";
-  const { data: deployments, isLoading } = useAutoRouters();
+  const isLoadingQuery = useAutoRouters();
+  const { data: deployments } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const invalidateAutoRouters = useInvalidateAutoRouters();
   // Clicking a router opens the same ?model= drill-in the Deployed Models table uses, so an auto
   // router gets the full ModelInfoView: Model Settings, Edit Settings, Edit Auto Router and

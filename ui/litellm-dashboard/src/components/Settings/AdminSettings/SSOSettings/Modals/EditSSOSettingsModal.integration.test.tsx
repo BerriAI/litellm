@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../../tests/queryState";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,7 +22,7 @@ const storedGoogleConfig = {
 const seed = (values: Record<string, unknown> = storedGoogleConfig) => {
   vi.mocked(useSSOSettings).mockReturnValue({
     data: { values },
-    isLoading: false,
+    ...queryState(false),
     error: null,
   } as unknown as ReturnType<typeof useSSOSettings>);
   vi.mocked(useEditSSOSettings).mockReturnValue({

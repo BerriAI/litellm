@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../../tests/queryState";
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -7,7 +8,7 @@ import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "@/../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import type { Organization } from "@/components/networking";
 import * as networking from "@/components/networking";
 import UsagePage from "./UsagePageView";
@@ -366,6 +367,7 @@ describe("UsagePage", () => {
   };
 
   beforeEach(() => {
+    testQueryClient.clear();
     mockUseAuthorized.mockReturnValue({
       isLoading: false,
       isAuthorized: true,
@@ -383,7 +385,7 @@ describe("UsagePage", () => {
         user_id: "user-123",
         max_budget: null,
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     } as any);
     mockUserDailyActivityAggregatedCall.mockClear();
@@ -421,17 +423,17 @@ describe("UsagePage", () => {
       fetchNextPage: vi.fn(),
       hasNextPage: false,
       isFetchingNextPage: false,
-      isLoading: false,
+      ...queryState(false),
     } as any);
     mockTagListCall.mockResolvedValue({});
     mockUseCustomers.mockReturnValue({
       data: [],
-      isLoading: false,
+      ...queryState(false),
       error: null,
     } as any);
     mockUseAgents.mockReturnValue({
       data: { agents: [] },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     } as any);
   });
@@ -783,7 +785,7 @@ describe("UsagePage", () => {
   it("should show customer usage view for admins", async () => {
     mockUseCustomers.mockReturnValue({
       data: mockCustomers,
-      isLoading: false,
+      ...queryState(false),
       error: null,
     } as any);
 
@@ -805,7 +807,11 @@ describe("UsagePage", () => {
   });
 
   it("should withhold the customer list while it is still loading", async () => {
-    mockUseCustomers.mockReturnValue({ data: undefined, isLoading: true, error: null } as any);
+    mockUseCustomers.mockReturnValue({
+      data: undefined,
+      ...queryState(true),
+      error: null,
+    } as any);
 
     renderWithProviders(<UsagePage {...defaultProps} />);
 
@@ -820,7 +826,7 @@ describe("UsagePage", () => {
   it("should show agent usage view for admins", async () => {
     mockUseAgents.mockReturnValue({
       data: { agents: mockAgents },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     } as any);
 
@@ -947,7 +953,7 @@ describe("UsagePage", () => {
         fetchNextPage: vi.fn(),
         hasNextPage: false,
         isFetchingNextPage: false,
-        isLoading: false,
+        ...queryState(false),
       } as any);
 
       renderWithProviders(<UsagePage {...defaultProps} />);
@@ -1000,7 +1006,7 @@ describe("UsagePage", () => {
         fetchNextPage: vi.fn(),
         hasNextPage: true,
         isFetchingNextPage: false,
-        isLoading: false,
+        ...queryState(false),
       } as unknown as ReturnType<typeof useInfiniteUsers>);
 
       renderWithProviders(<UsagePage {...defaultProps} />);
@@ -1245,7 +1251,7 @@ describe("UsagePage", () => {
     it("should show and be dismissible in customer view", async () => {
       mockUseCustomers.mockReturnValue({
         data: mockCustomers,
-        isLoading: false,
+        ...queryState(false),
         error: null,
       } as any);
 
@@ -1271,7 +1277,7 @@ describe("UsagePage", () => {
     it("should show agent usage banner with A2A info", async () => {
       mockUseAgents.mockReturnValue({
         data: { agents: mockAgents },
-        isLoading: false,
+        ...queryState(false),
         error: null,
       } as any);
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { Suspense, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -13,7 +14,9 @@ import { uiHref } from "@/utils/uiHref";
 // ChatShellProvider uses useSearchParams(), which requires a Suspense boundary for static export.
 function ChatLayoutContent({ children }: { children: React.ReactNode }) {
   const { accessToken, userRole, userId, userEmail, premiumUser } = useAuthorized();
-  const { data: uiSettings, isLoading: isUISettingsLoading } = useUISettings();
+  const isUISettingsLoadingQuery = useUISettings();
+  const { data: uiSettings } = isUISettingsLoadingQuery;
+  const isUISettingsLoading = isQueryPending(isUISettingsLoadingQuery);
   const router = useRouter();
 
   const chatEnabled = Boolean(uiSettings?.values?.enable_chat_ui);

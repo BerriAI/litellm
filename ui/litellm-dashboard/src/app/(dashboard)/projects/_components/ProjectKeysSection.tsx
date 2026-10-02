@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { KeyIcon, SearchIcon, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,10 +18,12 @@ export function ProjectKeysSection({ projectId }: ProjectKeysSectionProps) {
     onPaginationChange: setPagination,
   } = useProjectKeysTableState();
 
-  const { data, isLoading, isError } = useKeys(pagination.pageIndex + 1, pagination.pageSize, {
+  const isLoadingQuery = useKeys(pagination.pageIndex + 1, pagination.pageSize, {
     projectID: projectId,
     selectedKeyAlias: keyAlias || null,
   });
+  const { data, isError } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const keys = data?.keys ?? [];
   const totalCount = data?.total_count ?? 0;

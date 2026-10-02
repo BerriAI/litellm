@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -284,7 +285,7 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
   });
   const trace = traceQuery.data;
 
-  if (traceQuery.isLoading) {
+  if (isQueryPending(traceQuery)) {
     return (
       <div
         role="status"

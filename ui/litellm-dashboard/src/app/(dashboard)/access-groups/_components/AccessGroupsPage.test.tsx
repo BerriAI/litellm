@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { fireEvent, renderWithProviders, screen, within } from "@/../tests/test-utils";
 import { waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -98,7 +99,10 @@ const openRowMenu = async (user: ReturnType<typeof userEvent.setup>, groupId: st
 describe("AccessGroupsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUseAccessGroups.mockReturnValue({ data: mockAccessGroups, isLoading: false });
+    mockUseAccessGroups.mockReturnValue({
+      data: mockAccessGroups,
+      ...queryState(false),
+    });
     mockUseDeleteAccessGroup.mockReturnValue({ mutate: mockMutate, isPending: false });
     mockUseAuthorized.mockReturnValue({ userRole: "Admin", accessToken: "sk-test" });
   });
@@ -182,13 +186,19 @@ describe("AccessGroupsPage", () => {
   });
 
   it("shows the empty state when there are no groups", () => {
-    mockUseAccessGroups.mockReturnValue({ data: [], isLoading: false });
+    mockUseAccessGroups.mockReturnValue({
+      data: [],
+      ...queryState(false),
+    });
     renderWithProviders(<AccessGroupsPage />);
     expect(screen.getByText("No access groups yet")).toBeInTheDocument();
   });
 
   it("renders loading skeletons on the initial load", () => {
-    mockUseAccessGroups.mockReturnValue({ data: undefined, isLoading: true });
+    mockUseAccessGroups.mockReturnValue({
+      data: undefined,
+      ...queryState(true),
+    });
     renderWithProviders(<AccessGroupsPage />);
     expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
     expect(screen.queryByText("Admin Group")).not.toBeInTheDocument();
@@ -253,7 +263,10 @@ describe("AccessGroupsPage", () => {
 
   it("still shows matches when searching from a later page", async () => {
     const user = userEvent.setup();
-    mockUseAccessGroups.mockReturnValue({ data: makeGroups(25), isLoading: false });
+    mockUseAccessGroups.mockReturnValue({
+      data: makeGroups(25),
+      ...queryState(false),
+    });
     renderWithProviders(<AccessGroupsPage />);
 
     await user.click(screen.getByTestId("pagination-next"));

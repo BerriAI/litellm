@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useAccessGroupDetails } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails";
 import { ArrowLeftIcon, BotIcon, EditIcon, KeyIcon, LayersIcon, ServerIcon, UsersIcon } from "lucide-react";
 import { useState } from "react";
@@ -66,7 +67,9 @@ function ResourceBadge({
 }
 
 export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailProps) {
-  const { data: accessGroup, isLoading } = useAccessGroupDetails(accessGroupId);
+  const isLoadingQuery = useAccessGroupDetails(accessGroupId);
+  const { data: accessGroup } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [showAllKeys, setShowAllKeys] = useState(false);
   const [showAllTeams, setShowAllTeams] = useState(false);

@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 import { apiClient } from "@/components/networking";
@@ -55,7 +56,7 @@ export function AnalysisKeyDetails({
   showName?: boolean;
 }) {
   const key = useAnalysisKeyInfo(accessToken, keyId);
-  if (key.isLoading) return <p className="text-xs text-muted-foreground">Loading key permissions…</p>;
+  if (isQueryPending(key)) return <p className="text-xs text-muted-foreground">Loading key permissions…</p>;
   if (key.error || !key.data)
     return (
       <div role="alert" className="flex items-center gap-2 text-sm text-destructive">

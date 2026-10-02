@@ -8,13 +8,16 @@ const infiniteKeyAliasKeys = createQueryKeys("infiniteKeyAliases");
 export const useInfiniteKeyAliases = (size: number = 50, search?: string, team_id?: string) => {
   const { accessToken } = useAuthorized();
   return useInfiniteQuery<PaginatedKeyAliasResponse>({
-    queryKey: infiniteKeyAliasKeys.list({
-      filters: {
-        size,
-        ...(search && { search }),
-        ...(team_id && { team_id }),
-      },
-    }),
+    queryKey: [
+      ...infiniteKeyAliasKeys.list({
+        filters: {
+          size,
+          ...(search && { search }),
+          ...(team_id && { team_id }),
+        },
+      }),
+      accessToken,
+    ],
     queryFn: async ({ pageParam }) => {
       return await keyAliasesCall(accessToken!, pageParam as number, size, search, team_id);
     },

@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { isAdminRole, isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { CircleHelp, Plug, Search } from "lucide-react";
 import Link from "next/link";
@@ -172,15 +173,14 @@ function DeleteServerDialog({
 }
 
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, isViewOnly = false }) => {
-  const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
+  const isLoadingServersQuery = useMCPServers();
+  const { data: mcpServers, refetch } = isLoadingServersQuery;
+  const isLoadingServers = isQueryPending(isLoadingServersQuery);
 
   // Fetch health status for all servers
-  const {
-    data: healthStatuses,
-    isLoading: isLoadingHealth,
-    recheckServerHealth,
-    recheckingServerIds,
-  } = useMCPServerHealth();
+  const { query: isLoadingHealthQuery, recheckServerHealth, recheckingServerIds } = useMCPServerHealth();
+  const { data: healthStatuses } = isLoadingHealthQuery;
+  const isLoadingHealth = isQueryPending(isLoadingHealthQuery);
 
   // Merge health status data into servers
   const serversWithHealth = useMemo(() => {
@@ -231,7 +231,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
   // Single bulk fetch of this user's per-server env-var status. Drives the
   // red "N user fields missing" footer on each card with no per-row request.
   const { data: envVarStatuses, refetch: refetchEnvVarStatus } = useQuery<MCPUserEnvVarsStatus[]>({
-    queryKey: ["mcpUserEnvVarStatus"],
+    queryKey: ["mcpUserEnvVarStatus", accessToken],
     queryFn: () => listMCPUserEnvVarStatus(accessToken!),
     enabled: !!accessToken,
   });

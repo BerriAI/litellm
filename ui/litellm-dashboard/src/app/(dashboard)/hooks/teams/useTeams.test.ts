@@ -398,7 +398,10 @@ describe("useTeam", () => {
   });
 
   it("should use initialData from teams list cache when available", async () => {
-    queryClient.setQueryData(["teams", "list", { params: {} }], mockTeams);
+    queryClient.setQueryData(
+      ["teams", "list", { params: {} }, "test-access-token", "test-user-id", "Admin"],
+      mockTeams,
+    );
 
     const { result } = renderHook(() => useTeam("team-1"), { wrapper });
 
@@ -413,7 +416,10 @@ describe("useTeam", () => {
   });
 
   it("should return undefined initialData when teamId is not in cache", () => {
-    queryClient.setQueryData(["teams", "list", { params: {} }], mockTeams);
+    queryClient.setQueryData(
+      ["teams", "list", { params: {} }, "test-access-token", "test-user-id", "Admin"],
+      mockTeams,
+    );
 
     const { result } = renderHook(() => useTeam("non-existent-team"), { wrapper });
 

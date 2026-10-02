@@ -60,7 +60,7 @@ const getRouterFields = async (accessToken: string): Promise<RouterFieldsRespons
 export const useRouterFields = (): UseQueryResult<RouterFieldsResponse> => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<RouterFieldsResponse>({
-    queryKey: routerFieldsKeys.detail("fields"),
+    queryKey: [...routerFieldsKeys.detail("fields"), accessToken],
     queryFn: async () => await getRouterFields(accessToken!),
     enabled: Boolean(accessToken && userId && userRole),
   });

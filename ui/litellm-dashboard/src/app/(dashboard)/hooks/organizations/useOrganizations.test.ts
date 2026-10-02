@@ -170,7 +170,7 @@ describe("useOrganizations", () => {
     });
 
     expect(organizationListCall).toHaveBeenCalledWith("test-access-token", null, null);
-    expect(queryClient.getQueryData(organizationKeys.list({}))).toEqual(mockOrganizations);
+    expect(queryClient.getQueryData([...organizationKeys.list({}), "test-access-token"])).toEqual(mockOrganizations);
   });
 
   it("should not execute query when accessToken is missing", async () => {
@@ -367,13 +367,27 @@ describe("useOrganization", () => {
   it("seeds initialData from a filtered list cache entry so the detail renders without a loading state", () => {
     (organizationInfoCall as any).mockResolvedValue(mockOrganizations[1]);
     // Only a filtered list was ever fetched; the unfiltered list({}) entry stays empty.
-    queryClient.setQueryData(organizationKeys.list({ filters: { org_id: "org-2" } }), [mockOrganizations[1]]);
+    queryClient.setQueryData(
+      [...organizationKeys.list({ filters: { org_id: "org-2" } }), "test-access-token"],
+      [mockOrganizations[1]],
+    );
 
     const { result } = renderHook(() => useOrganization("org-2"), { wrapper });
 
     // initialData found org-2 in the filtered cache, so data is present on the first render.
     expect(result.current.data).toEqual(mockOrganizations[1]);
     expect(result.current.isLoading).toBe(false);
+  });
+
+  it("does not seed organization details from another session's list", () => {
+    queryClient.setQueryData([...organizationKeys.list({}), "another-session"], mockOrganizations);
+    vi.mocked(organizationInfoCall).mockImplementation(() => new Promise(() => {}));
+
+    const { result } = renderHook(() => useOrganization("org-1"), { wrapper });
+
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.isPending).toBe(true);
+    expect(organizationInfoCall).toHaveBeenCalledWith("test-access-token", "org-1");
   });
 
   it("does not call the organization info API when the session is not premium", () => {
@@ -398,7 +412,10 @@ describe("useOrganization", () => {
 
   it("falls through to the detail API call when no cached list contains the organization", async () => {
     (organizationInfoCall as any).mockResolvedValue(mockOrganizations[0]);
-    queryClient.setQueryData(organizationKeys.list({ filters: { org_id: "org-2" } }), [mockOrganizations[1]]);
+    queryClient.setQueryData(
+      [...organizationKeys.list({ filters: { org_id: "org-2" } }), "test-access-token"],
+      [mockOrganizations[1]],
+    );
 
     const { result } = renderHook(() => useOrganization("org-1"), { wrapper });
 

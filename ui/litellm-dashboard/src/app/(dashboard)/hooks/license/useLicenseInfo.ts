@@ -6,7 +6,7 @@ const licenseInfoKeys = createQueryKeys("licenseInfo");
 
 export const useLicenseInfo = (accessToken: string | null | undefined): UseQueryResult<LicenseInfo | null> => {
   const options = {
-    queryKey: licenseInfoKeys.detail("license"),
+    queryKey: [...licenseInfoKeys.detail("license"), accessToken],
     queryFn: () => getLicenseInfo(accessToken!),
     enabled: Boolean(accessToken),
     staleTime: 5 * 60 * 1000,

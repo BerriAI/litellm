@@ -1,3 +1,4 @@
+import { queryState } from "../../tests/queryState";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -75,7 +76,10 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeamMetadataSchema", () => ({
-  useTeamMetadataSchema: vi.fn(() => ({ data: [], isLoading: false })),
+  useTeamMetadataSchema: vi.fn(() => ({
+    data: [],
+    ...queryState(false),
+  })),
 }));
 
 vi.mock("./key_team_helpers/fetch_available_models_team_key", () => ({
@@ -147,7 +151,7 @@ vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
       { access_group_id: "ag-1", access_group_name: "Group 1" },
       { access_group_id: "ag-2", access_group_name: "Group 2" },
     ],
-    isLoading: false,
+    ...queryState(false),
     isError: false,
   }),
 }));
@@ -885,7 +889,7 @@ describe("Teams - schema-declared metadata fields in team create", () => {
     mockUseOrganizations.mockReturnValue({ data: null });
     vi.mocked(useTeamMetadataSchema).mockReturnValue({
       data: [{ key: "cost_center", label: "Cost Center" }],
-      isLoading: false,
+      ...queryState(false),
     } as any);
   });
 
@@ -948,7 +952,10 @@ describe("Teams - schema-declared metadata fields in team create", () => {
   });
 
   it("should show a skeleton in the metadata section while the schema is loading", async () => {
-    vi.mocked(useTeamMetadataSchema).mockReturnValue({ data: undefined, isLoading: true } as any);
+    vi.mocked(useTeamMetadataSchema).mockReturnValue({
+      data: undefined,
+      ...queryState(true),
+    } as any);
     await openCreateModal();
 
     expect(screen.getByTestId("metadata-schema-skeleton")).toBeInTheDocument();
@@ -1267,7 +1274,10 @@ describe("Teams - the exact bytes the create call sends", () => {
     vi.mocked(getPoliciesList).mockResolvedValue({ policies: [] });
     vi.mocked(getDefaultTeamSettings).mockResolvedValue({ values: {} });
     vi.mocked(teamCreateCall).mockResolvedValue({ team_id: "new-team-1" });
-    vi.mocked(useTeamMetadataSchema).mockReturnValue({ data: [], isLoading: false } as any);
+    vi.mocked(useTeamMetadataSchema).mockReturnValue({
+      data: [],
+      ...queryState(false),
+    } as any);
     mockUseOrganizations.mockReturnValue({ data: null });
   });
 

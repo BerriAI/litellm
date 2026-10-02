@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
 import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
 import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
@@ -82,11 +83,9 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   const [connectionTestId, setConnectionTestId] = useState<string>("");
 
   const { accessToken, userRole, premiumUser, userId, isViewOnly } = useAuthorized();
-  const {
-    data: providerMetadata,
-    isLoading: isProviderMetadataLoading,
-    error: providerMetadataError,
-  } = useProviderFields();
+  const isProviderMetadataLoadingQuery = useProviderFields();
+  const { data: providerMetadata, error: providerMetadataError } = isProviderMetadataLoadingQuery;
+  const isProviderMetadataLoading = isQueryPending(isProviderMetadataLoadingQuery);
   const { data: guardrailsData } = useGuardrails();
   const guardrailsList = guardrailsData?.guardrails.map((g) => g.guardrail_name);
   const { data: tagsList } = useTags();

@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useEffect, useMemo, useState } from "react";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -28,11 +29,9 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
 }) => {
   const [search, setSearch] = useState("");
 
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError, isLoading } = useInfiniteTeams(
-    pageSize,
-    search || undefined,
-    organizationId,
-  );
+  const isLoadingQuery = useInfiniteTeams(pageSize, search || undefined, organizationId);
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const teams = useMemo(() => {
     if (!data?.pages) return [];

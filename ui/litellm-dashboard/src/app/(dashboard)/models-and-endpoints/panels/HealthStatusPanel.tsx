@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useCallback, useMemo, useState } from "react";
 import type { PaginationState } from "@tanstack/react-table";
 import HealthCheckComponent from "@/components/model_dashboard/HealthCheckComponent";
@@ -19,7 +20,9 @@ export default function HealthStatusPanel() {
   const { data: modelCostMapData } = useModelCostMap();
   const { openModel } = useModelDetailRouting();
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: HEALTH_PAGE_SIZE });
-  const { data: healthModelDataResponse, isLoading } = useModelsInfo(pagination.pageIndex + 1, pagination.pageSize);
+  const isLoadingQuery = useModelsInfo(pagination.pageIndex + 1, pagination.pageSize);
+  const { data: healthModelDataResponse } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const getProviderFromModel = useCallback(
     (model: string) => {

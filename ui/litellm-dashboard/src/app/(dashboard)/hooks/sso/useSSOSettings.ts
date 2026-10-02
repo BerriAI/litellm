@@ -59,7 +59,7 @@ const ssoKeys = createQueryKeys("sso");
 export const useSSOSettings = (): UseQueryResult<SSOSettingsResponse> => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<SSOSettingsResponse>({
-    queryKey: ssoKeys.detail("settings"),
+    queryKey: [...ssoKeys.detail("settings"), accessToken],
     queryFn: async () => await getSSOSettings(accessToken!),
     enabled: Boolean(accessToken && userId && userRole),
   });

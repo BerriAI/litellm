@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useState } from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useUpdateUserBanner } from "@/app/(dashboard)/hooks/userBanner/useUpdateUserBanner";
@@ -31,7 +32,9 @@ const EMPTY_BANNER: UserBanner = { enabled: false, message: "", severity: "info"
 
 export default function UserBannerSettings() {
   const { accessToken } = useAuthorized();
-  const { data: banner, isLoading } = useUserBanner(accessToken);
+  const isLoadingQuery = useUserBanner(accessToken);
+  const { data: banner } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const { mutate: saveBanner, isPending } = useUpdateUserBanner(accessToken);
   const persisted = banner ?? EMPTY_BANNER;
 

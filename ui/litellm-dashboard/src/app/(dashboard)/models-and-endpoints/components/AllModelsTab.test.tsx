@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -78,12 +79,21 @@ vi.mock("../../hooks/models/useModels", () => ({
 }));
 
 vi.mock("../../hooks/models/useModelCostMap", () => ({
-  useModelCostMap: () => ({ data: { "gpt-4": { litellm_provider: "openai" } }, isLoading: false, error: null }),
+  useModelCostMap: () => ({
+    data: { "gpt-4": { litellm_provider: "openai" } },
+    ...queryState(false),
+    error: null,
+  }),
 }));
 
 const mockTeams = [{ team_id: "team-1", team_alias: "Engineering" }];
 vi.mock("../../hooks/teams/useTeams", () => ({
-  useTeams: () => ({ data: mockTeams, isLoading: false, error: null, refetch: vi.fn() }),
+  useTeams: () => ({
+    data: mockTeams,
+    ...queryState(false),
+    error: null,
+    refetch: vi.fn(),
+  }),
 }));
 
 const BASE_MODEL_INFO = {
@@ -106,6 +116,8 @@ const setModelsInfo = (rows: Record<string, unknown>[], totalCount = rows.length
   modelsInfoResult = {
     data: { data: rows, total_count: totalCount, current_page: 1, total_pages: 1, size: 50 },
     isLoading,
+    isPending: isLoading,
+    isEnabled: true,
     isFetching: false,
     error: null,
   };

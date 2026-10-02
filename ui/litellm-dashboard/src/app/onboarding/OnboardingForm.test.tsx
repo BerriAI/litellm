@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -68,7 +69,7 @@ describe("OnboardingForm", () => {
   it("should render loading view when credentials are loading", () => {
     mockUseOnboardingCredentials.mockReturnValue({
       data: undefined,
-      isLoading: true,
+      ...queryState(true),
       isError: false,
     });
 
@@ -80,7 +81,7 @@ describe("OnboardingForm", () => {
   it("should render error view when credentials fail to load", () => {
     mockUseOnboardingCredentials.mockReturnValue({
       data: undefined,
-      isLoading: false,
+      ...queryState(false),
       isError: true,
     });
 
@@ -92,7 +93,7 @@ describe("OnboardingForm", () => {
   it("should render form body with decoded email when credentials are loaded", () => {
     mockUseOnboardingCredentials.mockReturnValue({
       data: { token: "fake-jwt-token" },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
     });
 
@@ -105,7 +106,7 @@ describe("OnboardingForm", () => {
   it("should pass variant prop to OnboardingFormBody", () => {
     mockUseOnboardingCredentials.mockReturnValue({
       data: { token: "fake-jwt-token" },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
     });
 
@@ -120,7 +121,7 @@ describe("OnboardingForm", () => {
 
     mockUseOnboardingCredentials.mockReturnValue({
       data: { token: "fake-jwt-token" },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
     });
     mockClaimToken.mockImplementation((_params, options) => {
@@ -141,7 +142,7 @@ describe("OnboardingForm", () => {
   it("should set the new token cookie at path=/ui after successful claim", async () => {
     mockUseOnboardingCredentials.mockReturnValue({
       data: { token: "fake-jwt-token" },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
     });
     mockClaimToken.mockImplementation((_params, options) => {
@@ -169,7 +170,7 @@ describe("OnboardingForm", () => {
   it("should show claim error when claim response is missing final token", async () => {
     mockUseOnboardingCredentials.mockReturnValue({
       data: { token: "fake-jwt-token" },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
     });
     mockClaimToken.mockImplementation((_params, options) => {

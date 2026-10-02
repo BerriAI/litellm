@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Info } from "lucide-react";
 
@@ -17,6 +18,7 @@ import {
   pct,
   usd,
 } from "./costOptimizationUtils";
+import type { KeySpendActivityRow } from "@/components/UsagePage/dailyActivityApi";
 import { DailyActivityRange } from "./useDailyActivityRange";
 import { useCacheLeakageKeys } from "./useCacheLeakageKeys";
 
@@ -88,21 +90,22 @@ const SortableHead = ({
   );
 };
 
+const EMPTY_KEY_ROWS: KeySpendActivityRow[] = [];
+
 const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
   const { results, loading } = activity;
   const [dimension, setDimension] = useState<CacheLeakageDimension>("key");
   const [sort, setSort] = useState<SortState>({ column: "potentialSavings", dir: "desc" });
   const leakageRate = useMemo(() => netSavingsPerCachedToken(results), [results]);
-  const keyLeakage = useCacheLeakageKeys(activity, dimension === "key");
+  const keyLeakage = useCacheLeakageKeys(activity.scope, dimension === "key");
+  const keyRows = keyLeakage.data ?? EMPTY_KEY_ROWS;
   const unsortedRows = useMemo(
     () =>
-      dimension === "key"
-        ? leakageRowsFromKeyRows(keyLeakage.rows, leakageRate)
-        : computeCacheLeakage(results, "model").rows,
-    [dimension, keyLeakage.rows, leakageRate, results],
+      dimension === "key" ? leakageRowsFromKeyRows(keyRows, leakageRate) : computeCacheLeakage(results, "model").rows,
+    [dimension, keyRows, leakageRate, results],
   );
   const rows = useMemo(() => [...unsortedRows].sort((a, b) => compareRows(a, b, sort)), [unsortedRows, sort]);
-  const rowsLoading = dimension === "key" ? keyLeakage.loading : loading;
+  const rowsLoading = dimension === "key" ? isQueryPending(keyLeakage) : loading;
 
   const onSort = (column: SortColumn) =>
     setSort((prev) =>
@@ -115,7 +118,7 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
   const firstColumn = dimension === "model" ? "Model" : "Key";
   const emptyNoun = dimension === "model" ? "model" : "key";
   const emptyMessage =
-    dimension === "key" && keyLeakage.failed
+    dimension === "key" && keyLeakage.isError
       ? "Could not load key usage for this range."
       : `No ${emptyNoun} usage in this range.`;
 

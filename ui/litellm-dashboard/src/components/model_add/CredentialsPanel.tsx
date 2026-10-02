@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { Plus } from "lucide-react";
 import { useState } from "react";
 
@@ -37,7 +38,9 @@ export default function CredentialsPanel() {
   const { accessToken, userRole } = useAuthorized();
   // Admin Viewer follows the read-parity rule: see credentials, do not modify.
   const canModifyCredentials = isProxyAdminRole(userRole ?? "");
-  const { data: credentialsResponse, isLoading, refetch: refetchCredentials } = useCredentials();
+  const isLoadingQuery = useCredentials();
+  const { data: credentialsResponse, refetch: refetchCredentials } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const credentialList = credentialsResponse?.credentials || [];
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);

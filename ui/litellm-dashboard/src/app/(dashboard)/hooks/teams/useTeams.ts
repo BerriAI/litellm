@@ -109,7 +109,7 @@ export const useTeamsTable = (
   const { accessToken } = useAuthorized();
 
   return useQuery<TeamsResponse>({
-    queryKey: teamsTableKeys.list({ page, limit: pageSize, ...options }),
+    queryKey: [...teamsTableKeys.list({ page, limit: pageSize, ...options }), accessToken],
     queryFn: async () => await teamListCall(accessToken!, page, pageSize, options),
     enabled: Boolean(accessToken),
     staleTime: 30000,
@@ -121,7 +121,7 @@ export const teamKeys = createQueryKeys("teams");
 export const useTeams = (): UseQueryResult<Team[]> => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<Team[]>({
-    queryKey: teamKeys.list({}),
+    queryKey: [...teamKeys.list({}), accessToken, userId, userRole],
     queryFn: async () => await fetchTeams(accessToken!, userId, userRole, null),
     enabled: Boolean(accessToken),
   });
@@ -159,10 +159,10 @@ export const useAllTeams = (): UseQueryResult<Team[]> => {
 };
 
 export const useTeam = (teamId?: string) => {
-  const { accessToken } = useAuthorized();
+  const { accessToken, userId, userRole } = useAuthorized();
   const queryClient = useQueryClient();
   return useQuery<Team>({
-    queryKey: teamKeys.detail(teamId!),
+    queryKey: [...teamKeys.detail(teamId!), accessToken],
     enabled: Boolean(accessToken && teamId),
 
     queryFn: async () => {
@@ -177,7 +177,7 @@ export const useTeam = (teamId?: string) => {
     initialData: () => {
       if (!teamId) return undefined;
 
-      const teams = queryClient.getQueryData<Team[]>(teamKeys.list({}));
+      const teams = queryClient.getQueryData<Team[]>([...teamKeys.list({}), accessToken, userId, userRole]);
 
       return teams?.find((team) => team.team_id === teamId);
     },
@@ -196,14 +196,18 @@ export const useInfiniteTeams = (pageSize: number = 50, search?: string, organiz
   const isAdmin = userRole === "Admin" || userRole === "Admin Viewer";
 
   return useInfiniteQuery<TeamsResponse>({
-    queryKey: infiniteTeamKeys.list({
-      filters: {
-        pageSize,
-        ...(search && { search }),
-        ...(organizationId && { organizationId }),
-        ...(userId && { userId }),
-      },
-    }),
+    queryKey: [
+      ...infiniteTeamKeys.list({
+        filters: {
+          pageSize,
+          ...(search && { search }),
+          ...(organizationId && { organizationId }),
+          ...(userId && { userId }),
+        },
+      }),
+      accessToken,
+      isAdmin,
+    ],
     queryFn: async ({ pageParam }) => {
       return await teamListCall(accessToken!, pageParam as number, pageSize, {
         team_alias: search || undefined,
@@ -290,7 +294,7 @@ export const useDeletedTeams = (
   const { accessToken } = useAuthorized();
 
   return useQuery<DeletedTeamsResponse>({
-    queryKey: deletedTeamKeys.list({ page, limit: pageSize, ...options }),
+    queryKey: [...deletedTeamKeys.list({ page, limit: pageSize, ...options }), accessToken],
     queryFn: async () => await deletedTeamListCall(accessToken!, page, pageSize, options),
     enabled: Boolean(accessToken),
     staleTime: 30000, // 30 seconds

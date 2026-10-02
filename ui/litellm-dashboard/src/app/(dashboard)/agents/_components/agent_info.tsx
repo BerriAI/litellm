@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { AgentIdentityFields } from "./AgentIdentityFields";
 import { AgentIdentityDetails } from "./AgentIdentityDetails";
 import { withAgentIdentity } from "./agent_identity";
@@ -81,7 +82,9 @@ const DetailItem: React.FC<{ label: React.ReactNode; children: React.ReactNode }
 const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessToken, isAdmin }) => {
   const [agent, setAgent] = useState<Agent | null>(null);
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
-  const { data: keysData, isLoading: keysLoading, refetch: refetchAgentKeys } = useKeys(1, 100, { agentID: agentId });
+  const keysLoadingQuery = useKeys(1, 100, { agentID: agentId });
+  const { data: keysData, refetch: refetchAgentKeys } = keysLoadingQuery;
+  const keysLoading = isQueryPending(keysLoadingQuery);
   const agentKeys = keysData?.keys ?? [];
   const [isLoading, setIsLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);

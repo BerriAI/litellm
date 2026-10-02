@@ -114,7 +114,7 @@ export const useKeys = (
   const { accessToken } = useAuthorized();
 
   return useQuery<KeysResponse>({
-    queryKey: keyKeys.list({ page, limit: pageSize, ...options }),
+    queryKey: [...keyKeys.list({ page, limit: pageSize, ...options }), accessToken],
     queryFn: async () => await keyListCall(accessToken!, page, pageSize, options),
     enabled: Boolean(accessToken),
     staleTime: 30000, // 30 seconds
@@ -128,7 +128,7 @@ export const useInfiniteKeys = (pageSize: number, options: KeyListCallOptions = 
   const { accessToken } = useAuthorized();
 
   const infiniteKeyListOptions = {
-    queryKey: infiniteKeyKeys.list({ limit: pageSize, ...options }),
+    queryKey: [...infiniteKeyKeys.list({ limit: pageSize, ...options }), accessToken],
     queryFn: async ({ pageParam }: { pageParam: number }) => {
       if (!accessToken) throw new Error("Access token required");
       return await keyListCall(accessToken, pageParam, pageSize, options);
@@ -152,7 +152,7 @@ export const useDeletedKeys = (
   const { accessToken } = useAuthorized();
 
   return useQuery<DeletedKeysResponse>({
-    queryKey: deletedKeyKeys.list({ page, limit: pageSize, ...options }),
+    queryKey: [...deletedKeyKeys.list({ page, limit: pageSize, ...options }), accessToken],
     queryFn: async () => await keyListCall(accessToken!, page, pageSize, { ...options, status: "deleted" }),
     enabled: Boolean(accessToken),
     staleTime: 30000, // 30 seconds

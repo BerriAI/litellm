@@ -24,7 +24,7 @@ export const AgentIdentityDetails = ({
 }) => {
   const identity = readAgentIdentity(value);
   const { data, isError, isFetching, refetch } = useQuery({
-    queryKey: ["agent-identity", agentId, identity],
+    queryKey: ["agent-identity", agentId, identity, accessToken],
     queryFn: () =>
       apiClient.get<components["schemas"]["ManagedAgentIdentityStatus"]>(
         `/v1/agents/${encodeURIComponent(agentId)}/identity`,

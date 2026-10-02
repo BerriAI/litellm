@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Folder, Plus, SearchIcon, X } from "lucide-react";
@@ -12,8 +13,12 @@ import { ProjectsTable } from "./ProjectsTable";
 import { useClearProjectKeysTableState, useProjectsTableState } from "./useProjectsUrlState";
 
 export function ProjectsPage() {
-  const { data: projects, isLoading } = useProjects();
-  const { data: teams, isLoading: isTeamsLoading } = useTeams();
+  const isLoadingQuery = useProjects();
+  const { data: projects } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
+  const isTeamsLoadingQuery = useTeams();
+  const { data: teams } = isTeamsLoadingQuery;
+  const isTeamsLoading = isQueryPending(isTeamsLoadingQuery);
 
   const [selectedProjectId, setSelectedProjectId] = useQueryState(
     "project",

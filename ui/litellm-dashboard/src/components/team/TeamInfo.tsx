@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import type { components } from "@/lib/http/schema";
 import useCan from "@/app/(dashboard)/hooks/useCan";
@@ -607,7 +608,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
+  const isGuardrailsLoadingQuery = useGuardrails();
+  const { data: guardrailsData } = isGuardrailsLoadingQuery;
+  const isGuardrailsLoading = isQueryPending(isGuardrailsLoadingQuery);
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
   const canViewPolicies = useCan("viewPolicies");
   const [policiesList, setPoliciesList] = useState<string[]>([]);
@@ -622,13 +625,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole } = useAuthorized();
-  const { data: allMcpServers = [], isError: mcpServersFailed, isLoading: mcpServersLoading } = useMCPServers();
-  const { data: allMcpToolsets = [], isError: mcpToolsetsFailed, isLoading: mcpToolsetsLoading } = useMCPToolsets();
-  const { data: allAccessGroups = [], isError: accessGroupsFailed, isLoading: accessGroupsLoading } = useAccessGroups();
+  const mcpServersLoadingQuery = useMCPServers();
+  const { data: allMcpServers = [], isError: mcpServersFailed } = mcpServersLoadingQuery;
+  const mcpServersLoading = isQueryPending(mcpServersLoadingQuery);
+  const mcpToolsetsLoadingQuery = useMCPToolsets();
+  const { data: allMcpToolsets = [], isError: mcpToolsetsFailed } = mcpToolsetsLoadingQuery;
+  const mcpToolsetsLoading = isQueryPending(mcpToolsetsLoadingQuery);
+  const accessGroupsLoadingQuery = useAccessGroups();
+  const { data: allAccessGroups = [], isError: accessGroupsFailed } = accessGroupsLoadingQuery;
+  const accessGroupsLoading = isQueryPending(accessGroupsLoadingQuery);
   const canEditTeamEstimates = isProxyAdminRole(userRole);
   const teamEstimateTooltip = estimateTooltips(canEditTeamEstimates, "team");
   const { data: userOrganizations = [] } = useOrganizations();
-  const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
+  const isTeamMetadataSchemaLoadingQuery = useTeamMetadataSchema();
+  const { data: teamMetadataSchemaFields = [] } = isTeamMetadataSchemaLoadingQuery;
+  const isTeamMetadataSchemaLoading = isQueryPending(isTeamMetadataSchemaLoadingQuery);
   const queryClient = useQueryClient();
 
   // Models currently selected in the team edit form, used to scope the per-model

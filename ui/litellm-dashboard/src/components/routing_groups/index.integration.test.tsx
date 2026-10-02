@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -50,7 +51,7 @@ const setup = (overrides: { mutateAsync?: ReturnType<typeof vi.fn>; isPending?: 
   const mutateAsync = overrides.mutateAsync ?? vi.fn().mockResolvedValue(undefined);
   vi.mocked(useRoutingGroups).mockReturnValue({
     data: { routingGroups: [prodGroup, devGroup], availableStrategies: [] },
-    isLoading: false,
+    ...queryState(false),
     refetch: vi.fn(),
     isFetching: false,
   } as unknown as ReturnType<typeof useRoutingGroups>);

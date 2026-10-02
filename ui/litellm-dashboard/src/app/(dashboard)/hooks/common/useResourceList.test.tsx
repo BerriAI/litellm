@@ -1,8 +1,8 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react-query";
 import type { ColumnFiltersState } from "@tanstack/react-table";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import React, { type PropsWithChildren } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   toSortParam,
@@ -62,6 +62,19 @@ describe("toSortParam", () => {
 });
 
 describe("useResourceList", () => {
+  afterEach(() => onlineManager.setOnline(true));
+
+  it("keeps an offline first page pending until rows arrive", async () => {
+    onlineManager.setOnline(false);
+    const { result, unmount } = renderList();
+    expect(result.current.isLoading).toBe(true);
+    expect(calls).toHaveLength(0);
+    act(() => onlineManager.setOnline(true));
+    await waitFor(() => expect(result.current.rows).toEqual([{ id: "a" }]));
+    expect(result.current.isLoading).toBe(false);
+    unmount();
+  });
+
   beforeEach(() => {
     calls.length = 0;
   });

@@ -1,3 +1,4 @@
+import { queryState } from "../../tests/queryState";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
@@ -39,7 +40,7 @@ const { mockUseAuthorized, mockUseOrganizations } = vi.hoisted(() => {
 
   const mockUseOrganizations = vi.fn(() => ({
     data: [],
-    isLoading: false,
+    ...queryState(false),
     error: null,
   }));
 
@@ -55,14 +56,18 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
-  useTeams: () => ({ data: [], isLoading: false, error: null }),
+  useTeams: () => ({
+    data: [],
+    ...queryState(false),
+    error: null,
+  }),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => {
   return {
     useUIConfig: () => ({
       data: { admin_ui_disabled: false },
-      isLoading: false,
+      ...queryState(false),
     }),
   };
 });
@@ -538,7 +543,7 @@ describe("Sidebar (leftnav)", () => {
           ],
         },
       ],
-      isLoading: false,
+      ...queryState(false),
       error: null,
     } as any);
 

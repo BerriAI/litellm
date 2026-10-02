@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen } from "../../../../../tests/test-utils";
@@ -62,12 +63,18 @@ describe("ProjectDetail", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUseTeam.mockReturnValue({ data: undefined, isLoading: false });
+    mockUseTeam.mockReturnValue({
+      data: undefined,
+      ...queryState(false),
+    });
   });
 
   describe("when loading", () => {
     it("should show a busy indicator and neither the project nor the not-found state", () => {
-      mockUseProjectDetails.mockReturnValue({ data: undefined, isLoading: true });
+      mockUseProjectDetails.mockReturnValue({
+        data: undefined,
+        ...queryState(true),
+      });
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       expect(document.querySelector('[aria-busy="true"]')).toBeInTheDocument();
       expect(screen.queryByText("Project not found")).not.toBeInTheDocument();
@@ -77,14 +84,20 @@ describe("ProjectDetail", () => {
 
   describe("when the project is not found", () => {
     it("should display 'Project not found'", () => {
-      mockUseProjectDetails.mockReturnValue({ data: undefined, isLoading: false });
+      mockUseProjectDetails.mockReturnValue({
+        data: undefined,
+        ...queryState(false),
+      });
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       expect(screen.getByText("Project not found")).toBeInTheDocument();
     });
 
     it("should call onBack when the back button is clicked in the not-found state", async () => {
       const user = userEvent.setup();
-      mockUseProjectDetails.mockReturnValue({ data: undefined, isLoading: false });
+      mockUseProjectDetails.mockReturnValue({
+        data: undefined,
+        ...queryState(false),
+      });
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       await user.click(screen.getByRole("button"));
       expect(onBack).toHaveBeenCalledOnce();
@@ -93,7 +106,10 @@ describe("ProjectDetail", () => {
 
   describe("when the project loads successfully", () => {
     beforeEach(() => {
-      mockUseProjectDetails.mockReturnValue({ data: mockProject, isLoading: false });
+      mockUseProjectDetails.mockReturnValue({
+        data: mockProject,
+        ...queryState(false),
+      });
     });
 
     it("should render", () => {
@@ -119,7 +135,7 @@ describe("ProjectDetail", () => {
     it("should display 'Blocked' for a blocked project", () => {
       mockUseProjectDetails.mockReturnValue({
         data: { ...mockProject, blocked: true },
-        isLoading: false,
+        ...queryState(false),
       });
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       expect(screen.getByText("Blocked")).toBeInTheDocument();
@@ -148,7 +164,7 @@ describe("ProjectDetail", () => {
           ...mockProject,
           litellm_budget_table: { max_budget: 100 },
         },
-        isLoading: false,
+        ...queryState(false),
       });
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       expect(screen.getByText("of $100.00 budget")).toBeInTheDocument();
@@ -174,7 +190,7 @@ describe("ProjectDetail", () => {
     it("should show 'No team assigned' when the project has no team", () => {
       mockUseProjectDetails.mockReturnValue({
         data: { ...mockProject, team_id: null },
-        isLoading: false,
+        ...queryState(false),
       });
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       expect(screen.getByText("No team assigned")).toBeInTheDocument();
@@ -192,7 +208,10 @@ describe("ProjectDetail", () => {
       };
 
       it("should render one cyan bar per model without a legend", () => {
-        mockUseProjectDetails.mockReturnValue({ data: multiModelProject, isLoading: false });
+        mockUseProjectDetails.mockReturnValue({
+          data: multiModelProject,
+          ...queryState(false),
+        });
         const { container } = renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
 
         expect(container.querySelectorAll(".recharts-bar")).toHaveLength(1);
@@ -202,25 +221,37 @@ describe("ProjectDetail", () => {
       });
 
       it("should list models on the category axis sorted by spend descending", () => {
-        mockUseProjectDetails.mockReturnValue({ data: multiModelProject, isLoading: false });
+        mockUseProjectDetails.mockReturnValue({
+          data: multiModelProject,
+          ...queryState(false),
+        });
         const { container } = renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
 
         expect(yAxisTickLabels(container)).toEqual(["gpt-5.2", "gpt-5.2-codex", "claude-opus-4-8", "claude-sonnet-5"]);
       });
 
       it("should format value axis ticks as dollars with four decimals", () => {
-        mockUseProjectDetails.mockReturnValue({ data: multiModelProject, isLoading: false });
+        mockUseProjectDetails.mockReturnValue({
+          data: multiModelProject,
+          ...queryState(false),
+        });
         const { container } = renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
 
         expect(container.querySelector(".recharts-xAxis-tick-labels")?.textContent).toMatch(/\$\d+\.\d{4}/);
       });
 
       it("should scale the chart height at 40px per model with a 120px floor", () => {
-        mockUseProjectDetails.mockReturnValue({ data: multiModelProject, isLoading: false });
+        mockUseProjectDetails.mockReturnValue({
+          data: multiModelProject,
+          ...queryState(false),
+        });
         const { container } = renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
         expect(container.querySelector<HTMLElement>('[data-slot="chart"]')?.style.height).toBe("160px");
 
-        mockUseProjectDetails.mockReturnValue({ data: mockProject, isLoading: false });
+        mockUseProjectDetails.mockReturnValue({
+          data: mockProject,
+          ...queryState(false),
+        });
         const { container: singleModelContainer } = renderWithProviders(
           <ProjectDetail projectId="proj-1" onBack={onBack} />,
         );
@@ -230,7 +261,7 @@ describe("ProjectDetail", () => {
       it("should show the empty state when no model spend is recorded", () => {
         mockUseProjectDetails.mockReturnValue({
           data: { ...mockProject, model_spend: {} },
-          isLoading: false,
+          ...queryState(false),
         });
         const { container } = renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
 
@@ -248,7 +279,7 @@ describe("ProjectDetail", () => {
           spend: 50,
           members_with_roles: [],
         },
-        isLoading: false,
+        ...queryState(false),
       });
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       expect(screen.getByText("Engineering")).toBeInTheDocument();

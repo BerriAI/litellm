@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback, useMemo, useState } from "react";
 
@@ -194,7 +195,7 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
 
       <ToolPoliciesTable
         data={tools}
-        isLoading={query.isLoading}
+        isLoading={isQueryPending(query)}
         isRefreshing={query.isFetching}
         onRefresh={() => void query.refetch()}
         onSelectTool={onSelectTool}

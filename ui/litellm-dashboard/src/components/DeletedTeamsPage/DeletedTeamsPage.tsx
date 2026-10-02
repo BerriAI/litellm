@@ -1,4 +1,5 @@
 "use client";
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { PaginationState } from "@tanstack/react-table";
 import { Info } from "lucide-react";
 import { useState } from "react";
@@ -14,7 +15,9 @@ export default function DeletedTeamsPage() {
     pageIndex: 0,
     pageSize: DEFAULT_PAGE_SIZE_OPTIONS[0],
   });
-  const { data: teamsData, isLoading } = useDeletedTeams(pagination.pageIndex + 1, pagination.pageSize);
+  const isLoadingQuery = useDeletedTeams(pagination.pageIndex + 1, pagination.pageSize);
+  const { data: teamsData } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   return (
     <div className="flex flex-col gap-4">

@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useMemo, useState } from "react";
 import { PaginatedMultiSelect } from "@/components/shared/PaginatedMultiSelect";
 import type { SearchSelectOption } from "@/components/shared/SearchSelect";
@@ -22,11 +23,9 @@ const TeamMultiSelect: React.FC<TeamMultiSelectProps> = ({
 }) => {
   const [search, setSearch] = useState("");
 
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteTeams(
-    pageSize,
-    search || undefined,
-    organizationId,
-  );
+  const isLoadingQuery = useInfiniteTeams(pageSize, search || undefined, organizationId);
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const options = useMemo<SearchSelectOption[]>(
     () =>
