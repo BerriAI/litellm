@@ -43,8 +43,7 @@ def _lowered_call_kwargs(
                 model=model,
                 llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else "",
             )
-        case _:
-            assert_never(lowering)
+    return assert_never(lowering)
 
 
 def _lifted(result: object) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
