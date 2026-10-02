@@ -5,7 +5,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
@@ -424,7 +424,10 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             rpm_dict[rpm_keys[idx].split(":")[0]] = rpm_values[idx]
 
         input_tokens = 0
-        if any(_declares_tpm_limit(deployment) for deployment in healthy_deployments):
+        deployments: Final = cast(
+            Sequence[Mapping[str, object]], healthy_deployments
+        )  # cast-ok: router deployments are untyped dicts at this boundary
+        if any(_declares_tpm_limit(deployment) for deployment in deployments):
             try:
                 input_tokens = token_counter(messages=messages, text=input)
             except Exception:
