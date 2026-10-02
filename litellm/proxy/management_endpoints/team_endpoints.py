@@ -2465,48 +2465,7 @@ async def update_team(
                     },
                 }
 
-        if data.team_member_budget_update_mode is not None:
-            TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
-        elif _team_member_fields_in_request and TeamMemberBudgetHandler.should_create_budget(
-            team_member_budget=data.team_member_budget,
-            team_member_rpm_limit=data.team_member_rpm_limit,
-            team_member_tpm_limit=data.team_member_tpm_limit,
-            team_member_budget_duration=data.team_member_budget_duration,
-        ):
-            updated_kv = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
-                team_table=existing_team_row,
-                user_api_key_dict=user_api_key_dict,
-                updated_kv=updated_kv,
-                team_member_budget=data.team_member_budget,
-                team_member_rpm_limit=data.team_member_rpm_limit,
-                team_member_tpm_limit=data.team_member_tpm_limit,
-                team_member_budget_duration=data.team_member_budget_duration,
-                explicitly_set_fields=_team_member_fields_in_request,
-            )
-            # Backfill team_memberships for members who joined before the
-            # budget was configured — they won't have a membership row yet.
-            _backfill_budget_id: Final = (updated_kv.get("metadata") or {}).get("team_member_budget_id")
-            if _backfill_budget_id and existing_team_row.members_with_roles:
-                await TeamMemberBudgetHandler.backfill_team_member_budget_entries(
-                    team_id=data.team_id,
-                    members_with_roles=existing_team_row.members_with_roles,
-                    team_member_budget_id=_backfill_budget_id,
-                    prisma_client=prisma_client,
-                )
-                await _evict_created_membership_caches(
-                    user_ids=_member_user_ids(existing_team_row.members_with_roles),
-                    team_id=data.team_id,
-                    user_api_key_cache=user_api_key_cache,
-                )
-        elif _team_member_fields_in_request:
-            updated_kv = await TeamMemberBudgetHandler.clear_team_member_budget_fields(
-                team_table=existing_team_row,
-                user_api_key_dict=user_api_key_dict,
-                updated_kv=updated_kv,
-                explicitly_set_fields=_team_member_fields_in_request,
-            )
-        else:
-            TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
+        TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
 
         # Check object permission
         if data.object_permission is not None:
@@ -2557,7 +2516,7 @@ async def update_team(
                 ),
                 user_api_key_dict=user_api_key_dict,
             )
-            if data.team_member_budget_update_mode is not None
+            if _team_member_fields_in_request or "metadata" in team_update_data
             else None
         )
         if isinstance(budget_update, TeamMemberBudgetUpdateFailure):
@@ -2570,10 +2529,11 @@ async def update_team(
         if budget_update is not None:
             from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 
-            await evict_and_broadcast(
-                user_api_key_cache=user_api_key_cache,
-                cache_keys=(f"team_member_default_budget:{budget_update.budget_id}",),
-            )
+            if budget_update.budget_id is not None:
+                await evict_and_broadcast(
+                    user_api_key_cache=user_api_key_cache,
+                    cache_keys=(f"team_member_default_budget:{budget_update.budget_id}",),
+                )
             await _evict_created_membership_caches(
                 user_ids=budget_update.member_user_ids,
                 team_id=data.team_id,
@@ -2604,7 +2564,7 @@ async def update_team(
                         "team_member_budget_update_mode": data.team_member_budget_update_mode,
                         "updated_member_user_ids": budget_update.changed_user_ids,
                     }
-                    if budget_update is not None
+                    if budget_update is not None and _team_member_fields_in_request
                     else updated_kv
                 ),
                 team_id=data.team_id,

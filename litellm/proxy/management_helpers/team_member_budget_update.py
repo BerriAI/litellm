@@ -42,7 +42,7 @@ class _TransactionClient:
 @dataclass(frozen=True, slots=True)
 class TeamMemberBudgetUpdate:
     team: "LiteLLM_TeamTable"
-    budget_id: str
+    budget_id: str | None
     changed_user_ids: tuple[str, ...]
     member_user_ids: tuple[str, ...]
 
@@ -72,15 +72,11 @@ def matches_member_budget_update(
 ) -> bool:
     if amount is None or budget_reset_schedule_key(duration) != budget_reset_schedule_key(target_duration):
         return False
-    match mode:
-        case "raise":
-            return amount < target
-        case "lower":
-            return amount > target
-        case "both":
-            return amount != target
-        case _:
-            return False
+    if mode == "raise":
+        return amount < target
+    if mode == "lower":
+        return amount > target
+    return mode == "both" and amount != target
 
 
 async def update_team_member_budget_atomic(
@@ -133,9 +129,13 @@ async def _update_team_member_budget_once(
     return result
 
 
-async def lock_team_member_budgets(tx: "Prisma", team_id: str, user_id: str | None = None) -> None:
+async def lock_team_member_budgets(
+    tx: "Prisma", team_id: str, user_id: str | None = None, *, lock_members: bool = True
+) -> None:
     await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
     await tx.query_raw('SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_id=$1 FOR UPDATE', team_id)
+    if not lock_members:
+        return
     await tx.query_raw(
         'SELECT user_id FROM "LiteLLM_TeamMembership" WHERE team_id=$1 '
         "AND ($2::text IS NULL OR user_id=$2) ORDER BY user_id FOR UPDATE",
@@ -164,7 +164,9 @@ async def _apply_team_member_budget_update(
         _shared_budget_ids,  # pyright: ignore[reportPrivateUsage]  # preserve budgets shared across memberships
     )
 
-    await lock_team_member_budgets(tx, data.team_id)
+    requested: Final = data.model_dump(exclude_unset=True)
+    budget_fields: Final = {column: requested[field] for field, column in _BUDGET_FIELDS if field in requested}
+    await lock_team_member_budgets(tx, data.team_id, lock_members=bool(budget_fields))
     client: Final = _TransactionClient(tx)
     teams: Final = TeamRepository(client).table
     budgets: Final = BudgetRepository(client).table
@@ -176,11 +178,14 @@ async def _apply_team_member_budget_update(
     metadata: Final = _metadata(team_record.metadata)
     raw_budget_id: Final = metadata.get("team_member_budget_id")
     budget_id: Final = raw_budget_id if isinstance(raw_budget_id, str) else None
-    existing_budget: Final = await budgets.find_unique(where={"budget_id": budget_id}) if budget_id else None
-    current_members: Final = await memberships.find_many(
-        where={"team_id": data.team_id}, include={"litellm_budget_table": True}
+    existing_budget: Final = (
+        await budgets.find_unique(where={"budget_id": budget_id}) if budget_id and budget_fields else None
     )
-    requested: Final = data.model_dump(exclude_unset=True)
+    current_members: Final = (
+        await memberships.find_many(where={"team_id": data.team_id}, include={"litellm_budget_table": True})
+        if budget_fields
+        else ()
+    )
     target_duration: Final = (
         data.team_member_budget_duration
         if "team_member_budget_duration" in data.model_fields_set
@@ -190,28 +195,32 @@ async def _apply_team_member_budget_update(
     )
     reset_fields: Final = (
         {"budget_reset_at": get_budget_reset_time(budget_duration=target_duration) if target_duration else None}
-        if existing_budget is None or target_duration != existing_budget.budget_duration
+        if budget_fields and (existing_budget is None or target_duration != existing_budget.budget_duration)
         else {}
     )
     budget_data: Final[Mapping[str, object]] = {
-        **{column: requested[field] for field, column in _BUDGET_FIELDS if field in requested},
+        **budget_fields,
         "budget_duration": target_duration,
         "updated_by": user_api_key_dict.user_id or "litellm",
         **reset_fields,
     }
     saved_budget: Final = (
         await budgets.update(where={"budget_id": budget_id}, data=budget_data)
-        if existing_budget is not None
+        if existing_budget is not None and budget_fields
         else await budgets.create(data={**budget_data, "created_by": user_api_key_dict.user_id or "litellm"})
+        if existing_budget is None and any(value is not None for value in budget_fields.values())
+        else existing_budget
     )
-    if saved_budget is None or saved_budget.max_budget is None:
+    if existing_budget is not None and saved_budget is None:
         return TeamMemberBudgetUpdateFailure(
             status_code=409, detail="Team member budget changed. Reload the team and try again"
         )
     eligible: Final = tuple(
         member
         for member in current_members
-        if member.budget_id != saved_budget.budget_id
+        if saved_budget is not None
+        and saved_budget.max_budget is not None
+        and member.budget_id != saved_budget.budget_id
         and member.litellm_budget_table is not None
         and matches_member_budget_update(
             amount=member.litellm_budget_table.max_budget,
@@ -226,19 +235,22 @@ async def _apply_team_member_budget_update(
     )
     existing_ids: Final = frozenset(member.user_id for member in current_members)
     roster_ids: Final = tuple(
-        member.user_id for member in (team.members_with_roles or ()) if member.user_id is not None
+        member.user_id
+        for member in ((team.members_with_roles or ()) if budget_fields else ())
+        if member.user_id is not None
     )
     missing: Final = tuple(
         {"team_id": data.team_id, "user_id": user_id, "budget_id": saved_budget.budget_id}
         for user_id in roster_ids
-        if user_id not in existing_ids
+        if saved_budget is not None and user_id not in existing_ids
     )
     if missing:
         await memberships.create_many(data=missing, skip_duplicates=True)
-    await memberships.update_many(
-        where={"team_id": data.team_id, "budget_id": None},
-        data={"budget_id": saved_budget.budget_id},
-    )
+    if saved_budget is not None and budget_fields:
+        await memberships.update_many(
+            where={"team_id": data.team_id, "budget_id": None},
+            data={"budget_id": saved_budget.budget_id},
+        )
     for member in eligible:
         await _upsert_budget_and_membership(
             tx,
@@ -247,16 +259,21 @@ async def _apply_team_member_budget_update(
             existing_budget_id=member.budget_id,
             user_api_key_dict=user_api_key_dict,
             budget_patch={"max_budget": None},
-            team_default_budget_id=saved_budget.budget_id,
+            team_default_budget_id=saved_budget.budget_id if saved_budget is not None else None,
             shared_budget_ids=shared_ids,
         )
+    current_budget_id: Final = saved_budget.budget_id if saved_budget is not None else budget_id
+    requested_metadata: Final = team_data.get("metadata", team_record.metadata)
+    next_metadata: Final = (
+        {**_metadata(requested_metadata), "team_member_budget_id": current_budget_id}
+        if current_budget_id is not None
+        else requested_metadata
+    )
     written: Final = await teams.update_many(
         where=team_where,
         data={
             **team_data,
-            "metadata": safe_dumps(
-                {**_metadata(team_data.get("metadata", metadata)), "team_member_budget_id": saved_budget.budget_id}
-            ),
+            "metadata": next_metadata if isinstance(next_metadata, str) else safe_dumps(next_metadata),
         },
     )
     if written != 1:
@@ -270,7 +287,7 @@ async def _apply_team_member_budget_update(
         return TeamMemberBudgetUpdateFailure(status_code=409, detail="Team changed. Reload the team and try again")
     return TeamMemberBudgetUpdate(
         team=updated_team,
-        budget_id=saved_budget.budget_id,
+        budget_id=saved_budget.budget_id if saved_budget is not None else None,
         changed_user_ids=tuple(member.user_id for member in eligible),
         member_user_ids=tuple(sorted(existing_ids | frozenset(roster_ids))),
     )

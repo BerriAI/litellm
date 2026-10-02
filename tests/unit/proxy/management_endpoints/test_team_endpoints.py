@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -211,6 +211,27 @@ def _wire_team_delete_tx(prisma_client):
     tx_cm.__aenter__ = AsyncMock(return_value=tx)
     tx_cm.__aexit__ = AsyncMock(return_value=None)
     prisma_client.tx = MagicMock(return_value=tx_cm)
+
+
+def _wire_team_update_tx(prisma_client: MagicMock) -> None:
+    def budget_row(where: Mapping[str, object], data: Mapping[str, object] | None = None) -> LiteLLM_BudgetTable:
+        return LiteLLM_BudgetTable.model_validate({**where, **(data or {})})
+
+    def created_budget(data: Mapping[str, object]) -> LiteLLM_BudgetTable:
+        return LiteLLM_BudgetTable.model_validate({"budget_id": "created-budget", **data})
+
+    tx: Final = prisma_client.db
+    tx.query_raw = AsyncMock(return_value=[])
+    tx.litellm_teamtable.update_many = AsyncMock(return_value=1)
+    tx.litellm_teammembership.find_many = AsyncMock(return_value=[])
+    tx.litellm_teammembership.create_many = AsyncMock(return_value=0)
+    tx.litellm_teammembership.update_many = AsyncMock(return_value=0)
+    tx.litellm_budgettable.find_unique = AsyncMock(side_effect=budget_row)
+    tx.litellm_budgettable.update = AsyncMock(side_effect=budget_row)
+    tx.litellm_budgettable.create = AsyncMock(side_effect=created_budget)
+    prisma_client.tx = MagicMock(
+        return_value=SimpleNamespace(start=AsyncMock(return_value=tx), commit=AsyncMock(), rollback=AsyncMock())
+    )
 
 
 # Mock prisma_client
@@ -2513,168 +2534,20 @@ async def test_team_write_404s_when_row_vanishes_before_update(endpoint_name):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("include_budget", "amount"), ((True, 100.0), (True, None), (False, None)))
 async def test_update_team_team_member_budget_not_passed_to_db(
-    disable_audit_logging_for_mocked_team,
-):
-    """
-    Test that 'team_member_budget' is never passed to prisma_client.db.litellm_teamtable.update
-    regardless of whether the value is set or None.
-
-    This ensures that team_member_budget is properly handled via the separate budget table
-    and not accidentally passed to the team table update operation.
-    """
-    from unittest.mock import AsyncMock, MagicMock, Mock, patch
-
-    from fastapi import Request
-
-    from litellm.proxy._types import LitellmUserRoles, UpdateTeamRequest, UserAPIKeyAuth
-    from litellm.proxy.management_endpoints.team_endpoints import update_team
-
-    # Mock dependencies
-    mock_request = Mock(spec=Request)
-    mock_user_api_key_dict = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    disable_audit_logging_for_mocked_team: None,
+    include_budget: bool,
+    amount: float | None,
+) -> None:
+    _, write = await _drive_team_write(
+        "post",
+        existing_metadata={"team_member_budget_id": "budget_123"},
+        payload={"team_alias": "updated_alias", **({"team_member_budget": amount} if include_budget else {})},
     )
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,
-        patch("litellm.proxy.proxy_server.llm_router") as mock_llm_router,
-        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
-        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
-        patch(
-            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object"
-        ) as mock_cache_team,
-        patch(
-            "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
-        ) as mock_upsert_budget,
-    ):
-        # Setup mock prisma client
-        mock_existing_team = MagicMock()
-        mock_existing_team.model_dump.return_value = {
-            "team_id": "test_team_id",
-            "team_alias": "test_team",
-            "metadata": {"team_member_budget_id": "budget_123"},
-        }
-        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
-            return_value=mock_existing_team
-        )
-
-        # Mock the update return value
-        mock_updated_team = MagicMock()
-        mock_updated_team.team_id = "test_team_id"
-        mock_updated_team.model_dump.return_value = {"team_id": "test_team_id"}
-        mock_prisma_client.db.litellm_teamtable.update = AsyncMock(
-            return_value=mock_updated_team
-        )
-        mock_prisma_client.jsonify_team_object = MagicMock(
-            side_effect=lambda db_data: db_data
-        )
-
-        # Mock budget upsert to return updated_kv without team_member_budget
-        def mock_upsert_side_effect(
-            team_table,
-            user_api_key_dict,
-            updated_kv,
-            team_member_budget=None,
-            team_member_rpm_limit=None,
-            team_member_tpm_limit=None,
-            team_member_budget_duration=None,
-            explicitly_set_fields=frozenset(),
-        ):
-            # Remove team_member_budget from updated_kv as the real function does
-            result_kv = updated_kv.copy()
-            result_kv.pop("team_member_budget", None)
-            return result_kv
-
-        mock_upsert_budget.side_effect = mock_upsert_side_effect
-
-        # Test Case 1: team_member_budget is set (not None)
-        update_request_with_budget = UpdateTeamRequest(
-            team_id="test_team_id", team_member_budget=100.0, team_alias="updated_alias"
-        )
-
-        result = await update_team(
-            data=update_request_with_budget,
-            http_request=mock_request,
-            user_api_key_dict=mock_user_api_key_dict,
-        )
-
-        # Verify update was called
-        assert mock_prisma_client.db.litellm_teamtable.update.called
-
-        # Get the call arguments
-        call_args = mock_prisma_client.db.litellm_teamtable.update.call_args
-        update_data = call_args[1]["data"]  # data parameter from the update call
-
-        # Verify team_member_budget is NOT in the update data
-        assert (
-            "team_member_budget" not in update_data
-        ), f"team_member_budget should not be in update data, but found: {update_data}"
-
-        # Verify other fields are present (team_alias should be there)
-        assert "team_alias" in update_data or "team_id" in str(
-            call_args
-        ), "Expected team update fields should be present"
-
-        # Reset mock for second test
-        mock_prisma_client.db.litellm_teamtable.update.reset_mock()
-
-        # Test Case 2: team_member_budget is None
-        update_request_without_budget = UpdateTeamRequest(
-            team_id="test_team_id",
-            team_member_budget=None,
-            team_alias="updated_alias_2",
-        )
-
-        result = await update_team(
-            data=update_request_without_budget,
-            http_request=mock_request,
-            user_api_key_dict=mock_user_api_key_dict,
-        )
-
-        # Verify update was called again
-        assert mock_prisma_client.db.litellm_teamtable.update.called
-
-        # Get the call arguments for second call
-        call_args = mock_prisma_client.db.litellm_teamtable.update.call_args
-        update_data = call_args[1]["data"]  # data parameter from the update call
-
-        # Verify team_member_budget is NOT in the update data
-        assert (
-            "team_member_budget" not in update_data
-        ), f"team_member_budget should not be in update data, but found: {update_data}"
-
-        # Test Case 3: No team_member_budget field at all (excluded from request)
-        mock_prisma_client.db.litellm_teamtable.update.reset_mock()
-
-        update_request_no_budget_field = UpdateTeamRequest(
-            team_id="test_team_id",
-            team_alias="updated_alias_3",
-            # team_member_budget not specified at all
-        )
-
-        result = await update_team(
-            data=update_request_no_budget_field,
-            http_request=mock_request,
-            user_api_key_dict=mock_user_api_key_dict,
-        )
-
-        # Verify update was called again
-        assert mock_prisma_client.db.litellm_teamtable.update.called
-
-        # Get the call arguments for third call
-        call_args = mock_prisma_client.db.litellm_teamtable.update.call_args
-        update_data = call_args[1]["data"]  # data parameter from the update call
-
-        # Verify team_member_budget is NOT in the update data
-        assert (
-            "team_member_budget" not in update_data
-        ), f"team_member_budget should not be in update data, but found: {update_data}"
-
-        print(
-            "✅ All test cases passed: team_member_budget is properly excluded from database update operations"
-        )
+    written: Final = write.call_args.kwargs["data"]
+    assert "team_member_budget" not in written
+    assert written["team_alias"] == "updated_alias"
 
 
 def test_clean_team_member_fields():
@@ -3087,99 +2960,35 @@ async def test_create_team_member_budget_table_inherits_team_duration_when_durat
 
 @pytest.mark.asyncio
 async def test_update_team_with_team_member_budget_duration(
-    disable_audit_logging_for_mocked_team,
-):
-    """
-    Test that team/update endpoint properly handles team_member_budget_duration.
-    """
-    from unittest.mock import AsyncMock, MagicMock, Mock, patch
-
+    mock_db_client: MagicMock,
+    disable_audit_logging_for_mocked_team: None,
+) -> None:
     from fastapi import Request
 
-    from litellm.proxy._types import LitellmUserRoles, UpdateTeamRequest, UserAPIKeyAuth
-    from litellm.proxy.management_endpoints.team_endpoints import update_team
-
-    mock_request = Mock(spec=Request)
-    mock_user_api_key_dict = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    existing: Final = LiteLLM_TeamTable(
+        team_id="test_team_id", team_alias="test_team", metadata={"team_member_budget_id": "budget_123"}
     )
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,
-        patch("litellm.proxy.proxy_server.llm_router") as mock_llm_router,
-        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
-        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
-        patch(
-            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object"
-        ) as mock_cache_team,
-        patch(
-            "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
-        ) as mock_upsert_budget,
-    ):
-        mock_existing_team = MagicMock()
-        mock_existing_team.model_dump.return_value = {
-            "team_id": "test_team_id",
-            "team_alias": "test_team",
-            "metadata": {"team_member_budget_id": "budget_123"},
-        }
-        mock_existing_team.metadata = {"team_member_budget_id": "budget_123"}
-        mock_existing_team.members_with_roles = []
-        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
-            return_value=mock_existing_team
+    mock_db_client.db = MagicMock()
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    _wire_team_update_tx(mock_db_client)
+    with patch("litellm.proxy.management_endpoints.team_endpoints._cache_team_object", new=AsyncMock()):
+        await update_team(
+            data=UpdateTeamRequest(
+                team_id="test_team_id",
+                team_alias="updated_alias",
+                team_member_budget=100.0,
+                team_member_budget_duration="30d",
+            ),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"),
         )
-
-        mock_updated_team = MagicMock()
-        mock_updated_team.team_id = "test_team_id"
-        mock_updated_team.model_dump.return_value = {"team_id": "test_team_id"}
-        mock_prisma_client.db.litellm_teamtable.update = AsyncMock(
-            return_value=mock_updated_team
-        )
-        mock_prisma_client.jsonify_team_object = MagicMock(
-            side_effect=lambda db_data: db_data
-        )
-
-        def mock_upsert_side_effect(
-            team_table,
-            user_api_key_dict,
-            updated_kv,
-            team_member_budget=None,
-            team_member_rpm_limit=None,
-            team_member_tpm_limit=None,
-            team_member_budget_duration=None,
-            explicitly_set_fields=frozenset(),
-        ):
-            result_kv = updated_kv.copy()
-            result_kv.pop("team_member_budget", None)
-            result_kv.pop("team_member_budget_duration", None)
-            return result_kv
-
-        mock_upsert_budget.side_effect = mock_upsert_side_effect
-
-        update_request = UpdateTeamRequest(
-            team_id="test_team_id",
-            team_alias="updated_alias",
-            team_member_budget=100.0,
-            team_member_budget_duration="30d",
-        )
-
-        result = await update_team(
-            data=update_request,
-            http_request=mock_request,
-            user_api_key_dict=mock_user_api_key_dict,
-        )
-
-        assert mock_upsert_budget.called
-        call_args = mock_upsert_budget.call_args
-        assert call_args[1]["team_member_budget"] == 100.0
-        assert call_args[1]["team_member_budget_duration"] == "30d"
-
-        assert mock_prisma_client.db.litellm_teamtable.update.called
-        update_call_args = mock_prisma_client.db.litellm_teamtable.update.call_args
-        update_data = update_call_args[1]["data"]
-
-        assert "team_member_budget" not in update_data
-        assert "team_member_budget_duration" not in update_data
+    budget: Final = mock_db_client.db.litellm_budgettable.update.call_args.kwargs["data"]
+    assert budget["max_budget"] == 100.0
+    assert budget["budget_duration"] == "30d"
+    written: Final = mock_db_client.db.litellm_teamtable.update_many.call_args.kwargs["data"]
+    assert "team_member_budget" not in written
+    assert "team_member_budget_duration" not in written
 
 
 @pytest.mark.asyncio
@@ -8565,23 +8374,18 @@ async def test_update_team_guardrails_with_org_id(
             return_value=[mock_org_admin_membership]
         )
 
-        # Mock team update
-        mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
-        mock_updated_team.team_id = "team-guardrails-123"
-        mock_updated_team.organization_id = "test-org-guardrails"
-        mock_updated_team.metadata = {
-            "guardrails": ["aporia-pre-call", "aporia-post-call"]
-        }
-        mock_updated_team.litellm_model_table = None
-        mock_updated_team.access_group_ids = None
-        mock_updated_team.model_dump.return_value = {
-            "team_id": "team-guardrails-123",
-            "organization_id": "test-org-guardrails",
-            "metadata": {"guardrails": ["aporia-pre-call", "aporia-post-call"]},
-        }
-        mock_prisma.db.litellm_teamtable.update = AsyncMock(
-            return_value=mock_updated_team
-        )
+        def save_team(where: Mapping[str, object], data: Mapping[str, object]) -> int:
+            metadata: Final = data.get("metadata")
+            saved: Final = LiteLLM_TeamTable.model_validate({
+                **mock_existing_team.model_dump(),
+                **data,
+                "metadata": json.loads(metadata) if isinstance(metadata, str) else metadata,
+            })
+            mock_prisma.db.litellm_teamtable.find_unique.return_value = saved
+            return 1
+
+        _wire_team_update_tx(mock_prisma)
+        mock_prisma.db.litellm_teamtable.update_many = AsyncMock(side_effect=save_team)
         mock_prisma.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
         # async_get_cache must be an AsyncMock so `await` in get_org_object works
         mock_cache.async_get_cache = AsyncMock(return_value=None)
@@ -12383,6 +12187,7 @@ async def _drive_team_write(
             return_value=LiteLLM_TeamTable(team_id=_PATCH_TEAM_ID, team_alias="t")
         )
         pc.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
+        _wire_team_update_tx(pc)
         if mock_sink is not None:
             mock_sink["update"] = pc.db.litellm_teamtable.update
 
@@ -12403,13 +12208,18 @@ async def _drive_team_write(
                 user_api_key_dict=auth,
                 litellm_changed_by=None,
             )
-        return result, pc.db.litellm_teamtable.update
+        return result, (
+            pc.db.litellm_teamtable.update_many
+            if pc.db.litellm_teamtable.update_many.await_count
+            else pc.db.litellm_teamtable.update
+        )
 
 
 async def _written_metadata(kind, existing_metadata, body):
     _, update_mock = await _drive_team_write(kind, existing_metadata=existing_metadata, payload=body)
     written = update_mock.call_args.kwargs["data"]
-    return written["metadata"] if "metadata" in written else _ABSENT
+    metadata: Final = written.get("metadata", _ABSENT)
+    return json.loads(metadata) if isinstance(metadata, str) else metadata
 
 
 # (label, existing_metadata, merge_patch_body, expected_POST_metadata, expected_PATCH_metadata)
@@ -12515,15 +12325,7 @@ _STORED_METADATA_WITH_BUDGET: Final = {
 
 async def _written_metadata_with_budget(kind, body):
     """Like ``_written_metadata`` but the team already owns a member budget row."""
-    from litellm.proxy._types import LiteLLM_BudgetTable
-
-    with (
-        patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
-        patch(  # test-quality-ok: update_team imports update_budget at call time; the module attribute is its only seam
-            "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
-            AsyncMock(return_value=LiteLLM_BudgetTable(budget_id="budget-existing-123")),
-        ),
-    ):
+    with patch("litellm.proxy.proxy_server.premium_user", True):
         return await _written_metadata(kind, dict(_STORED_METADATA_WITH_BUDGET), body)
 
 

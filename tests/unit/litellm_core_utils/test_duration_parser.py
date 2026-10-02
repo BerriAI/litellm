@@ -393,7 +393,7 @@ def test_budget_schedule_keys_agree_for_equivalent_scheduler_inputs() -> None:
     from litellm.litellm_core_utils.duration_parser import budget_reset_schedule_key
 
     for alias, canonical in (
-        ("hourly", "1h"), ("daily", "24h"), ("weekly", "7d"),
+        ("hourly", "1h"), ("daily", "24h"), ("weekly", "7d"), ("60m", "1h"), ("60s", "1m"),
         ("1w", "7d"), ("2w", "14d"), ("monthly", "30d"), ("1mo", "30d"),
     ):
         assert budget_reset_schedule_key(alias) == budget_reset_schedule_key(canonical)

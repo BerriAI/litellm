@@ -35,7 +35,9 @@ def test_never_converts_amounts_across_reset_periods(
     assert selected == ()
 
 
-@pytest.mark.parametrize(("duration", "target_duration"), (("1mo", "30d"), ("weekly", "1w"), (None, None)))
+@pytest.mark.parametrize(
+    ("duration", "target_duration"), (("1mo", "30d"), ("weekly", "1w"), ("60m", "1h"), ("60s", "1m"), (None, None))
+)
 def test_accepts_equivalent_reset_schedules(duration: str | None, target_duration: str | None) -> None:
     assert matches_member_budget_update(
         amount=50, duration=duration, target=100, target_duration=target_duration, mode="raise"

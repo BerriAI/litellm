@@ -35,6 +35,10 @@ def budget_reset_schedule_key(duration: str | None) -> str | None:
         return normalized
     digits, unit = parsed.groups()
     value: Final = int(digits)
+    if unit == "s" and value == 60:
+        return "1m"
+    if unit == "m" and value == 60:
+        return "1h"
     if unit == "w":
         return f"{value * 7}d"
     if unit == "mo" and value == 1:

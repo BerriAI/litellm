@@ -252,3 +252,95 @@ def test_bulk_action_requires_a_positive_default(gateway: Gateway, amount: int |
         )
         assert response.status_code == 400, response.text
         assert _budgets(team) == before
+
+
+@pytest.mark.parametrize(
+    "concurrent_update",
+    (
+        pytest.param({"team_member_budget": 200}, id="positive-budget"),
+        pytest.param({"team_member_budget": 0}, id="zero-budget"),
+        pytest.param({"team_member_rpm_limit": 9}, id="rate-only"),
+        pytest.param({"team_member_budget": None}, id="clear-budget"),
+        pytest.param({"metadata": {"concurrent_setting": True}}, id="metadata-only"),
+    ),
+)
+def test_concurrent_team_updates_preserve_member_default_inheritance(
+    gateway: Gateway, concurrent_update: dict[str, JsonValue]
+) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team()
+        custom: Final = _member(scenario, team, 50)
+        inherited: Final = scenario.member(team)
+        with psycopg.connect(os.environ["DATABASE_URL"]) as blocker, ThreadPoolExecutor(max_workers=2) as executor:
+            blocker.execute(
+                'SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id=(SELECT budget_id '
+                'FROM "LiteLLM_TeamMembership" WHERE team_id=%s AND user_id=%s) FOR UPDATE',
+                (team, custom),
+            )
+            atomic: Final = executor.submit(
+                gateway.request,
+                "POST",
+                "/team/update",
+                {
+                    "team_id": team,
+                    "team_member_budget": 100,
+                    "team_member_budget_duration": "30d",
+                    "team_member_budget_update_mode": "raise",
+                },
+            )
+            try:
+                blocked_atomic: Final = eventually(
+                    lambda: read_rows(
+                        "SELECT pid::text FROM pg_stat_activity WHERE %s::int=ANY(pg_blocking_pids(pid))",
+                        (str(blocker.info.backend_pid),),
+                    ),
+                    bool,
+                    seconds=10,
+                )
+                atomic_pid: Final = string_value(blocked_atomic[0]["pid"])
+                concurrent: Final = executor.submit(
+                    gateway.request, "POST", "/team/update", {"team_id": team, **concurrent_update}
+                )
+                eventually(
+                    lambda: read_rows(
+                        "SELECT pid FROM pg_stat_activity WHERE %s::int=ANY(pg_blocking_pids(pid))",
+                        (atomic_pid,),
+                    ),
+                    bool,
+                    seconds=10,
+                )
+            finally:
+                blocker.commit()
+            atomic_response: Final = atomic.result(timeout=30)
+            concurrent_response: Final = concurrent.result(timeout=30)
+        assert atomic_response.status_code == 200, atomic_response.text
+        assert atomic_response.json()["member_budgets_updated"] == 1, atomic_response.text
+        assert concurrent_response.status_code == 200, concurrent_response.text
+        assert read_rows(
+            'SELECT b.budget_id IS NOT NULL AS has_default FROM "LiteLLM_TeamTable" t '
+            "LEFT JOIN \"LiteLLM_BudgetTable\" b ON b.budget_id=t.metadata->>'team_member_budget_id' "
+            "WHERE t.team_id=%s",
+            (team,),
+        ) == [{"has_default": True}]
+        gateway.post("/team/update", {"team_id": team, "team_member_budget": 300})
+        assert read_rows(
+            "SELECT m.budget_id=t.metadata->>'team_member_budget_id' AS inherits_default "
+            'FROM "LiteLLM_TeamMembership" m JOIN "LiteLLM_TeamTable" t USING(team_id) '
+            "WHERE m.team_id=%s AND m.user_id=%s",
+            (team, inherited),
+        ) == [{"inherits_default": True}]
+        amounts: Final = {row["user_id"]: row["max_budget"] for row in _budgets(team)}
+        assert (amounts[custom], amounts[inherited]) == (None, 300)
+        resolved: Final = gateway.post(
+            f"/management/v1/teams/{team}/members/bulk_update", {"members": [{"user_id": custom}]}
+        )
+        results: Final = resolved["data"]
+        assert isinstance(results, list), resolved
+        assert len(results) == 1, resolved
+        member: Final = results[0]
+        assert isinstance(member, dict), resolved
+        assert (member["user_id"], member["max_budget"], member["max_budget_source"]) == (
+            custom,
+            300,
+            "team_default",
+        )
