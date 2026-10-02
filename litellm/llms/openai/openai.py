@@ -33,7 +33,9 @@ from litellm.litellm_core_utils.logging_utils import speech_request_body, track_
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
-from litellm.llms.custom_httpx.upstream_response import capture_async_openai_client, capture_openai_client
+from litellm.llms.custom_httpx.upstream_response import (
+    install_openai_capture_hook,
+)
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -383,7 +385,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         organization: str | None = None,
         client: OpenAI | AsyncOpenAI | None = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> OpenAI | AsyncOpenAI | None:
+    ) -> OpenAI | AsyncOpenAI:
         workload_identity_config: Final = resolve_openai_workload_identity_config(api_key=api_key, api_base=api_base)
         client_initialization_params: Final[dict] = locals()
         if client is None:
@@ -398,8 +400,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
 
             if cached_client:
-                if isinstance(cached_client, OpenAI) or isinstance(cached_client, AsyncOpenAI):
-                    return cached_client
+                install_openai_capture_hook(cached_client)
+                return cached_client
             if is_async:
                 async_http_client: Final = OpenAIChatCompletion._get_async_http_client(shared_session=shared_session)
                 http_client: httpx.Client | httpx.AsyncClient | None = async_http_client
@@ -446,6 +448,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 )
 
             ## SAVE CACHE KEY
+            install_openai_capture_hook(_new_client)
             self.set_cached_openai_client(
                 openai_client=_new_client,
                 client_initialization_params=client_initialization_params,
@@ -460,6 +463,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 organization=organization,
                 max_retries=max_retries,
             )
+            install_openai_capture_hook(client)
             return client
 
     @track_llm_api_timing()
@@ -477,10 +481,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         """
         start_time: Final = time.time()
         try:
-            captured_client: Final = capture_async_openai_client(
-                openai_aclient, logging_obj.upstream_response_capture, logging_obj.litellm_call_id
-            )
-            raw_response = await captured_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
+            raw_response = await openai_aclient.chat.completions.with_raw_response.create(**data, timeout=timeout)
             end_time = time.time()
 
             if hasattr(raw_response, "headers"):
@@ -521,10 +522,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         """
         raw_response = None
         try:
-            captured_client: Final = capture_openai_client(
-                openai_client, logging_obj.upstream_response_capture, logging_obj.litellm_call_id
-            )
-            raw_response = captured_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
+            raw_response = openai_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
 
             if hasattr(raw_response, "headers"):
                 headers = dict(raw_response.headers)
@@ -1715,6 +1713,7 @@ class OpenAIFilesAPI(BaseLLM):
         else:
             openai_client = client
 
+        install_openai_capture_hook(openai_client)
         return openai_client
 
     async def acreate_file(
@@ -2073,6 +2072,7 @@ class OpenAIBatchesAPI(BaseLLM):
         else:
             openai_client = client
 
+        install_openai_capture_hook(openai_client)
         return openai_client
 
     async def acreate_batch(
@@ -2281,6 +2281,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         else:
             openai_client = client
 
+        install_openai_capture_hook(openai_client)
         return openai_client
 
     def async_get_openai_client(
@@ -2306,6 +2307,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         else:
             openai_client = client
 
+        install_openai_capture_hook(openai_client)
         return openai_client
 
     ### ASSISTANTS ###

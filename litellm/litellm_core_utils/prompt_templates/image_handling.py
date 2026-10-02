@@ -15,6 +15,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
+from litellm.litellm_core_utils.upstream_response_capture import suppress_upstream_capture
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, safe_get
 from litellm.types.llms.openai import AllMessageValues
 
@@ -101,16 +102,17 @@ async def async_convert_url_to_base64(url: str) -> str:
         return cached_result
 
     client: Final = litellm.module_level_aclient
-    for _ in range(3):
-        try:
-            response = await async_safe_get(client, url)
-            return _process_image_response(response, url)
-        except litellm.ImageFetchError:
-            raise
-        except SSRFError as e:
-            raise _rejected_image_fetch(url, e) from e
-        except Exception:
-            pass
+    with suppress_upstream_capture():
+        for _ in range(3):
+            try:
+                response = await async_safe_get(client, url)
+                return _process_image_response(response, url)
+            except litellm.ImageFetchError:
+                raise
+            except SSRFError as e:
+                raise _rejected_image_fetch(url, e) from e
+            except Exception:
+                pass
     raise litellm.ImageFetchError(f"Error: Unable to fetch image from URL after 3 attempts. url={url}")
 
 
@@ -129,16 +131,17 @@ def convert_url_to_base64(url: str) -> str:
         return cached_result
 
     client: Final = litellm.module_level_client
-    for _ in range(3):
-        try:
-            response = safe_get(client, url)
-            return _process_image_response(response, url)
-        except litellm.ImageFetchError:
-            raise
-        except SSRFError as e:
-            raise _rejected_image_fetch(url, e) from e
-        except Exception as e:
-            verbose_logger.exception(e)
+    with suppress_upstream_capture():
+        for _ in range(3):
+            try:
+                response = safe_get(client, url)
+                return _process_image_response(response, url)
+            except litellm.ImageFetchError:
+                raise
+            except SSRFError as e:
+                raise _rejected_image_fetch(url, e) from e
+            except Exception as e:
+                verbose_logger.exception(e)
     raise litellm.ImageFetchError(
         f"Error: Unable to fetch image from URL after 3 attempts. url={url}",
     )

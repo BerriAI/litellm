@@ -8,6 +8,7 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base import BaseLLM
+from litellm.llms.custom_httpx.upstream_response import install_openai_capture_hook
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
 from litellm.types.utils import LlmProviders, ModelResponse, TextCompletionResponse
 from litellm.utils import ProviderConfigManager
@@ -45,7 +46,7 @@ class OpenAITextCompletion(BaseLLM):
         acompletion: bool = False,
         litellm_params=None,
         logger_fn=None,
-        client=None,
+        client: OpenAI | AsyncOpenAI | None = None,
         organization: str | None = None,
         headers: dict | None = None,
     ):
@@ -82,6 +83,7 @@ class OpenAITextCompletion(BaseLLM):
                 },
             )
             if acompletion is True:
+                async_client: Final = client if isinstance(client, AsyncOpenAI) else None
                 if optional_params.get("stream", False):
                     return self.async_streaming(
                         logging_obj=logging_obj,
@@ -93,7 +95,7 @@ class OpenAITextCompletion(BaseLLM):
                         model=model,
                         timeout=timeout,
                         max_retries=max_retries,
-                        client=client,
+                        client=async_client,
                         organization=organization,
                     )
                 else:
@@ -108,9 +110,10 @@ class OpenAITextCompletion(BaseLLM):
                         timeout=timeout,
                         max_retries=max_retries,
                         organization=organization,
-                        client=client,
+                        client=async_client,
                     )
-            elif optional_params.get("stream", False):
+            sync_client: Final = client if isinstance(client, OpenAI) else None
+            if optional_params.get("stream", False):
                 return self.streaming(
                     logging_obj=logging_obj,
                     api_base=api_base,
@@ -121,12 +124,14 @@ class OpenAITextCompletion(BaseLLM):
                     model=model,
                     timeout=timeout,
                     max_retries=max_retries,
-                    client=client,
+                    client=sync_client,
                     organization=organization,
                 )
             else:
-                if client is None:
-                    openai_client = OpenAI(
+                openai_client: Final = (
+                    client
+                    if client is not None
+                    else OpenAI(
                         api_key=api_key,
                         base_url=api_base,
                         http_client=litellm.client_session,
@@ -134,8 +139,8 @@ class OpenAITextCompletion(BaseLLM):
                         max_retries=max_retries,
                         organization=organization,
                     )
-                else:
-                    openai_client = client
+                )
+                install_openai_capture_hook(openai_client)
 
                 raw_response: Final = openai_client.completions.with_raw_response.create(**data)
                 response: Final = raw_response.parse()
@@ -174,11 +179,13 @@ class OpenAITextCompletion(BaseLLM):
         timeout: float,
         max_retries: int,
         organization: str | None = None,
-        client=None,
+        client: AsyncOpenAI | None = None,
     ):
         try:
-            if client is None:
-                openai_aclient = AsyncOpenAI(
+            openai_aclient: Final = (
+                client
+                if client is not None
+                else AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
                     http_client=BaseOpenAILLM._get_async_http_client(),
@@ -186,8 +193,8 @@ class OpenAITextCompletion(BaseLLM):
                     max_retries=max_retries,
                     organization=organization,
                 )
-            else:
-                openai_aclient = client
+            )
+            install_openai_capture_hook(openai_aclient)
 
             raw_response: Final = await openai_aclient.completions.with_raw_response.create(**data)
             response: Final = raw_response.parse()
@@ -226,11 +233,13 @@ class OpenAITextCompletion(BaseLLM):
         timeout: float,
         api_base: str | None = None,
         max_retries=None,
-        client=None,
-        organization=None,
+        client: OpenAI | None = None,
+        organization: str | None = None,
     ):
-        if client is None:
-            openai_client = OpenAI(
+        openai_client: Final = (
+            client
+            if client is not None
+            else OpenAI(
                 api_key=api_key,
                 base_url=api_base,
                 http_client=litellm.client_session,
@@ -238,8 +247,8 @@ class OpenAITextCompletion(BaseLLM):
                 max_retries=max_retries,
                 organization=organization,
             )
-        else:
-            openai_client = client
+        )
+        install_openai_capture_hook(openai_client)
 
         try:
             raw_response: Final = openai_client.completions.with_raw_response.create(**data)
@@ -283,11 +292,13 @@ class OpenAITextCompletion(BaseLLM):
         timeout: float,
         max_retries: int,
         api_base: str | None = None,
-        client=None,
-        organization=None,
+        client: AsyncOpenAI | None = None,
+        organization: str | None = None,
     ):
-        if client is None:
-            openai_client = AsyncOpenAI(
+        openai_aclient: Final = (
+            client
+            if client is not None
+            else AsyncOpenAI(
                 api_key=api_key,
                 base_url=api_base,
                 http_client=litellm.aclient_session,
@@ -295,10 +306,10 @@ class OpenAITextCompletion(BaseLLM):
                 max_retries=max_retries,
                 organization=organization,
             )
-        else:
-            openai_client = client
+        )
+        install_openai_capture_hook(openai_aclient)
 
-        raw_response: Final = await openai_client.completions.with_raw_response.create(**data)
+        raw_response: Final = await openai_aclient.completions.with_raw_response.create(**data)
         response: Final = raw_response.parse()
         streamwrapper: Final = CustomStreamWrapper(
             completion_stream=response,

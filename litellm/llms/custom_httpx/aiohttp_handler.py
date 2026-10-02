@@ -10,6 +10,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm.litellm_core_utils.upstream_response_capture import record_current_upstream
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
@@ -182,6 +183,7 @@ class BaseLLMAIOHTTPHandler:
                     json=data,
                     data=form_data,
                 )
+                record_current_upstream(response.status, tuple(response.headers.items()))
                 if not response.ok:
                     response.raise_for_status()
             except aiohttp.ClientResponseError as e:

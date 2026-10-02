@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Union
 import httpx
 
 import litellm
+from litellm.llms.custom_httpx.upstream_response import install_capture_hook, with_capture_hooks
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -13,6 +14,8 @@ if TYPE_CHECKING:
 
 class BaseLLM:
     _client_session: httpx.Client | None = None
+    _owns_client_session: bool = True
+    _owns_aclient_session: bool = True
 
     def process_response(
         self,
@@ -52,28 +55,30 @@ class BaseLLM:
         """
         return model_response
 
-    def create_client_session(self):
+    def create_client_session(self) -> httpx.Client:
         if litellm.client_session:
-            _client_session = litellm.client_session
-        else:
-            _client_session = httpx.Client()
+            self._owns_client_session = False
+            install_capture_hook(litellm.client_session)
+            return litellm.client_session
 
-        return _client_session
+        self._owns_client_session = True
+        return httpx.Client(event_hooks=with_capture_hooks(None, is_async=False))
 
-    def create_aclient_session(self):
+    def create_aclient_session(self) -> httpx.AsyncClient:
         if litellm.aclient_session:
-            _aclient_session = litellm.aclient_session
-        else:
-            _aclient_session = httpx.AsyncClient()
+            self._owns_aclient_session = False
+            install_capture_hook(litellm.aclient_session)
+            return litellm.aclient_session
 
-        return _aclient_session
+        self._owns_aclient_session = True
+        return httpx.AsyncClient(event_hooks=with_capture_hooks(None, is_async=True))
 
     def __exit__(self):
-        if hasattr(self, "_client_session") and self._client_session is not None:
+        if self._owns_client_session and hasattr(self, "_client_session") and self._client_session is not None:
             self._client_session.close()
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if hasattr(self, "_aclient_session"):
+        if self._owns_aclient_session and hasattr(self, "_aclient_session"):
             await self._aclient_session.aclose()
 
     def validate_environment(self, *args, **kwargs) -> Any | None:  # set up the environment required to run the model

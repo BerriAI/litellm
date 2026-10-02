@@ -3,6 +3,8 @@ from typing import Final
 
 import httpx
 
+from litellm.llms.custom_httpx.upstream_response import with_capture_hooks
+
 try:
     from litellm._version import version
 except Exception:
@@ -33,6 +35,7 @@ class HTTPHandler:
                 max_keepalive_connections=concurrent_limit,
             ),
             headers=headers,
+            event_hooks=with_capture_hooks(None, is_async=True),
         )
 
     async def close(self):

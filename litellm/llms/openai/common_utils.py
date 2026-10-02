@@ -34,6 +34,10 @@ from litellm.llms.custom_httpx.http_handler import (
     get_ssl_configuration,
     http2_enabled,
 )
+from litellm.llms.custom_httpx.upstream_response import (
+    install_capture_hook,
+    with_capture_hooks,
+)
 
 
 def _get_client_init_params(cls: type) -> tuple[str, ...]:
@@ -306,12 +310,16 @@ class BaseOpenAILLM:
         shared_session: Optional["ClientSession"] = None,
     ) -> httpx.AsyncClient | None:
         if litellm.aclient_session is not None:
+            install_capture_hook(litellm.aclient_session)
             return litellm.aclient_session
 
         if getattr(litellm, "network_mock", False):
             from litellm.llms.custom_httpx.mock_transport import MockOpenAITransport
 
-            return httpx.AsyncClient(transport=MockOpenAITransport())
+            return httpx.AsyncClient(
+                transport=MockOpenAITransport(),
+                event_hooks=with_capture_hooks(None, is_async=True),
+            )
 
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration()
@@ -327,17 +335,22 @@ class BaseOpenAILLM:
             mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport, verify=ssl_config, cert=None),
             follow_redirects=True,
             http2=http2_enabled(),
+            event_hooks=with_capture_hooks(None, is_async=True),
         )
 
     @staticmethod
     def _get_sync_http_client() -> httpx.Client | None:
         if litellm.client_session is not None:
+            install_capture_hook(litellm.client_session)
             return litellm.client_session
 
         if getattr(litellm, "network_mock", False):
             from litellm.llms.custom_httpx.mock_transport import MockOpenAITransport
 
-            return httpx.Client(transport=MockOpenAITransport())
+            return httpx.Client(
+                transport=MockOpenAITransport(),
+                event_hooks=with_capture_hooks(None, is_async=False),
+            )
 
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration()
@@ -346,8 +359,8 @@ class BaseOpenAILLM:
             verify=ssl_config,
             follow_redirects=True,
             http2=http2_enabled(),
+            event_hooks=with_capture_hooks(None, is_async=False),
         )
-
 
 class OpenAICredentials(NamedTuple):
     api_base: str

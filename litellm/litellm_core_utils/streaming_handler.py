@@ -45,6 +45,11 @@ from .core_helpers import map_finish_reason, process_response_headers
 from .exception_mapping_utils import exception_type
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
+from .upstream_response_capture import (
+    UpstreamAttempt,
+    current_upstream_attempt,
+    resume_upstream_attempt,
+)
 
 # Constants for special delta attribute names
 AUDIO_ATTRIBUTE: Final = "audio"
@@ -218,6 +223,7 @@ class CustomStreamWrapper:
     ):
         self.model = model
         self.make_call = make_call
+        self._upstream_attempt: Final[UpstreamAttempt | None] = current_upstream_attempt()
         self.count_prompt_tokens = count_prompt_tokens
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj: LiteLLMLoggingObject = logging_obj
@@ -1961,16 +1967,16 @@ class CustomStreamWrapper:
 
     def fetch_sync_stream(self):
         if self.completion_stream is None and self.make_call is not None:
-            # Call make_call to get the completion stream
-            self.completion_stream = self.make_call(client=litellm.module_level_client)
+            with resume_upstream_attempt(self._upstream_attempt):
+                self.completion_stream = self.make_call(client=litellm.module_level_client)
             self._stream_iter = self.completion_stream.__iter__()
 
         return self.completion_stream
 
     async def fetch_stream(self):
         if self.completion_stream is None and self.make_call is not None:
-            # Call make_call to get the completion stream
-            self.completion_stream = await self.make_call(client=litellm.module_level_aclient)
+            with resume_upstream_attempt(self._upstream_attempt):
+                self.completion_stream = await self.make_call(client=litellm.module_level_aclient)
             self._stream_iter = self.completion_stream.__aiter__()
 
         return self.completion_stream

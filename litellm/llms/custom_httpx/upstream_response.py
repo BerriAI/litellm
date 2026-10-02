@@ -1,95 +1,53 @@
-from typing import Final, Generic, TypeVar
+from collections.abc import Callable, Mapping
+from typing import Final
 
 import httpx
-from httpx._client import USE_CLIENT_DEFAULT, UseClientDefault
-from httpx._types import AuthTypes, TimeoutTypes
 from openai import AsyncOpenAI, OpenAI
 
 from litellm.litellm_core_utils.upstream_response_capture import (
-    UpstreamResponseCapture,
-    async_send_with_capture,
-    send_with_capture,
+    record_current_upstream,
 )
 
-_Client = TypeVar("_Client", httpx.Client, httpx.AsyncClient)
+
+def record_upstream_response(response: httpx.Response) -> None:
+    try:
+        record_current_upstream(response.status_code, tuple(response.headers.multi_items()))
+    except Exception:
+        return
 
 
-class _BorrowedClient(Generic[_Client]):
-    def __init__(self, client: _Client, capture: UpstreamResponseCapture, attempt_id: str) -> None:
-        self._borrowed: Final = client
-        self.build_request: Final = client.build_request
-        self._capture: Final = capture
-        self._attempt_id: Final = attempt_id
-        self._closed = False
-
-    @property
-    def timeout(self) -> httpx.Timeout:
-        return self._borrowed.timeout
-
-    @timeout.setter
-    def timeout(self, timeout: TimeoutTypes) -> None:
-        self._borrowed.timeout = timeout
-
-    @property
-    def is_closed(self) -> bool:
-        return self._closed or self._borrowed.is_closed
+async def arecord_upstream_response(response: httpx.Response) -> None:
+    record_upstream_response(response)
 
 
-class _CaptureClient(_BorrowedClient[httpx.Client], httpx.Client):
-    def send(
-        self,
-        request: httpx.Request,
-        *,
-        stream: bool = False,
-        auth: AuthTypes | UseClientDefault | None = USE_CLIENT_DEFAULT,
-        follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,
-    ) -> httpx.Response:
-        if self.is_closed:
-            raise RuntimeError("Cannot send a request, as the client has been closed.")
-        return send_with_capture(
-            self._borrowed,
-            request,
-            self._capture,
-            self._attempt_id,
-            stream,
-            auth=auth,
-            follow_redirects=follow_redirects,
-        )
-
-    def close(self) -> None:
-        self._closed = True
+def with_capture_hooks(
+    event_hooks: Mapping[str, list[Callable[..., object]]] | None,
+    *,
+    is_async: bool,
+) -> dict[str, list[Callable[..., object]]]:
+    response_hooks: Final = tuple((event_hooks or {}).get("response", ()))
+    hooks: Final = {name: list(values) for name, values in (event_hooks or {}).items()}
+    capture_hook: Final = arecord_upstream_response if is_async else record_upstream_response
+    existing_hooks: Final = tuple(
+        hook
+        for hook in response_hooks
+        if hook is not record_upstream_response and hook is not arecord_upstream_response
+    )
+    return {**hooks, "response": [capture_hook, *existing_hooks]}
 
 
-class _AsyncCaptureClient(_BorrowedClient[httpx.AsyncClient], httpx.AsyncClient):
-    async def send(
-        self,
-        request: httpx.Request,
-        *,
-        stream: bool = False,
-        auth: AuthTypes | UseClientDefault | None = USE_CLIENT_DEFAULT,
-        follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,
-    ) -> httpx.Response:
-        if self.is_closed:
-            raise RuntimeError("Cannot send a request, as the client has been closed.")
-        return await async_send_with_capture(
-            self._borrowed,
-            request,
-            self._capture,
-            self._attempt_id,
-            stream,
-            auth=auth,
-            follow_redirects=follow_redirects,
-        )
-
-    async def aclose(self) -> None:
-        self._closed = True
+def install_capture_hook(client: httpx.Client | httpx.AsyncClient) -> None:
+    is_async: Final = isinstance(client, httpx.AsyncClient)
+    capture_hook: Final = arecord_upstream_response if is_async else record_upstream_response
+    if capture_hook in client.event_hooks.get("response", []):
+        return
+    client.event_hooks = with_capture_hooks(client.event_hooks, is_async=is_async)
 
 
-def capture_openai_client(client: OpenAI, capture: UpstreamResponseCapture, attempt_id: str) -> OpenAI:
-    borrowed: Final = client._client  # pyright: ignore[reportPrivateUsage]  # SDK exposes no HTTP client accessor
-    return client.with_options(http_client=_CaptureClient(borrowed, capture, attempt_id))
-
-
-def capture_async_openai_client(client: AsyncOpenAI, capture: UpstreamResponseCapture, attempt_id: str) -> AsyncOpenAI:
-    borrowed: Final = client._client  # pyright: ignore[reportPrivateUsage]  # SDK exposes no HTTP client accessor
-    return client.with_options(http_client=_AsyncCaptureClient(borrowed, capture, attempt_id))
+def install_openai_capture_hook(client: OpenAI | AsyncOpenAI) -> None:
+    try:
+        borrowed: Final[object] = client._client  # pyright: ignore[reportPrivateUsage]  # SDK exposes no HTTP client accessor
+    except AttributeError:
+        return
+    if isinstance(borrowed, (httpx.Client, httpx.AsyncClient)):
+        install_capture_hook(borrowed)

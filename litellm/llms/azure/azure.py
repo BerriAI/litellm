@@ -24,7 +24,10 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
-from litellm.llms.custom_httpx.upstream_response import capture_async_openai_client, capture_openai_client
+from litellm.llms.custom_httpx.upstream_response import (
+    install_capture_hook,
+    with_capture_hooks,
+)
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -151,10 +154,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         - call chat.completions.create by default
         """
         try:
-            captured_client: Final = capture_openai_client(
-                azure_client, logging_obj.upstream_response_capture, logging_obj.litellm_call_id
-            )
-            raw_response: Final = captured_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
+            raw_response: Final = azure_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
 
             headers: Final = dict(raw_response.headers)
             response: Final = raw_response.parse()
@@ -181,12 +181,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         """
         start_time: Final = time.time()
         try:
-            captured_client: Final = capture_async_openai_client(
-                azure_client, logging_obj.upstream_response_capture, logging_obj.litellm_call_id
-            )
-            raw_response: Final = await captured_client.chat.completions.with_raw_response.create(
-                **data, timeout=timeout
-            )
+            raw_response: Final = await azure_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
 
             headers: Final = dict(raw_response.headers)
             response: Final = raw_response.parse()
@@ -1492,7 +1487,14 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         input: list | None = None,
         prompt: str | None = None,
     ) -> dict:
-        client_session: Final = litellm.client_session or httpx.Client()
+        shared_client: Final = litellm.client_session
+        client_session: Final = (
+            shared_client
+            if shared_client is not None
+            else httpx.Client(event_hooks=with_capture_hooks(None, is_async=False))
+        )
+        if shared_client is not None:
+            install_capture_hook(shared_client)
         if api_base is not None and "gateway.ai.cloudflare.com" in api_base:
             ## build base url - assume api base includes resource name
             if not api_base.endswith("/"):

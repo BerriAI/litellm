@@ -20,6 +20,7 @@ from ...types.llms.openai import (
     SyncCursorPage,
     Thread,
 )
+from ..custom_httpx.upstream_response import install_openai_capture_hook
 from .common_utils import BaseAzureLLM
 
 
@@ -61,6 +62,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         else:
             azure_openai_client = client
 
+        install_openai_capture_hook(azure_openai_client)
         return azure_openai_client
 
     def async_get_azure_client(
@@ -89,6 +91,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         else:
             azure_openai_client = client
 
+        install_openai_capture_hook(azure_openai_client)
         return azure_openai_client
 
     ### ASSISTANTS ###

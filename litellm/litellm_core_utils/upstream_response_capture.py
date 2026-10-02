@@ -1,10 +1,11 @@
+from collections.abc import Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from threading import Lock
 from typing import Final
 
 import httpx
-from httpx._client import USE_CLIENT_DEFAULT, UseClientDefault
-from httpx._types import AuthTypes
 from typing_extensions import ReadOnly, TypedDict
 
 
@@ -68,10 +69,17 @@ class UpstreamResponseCapture:
         self._lock: Final = Lock()
         self._responses = responses
         self._dropped_responses = dropped_responses
+        self._attempt_counts: Final[dict[str, int]] = {}
 
     def __deepcopy__(self, memo: dict[int, object]) -> "UpstreamResponseCapture":
         with self._lock:
             return UpstreamResponseCapture(self._responses, self._dropped_responses)
+
+    def allocate_attempt_id(self, call_id: str) -> str:
+        with self._lock:
+            attempt_count: Final = self._attempt_counts.get(call_id, 0)
+            self._attempt_counts[call_id] = attempt_count + 1
+        return call_id if attempt_count == 0 else f"{call_id}.{attempt_count}"
 
     @property
     def responses(self) -> tuple[CapturedUpstreamResponse, ...]:
@@ -79,10 +87,28 @@ class UpstreamResponseCapture:
             return self._responses
 
     def record(self, attempt_id: str, response: httpx.Response) -> None:
-        metadata: Final = response_metadata(attempt_id, response.status_code, tuple(response.headers.multi_items()))
+        self.record_metadata(
+            attempt_id,
+            response.status_code,
+            tuple(response.headers.multi_items()),
+        )
+
+    def record_metadata(
+        self,
+        attempt_id: str,
+        status_code: int | None,
+        headers: tuple[tuple[str, str], ...],
+    ) -> None:
+        if status_code is None:
+            return
+        metadata: Final = response_metadata(
+            attempt_id,
+            status_code,
+            headers,
+        )
         captured: Final = CapturedUpstreamResponse(
             attempt_id=attempt_id,
-            status_code=response.status_code,
+            status_code=status_code,
             headers=metadata["headers"],
             truncated=metadata["truncated"],
         )
@@ -103,49 +129,83 @@ class UpstreamResponseCapture:
             )
 
 
-def send_with_capture(
-    client: httpx.Client,
-    request: httpx.Request,
-    capture: UpstreamResponseCapture | None,
-    attempt_id: str,
-    stream: bool,
-    *,
-    auth: AuthTypes | UseClientDefault | None = USE_CLIENT_DEFAULT,
-    follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,
-) -> httpx.Response:
-    if capture is None:
-        return client.send(request, stream=stream, auth=auth, follow_redirects=follow_redirects)
-    response: Final = client.send(request, stream=True, auth=auth, follow_redirects=follow_redirects)
-    for item in (*response.history, response):
-        capture.record(attempt_id, item)
-    try:
-        if not stream:
-            response.read()
-        return response
-    except BaseException:
-        response.close()
-        raise
+@dataclass(frozen=True, slots=True)
+class UpstreamAttempt:
+    capture: UpstreamResponseCapture
+    attempt_id: str
 
 
-async def async_send_with_capture(
-    client: httpx.AsyncClient,
-    request: httpx.Request,
-    capture: UpstreamResponseCapture | None,
-    attempt_id: str,
-    stream: bool,
-    *,
-    auth: AuthTypes | UseClientDefault | None = USE_CLIENT_DEFAULT,
-    follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,
-) -> httpx.Response:
-    if capture is None:
-        return await client.send(request, stream=stream, auth=auth, follow_redirects=follow_redirects)
-    response: Final = await client.send(request, stream=True, auth=auth, follow_redirects=follow_redirects)
-    for item in (*response.history, response):
-        capture.record(attempt_id, item)
+class _Scope:
+    __slots__ = ("attempt", "open")
+
+    def __init__(self, attempt: UpstreamAttempt) -> None:
+        self.attempt = attempt
+        self.open = True
+
+
+_CURRENT_UPSTREAM_SCOPE: Final[ContextVar[_Scope | None]] = ContextVar(
+    "litellm_current_upstream_scope",
+    default=None,
+)
+
+
+def current_upstream_attempt() -> UpstreamAttempt | None:
+    scope: Final = _CURRENT_UPSTREAM_SCOPE.get()
+    return scope.attempt if scope is not None and scope.open else None
+
+
+@contextmanager
+def _bind_upstream_attempt(
+    attempt: UpstreamAttempt,
+) -> Generator[UpstreamAttempt, None, None]:
+    scope: Final = _Scope(attempt)
+    token: Final = _CURRENT_UPSTREAM_SCOPE.set(scope)
     try:
-        if not stream:
-            await response.aread()
-        return response
-    except BaseException:
-        await response.aclose()
-        raise
+        yield attempt
+    finally:
+        scope.open = False
+        _CURRENT_UPSTREAM_SCOPE.reset(token)
+
+
+@contextmanager
+def upstream_attempt(
+    capture: UpstreamResponseCapture,
+    call_id: str,
+) -> Generator[UpstreamAttempt, None, None]:
+    current: Final = current_upstream_attempt()
+    if current is not None and current.capture is capture:
+        yield current
+        return
+    attempt: Final = UpstreamAttempt(capture, capture.allocate_attempt_id(call_id))
+    with _bind_upstream_attempt(attempt):
+        yield attempt
+
+
+@contextmanager
+def resume_upstream_attempt(
+    attempt: UpstreamAttempt | None,
+) -> Generator[None, None, None]:
+    if attempt is None:
+        yield
+        return
+    with _bind_upstream_attempt(attempt):
+        yield
+
+
+@contextmanager
+def suppress_upstream_capture() -> Generator[None, None, None]:
+    token: Final = _CURRENT_UPSTREAM_SCOPE.set(None)
+    try:
+        yield
+    finally:
+        _CURRENT_UPSTREAM_SCOPE.reset(token)
+
+
+def record_current_upstream(
+    status_code: int | None,
+    headers: tuple[tuple[str, str], ...],
+) -> None:
+    attempt: Final = current_upstream_attempt()
+    if attempt is None:
+        return
+    attempt.capture.record_metadata(attempt.attempt_id, status_code, headers)
