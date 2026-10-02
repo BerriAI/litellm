@@ -223,12 +223,10 @@ def _configured_database_passwords() -> frozenset[str]:
 
 def _redact_credentials(text: str) -> str:
     """Mask configured database passwords before passing the text to LiteLLM redaction."""
-    passwords: Final = _configured_database_passwords()
+    passwords: Final = sorted(_configured_database_passwords(), key=len, reverse=True)
+    alternation: Final = "|".join(re.escape(password) for password in passwords)
     password_pattern: Final = (
-        re.compile(
-            rf"(?P<lead>:|password=)(?:{'|'.join(re.escape(password) for password in sorted(passwords, key=len, reverse=True))})(?=@|&|$|[\s'\"\]),])",
-            re.IGNORECASE,
-        )
+        re.compile(rf"(?P<lead>:|password=)(?:{alternation})(?=@|&|$|[\s'\"\]),])", re.IGNORECASE)
         if passwords
         else None
     )
