@@ -11,8 +11,8 @@ from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from integration.spend._request_tag_helpers import (
-    MODEL,
-    OPENAI_MODEL,
+    ANTHROPIC_ANTHROPIC_MODEL,
+    OPENAI_ANTHROPIC_MODEL,
     T3,
     provider_env,
     provider_reply,
@@ -47,14 +47,19 @@ def _tagged_requests(
         candidate.request(
             "POST",
             "/anthropic/v1/messages",
-            {"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": marker}], "stream": stream},
+            {
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": marker}],
+                "stream": stream,
+            },
             key=key,
             headers=ANTHROPIC_HEADERS,
         ),
         candidate.request(
             "POST",
             "/openai/v1/chat/completions",
-            {"model": OPENAI_MODEL, "messages": [{"role": "user", "content": marker}], "stream": stream},
+            {"model": OPENAI_ANTHROPIC_MODEL, "messages": [{"role": "user", "content": marker}], "stream": stream},
             key=key,
             headers=HEADERS,
         ),
