@@ -135,6 +135,21 @@ describe("RunView", () => {
     expect(screen.queryByTestId("detail-pane")).not.toBeInTheDocument();
   });
 
+  it.each(["button", "Escape"])("reopens the selected step after closing details with %s", async (method) => {
+    const user = userEvent.setup();
+    renderRun(research);
+    await screen.findByTestId("detail-pane");
+    await user.keyboard("j");
+    const selectedId = screen.getByTestId("detail-pane").getAttribute("data-row-id");
+    expect(selectedId).not.toBe(rootSpanId(research));
+    if (method === "button") await user.click(screen.getByRole("button", { name: "close detail" }));
+    else await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("detail-pane")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Show details" }));
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", selectedId);
+    expect(screen.queryByRole("button", { name: "Show details" })).not.toBeInTheDocument();
+  });
+
   it("keeps a way back to the runs table when a run fails to load", async () => {
     const user = userEvent.setup();
     const onBack = vi.fn();

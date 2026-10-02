@@ -3028,9 +3028,101 @@ async def test_configured_upstream_revision_is_offered_and_checked(revision, acc
             await client.list_tools(raise_on_error=True)
 
 
-@pytest.mark.parametrize("revision", ["2026-07-28", "unknown", "", None])
+@pytest.mark.parametrize("revision", ["unknown", "", None])
 def test_upstream_protocol_configuration_rejects_unavailable_modes(revision):
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
         MCPClient(protocol_version=revision)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accepted", [True, False])
+async def test_modern_upstream_requests_are_self_contained_without_initialization(accepted: bool) -> None:
+    from queue import SimpleQueue
+
+    from mcp.types import DiscoverResult, ToolsCapability
+
+    methods: Final[SimpleQueue[str]] = SimpleQueue()
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method != "POST":
+            return httpx2.Response(405)
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        assert isinstance(payload, JSONRPCRequest)
+        methods.put(payload.method)
+        assert payload.method != "initialize", "Modern operations must not establish a legacy session"
+        assert "mcp-session-id" not in request.headers
+        assert request.headers["mcp-protocol-version"] == "2026-07-28"
+        assert request.headers["authorization"] == "Bearer upstream-credential"
+        assert payload.params is not None
+        metadata: Final = payload.params["_meta"]
+        assert metadata["io.modelcontextprotocol/protocolVersion"] == "2026-07-28"
+        assert "io.modelcontextprotocol/clientCapabilities" in metadata
+        if payload.method == "server/discover":
+            discovery: Final = DiscoverResult(
+                supported_versions=["2026-07-28"] if accepted else ["2025-11-25"],
+                capabilities=ServerCapabilities(tools=ToolsCapability()),
+                instructions="modern instructions",
+            )
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": discovery.model_dump(by_alias=True, exclude_none=True),
+                },
+            )
+        assert accepted, "Rejected negotiation must prevent upstream execution"
+        if payload.method == "tools/list":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "resultType": "complete",
+                        "cacheScope": "private",
+                        "ttlMs": 0,
+                        "tools": [{"name": "add", "inputSchema": {"type": "object"}}],
+                    },
+                },
+            )
+        assert payload.method == "tools/call"
+        assert payload.params["arguments"] == {"a": 2, "b": 3}
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {"resultType": "complete", "content": [{"type": "text", "text": "5"}], "isError": False},
+            },
+        )
+
+    client: Final = _MockTransportClient(
+        respond,
+        server_url="https://example.com/mcp",
+        protocol_version="2026-07-28",
+        auth_type=MCPAuth.bearer_token,
+        auth_value="upstream-credential",
+    )
+    params: Final = CallToolRequestParams(name="add", arguments={"a": 2, "b": 3})
+    if accepted:
+        result: Final = await client.call_tool(params, raise_on_error=True)
+        assert result.content[0].text == "5"
+        assert not result.is_error
+        assert client._last_initialize_instructions == "modern instructions"
+        assert tuple(methods.get_nowait() for _ in range(methods.qsize())) == (
+            "server/discover",
+            "tools/call",
+            "tools/list",
+        )
+    else:
+        with pytest.raises((MCPError, RuntimeError), match="protocol version"):
+            await client.call_tool(params, raise_on_error=True)
+        assert tuple(methods.get_nowait() for _ in range(methods.qsize())) == ("server/discover",)
+
+
+def test_modern_upstream_rejects_legacy_sse_transport() -> None:
+    with pytest.raises(ValueError, match="transport"):
+        MCPClient(protocol_version="2026-07-28", transport_type=MCPTransport.sse)
