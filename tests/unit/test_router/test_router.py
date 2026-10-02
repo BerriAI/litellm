@@ -15031,6 +15031,45 @@ async def test_anthropic_messages_retries_run_out_before_the_fallback_chain_is_c
     assert provider.calls[-1][0] == "anthropic/fb-model"
 
 
+def _anthropic_messages_raise_authentication_error():
+    raise litellm.AuthenticationError(message="invalid api key", llm_provider="anthropic", model="glm")
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_raising_a_non_retriable_error_is_handed_to_the_fallback_chain():
+    """A retry that fails before its stream opens with an error no retry covers ends the retries and reaches
+    the fallback group the way a pre-stream failure does, instead of surfacing as the client's error."""
+    router = _anthropic_messages_retry_router(num_retries=2, fallbacks=[{"glm": ["fb"]}])
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_raise_authentication_error,
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+        ),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+    assert [model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls] == [True, True, False]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_raising_a_non_retriable_error_reaches_the_client_without_fallbacks():
+    router = _anthropic_messages_retry_router(num_retries=2)
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_raise_authentication_error,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    with pytest.raises(litellm.AuthenticationError):
+        [chunk async for chunk in stream]
+
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2)]
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_request_num_retries_zero_opts_out_of_the_mid_stream_retry():
     router = _anthropic_messages_retry_router(num_retries=2)
