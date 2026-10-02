@@ -3730,6 +3730,10 @@ class TestGetToolsForSingleServer:
 class TestStdioCommandAllowlist:
     """Tests for MCP stdio command allowlist validation."""
 
+    @pytest.fixture(autouse=True)
+    def _stdio_enabled(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
+
     def test_allowed_command_passes_validation(self):
         """npx, uvx, python, etc. should be accepted."""
         req = NewMCPServerRequest(
