@@ -954,6 +954,7 @@ async def common_checks(
     10. [OPTIONAL] Organization checks - is user_object.organization_id is set, run these checks
     11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
     """
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     _model: Final[str | list[str] | None] = get_model_from_request(
@@ -1121,13 +1122,28 @@ async def common_checks(
     # Run before apply_key_tags_pre_auth injects key metadata.tags into request_body.
     _reject_clientside_metadata_tags_check(general_settings, request_body, route)
 
+    # Every tag the request can be attributed to must be unowned or owned by the
+    # caller's team. Independent of budget skips and runs before any reservation.
+    tag_ownership_map: Final = (
+        await _enforce_tag_ownership(
+            tags=LiteLLMProxyRequestSetup.attributable_request_tags(
+                request_data=request_body,
+                headers=_safe_get_request_headers(request=request),
+                user_api_key_dict=valid_token,
+            ),
+            valid_token=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+        if RouteChecks.is_llm_api_route(route=route)
+        else None
+    )
+
     # If this is a free model, skip all budget checks
     if not skip_all_budget_checks:
         # Key metadata.tags are injected into request_body here so the tag budget
         # check can read them; this mutation must run before the gathered checks.
         if valid_token is not None:
-            from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
-
             LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(
                 request_data=request_body,
                 route=route,
@@ -1209,6 +1225,7 @@ async def common_checks(
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                     valid_token=valid_token,
+                    tag_objects=tag_ownership_map,
                 ),
                 _model_access_group_max_budget_check(
                     matched_model_access_groups=matched_model_access_groups,
@@ -2204,12 +2221,15 @@ async def get_model_access_group_budgets_batch(
     return {group: budget for group, budget in (*probed, *fetched) if budget is not None}
 
 
-async def _fetch_uncached_tags(
+async def _query_uncached_tags(
     uncached_tags: Sequence[str],
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
 ) -> tuple[tuple[str, LiteLLM_TagTable], ...]:
-    """Rows for the tags a cache probe missed; names absent from the registry never reach the DB."""
+    """Rows for the tags a cache probe missed; names absent from the registry never reach the DB.
+
+    Raises on a DB failure so the ownership check can tell "tag not found" from
+    "unknown whether the tag exists"; the fail-safe variant wraps this."""
     if not uncached_tags:
         return ()
 
@@ -2223,24 +2243,37 @@ async def _fetch_uncached_tags(
     if not tags_to_fetch:
         return ()
 
-    try:
-        db_tags: Final = await _tag_table(TagRepository(prisma_client)).find_many(
-            where={"tag_name": {"in": list(tags_to_fetch)}},
-            include={"litellm_budget_table": True},
+    db_tags: Final = await _tag_table(TagRepository(prisma_client)).find_many(
+        where={"tag_name": {"in": list(tags_to_fetch)}},
+        include={"litellm_budget_table": True},
+    )
+    fetched: Final = tuple((db_tag.tag_name, LiteLLM_TagTable.model_validate(db_tag.dict())) for db_tag in db_tags)
+    for fetched_name, fetched_obj in fetched:
+        await user_api_key_cache.async_set_cache(
+            key=tag_cache_key(fetched_name),
+            value=fetched_obj,
+            model_type=LiteLLM_TagTable,
+            ttl=get_management_object_ttl(user_api_key_cache),
         )
-        fetched: Final = tuple((db_tag.tag_name, LiteLLM_TagTable.model_validate(db_tag.dict())) for db_tag in db_tags)
-        for fetched_name, fetched_obj in fetched:
-            await user_api_key_cache.async_set_cache(
-                key=tag_cache_key(fetched_name),
-                value=fetched_obj,
-                model_type=LiteLLM_TagTable,
-                ttl=get_management_object_ttl(user_api_key_cache),
-            )
+    return fetched
+
+
+async def _fetch_uncached_tags(
+    uncached_tags: Sequence[str],
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> tuple[tuple[str, LiteLLM_TagTable], ...]:
+    """Fail-safe variant of ``_query_uncached_tags``: a tag fetch error yields
+    "no budget objects", never breaks auth."""
+    try:
+        return await _query_uncached_tags(
+            uncached_tags=uncached_tags,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
     except Exception as e:  # noqa: BLE001  # fail-safe: a tag fetch error must yield "no budget objects", never break auth
         verbose_proxy_logger.debug("Error batch fetching tags from database: %s", e)
         return ()
-    else:
-        return fetched
 
 
 @log_db_metrics
@@ -2285,6 +2318,82 @@ async def get_tag_objects_batch(
         user_api_key_cache=user_api_key_cache,
     )
     return {tag_name: tag_obj for tag_name, tag_obj in (*probed, *fetched) if tag_obj is not None}
+
+
+@log_db_metrics
+async def get_tag_objects_for_ownership(
+    tag_names: Sequence[str],
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> dict[str, LiteLLM_TagTable]:
+    """Same cache probe as ``get_tag_objects_batch`` but lets a DB failure
+    propagate: the ownership check must distinguish "tag not registered" from
+    "could not determine whether the tag is registered"."""
+    if prisma_client is None or not tag_names:
+        return {}
+
+    probed: Final = [
+        (
+            tag_name,
+            await user_api_key_cache.async_get_cache(key=tag_cache_key(tag_name), model_type=LiteLLM_TagTable),
+        )
+        for tag_name in tag_names
+    ]
+    fetched: Final = await _query_uncached_tags(
+        uncached_tags=tuple(tag_name for tag_name, tag_obj in probed if tag_obj is None),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    return {tag_name: tag_obj for tag_name, tag_obj in (*probed, *fetched) if tag_obj is not None}
+
+
+async def _enforce_tag_ownership(
+    tags: Sequence[str],
+    valid_token: UserAPIKeyAuth | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> Mapping[str, LiteLLM_TagTable]:
+    """Reject a request carrying a registered tag owned by a different team.
+
+    An owned tag requires ``valid_token.team_id == row.team_id``; identities
+    with no team (master key, proxy-admin tokens, teamless keys) cannot use
+    owned tags. Unknown and unowned tags pass through. Returns the resolved
+    tag map so the tag-budget check reuses the same lookup."""
+    if not tags:
+        return MappingProxyType({})
+    try:
+        tag_objects: Final = await get_tag_objects_for_ownership(
+            tag_names=tags,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning("Tag ownership lookup failed; rejecting request: %s", e)
+        raise ProxyException(
+            message="Tag ownership could not be determined; request rejected",
+            type=ProxyErrorTypes.tag_ownership_unavailable,
+            param="tags",
+            code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from e
+
+    caller_team: Final = valid_token.team_id if valid_token is not None else None
+    foreign: Final = tuple(
+        (tag_name, tag_obj.team_id)
+        for tag_name, tag_obj in tag_objects.items()
+        if tag_obj.team_id is not None and tag_obj.team_id != caller_team
+    )
+    if foreign:
+        raise ProxyException(
+            message=(
+                "Request tags not permitted for this key: "
+                + ", ".join(f"{tag_name} (owned by team {owner})" for tag_name, owner in foreign)
+                + f". Caller team: {caller_team or 'no team'}"
+            ),
+            type=ProxyErrorTypes.tag_ownership_denied,
+            param="tags",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+    return tag_objects
 
 
 @log_db_metrics
@@ -6404,6 +6513,7 @@ async def _tag_max_budget_check(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     valid_token: UserAPIKeyAuth | None,
+    tag_objects: Mapping[str, LiteLLM_TagTable] | None = None,
 ):
     """
     Check if any tags in the request are over their max budget.
@@ -6420,6 +6530,7 @@ async def _tag_max_budget_check(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
         valid_token=valid_token,
+        tag_objects=tag_objects,
     )
 
 
@@ -6429,20 +6540,25 @@ async def tag_max_budget_check_for_tags(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     valid_token: UserAPIKeyAuth | None,
+    tag_objects: Mapping[str, LiteLLM_TagTable] | None = None,
 ) -> None:
     if prisma_client is None or not tags:
         return
 
-    tag_objects: Final = await get_tag_objects_batch(
-        tag_names=tags,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
+    resolved_tag_objects: Final = (
+        tag_objects
+        if tag_objects is not None
+        else await get_tag_objects_batch(
+            tag_names=tags,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
     )
 
     # Check budget for each tag
     for tag_name in tags:
-        tag_object = tag_objects.get(tag_name)
+        tag_object = resolved_tag_objects.get(tag_name)
         if tag_object is None:
             continue
 

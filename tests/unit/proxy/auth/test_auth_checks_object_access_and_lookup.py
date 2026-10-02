@@ -2874,7 +2874,7 @@ def _tag_registry_row(tag_name: str):
     return SimpleNamespace(tag_name=tag_name)
 
 
-def _tag_db_row(tag_name: str, max_budget=None):
+def _tag_db_row(tag_name: str, max_budget=None, team_id=None):
     row = MagicMock()
     row.tag_name = tag_name
     budget = None if max_budget is None else {"max_budget": max_budget}
@@ -2884,6 +2884,7 @@ def _tag_db_row(tag_name: str, max_budget=None):
             "spend": 0.0,
             "models": [],
             "litellm_budget_table": budget,
+            "team_id": team_id,
         }
     )
     return row
@@ -10357,3 +10358,256 @@ async def test_authoritative_group_grants_propagate_policy_outages(
             await _get_agent_ids_from_access_groups(["group"], check_db_only=True)
     else:
         assert await _get_agent_ids_from_access_groups(["group"]) == []
+
+
+# Tag ownership enforcement tests
+
+
+def _ownership_prisma(tag_rows=(), registry_rows=None):
+    """Prisma boundary: find_many serves the names-only registry query and the
+    per-name batch query. ``registry_rows`` defaults to every row's name."""
+    mock_prisma = MagicMock()
+    registry = registry_rows if registry_rows is not None else [_tag_registry_row(row.tag_name) for row in tag_rows]
+
+    async def find_many(**kwargs):
+        if "where" in kwargs:
+            names = set(kwargs["where"]["tag_name"]["in"])
+            return [row for row in tag_rows if row.tag_name in names]
+        return list(registry)
+
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=find_many)
+    return mock_prisma
+
+
+async def _enforce(tags, team_id="team-a", prisma=None, cache=None):
+    from litellm.proxy.auth.auth_checks import _enforce_tag_ownership
+
+    return await _enforce_tag_ownership(
+        tags=tags,
+        valid_token=UserAPIKeyAuth(api_key="k", team_id=team_id),
+        prisma_client=prisma if prisma is not None else _ownership_prisma(),
+        user_api_key_cache=cache if cache is not None else UserApiKeyCache(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_matching_team_is_allowed():
+    tag_map = await _enforce(
+        ["owned-tag"],
+        prisma=_ownership_prisma(tag_rows=[_tag_db_row("owned-tag", team_id="team-a")]),
+    )
+    assert tag_map["owned-tag"].team_id == "team-a"
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_foreign_team_denied_names_tag_and_owner():
+    with pytest.raises(ProxyException) as exc_info:
+        await _enforce(
+            ["owned-tag"],
+            prisma=_ownership_prisma(tag_rows=[_tag_db_row("owned-tag", team_id="team-b")]),
+        )
+    assert exc_info.value.type == ProxyErrorTypes.tag_ownership_denied
+    assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
+    assert "owned-tag" in exc_info.value.message
+    assert "team-b" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_no_team_token_denied():
+    with pytest.raises(ProxyException) as exc_info:
+        await _enforce(
+            ["owned-tag"],
+            team_id=None,
+            prisma=_ownership_prisma(tag_rows=[_tag_db_row("owned-tag", team_id="team-b")]),
+        )
+    assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
+    assert "no team" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_unknown_and_unowned_tags_allowed():
+    tag_map = await _enforce(
+        ["unowned-tag", "unregistered-tag"],
+        prisma=_ownership_prisma(tag_rows=[_tag_db_row("unowned-tag")]),
+    )
+    assert tag_map["unowned-tag"].team_id is None
+    assert "unregistered-tag" not in tag_map
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_several_permitted_tags_allowed():
+    tag_map = await _enforce(
+        ["owned-a", "unowned", "unknown"],
+        prisma=_ownership_prisma(
+            tag_rows=[_tag_db_row("owned-a", team_id="team-a"), _tag_db_row("unowned")]
+        ),
+    )
+    assert set(tag_map) == {"owned-a", "unowned"}
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_one_foreign_tag_rejects_request():
+    with pytest.raises(ProxyException) as exc_info:
+        await _enforce(
+            ["mine", "theirs"],
+            prisma=_ownership_prisma(
+                tag_rows=[_tag_db_row("mine", team_id="team-a"), _tag_db_row("theirs", team_id="team-b")]
+            ),
+        )
+    assert exc_info.value.type == ProxyErrorTypes.tag_ownership_denied
+    assert "theirs" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_db_failure_is_503_never_an_allow():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=RuntimeError("db down"))
+    with pytest.raises(ProxyException) as exc_info:
+        await _enforce(["any-tag"], prisma=mock_prisma)
+    assert exc_info.value.type == ProxyErrorTypes.tag_ownership_unavailable
+    assert int(exc_info.value.code) == status.HTTP_503_SERVICE_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_cached_tag_plus_db_failure_is_503():
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=tag_cache_key("cached-owned"),
+        value=LiteLLM_TagTable(tag_name="cached-owned", team_id="team-a"),
+        model_type=LiteLLM_TagTable,
+    )
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=RuntimeError("db down"))
+    with pytest.raises(ProxyException) as exc_info:
+        await _enforce(["cached-owned", "uncached"], prisma=mock_prisma, cache=cache)
+    assert int(exc_info.value.code) == status.HTTP_503_SERVICE_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_registry_failure_still_enforces_via_per_name_query():
+    mock_prisma = MagicMock()
+
+    async def find_many(**kwargs):
+        if "where" in kwargs:
+            names = set(kwargs["where"]["tag_name"]["in"])
+            rows = [_tag_db_row("foreign-tag", team_id="team-b")]
+            return [row for row in rows if row.tag_name in names]
+        raise RuntimeError("registry load failed")
+
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=find_many)
+    with pytest.raises(ProxyException) as exc_info:
+        await _enforce(["foreign-tag"], prisma=mock_prisma)
+    assert exc_info.value.type == ProxyErrorTypes.tag_ownership_denied
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_cache_only_resolution_needs_no_db_call():
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=tag_cache_key("cached-owned"),
+        value=LiteLLM_TagTable(tag_name="cached-owned", team_id="team-a"),
+        model_type=LiteLLM_TagTable,
+    )
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=RuntimeError("must not be called"))
+    tag_map = await _enforce(["cached-owned"], prisma=mock_prisma, cache=cache)
+    assert tag_map["cached-owned"].team_id == "team-a"
+    mock_prisma.db.litellm_tagtable.find_many.assert_not_called()
+
+
+# Tag ownership enforcement inside common_checks
+
+
+async def _ownership_common_checks(
+    *,
+    request_body,
+    route="/chat/completions",
+    valid_token=None,
+    user_object=None,
+    prisma=None,
+    cache=None,
+    skip_budget_checks=False,
+):
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    request = MagicMock(spec=Request)
+    request.headers = {}
+    with (
+        patch(  # test-quality-ok: common_checks imports prisma_client from proxy_server
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: common_checks imports user_api_key_cache from proxy_server
+            "litellm.proxy.proxy_server.user_api_key_cache", cache if cache is not None else UserApiKeyCache()
+        ),
+    ):
+        return await common_checks(
+            request_body=request_body,
+            team_object=None,
+            user_object=user_object,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=AsyncMock(),
+            valid_token=valid_token if valid_token is not None else UserAPIKeyAuth(token="k", team_id="team-a"),
+            request=request,
+            skip_budget_checks=skip_budget_checks,
+        )
+
+
+def _per_name_tag_query_count(prisma) -> int:
+    return sum(1 for call in prisma.db.litellm_tagtable.find_many.await_args_list if "where" in call.kwargs)
+
+
+@pytest.mark.asyncio
+async def test_common_checks_enforces_tag_ownership_on_llm_route_without_tag_budget():
+    prisma = _ownership_prisma(tag_rows=[_tag_db_row("foreign-tag", team_id="team-b")])
+    with pytest.raises(ProxyException) as exc_info:
+        await _ownership_common_checks(
+            request_body={"model": "gpt-4o", "metadata": {"tags": ["foreign-tag"]}},
+            prisma=prisma,
+        )
+    assert exc_info.value.type == ProxyErrorTypes.tag_ownership_denied
+    assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
+    assert "foreign-tag" in exc_info.value.message
+    assert "team-b" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_common_checks_enforces_tag_ownership_when_budget_checks_skipped():
+    prisma = _ownership_prisma(tag_rows=[_tag_db_row("foreign-tag", team_id="team-b")])
+    with pytest.raises(ProxyException) as exc_info:
+        await _ownership_common_checks(
+            request_body={"model": "gpt-4o", "metadata": {"tags": ["foreign-tag"]}},
+            prisma=prisma,
+            skip_budget_checks=True,
+        )
+    assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.asyncio
+async def test_common_checks_ignores_tag_ownership_on_non_llm_route():
+    prisma = _ownership_prisma(tag_rows=[_tag_db_row("foreign-tag", team_id="team-b")])
+    result = await _ownership_common_checks(
+        request_body={"metadata": {"tags": ["foreign-tag"]}},
+        route="/key/generate",
+        prisma=prisma,
+        valid_token=UserAPIKeyAuth(token="k", user_role=LitellmUserRoles.PROXY_ADMIN.value),
+        user_object=LiteLLM_UserTable(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN.value),
+    )
+    assert result is True
+    prisma.db.litellm_tagtable.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_common_checks_tag_ownership_and_tag_budget_share_one_find_many():
+    prisma = _ownership_prisma(tag_rows=[_tag_db_row("owned-tag", team_id="team-a", max_budget=100.0)])
+    result = await _ownership_common_checks(
+        request_body={"model": "gpt-4o", "metadata": {"tags": ["owned-tag"]}},
+        prisma=prisma,
+    )
+    assert result is True
+    assert _per_name_tag_query_count(prisma) == 1

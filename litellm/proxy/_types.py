@@ -4524,6 +4524,16 @@ class ProxyErrorTypes(str, enum.Enum):
     Tool is not in the allowed tools list for this key/team
     """
 
+    tag_ownership_denied = "tag_ownership_denied"
+    """
+    A request tag is registered to a different team than the caller's
+    """
+
+    tag_ownership_unavailable = "tag_ownership_unavailable"
+    """
+    Tag ownership could not be determined for the request
+    """
+
     @classmethod
     def get_model_access_error_type_for_object(
         cls, object_type: Literal["key", "user", "team", "org", "project", "agent"]
