@@ -131,7 +131,7 @@ class SpanRow(TypedDict):
     ApiKeyHash: ReadOnly[str]
     ObservationType: SpanType
     AgentName: str
-    Framework: str
+    Framework: ReadOnly[str]
     LiteLLMRequestId: str
     Model: str
     InputTokens: int
