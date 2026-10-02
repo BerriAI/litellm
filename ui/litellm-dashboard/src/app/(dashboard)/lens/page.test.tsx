@@ -18,12 +18,11 @@ vi.mock("./_components/LensView", () => ({
 describe("Lens navigation", () => {
   beforeEach(() => auth.mockReturnValue({ accessToken: "test-token", userRole: "Admin", isViewOnly: false }));
 
-  it("opens investigations and pauses trace polling when returning from traces", async () => {
+  it("opens traces by default and pauses polling while viewing investigations", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();
     renderWithProviders(<LensPage />, { onUrlUpdate });
-    expect(screen.getByRole("tab", { name: "Investigations" })).toHaveAttribute("aria-selected", "true");
-    await user.click(screen.getByRole("tab", { name: "Traces" }));
+    expect(screen.getByRole("tab", { name: "Traces" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("Trace polling active")).toBeVisible();
     await user.click(screen.getByRole("tab", { name: "Investigations" }));
     expect(screen.getByText("Manage investigations")).toBeVisible();
@@ -37,6 +36,12 @@ describe("Lens navigation", () => {
     renderWithProviders(<LensPage />, { searchParams: "?lens=saved-lens" });
     expect(screen.getByRole("tab", { name: "Investigations" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("Manage investigations")).toBeVisible();
+  });
+
+  it("honors an explicit traces tab even when a saved investigation is in the URL", () => {
+    renderWithProviders(<LensPage />, { searchParams: "?tab=traces&lens=saved-lens" });
+    expect(screen.getByRole("tab", { name: "Traces" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Trace polling active")).toBeVisible();
   });
 
   it.each(["Internal User", "Internal Viewer", "Org Admin"])(
