@@ -17,8 +17,6 @@ class TestOpenAIRealtime(BaseRealtimeTest):
     E2E tests for OpenAI Realtime API using base test class.
     """
 
-    test_realtime_connection = None
-
     def get_model(self) -> str:
         # OpenAI shut down the entire gpt-4o-realtime-preview family
         # (including the undated alias) on 2026-05-07. gpt-realtime is the
