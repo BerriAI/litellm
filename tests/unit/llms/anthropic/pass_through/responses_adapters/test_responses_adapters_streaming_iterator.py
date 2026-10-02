@@ -657,6 +657,19 @@ def _collect_with_logging(stream, logging_obj: LitellmLogging) -> list:
     return asyncio.run(_run())
 
 
+class _DeliveryCountingConsumer:
+    def __init__(self) -> None:
+        self.delivered: tuple[dict, ...] = ()
+        self.delivered_when_hook_fired: tuple[int, ...] = ()
+
+    async def hook(self, failure: Exception) -> None:
+        self.delivered_when_hook_fired = (*self.delivered_when_hook_fired, len(self.delivered))
+
+    async def drain(self, wrapper: AnthropicResponsesStreamWrapper) -> None:
+        async for chunk in wrapper:
+            self.delivered = (*self.delivered, chunk)
+
+
 def _failing_after_one_delta():
     async def _gen():
         yield {"type": "response.created"}
@@ -728,41 +741,40 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
         assert chunks[-1]["error"] == {"type": "api_error", "message": "Response payload is not completed"}
 
     def test_the_hook_fires_only_after_the_consumer_took_the_error_event(self):
-        delivered: list[dict] = []
-        delivered_when_hook_fired: list[int] = []
-
-        async def _hook(failure: Exception) -> None:
-            delivered_when_hook_fired.append(len(delivered))
+        consumer = _DeliveryCountingConsumer()
 
         async def _run() -> None:
             wrapper = AnthropicResponsesStreamWrapper(
-                responses_stream=_failing_after_one_delta(), model="m", litellm_logging_obj=_logging_obj_with_failure_hook(_hook)
+                responses_stream=_failing_after_one_delta(),
+                model="m",
+                litellm_logging_obj=_logging_obj_with_failure_hook(consumer.hook),
             )
-            async for chunk in wrapper:
-                delivered.append(chunk)
+            await consumer.drain(wrapper)
             with pytest.raises(StopAsyncIteration):
                 await wrapper.__anext__()
 
         asyncio.run(_run())
-        assert [chunk["type"] for chunk in delivered] == ["message_start", "content_block_start", "content_block_delta", "error"]
-        assert delivered_when_hook_fired == [len(delivered)]
+        assert [chunk["type"] for chunk in consumer.delivered] == [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "error",
+        ]
+        assert consumer.delivered_when_hook_fired == (len(consumer.delivered),)
 
     def test_a_consumer_that_closes_the_stream_on_the_error_event_recovers_it_without_the_hook(self):
         recorder = _FailureHookRecorder()
 
-        async def _run() -> list[bytes]:
+        async def _close_on_the_error_event() -> None:
             wrapper = AnthropicResponsesStreamWrapper(
                 responses_stream=_failing_after_one_delta(), model="m", litellm_logging_obj=_logging_obj_with_failure_hook(recorder)
             )
             sse = wrapper.async_anthropic_sse_wrapper()
-            frames: list[bytes] = []
             async for frame in sse:
-                frames.append(frame)
                 if frame.startswith(b"event: error\n"):
                     await sse.aclose()
-                    break
-            return frames
+                    return
+            pytest.fail("the stream ended without an error event")
 
-        frames = asyncio.run(_run())
-        assert frames[-1].startswith(b"event: error\n")
+        asyncio.run(_close_on_the_error_event())
         assert recorder.received == ()
