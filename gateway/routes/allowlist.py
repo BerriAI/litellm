@@ -73,6 +73,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/containers",
     "/containers",
     "/v1/evals",
+    "/v1/traces",
     "/v1/memory",
     "/queue/chat/",
     # Google data plane (v1beta is the Google AI Studio version)
@@ -131,6 +132,7 @@ GATEWAY_EXACT_PATHS: frozenset[str] = frozenset(
         "/redoc",
         "/test",
         "/debug/memory/summary",
+        "/api/event_logging/batch",
     }
 )
 

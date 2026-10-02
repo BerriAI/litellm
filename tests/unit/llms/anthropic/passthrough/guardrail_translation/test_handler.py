@@ -9,6 +9,7 @@ Pins the two Greptile P1s from PR #42585:
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from unittest.mock import MagicMock
 
 import pytest
@@ -16,6 +17,9 @@ import pytest
 from litellm.llms.anthropic.passthrough.guardrail_translation.handler import (
     AnthropicPassthroughGuardrailHandler,
     _parse_sse_blocks,
+    _processed_texts,
+    _text_delta,
+    _with_text,
 )
 
 
@@ -28,11 +32,7 @@ def _text_delta_frame(index: int, text: str, sep: bytes = b"\n\n", line_end: byt
         "delta": {"type": "text_delta", "text": text},
     }
     return (
-        b"event: content_block_delta"
-        + line_end
-        + b"data: "
-        + json.dumps(payload, separators=(",", ":")).encode()
-        + sep
+        b"event: content_block_delta" + line_end + b"data: " + json.dumps(payload, separators=(",", ":")).encode() + sep
     )
 
 
@@ -54,16 +54,66 @@ def _frame_payloads(body: bytes) -> list[dict]:
 
 class TestParseSseBlocks:
     def test_splits_lf_crlf_and_cr_blank_lines(self):
-        body = (
-            b"event: a\ndata: 1\n\n"
-            b"event: b\r\ndata: 2\r\n\r\n"
-            b"event: c\rdata: 3\r\r"
-        )
+        body = b"event: a\ndata: 1\n\nevent: b\r\ndata: 2\r\n\r\nevent: c\rdata: 3\r\r"
         blocks = _parse_sse_blocks(body)
         assert len(blocks) == 3
         assert blocks[0].endswith(b"\n\n")
         assert blocks[1].endswith(b"\r\n\r\n")
         assert blocks[2].endswith(b"\r\r")
+
+
+@pytest.mark.parametrize("separator", [b"\n\n", b"\r\n\r\n", b"\r\r", b""])
+def test_text_rewrite_preserves_index_metadata_and_framing(separator: bytes) -> None:
+    line_end = separator[: len(separator) // 2] or b"\n"
+    payload = {
+        "type": "content_block_delta",
+        "index": 3,
+        "delta": {"type": "text_delta", "text": "<PERSON_1>", "metadata": {"source": "guardrail"}},
+        "extra": [True, None, {"value": 1}],
+    }
+    frame = b"event: content_block_delta" + line_end + b"data: " + json.dumps(payload).encode() + separator
+
+    rewritten = _with_text(frame, "Alice")
+
+    assert rewritten == (
+        b"event: content_block_delta"
+        + line_end
+        + b"data: "
+        + json.dumps({**payload, "delta": {**payload["delta"], "text": "Alice"}}, separators=(",", ":")).encode()
+        + separator
+    )
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        b"event: content_block_delta\ndata: {invalid}\n\n",
+        b"event: content_block_delta\ndata: []\n\n",
+        b"event: content_block_delta\ndata: null\n\n",
+        b"event: content_block_delta\ndata: \xff\n\n",
+        b'event: content_block_delta\ndata: {"index":0,"delta":"text"}\n\n',
+        _message_stop_frame(),
+    ],
+)
+def test_invalid_or_non_delta_frames_stay_unchanged(frame: bytes) -> None:
+    assert _text_delta(frame) is None
+    assert _with_text(frame, "Alice") == frame
+
+
+@pytest.mark.parametrize(
+    "processed, expected",
+    [
+        ({"content": [{"text": "Alice"}, {"text": "Bob"}]}, ("Alice", "Bob")),
+        ({"content": [{"text": "Alice"}]}, None),
+        ({"content": [{"text": "Alice"}, {"text": 42}]}, None),
+        ({"content": [{"text": "Alice"}, {"type": "text"}]}, None),
+        ({"content": None}, None),
+    ],
+)
+def test_guardrail_texts_require_a_complete_string_rewrite(
+    processed: Mapping[str, object], expected: tuple[str, ...] | None
+) -> None:
+    assert _processed_texts(processed, 2) == expected
 
 
 class TestDeAnonymizeEventStream:

@@ -54,7 +54,7 @@ const ClassifierTypeRadios: React.FC<ClassifierTypeRadiosProps> = ({ value, clas
         <Label className="items-start font-normal leading-normal">
           <RadioGroupItem value="jev" className="mt-0.5" />
           <span>
-            <strong className="font-semibold">JEV Classifier</strong>{" "}
+            <strong className="font-semibold">Jev Classifier</strong>{" "}
             <span className="text-muted-foreground">uses TypeSafe System One Choice to decide the tier</span>
           </span>
         </Label>

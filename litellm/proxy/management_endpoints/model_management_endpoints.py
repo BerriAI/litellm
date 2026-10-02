@@ -68,7 +68,8 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
+from litellm.proxy.management.teams.access import TEAM_ADMIN_ONLY, is_team_admin
+from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.team_endpoints import (
     _refresh_cached_team,
     append_team_models,
@@ -340,8 +341,21 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
+def _stored_credential_name(existing_litellm_params: GenericLiteLLMParams | None) -> str | None:
+    if existing_litellm_params is None or existing_litellm_params.litellm_credential_name is None:
+        return None
+    return decrypt_value_helper(
+        value=existing_litellm_params.litellm_credential_name,
+        key="litellm_credential_name",
+        exception_type="debug",
+        return_original_value=True,
+    )
+
+
 async def _raise_on_invalid_credential_name(
-    litellm_params: updateLiteLLMParams | None, prisma_client: PrismaClient
+    litellm_params: updateLiteLLMParams | None,
+    existing_litellm_params: GenericLiteLLMParams | None,
+    prisma_client: PrismaClient,
 ) -> None:
     if litellm_params is None or "litellm_credential_name" not in litellm_params.model_fields_set:
         return
@@ -355,6 +369,8 @@ async def _raise_on_invalid_credential_name(
             code=status.HTTP_400_BAD_REQUEST,
             param="litellm_credential_name",
         )
+    if credential_name == _stored_credential_name(existing_litellm_params):
+        return
     if CredentialAccessor.find_credential(credential_name) is not None:
         return
     stored_credential: Final = await CredentialsRepository(WriterPinnedClient(prisma_client.db)).find_by_name(
@@ -412,9 +428,9 @@ def _effective_complexity_router_config(
             if key in ("api_key", "api_base") and (key != "api_key" or same_base)
         }
     )
-    return {  # mutable-ok: persisted JSON requires concrete nested dicts
+    return {
         **incoming,
-        "jev_classifier_config": {  # mutable-ok: json.dumps cannot serialize MappingProxyType
+        "jev_classifier_config": {
             **transport,
             **supplied,
         },
@@ -944,7 +960,7 @@ def _cost_map_entry(db_model: Deployment, incoming_model_info: Mapping[str, obje
     return MappingProxyType({})
 
 
-LoadedCatalog: TypeAlias = Callable[[], Mapping[str, Mapping[str, object]]]  # mutable-ok: Callable parameter syntax
+LoadedCatalog: TypeAlias = Callable[[], Mapping[str, Mapping[str, object]]]
 
 
 def _loaded_catalog_entry(
@@ -1192,7 +1208,7 @@ async def patch_model(
             existing_litellm_params=db_model.litellm_params,
             null_detaches=True,
         )
-        await _raise_on_invalid_credential_name(patch_data.litellm_params, prisma_client)
+        await _raise_on_invalid_credential_name(patch_data.litellm_params, db_model.litellm_params, prisma_client)
 
         ModelManagementAuthChecks.can_user_set_aws_session_tags(
             litellm_params=patch_data.litellm_params,
@@ -1782,10 +1798,11 @@ async def delete_team_models(
     # Under MODEL_RECONCILE_LOCK, for the same reason as delete_model: the rows are
     # gone, but a reconcile holding a pre-delete snapshot would upsert these ids back
     # onto this pod. The lock orders the eviction after any in-flight reconcile.
-    if llm_router is not None:
-        from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK
+    from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK, proxy_config
 
-        async with MODEL_RECONCILE_LOCK:
+    async with MODEL_RECONCILE_LOCK:
+        proxy_config.remove_auto_router_catalog_entries(frozenset(deleted_model_ids))
+        if llm_router is not None:
             for model_id in deleted_model_ids:
                 llm_router.delete_deployment(id=model_id)
 
@@ -1988,7 +2005,7 @@ class ModelManagementAuthChecks:
             )
         if user_api_key_dict.user_role and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return True
-        elif team_obj is None or not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        elif team_obj is None or not is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -2011,18 +2028,8 @@ class ModelManagementAuthChecks:
             return True
         if litellm_params.litellm_credential_name is None and not null_detaches:
             return True
-        existing_credential_name: Final = (
-            decrypt_value_helper(
-                value=existing_litellm_params.litellm_credential_name,
-                key="litellm_credential_name",
-                exception_type="debug",
-                return_original_value=True,
-            )
-            if existing_litellm_params is not None and existing_litellm_params.litellm_credential_name is not None
-            else None
-        )
         requested_credential_name: Final = litellm_params.litellm_credential_name
-        if requested_credential_name == existing_credential_name:
+        if requested_credential_name == _stored_credential_name(existing_litellm_params):
             return True
         if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return True
@@ -2127,11 +2134,8 @@ class ModelManagementAuthChecks:
                 )
             team_obj: Final = LiteLLM_TeamTable.model_validate(team_obj_row.model_dump())
 
-            if (
-                member_operation is not None
-                and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-                and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
-            ):
+            caller_is_admin: Final = await get_team_access().allows(user_api_key_dict, team_obj, TEAM_ADMIN_ONLY)
+            if member_operation is not None and not caller_is_admin:
                 from litellm.proxy.proxy_server import llm_router
 
                 if llm_router is None or (member_operation == "update" and incoming_model_params is None):
@@ -2194,6 +2198,7 @@ async def delete_model(
             llm_router,
             premium_user,
             prisma_client,
+            proxy_config,
             proxy_logging_obj,
             store_model_in_db,
             user_api_key_cache,
@@ -2245,8 +2250,9 @@ async def delete_model(
             # this pod serving a model the database no longer has, until the next
             # reconcile. Taking the lock orders this eviction after any such in-flight
             # reconcile's re-add, so the eviction is the last word.
-            if llm_router is not None:
-                async with MODEL_RECONCILE_LOCK:
+            async with MODEL_RECONCILE_LOCK:
+                proxy_config.remove_auto_router_catalog_entries(frozenset({model_info.id}))
+                if llm_router is not None:
                     llm_router.delete_deployment(id=model_info.id)
 
             # Runs after the row delete so the sibling check sees post-delete state.
@@ -2682,12 +2688,10 @@ async def update_model(
                 "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             }
             renamed_update: Final[PrismaCompatibleUpdateDBModel] = (
-                {**base_update, "model_name": renamed_to}  # mutable-ok: Prisma serializes only concrete update dicts
-                if renamed_to is not None
-                else base_update
+                {**base_update, "model_name": renamed_to} if renamed_to is not None else base_update
             )
             _data: Final[PrismaCompatibleUpdateDBModel] = (
-                {  # mutable-ok: Prisma serializes only concrete update dicts
+                {
                     **renamed_update,
                     "model_info": deployment.model_info.model_copy(
                         update=MappingProxyType({"member_auto_router": member_marker})
@@ -2979,8 +2983,8 @@ class AutoRouterClassifierPromptPreviewRequest(BaseModel):
 @router.post(
     "/auto_router/classifier/default_prompt",
     description="Get the system prompt an auto-router's LLM classifier sends for an edited tier set",
-    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def preview_auto_router_classifier_prompt(
     request: AutoRouterClassifierPromptPreviewRequest,
@@ -2991,7 +2995,7 @@ async def preview_auto_router_classifier_prompt(
     Built by the same function the live classifier uses, so the preview cannot drift from what the
     router sends. Payload validity beyond a renderable definition stays the dry-run's job.
     """
-    labeled_tiers: Final = _validated_labeled_tiers(request.tier_labels or {})  # mutable-ok: Pydantic field default
+    labeled_tiers: Final = _validated_labeled_tiers(request.tier_labels or {})
     system_prompt: Final = (
         custom_tier_classification_prompt(
             request.tier_definitions,
@@ -3014,8 +3018,8 @@ async def preview_auto_router_classifier_prompt(
 @router.get(
     "/auto_router/classifier/default_prompt",
     description="Get the built-in system prompt used by an auto-router's LLM classifier",
-    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def get_auto_router_classifier_default_prompt(
     context_window_size: int = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,

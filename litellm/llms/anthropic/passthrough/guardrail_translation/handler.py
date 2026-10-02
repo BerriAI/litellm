@@ -6,7 +6,9 @@ import json
 import re
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
+
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -16,16 +18,25 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
+    from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
 _EVENT_STREAM_MEDIA_TYPE: Final = "text/event-stream"
 _MESSAGES_SUFFIXES: Final = frozenset({"messages", "v1/messages"})
-# SSE allows CRLF, LF or CR line endings, so an event ends at a blank line in any of them.
 _SSE_EVENT_END: Final = re.compile(rb"\r\n\r\n|\n\n|\r\r")
 _SSE_TRAILING_END: Final = re.compile(rb"(?:\r\n\r\n|\n\n|\r\r)\Z")
+_SSE_PAYLOAD: Final = TypeAdapter(Mapping[str, JsonValue])
+
+
+class _GuardrailText(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True)
+    text: str
+
+
+_GUARDRAIL_TEXTS: Final = TypeAdapter(tuple[_GuardrailText, ...])
 
 
 def _is_messages_endpoint(endpoint: str) -> bool:
-    normalized = endpoint.rstrip("/").split("?")[0]
+    normalized: Final = endpoint.rstrip("/").split("?")[0]
     return any(normalized.endswith(suffix) for suffix in _MESSAGES_SUFFIXES)
 
 
@@ -39,25 +50,19 @@ def _parse_sse_blocks(body_bytes: bytes) -> tuple[bytes, ...]:
     return tuple(body_bytes[start:stop] for start, stop in zip(starts, stops) if stop > start)
 
 
-def _event_payload(block: bytes) -> tuple[str | None, dict[str, Any] | None]:
+def _event_payload(block: bytes) -> tuple[str | None, Mapping[str, JsonValue] | None]:
     try:
-        text = block.decode("utf-8")
+        text: Final = block.decode("utf-8")
     except UnicodeDecodeError:
         return None, None
-    event_type: str | None = None
-    data_line: str | None = None
-    for line in text.splitlines():
-        if line.startswith("event:"):
-            event_type = line[6:].strip()
-        elif line.startswith("data:"):
-            data_line = line[5:].strip()
+    lines: Final = tuple(reversed(text.splitlines()))
+    event_type: Final = next((line[6:].strip() for line in lines if line.startswith("event:")), None)
+    data_line: Final = next((line[5:].strip() for line in lines if line.startswith("data:")), None)
     if not data_line:
         return event_type, None
     try:
-        payload = json.loads(data_line)
-    except json.JSONDecodeError:
-        return event_type, None
-    if not isinstance(payload, dict):
+        payload: Final = _SSE_PAYLOAD.validate_json(data_line)
+    except ValidationError:
         return event_type, None
     return event_type, payload
 
@@ -67,11 +72,11 @@ def _text_delta(block: bytes) -> tuple[int, str] | None:
     event_type, payload = _event_payload(block)
     if event_type != "content_block_delta" or not payload:
         return None
-    index = payload.get("index")
-    delta = payload.get("delta")
-    if not isinstance(index, int) or not isinstance(delta, dict) or delta.get("type") != "text_delta":
+    index: Final = payload.get("index")
+    delta: Final = payload.get("delta")
+    if not isinstance(index, int) or not isinstance(delta, Mapping) or delta.get("type") != "text_delta":
         return None
-    text = delta.get("text")
+    text: Final = delta.get("text")
     return (index, text) if isinstance(text, str) else None
 
 
@@ -80,15 +85,14 @@ def _with_text(block: bytes, new_text: str) -> bytes:
     event_type, payload = _event_payload(block)
     if event_type != "content_block_delta" or not payload:
         return block
-    delta = payload.get("delta")
-    if not isinstance(delta, dict):
+    delta: Final = payload.get("delta")
+    if not isinstance(delta, Mapping):
         return block
-    # ``payload`` was just parsed from ``block`` and is not shared, so editing it is local.
-    delta["text"] = new_text
+    rewritten: Final = {**payload, "delta": {**delta, "text": new_text}}
     trailing: Final = _SSE_TRAILING_END.search(block)
     separator: Final = trailing.group(0) if trailing else b""
     line_end: Final = separator[: len(separator) // 2].decode() or "\n"
-    data: Final = json.dumps(payload, separators=(",", ":"))
+    data: Final = json.dumps(rewritten, separators=(",", ":"))
     return f"event: content_block_delta{line_end}data: {data}".encode() + separator
 
 
@@ -97,12 +101,11 @@ def _processed_texts(processed: Mapping[str, object], count: int) -> tuple[str, 
     content: Final = processed.get("content")
     if not isinstance(content, list):
         return None
-    first: Final[list[object]] = content[:count]
-    texts: Final = tuple(
-        text
-        for text in (block.get("text") if isinstance(block, Mapping) else None for block in first)
-        if isinstance(text, str)
-    )
+    try:
+        first: Final = _GUARDRAIL_TEXTS.validate_python(content[:count])
+    except ValidationError:
+        return None
+    texts: Final = tuple(block.text for block in first)
     return texts if len(texts) == count else None
 
 
@@ -124,7 +127,7 @@ class AnthropicPassthroughGuardrailHandler(BaseTranslation):
         body_bytes: bytes,
         proxy_logging_obj: ProxyLogging,
         user_api_key_dict: UserAPIKeyAuth,
-        data: dict,
+        data: dict[str, object],  # mutable-ok: post-call hooks share and update the request dictionary
     ) -> bytes:
         """
         Buffer Anthropic SSE frames, run post-call guardrails on concatenated
@@ -145,10 +148,8 @@ class AnthropicPassthroughGuardrailHandler(BaseTranslation):
         if not deltas:
             return body_bytes
 
-        # One synthetic text block per Anthropic content block, so text from separate
-        # blocks is never merged or moved across the tool/thinking blocks between them.
         indices: Final = tuple(sorted(frozenset(index for _, (index, _) in deltas)))
-        synthetic_response: Final[dict] = {
+        synthetic_response: Final[AnthropicMessagesResponse] = {
             "type": "message",
             "role": "assistant",
             "content": [
@@ -157,7 +158,7 @@ class AnthropicPassthroughGuardrailHandler(BaseTranslation):
             "stop_reason": "end_turn",
         }
 
-        processed: Final = await proxy_logging_obj.post_call_success_hook(
+        processed: Final = await proxy_logging_obj.post_call_success_hook(  # pyright: ignore[reportUnknownMemberType]  # untyped request
             data=data,
             user_api_key_dict=user_api_key_dict,
             response=synthetic_response,
@@ -174,8 +175,6 @@ class AnthropicPassthroughGuardrailHandler(BaseTranslation):
         if rewritten is None:
             return body_bytes
 
-        # Put each block's full rewrite on its first text_delta and blank the rest, so
-        # placeholders split across frames cannot survive.
         text_for_index: Final = MappingProxyType({index: text for index, text in zip(indices, rewritten)})
         index_at: Final = MappingProxyType({position: index for position, (index, _) in deltas})
         first_positions: Final = frozenset(
@@ -190,7 +189,7 @@ class AnthropicPassthroughGuardrailHandler(BaseTranslation):
 
     async def process_input_messages(
         self,
-        data: dict,
+        data: dict[str, object],  # mutable-ok: the delegated guardrail updates the original request dictionary
         guardrail_to_apply: CustomGuardrail,
         litellm_logging_obj: LiteLLMLoggingObj | None = None,
     ) -> Mapping[str, object]:
@@ -198,7 +197,8 @@ class AnthropicPassthroughGuardrailHandler(BaseTranslation):
             PassThroughEndpointHandler,
         )
 
-        return await PassThroughEndpointHandler().process_input_messages(
+        handler: Final = PassThroughEndpointHandler()
+        return await handler.process_input_messages(  # pyright: ignore[reportUnknownMemberType]  # untyped request
             data=data,
             guardrail_to_apply=guardrail_to_apply,
             litellm_logging_obj=litellm_logging_obj,
@@ -210,13 +210,14 @@ class AnthropicPassthroughGuardrailHandler(BaseTranslation):
         guardrail_to_apply: CustomGuardrail,
         litellm_logging_obj: LiteLLMLoggingObj | None = None,
         user_api_key_dict: UserAPIKeyAuth | None = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,  # mutable-ok: delegated hooks update shared request state
     ) -> object:
         from litellm.llms.pass_through.guardrail_translation.handler import (
             PassThroughEndpointHandler,
         )
 
-        return await PassThroughEndpointHandler().process_output_response(
+        handler: Final = PassThroughEndpointHandler()
+        return await handler.process_output_response(  # pyright: ignore[reportUnknownMemberType]  # untyped request
             response=response,
             guardrail_to_apply=guardrail_to_apply,
             litellm_logging_obj=litellm_logging_obj,

@@ -7,8 +7,15 @@ export interface AgentAttachedKey {
 }
 
 export type AgentObjectPermission = components["schemas"]["AgentObjectPermission"];
+export type AgentKillSwitchConfig = components["schemas"]["AgentKillSwitchConfig"];
+export type AgentKillSwitchResult = components["schemas"]["AgentKillSwitchResult"];
 
 export interface Agent {
+  identity?: components["schemas"]["AgentIdentityBinding"] | null;
+  identity_managed?: boolean;
+  enabled?: boolean;
+  execution_mode?: components["schemas"]["AgentResponse"]["execution_mode"];
+  jwt_auth_configured?: boolean;
   agent_id: string;
   agent_name: string;
   litellm_params: {
@@ -22,6 +29,7 @@ export interface Agent {
   };
   object_permission?: AgentObjectPermission;
   access_group_ids?: string[] | null;
+  kill_switch?: AgentKillSwitchConfig | null;
   keys?: AgentAttachedKey[] | null;
   spend?: number;
   tpm_limit?: number | null;

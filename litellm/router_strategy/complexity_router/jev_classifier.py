@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, NamedTuple, Protocol
+from typing import Annotated, Final, Literal, NamedTuple, Protocol, TypeAlias
 from uuid import uuid4
 
 import httpx
@@ -24,7 +24,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.typesafe_passthr
 from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS as _DEFAULT_JEV_INSTRUCTIONS
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
 
-JevProbability = Annotated[float, Field(ge=0.0, le=1.0)]
+JevProbability: TypeAlias = Annotated[float, Field(ge=0.0, le=1.0)]
 DEFAULT_JEV_INSTRUCTIONS: Final = _DEFAULT_JEV_INSTRUCTIONS
 
 
@@ -130,8 +130,8 @@ class HttpJevClassifierClient:
                 for key, value in TypeAdapter(Mapping[str, object]).validate_python(metadata).items()
             }
         )
-        params: Final = {  # mutable-ok: Logging's kwargs and litellm_params require dicts
-            "metadata": {  # mutable-ok: Logging enriches metadata in place before dispatching callbacks
+        params: Final = {
+            "metadata": {
                 **forwarded_internal_call_metadata(parent_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN),
                 INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
             },
@@ -140,7 +140,7 @@ class HttpJevClassifierClient:
         }
         logging_obj: Final = Logging(
             model=f"typesafe/{request.model}",
-            messages=[{"role": "user", "content": request.state}],  # mutable-ok: callbacks require JSON message lists
+            messages=[{"role": "user", "content": request.state}],
             stream=False,
             call_type="pass_through_endpoint",
             start_time=start_time,
@@ -152,7 +152,7 @@ class HttpJevClassifierClient:
         logging_obj.update_environment_variables(
             model=f"typesafe/{request.model}",
             user=parent_user if isinstance(parent_user := parent.get("user"), str) else None,
-            optional_params={},  # mutable-ok: Logging's optional_params contract requires a dict
+            optional_params={},
             litellm_params=params,
         )
         normalized: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(

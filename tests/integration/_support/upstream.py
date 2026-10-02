@@ -152,6 +152,31 @@ class Provider:
                 )
         return await chat_completions(request)
 
+    async def vector_store_search(self, request: Request) -> Response:
+        body: Final = JSON_OBJECT.validate_json(await request.body())
+        self.observations.put(Observation(request.url.path, request.headers.get("authorization", ""), body))
+        query: Final = body.get("query")
+        if not isinstance(query, str) or not query:
+            return JSONResponse({"error": {"message": "query is required"}}, status_code=400)
+        vector_store_id: Final = cast(str, request.path_params["vector_store_id"])
+        return JSONResponse(
+            {
+                "object": "vector_store.search_results.page",
+                "search_query": query,
+                "data": [
+                    {
+                        "file_id": f"file_{vector_store_id}",
+                        "filename": "scripted.txt",
+                        "score": 0.9,
+                        "attributes": {},
+                        "content": [{"type": "text", "text": f"scripted context for {query}"}],
+                    }
+                ],
+                "has_more": False,
+                "next_page": None,
+            }
+        )
+
     async def script(self, request: Request) -> Response:
         name: Final = cast(str, request.path_params["model"])
         if request.method in {"DELETE", "GET"} and name not in self.scripts:
@@ -214,6 +239,14 @@ class Provider:
         response: Final = self.scenario_store.get(scenario_id)
         if response is None:
             return JSONResponse({"error": "Unknown scenario"}, status_code=404)
+        if request.method == "POST" and "json" in request.headers.get("content-type", ""):
+            raw_body: Final = await request.body()
+            if raw_body:
+                body: Final = JSON_OBJECT.validate_json(raw_body)
+                if isinstance(body, dict):
+                    self.observations.put(
+                        Observation(request.url.path, request.headers.get("authorization", ""), body)
+                    )
         if isinstance(response, RoutedResponse):
             route_key: Final = f"{request.method} /{'/'.join(segments[1:])}"
             route: Final = next(
@@ -338,6 +371,7 @@ class Provider:
                 Route("/v1/completions", completions, methods=["POST"]),
                 Route("/v1/embeddings", embeddings, methods=["POST"]),
                 Route("/v1/moderations", moderations, methods=["POST"]),
+                Route("/vector_stores/{vector_store_id}/search", self.vector_store_search, methods=["POST"]),
                 Route("/{path:path}", self.scripted, methods=["POST"]),
                 Route("/{path:path}", self.scripted, methods=["GET"]),
                 WebSocketRoute("/v1/realtime", self.realtime),

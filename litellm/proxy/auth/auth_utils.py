@@ -1259,7 +1259,7 @@ def enforce_batch_enqueued_token_limit_is_admin_only(
         return
     raise HTTPException(
         status_code=403,
-        detail={  # mutable-ok: HTTPException.detail has no immutable form
+        detail={
             "error": f"Only proxy admins can set {BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY} on a {entity}. "
             "It replaces the standard rate limit checks for batch submissions."
         },
@@ -1410,7 +1410,7 @@ def log_once_if_budget_reservation_disabled(
         "Set disable_budget_reservation to False or remove it to restore "
         "hard per-request budget enforcement."
     )
-    constants.budget_reservation_disabled_info_emitted = True  # rebind-ok: process-wide one-shot sentinel
+    constants.budget_reservation_disabled_info_emitted = True
 
 
 def is_pass_through_provider_route(route: str) -> bool:

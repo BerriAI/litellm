@@ -141,6 +141,7 @@ def test_should_replace_model_in_jsonl():
     from litellm.router_utils.batch_utils import should_replace_model_in_jsonl
 
     assert should_replace_model_in_jsonl(purpose="batch") is True
+    assert should_replace_model_in_jsonl(purpose="batch", passthrough=True) is False
     assert should_replace_model_in_jsonl(purpose="test") is False
     assert should_replace_model_in_jsonl(purpose="user_data") is False
 

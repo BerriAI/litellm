@@ -40,14 +40,6 @@ class McpServerPayloadLike(Protocol):
     def tool_name_to_display_name(self) -> Mapping[str, str] | None: ...
 
 
-# Constants
-#
-# NOTE: The environment-backed values below are read once, when this module is
-# first imported, and cached for the lifetime of the process. Changing the
-# corresponding environment variables after import has no effect unless the
-# module is reloaded (e.g. ``importlib.reload``). Tests that override these
-# variables must reload this module — see
-# ``tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_identity_env.py``.
 LITELLM_MCP_SERVER_NAME: Final = os.environ.get("LITELLM_MCP_SERVER_NAME", "litellm-mcp-server")
 LITELLM_MCP_SERVER_VERSION: Final = "1.0.0"
 LITELLM_MCP_SERVER_DESCRIPTION: Final = os.environ.get("LITELLM_MCP_SERVER_DESCRIPTION", "MCP Server for LiteLLM")
@@ -986,7 +978,7 @@ def _forwarded_upstream_header_names() -> frozenset[str]:
     )
 
 
-def _upstream_credential_headers(header_names: Iterable[str]) -> frozenset[str]:
+def upstream_credential_headers(header_names: Iterable[str]) -> frozenset[str]:
     """Lowercased names of the headers in ``header_names`` that carry an upstream MCP
     credential rather than request context: the configured client side auth header, any
     header name a configured server forwards upstream via ``extra_headers``, and the
@@ -1038,7 +1030,7 @@ def build_synthetic_mcp_request(
     custom_key_header: Final = _custom_litellm_key_header_name()
     excluded: Final = (
         _SYNTHETIC_REQUEST_EXCLUDED_HEADERS
-        | _upstream_credential_headers(raw_headers.keys() if raw_headers else ())
+        | upstream_credential_headers(raw_headers.keys() if raw_headers else ())
         | (frozenset({custom_key_header.lower()}) if custom_key_header else frozenset())
     )
     forwarded: Final = tuple(
@@ -1086,7 +1078,7 @@ def logging_safe_mcp_headers(raw_headers: Mapping[str, str] | None) -> Mapping[s
     )
 
     excluded: Final = (
-        _upstream_credential_headers(raw_headers.keys() if raw_headers else ())
+        upstream_credential_headers(raw_headers.keys() if raw_headers else ())
         | UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS
         | frozenset({"host"})
     )
