@@ -7,9 +7,9 @@ export interface RootBlock {
 }
 
 export const ROOT_BLOCK_STYLES: Record<RootBlockKey, { band: string; accent: string }> = {
-  model: { band: "bg-blue-500/10 border-blue-500/60", accent: "border-l-blue-500/60" },
-  state: { band: "bg-green-500/10 border-green-500/60", accent: "border-l-green-500/60" },
-  questions: { band: "bg-orange-500/10 border-orange-500/60", accent: "border-l-orange-500/60" },
+  model: { band: "bg-blue-500/10 before:bg-blue-500/60", accent: "border-l-blue-500/60" },
+  state: { band: "bg-green-500/10 before:bg-green-500/60", accent: "border-l-green-500/60" },
+  questions: { band: "bg-orange-500/10 before:bg-orange-500/60", accent: "border-l-orange-500/60" },
 };
 
 const isRootBlockKey = (key: string): key is RootBlockKey => Object.hasOwn(ROOT_BLOCK_STYLES, key);

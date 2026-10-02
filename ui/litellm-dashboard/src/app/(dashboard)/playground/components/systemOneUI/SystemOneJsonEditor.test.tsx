@@ -55,6 +55,16 @@ describe("SystemOneJsonEditor", () => {
     );
   });
 
+  it("numbers every line, including a trailing empty one, so wrapped lines keep their number", () => {
+    const value = `${validPayload}\n`;
+    render(<SystemOneJsonEditor value={value} onChange={vi.fn()} validation={validateSystemOnePayload(value)} />);
+
+    const lineCount = value.split("\n").length;
+    expect(screen.getByText(`${lineCount} lines`)).toBeInTheDocument();
+    expect(screen.getByText(String(lineCount))).toBeInTheDocument();
+    expect(screen.queryByText(String(lineCount + 1))).not.toBeInTheDocument();
+  });
+
   it("reports edits to the caller", () => {
     const onChange = vi.fn();
     render(

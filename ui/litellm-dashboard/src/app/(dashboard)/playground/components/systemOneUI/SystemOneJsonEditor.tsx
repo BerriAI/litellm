@@ -2,14 +2,18 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cva.config";
 import { CircleAlert, CircleCheck, TriangleAlert } from "lucide-react";
 import { useId, useMemo, useRef } from "react";
-import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
+import { createElement, PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
+import type { rendererProps } from "react-syntax-highlighter";
 import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
-import { findRootBlocks, ROOT_BLOCK_STYLES } from "./json_root_blocks";
+import { findRootBlocks, ROOT_BLOCK_STYLES, type RootBlock } from "./json_root_blocks";
 import type { SystemOnePayloadValidation } from "./validate_system_one_payload";
 
 SyntaxHighlighter.registerLanguage("json", json);
 
-const EDITOR_TEXT = "m-0 whitespace-pre p-3 font-mono text-xs leading-5";
+const EDITOR_TEXT = "m-0 whitespace-pre-wrap break-words py-3 font-mono text-xs leading-5 [scrollbar-gutter:stable]";
+const GUTTER_WIDTH = "w-11";
+const CONTENT_INSET = "pl-14 pr-3";
+const CODE_TAG_PROPS = { className: "language-json", style: { whiteSpace: "pre-wrap" } } as const;
 
 const TOKEN_COLORS = [
   "[&_.token.property]:text-sky-700 dark:[&_.token.property]:text-sky-300",
@@ -64,27 +68,41 @@ function IssueList({ id, validation }: { id: string; validation: SystemOnePayloa
   );
 }
 
+function renderLines(rootBlocks: RootBlock[]) {
+  return function LineRows({ rows, stylesheet, useInlineStyles }: rendererProps) {
+    return rows.map((row, line) => {
+      const lineElement = { node: row, stylesheet, useInlineStyles, key: line };
+      const block = rootBlocks.find(({ startLine, endLine }) => line >= startLine && line <= endLine);
+      return (
+        <div key={line} className="flex">
+          <span className={cn(GUTTER_WIDTH, "shrink-0 select-none pr-3 text-right text-muted-foreground")}>
+            {line + 1}
+          </span>
+          <span
+            className={cn(
+              "relative min-h-5 min-w-0 flex-1 px-3",
+              block && [
+                "before:absolute before:inset-y-0 before:left-0 before:w-0.5",
+                ROOT_BLOCK_STYLES[block.key].band,
+                line === block.startLine && "rounded-t-sm before:rounded-t-sm",
+                line === block.endLine && "rounded-b-sm before:rounded-b-sm",
+              ],
+            )}
+          >
+            {createElement(lineElement)}
+          </span>
+        </div>
+      );
+    });
+  };
+}
+
 export default function SystemOneJsonEditor({ value, onChange, validation }: SystemOneJsonEditorProps) {
   const issuesId = useId();
-  const gutterRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
-  const blocksRef = useRef<HTMLDivElement>(null);
-  const rootBlocks = useMemo(() => findRootBlocks(value), [value]);
+  const renderer = useMemo(() => renderLines(findRootBlocks(value)), [value]);
   const lineCount = value.split("\n").length;
   const hasErrors = !validation.isValid;
-
-  function syncScroll(textarea: HTMLTextAreaElement) {
-    if (gutterRef.current) {
-      gutterRef.current.scrollTop = textarea.scrollTop;
-    }
-    if (blocksRef.current) {
-      blocksRef.current.style.transform = `translateY(-${textarea.scrollTop}px)`;
-    }
-    if (highlightRef.current) {
-      highlightRef.current.scrollTop = textarea.scrollTop;
-      highlightRef.current.scrollLeft = textarea.scrollLeft;
-    }
-  }
 
   return (
     <div
@@ -102,64 +120,45 @@ export default function SystemOneJsonEditor({ value, onChange, validation }: Sys
           {lineCount} {lineCount === 1 ? "line" : "lines"}
         </span>
       </div>
-      <div className="relative flex min-h-80 flex-1">
+      <div className="relative min-h-80 flex-1">
+        <div aria-hidden="true" className={cn(GUTTER_WIDTH, "absolute inset-y-0 left-0 border-r bg-muted/50")} />
         <div
-          ref={gutterRef}
+          ref={highlightRef}
           aria-hidden="true"
+          className={cn("absolute inset-0 overflow-hidden", EDITOR_TEXT, TOKEN_COLORS)}
+        >
+          <SyntaxHighlighter
+            language="json"
+            style={{}}
+            useInlineStyles={false}
+            PreTag="div"
+            codeTagProps={CODE_TAG_PROPS}
+            renderer={renderer}
+          >
+            {value}
+          </SyntaxHighlighter>
+        </div>
+        <textarea
+          aria-label="System One JSON payload"
+          aria-invalid={hasErrors}
+          aria-describedby={issuesId}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onScroll={(event) => {
+            if (highlightRef.current) {
+              highlightRef.current.scrollTop = event.currentTarget.scrollTop;
+            }
+          }}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoComplete="off"
+          placeholder="Paste or write a System One request"
           className={cn(
             EDITOR_TEXT,
-            "select-none overflow-hidden border-r bg-muted/50 text-right text-muted-foreground",
+            CONTENT_INSET,
+            "absolute inset-0 size-full resize-none overflow-y-auto bg-transparent text-transparent caret-foreground outline-none selection:bg-primary/20 placeholder:text-muted-foreground",
           )}
-        >
-          {Array.from({ length: lineCount }, (_, index) => (
-            <div key={index}>{index + 1}</div>
-          ))}
-        </div>
-        <div className="relative flex-1">
-          <div aria-hidden="true" className="absolute inset-0 overflow-hidden">
-            <div ref={blocksRef}>
-              {rootBlocks.map(({ key, startLine, endLine }) => (
-                <div
-                  key={key}
-                  className={cn("absolute inset-x-1 rounded-sm border", ROOT_BLOCK_STYLES[key].band)}
-                  style={{
-                    top: `calc(0.75rem + ${startLine * 1.25}rem)`,
-                    height: `${(endLine - startLine + 1) * 1.25}rem`,
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-          <div ref={highlightRef} aria-hidden="true" className={cn("absolute inset-0 overflow-hidden", TOKEN_COLORS)}>
-            <SyntaxHighlighter
-              language="json"
-              style={{}}
-              useInlineStyles={false}
-              PreTag="div"
-              className={EDITOR_TEXT}
-              codeTagProps={{ className: "language-json" }}
-            >
-              {`${value}\n`}
-            </SyntaxHighlighter>
-          </div>
-          <textarea
-            aria-label="System One JSON payload"
-            aria-invalid={hasErrors}
-            aria-describedby={issuesId}
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-            onScroll={(event) => syncScroll(event.currentTarget)}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoComplete="off"
-            wrap="off"
-            placeholder="Paste or write a System One request"
-            className={cn(
-              EDITOR_TEXT,
-              "absolute inset-0 size-full resize-none overflow-auto bg-transparent text-transparent caret-foreground outline-none selection:bg-primary/20 placeholder:text-muted-foreground",
-            )}
-          />
-        </div>
+        />
       </div>
       <IssueList id={issuesId} validation={validation} />
     </div>
