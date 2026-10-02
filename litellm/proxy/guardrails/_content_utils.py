@@ -310,7 +310,7 @@ def _apply_redacted_tool_search_tools(item: dict[str, object], redacted_iter: It
     if not _is_object_list(tools):
         return
     for tool in tools:
-        if _is_object_mapping(tool) and _tool_search_tool_text(tool):
+        if _is_object_mapping(tool) and "description" in tool:
             rewritten_tools.append(
                 {
                     **tool,

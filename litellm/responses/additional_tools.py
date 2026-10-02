@@ -52,8 +52,8 @@ def _is_tool_search_output_item(item: object) -> bool:
         return False
 
 
-def _tool_key(tool: Mapping[str, object]) -> tuple[object, object]:
-    return (tool.get("type"), tool.get("name"))
+def _tool_key(tool: Mapping[str, object]) -> tuple[object, ...]:
+    return (tool.get("type"), tool.get("name"), tool.get("server_label"))
 
 
 def hoist_additional_tools(
@@ -67,7 +67,7 @@ def hoist_additional_tools(
     if not items:
         return HoistedAdditionalTools(input=input, tools=existing, hoisted=())
     hoisted: list[ALL_RESPONSES_API_TOOL_PARAMS] = []  # mutable-ok: accumulator for hoisted request tools
-    seen_tool_keys: set[tuple[object, object]] = {  # mutable-ok: accumulator for tool identities
+    seen_tool_keys: set[tuple[object, ...]] = {  # mutable-ok: accumulator for tool identities
         _tool_key(tool) for tool in existing
     }
     for item in items:

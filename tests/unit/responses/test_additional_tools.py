@@ -101,6 +101,27 @@ def test_tool_search_output_tools_do_not_override_top_level_tools():
     assert hoisted.tools == (_TOP_LEVEL_TOOL, {"type": "function", "name": "get_weather"})
 
 
+def test_mcp_tools_without_names_are_deduplicated_by_server_label():
+    first_mcp_tool = {"type": "mcp", "server_label": "first"}
+    second_mcp_tool = {"type": "mcp", "server_label": "second"}
+    request_input = [
+        {
+            "type": "tool_search_output",
+            "call_id": "call_tool_search",
+            "tools": [first_mcp_tool, second_mcp_tool],
+        },
+        {
+            "type": "additional_tools",
+            "role": "developer",
+            "tools": [first_mcp_tool],
+        },
+    ]
+
+    hoisted = hoist_additional_tools(request_input, None)
+
+    assert hoisted.hoisted == (first_mcp_tool, second_mcp_tool)
+
+
 def test_invalid_input_items_do_not_break_tool_hoisting():
     """Invalid input items are treated as ordinary history, not hoisting candidates."""
     request_input = [

@@ -146,6 +146,49 @@ def test_tool_call_delta_is_emitted_as_responses_events():
     assert len(evt2.delta) <= 10  # Chunks are max 10 characters
 
 
+def test_final_function_call_done_events_use_distinct_sequence_numbers():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+    final_response = ModelResponse(
+        id="complete-1",
+        created=123,
+        model="test-model",
+        object="chat.completion",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "do_thing", "arguments": '{"x":1}'},
+                        }
+                    ],
+                ),
+            )
+        ],
+    )
+
+    iterator._queue_final_tool_call_done_events(final_response)
+
+    sequence_numbers = [event.__dict__["sequence_number"] for event in iterator._pending_tool_events]
+    assert sequence_numbers == [1, 2, 3, 4]
+    assert [event.type for event in iterator._pending_tool_events] == [
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+    ]
+
+
 def test_client_tool_search_delta_is_emitted_as_tool_search_call():
     iterator = LiteLLMCompletionStreamingIterator(
         model="test-model",

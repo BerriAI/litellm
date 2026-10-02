@@ -424,6 +424,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 output_index=output_index,
                 arguments=final_args,
             )
+            self._sequence_number += 1
             done_event.__dict__["sequence_number"] = self._sequence_number
             self._pending_tool_events.append(done_event)
 

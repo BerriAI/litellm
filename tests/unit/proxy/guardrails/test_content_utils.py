@@ -1034,6 +1034,36 @@ def test_apply_redacted_messages_back_preserves_tool_search_output_non_text_tool
     assert data["input"][0]["tools"][1] == {"type": "function", "name": "two"}
 
 
+def test_apply_redacted_messages_back_consumes_tool_search_output_empty_description_redaction() -> None:
+    data = {
+        "input": [
+            {
+                "type": "tool_search_output",
+                "call_id": "call_tool_search",
+                "tools": [
+                    {"type": "function", "name": "one", "description": "leak-one"},
+                    {"type": "function", "name": "two", "description": ""},
+                ],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "message-secret"}],
+            },
+        ]
+    }
+    redacted = [
+        {"role": "tool", "content": "one-[REDACTED]"},
+        {"role": "tool", "content": ""},
+        {"role": "user", "content": "message-[REDACTED]"},
+    ]
+
+    assert apply_redacted_messages_back(data, redacted) is True
+    assert data["input"][0]["tools"][0]["description"] == "one-[REDACTED]"
+    assert data["input"][0]["tools"][1]["description"] == ""
+    assert data["input"][1]["content"] == "message-[REDACTED]"
+
+
 def test_apply_redacted_messages_back_rewrites_mixed_response_content_parts() -> None:
     data = {
         "input": [
