@@ -39230,6 +39230,24 @@
         "supports_video_input": true,
         "supports_vision": true
     },
+    "moonshot/kimi-k2.7-code-highspeed": {
+        "cache_read_input_token_cost": 3.8e-07,
+        "input_cost_per_token": 1.9e-06,
+        "litellm_provider": "moonshot",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 8e-06,
+        "source": "https://platform.kimi.ai/docs/pricing/chat-k27-code",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
     "moonshot/kimi-k2.5": {
         "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 6e-07,
@@ -42258,14 +42276,14 @@
         "supports_web_search": false
     },
     "openrouter/deepseek/deepseek-v4.1-flash": {
-        "cache_read_input_token_cost": 1e-08,
-        "input_cost_per_token": 3e-08,
+        "cache_read_input_token_cost": 2e-08,
+        "input_cost_per_token": 2e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
         "max_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 5e-07,
+        "output_cost_per_token": 6e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -42852,14 +42870,14 @@
         "supports_web_search": false
     },
     "openrouter/nvidia/nemotron-3.5-lightning": {
-        "cache_read_input_token_cost": 2.975e-08,
-        "input_cost_per_token": 5.95e-08,
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 6e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 1.7e-07,
+        "output_cost_per_token": 1.6e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -43604,19 +43622,19 @@
         "supports_web_search": false
     },
     "openrouter/qwen/qwen3.5-35b-a3b": {
-        "input_cost_per_token": 1.625e-07,
+        "input_cost_per_token": 1.5e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
-        "output_cost_per_token": 1.3e-06,
+        "output_cost_per_token": 1e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1.5625e-07,
+        "cache_read_input_token_cost": 5e-08,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_prompt_caching": true,
@@ -64013,6 +64031,23 @@
             "video"
         ]
     },
+    "xai/grok-imagine-video-1.5-lite": {
+        "input_cost_per_image": 0.01,
+        "litellm_provider": "xai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.02,
+        "output_cost_per_second_1080p": 0.14,
+        "output_cost_per_second_480p": 0.02,
+        "output_cost_per_second_720p": 0.03,
+        "source": "https://docs.x.ai/docs/models/grok-imagine-video-1.5-lite",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "xai/grok-voice-transcribe-1.0": {
         "input_cost_per_second": 2.778e-05,
         "litellm_provider": "xai",
@@ -67381,7 +67416,7 @@
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 1310720,
+        "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
@@ -67418,9 +67453,9 @@
         "supports_web_search": false
     },
     "openrouter/z-ai/glm-5.3": {
-        "input_cost_per_token": 2.219e-07,
-        "output_cost_per_token": 3.39e-06,
-        "cache_read_input_token_cost": 1.775e-07,
+        "input_cost_per_token": 1.4e-06,
+        "output_cost_per_token": 4.4e-06,
+        "cache_read_input_token_cost": 1.4e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
@@ -67644,14 +67679,14 @@
         "supports_web_search": false
     },
     "openrouter/moonshotai/kimi-k3": {
-        "cache_read_input_token_cost": 4.357e-07,
-        "input_cost_per_token": 4.357e-07,
+        "cache_read_input_token_cost": 2.7e-07,
+        "input_cost_per_token": 2.7e-06,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
         "max_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 1e-05,
+        "output_cost_per_token": 1.35e-05,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -67767,7 +67802,7 @@
         "supports_web_search": true
     },
     "openrouter/z-ai/glm-5.2": {
-        "cache_read_input_token_cost": 2.6e-07,
+        "cache_read_input_token_cost": 3.2e-07,
         "input_cost_per_token": 4.1e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
@@ -74317,6 +74352,20 @@
         "supports_vision": false,
         "supports_web_search": false
     },
+    "openrouter/inclusionai/ling-3.1-flash": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
     "openrouter/inclusionai/ling-3.0-flash-fin": {
         "cache_read_input_token_cost": 1.2e-08,
         "input_cost_per_token": 6e-08,
@@ -76284,15 +76333,15 @@
         "supports_web_search": false
     },
     "openrouter/tencent/hy3": {
-        "cache_read_input_token_cost": 3.3e-08,
-        "input_cost_per_token": 1.32e-07,
+        "cache_read_input_token_cost": 2.0625e-08,
+        "input_cost_per_token": 8.25e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "off_peak_pricing": {"hours_utc":"16:00-00:00","input_cost_per_token":8.25e-8,"output_cost_per_token":3.3e-7,"cache_read_input_token_cost":2.0625e-8},
-        "output_cost_per_token": 5.28e-07,
+        "output_cost_per_token": 3.3e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -76325,15 +76374,15 @@
         "supports_web_search": false
     },
     "openrouter/tencent/hy4-preview": {
-        "cache_read_input_token_cost": 4.2e-08,
-        "input_cost_per_token": 8.34e-07,
+        "cache_read_input_token_cost": 3.78e-08,
+        "input_cost_per_token": 7.506e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
         "off_peak_pricing": {"input_cost_per_token":7.506e-7,"output_cost_per_token":0.0000022509,"cache_read_input_token_cost":3.78e-8,"hours_utc":"16:00-00:00"},
-        "output_cost_per_token": 2.501e-06,
+        "output_cost_per_token": 2.2509e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -76405,8 +76454,8 @@
         "supports_web_search": false
     },
     "openrouter/thinkingmachines/inkling": {
-        "cache_read_input_token_cost": 1.7e-07,
-        "input_cost_per_token": 1e-06,
+        "cache_read_input_token_cost": 1.6e-07,
+        "input_cost_per_token": 9.5e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 524288,
         "max_output_tokens": 471859,
@@ -76792,7 +76841,7 @@
         "cache_read_input_token_cost": 2.8e-09,
         "input_cost_per_token": 1.4e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 1048576,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
@@ -76812,7 +76861,7 @@
         "cache_read_input_token_cost": 3.6e-09,
         "input_cost_per_token": 4.35e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 1048576,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
