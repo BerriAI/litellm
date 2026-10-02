@@ -377,6 +377,7 @@ def _strategy_router_dependency_error(
         (
             failure
             for dependency in strategy_router_dependencies(params)
+            if dependency.role != "evaluation"
             if (failure := _dependency_failure(dependency, router, unhealthy_ids))
         ),
         None,
@@ -419,6 +420,7 @@ def _dependency_deployments_to_probe(
             for deployment in frontier
             if isinstance(params := deployment.get("litellm_params"), Mapping)
             for dependency in strategy_router_dependencies(params)
+            if dependency.role != "evaluation"
         )
         fresh_ids = (
             frozenset(ident for name in names for ident in (_resolved_deployment_ids(router, name) or ())) - reached
@@ -505,11 +507,7 @@ def _finalize_strategy_router_endpoints(
     return (
         tuple(e for e in kept_healthy if verdict_for(e) is None),
         tuple(e for e in unhealthy_endpoints if keep(e))
-        + tuple(
-            dict(e, error=error)  # mutable-ok: the /health payload must stay a plain JSON-serializable dict
-            for e in kept_healthy
-            if (error := verdict_for(e)) is not None
-        ),
+        + tuple(dict(e, error=error) for e in kept_healthy if (error := verdict_for(e)) is not None),
     )
 
 
@@ -917,7 +915,7 @@ async def perform_health_check(
         if router is not None
         else ()
     )
-    checked: Final = requested + list(dependency_probes)  # mutable-ok: _perform_health_check takes a list
+    checked: Final = requested + list(dependency_probes)
 
     if instrumentation_enabled:
         logger.debug(

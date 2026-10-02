@@ -4,14 +4,16 @@ from enum import Enum
 from functools import lru_cache
 from typing import Annotated, Any, Final
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, TypeAdapter, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.baggage import (
     BAGGAGE_PROMOTED_KEYS,
     DEFAULT_BAGGAGE_METADATA_KEYS,
     DEFAULT_BAGGAGE_TEAM_METADATA_KEYS,
 )
+from litellm.integrations.otel.model.spans import POSTGRESQL, db_system
 from litellm.types.utils import OtelSpanScope
 
 #: Master feature-flag env var. The logger is inert until this is truthy.
@@ -41,6 +43,7 @@ class ExporterOwner(str, Enum):
     LEVO = "levo"
     AGENTOPS = "agentops"
     NEWRELIC = "newrelic"
+    SIGNOZ = "signoz"
 
 
 class _OTelV2Flag(BaseSettings):
@@ -173,6 +176,19 @@ class OpenTelemetryV2Config(BaseSettings):
             "key/team destinations are not affected."
         ),
     )
+    excluded_services: Annotated[frozenset[str], NoDecode] = Field(
+        default_factory=frozenset,
+        validation_alias=AliasChoices("excluded_services", "LITELLM_OTEL_EXCLUDED_SERVICES"),
+        description=(
+            "Datastore services whose spans are withheld from key/team ``callback_vars`` "
+            "OTel destinations (the operator's own exporters still receive them). Accepted "
+            "values are the datastore ``ServiceTypes`` names (``redis``, ``postgres``, "
+            "``batch_write_to_db``, ``redis_*``) or their ``db.system.name`` spellings "
+            "(``redis``, ``postgresql``); stored normalized to ``db.system.name`` values. "
+            "Configure via the ``LITELLM_OTEL_EXCLUDED_SERVICES`` env var (comma-separated) "
+            "or ``callback_settings.otel.excluded_services`` in config.yaml (a YAML list)."
+        ),
+    )
 
     # ----- explicit multi-destination / vocabulary configuration ------------ #
 
@@ -283,6 +299,11 @@ class OpenTelemetryV2Config(BaseSettings):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
+    @field_validator("excluded_services", mode="before")
+    @classmethod
+    def _read_excluded_services(cls, value: object) -> frozenset[str]:
+        return excluded_service_names(value)
+
     @model_validator(mode="after")
     def _normalize(self) -> "OpenTelemetryV2Config":
         # An endpoint with the default exporter kind implies OTLP/HTTP.
@@ -315,6 +336,7 @@ class OpenTelemetryV2Config(BaseSettings):
         if self.legacy_compat and "legacy" not in names:
             names.append("legacy")
         self.mapper_names = names
+        self.excluded_services = _normalize_excluded_services(self.excluded_services)
         return self
 
     @property
@@ -333,3 +355,55 @@ class OpenTelemetryV2Config(BaseSettings):
     @classmethod
     def from_env(cls) -> "OpenTelemetryV2Config":
         return cls()
+
+
+_EXCLUDED_SERVICES_INPUT: Final[TypeAdapter[str | tuple[object, ...]]] = TypeAdapter(str | tuple[object, ...])
+
+
+def excluded_db_systems_from(value: object) -> frozenset[str]:
+    """Normalize a raw ``excluded_services`` value without building a settings model that rereads the env"""
+    return _normalize_excluded_services(excluded_service_names(value))
+
+
+def excluded_service_names(value: object) -> frozenset[str]:
+    """Read a YAML list or comma-separated string of service names, logging and dropping unusable input
+    so a malformed value cannot stop the OTel logger from being built"""
+    if value is None:
+        return frozenset()
+    try:
+        parsed: Final = _EXCLUDED_SERVICES_INPUT.validate_python(value)
+    except ValidationError:
+        verbose_logger.error("excluded_services must be a list or comma-separated string; %r ignored", value)
+        return frozenset()
+    items: Final = tuple(parsed.split(",")) if isinstance(parsed, str) else parsed
+    return frozenset(name for item in items if (name := _service_name(item)))
+
+
+def _service_name(item: object) -> str:
+    if not isinstance(item, str):
+        verbose_logger.error("excluded_services must be a list of service names; %r ignored", item)
+        return ""
+    return item.strip().lower()
+
+
+def _normalize_excluded_services(services: frozenset[str]) -> frozenset[str]:
+    """Fold each accepted spelling to its ``db.system.name`` value.
+
+    ``postgres`` and ``postgresql`` name the same system, as do every
+    ``ServiceTypes`` member that ``db_system`` maps. Anything else means the
+    operator pointed the setting at a span family it cannot cover; those names
+    are logged and dropped so a typo cannot take the proxy down.
+    """
+    resolved: Final = frozenset(
+        system for service in services if (system := _db_system_for_excluded_service(service)) is not None
+    )
+    return resolved
+
+
+def _db_system_for_excluded_service(service: str) -> str | None:
+    resolved: Final = db_system(service) if service != POSTGRESQL else POSTGRESQL
+    if resolved is None:
+        verbose_logger.error(
+            "excluded_services: %r is not a datastore service; ignored. Allowed: postgres, redis", service
+        )
+    return resolved

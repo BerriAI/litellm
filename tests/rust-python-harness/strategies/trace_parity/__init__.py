@@ -15,10 +15,7 @@ from .runner import run_trace_cases
 CASES: Final[tuple[CaseDefinition, ...]] = (
     CaseDefinition(
         "ocr",
-        ModuleCaseSpec(
-            coverage=Coverage.PARTIAL,
-            module="tests.rust-python-harness.strategies.trace_parity.sdk.ocr.case",
-        ),
+        NotImplementedCaseSpec(reason="OCR has no Python implementation left to trace."),
         surface="sdk",
     ),
     CaseDefinition(

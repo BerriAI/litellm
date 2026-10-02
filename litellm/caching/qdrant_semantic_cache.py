@@ -12,6 +12,7 @@ import ast
 import asyncio
 import json
 import os
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import litellm
@@ -35,6 +36,8 @@ from ._embedding_router import (
     truncate_embedding_input,
 )
 from .base_cache import BaseCache
+
+_WAIT_FOR_INDEXING: Final = MappingProxyType({"wait": "true"})
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -313,6 +316,7 @@ class QdrantSemanticCache(BaseCache):
         self.sync_client.put(
             url=f"{self.qdrant_api_base}/collections/{self.collection_name}/points",
             headers=self.headers,
+            params=_WAIT_FOR_INDEXING,
             json=data,
         )
 
@@ -422,6 +426,7 @@ class QdrantSemanticCache(BaseCache):
         await self.async_client.put(
             url=f"{self.qdrant_api_base}/collections/{self.collection_name}/points",
             headers=self.headers,
+            params=_WAIT_FOR_INDEXING,
             json=data,
         )
 

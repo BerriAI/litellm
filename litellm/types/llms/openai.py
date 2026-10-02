@@ -110,12 +110,33 @@ FileTypes = (
 EmbeddingInput = str | list[str]
 
 
+class BinaryResponseSummary(TypedDict):
+    """What logging keeps of a binary response (speech audio, file content): size and media type, never the bytes."""
+
+    object: ReadOnly[Literal["binary"]]
+    content_type: ReadOnly[str | None]
+    num_bytes: ReadOnly[int]
+
+
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
     _hidden_params: dict
 
     def __init__(self, response: httpx.Response) -> None:
         super().__init__(response)
-        self._hidden_params = {}  # mutable-ok: mutable-dict contract shared with ModelResponse logging consumers
+        self._hidden_params = {}
+
+    def logging_summary(self) -> BinaryResponseSummary:
+        return {
+            "object": "binary",
+            "content_type": self.response.headers.get("content-type"),
+            "num_bytes": self._num_bytes(),
+        }
+
+    def _num_bytes(self) -> int:
+        try:
+            return len(self.response.content)
+        except httpx.ResponseNotRead:
+            return self.response.num_bytes_downloaded
 
     def set_response_cost(self, response_cost: float | None) -> None:
         if response_cost is None:
@@ -393,9 +414,7 @@ class OpenAIFileObject(BaseModel):
         serialized: Final[Mapping[str, object]] = handler(self)
         if self.litellm_batch_guardrail is not None:
             return serialized
-        return {  # mutable-ok: pydantic's json serializer rejects a mapping that is not a dict
-            key: value for key, value in serialized.items() if key != BATCH_GUARDRAIL_RESPONSE_FIELD
-        }
+        return {key: value for key, value in serialized.items() if key != BATCH_GUARDRAIL_RESPONSE_FIELD}
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -501,7 +520,19 @@ class CreateBatchRequest(TypedDict, total=False):
     """
 
     completion_window: Literal["24h"]
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses", "/v1/ocr"]
+    endpoint: Literal[
+        "/v1/chat/completions",
+        "/v1/embeddings",
+        "/v1/completions",
+        "/v1/responses",
+        "/v1/ocr",
+        "/v1/images/generations",
+        "/v1/images/edits",
+        "/v1/videos/generations",
+        "/v1/videos",
+        "/v1/videos/edits",
+        "/v1/videos/extensions",
+    ]
     input_file_id: str
     metadata: dict[str, str] | None
     output_expires_after: FileExpiresAfter
@@ -1280,8 +1311,8 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
     """TypedDict for request parameters supported by the responses API."""
 
-    input: str | ResponseInputParam
-    model: str
+    input: Required[ReadOnly[str | ResponseInputParam]]
+    model: Required[ReadOnly[str]]
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):

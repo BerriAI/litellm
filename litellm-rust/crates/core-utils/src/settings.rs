@@ -1,5 +1,7 @@
 use std::str::FromStr;
 
+use crate::serde_compat::parse_str_bool;
+
 pub trait Lookup {
     fn get(&self, name: &str) -> Option<String>;
 
@@ -9,7 +11,7 @@ pub trait Lookup {
 
     fn enabled(&self, name: &str) -> Option<bool> {
         self.get(name)
-            .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
+            .is_some_and(|value| parse_str_bool(&value) == Some(true))
             .then_some(true)
     }
 
@@ -33,6 +35,22 @@ impl Lookup for ProcessEnvironment {
     fn get(&self, name: &str) -> Option<String> {
         std::env::var(name).ok()
     }
+}
+
+pub fn resolve_non_empty(
+    value: Option<&str>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+    names: &[&str],
+) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            names
+                .iter()
+                .find_map(|name| env_lookup(name).filter(|value| !value.trim().is_empty()))
+        })
 }
 
 pub trait Layer: Default {

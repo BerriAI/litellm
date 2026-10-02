@@ -1,7 +1,7 @@
 """Claude Code status line and Codex Stop hook for auto-routed sessions.
 
-`lite` copies this file verbatim to ~/.litellm/statusline.py and registers it as Claude
-Code's `statusLine` command and as Codex's `[[hooks.Stop]]` command, so it must stay
+`lite` copies this file to ~/.litellm/statusline.py with a CLI version header when known and registers
+it as Claude Code's `statusLine` command and as Codex's `[[hooks.Stop]]` command, so it must stay
 standard-library only and must never import litellm. Claude Code re-runs it on every
 status refresh (about every 300ms while typing), so the proxy is asked at most once per
 TTL per session and every other refresh is served from a small on-disk cache that holds
@@ -190,7 +190,7 @@ def fetch_session(credentials: Credentials, session_id: str) -> Fetched:
     query: Final = urlencode((("session_id", session_id),))
     request: Final = urllib.request.Request(
         f"{credentials.base_url}{SESSION_ENDPOINT}?{query}",
-        headers={  # mutable-ok: urllib.request.Request takes a dict
+        headers={
             "Authorization": f"Bearer {credentials.api_key}",
             "Accept": "application/json",
         },
@@ -305,7 +305,7 @@ def _read_cache(path: Path) -> Mapping[str, object]:
 def _write_cache(path: Path, session: Session | None, fetched_at: float) -> None:
     """Staged beside the entry and renamed into place, so a refresh reading the entry never sees a torn write."""
     entry: Final = session._asdict() if session else None
-    body: Final = json.dumps({"fetched_at": fetched_at, "session": entry})  # mutable-ok: json.dumps takes a dict
+    body: Final = json.dumps({"fetched_at": fetched_at, "session": entry})
     if not _own_private_dir(path.parent):
         return
     try:
@@ -415,7 +415,7 @@ def codex_stop_message(
     if session is None:
         return ""
     text: Final = render(model_label(session.last_model, config_dir), session, config_dir, use_color=False)
-    return json.dumps({"systemMessage": f"\n{text}"})  # mutable-ok: json.dumps takes a dict
+    return json.dumps({"systemMessage": f"\n{text}"})
 
 
 def run(stdin: IO[str], stdout: IO[str], env: Mapping[str, str], fetch: Fetch = fetch_session) -> None:

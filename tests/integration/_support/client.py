@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
@@ -15,6 +15,7 @@ from pydantic import JsonValue, TypeAdapter
 from tests.integration._support.database import read_rows
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+GATEWAY_LIMITS: Final = httpx.Limits(keepalive_expiry=2)
 T = TypeVar("T")
 
 
@@ -34,11 +35,18 @@ def delete_key_if_present(candidate: Gateway, key: str) -> None:
     assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)) == []
 
 
-def eventually(read: Callable[[], T], satisfied: Callable[[T], bool], seconds: float = 10) -> T:
+def eventually(
+    read: Callable[[], T],
+    satisfied: Callable[[T], bool],
+    seconds: float = 10,
+    return_last_on_timeout: bool = False,
+) -> T:
     deadline: Final = time.monotonic() + seconds
     while True:
         observed: Final = read()
         if satisfied(observed):
+            return observed
+        if return_last_on_timeout and time.monotonic() >= deadline:
             return observed
         assert time.monotonic() < deadline, f"State did not converge: {observed!r}"
         time.sleep(0.1)
@@ -58,12 +66,32 @@ class Gateway:
         *,
         key: str | None = None,
         params: Mapping[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> httpx.Response:
+        request_headers: Final = {
+            "Authorization": f"Bearer {self.key if key is None else key}",
+            **(headers or {}),
+        }
         return self.client.request(
             method,
             path,
             json=body,
             params=params,
+            headers=request_headers,
+        )
+
+    def request_multipart(
+        self,
+        path: str,
+        fields: Mapping[str, str],
+        files: Mapping[str, tuple[str, bytes, str]],
+        *,
+        key: str | None = None,
+    ) -> httpx.Response:
+        return self.client.post(
+            path,
+            data=fields,
+            files=files,
             headers={"Authorization": f"Bearer {self.key if key is None else key}"},
         )
 
@@ -134,6 +162,31 @@ class Scenario:
         self.gateway.post("/budget/delete", {"id": identity})
         assert read_rows('SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id = %s', (identity,)) == []
 
+    def organization(self, **fields: JsonValue) -> str:
+        created: Final = self.gateway.post(
+            "/organization/new", {"organization_alias": f"integration-{uuid.uuid4().hex}", **fields}
+        )
+        identity: Final = string_value(created["organization_id"])
+        self.cleanups.callback(self.delete_organization, identity, string_value(created["budget_id"]))
+        return identity
+
+    def delete_organization(self, identity: str, budget_id: str) -> None:
+        response: Final = self.gateway.request("DELETE", "/organization/delete", {"organization_ids": [identity]})
+        assert response.status_code == 200, response.text
+        assert (
+            read_rows('SELECT organization_id FROM "LiteLLM_OrganizationTable" WHERE organization_id = %s', (identity,))
+            == []
+        )
+        self.delete_budget(budget_id)
+
+    def org_member(self, organization_id: str, role: str) -> str:
+        user_id: Final = self.user(user_role="internal_user")
+        self.gateway.post(
+            "/organization/member_add",
+            {"organization_id": organization_id, "member": {"role": role, "user_id": user_id}},
+        )
+        return user_id
+
     def user(self, **fields: JsonValue) -> str:
         created: Final = self.gateway.post(
             "/user/new", {"user_id": f"integration-{uuid.uuid4().hex}", "auto_create_key": False, **fields}
@@ -146,6 +199,12 @@ class Scenario:
         response: Final = self.gateway.request("POST", "/user/delete", {"user_ids": [identity]})
         assert response.status_code == 200 and response.json() == 1, response.text
         assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (identity,)) == []
+
+    def member(self, team_id: str, role: str = "user") -> str:
+        """Create an internal user and add them to ``team_id``; deleting the user later removes the membership."""
+        user_id: Final = self.user(user_role="internal_user")
+        self.gateway.post("/team/member_add", {"team_id": team_id, "member": {"role": role, "user_id": user_id}})
+        return user_id
 
     def delete_key(self, token: str) -> None:
         self.gateway.post("/key/delete", {"keys": [token]})
@@ -185,5 +244,21 @@ class Scenario:
 def gateway_from_environment() -> Iterator[Gateway]:
     url: Final = os.environ["INTEGRATION_PROXY_URL"]
     upstream: Final = os.environ["INTEGRATION_UPSTREAM_URL"]
-    with httpx.Client(base_url=url, timeout=15, trust_env=False) as client:
+    with httpx.Client(base_url=url, timeout=15, trust_env=False, limits=GATEWAY_LIMITS) as client:
         yield Gateway(client, os.environ["INTEGRATION_MASTER_KEY"], upstream)
+
+
+def _set_team_admin_permissions(gateway: Gateway, fields: Sequence[str]) -> None:
+    response: Final = gateway.request("PATCH", "/update/ui_settings", {"team_admin_editable_team_fields": list(fields)})
+    assert response.status_code == 200, response.text
+
+
+@contextmanager
+def team_admin_permissions(gateway: Gateway, fields: Sequence[str]) -> Iterator[None]:
+    """Grant team admins ``fields`` proxy-wide for the block, then restore the prior grant."""
+    original: Final = object_value(gateway.get("/get/ui_settings")["values"]).get("team_admin_editable_team_fields")
+    _set_team_admin_permissions(gateway, fields)
+    try:
+        yield
+    finally:
+        _set_team_admin_permissions(gateway, [str(field) for field in original] if isinstance(original, list) else ())

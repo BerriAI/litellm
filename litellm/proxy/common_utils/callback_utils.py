@@ -714,7 +714,7 @@ def strip_callback_config(metadata: dict[str, object] | None) -> dict[str, objec
     return {k: v for k, v in metadata.items() if k not in _CALLBACK_CONFIG_SLOTS}
 
 
-def encrypt_callback_vars(metadata: Any) -> Any:
+def encrypt_callback_vars(metadata: object) -> Any:
     """Return a deep copy of metadata with callback_vars values encrypted at rest.
 
     Idempotent: a value that already decrypts cleanly is left unchanged so
@@ -723,7 +723,7 @@ def encrypt_callback_vars(metadata: Any) -> Any:
     return _transform_callback_vars(metadata, _encrypt_if_plaintext)
 
 
-def decrypt_callback_vars(metadata: Any) -> Any:
+def decrypt_callback_vars(metadata: object) -> Any:
     """Return a deep copy of metadata with callback_vars values decrypted.
 
     Legacy plaintext rows pass through unchanged (decrypt failure → original).
@@ -731,7 +731,7 @@ def decrypt_callback_vars(metadata: Any) -> Any:
     return _transform_callback_vars(metadata, _decrypt_or_passthrough)
 
 
-def _transform_callback_vars(metadata: object, transform: Callable[[str, Any], Any]) -> object:
+def _transform_callback_vars(metadata: object, transform: Callable[[str, object], object]) -> object:
     if not isinstance(metadata, dict):
         return metadata
     out: Final = copy.deepcopy(metadata)

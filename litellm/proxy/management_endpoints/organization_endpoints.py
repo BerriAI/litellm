@@ -14,10 +14,12 @@ Endpoints for /organization operations
 #### ORGANIZATION MANAGEMENT ####
 
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
     Final,
+    NamedTuple,
     Protocol,
     cast,  # noqa: TID251  # prisma types Json columns as fields.Json but reads back plain python values
     overload,
@@ -62,6 +64,7 @@ from litellm.proxy.management_helpers.utils import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import OrganizationMembershipRepository
@@ -583,43 +586,23 @@ async def get_organization_daily_activity(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    # Parse comma-separated ids
-    org_ids_list = organization_ids.split(",") if organization_ids else None
+    org_ids: Final = tuple(organization_ids.split(",")) if organization_ids else None
     exclude_org_ids_list: list[str] | None = None
     if exclude_organization_ids:
         exclude_org_ids_list = exclude_organization_ids.split(",") if exclude_organization_ids else None
 
-    # Restrict non-proxy-admins to only organizations where they are org_admin
-    if not _user_has_admin_view(user_api_key_dict):
-        memberships: Final = await _table(OrganizationMembershipRepository(prisma_client)).find_many(
-            where={"user_id": user_api_key_dict.user_id}
-        )
-        admin_org_ids = [m.organization_id for m in memberships if m.user_role == LitellmUserRoles.ORG_ADMIN.value]
-        if org_ids_list is None:
-            # Default to orgs where user is org_admin
-            org_ids_list = admin_org_ids
-        else:
-            # Ensure user is org_admin for all requested orgs
-            for org_id in org_ids_list:
-                if org_id not in admin_org_ids:
-                    raise HTTPException(
-                        status_code=403,
-                        detail={"error": f"User is not org_admin for Organization= {org_id}."},
-                    )
+    org_scope: Final = await resolve_organization_daily_activity_scope(
+        organization_ids=org_ids,
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+    )
 
-    # Fetch organization aliases for metadata
-    where_condition: Final = _STR_OBJECT_DICT_ADAPTER.validate_python({})
-    if org_ids_list is not None:
-        where_condition["organization_id"] = {"in": list(org_ids_list)}
-    org_aliases: Final = await _table(OrganizationRepository(prisma_client)).find_many(where=where_condition)
-
-    # Query daily activity for organizations
     return await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailyorganizationspend",
         entity_id_field="organization_id",
-        entity_id=org_ids_list,
-        entity_metadata_field={o.organization_id: {"organization_alias": o.organization_alias} for o in org_aliases},
+        entity_id=None if org_scope.organization_ids is None else list(org_scope.organization_ids),
+        entity_metadata_field=org_scope.organization_metadata,
         exclude_entity_ids=exclude_org_ids_list,
         start_date=start_date,
         end_date=end_date,
@@ -628,6 +611,56 @@ async def get_organization_daily_activity(
         page=page,
         page_size=page_size,
     )
+
+
+class _OrganizationDailyActivityScope(NamedTuple):
+    organization_ids: tuple[str, ...] | None
+    organization_metadata: Mapping[str, dict[str, object]]
+
+
+async def resolve_organization_daily_activity_scope(
+    *,
+    organization_ids: tuple[str, ...] | None,
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> _OrganizationDailyActivityScope:
+    is_admin: Final = _user_has_admin_view(user_api_key_dict)
+    memberships: Final = (
+        await _table(OrganizationMembershipRepository(prisma_client)).find_many(
+            where={"user_id": user_api_key_dict.user_id}
+        )
+        if not is_admin
+        else ()
+    )
+    admin_organization_ids: Final = tuple(
+        membership.organization_id
+        for membership in memberships
+        if membership.user_role == LitellmUserRoles.ORG_ADMIN.value
+    )
+    if not is_admin and organization_ids is not None:
+        for organization_id in organization_ids:
+            if organization_id not in admin_organization_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail={"error": f"User is not org_admin for Organization= {organization_id}."},
+                )
+    resolved_organization_ids: Final[tuple[str, ...] | None] = (
+        organization_ids if is_admin or organization_ids is not None else admin_organization_ids
+    )
+
+    organization_table: Final = _table(OrganizationRepository(prisma_client))
+    organization_rows: Final = (
+        await find_many_in(organization_table, "organization_id", resolved_organization_ids)
+        if resolved_organization_ids is not None
+        else await organization_table.find_many(where={})
+    )
+    metadata: Final = MappingProxyType(
+        {
+            organization.organization_id: {"organization_alias": organization.organization_alias}
+            for organization in organization_rows
+        }
+    )
+    return _OrganizationDailyActivityScope(resolved_organization_ids, metadata)
 
 
 async def _set_object_permission(

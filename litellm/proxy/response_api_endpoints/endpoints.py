@@ -1,17 +1,16 @@
 import asyncio
 import contextlib
 import json
-import time
-from collections.abc import AsyncIterator, Awaitable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Mapping, Sequence
 from enum import Enum
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, cast, get_args
-from uuid import uuid4
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeAlias, cast, get_args
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from openai.types.responses import ResponseItemList
 from openai.types.responses.response_create_params import ResponseInputParam
 from pydantic import BaseModel, ConfigDict, ValidationError
 from starlette.websockets import WebSocket, WebSocketDisconnect
@@ -20,8 +19,9 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.custom_guardrail import ModifyResponseException
-from litellm.llms.base_llm.guardrail_translation.utils import (
-    blocked_responses_api_usage as _blocked_responses_api_usage,
+from litellm.llms.openai.responses.guardrail_translation.handler import (
+    OpenAIResponsesHandler,
+    build_blocked_response,
 )
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import (
@@ -29,7 +29,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
     user_api_key_auth_websocket,
 )
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, create_response
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_set_request_parsed_body,
@@ -47,6 +47,20 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 router: Final = APIRouter()
+
+_ResponseDocSchemas: TypeAlias = dict[int | str, dict[str, object]]  # fastapi's responses kwarg
+
+RESPONSES_API_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {200: {"model": ResponsesAPIResponse}}
+RESPONSES_API_CREATE_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {
+    200: {
+        "model": ResponsesAPIResponse,
+        "content": {
+            "text/event-stream": {"schema": {"type": "string", "description": "Server sent events when stream=true"}}
+        },
+    }
+}
+DELETE_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {200: {"model": DeleteResponseResult}}
+RESPONSE_ITEM_LIST_SCHEMAS: Final[_ResponseDocSchemas] = {200: {"model": ResponseItemList}}
 
 _user_api_key_auth_dep: Final = Depends(user_api_key_auth)
 _RESPONSES_TAGS: Final[list[str | Enum]] = ["responses"]  # mutable-ok: fastapi's route signature requires list tags
@@ -81,14 +95,14 @@ def _convert_tool_envelope(obj: object, *, to_chat: bool) -> object:
         return obj
     nested: Final = obj.get(tool_type)
     nested_source: Final = nested if isinstance(nested, dict) else _EMPTY_TOOL_PAYLOAD
-    payload: Final = {  # mutable-ok: tool entries are embedded verbatim in the JSON request body
+    payload: Final = {
         key: _convert_tool_payload_value(key, nested_source[key] if key in nested_source else obj[key], to_chat=to_chat)
         for key in payload_keys
         if key in nested_source or key in obj
     }
     if "name" not in payload:
         return obj
-    return {"type": tool_type, tool_type: payload} if to_chat else {"type": tool_type, **payload}  # mutable-ok: same
+    return {"type": tool_type, tool_type: payload} if to_chat else {"type": tool_type, **payload}
 
 
 def _normalize_tool_dialect(
@@ -97,17 +111,13 @@ def _normalize_tool_dialect(
     tools: Final = data.get("tools")
     tool_choice: Final = data.get("tool_choice")
     normalized_tools: Final = (
-        [
-            _convert_tool_envelope(tool, to_chat=to_chat) for tool in tools
-        ]  # mutable-ok: body's tools stays a plain JSON list
-        if isinstance(tools, list)
-        else tools
+        [_convert_tool_envelope(tool, to_chat=to_chat) for tool in tools] if isinstance(tools, list) else tools
     )
     normalized_choice: Final = _convert_tool_envelope(tool_choice, to_chat=to_chat)
     if normalized_tools == tools and normalized_choice == tool_choice:
         return data
     replaceable: Final = (("tools", normalized_tools), ("tool_choice", normalized_choice))
-    return {**data, **{key: value for key, value in replaceable if key in data}}  # mutable-ok: plain body dict
+    return {**data, **{key: value for key, value in replaceable if key in data}}
 
 
 def _is_chat_completions_body(data: Mapping[str, object]) -> bool:
@@ -154,19 +164,19 @@ def _resolve_cursor_model_variant(
     variant: Final = _parse_cursor_model_variant(model)
     if variant.base_model == model or not _router_can_serve(variant.base_model, llm_router):
         return data
-    resolved: Final = {**data, "model": variant.base_model}  # mutable-ok: plain body dict
+    resolved: Final = {**data, "model": variant.base_model}
     if variant.reasoning_effort is None:
         return resolved
     if _is_chat_completions_body(data):
         if "reasoning_effort" in data:
             return resolved
-        return {**resolved, "reasoning_effort": variant.reasoning_effort}  # mutable-ok: plain body dict
+        return {**resolved, "reasoning_effort": variant.reasoning_effort}
     reasoning: Final = data.get("reasoning")
     if isinstance(reasoning, dict):
         if reasoning.get("effort"):
             return resolved
-        return {**resolved, "reasoning": {**reasoning, "effort": variant.reasoning_effort}}  # mutable-ok: same
-    return {**resolved, "reasoning": {"effort": variant.reasoning_effort}}  # mutable-ok: plain body dict
+        return {**resolved, "reasoning": {**reasoning, "effort": variant.reasoning_effort}}
+    return {**resolved, "reasoning": {"effort": variant.reasoning_effort}}
 
 
 async def _resolve_cursor_model_variant_before_auth(request: Request) -> None:
@@ -185,16 +195,19 @@ async def _resolve_cursor_model_variant_before_auth(request: Request) -> None:
     "/v1/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
 )
 @router.post(
     "/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
 )
 @router.post(
     "/openai/v1/responses",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_CREATE_RESPONSE_SCHEMAS,
 )
 async def responses_api(
     request: Request,
@@ -426,17 +439,16 @@ async def responses_api(
             request_data=_data,
         )
 
-        violation_text: Final = e.message
-        response_obj: Final = ResponsesAPIResponse(
-            id=f"resp_{uuid4()}",
-            object="response",
-            created_at=int(time.time()),
-            model=e.model or data.get("model"),
-            output=cast(Any, [{"content": [{"type": "text", "text": violation_text}]}]),
-            status="completed",
-            usage=_blocked_responses_api_usage(e.original_response),
-        )
-        return response_obj
+        if data.get("stream") is True:
+            block_chunks: Final = OpenAIResponsesHandler().build_block_sse_chunks(e)
+
+            async def _blocked_stream() -> AsyncGenerator[str, None]:
+                for chunk in block_chunks:
+                    yield chunk.decode()
+                yield "data: [DONE]\n\n"
+
+            return await create_response(generator=_blocked_stream(), media_type="text/event-stream", headers={})
+        return build_blocked_response(e)
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -556,9 +568,7 @@ async def cursor_chat_completions(
     # Rebuild rather than pop: _read_request_body can return the request-scope
     # cached parsed-body dict itself, and removing keys from it corrupts the
     # cache's key snapshot so later readers get an empty body
-    body_without_stream_options: Final = {  # mutable-ok: base_process_llm_request mutates the body dict in place
-        key: value for key, value in raw_body.items() if key != "stream_options"
-    }
+    body_without_stream_options: Final = {key: value for key, value in raw_body.items() if key != "stream_options"}
 
     data: Final = _normalize_tool_dialect(body_without_stream_options, to_chat=False)
 
@@ -668,16 +678,19 @@ async def cursor_chat_completions(
     "/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_RESPONSE_SCHEMAS,
 )
 @router.get(
     "/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_RESPONSE_SCHEMAS,
 )
 @router.get(
     "/openai/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSES_API_RESPONSE_SCHEMAS,
 )
 async def get_response(
     response_id: str,
@@ -781,16 +794,19 @@ async def get_response(
     "/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=DELETE_RESPONSE_SCHEMAS,
 )
 @router.delete(
     "/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=DELETE_RESPONSE_SCHEMAS,
 )
 @router.delete(
     "/openai/v1/responses/{response_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=DELETE_RESPONSE_SCHEMAS,
 )
 async def delete_response(
     response_id: str,
@@ -887,16 +903,19 @@ async def delete_response(
     "/v1/responses/{response_id}/input_items",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSE_ITEM_LIST_SCHEMAS,
 )
 @router.get(
     "/responses/{response_id}/input_items",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSE_ITEM_LIST_SCHEMAS,
 )
 @router.get(
     "/openai/v1/responses/{response_id}/input_items",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+    responses=RESPONSE_ITEM_LIST_SCHEMAS,
 )
 async def get_response_input_items(
     response_id: str,
@@ -1365,7 +1384,7 @@ async def _read_ws_model_from_first_frame(
     return model, first_message
 
 
-def _extract_model_from_first_ws_event(first_event: Any) -> str | None:
+def _extract_model_from_first_ws_event(first_event: object) -> str | None:
     """Extract model from a response.create WS event, handling flat and nested formats.
 
     Flat:   {"type": "response.create", "model": "gpt-4o", ...}

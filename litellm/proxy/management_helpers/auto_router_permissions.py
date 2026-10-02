@@ -151,9 +151,7 @@ async def authorize_member_auto_router_dependencies(
     if team.blocked:
         raise HTTPException(status_code=403, detail="This auto router's team is blocked.")
     aliases: Final = team_model_aliases(team)
-    alias_dict: Final = (
-        dict(aliases) if aliases is not None else None  # mutable-ok: auth model and helpers require dict
-    )
+    alias_dict: Final = dict(aliases) if aliases is not None else None
     scoped_actor: Final = user_api_key_dict.model_copy(
         update=MappingProxyType({"team_id": team.team_id, "team_models": team.models, "team_model_aliases": alias_dict})
     )
@@ -179,14 +177,23 @@ async def authorize_member_auto_router_dependencies(
             }
         )
     )
-    for model, deployments in (
-        (dependency.model_name, llm_router.get_model_list(model_name=dependency.model_name, team_id=team.team_id))
+    for dependency, model, deployments in (
+        (
+            dependency,
+            dependency.model_name,
+            llm_router.get_model_list(model_name=dependency.model_name, team_id=team.team_id),
+        )
         for dependency in dependencies
     ):
-        if not deployments or any(
-            classify_strategy_router_model(_RouterConfigSource.model_validate(deployment["litellm_params"]).model or "")
-            is not None
-            for deployment in deployments
+        if dependency.role != "evaluation" and (
+            not deployments
+            or any(
+                classify_strategy_router_model(
+                    _RouterConfigSource.model_validate(deployment["litellm_params"]).model or ""
+                )
+                is not None
+                for deployment in deployments
+            )
         ):
             raise HTTPException(status_code=400, detail=f"Auto-router target {model!r} must be a configured model.")
         await can_team_access_model(

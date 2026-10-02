@@ -123,11 +123,7 @@ class AutoRouterBaselineCache(CustomLogger):
         if not isinstance(logging_obj, Logging) or call_type != CallTypes.anthropic_messages:
             return
         try:
-            metadata: Final = _METADATA.validate_python(
-                get_litellm_metadata_from_kwargs(
-                    {"litellm_params": kwargs}  # mutable-ok: legacy metadata owner requires a dictionary
-                )
-            )
+            metadata: Final = _METADATA.validate_python(get_litellm_metadata_from_kwargs({"litellm_params": kwargs}))
             if metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
                 return
             if logging_obj.baseline_cache_context is not None:
@@ -230,12 +226,10 @@ class AutoRouterBaselineCache(CustomLogger):
 async def invalidate_baseline_cache(logging_obj: Logging, reason: str, *, completed: bool = False) -> None:
     context: Final = logging_obj.baseline_cache_context
     if context is not None:
-        logging_obj.baseline_cache_context = replace(
-            context, invalidated=reason
-        )  # rebind-ok: request-owned retry marker
+        logging_obj.baseline_cache_context = replace(context, invalidated=reason)
         logging_obj.baseline_observation = context.capture.model_copy(
             update=MappingProxyType(
-                {  # rebind-ok: capture uncertainty for failure logging
+                {
                     "observation": context.capture.observation.model_copy(
                         update=MappingProxyType(
                             {

@@ -48,6 +48,7 @@ _UI_SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "allow_agents_for_team_admins",
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
+    "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
     "team_admin_editable_team_fields",
 )
@@ -75,6 +76,13 @@ def _build_dual_source_keys() -> Mapping[tuple[Section, str], KeyRule]:
 
 
 DUAL_SOURCE_KEYS: Final[Mapping[tuple[Section, str], KeyRule]] = _build_dual_source_keys()
+
+
+RESOURCE_LIST_KEYS: Final[frozenset[tuple[Section, str]]] = frozenset({("general_settings", "pass_through_endpoints")})
+
+
+def is_resource_list(section: Section, key: str) -> bool:
+    return (section, key) in RESOURCE_LIST_KEYS
 
 
 def rule_for(section: Section, key: str) -> KeyRule:

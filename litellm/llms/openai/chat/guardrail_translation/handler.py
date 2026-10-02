@@ -17,7 +17,7 @@ This pattern can be replicated for other message formats (e.g., Anthropic).
 import json
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
@@ -247,8 +247,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 texts_to_check=texts,
                 images_to_check=images,
                 tool_calls_to_check=tool_calls,
-                text_task_mappings=[],  # mutable-ok: required by _extract_inputs, unused here
-                tool_call_task_mappings=[],  # mutable-ok: required by _extract_inputs, unused here
+                text_task_mappings=[],
+                tool_call_task_mappings=[],
             )
         if texts or tool_calls:
             return "no scannable content after message scoping"
@@ -269,7 +269,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     def _extract_inputs(
         self,
-        message: dict[str, Any],
+        message: Mapping[str, object],
         msg_idx: int,
         texts_to_check: list[str],
         images_to_check: list[str],
@@ -330,7 +330,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     async def _apply_guardrail_responses_to_input_texts(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, object]],
         responses: list[str],
         task_mappings: list[tuple[int, int | None]],
     ) -> None:
@@ -355,12 +355,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             elif isinstance(content, list) and content_idx_optional is not None:
                 # Replace specific text item in list content
-                messages[msg_idx]["content"][content_idx_optional]["text"] = guardrail_response
+                content[content_idx_optional]["text"] = guardrail_response
 
     async def _apply_guardrail_responses_to_input_tool_calls(
         self,
-        messages: list[dict[str, Any]],
-        tool_calls: list[dict[str, Any]],
+        messages: Sequence[Mapping[str, object]],
+        tool_calls: Sequence[Mapping[str, object]],
         task_mappings: list[tuple[int, int]],
     ) -> None:
         """
@@ -412,7 +412,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
-        tool_calls_to_check: Final[list[dict[str, Any]]] = []
+        tool_calls_to_check: Final[list[dict[str, object]]] = []
         text_task_mappings: Final[list[tuple[int, int | None]]] = []
         tool_call_task_mappings: Final[list[tuple[int, int]]] = []
         # text_task_mappings: Track (choice_index, content_index) for each text
@@ -461,8 +461,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
-            guardrailed_tool_calls: Final[list[dict[str, Any]]] = (
-                cast(list[dict[str, Any]], returned_tool_calls)
+            guardrailed_tool_calls: Final[list[dict[str, object]]] = (
+                cast(list[dict[str, object]], returned_tool_calls)
                 if isinstance(returned_tool_calls, list) and len(returned_tool_calls) == len(tool_calls_to_check)
                 else tool_calls_to_check
             )
@@ -695,7 +695,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 cast(
                     ModelResponse,
                     stream_chunk_builder(
-                        chunks=[  # mutable-ok: callee takes a list
+                        chunks=[
                             OpenAIChatCompletionsHandler._narrowed_to_choice(response, index)
                             for response in responses_so_far
                         ],
@@ -706,7 +706,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             for index in choice_indices
         )
         (_, base_response), *_ = rebuilt_by_index
-        stitched_choices: Final = [  # mutable-ok: choices is a List field; a tuple there breaks model_dump round-trips
+        stitched_choices: Final = [
             rebuilt.choices[0].model_copy(update=MappingProxyType({"index": index}))
             for index, rebuilt in rebuilt_by_index
         ]
@@ -714,7 +714,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     @staticmethod
     def _narrowed_to_choice(response: "ModelResponseStream", index: int) -> "ModelResponseStream":
-        narrowed: Final = [choice for choice in response.choices if choice.index == index]  # mutable-ok: List field
+        narrowed: Final = [choice for choice in response.choices if choice.index == index]
         return response.model_copy(update=MappingProxyType({"choices": narrowed}))
 
     def build_stream_error_items(
@@ -939,7 +939,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         choice_idx: int,
         texts_to_check: list[str],
         images_to_check: list[str],
-        tool_calls_to_check: list[dict[str, Any]],
+        tool_calls_to_check: list[dict[str, object]],
         text_task_mappings: list[tuple[int, int | None]],
         tool_call_task_mappings: list[tuple[int, int]],
     ) -> None:
@@ -1115,8 +1115,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             return
         await self._apply_guardrail_responses_to_output_streaming(
             responses=responses_so_far,
-            guardrailed_texts=list(rewrites_by_choice.values()),  # mutable-ok: callee takes lists
-            task_mappings=[(index, None) for index in rewrites_by_choice],  # mutable-ok: callee takes lists
+            guardrailed_texts=list(rewrites_by_choice.values()),
+            task_mappings=[(index, None) for index in rewrites_by_choice],
         )
 
     @staticmethod
