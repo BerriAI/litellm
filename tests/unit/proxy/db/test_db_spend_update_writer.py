@@ -1588,7 +1588,14 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_skips_when_a
 
 
 @pytest.mark.asyncio
-async def test_endpoint_field_is_correctly_mapped_from_call_type():
+@pytest.mark.parametrize(
+    ("call_type", "endpoint"),
+    (
+        pytest.param("acompletion", "/chat/completions", id="chat-completion"),
+        pytest.param("aimage_generation", "/image/generations", id="image-generation"),
+    ),
+)
+async def test_endpoint_field_is_correctly_mapped_from_call_type(call_type: str, endpoint: str) -> None:
     """
     Test that the endpoint field is correctly mapped from call_type using ROUTE_ENDPOINT_MAPPING.
     Verifies that when call_type is provided, the endpoint is set in the transaction and included in the key.
@@ -1600,7 +1607,7 @@ async def test_endpoint_field_is_correctly_mapped_from_call_type():
     payload = {
         "request_id": "req-endpoint-test",
         "user": "test-user",
-        "call_type": "acompletion",  # Maps to "/chat/completions"
+        "call_type": call_type,
         "startTime": "2024-01-01T12:00:00",
         "api_key": "test-key",
         "model": "gpt-4",
@@ -1627,10 +1634,10 @@ async def test_endpoint_field_is_correctly_mapped_from_call_type():
 
     for key, transaction in update_dict.items():
         # Verify endpoint is included in the key
-        assert key == f"test-user_2024-01-01_test-key_gpt-4_openai_/chat/completions"
+        assert key == f"test-user_2024-01-01_test-key_gpt-4_openai_{endpoint}"
 
         # Verify endpoint is set in the transaction
-        assert transaction["endpoint"] == "/chat/completions"
+        assert transaction["endpoint"] == endpoint
         assert transaction["user_id"] == "test-user"
         assert transaction["date"] == "2024-01-01"
         assert transaction["api_key"] == "test-key"

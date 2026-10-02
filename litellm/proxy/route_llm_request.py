@@ -1,9 +1,11 @@
 import asyncio
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from fastapi import HTTPException, status
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -77,7 +79,7 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "acompletion": "/chat/completions",
     "atext_completion": "/completions",
     "aembedding": "/embeddings",
-    "aimage_generation": "/images/generations",
+    "aimage_generation": "/image/generations",
     "aspeech": "/audio/speech",
     "atranscription": "/audio/transcriptions",
     "amoderation": "/moderations",
@@ -162,11 +164,18 @@ REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
     "aembedding": ("input",),
     "aresponses": ("input",),
     "acreate_batch": ("input_file_id", "endpoint", "completion_window"),
-    "arerank": ("query", "documents"),
-    "aspeech": ("input",),
-    "amoderation": ("input",),
-    "aimage_generation": ("prompt",),
 }
+
+REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "arerank": ("query", "documents"),
+        "aspeech": ("input",),
+        "amoderation": ("input",),
+        "aimage_generation": ("prompt",),
+    }
+)
+
+JSON_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 
 
 class ProxyMissingRequiredParamError(ProxyException):
@@ -179,11 +188,65 @@ class ProxyMissingRequiredParamError(ProxyException):
         )
 
 
-def raise_if_required_body_param_missing(route_type: str, data: Mapping[str, object]) -> None:
-    missing_param: Final = next(
+def _find_missing_required_body_param(
+    route_type: str,
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+) -> str | None:
+    missing_merge_base_param: Final = next(
         (param for param in REQUIRED_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if data.get(param) is None),
         None,
     )
+    if missing_merge_base_param is not None:
+        return missing_merge_base_param
+    missing_present_params: Final = tuple(
+        param for param in REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if param not in data
+    )
+    if not missing_present_params:
+        return None
+    candidate_litellm_params: Final = _candidate_deployment_litellm_params(data, llm_router)
+    return next(
+        (
+            param
+            for param in missing_present_params
+            if not any(deployment_params.get(param) is not None for deployment_params in candidate_litellm_params)
+        ),
+        None,
+    )
+
+
+def _candidate_deployment_litellm_params(
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+) -> tuple[dict[str, object], ...]:
+    model_name: Final = data.get("model")
+    if llm_router is None or not isinstance(model_name, str):
+        return ()
+    deployments: Final = (
+        llm_router.get_model_list(
+            model_name=model_name,
+            team_id=get_team_id_from_data(dict(data)),
+        )
+        or ()
+    )
+    return tuple(
+        params for deployment in deployments if (params := _validated_deployment_litellm_params(deployment)) is not None
+    )
+
+
+def _validated_deployment_litellm_params(deployment: Mapping[str, object]) -> dict[str, object] | None:
+    try:
+        return JSON_OBJECT_ADAPTER.validate_python(deployment.get("litellm_params"))
+    except ValidationError:
+        return None
+
+
+def raise_if_required_body_param_missing(
+    route_type: str,
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+) -> None:
+    missing_param: Final = _find_missing_required_body_param(route_type, data, llm_router)
     if missing_param is None:
         return
     raise ProxyMissingRequiredParamError(
@@ -473,7 +536,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     route_type: RouteType,
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
-    raise_if_required_body_param_missing(route_type=route_type, data=data)
+    raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=llm_router)
 
     await add_shared_session_to_data(data)
 

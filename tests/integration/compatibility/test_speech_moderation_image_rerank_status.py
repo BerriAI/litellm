@@ -44,7 +44,7 @@ _MODERATION: Final = _Case(
     "moderations", "/v1/moderations", "/moderations", ("input",), {"input": "moderate this"}, "openai/gpt-4o-mini"
 )
 _IMAGE: Final = _Case(
-    "images", "/v1/images/generations", "/images/generations", ("prompt",), {"prompt": "audit"}, "openai/gpt-image-1"
+    "images", "/v1/images/generations", "/image/generations", ("prompt",), {"prompt": "audit"}, "openai/gpt-image-1"
 )
 _RERANK: Final = _Case(
     "rerank",
@@ -254,6 +254,22 @@ def test_valid_body_reaches_scripted_upstream(gateway: Gateway, case: _Case) -> 
         assert len(matches) == 1, captured
         outbound: Final = object_value(matches[0]["body"])
         assert all(outbound.get(name) == body[name] for name in case.required), captured
+
+
+def test_image_generation_null_prompt_reaches_upstream(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        alias, identity = _model(scenario, _IMAGE, _response(_BODIES["images"]))
+        response: Final = _post(gateway, _IMAGE.path, {"model": alias, "prompt": None})
+        assert response.status_code == 200, response.text
+        _assert_scripted_response(_IMAGE, JSON_OBJECT.validate_python(response.json()))
+        observations: Final = _Observations(gateway.upstream_url)
+        captured: Final = eventually(
+            observations.read, lambda _items: len(observations.for_scenario(identity)) == 1, seconds=20
+        )
+        matches: Final = observations.for_scenario(identity)
+        assert len(matches) == 1, captured
+        outbound: Final = object_value(matches[0]["body"])
+        assert "prompt" in outbound and outbound["prompt"] is None, captured
 
 
 @pytest.mark.parametrize("client_kind", ("sync", "async"), ids=("sync", "async"))
