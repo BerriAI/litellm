@@ -2207,6 +2207,16 @@ class _MarkerBlockingScanGuardrail(_ScanCountingGuardrail):
         return recorded
 
 
+class _MarkerHttpErrorScanGuardrail(_ScanCountingGuardrail):
+    """Scan-counting guardrail that raises an HTTPException for any scan whose text contains BLOCKME"""
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        recorded = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+        if any("BLOCKME" in text for text in recorded.get("texts") or []):
+            raise unified_module.HTTPException(status_code=400, detail={"error": "Violated guardrail policy"})
+        return recorded
+
+
 class _MarkerBlockingStreamingTextGuardrail(_StreamingTextGuardrail):
     """incremental_diff guardrail that blocks any round whose text contains BLOCKME"""
 
@@ -2533,6 +2543,39 @@ class TestStreamingClientDisconnectScan:
 
         assert received == ["a", "b", "c"]
         assert [scan["texts"] for scan in guardrail.scans] == [["ab"], ["abcBLOCKME"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_closing_while_a_mid_stream_guardrail_error_is_delivered_does_not_scan_the_content_again(self):
+        guardrail = _MarkerHttpErrorScanGuardrail(sampling_rate=2)
+
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            for text in ("a", "b", "c", "BLOCKME"):
+                yield _stream_chunk(text)
+            yield _stream_chunk(" tail", finish_reason="stop")
+
+        stream = self._guarded_stream(guardrail, upstream())
+        received = [_delta_text(await stream.__anext__()) for _ in range(3)]
+        await stream.__anext__()
+        await stream.aclose()
+
+        assert received == ["a", "b", "c"]
+        assert [scan["texts"] for scan in guardrail.scans] == [["ab"], ["abcBLOCKME"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_closing_while_the_scanned_final_chunk_is_delivered_does_not_scan_the_stream_again(self):
+        guardrail = _ScanCountingGuardrail(end_of_stream_only=True)
+
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            yield _stream_chunk("a")
+            yield _stream_chunk("b")
+            yield _stream_chunk(" tail", finish_reason="stop")
+
+        stream = self._guarded_stream(guardrail, upstream())
+        received = [_delta_text(await stream.__anext__()) for _ in range(3)]
+        await stream.aclose()
+
+        assert received == ["a", "b", " tail"]
+        assert [scan["texts"] for scan in guardrail.scans] == [["ab tail"]], guardrail.scans
 
     @pytest.mark.asyncio
     async def test_cancellation_with_a_withheld_window_scans_only_the_released_chunks(self):
