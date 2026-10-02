@@ -2968,7 +2968,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     vector_store_deny_by_default: bool = Field(
         default=False,
-        description="When True, a virtual key without a team may only use vector stores explicitly listed in its object_permission.vector_stores. A key with no permission record or an empty list is denied. Team keys and non-key callers are not yet covered",
+        description="When True, a virtual key may only use vector stores explicitly listed in its object_permission.vector_stores, and a key on a team also needs the team to list them. A missing permission record, an empty list, or an unresolved team grants nothing. Dashboard session keys and non-key callers are not yet covered",
     )
     missing_session_id: Literal["generate", "reject", "omit"] | None = Field(
         None,

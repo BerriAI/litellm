@@ -4855,6 +4855,68 @@ async def test_centralized_common_checks_tolerates_db_errors_when_fetching_conte
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deny_by_default", "team_lookup_error", "denied"),
+    [
+        (False, RuntimeError("team cache unavailable"), False),
+        (True, RuntimeError("team cache unavailable"), True),
+        (True, HTTPException(status_code=404, detail="team read failed"), True),
+    ],
+    ids=["flag-off-lookup-swallowed", "flag-on-lookup-swallowed", "flag-on-team-rebuilt-from-token"],
+)
+async def test_team_key_vector_store_access_when_team_cannot_be_resolved(
+    monkeypatch: pytest.MonkeyPatch, deny_by_default: bool, team_lookup_error: Exception, denied: bool
+):
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(
+        api_key="sk-team-key", team_id="team-1", team_models=["gpt-4o-mini"], object_permission_id="key-permission"
+    )
+    token.via_virtual_key = True
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/v1/rag/query")
+    database = MagicMock()
+    database.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        side_effect=lambda where: SimpleNamespace(vector_stores=["KBSTOREA"])
+        if where["object_permission_id"] == "key-permission"
+        else None
+    )
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": database,
+        "general_settings": {"vector_store_deny_by_default": deny_by_default},
+    }
+    for name, value in attrs.items():
+        monkeypatch.setattr(litellm.proxy.proxy_server, name, value)
+    monkeypatch.setattr(litellm, "vector_store_registry", None)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.user_api_key_auth.get_team_object", AsyncMock(side_effect=team_lookup_error)
+    )
+
+    checks = _run_centralized_common_checks(
+        user_api_key_auth_obj=token,
+        request=request,
+        request_data={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what is in this KB?"}],
+            "retrieval_config": {"vector_store_id": "KBSTOREA", "custom_llm_provider": "bedrock"},
+        },
+        route="/v1/rag/query",
+    )
+    if not denied:
+        await checks
+        return
+    with pytest.raises(ProxyException) as exc_info:
+        await checks
+    assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (
+        ProxyErrorTypes.team_vector_store_access_denied,
+        "vector_store",
+        "401",
+    )
+
+
+@pytest.mark.asyncio
 async def test_centralized_common_checks_propagates_end_user_budget_error():
     """Regression: ``get_end_user_object`` raises ``litellm.BudgetExceededError``
     internally when an end user is over budget. ``_safe_fetch`` must
