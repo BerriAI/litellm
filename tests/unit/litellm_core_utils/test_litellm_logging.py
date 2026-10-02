@@ -2959,6 +2959,30 @@ def test_get_extra_header_tags():
                 delattr(litellm, "extra_spend_tag_headers")
 
 
+def test_get_request_tags_reads_header_tags_from_starlette_headers():
+    from starlette.datastructures import Headers
+
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    original_extra_headers = getattr(litellm, "extra_spend_tag_headers", None)
+    original_disable_user_agent = litellm.disable_add_user_agent_to_request_tags
+    try:
+        litellm.extra_spend_tag_headers = ["x-tenant-id"]
+        litellm.disable_add_user_agent_to_request_tags = False
+        proxy_server_request = {"headers": Headers({"user-agent": "claude-cli/2.0.0", "x-tenant-id": "tenant-a"})}
+
+        assert StandardLoggingPayloadSetup._get_request_tags(
+            litellm_params={}, proxy_server_request=proxy_server_request
+        ) == ["User-Agent: claude-cli", "User-Agent: claude-cli/2.0.0", "x-tenant-id: tenant-a"]
+    finally:
+        if original_extra_headers is not None:
+            litellm.extra_spend_tag_headers = original_extra_headers
+        elif hasattr(litellm, "extra_spend_tag_headers"):
+            delattr(litellm, "extra_spend_tag_headers")
+        litellm.disable_add_user_agent_to_request_tags = original_disable_user_agent
+
+
 def test_response_cost_calculator_with_response_cost_in_hidden_params(logging_obj):
     from litellm import Router
 
