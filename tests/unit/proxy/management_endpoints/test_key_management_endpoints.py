@@ -20745,6 +20745,95 @@ async def test_key_update_rejects_team_change_for_project_bound_key(monkeypatch:
     assert expected_detail in str(error.value.detail)
 
 
+@pytest.mark.asyncio
+async def test_bulk_key_update_rejects_project_team_change_and_allows_other_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import bulk_update_keys
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateKeyRequest,
+        BulkUpdateKeyRequestItem,
+    )
+
+    user_api_key_cache: Final = await _cache_with_project(
+        _OWNED_PROJECT, [], team_id=_OWNERSHIP_PROJECT_TEAM
+    )
+    mock_prisma_client: Final = _configure_key_endpoints(monkeypatch, user_api_key_cache)
+    existing_key_row: Final = LiteLLM_VerificationToken(
+        token="hashed-bulk-key",
+        user_id=None,
+        models=[],
+        team_id=_OWNERSHIP_PROJECT_TEAM,
+        project_id=_OWNED_PROJECT,
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing_key_row)
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id=_OWNERSHIP_DESTINATION_TEAM)
+    )
+    mock_prisma_client.get_data = AsyncMock(return_value=existing_key_row)
+    updated_key: Final = MagicMock()
+    updated_key.model_dump.return_value = {
+        "max_budget": 10.0,
+        "tags": ["bulk-update"],
+        "team_id": _OWNERSHIP_PROJECT_TEAM,
+        "project_id": _OWNED_PROJECT,
+    }
+    mock_prisma_client.update_data = AsyncMock(return_value={"data": updated_key})
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    request: Final = BulkUpdateKeyRequest(
+        keys=[
+            BulkUpdateKeyRequestItem(key="sk-bulk-key", team_id=_OWNERSHIP_DESTINATION_TEAM),
+            BulkUpdateKeyRequestItem(key="sk-bulk-key", max_budget=10.0, tags=["bulk-update"]),
+        ]
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-admin",
+        user_id="admin",
+    )
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=LiteLLM_TeamTable(team_id=_OWNERSHIP_DESTINATION_TEAM),
+        ),
+        patch("litellm.proxy.management_endpoints.common_utils._premium_user_check"),
+        patch("litellm.proxy.utils._premium_user_check"),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook",
+            new_callable=AsyncMock,
+        ),
+    ):
+        response: Final = await bulk_update_keys(
+            data=request,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
+    assert response.total_requested == 2
+    assert [(item.key, item.failed_reason) for item in response.failed_updates] == [
+        (
+            "sk-bulk-key",
+            (
+                f"Project {_OWNED_PROJECT} belongs to team {_OWNERSHIP_PROJECT_TEAM}, but the key belongs to "
+                f"{_OWNERSHIP_DESTINATION_TEAM}. A key can only be attached to a project owned by its own team."
+            ),
+        )
+    ]
+    assert len(response.successful_updates) == 1
+    assert response.successful_updates[0].key == "sk-bulk-key"
+    assert response.successful_updates[0].key_info["max_budget"] == 10.0
+    assert response.successful_updates[0].key_info["tags"] == ["bulk-update"]
+    mock_prisma_client.update_data.assert_awaited_once()
+
+
 @pytest.mark.parametrize(
     "request_fields",
     [{"key_alias": "renamed"}, {"team_id": "team-a"}],

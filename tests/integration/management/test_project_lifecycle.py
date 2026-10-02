@@ -253,16 +253,57 @@ def test_key_regenerate_rejects_foreign_project_without_changing_key(ownership_g
         )
         assert generated.status_code == 200, generated.text
         key: Final = string_value(JSON_OBJECT.validate_json(generated.content)["key"])
+        scenario.cleanups.callback(scenario.delete_key, key)
         before: Final = _key_rows(key)
         assert len(before) == 1
         response: Final = ownership_gateway.request(
             "POST", f"/key/{key}/regenerate", {"project_id": project_b}
         )
         _discard_unexpected_key(ownership_gateway, response)
-        if response.status_code != 200:
-            scenario.cleanups.callback(scenario.delete_key, key)
         assert response.status_code == 400, response.text
         assert _key_rows(key) == before
+
+
+def test_key_bulk_update_rejects_foreign_team_project_and_preserves_key(ownership_gateway: Gateway) -> None:
+    with ownership_gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        team_a: Final = scenario.team(models=[model])
+        team_b: Final = scenario.team(models=[model])
+        project_a: Final = scenario.project(team_a, models=[model])
+        key: Final = scenario.key(team_id=team_a, project_id=project_a, models=[model])
+        before: Final = _key_rows(key)
+        assert len(before) == 1
+        assert before[0]["team_id"] == team_a
+        assert before[0]["project_id"] == project_a
+
+        response: Final = ownership_gateway.request(
+            "POST",
+            "/key/bulk_update",
+            {
+                "keys": [
+                    {"key": key, "team_id": team_b},
+                    {"key": key, "max_budget": 10, "tags": ["bulk-update"]},
+                ]
+            },
+        )
+        assert response.status_code == 200, response.text
+        body: Final = JSON_OBJECT.validate_json(response.content)
+        failed_updates: Final = body["failed_updates"]
+        successful_updates: Final = body["successful_updates"]
+        assert isinstance(failed_updates, list), response.text
+        assert isinstance(successful_updates, list), response.text
+        assert len(failed_updates) == 1
+        assert len(successful_updates) == 1
+        failed_update: Final = object_value(failed_updates[0])
+        successful_update: Final = object_value(successful_updates[0])
+        assert string_value(failed_update["key"]) == key
+        assert f"Project {project_a} belongs to team {team_a}" in string_value(failed_update["failed_reason"])
+        assert string_value(successful_update["key"]) == key
+
+        after: Final = _key_rows(key)
+        assert len(after) == 1
+        assert after[0]["team_id"] == before[0]["team_id"]
+        assert after[0]["project_id"] == before[0]["project_id"]
 
 
 def test_project_update_rejects_moving_project_with_attached_key(ownership_gateway: Gateway) -> None:

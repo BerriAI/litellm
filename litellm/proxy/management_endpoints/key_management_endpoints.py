@@ -2761,6 +2761,23 @@ def _resolve_token_to_update(data: UpdateKeyRequest, existing_key_row: LiteLLM_V
     return existing_key_row.token
 
 
+async def _check_single_key_update_team_permissions(
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    existing_key_row: LiteLLM_VerificationToken,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    if prisma_client is None:
+        return
+    await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
+        user_api_key_dict=user_api_key_dict,
+        route=KeyManagementRoutes.KEY_UPDATE,
+        prisma_client=prisma_client,
+        existing_key_row=existing_key_row,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+
 async def _process_single_key_update(
     update_key_request: UpdateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -2824,15 +2841,12 @@ async def _process_single_key_update(
         entity="key",
     )
 
-    # Check team member permissions
-    if prisma_client is not None:
-        await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
-            user_api_key_dict=user_api_key_dict,
-            route=KeyManagementRoutes.KEY_UPDATE,
-            prisma_client=prisma_client,
-            existing_key_row=existing_key_row,
-            user_api_key_cache=user_api_key_cache,
-        )
+    await _check_single_key_update_team_permissions(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        existing_key_row=existing_key_row,
+        user_api_key_cache=user_api_key_cache,
+    )
 
     # Custom key update hook
     if user_custom_key_update is not None:
@@ -2884,6 +2898,14 @@ async def _process_single_key_update(
             team=team_obj,
             change_initiated_by=user_api_key_dict,
             llm_router=llm_router,
+        )
+
+    if prisma_client is not None:
+        await _check_key_project_team_on_mutation(
+            data=update_key_request,
+            existing_key_row=existing_key_row,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
         )
 
     key_request: Final = await _with_validated_object_permission(
