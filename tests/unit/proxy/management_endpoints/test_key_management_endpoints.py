@@ -20544,6 +20544,18 @@ def _configure_key_endpoints(
 ) -> AsyncMock:
     mock_prisma_client: Final = _make_generate_mock_prisma()
     mock_prisma_client.writer_db = mock_prisma_client.db
+    project_obj: Final = user_api_key_cache.get_cache(
+        key=project_cache_key(_OWNED_PROJECT),
+        model_type=LiteLLM_ProjectTableCachedObj,
+    )
+    mock_prisma_client.db.litellm_projecttable = MagicMock()
+    mock_prisma_client.db.litellm_projecttable.find_unique = AsyncMock(
+        return_value=(
+            LiteLLM_ProjectTable(project_id=_OWNED_PROJECT, team_id=project_obj.team_id)
+            if project_obj is not None
+            else None
+        )
+    )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache)
     return mock_prisma_client
@@ -20572,6 +20584,54 @@ async def test_key_generation_rejects_foreign_project_team(
             f"Project {_OWNED_PROJECT} belongs to team team-b, but the key belongs to "
             f"{key_team_id if key_team_id is not None else 'no team'}. "
             "A key can only be attached to a project owned by its own team."
+        )
+    }
+    assert error.value.status_code == 400
+    assert error.value.detail == expected_detail
+
+
+@pytest.mark.parametrize(
+    ("key_team_id", "expected_status"),
+    [(_OWNERSHIP_PROJECT_TEAM, 200), (_OWNERSHIP_KEY_TEAM, 400)],
+)
+@pytest.mark.asyncio
+async def test_key_generation_uses_database_project_team_when_cache_is_stale(
+    monkeypatch: pytest.MonkeyPatch,
+    key_team_id: str,
+    expected_status: int,
+) -> None:
+    user_api_key_cache: Final = await _cache_with_project(_OWNED_PROJECT, [], team_id=_OWNERSHIP_KEY_TEAM)
+    prisma_client: Final = _configure_key_endpoints(monkeypatch, user_api_key_cache)
+    prisma_client.db.litellm_projecttable = MagicMock()
+    prisma_client.db.litellm_projecttable.find_unique = AsyncMock(
+        return_value=LiteLLM_ProjectTable(project_id=_OWNED_PROJECT, team_id=_OWNERSHIP_PROJECT_TEAM)
+    )
+    monkeypatch.setattr(litellm, "default_key_generate_params", None)
+    data: Final = GenerateKeyRequest(project_id=_OWNED_PROJECT, team_id=key_team_id)
+    user_api_key_dict: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin")
+
+    if expected_status == 200:
+        response: Final = await _common_key_generation_helper(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+        assert response.team_id == _OWNERSHIP_PROJECT_TEAM
+        return
+
+    with pytest.raises(HTTPException) as error:
+        await _common_key_generation_helper(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    expected_detail: Final = {
+        "error": (
+            f"Project {_OWNED_PROJECT} belongs to team {_OWNERSHIP_PROJECT_TEAM}, but the key belongs to "
+            f"{_OWNERSHIP_KEY_TEAM}. A key can only be attached to a project owned by its own team."
         )
     }
     assert error.value.status_code == 400
@@ -20859,7 +20919,6 @@ async def test_key_team_ownership_mutation_allows_legacy_mismatch_without_change
         data=UpdateKeyRequest(key="sk-key", **request_fields),
         existing_key_row=existing_key_row,
         prisma_client=prisma_client,
-        user_api_key_cache=UserApiKeyCache(),
     )
 
 
@@ -20882,7 +20941,6 @@ async def test_key_team_ownership_mutation_allows_detach_with_team_change() -> N
         data=UpdateKeyRequest(key="sk-key", project_id=None, team_id="team-b"),
         existing_key_row=existing_key_row,
         prisma_client=prisma_client,
-        user_api_key_cache=UserApiKeyCache(),
     )
 
 
@@ -20898,6 +20956,10 @@ async def test_regenerate_checks_project_team_ownership(
 ) -> None:
     existing_key: Final = LiteLLM_VerificationToken(token="abc123", team_id=key_team_id)
     mock_prisma_client: Final = _make_regenerate_mock_prisma()
+    mock_prisma_client.db.litellm_projecttable = MagicMock()
+    mock_prisma_client.db.litellm_projecttable.find_unique = AsyncMock(
+        return_value=LiteLLM_ProjectTable(project_id=_OWNED_PROJECT, team_id="team-b")
+    )
     user_api_key_cache: Final = await _cache_with_project(_OWNED_PROJECT, [], team_id="team-b")
 
     async def regenerate() -> None:
@@ -20949,7 +21011,6 @@ async def test_key_project_team_validation_uses_project_missing_404() -> None:
             project_id=_OWNED_PROJECT,
             key_team_id="team-a",
             prisma_client=prisma_client,
-            user_api_key_cache=UserApiKeyCache(),
         )
 
     assert error.value.status_code == 404

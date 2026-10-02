@@ -139,6 +139,7 @@ from litellm.repositories.config_repository import ConfigParam, ConfigRepository
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     DeletedVerificationTokenRepository,
     DeprecatedVerificationTokenRepository,
@@ -1268,7 +1269,6 @@ async def _common_key_generation_helper(
             project_id=data.project_id,
             key_team_id=data.team_id,
             prisma_client=prisma_client,
-            user_api_key_cache=proxy_server.user_api_key_cache,
         )
 
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
@@ -1816,13 +1816,8 @@ async def _check_key_project_team(
     project_id: str,
     key_team_id: str | None,
     prisma_client: PrismaClient,
-    user_api_key_cache: UserApiKeyCache,
 ) -> None:
-    project_obj: Final = await get_project_object(
-        project_id=project_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-    )
+    project_obj: Final = await ProjectRepository(prisma_client).find_by_id(project_id)
 
     if project_obj is None:
         raise HTTPException(
@@ -1849,7 +1844,6 @@ async def _check_key_project_team_on_mutation(
     data: UpdateKeyRequest | RegenerateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
     prisma_client: PrismaClient,
-    user_api_key_cache: UserApiKeyCache,
 ) -> None:
     fields_set: Final = data.model_fields_set
     team_changed: Final = "team_id" in fields_set and data.team_id != existing_key_row.team_id
@@ -1866,7 +1860,6 @@ async def _check_key_project_team_on_mutation(
         project_id=project_id,
         key_team_id=team_id,
         prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
     )
 
 
@@ -2905,7 +2898,6 @@ async def _process_single_key_update(
             data=update_key_request,
             existing_key_row=existing_key_row,
             prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
         )
 
     key_request: Final = await _with_validated_object_permission(
@@ -3369,7 +3361,6 @@ async def _validate_update_key_data(
         data=data,
         existing_key_row=existing_key_row,
         prisma_client=checked_prisma_client,
-        user_api_key_cache=user_api_key_cache,
     )
 
     # When the caller asks to change the key's organization_id, require that
@@ -5668,7 +5659,6 @@ async def _execute_virtual_key_regeneration(
             data=data,
             existing_key_row=key_in_db,
             prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
         )
         _existing_key_metadata: Final = getattr(key_in_db, "metadata", None)
         enforce_output_token_estimates_are_admin_only(
