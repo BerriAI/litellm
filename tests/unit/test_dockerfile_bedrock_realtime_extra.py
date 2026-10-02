@@ -1,5 +1,5 @@
 """
-Static checks that every proxy Docker image installs the `bedrock-realtime` extra.
+Static checks that the shipped Docker image installs the `bedrock-realtime` extra.
 
 Bedrock Nova Sonic speech-to-speech (`/v1/realtime`) needs `aws-sdk-bedrock-runtime`,
 which only ships in the `bedrock-realtime` extra. An image whose `uv sync` stages
@@ -23,12 +23,7 @@ else:
 
 REPO_ROOT: Final = os.path.join(os.path.dirname(__file__), "..", "..")
 
-PROXY_DOCKERFILES: Final = (
-    "Dockerfile",
-    os.path.join("docker", "Dockerfile.non_root"),
-    os.path.join("docker", "Dockerfile.database"),
-    os.path.join("gateway", "Dockerfile"),
-)
+PROXY_DOCKERFILES: Final = ("Dockerfile",)
 
 CONTINUED_LINE_RE: Final = re.compile(r"(?:\\\n|[^\n])+")
 UV_SYNC_BOUNDARY_RE: Final = re.compile(r"(?=uv sync)")

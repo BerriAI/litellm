@@ -280,7 +280,7 @@ def owned_proxy_process(
 def owned_gateway_image(
     gateway: Gateway, directory: Path, overrides: Mapping[str, str], *, config: Path, workers: int
 ) -> Iterator[OwnedProxy]:
-    """The componentized gateway started the way its image starts it: `docker/component_entrypoint.sh` running
+    """The componentized gateway started the way its image starts it: `docker-entrypoint.sh` running
     `python -m gateway.launch`, with the config handed over as `CONFIG_FILE_PATH`. It serves the data plane only,
     so keys come from a proxy that shares its database."""
     root: Final = _proxy_root()
@@ -288,7 +288,7 @@ def owned_gateway_image(
     output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
     output.mkdir(parents=True, exist_ok=True)
     command: Final = (
-        str(root / "docker" / "component_entrypoint.sh"),
+        str(root / "docker-entrypoint.sh"),
         sys.executable,
         "-m",
         "gateway.launch",
