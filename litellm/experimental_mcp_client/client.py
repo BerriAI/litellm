@@ -36,6 +36,7 @@ from mcp.types import (
     METHOD_NOT_FOUND,
     REQUEST_TIMEOUT,
     ClientCapabilities,
+    DiscoverResult,
     ElicitationCapability,
     FormElicitationCapability,
     GetPromptRequestParams,
@@ -60,6 +61,7 @@ from mcp.types import (
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import Tool as MCPTool
+from mcp_types.version import MODERN_PROTOCOL_VERSIONS
 from pydantic import AnyUrl, TypeAdapter
 
 from litellm._logging import verbose_logger
@@ -540,12 +542,18 @@ class MCPClient:
 
         return safe_env
 
-    async def _initialize_session(self, session: ClientSession) -> InitializeResult:
+    async def _initialize_session(self, session: ClientSession) -> InitializeResult | DiscoverResult:
         if self.protocol_version == "auto":
             automatic: Final = await session.initialize()
             if automatic.protocol_version not in MCP_LEGACY_VERSIONS:
                 raise MCPError(code=-32022, message="Upstream selected an unsupported MCP protocol version")
             return automatic
+        if self.protocol_version in MODERN_PROTOCOL_VERSIONS:
+            discovered: Final = DiscoverResult.model_validate(await session.send_discover(self.protocol_version))
+            if self.protocol_version not in discovered.supported_versions:
+                raise MCPError(code=-32022, message="Upstream did not accept the configured MCP protocol version")
+            session.adopt(discovered.model_copy(update={"supported_versions": [self.protocol_version]}))
+            return discovered
         result: Final = await session.send_request(
             InitializeRequest(
                 params=InitializeRequestParams(
