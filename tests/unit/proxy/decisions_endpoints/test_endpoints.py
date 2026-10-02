@@ -17,12 +17,14 @@ from litellm.proxy.proxy_server import (
     initialize,
 )
 
+_INPUT_TOKENS: Final[int] = 367
+_OUTPUT_TOKENS: Final[int] = 3
 _RESPONSE: Final[Mapping[str, object]] = {
     "model": "pplx-decider-v1-27b",
     "answers": {
         "is_defect": {"type": "noul", "noul": 0.9},
     },
-    "usage": {"input_tokens": 367, "output_tokens": 3},
+    "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": _OUTPUT_TOKENS},
 }
 _REQUEST: Final[Mapping[str, object]] = {
     "model": "decider",
@@ -73,7 +75,13 @@ def test_proxy_decisions_route_returns_answers_and_cost(
     assert response.status_code == 200, response.text
     assert response.json()["answers"] == _RESPONSE["answers"]
     assert "_hidden_params" not in response.json()
-    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(367 * 4e-8)
+    perplexity_cost: Final = litellm.model_cost["perplexity/pplx-decider-v1-27b"]
+    expected_cost: Final = _INPUT_TOKENS * float(perplexity_cost["input_cost_per_token"]) + _OUTPUT_TOKENS * float(
+        perplexity_cost["output_cost_per_token"]
+    )
+
+    assert expected_cost > 0
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
     assert upstream.called
     assert json.loads(upstream.calls[0].request.content) == {
         "model": "pplx-decider-v1-27b",
@@ -136,3 +144,30 @@ def test_proxy_decisions_unknown_model_is_a_client_error(
 
     assert 400 <= response.status_code < 500, response.text
     assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.parametrize(
+    "request_body",
+    (
+        {
+            "model": "decider",
+            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        },
+        {
+            "model": "decider",
+            "state": {"source": "proxy-test"},
+        },
+    ),
+    ids=("missing_state", "missing_questions"),
+)
+def test_proxy_decisions_missing_required_field_is_a_client_error(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    request_body: Mapping[str, object],
+) -> None:
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post("/v1/decisions", json=request_body)
+
+    assert response.status_code == 400, response.text
+    assert not upstream.called

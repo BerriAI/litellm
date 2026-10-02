@@ -44,6 +44,19 @@ DecisionQuestion: TypeAlias = Annotated[
     Field(discriminator="type"),
 ]
 
+DecisionQuestionMap: TypeAlias = Annotated[
+    Mapping[Annotated[str, Field(min_length=1)], DecisionQuestion],
+    Field(min_length=1, max_length=128),
+]
+
+
+class DecisionsRequest(LiteLLMPydanticObjectBase):
+    model: str
+    state: DecisionsJSON
+    questions: DecisionQuestionMap
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
 
 class NoulAnswer(LiteLLMPydanticObjectBase):
     type: Literal["noul"]

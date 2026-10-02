@@ -61,7 +61,7 @@ jobs:
 
           - shard: core-utils
             artifact-name: core-utils
-            test-path: ""
+            test-path: tests/unit/decisions
             unit-flag: core-utils
             workers: 2
             reruns: 1

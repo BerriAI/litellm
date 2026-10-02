@@ -27,6 +27,8 @@ _QUESTIONS: Final[Mapping[str, object]] = MappingProxyType(
         "severity": {"type": "score", "criteria": ["none", "low", "high"]},
     }
 )
+_INPUT_TOKENS: Final[int] = 367
+_OUTPUT_TOKENS: Final[int] = 3
 _RESPONSE: Final[Mapping[str, object]] = {
     "model": "jev-1.13",
     "answers": {
@@ -45,7 +47,7 @@ _RESPONSE: Final[Mapping[str, object]] = {
             "probabilities": {"0": 0.1, "1": 0.8, "2": 0.1},
         },
     },
-    "usage": {"input_tokens": 367, "output_tokens": 3},
+    "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": _OUTPUT_TOKENS},
 }
 _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
     (
@@ -234,7 +236,7 @@ def test_decisions_cost_uses_litellm_token_pricing() -> None:
     response: Final = DecisionsResponse(
         model="pplx-decider-v1-27b",
         answers={},
-        usage=DecisionsUsage(input_tokens=367, output_tokens=3),
+        usage=DecisionsUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS),
     )
     response._hidden_params = {
         "model": "perplexity/pplx-decider-v1-27b",
@@ -242,8 +244,13 @@ def test_decisions_cost_uses_litellm_token_pricing() -> None:
     }
 
     cost: Final = litellm.completion_cost(completion_response=response)
+    perplexity_cost: Final = litellm.model_cost["perplexity/pplx-decider-v1-27b"]
+    expected_cost: Final = _INPUT_TOKENS * float(perplexity_cost["input_cost_per_token"]) + _OUTPUT_TOKENS * float(
+        perplexity_cost["output_cost_per_token"]
+    )
 
-    assert cost == pytest.approx(367 * 4e-8)
+    assert expected_cost > 0
+    assert cost == pytest.approx(expected_cost)
 
 
 @pytest.mark.asyncio
@@ -265,9 +272,15 @@ async def test_decisions_cost_is_in_standard_logging_object(respx_mock: respx.Mo
         litellm.callbacks = original_callbacks
 
     assert recording_logger.standard_logging_object is not None
-    assert recording_logger.standard_logging_object["response_cost"] == pytest.approx(367 * 4e-8)
-    assert recording_logger.standard_logging_object["prompt_tokens"] == 367
-    assert recording_logger.standard_logging_object["completion_tokens"] == 3
+    perplexity_cost: Final = litellm.model_cost["perplexity/pplx-decider-v1-27b"]
+    expected_cost: Final = _INPUT_TOKENS * float(perplexity_cost["input_cost_per_token"]) + _OUTPUT_TOKENS * float(
+        perplexity_cost["output_cost_per_token"]
+    )
+
+    assert expected_cost > 0
+    assert recording_logger.standard_logging_object["response_cost"] == pytest.approx(expected_cost)
+    assert recording_logger.standard_logging_object["prompt_tokens"] == _INPUT_TOKENS
+    assert recording_logger.standard_logging_object["completion_tokens"] == _OUTPUT_TOKENS
 
 
 @pytest.mark.asyncio

@@ -1,15 +1,17 @@
-from typing import Final
+from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse  # pyright: ignore[reportDeprecated]  # required endpoint contract
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
-from litellm.proxy._types import *
+from litellm.exceptions import BadRequestError
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.types.decisions import DecisionsRequest
 
 router: Final = APIRouter()
 _REQUEST_DATA_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+_DECISIONS_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequest]] = TypeAdapter(DecisionsRequest)
 _GENERAL_SETTINGS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 _OPTIONAL_FLOAT_ADAPTER: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
@@ -30,7 +32,7 @@ _OPTIONAL_FLOAT_ADAPTER: Final[TypeAdapter[float | None]] = TypeAdapter(float | 
 async def decisions(
     request: Request,
     fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     from litellm.proxy.proxy_server import (
         general_settings as proxy_general_settings,
@@ -60,6 +62,7 @@ async def decisions(
     user_temperature: Final = _OPTIONAL_FLOAT_ADAPTER.validate_python(proxy_user_temperature)
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
+        _DECISIONS_REQUEST_ADAPTER.validate_python(data)
         return await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
@@ -76,6 +79,18 @@ async def decisions(
             user_request_timeout=user_request_timeout,
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
+            version=version,
+        )
+    except ValidationError as error:
+        bad_request_error: Final = BadRequestError(
+            message=f"Invalid Decisions request: {error}",
+            model=str(data.get("model", "")),
+            llm_provider="",
+        )
+        raise await processor._handle_llm_api_exception(
+            e=bad_request_error,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
     except Exception as error:

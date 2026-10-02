@@ -2559,6 +2559,13 @@
         "image_variations": true
       }
     },
+    "typesafe": {
+      "display_name": "TypeSafe (`typesafe`)",
+      "url": "https://docs.typesafe.ai/models",
+      "endpoints": {
+        "systemone": true
+      }
+    },
     "tavily": {
       "display_name": "Tavily (`tavily`)",
       "url": "https://docs.litellm.ai/docs/search/tavily",

@@ -1,60 +1,37 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Annotated, Final, TypeAlias
+from typing import Final
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import Field, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.decisions.transformation import DecisionsEndpoint
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client, get_async_httpx_client
+from litellm.llms.openrouter.decisions.transformation import OPENROUTER_DECISIONS_ENDPOINT
+from litellm.llms.perplexity.decisions.transformation import PERPLEXITY_DECISIONS_ENDPOINT
+from litellm.llms.typesafe.decisions.transformation import TYPESAFE_DECISIONS_ENDPOINT
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
     DecisionQuestion,
     DecisionsJSON,
+    DecisionsRequest,
     DecisionsResponse,
 )
 from litellm.utils import client
 
-
-@dataclass(frozen=True, slots=True)
-class DecisionsEndpoint:
-    default_api_base: str
-    path: str
-    api_key_env: tuple[str, ...]
-    api_base_env: str
-
-
 DECISIONS_ENDPOINTS: Final[Mapping[str, DecisionsEndpoint]] = MappingProxyType(
     {
-        "perplexity": DecisionsEndpoint(
-            "https://api.perplexity.ai",
-            "/v1/decisions",
-            ("PERPLEXITYAI_API_KEY", "PERPLEXITY_API_KEY"),
-            "PERPLEXITY_API_BASE",
-        ),
-        "typesafe": DecisionsEndpoint(
-            "https://api.typesafe.ai",
-            "/v1/systemone",
-            ("TYPESAFE_API_KEY",),
-            "TYPESAFE_API_BASE",
-        ),
-        "openrouter": DecisionsEndpoint(
-            "https://openrouter.ai/api",
-            "/alpha/decisions",
-            ("OPENROUTER_API_KEY",),
-            "OPENROUTER_API_BASE",
-        ),
+        "perplexity": PERPLEXITY_DECISIONS_ENDPOINT,
+        "typesafe": TYPESAFE_DECISIONS_ENDPOINT,
+        "openrouter": OPENROUTER_DECISIONS_ENDPOINT,
     }
 )
 
-DecisionQuestionMap: TypeAlias = Annotated[
-    Mapping[Annotated[str, Field(min_length=1)], DecisionQuestion],
-    Field(min_length=1, max_length=128),
-]
-_QUESTION_ADAPTER: Final[TypeAdapter[DecisionQuestionMap]] = TypeAdapter(DecisionQuestionMap)
+_DECISIONS_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequest]] = TypeAdapter(DecisionsRequest)
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -142,6 +119,17 @@ def _prepare_request(
     extra_headers: Mapping[str, str] | None,
 ) -> _PreparedDecisionsRequest:
     provider, upstream_model = _resolve_provider_model(model, custom_llm_provider)
+    try:
+        validated_request: Final = _DECISIONS_REQUEST_ADAPTER.validate_python(
+            {"model": model, "state": state, "questions": questions}
+        )
+    except ValidationError as error:
+        raise litellm.BadRequestError(
+            message=f"Invalid Decisions request: {error}",
+            model=model,
+            llm_provider=provider,
+        ) from error
+
     endpoint: Final = DECISIONS_ENDPOINTS[provider]
     env_api_base: Final = get_secret_str(endpoint.api_base_env)
     resolved_api_base: Final = api_base or env_api_base or endpoint.default_api_base
@@ -153,14 +141,6 @@ def _prepare_request(
         api_base=api_base,
         resolved_api_base=resolved_api_base,
     )
-    try:
-        validated_questions: Final = _QUESTION_ADAPTER.validate_python(questions)
-    except ValidationError as error:
-        raise litellm.BadRequestError(
-            message=f"Invalid Decisions request: {error}",
-            model=model,
-            llm_provider=provider,
-        ) from error
 
     outbound_headers: Final = MappingProxyType(
         {
@@ -176,10 +156,10 @@ def _prepare_request(
     body: Final = MappingProxyType(
         {
             "model": upstream_model,
-            "state": state,
+            "state": validated_request.state,
             "questions": {
                 name: question.model_dump(mode="json", exclude_none=True)
-                for name, question in validated_questions.items()
+                for name, question in validated_request.questions.items()
             },
         }
     )
