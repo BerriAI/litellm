@@ -3322,6 +3322,7 @@ async def clear_cache() -> ReconcileOutcome:
                 llm_router.complexity_routers.pop(model_name, None)
                 llm_router.adaptive_routers.pop(model_name, None)
                 llm_router.quality_routers.pop(model_name, None)
+                llm_router.oracle_routers.pop(model_name, None)
 
             # Reload only DB models. _add_deployment_locked, not add_deployment: this
             # coroutine already holds MODEL_RECONCILE_LOCK and asyncio.Lock is not
