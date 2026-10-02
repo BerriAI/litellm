@@ -1846,6 +1846,8 @@ async def _common_checks_for_rag_query(
     team_permission: SimpleNamespace | None = None,
     user_object: LiteLLM_UserTable | None = None,
     user_permission: SimpleNamespace | LiteLLM_ObjectPermissionTable | None = None,
+    request_body: Mapping[str, object] | None = None,
+    vector_store_registry: VectorStoreRegistry | None = None,
 ) -> bool:
     permissions: Final = {
         "key-permission": key_permission,
@@ -1857,21 +1859,25 @@ async def _common_checks_for_rag_query(
         side_effect=lambda where: permissions.get(where["object_permission_id"])
     )
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
-    request_body = {
-        "model": "gpt-4o-mini",
-        "messages": [{"role": "user", "content": "what is in this KB?"}],
-        "retrieval_config": {"vector_store_id": "KBSTOREA", "custom_llm_provider": "bedrock"},
-    }
+    body: Final = (
+        dict(request_body)
+        if request_body is not None
+        else {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what is in this KB?"}],
+            "retrieval_config": {"vector_store_id": "KBSTOREA", "custom_llm_provider": "bedrock"},
+        }
+    )
     with (
         patch(  # test-quality-ok: production auth reads these module globals; no dependency injection seam exists
             "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
         ),
         patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
-            "litellm.vector_store_registry", None
+            "litellm.vector_store_registry", vector_store_registry
         ),
     ):
         return await common_checks(
-            request_body=request_body,
+            request_body=body,
             team_object=team_object,
             user_object=user_object,
             end_user_object=None,
@@ -2168,6 +2174,57 @@ async def test_user_owned_standalone_key_cannot_use_owner_grants_under_deny_by_d
             user_permission=SimpleNamespace(vector_stores=["KBSTOREA"]),
         ),
         _KEY_DENIED,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deny_by_default", "key_vector_stores", "denied_by"),
+    [
+        (True, ["KBSTOREA", "KBSTOREB"], None),
+        (True, ["KBSTOREA"], _KEY_DENIED),
+        (True, ["KBSTOREB"], _KEY_DENIED),
+        (False, ["KBSTOREA"], _KEY_DENIED),
+    ],
+    ids=["enabled-grants-both", "enabled-missing-second", "enabled-missing-first", "disabled-missing-second"],
+)
+async def test_every_requested_vector_store_needs_a_grant(
+    deny_by_default: bool, key_vector_stores: list[str], denied_by: ProxyErrorTypes | None
+):
+    await _assert_rag_query_outcome(
+        _common_checks_for_rag_query(
+            {"vector_store_deny_by_default": deny_by_default},
+            _virtual_key(object_permission_id="key-permission"),
+            SimpleNamespace(vector_stores=key_vector_stores),
+            request_body={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "what is in these KBs?"}],
+                "tools": [{"type": "file_search", "vector_store_ids": ["KBSTOREB"]}],
+                "retrieval_config": {"vector_store_id": "KBSTOREA", "custom_llm_provider": "bedrock"},
+            },
+            vector_store_registry=VectorStoreRegistry(),
+        ),
+        denied_by,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "valid_token",
+    [_virtual_key(), UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER)],
+    ids=["standalone-key", "keyless-user"],
+)
+async def test_request_without_vector_stores_is_unaffected_by_deny_by_default(valid_token: UserAPIKeyAuth):
+    await _assert_rag_query_outcome(
+        _common_checks_for_rag_query(
+            {"vector_store_deny_by_default": True},
+            valid_token,
+            None,
+            user_object=_user_row(None),
+            request_body={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]},
+            vector_store_registry=VectorStoreRegistry(),
+        ),
+        None,
     )
 
 
