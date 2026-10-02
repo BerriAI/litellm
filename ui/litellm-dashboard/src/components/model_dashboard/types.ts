@@ -14,6 +14,7 @@ export interface ModelInfo {
   blocked?: boolean;
   team_public_model_name?: string;
   key?: string;
+  pricing_overrides?: string[];
 }
 
 export interface LiteLLMParams {

@@ -10,6 +10,8 @@ import asyncio
 import math
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, cast
 
 from typing_extensions import Never, ReadOnly
@@ -44,6 +46,7 @@ from litellm.types.integrations.custom_logger import (
 from litellm.types.integrations.websearch_interception import (
     AnthropicSearchQuery,
     AnthropicServerToolUseBlock,
+    RichWebSearchInput,
     SearchFailed,
     SearchOutcome,
     WebSearchInterceptionConfig,
@@ -195,6 +198,46 @@ class _AcompletionNamedParams(TypedDict, total=False):
 
 _NO_ACREATE_NAMED: Final[_AcreateNamedParams] = {}
 _NO_ASEARCH_NAMED: Final[_AsearchNamedParams] = {}
+
+
+def _as_str_mapping(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # str-keyed request metadata is not narrowable from object
+
+
+@dataclass(frozen=True, slots=True)
+class _ParentRequestCorrelation:
+    """Correlation ids of the LLM request that triggered an intercepted search, so the search's
+    own spend log row and traces land under the same session/trace instead of a fresh one."""
+
+    session_id: str | None
+    trace_id: str | None
+    parent_request_id: str | None
+    parent_otel_span: object | None
+
+    def as_search_metadata(self) -> Mapping[str, object]:
+        return MappingProxyType(
+            {
+                key: value
+                for key, value in (
+                    ("session_id", self.session_id),
+                    ("trace_id", self.trace_id),
+                    ("parent_request_id", self.parent_request_id),
+                    ("litellm_parent_otel_span", self.parent_otel_span),
+                )
+                if value is not None
+            }
+        )
+
+    def as_search_kwargs(self) -> Mapping[str, str]:
+        return MappingProxyType(
+            {
+                key: value
+                for key, value in (("litellm_session_id", self.session_id), ("litellm_trace_id", self.trace_id))
+                if value is not None
+            }
+        )
+
+
 _NO_ACOMPLETION_NAMED: Final[_AcompletionNamedParams] = {}
 
 
@@ -1144,7 +1187,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         """Execute litellm.asearch() and build a Responses API rerun patch."""
         search_tasks: Final = [
             (
-                self._execute_search(tool_call["input"]["query"], kwargs=kwargs)
+                self._execute_search(
+                    tool_call["input"]["query"], kwargs=kwargs, rich=self._rich_search_input(tool_call["input"])
+                )
                 if isinstance(tool_call.get("input"), dict) and tool_call["input"].get("query")
                 else self._create_empty_search_result()
             )
@@ -1362,7 +1407,9 @@ class WebSearchInterceptionLogger(CustomLogger):
             query = tool_call["input"].get("query")
             if query:
                 verbose_logger.debug("WebSearchInterception: Queuing search for query='%s'", query)
-                search_tasks.append(self._execute_search(query, kwargs=kwargs))
+                search_tasks.append(
+                    self._execute_search(query, kwargs=kwargs, rich=self._rich_search_input(tool_call["input"]))
+                )
             else:
                 verbose_logger.debug("WebSearchInterception: Tool call %s has no query", tool_call["id"])
                 # Add empty result for tools without query
@@ -1431,8 +1478,53 @@ class WebSearchInterceptionLogger(CustomLogger):
             return WebSearchTransformation.search_outcome(e)
         return WebSearchTransformation.search_outcome(result)
 
+    @staticmethod
+    def _rich_search_input(tool_input: object) -> RichWebSearchInput | None:
+        """
+        Extract the optional objective/search_queries pair from a tool input.
+
+        Returns None when the input carries neither, so callers can pass the
+        result straight through as ``_execute_search``'s ``rich`` argument.
+        """
+        if not isinstance(tool_input, Mapping):
+            return None
+        objective = tool_input.get("objective")
+        valid_objective = objective if isinstance(objective, str) and objective.strip() else None
+        raw_queries = tool_input.get("search_queries")
+        valid_queries: list[str] | None = None  # mutable-ok: matches litellm.asearch's list[str] query parameter
+        if isinstance(raw_queries, Sequence) and not isinstance(raw_queries, str):
+            queries = [q for q in raw_queries if isinstance(q, str) and q.strip()]
+            if queries:
+                # Providers cap multi-query requests (Parallel drops queries
+                # past the fifth); trim here so nothing is silently ignored.
+                valid_queries = queries[:5]
+        if valid_objective is not None and valid_queries is not None:
+            return {"objective": valid_objective, "search_queries": valid_queries}
+        if valid_objective is not None:
+            return {"objective": valid_objective}
+        if valid_queries is not None:
+            return {"search_queries": valid_queries}
+        return None
+
+    @staticmethod
+    def _provider_supports_rich_search(search_provider: str | None) -> bool:
+        """Whether the provider's search config accepts objective + multi-query input."""
+        if not search_provider:
+            return False
+        try:
+            from litellm.utils import ProviderConfigManager
+        except ImportError:
+            return False
+        # SearchProviders is a str enum, so an unknown provider string simply
+        # misses the config map and returns None rather than raising.
+        config = ProviderConfigManager.get_provider_search_config(search_provider)  # pyright: ignore[reportArgumentType] -- SearchProviders is a str enum, so the router's provider string hashes to the matching member; unknown strings miss the map and yield None
+        return config is not None and config.supports_rich_search_input()
+
     async def _execute_search(
-        self, query: str, kwargs: Mapping[str, object] | None = None
+        self,
+        query: str,
+        kwargs: Mapping[str, object] | None = None,
+        rich: RichWebSearchInput | None = None,
     ) -> tuple[str, SearchResponse | None]:
         """
         Execute a single web search using router's search tools.
@@ -1477,26 +1569,42 @@ class WebSearchInterceptionLogger(CustomLogger):
                 "WebSearchInterception: Executing search for '%s' using provider '%s'", query, search_provider
             )
             user_api_key_auth: Final = self._get_user_api_key_auth_from_kwargs(kwargs)
+            parent_correlation: Final = self._get_parent_request_correlation(kwargs, user_api_key_auth)
             search_metadata: Final = (
                 None
                 if user_api_key_auth is None
                 else self._build_search_request_metadata(
                     user_api_key_auth=user_api_key_auth,
                     search_tool_name=search_tool_name,
+                    parent_correlation=parent_correlation,
                 )
             )
-            search_kwargs: Final = {
+            configured_search_kwargs: Final = {
                 key: value
                 for key, value in search_litellm_params.items()
                 if key != "search_provider" and value is not None
             }
+            # Forward the model's richer shape (objective + keyword queries)
+            # only to providers whose search API takes it natively; everyone
+            # else keeps the single query string the model also provided.
+            query_arg: str | list[str] = query  # mutable-ok: litellm.asearch declares query as str | list[str]
+            if rich and self._provider_supports_rich_search(search_provider):
+                rich_queries = rich.get("search_queries")
+                if rich_queries:
+                    query_arg = rich_queries
+                rich_objective = rich.get("objective")
+                if rich_objective and "objective" not in configured_search_kwargs:
+                    configured_search_kwargs["objective"] = rich_objective
+            search_kwargs: Final = MappingProxyType(
+                {**configured_search_kwargs, **parent_correlation.as_search_kwargs()}
+            )
             result: Final = (
                 await litellm.asearch(
-                    query=query, search_provider=search_provider, **_NO_ASEARCH_NAMED, **search_kwargs
+                    query=query_arg, search_provider=search_provider, **_NO_ASEARCH_NAMED, **search_kwargs
                 )
                 if search_metadata is None
                 else await litellm.asearch(
-                    query=query,
+                    query=query_arg,
                     search_provider=search_provider,
                     litellm_metadata=search_metadata,
                     **_NO_ASEARCH_NAMED,
@@ -1563,6 +1671,7 @@ class WebSearchInterceptionLogger(CustomLogger):
     def _build_search_request_metadata(
         user_api_key_auth: "UserAPIKeyAuth",
         search_tool_name: str | None,
+        parent_correlation: _ParentRequestCorrelation,
     ) -> Mapping[str, object]:
         """
         Spend-tracking metadata for the intercepted search, so its provider cost is logged
@@ -1574,12 +1683,51 @@ class WebSearchInterceptionLogger(CustomLogger):
         user_api_key_metadata: Final[StandardLoggingUserAPIKeyMetadata] = (
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_auth)
         )
-        return {  # mutable-ok: litellm's metadata channel is a plain dict its logging path reads and enriches
+        return {
             **user_api_key_metadata,
+            **parent_correlation.as_search_metadata(),
             "model_group": search_tool_name,
-            "user_api_key": user_api_key_auth.api_key,
+            "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_auth),
             "user_api_key_auth": user_api_key_auth,
         }
+
+    @staticmethod
+    def _get_parent_request_correlation(
+        kwargs: Mapping[str, object] | None,
+        user_api_key_auth: "UserAPIKeyAuth | None",
+    ) -> _ParentRequestCorrelation:
+        """Read the originating request's ids from the hook kwargs, which are either the raw call
+        kwargs (metadata/litellm_metadata at top level) or a logging payload (under litellm_params)."""
+        if not kwargs:
+            return _ParentRequestCorrelation(None, None, None, None)
+        litellm_params: Final = _as_str_mapping(kwargs.get("litellm_params"))
+        scopes: Final[tuple[Mapping[str, object], ...]] = (
+            (kwargs,) if litellm_params is None else (kwargs, litellm_params)
+        )
+        metadatas: Final[tuple[Mapping[str, object], ...]] = tuple(
+            metadata
+            for scope in scopes
+            for metadata_key in ("metadata", "litellm_metadata")
+            if (metadata := _as_str_mapping(scope.get(metadata_key))) is not None
+        )
+
+        def first_str(scope_key: str | None, metadata_key: str | None) -> str | None:
+            candidates: Final[tuple[object, ...]] = (
+                *(scope.get(scope_key) for scope in scopes if scope_key is not None),
+                *(metadata.get(metadata_key) for metadata in metadatas if metadata_key is not None),
+            )
+            return next((value for value in candidates if isinstance(value, str) and value), None)
+
+        parent_otel_span: Final[object | None] = next(
+            (span for metadata in metadatas if (span := metadata.get("litellm_parent_otel_span")) is not None),
+            None if user_api_key_auth is None else user_api_key_auth.parent_otel_span,
+        )
+        return _ParentRequestCorrelation(
+            session_id=first_str("litellm_session_id", "session_id"),
+            trace_id=first_str("litellm_trace_id", "trace_id"),
+            parent_request_id=first_str("litellm_call_id", None),
+            parent_otel_span=parent_otel_span,
+        )
 
     @staticmethod
     def _selected_search_tool_name(search_tool: Mapping[str, object] | None) -> str | None:
@@ -1701,18 +1849,21 @@ class WebSearchInterceptionLogger(CustomLogger):
         for tool_call in tool_calls:
             # Handle both Anthropic-style input and OpenAI-style function.arguments
             query = None
+            tool_args: dict[str, object] | None = None  # mutable-ok: the tool call's own arguments dict
             if "input" in tool_call and isinstance(tool_call["input"], dict):
-                query = tool_call["input"].get("query")
+                tool_args = tool_call["input"]
+                query = tool_args.get("query")
             elif "function" in tool_call:
                 func = tool_call["function"]
                 if isinstance(func, dict):
                     args = func.get("arguments", {})
                     if isinstance(args, dict):
+                        tool_args = args
                         query = args.get("query")
 
             if query:
                 verbose_logger.debug("WebSearchInterception: Queuing search for query='%s'", query)
-                search_tasks.append(self._execute_search(query, kwargs=kwargs))
+                search_tasks.append(self._execute_search(query, kwargs=kwargs, rich=self._rich_search_input(tool_args)))
             else:
                 verbose_logger.debug("WebSearchInterception: Tool call %s has no query", tool_call.get("id"))
                 # Add empty result for tools without query

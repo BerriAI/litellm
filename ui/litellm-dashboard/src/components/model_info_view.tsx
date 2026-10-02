@@ -15,6 +15,7 @@ import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
 import { truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
+import { buildSavedJevConnectionTestRequest } from "./add_model/build_auto_router_routing_test_request";
 import { AutoRouterTestTarget, buildComplexityRouterTestTargets } from "./add_model/build_auto_router_test_targets";
 import {
   hasAutoRouterEditor,
@@ -339,8 +340,10 @@ export default function ModelInfoView({
         }
       }
 
-      if (values.litellm_credential_name) {
-        updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
+      const storedCredentialName: string | null = localModelData?.litellm_params?.litellm_credential_name ?? null;
+      const selectedCredentialName: string | null = values.litellm_credential_name ?? null;
+      if (selectedCredentialName !== storedCredentialName) {
+        updatedLitellmParams.litellm_credential_name = selectedCredentialName;
       } else {
         delete updatedLitellmParams.litellm_credential_name;
       }
@@ -396,6 +399,7 @@ export default function ModelInfoView({
       // without this strip a masked value would be re-encrypted over the real secret.
       // Credential rotation has its own dedicated path (UpdateModelCredentialsModal).
       const safeLitellmParams = stripMaskedSecrets(updatedLitellmParams);
+      const { litellm_credential_name: _sentCredential, ...localLitellmParams } = safeLitellmParams;
 
       const updateData = {
         model_name: values.model_name,
@@ -409,7 +413,10 @@ export default function ModelInfoView({
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
-        litellm_params: safeLitellmParams,
+        litellm_params:
+          selectedCredentialName === null
+            ? localLitellmParams
+            : { ...localLitellmParams, litellm_credential_name: selectedCredentialName },
         model_info: updatedModelInfo,
       };
 
@@ -846,6 +853,11 @@ export default function ModelInfoView({
               key={autoRouterTestId}
               accessToken={accessToken}
               targets={autoRouterTestTargets}
+              jevRequest={buildSavedJevConnectionTestRequest(
+                (localModelData ?? modelData)?.litellm_params?.complexity_router_config,
+                (localModelData ?? modelData)?.model_info?.id,
+                (localModelData ?? modelData)?.model_info?.team_id,
+              )}
             />
           )}
           <DialogFooter>

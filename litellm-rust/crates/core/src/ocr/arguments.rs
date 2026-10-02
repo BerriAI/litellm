@@ -15,6 +15,18 @@ const AZURE_AUTH_OPTION_FIELDS: &[&str] = &[
     "azure_federated_token_file",
     "enable_azure_ad_token_refresh",
 ];
+const AWS_AUTH_OPTION_FIELDS: &[&str] = &[
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "aws_region_name",
+    "aws_session_name",
+    "aws_profile_name",
+    "aws_role_name",
+    "aws_web_identity_token",
+    "aws_sts_endpoint",
+    "aws_external_id",
+];
 const VERTEX_AUTH_OPTION_FIELDS: &[&str] = &[
     "vertex_credentials",
     "vertex_ai_credentials",
@@ -35,6 +47,7 @@ pub fn consumed_optional_param_names(
     let (model, config) = resolve_provider_config(model, custom_llm_provider)?;
     let provider_fields = config.get_supported_ocr_params(&model);
     let auth_fields: &[&str] = match config {
+        OcrConfigKind::AwsTextract | OcrConfigKind::AwsTextractAnalyze => AWS_AUTH_OPTION_FIELDS,
         OcrConfigKind::AzureAi
         | OcrConfigKind::AzureDocumentIntelligence
         | OcrConfigKind::AzureCohere => AZURE_AUTH_OPTION_FIELDS,
@@ -57,6 +70,9 @@ pub(crate) fn is_secret_param(name: &str) -> bool {
             | "azure_federated_token_file"
             | "vertex_credentials"
             | "vertex_ai_credentials"
+            | "aws_secret_access_key"
+            | "aws_session_token"
+            | "aws_web_identity_token"
     )
 }
 

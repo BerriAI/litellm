@@ -49,8 +49,10 @@ from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
+    header_value,
     httpxSpecialProvider,
 )
+from litellm.proxy._experimental.mcp_server.tool_outcome import JsonResult, TextResult, parse_http_body
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
@@ -457,7 +459,7 @@ def _raise_for_upstream_failure(
     if response.status_code == 401 and relays_upstream_auth:
         raise MCPUpstreamAuthError(
             status_code=response.status_code,
-            www_authenticate=response.headers.get("www-authenticate"),
+            www_authenticate=header_value(response.headers, "www-authenticate"),
             server_name=upstream,
         )
     raise MCPOpenApiUpstreamError(response.status_code, upstream)
@@ -496,7 +498,7 @@ def create_tool_function(
     path_params, query_params, body_params = extract_parameters(operation)
     original_method: Final = method.lower()
 
-    async def tool_function(**kwargs: object) -> str:
+    async def tool_function(**kwargs: object) -> TextResult | JsonResult:
         """
         Dynamically generated tool function.
 
@@ -530,7 +532,7 @@ def create_tool_function(
                     # Sanitize and encode path parameter to prevent traversal attacks
                     safe_value = _sanitize_path_parameter_value(param_value, param_name)
                 except ValueError as exc:
-                    return "Invalid path parameter: " + str(exc)
+                    return TextResult("Invalid path parameter: " + str(exc))
                 # Replace {param_name} or {{param_name}} in URL
                 url = url.replace("{" + param_name + "}", safe_value)
                 url = url.replace("{{" + param_name + "}}", safe_value)
@@ -579,7 +581,7 @@ def create_tool_function(
             elif original_method == "patch":
                 response = await client.patch(url, params=params, json=json_body, headers=effective_headers)
             else:
-                return f"Unsupported HTTP method: {original_method}"
+                return TextResult(f"Unsupported HTTP method: {original_method}")
         except MaskedHTTPStatusError as e:
             _raise_for_upstream_failure(e.response, upstream, relays_upstream_auth)
             raise
@@ -587,7 +589,7 @@ def create_tool_function(
             _request_upstream_url.reset(url_token)
 
         _raise_for_upstream_failure(response, upstream, relays_upstream_auth)
-        return response.text
+        return parse_http_body(response.text)
 
     return tool_function
 

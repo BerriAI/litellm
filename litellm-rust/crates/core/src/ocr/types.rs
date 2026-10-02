@@ -5,10 +5,9 @@ use litellm_auth::{InputSource, SecretValue, TokenProviderHandle};
 use litellm_core_utils::call_arguments::CallArguments;
 use litellm_llms::base_llm::ocr::{
     error::Error,
-    transformation::{
-        OcrCredentialInputs, OcrDocument, OcrResponseFormat, OcrTransportConfig, response_format,
-    },
+    transformation::{OcrCredentialInputs, OcrTransportConfig, response_format},
 };
+use litellm_llms_types::formats::ocr::{OcrDocument, OcrResponseFormat};
 use serde_json::{Map, Value};
 
 use super::provider_config::{OcrConfigKind, resolve_provider_config};
@@ -23,9 +22,6 @@ pub enum OcrDocumentInput {
     Bytes {
         bytes: Bytes,
         file_name: Option<String>,
-        mime_type: Option<String>,
-    },
-    HostReader {
         mime_type: Option<String>,
     },
 }
@@ -43,12 +39,6 @@ impl From<PathBuf> for OcrDocumentInput {
             mime_type: None,
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OcrFileContent {
-    pub bytes: Bytes,
-    pub file_name: Option<String>,
 }
 
 /// Caller-supplied connection overrides for a [`LiteLLMOcrRequest`], in the
@@ -231,7 +221,7 @@ mod tests {
     use super::*;
 
     fn document() -> OcrDocument {
-        OcrDocument::try_from(
+        serde_json::from_value(
             json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
         )
         .unwrap()
@@ -277,7 +267,7 @@ mod tests {
             vec![("x-a".to_string(), "1".to_string())]
         );
         assert_eq!(request.transport.extra_headers_source, InputSource::Request);
-        assert_eq!(request.transport.timeout, Duration::from_secs(7));
+        assert_eq!(request.transport.timeout, Some(Duration::from_secs(7)));
         assert_eq!(request.input_sources.len(), 2);
 
         let defaulted = LiteLLMOcrRequest::from_inputs(

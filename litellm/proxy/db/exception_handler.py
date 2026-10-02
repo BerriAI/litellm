@@ -1,5 +1,7 @@
+import re
 from collections.abc import Awaitable, Callable, Iterator
-from typing import Any, Final, TypeVar
+from http import HTTPStatus
+from typing import Final, Protocol, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -9,6 +11,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
 )
+from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.secret_managers.main import str_to_bool
 
 # Bounds the __cause__/__context__ walk in find_database_service_unavailable_error_in_chain.
@@ -20,6 +23,7 @@ _TRANSIENT_DB_UNAVAILABLE_MESSAGE: Final = (
 )
 
 _DATABASE_ERROR_META: Final = TypeAdapter(dict[str, object])
+_BATCH_POSTGRES_ERROR_CODE: Final = re.compile(r'PostgresError \{ code: "([0-9A-Z]{5})"')
 
 
 def _exception_chain(e: BaseException) -> Iterator[BaseException]:
@@ -38,6 +42,13 @@ def _database_service_unavailable_errors(e: BaseException) -> tuple[Exception, .
         for link in _exception_chain(e)
         if isinstance(link, Exception) and PrismaDBExceptionHandler.is_database_service_unavailable_error(link)
     )
+
+
+def _batch_postgres_sqlstate(e: Exception) -> str | None:
+    """The SQLSTATE a batched statement failed with: prisma reports those without a
+    ``meta`` payload and only prints the connector error into the message."""
+    match: Final = _BATCH_POSTGRES_ERROR_CODE.search(str(e))
+    return match.group(1) if match is not None else None
 
 
 def _exception_types(*candidates: object) -> tuple[type[BaseException], ...]:
@@ -94,7 +105,7 @@ class PrismaDBExceptionHandler:
         """
         import prisma.engine.errors
 
-        if isinstance(e, DB_CONNECTION_ERROR_TYPES):
+        if isinstance(e, (*DB_CONNECTION_ERROR_TYPES, DBLookupDeadlineExceeded)):
             return True
         if isinstance(e, _exception_types(prisma.engine.errors.EngineConnectionError)):
             return True
@@ -235,9 +246,9 @@ class PrismaDBExceptionHandler:
         try:
             meta: Final = _DATABASE_ERROR_META.validate_python(getattr(e, "meta", None))
         except ValidationError:
-            return None
+            return _batch_postgres_sqlstate(e)
         code: Final = meta.get("code")
-        return code if isinstance(code, str) else None
+        return code if isinstance(code, str) else _batch_postgres_sqlstate(e)
 
     @staticmethod
     def is_read_only_transaction_error(e: Exception) -> bool:
@@ -370,6 +381,15 @@ class PrismaDBExceptionHandler:
         )
 
     @staticmethod
+    def service_unavailable_proxy_exception(e: Exception) -> ProxyException:
+        return ProxyException(
+            message=PrismaDBExceptionHandler.database_unavailable_message(e),
+            type=ProxyErrorTypes.no_db_connection,
+            param="None",
+            code=HTTPStatus.SERVICE_UNAVAILABLE.value,
+        )
+
+    @staticmethod
     def find_database_service_unavailable_error_in_chain(e: BaseException) -> Exception | None:
         """The exception in the ``__cause__`` / ``__context__`` chain that
         ``is_database_service_unavailable_error`` accepts, or ``None``. Callers
@@ -389,11 +409,8 @@ class PrismaDBExceptionHandler:
 
         ``is_database_service_unavailable_error`` classifies a single exception
         by type, which a caller that catches a raw DB failure and re-raises a
-        domain exception of a different type defeats. ``get_user_object`` in
-        ``litellm/proxy/auth/auth_checks.py`` is the concrete case: it wraps
-        every DB error, a genuine outage included, in a bare ``ValueError``
-        whose original error survives only as ``__context__``. A type check on
-        the ``ValueError`` misses the outage, so the caller would mistake an
+        domain exception of a different type defeats. A type check on the
+        wrapper misses the outage, so the caller would mistake an
         infrastructure fault for an auth failure. Walking the chain recovers the
         real signal, which is the PEP 3134 way to inspect a wrapped cause.
 
@@ -437,8 +454,20 @@ def _coerce_timeout(value: object, fallback: float) -> float:
 _ReadResultT: Final = TypeVar("_ReadResultT")
 
 
+class _DBReconnectClient(Protocol):
+    """The one method `call_with_db_reconnect_retry` needs from a Prisma client."""
+
+    async def attempt_db_reconnect(
+        self,
+        *,
+        reason: str,
+        timeout_seconds: float | None = None,
+        lock_timeout_seconds: float | None = None,
+    ) -> bool: ...
+
+
 async def call_with_db_reconnect_retry(
-    prisma_client: Any,
+    prisma_client: _DBReconnectClient,
     coro_factory: Callable[[], Awaitable[_ReadResultT]],
     *,
     reason: str,

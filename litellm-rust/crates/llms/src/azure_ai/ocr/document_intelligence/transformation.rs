@@ -2,36 +2,31 @@ use std::{collections::BTreeSet, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_auth::{InputSource, Sourced};
-use litellm_auth_azure::AzureAuthInputs;
-use litellm_core_utils::{
-    call_arguments::CallArguments,
-    serde_compat::{FiniteF64, LaxI64},
-    url_utils::ApiUrl,
-};
+use litellm_auth_azure::{AzureAuthInputs, SECRET_NAMES as AZURE_AUTH_SECRET_NAMES};
+use litellm_core_utils::{call_arguments::CallArguments, url_utils::ApiUrl};
+use litellm_llms_types::serde_compat::{FiniteF64, LaxI64};
 use reqwest::Url;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 use tokio::time::Instant;
 
-use crate::{
-    base_llm::ocr::{
-        document::InlineDocument,
-        error::Error,
-        transformation::{
-            BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES,
-            OCR_POLL_RETRY_SECS, OcrConnection, OcrCredentialInputs, OcrDocument, OcrPage,
-            OcrPageDimensions, OcrResponseContext, OcrResponseFormat, OcrUsageInfo,
-            PreparedOcrRequest, ResolvedOcrCredentials, credential_env,
-            decode_and_normalize_response, decode_response,
-        },
+use crate::base_llm::ocr::{
+    document::InlineDocument,
+    error::Error,
+    handler::{CallHooks, OcrClient, read_json_response},
+    settings::OcrSettings,
+    transformation::{
+        BaseOcrConfig, DecodedOcrResponse, OCR_INLINE_MAX_BYTES, OCR_POLL_RETRY_SECS,
+        OcrConnection, OcrCredentialInputs, OcrResponseContext, PreparedOcrRequest,
+        ResolvedOcrCredentials, decode_and_normalize_response, decode_response,
     },
-    custom_httpx::llm_http_handler::{CallHooks, OcrClient, read_json_response},
+};
+use litellm_llms_types::formats::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrResponseFormat, OcrUsageInfo,
 };
 
-const AZURE_DI_API_VERSION: &str = "2024-11-30";
 const AZURE_DI_SUBSCRIPTION_HEADER: &str = "Ocp-Apim-Subscription-Key";
-const AZURE_DI_DEFAULT_DPI: i64 = 96;
 const AZURE_DI_DEFAULT_WIDTH: f64 = 8.5;
 const AZURE_DI_DEFAULT_HEIGHT: f64 = 11.0;
 
@@ -145,6 +140,17 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         Some(AZURE_DI_API_KEY_ENV)
     }
 
+    fn secret_names(&self) -> Vec<&'static str> {
+        [
+            [AZURE_DI_API_KEY_ENV, AZURE_DI_ENDPOINT_ENV].as_slice(),
+            AZURE_AUTH_SECRET_NAMES,
+        ]
+        .into_iter()
+        .flatten()
+        .copied()
+        .collect()
+    }
+
     fn resolve_connection_params(&self, inputs: OcrCredentialInputs) -> ResolvedOcrCredentials {
         ResolvedOcrCredentials {
             api_key: inputs.api_key.and_then(|key| {
@@ -176,17 +182,16 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
     async fn validate_environment(
         &self,
         request: &PreparedOcrRequest,
-        _client: &OcrClient,
+        client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
-        let config = AzureAuthInputs {
-            azure_ad_token_provider: request.azure_ad_token_provider.clone(),
-            ..AzureAuthInputs::from_sourced_optional_params(
-                &request.optional_params,
-                &request.input_sources,
-            )?
-        };
-        self.resolve_headers(&request.connection, &config, &credential_env)
-            .await
+        let config = crate::azure_ai::ocr::common_utils::azure_auth_inputs(request)?;
+        self.resolve_headers(
+            &client.auth().azure,
+            &request.connection,
+            &config,
+            &|name: &str| request.connection.secret(name),
+        )
+        .await
     }
 
     fn get_complete_url(
@@ -196,9 +201,17 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         _environment: &Self::Environment,
     ) -> Result<String, Error> {
         let endpoint = nonblank(request.connection.api_base.clone())
-            .or_else(|| nonblank(credential_env(AZURE_DI_ENDPOINT_ENV)))
+            .or_else(|| nonblank(request.connection.secret(AZURE_DI_ENDPOINT_ENV)))
             .ok_or_else(|| Error::Auth(litellm_auth::Error::ProviderAuthentication("Missing Azure Document Intelligence API Base - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT or pass api_base".into())))?;
-        self.build_ocr_url(&endpoint, &request.model, optional_params)
+        self.build_ocr_url(
+            &endpoint,
+            &request.model,
+            optional_params,
+            &request
+                .connection
+                .settings
+                .document_intelligence_api_version,
+        )
     }
 
     fn transform_ocr_request(
@@ -217,12 +230,13 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         raw_response: &[u8],
         request_format: OcrResponseFormat,
     ) -> Result<LiteLLMOcrResponse, Error> {
-        decode_and_normalize_response(
-            model,
-            raw_response,
-            request_format,
-            transform_completed_response,
-        )
+        decode_and_normalize_response(model, raw_response, request_format, |model, response| {
+            transform_completed_response(
+                model,
+                response,
+                OcrSettings::default().document_intelligence_dpi,
+            )
+        })
     }
 
     async fn async_transform_ocr_response(
@@ -243,7 +257,11 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         .await?;
         Ok(LiteLLMOcrResponse {
             provider_native_response: decoded.native,
-            ..transform_completed_response(model, decoded.data)?
+            ..transform_completed_response(
+                model,
+                decoded.data,
+                context.connection.settings.document_intelligence_dpi,
+            )?
         })
     }
 }
@@ -356,6 +374,7 @@ fn build_request(document: OcrDocument) -> Result<DocumentIntelligenceRequest, E
 fn transform_completed_response(
     model: &str,
     response: AzureDocumentIntelligenceOperation,
+    dpi: i64,
 ) -> Result<LiteLLMOcrResponse, Error> {
     if response.status != Some(OperationStatus::Succeeded) {
         return Err(Error::OperationStatus(
@@ -369,7 +388,7 @@ fn transform_completed_response(
     let pages = result
         .pages
         .into_iter()
-        .map(transform_azure_page)
+        .map(|page| transform_azure_page(page, dpi))
         .collect::<Result<Vec<_>, _>>()?;
     let pages_processed = i64::try_from(pages.len()).map_err(|_| Error::NumericRange("pages"))?;
     Ok(LiteLLMOcrResponse {
@@ -384,7 +403,7 @@ fn transform_completed_response(
     })
 }
 
-fn transform_azure_page(page: AzureDocumentIntelligencePage) -> Result<OcrPage, Error> {
+fn transform_azure_page(page: AzureDocumentIntelligencePage, dpi: i64) -> Result<OcrPage, Error> {
     let index = page
         .page_number
         .unwrap_or(1)
@@ -394,6 +413,7 @@ fn transform_azure_page(page: AzureDocumentIntelligencePage) -> Result<OcrPage, 
         page.width.unwrap_or(AZURE_DI_DEFAULT_WIDTH),
         page.height.unwrap_or(AZURE_DI_DEFAULT_HEIGHT),
         page.unit.as_deref().unwrap_or("inch"),
+        dpi,
     )?;
     let markdown = page
         .lines
@@ -409,16 +429,17 @@ fn transform_azure_page(page: AzureDocumentIntelligencePage) -> Result<OcrPage, 
     })
 }
 
-fn convert_dimensions(width: f64, height: f64, unit: &str) -> Result<OcrPageDimensions, Error> {
-    let scale = if unit == "inch" {
-        AZURE_DI_DEFAULT_DPI as f64
-    } else {
-        1.0
-    };
+fn convert_dimensions(
+    width: f64,
+    height: f64,
+    unit: &str,
+    dpi: i64,
+) -> Result<OcrPageDimensions, Error> {
+    let scale = if unit == "inch" { dpi as f64 } else { 1.0 };
     Ok(OcrPageDimensions {
         width: Some(pixel_dimension(width, scale, "page.width")?),
         height: Some(pixel_dimension(height, scale, "page.height")?),
-        dpi: Some(AZURE_DI_DEFAULT_DPI),
+        dpi: Some(dpi),
     })
 }
 
@@ -431,7 +452,7 @@ fn pixel_dimension(value: f64, scale: f64, field: &'static str) -> Result<i64, E
 }
 
 async fn read_operation_response(
-    http_client: &reqwest::Client,
+    http_client: &litellm_http::Client,
     response: reqwest::Response,
     original_url: &str,
     headers: &[(String, String)],
@@ -440,7 +461,7 @@ async fn read_operation_response(
     hooks: &dyn CallHooks<Error>,
 ) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, Error> {
     if response.status() != reqwest::StatusCode::ACCEPTED {
-        let bytes = crate::custom_httpx::llm_http_handler::read_response_bytes(
+        let bytes = crate::base_llm::ocr::handler::read_response_bytes(
             response,
             connection.max_response_bytes,
         )
@@ -462,17 +483,15 @@ async fn read_operation_response(
     {
         return Err(Error::PollOrigin);
     }
-    let bytes = crate::custom_httpx::llm_http_handler::read_response_bytes(
-        response,
-        connection.max_response_bytes,
-    )
-    .await?;
+    let bytes =
+        crate::base_llm::ocr::handler::read_response_bytes(response, connection.max_response_bytes)
+            .await?;
     hooks.response_received(&bytes).await?;
     poll_operation(http_client, operation, headers, connection, native, hooks).await
 }
 
 async fn poll_operation(
-    http_client: &reqwest::Client,
+    http_client: &litellm_http::Client,
     url: Url,
     headers: &[(String, String)],
     connection: &OcrConnection,
@@ -480,7 +499,7 @@ async fn poll_operation(
     hooks: &dyn CallHooks<Error>,
 ) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, Error> {
     let deadline = Instant::now()
-        .checked_add(connection.poll_timeout)
+        .checked_add(connection.settings.poll_timeout)
         .ok_or(Error::PollTimeout)?;
 
     loop {
@@ -491,21 +510,19 @@ async fn poll_operation(
         let builder = http_client
             .get(url.clone())
             .timeout(remaining.min(connection.timeout));
-        let builder = crate::custom_httpx::http_handler::with_headers(
+        let builder = litellm_http::request::with_headers(
             builder,
             headers,
-            crate::custom_httpx::http_handler::HeaderPolicy::Only(&[
+            litellm_http::request::HeaderPolicy::Only(&[
                 AZURE_DI_SUBSCRIPTION_HEADER,
                 "authorization",
             ]),
         );
-        let response = tokio::time::timeout_at(
-            deadline,
-            crate::custom_httpx::http_handler::http_request(builder),
-        )
-        .await
-        .map_err(|_| Error::PollTimeout)?
-        .map_err(crate::custom_httpx::transport::Error::from)?;
+        let response =
+            tokio::time::timeout_at(deadline, litellm_http::request::http_request(builder))
+                .await
+                .map_err(|_| Error::PollTimeout)?
+                .map_err(litellm_http::transport::Error::from)?;
         let retry = response
             .headers()
             .get(reqwest::header::RETRY_AFTER)
@@ -546,18 +563,27 @@ async fn poll_operation(
 }
 
 impl AzureDocumentIntelligenceOcrConfig {
+    pub fn analyze_path(model: &str) -> Result<[String; 3], Error> {
+        Ok([
+            "documentintelligence".into(),
+            "documentModels".into(),
+            format!("{}:analyze", model_id(model)?),
+        ])
+    }
+
     fn build_ocr_url(
         &self,
         endpoint: &str,
         model: &str,
         params: &DocumentIntelligenceParams,
+        api_version: &str,
     ) -> Result<String, Error> {
-        let model = format!("{}:analyze", model_id(model)?);
+        let path = Self::analyze_path(model)?;
         ApiUrl::parse(endpoint)
-            .and_then(|url| url.complete_path(&["documentintelligence", "documentModels", &model]))
+            .and_then(|url| url.complete_path(&path.each_ref().map(String::as_str)))
             .map(|url| {
                 url.append_query_pairs(
-                    [("api-version", AZURE_DI_API_VERSION)]
+                    [("api-version", api_version)]
                         .into_iter()
                         .chain(params.pages.iter().map(|pages| ("pages", pages.as_str())))
                         .chain(
@@ -576,12 +602,13 @@ impl AzureDocumentIntelligenceOcrConfig {
 
     async fn resolve_headers(
         &self,
+        auth: &litellm_auth_azure::AzureAuthService,
         connection: &OcrConnection,
         config: &AzureAuthInputs,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Vec<(String, String)>, Error> {
-        if crate::custom_httpx::http_handler::has_header(&connection.extra_headers, "authorization")
-            || crate::custom_httpx::http_handler::has_header(
+        if litellm_http::request::has_header(&connection.extra_headers, "authorization")
+            || litellm_http::request::has_header(
                 &connection.extra_headers,
                 AZURE_DI_SUBSCRIPTION_HEADER,
             )
@@ -611,7 +638,7 @@ impl AzureDocumentIntelligenceOcrConfig {
                     .collect(),
             );
         }
-        let token = super::super::common_utils::resolve_entra(config, env_lookup)
+        let token = super::super::common_utils::resolve_entra(auth, config, env_lookup)
             .await?
             .ok_or(Error::MissingAzureDocumentIntelligenceCredentials)?;
         super::super::common_utils::validate_destination(connection, token.source())?;
@@ -785,9 +812,12 @@ mod tests {
         };
 
         let error = AzureDocumentIntelligenceOcrConfig
-            .resolve_headers(&connection, &Default::default(), &|name| {
-                (name == AZURE_DI_API_KEY_ENV).then(|| "environment-key".into())
-            })
+            .resolve_headers(
+                &Default::default(),
+                &connection,
+                &Default::default(),
+                &|name| (name == AZURE_DI_API_KEY_ENV).then(|| "environment-key".into()),
+            )
             .await
             .unwrap_err();
 
@@ -809,7 +839,12 @@ mod tests {
         };
 
         let headers = AzureDocumentIntelligenceOcrConfig
-            .resolve_headers(&connection, &Default::default(), &|_| None)
+            .resolve_headers(
+                &Default::default(),
+                &connection,
+                &Default::default(),
+                &|_| None,
+            )
             .await
             .unwrap();
 
