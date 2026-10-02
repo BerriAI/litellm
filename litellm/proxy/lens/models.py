@@ -29,8 +29,9 @@ class LensSettings(Record):
     name: str = Field(min_length=1, max_length=100)
     context: str = Field(default="", max_length=6000)
     source: Literal["traces", "requests", "both"] = "traces"
-    lookback_hours: int = Field(default=24, ge=1, le=720)
+    lookback_hours: int = Field(default=24, ge=1, le=8760)
     service: str = Field(default="", max_length=200)
+    agent_name: str = Field(default="", max_length=200)
     filters: tuple[MetadataFilter, ...] = Field(default=(), max_length=8)
     checks: tuple[Check, ...] = ()
     model: str = Field(min_length=1, max_length=200)
@@ -41,7 +42,7 @@ class LensSettings(Record):
     concurrency: int = Field(default=8, ge=1)
     team_id: str = ""
     execution_ids: tuple[str, ...] = ()
-    monthly_budget: float = Field(default=20, gt=0, le=100000, allow_inf_nan=False)
+    monthly_budget: float = Field(default=100, gt=0, le=100000, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def unique_checks(self) -> "LensSettings":
@@ -214,7 +215,7 @@ class LensList(Record):
 
 class RunRequest(Record):
     settings: LensSettings | None = None
-    lookback_hours: int | None = Field(default=None, ge=1, le=720)
+    lookback_hours: int | None = Field(default=None, ge=1, le=8760)
 
 
 class FindingUpdate(Record):

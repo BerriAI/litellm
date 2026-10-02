@@ -1,4 +1,5 @@
 use litellm_http::Client;
+use litellm_migrate::Migration;
 use std::time::Duration;
 
 use crate::Connection;
@@ -6,17 +7,7 @@ use crate::Error;
 
 const SCHEMA_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-const MIGRATIONS: [&str; 9] = [
-    include_str!("../migrations/0001_otel_traces.sql"),
-    include_str!("../migrations/0002_agent_traces.sql"),
-    include_str!("../migrations/0003_agent_traces_mv.sql"),
-    include_str!("../migrations/0004_spend_logs.sql"),
-    include_str!("../migrations/0005_otel_traces_ttl.sql"),
-    include_str!("../migrations/0006_agent_traces_ttl.sql"),
-    include_str!("../migrations/0007_spend_logs_ttl.sql"),
-    include_str!("../migrations/0008_trace_received.sql"),
-    include_str!("../migrations/0009_spend_received.sql"),
-];
+const MIGRATIONS: &[Migration] = litellm_migrate::migrate!("migrations");
 
 pub fn schema_statements(
     database: &str,
@@ -35,8 +26,10 @@ pub fn schema_statements(
     let database = format!("`{database}`");
     Ok(
         std::iter::once(format!("CREATE DATABASE IF NOT EXISTS {database}"))
-            .chain(MIGRATIONS.iter().map(|sql| {
-                sql.replace("{database}", &database)
+            .chain(MIGRATIONS.iter().map(|migration| {
+                migration
+                    .sql
+                    .replace("{database}", &database)
                     .replace("{trace_retention_days}", &trace_retention_days.to_string())
                     .replace(
                         "{spend_log_retention_days}",

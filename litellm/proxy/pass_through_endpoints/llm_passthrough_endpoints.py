@@ -221,7 +221,7 @@ def get_passthrough_router_request_metadata(user_api_key_dict: UserAPIKeyAuth) -
     """
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
-    request_data: Final = {"litellm_metadata": {}}  # mutable-ok: builder + litellm mutate this in place
+    request_data: Final = {"litellm_metadata": {}}
     LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=request_data,
         user_api_key_dict=user_api_key_dict,
@@ -446,8 +446,8 @@ def _fal_target(endpoint: str) -> httpx.URL:
 
 @router.api_route(
     "/fal_ai/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route metadata requires a list
-    tags=["Fal AI Pass-through", "pass-through"],  # mutable-ok: FastAPI route metadata requires a list
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Fal AI Pass-through", "pass-through"],
 )
 async def fal_ai_proxy_route(
     endpoint: str,
@@ -604,8 +604,8 @@ async def mistral_proxy_route(
 
 @router.api_route(
     "/typesafe/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route metadata requires a list
-    tags=["TypeSafe AI Pass-through", "pass-through"],  # mutable-ok: FastAPI route metadata requires a list
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["TypeSafe AI Pass-through", "pass-through"],
 )
 async def typesafe_proxy_route(
     endpoint: str,
@@ -628,7 +628,7 @@ async def typesafe_proxy_route(
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
-        custom_headers={  # mutable-ok: pass-through request headers require a mutable mapping
+        custom_headers={
             "Authorization": f"Bearer {typesafe_api_key}",
             "Content-Type": "application/json",
         },
@@ -640,8 +640,8 @@ async def typesafe_proxy_route(
 
 @router.api_route(
     "/openrouter/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route metadata requires a list
-    tags=["OpenRouter Pass-through", "pass-through"],  # mutable-ok: FastAPI route metadata requires a list
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["OpenRouter Pass-through", "pass-through"],
 )
 async def openrouter_proxy_route(
     endpoint: str,
@@ -664,7 +664,7 @@ async def openrouter_proxy_route(
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
-        custom_headers={  # mutable-ok: pass-through request headers require a mutable mapping
+        custom_headers={
             "Authorization": f"Bearer {openrouter_api_key}",
             "Content-Type": "application/json",
         },
@@ -707,7 +707,7 @@ async def milvus_proxy_route(
             detail=f"collectionName must be a string. Got {type(_raw_collection_name).__name__}",
         )
     collection_name: str | None = _raw_collection_name  # rebind-ok: locally scoped conversion
-    extra_headers = {}  # mutable-ok: dict for extra headers; rebind-ok: reassigned later from credentials
+    extra_headers = {}
     base_target_url: str | None = None
     if not collection_name:
         raise HTTPException(
@@ -1374,7 +1374,7 @@ def _resolve_aws_passthrough_region() -> str | None:
 
 @router.post(
     "/comprehendmedical/{operation}",
-    tags=["AWS Comprehend Medical Pass-through", "pass-through"],  # mutable-ok: fastapi route tags must be a list
+    tags=["AWS Comprehend Medical Pass-through", "pass-through"],
 )
 async def comprehend_medical_proxy_route(
     operation: str,
@@ -1451,7 +1451,7 @@ async def comprehend_medical_proxy_route(
 
 @router.post(
     "/comprehendmedical",
-    tags=["AWS Comprehend Medical Pass-through", "pass-through"],  # mutable-ok: fastapi route tags must be a list
+    tags=["AWS Comprehend Medical Pass-through", "pass-through"],
 )
 async def comprehend_medical_sdk_proxy_route(
     request: Request,
@@ -1535,8 +1535,8 @@ def canonical_azure_speech_endpoint_path(endpoint: str) -> str:
 
 @router.api_route(
     f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/{{endpoint:path}}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: fastapi route methods must be a list
-    tags=["Azure AI Speech Pass-through", "pass-through"],  # mutable-ok: fastapi route tags must be a list
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Azure AI Speech Pass-through", "pass-through"],
 )
 async def azure_speech_proxy_route(
     endpoint: str,
@@ -1621,7 +1621,7 @@ async def azure_speech_proxy_route(
 
 @router.post(
     "/transcribe/{operation}",
-    tags=["Amazon Transcribe Pass-through", "pass-through"],  # mutable-ok: fastapi route tags must be a list
+    tags=["Amazon Transcribe Pass-through", "pass-through"],
 )
 async def transcribe_proxy_route(
     operation: str,
@@ -1745,7 +1745,7 @@ async def transcribe_proxy_route(
 
 @router.post(
     "/transcribe",
-    tags=["Amazon Transcribe Pass-through", "pass-through"],  # mutable-ok: fastapi route tags must be a list
+    tags=["Amazon Transcribe Pass-through", "pass-through"],
 )
 async def transcribe_sdk_proxy_route(
     request: Request,
@@ -3166,9 +3166,7 @@ async def openai_websocket_proxy_route(
     )
     query_string: Final = websocket.url.query
     wss_target: Final = f"{wss_base}{'&' if '?' in wss_base else '?'}{query_string}" if query_string else wss_base
-    custom_headers: Final = {  # mutable-ok: websocket_passthrough_request requires a plain dict of upstream headers
-        "Authorization": f"Bearer {openai_api_key}"
-    }
+    custom_headers: Final = {"Authorization": f"Bearer {openai_api_key}"}
 
     await websocket.accept(subprotocol=negotiated_subprotocol)
 
@@ -3236,9 +3234,7 @@ async def deepgram_listen_websocket_route(
     await relay(
         websocket=websocket,
         target=target,
-        custom_headers={  # mutable-ok: websocket_passthrough_request requires a plain dict of upstream headers
-            "Authorization": f"Token {deepgram_api_key}"
-        },
+        custom_headers={"Authorization": f"Token {deepgram_api_key}"},
         user_api_key_dict=user_api_key_dict,
         forward_headers=False,
         endpoint=websocket.url.path,
@@ -3440,8 +3436,8 @@ def _tinyfish_route_timeout() -> float | None:
 
 @router.api_route(
     "/tinyfish/{endpoint:path}",
-    methods=["GET", "POST"],  # mutable-ok: fastapi api_route requires List[str]
-    tags=["TinyFish Pass-through", "pass-through"],  # mutable-ok: fastapi api_route requires a list
+    methods=["GET", "POST"],
+    tags=["TinyFish Pass-through", "pass-through"],
 )
 async def tinyfish_proxy_route(
     endpoint: str,
@@ -3815,8 +3811,8 @@ def create_generic_websocket_passthrough_endpoint(
 
 @router.api_route(
     "/gigachat/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route methods
-    tags=["Gigachat Pass-through", "pass-through"],  # mutable-ok: FastAPI route tags
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Gigachat Pass-through", "pass-through"],
 )
 async def gigachat_proxy_route(
     endpoint: str,
@@ -3982,7 +3978,7 @@ async def handle_gigachat_passthrough_router_model(
     data["json"] = request_body
     data["custom_llm_provider"] = "gigachat"
 
-    keys: Final = [  # mutable-ok: list of keys to remove from data
+    keys: Final = [
         "gigachat_auth_url",
         "gigachat_access_token",
         "gigachat_scope",
@@ -3994,7 +3990,7 @@ async def handle_gigachat_passthrough_router_model(
 
     client: Final = get_async_httpx_client(
         llm_provider=LlmProviders.GIGACHAT,
-        params={  # mutable-ok: httpx client params
+        params={
             "timeout": httpx.Timeout(timeout=600.0, connect=5.0),
         },
     )

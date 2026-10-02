@@ -642,7 +642,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         #########################################################
         uploads: Final = self._batch_file_elements(batch) if self._batch_file_mode_active() else batch
         self._flush_retries = 0
-        self._flush_dropped = {}  # mutable-ok: per-flush drop marks read back by _upload_bounded
+        self._flush_dropped = {}
         stale: Final = min(self._requeued_count, len(uploads)) if len(uploads) == len(batch) else 0
         order: Final = (*range(stale, len(uploads)), *range(stale))
         ordered: Final = await asyncio.gather(*(self._upload_outcome(uploads[i]) for i in order))
@@ -694,7 +694,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 self.max_queue_size,
                 overflow,
             )
-        self.log_queue = [  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
+        self.log_queue = [
             *requeued,
             *arrivals,
         ][overflow:]
