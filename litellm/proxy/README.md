@@ -49,7 +49,7 @@ A trusted application can reuse the gateway's configured SSO, consent and PKCE f
 
 Clients discover `hosted_app` at `/.well-known/litellm-cli-auth`, register their callback, and request `scope=proxy:admin` with the advertised resource. Only current full proxy admins can consent. The existing `/token` endpoint returns signed sessions bound to the user, selected team, client, callback and gateway. Access lasts five minutes; renewal ends 24 hours after consent
 
-Every request checks the shared session and current database permissions, then uses the gateway's normal authorization and budget checks. Admin API operations and model calls are permitted; MCP admission, login flows, personal credential stores and master-key-only routes are excluded. Custom auth or external OAuth API authentication disables app issuance, renewal and access
+Every request checks the shared session and current database permissions, then uses the gateway's normal authorization and budget checks. Admin API operations and model calls are permitted; MCP admission, login flows, personal credential stores, key, user and invitation issuance and master-key-only routes are excluded. Custom auth or external OAuth API authentication disables app issuance, renewal and access
 
 The existing `/revoke` endpoint disconnects all access and refresh generations, including when called with an expired access token before the session deadline. Refresh replay revokes the session. Missing Redis or database authority denies access; failed revocation is retryable. Keep tokens on the application server and validate OAuth state before exchanging the code
 

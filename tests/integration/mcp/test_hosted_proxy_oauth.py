@@ -185,15 +185,8 @@ def test_hosted_admin_uses_configured_sso_and_revocable_sessions_across_instance
 def _exercise_admin(gateway: Gateway, headers: dict[str, str], user_id: str) -> None:
     user: Final = gateway.client.get("/user/info", headers=headers)
     assert user.status_code == 200 and user.json()["user_id"] == user_id, user.text
-    created: Final = gateway.client.post("/key/generate", headers=headers, json={"user_id": user_id})
-    assert created.status_code == 200, created.text
-    key: Final = created.json()["key"]
-    try:
-        fetched: Final = gateway.client.get("/key/info", headers=headers, params={"key": key})
-        assert fetched.status_code == 200 and fetched.json()["info"]["user_id"] == user_id, fetched.text
-    finally:
-        deleted: Final = gateway.client.post("/key/delete", headers=headers, json={"keys": [key]})
-        assert deleted.status_code == 200, deleted.text
+    minted: Final = gateway.client.post("/key/generate", headers=headers, json={"user_id": user_id})
+    assert minted.status_code == 403, minted.text
 
     expected: Final = _chat_completion_body("hosted-model")
     with wire_server(lambda _: Reply(body=json.dumps(expected).encode())) as upstream, gateway.scenario() as scenario:

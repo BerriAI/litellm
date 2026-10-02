@@ -77,6 +77,14 @@ _ADMIN_OPERATIONS: Final = (
     "/team/model/delete",
     "/team/{team_id}/disable_logging",
 )
+_HOSTED_CREDENTIAL_ISSUANCE: Final = (
+    KeyManagementRoutes.KEY_GENERATE.value,
+    KeyManagementRoutes.KEY_REGENERATE.value,
+    KeyManagementRoutes.KEY_REGENERATE_WITH_PATH_PARAM.value,
+    KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT.value,
+    "/user/new",
+    "/invitation/new",
+)
 
 
 class RouteChecks:
@@ -94,6 +102,8 @@ class RouteChecks:
             segment in ("user-credential", "user-credentials", "oauth-user-credential", "user-env-vars")
             for segment in route.split("/")
         ):
+            return False
+        if RouteChecks.check_route_access(route=route, allowed_routes=_HOSTED_CREDENTIAL_ISSUANCE):
             return False
         if "/realtime/" in route and route.endswith(("/client_secrets", "/transcription_sessions")):
             return False

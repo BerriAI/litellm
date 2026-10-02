@@ -144,7 +144,7 @@ async def test_hosted_identity_reloads_user_team_and_member_limits_from_writer(
     assert isinstance(minted, MintedSessionToken)
     token: Final = minted.token.get_secret_value()
     request: Final = Request({"type": "http", "headers": []})
-    for route in ("/key/generate", "/budget/update", "/v1/chat/completions", "/spend/logs"):
+    for route in ("/key/info", "/budget/update", "/v1/chat/completions", "/spend/logs"):
         loaded: Final = await authenticate_hosted_request(request, token, route)
         assert loaded.api_key == loaded.token == hashlib.sha256(token.encode()).hexdigest()
         assert (loaded.user_role, loaded.team_rpm_limit, loaded.team_member_rpm_limit, loaded.team_member_tpm_limit) == (
@@ -157,6 +157,8 @@ async def test_hosted_identity_reloads_user_team_and_member_limits_from_writer(
         "/mcp", "/sso/key/generate", "/config/yaml", "/user/password/change",
         "/v1/mcp/server/server-id/user-credentials", "/v1/models/../key/info", "/v1/realtime/client_secrets",
         "/v1/mcp/server/server-id/user-credential\n", "/v1/realtime/client_secrets\n",
+        "/key/generate", "/key/regenerate", "/key/sk-1/regenerate", "/key/service-account/generate",
+        "/user/new", "/invitation/new",
     ):
         with pytest.raises(HTTPException) as denied:
             await authenticate_hosted_request(request, token, route)
