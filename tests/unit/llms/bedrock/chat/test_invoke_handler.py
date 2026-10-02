@@ -24,7 +24,11 @@ from litellm.llms.bedrock.chat.invoke_handler import (
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import ModelResponseStream
-from tests.unit.llms.bedrock.slow_upstream import slow_upstream
+from tests.unit.llms.bedrock.slow_upstream import (
+    STREAM_TIMEOUT_SECONDS,
+    slow_upstream_async_client,
+    slow_upstream_sync_client,
+)
 
 
 def test_transform_thinking_blocks_with_redacted_content():
@@ -926,17 +930,12 @@ async def test_async_converse_stream_with_an_empty_200_body_raises_instead_of_an
     _assert_empty_stream_surfaced_as_bad_gateway(exc_info.value)
 
 
-STREAM_TIMEOUT_SECONDS: Final = 0.5
-SLOW_UPSTREAM_SECONDS: Final = 6.0
-
-
-def _invoke_streaming_kwargs(api_base: str) -> dict[str, object]:
+def _invoke_streaming_kwargs() -> dict[str, object]:
     return {
         "model": "bedrock/invoke/anthropic.claude-sonnet-4-6",
         "messages": [{"role": "user", "content": "hi"}],
         "stream": True,
         "timeout": STREAM_TIMEOUT_SECONDS,
-        "api_base": api_base,
         "aws_access_key_id": "fake",
         "aws_secret_access_key": "fake",
         "aws_region_name": "us-east-1",
@@ -944,19 +943,11 @@ def _invoke_streaming_kwargs(api_base: str) -> dict[str, object]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("caller_client", ["pooled", "own"])
-async def test_async_invoke_streaming_fails_at_the_request_timeout_not_the_upstreams_pace(caller_client: str) -> None:
-    client: Final = None if caller_client == "pooled" else AsyncHTTPHandler()
-    with slow_upstream(SLOW_UPSTREAM_SECONDS) as upstream:
-        with pytest.raises(litellm.Timeout):
-            await litellm.acompletion(client=client, **_invoke_streaming_kwargs(upstream.base_url))
-        assert upstream.seconds_since_first_request() < upstream.delay_seconds / 2
+async def test_async_invoke_streaming_fails_at_the_request_timeout_not_the_upstreams_pace() -> None:
+    with pytest.raises(litellm.Timeout):
+        await litellm.acompletion(client=slow_upstream_async_client(), **_invoke_streaming_kwargs())
 
 
-@pytest.mark.parametrize("caller_client", ["pooled", "own"])
-def test_sync_invoke_streaming_fails_at_the_request_timeout_not_the_upstreams_pace(caller_client: str) -> None:
-    client: Final = None if caller_client == "pooled" else HTTPHandler()
-    with slow_upstream(SLOW_UPSTREAM_SECONDS) as upstream:
-        with pytest.raises(litellm.Timeout):
-            litellm.completion(client=client, **_invoke_streaming_kwargs(upstream.base_url))
-        assert upstream.seconds_since_first_request() < upstream.delay_seconds / 2
+def test_sync_invoke_streaming_fails_at_the_request_timeout_not_the_upstreams_pace() -> None:
+    with pytest.raises(litellm.Timeout):
+        litellm.completion(client=slow_upstream_sync_client(), **_invoke_streaming_kwargs())

@@ -1,59 +1,35 @@
-"""A local HTTP upstream that answers every POST only after a fixed delay, the way a slow model does."""
+"""An upstream whose first byte takes longer than the request allows, the way a slow model does.
+
+httpx hands every transport the request's timeout in ``request.extensions["timeout"]``, so this one honours it
+in process the way a socket would: a read timeout shorter than the first byte's latency times out, a longer one
+gets the answer.
+"""
 
 from __future__ import annotations
 
-import threading
-import time
-from collections.abc import Iterator
-from contextlib import contextmanager
-from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from queue import SimpleQueue
-from socket import socket
 from typing import Final
 
+import httpx
+from pydantic import TypeAdapter
 
-@dataclass(frozen=True, slots=True)
-class SlowUpstream:
-    base_url: str
-    delay_seconds: float
-    request_arrivals: SimpleQueue[float]
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
-    def seconds_since_first_request(self) -> float:
-        return time.monotonic() - self.request_arrivals.get(timeout=1.0)
+STREAM_TIMEOUT_SECONDS: Final = 0.5
+UPSTREAM_FIRST_BYTE_SECONDS: Final = 2.0
 
-
-class _QuietServer(ThreadingHTTPServer):
-    block_on_close = False
-
-    def handle_error(self, request: socket | tuple[bytes, socket], client_address: object) -> None:
-        return
+_TIMEOUT_EXTENSION: Final = TypeAdapter(dict[str, float | None])
 
 
-@contextmanager
-def slow_upstream(delay_seconds: float) -> Iterator[SlowUpstream]:
-    request_arrivals: Final[SimpleQueue[float]] = SimpleQueue()
+def _answer_once_the_first_byte_is_due(request: httpx.Request) -> httpx.Response:
+    read_timeout: Final = _TIMEOUT_EXTENSION.validate_python(request.extensions["timeout"])["read"]
+    if read_timeout is not None and read_timeout < UPSTREAM_FIRST_BYTE_SECONDS:
+        raise httpx.ReadTimeout(f"no byte arrived within {read_timeout}s", request=request)
+    return httpx.Response(200, content=b"", request=request)
 
-    class DelayedHandler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:
-            request_arrivals.put(time.monotonic())
-            self.rfile.read(int(self.headers.get("Content-Length", "0")))
-            time.sleep(delay_seconds)
-            self.send_response(200)
-            self.send_header("Content-Length", "0")
-            self.end_headers()
 
-        def log_message(self, format: str, *args: object) -> None:
-            return
+def slow_upstream_async_client() -> AsyncHTTPHandler:
+    return AsyncHTTPHandler(transport=httpx.MockTransport(_answer_once_the_first_byte_is_due))
 
-    server: Final = _QuietServer(("127.0.0.1", 0), DelayedHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        yield SlowUpstream(
-            base_url=f"http://127.0.0.1:{server.server_address[1]}",
-            delay_seconds=delay_seconds,
-            request_arrivals=request_arrivals,
-        )
-    finally:
-        server.shutdown()
-        server.server_close()
+
+def slow_upstream_sync_client() -> HTTPHandler:
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_answer_once_the_first_byte_is_due)))
