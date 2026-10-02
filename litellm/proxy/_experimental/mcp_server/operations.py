@@ -239,8 +239,8 @@ def _request_tags_from_raw_headers(
         return None
     return LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
         llm_router=None,
-        headers={"x-litellm-tags": header_value},  # mutable-ok: the shared parser reads a plain dict
-        data={},  # mutable-ok: no request body to read tags from on this path
+        headers={"x-litellm-tags": header_value},
+        data={},
     )
 
 
