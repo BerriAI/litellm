@@ -165,21 +165,15 @@ def _close_handler_if_needed(handler: object) -> None:
     _run_coroutine_if_needed(close())
 
 
-def _aws_auth_caches() -> Iterator[object]:
-    for name in MODULES_WITH_AWS_AUTH_HANDLERS:
-        module: Final = importlib.import_module(name)
-        for handler in tuple(vars(module).values()):
-            cache: Final = getattr(handler, "iam_cache", None)
-            if cache is not None:
-                yield cache
-
-
 def _reset_aws_auth_caches() -> None:
-    caches: Final = {id(cache): cache for cache in _aws_auth_caches()}
-    for cache in caches.values():
-        flush: Final = getattr(cache, "flush_cache", None)
-        if callable(flush):
-            flush()
+    modules: Final = tuple(importlib.import_module(name) for name in MODULES_WITH_AWS_AUTH_HANDLERS)
+    flushes: Final = (
+        getattr(getattr(getattr(module, attr_name), "iam_cache", None), "flush_cache", None)
+        for module in modules
+        for attr_name in dir(module)
+    )
+    for flush in filter(callable, flushes):
+        flush()
     boto3.DEFAULT_SESSION = None
 
 

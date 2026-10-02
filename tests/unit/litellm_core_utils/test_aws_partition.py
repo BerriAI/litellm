@@ -200,7 +200,7 @@ def _fstring_literals(root: Path) -> Iterator[tuple[str, str]]:
                     yield relative, part.value
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def fstring_literals() -> tuple[tuple[str, str], ...]:
     return tuple(_fstring_literals(Path(litellm.__file__).parent))
 
