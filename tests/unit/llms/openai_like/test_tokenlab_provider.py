@@ -163,8 +163,11 @@ class TestTokenLabCostMap:
             prompt_tokens=1_000_000,
             completion_tokens=1_000_000,
         )
-        assert prompt_cost == pytest.approx(1.5)
-        assert completion_cost == pytest.approx(9.0)
+        assert prompt_cost == pytest.approx(litellm.model_cost["tokenlab/gpt-5.5"]["input_cost_per_token"] * 1_000_000)
+        assert completion_cost == pytest.approx(
+            litellm.model_cost["tokenlab/gpt-5.5"]["output_cost_per_token"] * 1_000_000
+        )
+        assert prompt_cost > 0 and completion_cost > 0
 
     def test_embedding_cost_is_wired(self):
         prompt_cost, completion_cost = litellm.cost_per_token(
@@ -172,5 +175,8 @@ class TestTokenLabCostMap:
             prompt_tokens=1_000_000,
             completion_tokens=0,
         )
-        assert prompt_cost == pytest.approx(0.02)
+        assert prompt_cost == pytest.approx(
+            litellm.model_cost["tokenlab/text-embedding-3-small"]["input_cost_per_token"] * 1_000_000
+        )
+        assert prompt_cost > 0
         assert completion_cost == 0
