@@ -701,6 +701,9 @@ def test_unauthenticated_request_writes_no_spend_row(gateway: Gateway, tmp_path:
             candidate.scenario() as scenario,
         ):
             before: Final = _spend_count()
+            anonymous_before: Final = len(
+                read_rows("SELECT request_tags FROM \"LiteLLM_SpendLogs\" WHERE api_key IS NULL OR api_key=''", ())
+            )
             response: Final = candidate.client.post(
                 route,
                 json={
@@ -713,13 +716,13 @@ def test_unauthenticated_request_writes_no_spend_row(gateway: Gateway, tmp_path:
             assert response.status_code == 401, response.text
             anonymous: Final = eventually(
                 lambda: read_rows(
-                    "SELECT request_tags FROM \"LiteLLM_SpendLogs\" WHERE api_key IS NULL OR api_key=''",
+                    'SELECT request_tags FROM "LiteLLM_SpendLogs" WHERE api_key IS NULL OR api_key=\'\' ORDER BY "startTime" DESC',
                     (),
                 ),
-                lambda rows: len(rows) == 1,
+                lambda rows: len(rows) == anonymous_before + 1,
                 seconds=70,
             )
-            assert [tags_of(row) for row in anonymous] == [[]]
+            assert tags_of(anonymous[0]) == []
             key: Final = scenario.key()
             control: Final = candidate.request(
                 "POST",
