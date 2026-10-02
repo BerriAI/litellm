@@ -300,6 +300,29 @@ describe("AgentTracesSection", () => {
     expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
   });
 
+  it("labels each run with the SDK that produced it, before its agent names", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue({
+      ...(traceList as TracePage),
+      data: [
+        { ...runs[0], agent_names: ["claude-code"], frameworks: ["claude-agent-sdk", "claude-code"] },
+        { ...runs[1], agent_names: ["claude-code"], frameworks: ["claude-code"] },
+        { ...runs[2], frameworks: [] },
+      ],
+    });
+    renderSection();
+    const [sdkRun, cliRun, plainRun] = await screen.findAllByTestId("agent-trace-row");
+    const agentCell = (row: HTMLElement) => within(row).getAllByRole("cell")[1];
+
+    expect(agentCell(sdkRun)).toHaveTextContent(/^Claude Agent SDKclaude-code$/);
+    expect(within(sdkRun).getByRole("img", { name: "Claude Agent SDK logo" })).toHaveAttribute(
+      "src",
+      expect.stringContaining("anthropic.svg"),
+    );
+    expect(agentCell(cliRun)).toHaveTextContent(/^Claude Codeclaude-code$/);
+    expect(within(plainRun).queryByRole("img")).not.toBeInTheDocument();
+    expect(agentCell(plainRun)).toHaveTextContent((runs[2].agent_names ?? [runs[2].service]).join(", "));
+  });
+
   it("status filter 'Failed' keeps only runs with errors", () => {
     const failed = filterRuns(runs, "", "all", "error");
     expect(failed.length).toBeGreaterThan(0);
