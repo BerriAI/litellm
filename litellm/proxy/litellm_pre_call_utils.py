@@ -66,7 +66,7 @@ from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
     strip_callback_config,
 )
-from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
+from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers, tags_from_metadata_value
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
 
@@ -1957,8 +1957,6 @@ class LiteLLMProxyRequestSetup:
         ``litellm_metadata.tags`` (either may carry them post-merge), and the
         key/team/project ``metadata["tags"]`` on the resolved token. Ordered
         and deduplicated; reads nothing the pipeline mutated."""
-        from litellm.proxy.common_utils.http_parsing_utils import tags_from_metadata_value
-
         raw_body_tags: Final = request_data.get("tags")
         body_tags: Final = raw_body_tags if isinstance(raw_body_tags, list) else ()
         token_metadata: Final = (

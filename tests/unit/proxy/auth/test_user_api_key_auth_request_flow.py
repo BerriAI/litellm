@@ -9528,9 +9528,7 @@ async def test_managed_agent_cannot_bypass_grants_with_server_default(
         monkeypatch.setattr(proxy_server, name, value)
     data = {"messages": [{"role": "user", "content": "hi"}], **({"model": requested} if requested else {})}
     auth = UserAPIKeyAuth(agent_id="managed")
-    auth.managed_agent_context = ManagedAgentContext(
-        agent_id="managed", binding_revision="revision", mode="autonomous"
-    )
+    auth.managed_agent_context = ManagedAgentContext(agent_id="managed", binding_revision="revision", mode="autonomous")
     if not grant_default:
         with pytest.raises(ProxyException) as denied:
             await _authorize_authenticated_request(auth, _alias_request(route, data), data, route, "persisted-key")
@@ -9560,12 +9558,21 @@ async def test_managed_jwt_cannot_be_downgraded_into_virtual_key_mapping(monkeyp
     from litellm.types.proxy.agent_identity import AgentIdentityBinding
 
     binding: Final = AgentIdentityBinding(
-        agent_id="managed", provider="microsoft_entra", issuer="issuer", tenant_id="tenant",
-        client_id="client", service_principal_id="principal", revision="current",
+        agent_id="managed",
+        provider="microsoft_entra",
+        issuer="issuer",
+        tenant_id="tenant",
+        client_id="client",
+        service_principal_id="principal",
+        revision="current",
     )
     agent: Final = AgentResponse(
-        agent_id="managed", agent_name="Managed", agent_card_params={},
-        identity_managed=True, identity=binding, execution_mode="autonomous",
+        agent_id="managed",
+        agent_name="Managed",
+        agent_card_params={},
+        identity_managed=True,
+        identity=binding,
+        execution_mode="autonomous",
     )
     client: Final = MagicMock()
     client.writer_db.litellm_agentidentity.find_unique = AsyncMock(return_value=binding)
@@ -9573,22 +9580,35 @@ async def test_managed_jwt_cannot_be_downgraded_into_virtual_key_mapping(monkeyp
     handler: Final = MagicMock()
     handler.is_jwt.return_value = True
     handler.litellm_jwtauth = LiteLLM_JWTAuth(virtual_key_claim_field="sub")
-    handler.auth_jwt = AsyncMock(return_value={
-        "iss": "issuer", "tid": "tenant", "azp": "client", "oid": "principal", "sub": "mapped-key",
-    })
+    handler.auth_jwt = AsyncMock(
+        return_value={
+            "iss": "issuer",
+            "tid": "tenant",
+            "azp": "client",
+            "oid": "principal",
+            "sub": "mapped-key",
+        }
+    )
     for name, value in {
         **_proxy_attrs_for_centralized_checks(),
-        "general_settings": {"enable_jwt_auth": True}, "premium_user": True,
-        "prisma_client": client, "jwt_handler": handler, "user_api_key_cache": UserApiKeyCache(),
+        "general_settings": {"enable_jwt_auth": True},
+        "premium_user": True,
+        "prisma_client": client,
+        "jwt_handler": handler,
+        "user_api_key_cache": UserApiKeyCache(),
         "proxy_logging_obj": MagicMock(post_call_failure_hook=AsyncMock(return_value=None)),
     }.items():
         monkeypatch.setattr(proxy_server, name, value)
     for _ in range(2):
         with pytest.raises(ProxyException) as failure:
             await _user_api_key_auth_builder(
-                request=_alias_request("/v1/chat/completions", {}), api_key="Bearer verified.jwt.token",
-                azure_api_key_header="", anthropic_api_key_header=None, google_ai_studio_api_key_header=None,
-                azure_apim_header=None, request_data={},
+                request=_alias_request("/v1/chat/completions", {}),
+                api_key="Bearer verified.jwt.token",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
             )
         assert failure.value.code == "403"
         assert "without virtual-key mapping" in failure.value.message
@@ -9605,9 +9625,17 @@ async def test_virtual_key_cannot_enter_checks_as_an_identity_managed_actor(monk
     from litellm.types.proxy.agent_identity import AgentIdentityBinding
 
     target: Final = AgentResponse(
-        agent_id="bound", agent_name="Bound", agent_card_params={}, identity_managed=True,
+        agent_id="bound",
+        agent_name="Bound",
+        agent_card_params={},
+        identity_managed=True,
         identity=AgentIdentityBinding(
-            agent_id="bound", provider="microsoft_entra", tenant_id="tenant", client_id="client", issuer="issuer", revision="current"
+            agent_id="bound",
+            provider="microsoft_entra",
+            tenant_id="tenant",
+            client_id="client",
+            issuer="issuer",
+            revision="current",
         ),
     )
     client: Final = MagicMock()
@@ -9615,7 +9643,9 @@ async def test_virtual_key_cannot_enter_checks_as_an_identity_managed_actor(monk
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     checks: Final = AsyncMock()
     monkeypatch.setattr(auth_module, "_run_centralized_common_checks", checks)
-    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock(return_value=None)))
+    monkeypatch.setattr(
+        proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock(return_value=None))
+    )
     data: Final = {"model": "allowed", "messages": [{"role": "user", "content": "hello"}]}
     request: Final = _alias_request("/v1/chat/completions", data)
     with pytest.raises(ProxyException):
@@ -9643,16 +9673,24 @@ async def test_custom_auth_grants_reach_managed_targets_without_a_virtual_key_ro
     from litellm.types.proxy.agent_identity import AgentIdentityBinding
 
     target: Final = AgentResponse(
-        agent_id="target", agent_name="Target", agent_card_params={}, identity_managed=True,
+        agent_id="target",
+        agent_name="Target",
+        agent_card_params={},
+        identity_managed=True,
         identity=AgentIdentityBinding(
-            agent_id="target", provider="microsoft_entra", tenant_id="tenant", client_id="client",
-            issuer="issuer", revision="current",
+            agent_id="target",
+            provider="microsoft_entra",
+            tenant_id="tenant",
+            client_id="client",
+            issuer="issuer",
+            revision="current",
         ),
     )
     registry: Final = AgentRegistry()
     registry.register_agent(target)
     trusted: Final = UserAPIKeyAuth(
-        api_key=credential, object_permission={"object_permission_id": "custom", "agents": ["target"] if granted else ["other"]}
+        api_key=credential,
+        object_permission={"object_permission_id": "custom", "agents": ["target"] if granted else ["other"]},
     )
     custom: Final = AsyncMock(return_value=trusted)
     database: Final = MagicMock()
@@ -9668,9 +9706,13 @@ async def test_custom_auth_grants_reach_managed_targets_without_a_virtual_key_ro
     monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
     monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", False, raising=False)
     admitted: Final = await _user_api_key_auth_builder(
-        request=_alias_request("/a2a/target/message/send", {}), api_key=f"Bearer {credential}",
-        azure_api_key_header="", anthropic_api_key_header=None, google_ai_studio_api_key_header=None,
-        azure_apim_header=None, request_data={},
+        request=_alias_request("/a2a/target/message/send", {}),
+        api_key=f"Bearer {credential}",
+        azure_api_key_header="",
+        anthropic_api_key_header=None,
+        google_ai_studio_api_key_header=None,
+        azure_apim_header=None,
+        request_data={},
     )
     assert await AgentRequestHandler.is_agent_allowed("target", admitted) is granted
     custom.assert_awaited_once()
@@ -9690,17 +9732,16 @@ async def test_enterprise_custom_auth_key_return_stays_a_proxy_validated_key(mon
     module: Final = importlib.import_module("litellm.proxy.auth.user_api_key_auth")
     monkeypatch.setattr(module, "enterprise_custom_auth", custom)
     admitted: Final = await _user_api_key_auth_builder(
-        request=_alias_request("/v1/chat/completions", {}), api_key="Bearer external-credential",
-        azure_api_key_header="", anthropic_api_key_header=None, google_ai_studio_api_key_header=None,
-        azure_apim_header=None, request_data={},
+        request=_alias_request("/v1/chat/completions", {}),
+        api_key="Bearer external-credential",
+        azure_api_key_header="",
+        anthropic_api_key_header=None,
+        google_ai_studio_api_key_header=None,
+        azure_apim_header=None,
+        request_data={},
     )
     assert admitted.authenticated_by_custom_auth is False
     assert admitted.via_virtual_key is True
-
-
-# ---------------------------------------------------------------------------
-# Tag ownership enforcement end to end through user_api_key_auth
-# ---------------------------------------------------------------------------
 
 
 def _tag_ownership_prisma(tag_rows):
@@ -9774,7 +9815,9 @@ def _jwt_handler_for_result(jwt_result):
     return jwt_handler
 
 
-async def _run_tag_ownership_auth(*, api_key, request, prisma, valid_token=None, jwt_result=None, general_settings=None, user_custom_auth=None):
+async def _run_tag_ownership_auth(
+    *, api_key, request, prisma, valid_token=None, jwt_result=None, general_settings=None, user_custom_auth=None
+):
     patches = [
         patch(  # test-quality-ok: the builder has no DI seam for the key lookup; stands in for the DB
             "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
@@ -9849,9 +9892,7 @@ def _jwt_result(team_id="team-a"):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("auth_path", ["virtual_key", "jwt"])
 async def test_tag_ownership_foreign_tag_denied_virtual_key_and_jwt(auth_path):
-    prisma = _tag_ownership_prisma(
-        [LiteLLM_TagTable(tag_name="foreign-tag", team_id="team-b")]
-    )
+    prisma = _tag_ownership_prisma([LiteLLM_TagTable(tag_name="foreign-tag", team_id="team-b")])
     request = _tag_ownership_request(
         "/chat/completions",
         body={"model": "gpt-4o", "metadata": {"tags": ["foreign-tag"]}},
@@ -9875,9 +9916,7 @@ async def test_tag_ownership_foreign_tag_denied_virtual_key_and_jwt(auth_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("auth_path", ["virtual_key", "jwt"])
 async def test_tag_ownership_matching_tag_allowed_virtual_key_and_jwt(auth_path):
-    prisma = _tag_ownership_prisma(
-        [LiteLLM_TagTable(tag_name="owned-tag", team_id="team-a")]
-    )
+    prisma = _tag_ownership_prisma([LiteLLM_TagTable(tag_name="owned-tag", team_id="team-a")])
     request = _tag_ownership_request(
         "/chat/completions",
         body={"model": "gpt-4o", "metadata": {"tags": ["owned-tag"]}},
@@ -9931,9 +9970,7 @@ def _request_with_source(source, route, tag):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", _TAG_OWNERSHIP_SOURCES)
 async def test_tag_ownership_every_source_denied_when_foreign(source):
-    prisma = _tag_ownership_prisma(
-        [LiteLLM_TagTable(tag_name="foreign-tag", team_id="team-b")]
-    )
+    prisma = _tag_ownership_prisma([LiteLLM_TagTable(tag_name="foreign-tag", team_id="team-b")])
     outcome, _ = await _run_tag_ownership_auth(
         api_key="Bearer sk-e2e",
         request=_request_with_source(source, "/chat/completions", "foreign-tag"),
@@ -9947,9 +9984,7 @@ async def test_tag_ownership_every_source_denied_when_foreign(source):
 
 @pytest.mark.asyncio
 async def test_tag_ownership_inherited_foreign_tag_denied_without_caller_tags():
-    prisma = _tag_ownership_prisma(
-        [LiteLLM_TagTable(tag_name="inherited-foreign", team_id="team-b")]
-    )
+    prisma = _tag_ownership_prisma([LiteLLM_TagTable(tag_name="inherited-foreign", team_id="team-b")])
     outcome, _ = await _run_tag_ownership_auth(
         api_key="Bearer sk-e2e",
         request=_tag_ownership_request("/chat/completions", body={"model": "gpt-4o"}),
@@ -9992,9 +10027,7 @@ async def test_tag_ownership_permitted_tag_cannot_hide_foreign_tag():
     ],
 )
 async def test_tag_ownership_enforced_on_every_llm_surface(route, tag_slot):
-    prisma = _tag_ownership_prisma(
-        [LiteLLM_TagTable(tag_name="foreign-tag", team_id="team-b")]
-    )
+    prisma = _tag_ownership_prisma([LiteLLM_TagTable(tag_name="foreign-tag", team_id="team-b")])
     outcome, _ = await _run_tag_ownership_auth(
         api_key="Bearer sk-e2e",
         request=_tag_ownership_request(
@@ -10010,9 +10043,7 @@ async def test_tag_ownership_enforced_on_every_llm_surface(route, tag_slot):
 
 @pytest.mark.asyncio
 async def test_tag_ownership_master_key_cannot_use_owned_tag():
-    prisma = _tag_ownership_prisma(
-        [LiteLLM_TagTable(tag_name="owned-tag", team_id="team-a")]
-    )
+    prisma = _tag_ownership_prisma([LiteLLM_TagTable(tag_name="owned-tag", team_id="team-a")])
     outcome, _ = await _run_tag_ownership_auth(
         api_key="Bearer sk-master-tag-e2e",
         request=_tag_ownership_request(
@@ -10028,9 +10059,7 @@ async def test_tag_ownership_master_key_cannot_use_owned_tag():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("flagged", [True, False], ids=["opt_in_enforced", "unset_not_enforced"])
 async def test_tag_ownership_custom_auth_enforced_only_with_flag(flagged):
-    prisma = _tag_ownership_prisma(
-        [LiteLLM_TagTable(tag_name="foreign-tag", team_id="team-b")]
-    )
+    prisma = _tag_ownership_prisma([LiteLLM_TagTable(tag_name="foreign-tag", team_id="team-b")])
     trusted_token = UserAPIKeyAuth(api_key="Bearer sk-custom", user_id="custom-user", team_id="team-c")
     outcome, _ = await _run_tag_ownership_auth(
         api_key="Bearer sk-custom",
