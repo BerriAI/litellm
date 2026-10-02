@@ -1048,13 +1048,21 @@ async def approve_guardrail_submission(
                 detail=f"Guardrail is not pending review (status={row.status})",
             )
 
+        litellm_params: Final = _parse_json_field(row.litellm_params)
+        decrypted_params: Final = decrypt_guardrail_litellm_params(litellm_params or {})
+        if contains_encrypted_marker(decrypted_params):
+            raise HTTPException(
+                status_code=409,
+                detail="Guardrail litellm_params do not decrypt with the current key. "
+                "Restart the proxy if the master key was rotated, then approve again.",
+            )
+
         now: Final = datetime.now(timezone.utc)
         await _guardrails_table(prisma_client).update(
             where={"guardrail_id": guardrail_id},
             data={"status": "active", "reviewed_at": now, "updated_at": now},
         )
 
-        litellm_params: Final = _parse_json_field(row.litellm_params)
         guardrail_info: Final = _parse_json_field(row.guardrail_info)
         if not litellm_params:
             raise HTTPException(
@@ -1064,7 +1072,7 @@ async def approve_guardrail_submission(
         guardrail_dict: Final = {
             "guardrail_id": row.guardrail_id,
             "guardrail_name": row.guardrail_name,
-            "litellm_params": decrypt_guardrail_litellm_params(litellm_params),
+            "litellm_params": decrypted_params,
             "guardrail_info": guardrail_info or {},
             "team_id": row.team_id,
         }

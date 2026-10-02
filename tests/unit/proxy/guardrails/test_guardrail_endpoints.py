@@ -41,6 +41,7 @@ MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 from litellm.proxy.guardrails.guardrail_registry import (
     IN_MEMORY_GUARDRAIL_HANDLER,
     InMemoryGuardrailHandler,
+    encrypt_guardrail_litellm_params,
 )
 from litellm.types.guardrails import (
     ApplyGuardrailRequest,
@@ -2728,6 +2729,36 @@ async def test_team_guardrail_api_key_is_encrypted_at_rest_and_decrypted_on_revi
     await approve_guardrail_submission("reg-enc", admin)
     loaded = mock_handler.initialize_guardrail.call_args.kwargs["guardrail"]
     assert loaded["litellm_params"]["api_key"] == "team-vendor-secret-1234"
+
+
+@pytest.mark.asyncio
+async def test_approve_guardrail_submission_rejects_params_that_do_not_decrypt(mocker, monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-worker-key")
+    stored_params = encrypt_guardrail_litellm_params(
+        {"guardrail": "generic_guardrail_api", "mode": "pre_call", "api_key": "team-vendor-secret-1234"},
+        new_encryption_key="sk-rotated-key-the-worker-lacks",
+    )
+    row = mocker.Mock(
+        guardrail_id="reg-rotated",
+        guardrail_name="team-rotated",
+        status="pending_review",
+        team_id="team-1",
+        litellm_params=stored_params,
+        guardrail_info={},
+    )
+    mock_prisma = mocker.Mock()
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mock_prisma.db.litellm_guardrailstable.update = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    mock_handler = mocker.Mock()
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_handler)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await approve_guardrail_submission("reg-rotated", MOCK_ADMIN_USER)
+
+    assert exc_info.value.status_code == 409
+    mock_prisma.db.litellm_guardrailstable.update.assert_not_called()
+    mock_handler.initialize_guardrail.assert_not_called()
 
 
 @pytest.mark.asyncio
