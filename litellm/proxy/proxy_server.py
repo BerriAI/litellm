@@ -5402,6 +5402,7 @@ class ProxyConfig:
         self._last_cyberark_config: dict[str, object] | None = None  # mutable-ok: change-detection cache
         self._last_cleanup_schedule_attempt: tuple[object, ...] | None = None
         self._cleanup_reschedule_failed: bool = False
+        self._warned_db_mcp_stdio_flag_ignored: bool = False
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
@@ -7593,10 +7594,12 @@ class ProxyConfig:
         decrypted_env_vars: Final = {}
         for k, v in environment_variables.items():
             if isinstance(k, str) and is_mcp_stdio_flag_key(k):
-                verbose_proxy_logger.warning(
-                    "Ignoring %s stored in the database. Set it in the proxy's environment instead",
-                    MCP_STDIO_ENABLED_ENV_VAR,
-                )
+                if not self._warned_db_mcp_stdio_flag_ignored:
+                    verbose_proxy_logger.warning(
+                        "Ignoring %s stored in the database. Set it in the proxy's environment instead",
+                        MCP_STDIO_ENABLED_ENV_VAR,
+                    )
+                    self._warned_db_mcp_stdio_flag_ignored = True
                 continue
             try:
                 decrypted_value = decrypt_value_helper(value=v, key=k, return_original_value=return_original_value)
