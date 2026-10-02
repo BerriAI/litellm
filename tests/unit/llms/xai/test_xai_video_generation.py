@@ -3,7 +3,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.url_utils import SSRFError
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.xai.videos.transformation import XAIVideoConfig
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -119,6 +121,22 @@ def test_transform_create_and_status_response():
     assert status.status == "completed"
     assert status.seconds == "6"
     assert status._hidden_params.get("video_url") == "https://vidgen.x.ai/x.mp4"
+
+
+def test_sync_video_status_through_the_http_handler():
+    client = MagicMock(spec=HTTPHandler)
+    client.get.return_value = httpx.Response(
+        200,
+        json={"status": "done", "request_id": "req-123", "video": {"url": "https://vidgen.x.ai/x.mp4"}},
+        request=httpx.Request("GET", "https://api.x.ai/v1/videos/req-123"),
+    )
+
+    status = litellm.video_status(
+        video_id="req-123", model="xai/grok-imagine-video", api_key="test-key", client=client
+    )
+
+    assert status.status == "completed"
+    assert client.get.call_args.kwargs["url"] == "https://api.x.ai/v1/videos/req-123"
 
 
 def test_validate_environment_requires_credentials():
