@@ -259,7 +259,9 @@ class TestBedrockMantleConfig:
         "model", ["openai.gpt-5.6-terra", "us-gov-west-1/openai.gpt-5.6-terra", "openai.gpt-6-sol"]
     )
     @pytest.mark.parametrize("limit_param", ["max_tokens", "max_completion_tokens"])
-    def test_gpt_reasoning_series_output_limit_is_sent_as_max_completion_tokens(self, model, limit_param):
+    def test_gpt_reasoning_series_output_limit_is_sent_as_max_completion_tokens(
+        self, model: str, limit_param: str
+    ) -> None:
         optional_params = litellm.get_optional_params(
             model=model,
             custom_llm_provider="bedrock_mantle",
