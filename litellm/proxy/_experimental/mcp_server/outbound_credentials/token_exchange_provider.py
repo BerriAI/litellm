@@ -35,8 +35,6 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger
 _GATEWAY_FAULT_OAUTH_ERRORS: Final = frozenset(
     {"invalid_client", "unauthorized_client", "unsupported_grant_type", "invalid_target", "invalid_scope"}
 )
-# Entra reports a forged or garbled assertion as ``invalid_client`` with an AADSTS50027xx sub-code,
-# the same top-level code as a bad gateway secret; the sub-code is what says the caller has to fix it.
 _INVALID_ASSERTION_AADSTS_PREFIX: Final = "50027"
 
 
