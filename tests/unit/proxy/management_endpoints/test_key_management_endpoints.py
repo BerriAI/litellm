@@ -20491,9 +20491,9 @@ async def test_project_detachment_uses_effective_project_for_validation(project_
 
 def _project_assignment_prisma() -> MagicMock:
     database = MagicMock()
-    database.db.litellm_teamtable.find_unique = AsyncMock(
-        return_value=LiteLLM_TeamTable(team_id="team-lit-5823", members=[])
-    )
+    team_row: Final = LiteLLM_TeamTable(team_id="team-lit-5823", members=[])
+    database.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    database.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     return database
 
 
