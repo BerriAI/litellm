@@ -112,7 +112,7 @@ class AdaptiveRouterUpdateQueue:
 
         # Sort keys to give deterministic write order across writers and
         # reduce the chance of cross-row deadlocks when other workers race us.
-        pending: Final = dict(batch)  # mutable-ok: tracks unacknowledged rows until the batch is restored
+        pending: Final = dict(batch)
         try:
             for key, payload in sorted(batch.items()):
                 router, rt, model = key
@@ -174,7 +174,7 @@ class AdaptiveRouterUpdateQueue:
         if not batch:
             return 0
 
-        pending: Final = dict(batch)  # mutable-ok: tracks unacknowledged rows until the batch is restored
+        pending: Final = dict(batch)
         try:
             for key, payload in sorted(batch.items()):
                 session_id, router, model = key
@@ -221,7 +221,7 @@ class AdaptiveRouterUpdateQueue:
     async def _restore_state_batch(self, pending: Mapping[StateKey, Mapping[str, float]]) -> None:
         async with self._lock:
             for key, payload in pending.items():
-                self._state_agg[key] = {  # mutable-ok: queue-owned accumulator merges unacknowledged deltas
+                self._state_agg[key] = {
                     field: value + (self._state_agg[key][field] if key in self._state_agg else 0)
                     for field, value in payload.items()
                 }
@@ -229,7 +229,7 @@ class AdaptiveRouterUpdateQueue:
 
     async def _restore_session_batch(self, pending: Mapping[SessionKey, Mapping[str, object]]) -> None:
         async with self._lock:
-            self._session_agg = {**pending, **self._session_agg}  # mutable-ok: newer queued snapshots win over retries
+            self._session_agg = {**pending, **self._session_agg}
             self._max_session_size_seen = max(self._max_session_size_seen, len(self._session_agg))
 
     # ---- Observability ---------------------------------------------------
