@@ -15,7 +15,7 @@ export default function LensPage() {
     parseAsStringLiteral(["traces", "investigations"]).withOptions({ history: "push" }),
   );
   const [lensId] = useQueryState("lens", parseAsString);
-  const defaultTab = isProxyAdminTierRole(userRole ?? "") || lensId ? "investigations" : "traces";
+  const defaultTab = lensId ? "investigations" : "traces";
   const activeTab = tab ?? defaultTab;
   if (!accessToken) return null;
   return (

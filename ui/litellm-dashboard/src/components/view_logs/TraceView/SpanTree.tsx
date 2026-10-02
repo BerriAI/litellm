@@ -1,8 +1,9 @@
 "use client";
 
-import { BarChart3, Clock, Coins, ListTree, MoreHorizontal, Timer } from "lucide-react";
+import { BarChart3, Clock, Coins, ListTree, MoreHorizontal, PanelRightOpen, Timer } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/cva.config";
 
@@ -24,6 +25,7 @@ interface SpanTreeProps {
   onToggleSpan: (id: string) => void;
   onToggleGroup: (id: string) => void;
   onLoadMore: (groupId: string) => void;
+  onOpenDetails?: () => void;
   /** Inside the side drawer J/K switch runs, so spans move with the arrow keys. */
   embedded?: boolean;
 }
@@ -308,6 +310,7 @@ export function SpanTree({
   onToggleSpan,
   onToggleGroup,
   onLoadMore,
+  onOpenDetails,
   embedded = false,
 }: SpanTreeProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -333,6 +336,12 @@ export function SpanTree({
             aria-label="Hide framework spans"
           />
         </label>
+        {onOpenDetails && (
+          <Button variant="ghost" size="sm" onClick={onOpenDetails} className="ml-3 shrink-0 text-xs text-trace-text-2">
+            <PanelRightOpen className="size-4" />
+            Show details
+          </Button>
+        )}
       </div>
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto pb-4">
         <Summary summary={summary} />
