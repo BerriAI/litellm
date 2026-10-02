@@ -379,7 +379,7 @@ def test_unified_responses_records_header_tags(gateway: Gateway, tmp_path: Path,
             client: Final = openai.OpenAI(
                 api_key=key, base_url=f"{_base_url(candidate)}/v1", default_headers=SENT_HEADERS
             )
-            created: Final = client.responses.create(model=model, input="tag me", stream=stream)
+            created: Final = client.responses.create(model=model, input=f"tag me {uuid.uuid4().hex}", stream=stream)
             if stream:
                 frames: Final = list(created)
                 request_id: Final = next(event.response.id for event in frames if event.type == "response.completed")
