@@ -1,5 +1,6 @@
 import json
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from pathlib import Path
@@ -42,7 +43,7 @@ def _tagged_requests(
     candidate: Gateway, key: str, anthropic_model: str, openai_model: str, stream: bool, index: int
 ) -> tuple:
     """One call per route in ROUTES order with the same client headers."""
-    marker: Final = f"burst {index}"
+    marker: Final = f"burst {index} {uuid.uuid4().hex}"
     return (
         candidate.request(
             "POST",
@@ -92,14 +93,14 @@ def _deployments(scenario, url: str) -> tuple[str, str]:
     )
 
 
-def _landed_tags(key: str, count: int) -> list[dict]:
+def _landed_tags(key: str, satisfied) -> list[dict]:
     digest: Final = sha256(key.encode()).hexdigest()
     landed: Final = eventually(
         lambda: read_rows('SELECT request_id, request_tags FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (digest,)),
-        lambda values: len(values) == count,
-        seconds=70,
+        satisfied,
+        seconds=60,
     )
-    assert len({row["request_id"] for row in landed}) == count
+    assert len({row["request_id"] for row in landed}) == len(landed)
     for row in landed:
         value: Final = row["request_tags"]
         assert (json.loads(value) if isinstance(value, str) else value) == EXPECTED
@@ -142,8 +143,8 @@ def test_burst_across_routes_records_tags_once_per_response(gateway: Gateway, tm
             assert len(wire.drain()) == 50
             pids: Final = _worker_pids(owned)
             assert len(set(pids)) == 2, f"expected two uvicorn workers, found {pids}"
-            assert all(worker.is_running() for worker in psutil.process_iter(pids))
-            _landed_tags(key, 50)
+            assert all(psutil.Process(pid).is_running() for pid in pids)
+            _landed_tags(key, lambda values: len(values) == 50)
 
 
 def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Path) -> None:
@@ -234,7 +235,7 @@ def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Pa
                 return_last_on_timeout=True,
             )
             assert second_delivered == second_ids
-            _landed_tags(key, len(responses))
+            _landed_tags(key, lambda values: len(values) == len(responses))
 
 
 def test_worker_kill_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_path: Path) -> None:
@@ -276,7 +277,9 @@ def test_worker_kill_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_path: P
                     responses[offset + position].status_code for offset in range(0, len(responses), len(ROUTES))
                 }
                 assert 200 in statuses, f"no surviving 200 for route {ROUTES[position]}: {statuses}"
+            second_ok: Final = [response for response in second if response.status_code == 200]
+            assert second_ok, "surviving worker served no second-burst request"
             ok: Final = [response for response in responses if response.status_code == 200]
             ids: Final = [_ids(response) for response in ok]
             assert len(set(ids)) == len(ids), "duplicate upstream id in burst"
-            _landed_tags(key, len(ok))
+            landed: Final = _landed_tags(key, lambda values: len(values) == len(ok))
