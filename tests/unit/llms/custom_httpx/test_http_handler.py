@@ -7,6 +7,7 @@ import ssl
 import threading
 import weakref
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -1388,7 +1389,8 @@ async def test_finalizer_on_live_loop_disposes_foreign_loop_session_without_sche
     another, dead loop must not schedule aclose() here — that is the cross-loop
     path the transport refuses — and must still dispose the session."""
     handler = AsyncHTTPHandler(timeout=61.0)
-    session = await asyncio.to_thread(_mint_session_on_dead_loop, handler)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        session = pool.submit(_mint_session_on_dead_loop, handler).result()
     assert not session.closed
 
     baseline_tasks = set(AsyncHTTPHandler._finalizer_close_tasks)

@@ -11,6 +11,7 @@ from litellm.rust_bridge.embeddings.entrypoints import LiteLLMEmbeddingRequest
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
 from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
+from litellm.rust_bridge.traces import DecodedSpan, QueryScope
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import EmbeddingResponse, ModelResponse
@@ -20,18 +21,28 @@ class RustUpstreamError(Exception): ...
 class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
 
-def trace_encode_rows(rows: Sequence[Mapping[str, JsonValue]]) -> str: ...
-def trace_ensure_schema(
-    url: str, database: str, user: str, password: str, trace_retention_days: int, spend_log_retention_days: int
-) -> Future[None]: ...
-def trace_query(
-    url: str,
-    database: str,
-    user: str,
-    password: str,
-    sql: str,
-    parameters: Mapping[str, str | int | Sequence[str]],
-) -> Future[str]: ...
+def trace_decode_otlp(body: bytes, content_type: str | None) -> list[DecodedSpan]: ...
+def trace_encode_error(message: str) -> bytes: ...
+def trace_normalized_field_definitions() -> list[dict[str, str]]: ...
+
+@final
+class NativeTraceConfig:
+    def __new__(
+        cls,
+        database: str,
+        url: str,
+        retention_days: int,
+    ) -> NativeTraceConfig: ...
+
+@final
+class NativeTraceStorage:
+    def __new__(cls, config: NativeTraceConfig) -> NativeTraceStorage: ...
+    def ensure_schema(self) -> Future[None]: ...
+    def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> Future[None]: ...
+    def query_sql(self, sql: str, scope: QueryScope, secret: str) -> Future[str]: ...
+    def query_help(self, scope: QueryScope, secret: str) -> Future[str]: ...
+    def lens_query(self, name: str, parameters: Mapping[str, str | int | Sequence[str]]) -> Future[str]: ...
+    def query(self, query: str, parameters: Mapping[str, str | int | Sequence[str]]) -> Future[str]: ...
 
 @final
 class NativeDiagnosticProcessor:
@@ -327,6 +338,8 @@ __all__ = [
     "ForkedAfterNativeRuntimeStarted",
     "HuggingFaceEncoding",
     "NativeDiagnosticProcessor",
+    "NativeTraceConfig",
+    "NativeTraceStorage",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
     "RustBridgeDeclined",
@@ -351,9 +364,9 @@ __all__ = [
     "process_state_started",
     "reserve_process_for_forking",
     "responses",
-    "trace_encode_rows",
-    "trace_ensure_schema",
-    "trace_query",
+    "trace_decode_otlp",
+    "trace_encode_error",
+    "trace_normalized_field_definitions",
     "transcription",
 ]
 

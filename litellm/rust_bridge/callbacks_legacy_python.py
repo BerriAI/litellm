@@ -53,7 +53,7 @@ def setup(
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.utils import Rules, function_setup
 
-    arguments: Final = {  # mutable-ok: function_setup consumes an owned kwargs dict
+    arguments: Final = {
         "litellm_call_id": str(uuid.uuid4()),
         **kwargs,
     }
@@ -124,7 +124,7 @@ class LoggingSurface(Protocol):
     ) -> object: ...
 
     def handle_sync_success_callbacks_for_async_calls(
-        self, result: object, start_time: datetime.datetime, end_time: datetime.datetime, cache_hit: object = None
+        self, result: object, start_time: datetime.datetime, end_time: datetime.datetime, cache_hit: bool | None = None
     ) -> None: ...
 
     def failure_handler(

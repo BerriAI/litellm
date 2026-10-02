@@ -1,38 +1,131 @@
 from collections.abc import Awaitable, Mapping, Sequence
-from typing import Final, Protocol, cast
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final, Literal, Protocol, TypedDict, cast
 
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
+from typing_extensions import ReadOnly
 
 from litellm.rust_bridge.loader import get_native_bridge
 
 
+class DecodedEvent(TypedDict):
+    name: ReadOnly[str]
+    attributes: ReadOnly[dict[str, str]]
+
+
+class NormalizedSpan(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    observation_type: Literal["agent", "llm", "tool", "chain", "framework"]
+    agent_name: str
+    litellm_request_id: str
+    model: str
+    input_tokens: int = Field(ge=0, le=2**32 - 1)
+    output_tokens: int = Field(ge=0, le=2**32 - 1)
+    input: str
+    output: str
+
+
+class NormalizedFieldDefinition(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    name: str
+    clickhouse_column: str
+    clickhouse_type: str
+    meaning: str
+
+
+class DecodedSpan(TypedDict):
+    trace_id: ReadOnly[str]
+    span_id: ReadOnly[str]
+    parent_span_id: ReadOnly[str]
+    trace_state: ReadOnly[str]
+    name: ReadOnly[str]
+    kind: ReadOnly[str]
+    resource_attributes: ReadOnly[dict[str, str]]
+    scope_name: ReadOnly[str]
+    scope_version: ReadOnly[str]
+    attributes: ReadOnly[dict[str, str]]
+    start_ns: ReadOnly[int]
+    end_ns: ReadOnly[int]
+    status_code: ReadOnly[str]
+    status_message: ReadOnly[str]
+    events: ReadOnly[list[DecodedEvent]]
+    normalized: ReadOnly[NormalizedSpan]
+    consumed_attributes: ReadOnly[tuple[str, str]]
+
+
+ReadQueryName = Literal["list_traces", "trace_spans", "span_detail", "span_error", "spend_by_response_ids"]
+
+
+class AdminQueryScope(TypedDict):
+    kind: ReadOnly[Literal["admin"]]
+
+
+class TeamQueryScope(TypedDict):
+    kind: ReadOnly[Literal["team"]]
+    team_id: ReadOnly[str]
+
+
+class KeyQueryScope(TypedDict):
+    kind: ReadOnly[Literal["key"]]
+    team_id: ReadOnly[str]
+    api_key_hash: ReadOnly[str]
+
+
+QueryScope = AdminQueryScope | TeamQueryScope | KeyQueryScope
+
+
+class NativeStore(Protocol):
+    def __init__(self, config: "NativeConfig") -> None: ...
+
+    def ensure_schema(self) -> Awaitable[None]: ...
+
+    def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> Awaitable[None]: ...
+
+    def query_sql(self, sql: str, scope: QueryScope, secret: str) -> Awaitable[str]: ...
+
+    def query_help(self, scope: QueryScope, secret: str) -> Awaitable[str]: ...
+
+    def lens_query(self, name: str, parameters: Mapping[str, str | int | Sequence[str]]) -> Awaitable[str]: ...
+
+    def query(self, name: ReadQueryName, parameters: Mapping[str, str | int | Sequence[str]]) -> Awaitable[str]: ...
+
+
 class NativeTraces(Protocol):
-    def trace_encode_rows(self, rows: Sequence[Mapping[str, JsonValue]]) -> str: ...
+    NativeTraceConfig: type["NativeConfig"]
+    NativeTraceStorage: type[NativeStore]
 
-    def trace_ensure_schema(
+    def trace_decode_otlp(
         self,
-        url: str,
-        database: str,
-        user: str,
-        password: str,
-        trace_retention_days: int,
-        spend_log_retention_days: int,
-    ) -> Awaitable[None]: ...
+        body: bytes,
+        content_type: str | None,
+    ) -> list[DecodedSpan]: ...
 
-    def trace_query(
-        self,
-        url: str,
-        database: str,
-        user: str,
-        password: str,
-        sql: str,
-        parameters: Mapping[str, str | int | Sequence[str]],
-    ) -> Awaitable[str]: ...
+    def trace_encode_error(self, message: str) -> bytes: ...
+
+    def trace_normalized_field_definitions(self) -> list[dict[str, str]]: ...
 
 
 class QueryResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
     data: list[dict[str, JsonValue]]
+
+
+QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | list[str]])
+_FIELD_DEFINITIONS_ADAPTER: Final = TypeAdapter(tuple[NormalizedFieldDefinition, ...])
+
+
+class NativeConfig(Protocol):
+    def __init__(self, database: str, url: str, retention_days: int) -> None: ...
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class TraceStorageConfig:
+    url: str
+    database: str = "litellm"
+    retention_days: int = 14
 
 
 def _native() -> NativeTraces:
@@ -42,28 +135,71 @@ def _native() -> NativeTraces:
     return cast(NativeTraces, native)  # cast-ok: the native extension is validated against this protocol at call sites
 
 
-async def ensure_schema(
-    url: str,
-    database: str,
-    user: str,
-    password: str,
-    trace_retention_days: int,
-    spend_log_retention_days: int,
-) -> None:
-    await _native().trace_ensure_schema(url, database, user, password, trace_retention_days, spend_log_retention_days)
+def decode_otlp(body: bytes, content_type: str | None) -> list[DecodedSpan]:
+    return [
+        {**span, "normalized": NormalizedSpan.model_validate(span["normalized"])}
+        for span in _native().trace_decode_otlp(body, content_type)
+    ]
 
 
-async def query(
-    url: str,
-    database: str,
-    user: str,
-    password: str,
-    sql: str,
-    parameters: Mapping[str, str | int | Sequence[str]],
-) -> list[dict[str, JsonValue]]:
-    result: Final = await _native().trace_query(url, database, user, password, sql, parameters)
-    return QueryResponse.model_validate_json(result).data
+def normalized_field_definitions() -> tuple[NormalizedFieldDefinition, ...]:
+    fields: Final = _FIELD_DEFINITIONS_ADAPTER.validate_python(_native().trace_normalized_field_definitions())
+    if frozenset(field.name for field in fields) != frozenset(NormalizedSpan.model_fields):
+        raise ValueError("Rust and Python normalized trace fields disagree")
+    return fields
 
 
-def encode_rows(rows: Sequence[Mapping[str, JsonValue]]) -> bytes:
-    return _native().trace_encode_rows(rows).encode("utf-8")
+def encode_error(message: str) -> bytes:
+    if get_native_bridge() is None:
+        return b""
+    return _native().trace_encode_error(message)
+
+
+class ClickHouseStorage:
+    def __init__(self, config: TraceStorageConfig) -> None:
+        native: Final = _native()
+        validated: Final = native.NativeTraceConfig(
+            config.database,
+            config.url,
+            config.retention_days,
+        )
+        self._native: Final = native.NativeTraceStorage(validated)
+
+    async def ensure_schema(self) -> None:
+        await self._native.ensure_schema()
+
+    async def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> None:
+        await self._native.insert_rows(table, rows)
+
+    async def query(
+        self, name: ReadQueryName, parameters: Mapping[str, object] | None = None
+    ) -> list[dict[str, JsonValue]]:
+        result: Final = await self._native.query(
+            name, QUERY_PARAMETERS.validate_python(parameters or MappingProxyType({}))
+        )
+        return QueryResponse.model_validate_json(result).data
+
+    async def query_sql(self, sql: str, scope: QueryScope, secret: str) -> str:
+        return await self._native.query_sql(sql, scope, secret)
+
+    async def query_help(self, scope: QueryScope, secret: str) -> str:
+        return await self._native.query_help(scope, secret)
+
+    async def _lens_query(self, name: str, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        result: Final = await self._native.lens_query(name, QUERY_PARAMETERS.validate_python(parameters))
+        return QueryResponse.model_validate_json(result).data
+
+    async def lens_sample(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        return await self._lens_query("sample", parameters)
+
+    async def lens_availability(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        return await self._lens_query("availability", parameters)
+
+    async def lens_agents(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        return await self._lens_query("agents", parameters)
+
+    async def lens_content(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        return await self._lens_query("content", parameters)
+
+    async def lens_evidence(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        return await self._lens_query("evidence", parameters)

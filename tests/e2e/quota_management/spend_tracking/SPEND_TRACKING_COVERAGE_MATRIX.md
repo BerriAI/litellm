@@ -6,7 +6,7 @@ that would catch a regression.
 
 Companion: live suite `test_spend_tracking_e2e.py` + route breadth
 `test_spend_routes.py` (this directory). Offline regression suite:
-`tests/test_litellm/proxy/spend_tracking/`. Reference PR: BerriAI/litellm#29956.
+`tests/unit/proxy/spend_tracking/`. Reference PR: BerriAI/litellm#29956.
 
 Levels: `unit` mocked; `integration` real DB/cost-map; `live` real provider +
 proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
