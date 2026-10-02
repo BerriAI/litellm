@@ -28,6 +28,7 @@ GEMINI_BACKEND: Final = "gemini/gemini-3.5-flash-lite"
 MISTRAL_BACKEND: Final = "mistral/mistral-medium-3.5"
 ANTHROPIC_BACKEND: Final = "anthropic/claude-haiku-4-5"
 BEDROCK_CONVERSE_BACKEND: Final = "bedrock/converse/us.anthropic.claude-sonnet-5-5"
+BEDROCK_LEGACY_THINKING_BACKEND: Final = "bedrock/converse/us.anthropic.claude-sonnet-4-6"
 
 PROMPT: Final = "What is the weather in Paris and in Tokyo? Use the get_weather tool for each city."
 CITY_TEMPERATURES: Final = MappingProxyType({"paris": "22", "tokyo": "31"})
@@ -54,9 +55,9 @@ def _api_key_params(backend: str, env: str) -> LiteLLMParamsBody:
     return LiteLLMParamsBody(model=backend, api_key=f"os.environ/{env}")
 
 
-def _bedrock_params() -> LiteLLMParamsBody:
+def _bedrock_params(backend: str) -> LiteLLMParamsBody:
     return LiteLLMParamsBody(
-        model=BEDROCK_CONVERSE_BACKEND,
+        model=backend,
         aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
         aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
         aws_region_name="os.environ/AWS_REGION",
@@ -146,7 +147,7 @@ class TestChatToolResultRoundTrip:
         _assert_tool_results_reach_the_model(client, key, model, thinking=None, tool_choice="required")
 
     def test_bedrock_converse(self, client: PassthroughClient, resources: ResourceManager) -> None:
-        model, key = _register(client, resources, _bedrock_params())
+        model, key = _register(client, resources, _bedrock_params(BEDROCK_CONVERSE_BACKEND))
         _assert_tool_results_reach_the_model(client, key, model, thinking=None, tool_choice="required")
 
     def test_anthropic_with_extended_thinking(self, client: PassthroughClient, resources: ResourceManager) -> None:
@@ -156,5 +157,5 @@ class TestChatToolResultRoundTrip:
     def test_bedrock_converse_with_extended_thinking(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        model, key = _register(client, resources, _bedrock_params())
+        model, key = _register(client, resources, _bedrock_params(BEDROCK_LEGACY_THINKING_BACKEND))
         _assert_tool_results_reach_the_model(client, key, model, thinking=THINKING, tool_choice=None)
