@@ -38118,6 +38118,170 @@
           "title": "MCPSubmissionsSummary",
           "type": "object"
         },
+        "MCPToolChange": {
+          "additionalProperties": false,
+          "properties": {
+            "breaking": {
+              "title": "Breaking",
+              "type": "boolean"
+            },
+            "summary": {
+              "title": "Summary",
+              "type": "string"
+            }
+          },
+          "required": [
+            "breaking",
+            "summary"
+          ],
+          "title": "MCPToolChange",
+          "type": "object"
+        },
+        "MCPToolDeprecationRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "deprecation_note": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Deprecation Note"
+            },
+            "sunset_date": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sunset Date"
+            }
+          },
+          "title": "MCPToolDeprecationRequest",
+          "type": "object"
+        },
+        "MCPToolVersion": {
+          "properties": {
+            "change_kind": {
+              "enum": [
+                "initial",
+                "non_breaking",
+                "breaking",
+                "removed"
+              ],
+              "title": "Change Kind",
+              "type": "string"
+            },
+            "changelog": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Changelog"
+            },
+            "changes": {
+              "default": [],
+              "items": {
+                "$ref": "#/components/schemas/MCPToolChange"
+              },
+              "title": "Changes",
+              "type": "array"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "created_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created By"
+            },
+            "deprecated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Deprecated At"
+            },
+            "deprecation_note": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Deprecation Note"
+            },
+            "description": {
+              "default": "",
+              "title": "Description",
+              "type": "string"
+            },
+            "input_schema": {
+              "additionalProperties": true,
+              "title": "Input Schema",
+              "type": "object"
+            },
+            "server_id": {
+              "title": "Server Id",
+              "type": "string"
+            },
+            "sunset_date": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sunset Date"
+            },
+            "tool_name": {
+              "title": "Tool Name",
+              "type": "string"
+            },
+            "version": {
+              "title": "Version",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "server_id",
+            "tool_name",
+            "version",
+            "change_kind",
+            "created_at"
+          ],
+          "title": "MCPToolVersion",
+          "type": "object"
+        },
         "MCPToolsetTool": {
           "properties": {
             "server_id": {
@@ -38880,6 +39044,24 @@
             "toolset_name"
           ],
           "title": "NewMCPToolsetRequest",
+          "type": "object"
+        },
+        "PinMCPServerToolsRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "changelog": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Changelog"
+            }
+          },
+          "title": "PinMCPServerToolsRequest",
           "type": "object"
         },
         "PinnedMCPTool": {
@@ -40532,6 +40714,23 @@
               }
             }
           ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PinMCPServerToolsRequest"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Payload"
+                }
+              }
+            }
+          },
           "responses": {
             "200": {
               "content": {
@@ -40622,6 +40821,198 @@
             }
           ],
           "summary": "Reject Mcp Server Submission",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/server/{server_id}/tool-versions": {
+        "get": {
+          "description": "Returns the version history of the tools recorded for an MCP server.",
+          "operationId": "fetch_mcp_server_tool_versions_v1_mcp_server__server_id__tool_versions_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/MCPToolVersion"
+                    },
+                    "title": "Response Fetch Mcp Server Tool Versions V1 Mcp Server  Server Id  Tool Versions Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Fetch Mcp Server Tool Versions",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/server/{server_id}/tools/{tool_name}/versions/{version}/deprecation": {
+        "delete": {
+          "description": "Clear deprecation and sunset metadata for an MCP tool version.",
+          "operationId": "clear_tool_version_deprecation_v1_mcp_server__server_id__tools__tool_name__versions__version__deprecation_delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "title": "Server Id",
+                "type": "string"
+              }
+            },
+            {
+              "in": "path",
+              "name": "tool_name",
+              "required": true,
+              "schema": {
+                "title": "Tool Name",
+                "type": "string"
+              }
+            },
+            {
+              "in": "path",
+              "name": "version",
+              "required": true,
+              "schema": {
+                "title": "Version",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MCPToolVersion"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Clear Tool Version Deprecation",
+          "tags": [
+            "mcp_management"
+          ]
+        },
+        "put": {
+          "description": "Set deprecation and sunset metadata for an MCP tool version.",
+          "operationId": "set_tool_version_deprecation_v1_mcp_server__server_id__tools__tool_name__versions__version__deprecation_put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "title": "Server Id",
+                "type": "string"
+              }
+            },
+            {
+              "in": "path",
+              "name": "tool_name",
+              "required": true,
+              "schema": {
+                "title": "Tool Name",
+                "type": "string"
+              }
+            },
+            {
+              "in": "path",
+              "name": "version",
+              "required": true,
+              "schema": {
+                "title": "Version",
+                "type": "integer"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPToolDeprecationRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MCPToolVersion"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Set Tool Version Deprecation",
           "tags": [
             "mcp_management"
           ]

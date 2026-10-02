@@ -385,6 +385,15 @@ async def test_purge_user_oauth_credentials_for_server_logs_raced_rows(monkeypat
     warning.assert_called_once()
 
 
+def _bind_delete_transaction(prisma: MagicMock) -> None:
+    prisma.db.execute_raw = AsyncMock()
+    prisma.db.litellm_mcptoolversion.delete_many = AsyncMock(return_value=0)
+    tx: Final = MagicMock()
+    tx.__aenter__ = AsyncMock(return_value=prisma.db)
+    tx.__aexit__ = AsyncMock(return_value=False)
+    prisma.tx = MagicMock(return_value=tx)
+
+
 @pytest.mark.asyncio
 async def test_delete_mcp_server_invalidates_cached_tokens_for_enumerated_users():
     """Deleting a server must invalidate each enumerated user's cached per-user token: the caches are
@@ -394,6 +403,7 @@ async def test_delete_mcp_server_invalidates_cached_tokens_for_enumerated_users(
 
     prisma = MagicMock()
     prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=MagicMock(server_id="srv-1"))
+    _bind_delete_transaction(prisma)
     prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[_oauth_row("alice"), _byok_row("bob")])
     prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock(return_value=2)
     prisma.db.litellm_mcpuserenvvars.delete_many = AsyncMock(return_value=0)
@@ -415,6 +425,7 @@ async def test_delete_mcp_server_returns_none_without_cleanup_when_server_missin
 
     prisma = MagicMock()
     prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=None)
+    _bind_delete_transaction(prisma)
     prisma.db.litellm_mcpusercredentials.find_many = AsyncMock()
 
     deleted = await delete_mcp_server(prisma, "srv-1", invalidate_token_cache=AsyncMock())
@@ -1573,6 +1584,7 @@ async def test_delete_mcp_server_cleans_oauth_client_store():
 
     prisma = MagicMock()
     prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=SimpleNamespace(server_id="s1"))
+    _bind_delete_transaction(prisma)
     prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock()
     prisma.db.litellm_mcpuserenvvars.delete_many = AsyncMock()

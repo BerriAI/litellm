@@ -427,6 +427,26 @@ model LiteLLM_MCPServerTable {
   @@index([approval_status])
 }
 
+model LiteLLM_MCPToolVersion {
+  id               String    @id @default(uuid())
+  server_id        String
+  tool_name        String
+  version          Int
+  description      String    @default("")
+  input_schema     Json      @default("{}")
+  change_kind      String
+  changes          Json      @default("[]")
+  changelog        String?
+  deprecated_at    DateTime?
+  sunset_date      DateTime?
+  deprecation_note String?
+  created_at       DateTime  @default(now())
+  created_by       String?
+
+  @@unique([server_id, tool_name, version])
+  @@index([server_id])
+}
+
 // Named collection of {server_id, tool_name} pairs that can be granted to keys/teams
 model LiteLLM_MCPToolsetTable {
   toolset_id   String   @id @default(uuid())

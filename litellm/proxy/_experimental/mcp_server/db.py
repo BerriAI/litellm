@@ -57,7 +57,12 @@ from litellm.repositories.verification_token_repository import (
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPCredentials, MCPTransportType, MCPUpstreamProtocol, validate_mcp_protocol_transport
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo, PinnedMCPTool
+from litellm.types.mcp_server.mcp_server_manager import (
+    MCPInfo,
+    MCPToolDeprecationRequest,
+    MCPToolVersion,
+    PinnedMCPTool,
+)
 
 if TYPE_CHECKING:
     from prisma import models as prisma_db_models
@@ -597,6 +602,9 @@ def _db_transaction_manager(prisma_client: PrismaClient) -> _UserEnvVarsTransact
     return manager
 
 
+_MCP_PIN_ADVISORY_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) IS NULL AS locked"
+
+
 def _identifier_where(value: str, exclude_server_id: str | None) -> "prisma_db_types.LiteLLM_MCPServerTableWhereInput":
     own_row_guard: Final = ({"NOT": [{"server_id": exclude_server_id}]},) if exclude_server_id is not None else ()
     where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {
@@ -1003,6 +1011,10 @@ async def delete_mcp_server(
     """
     Delete the mcp server from the db by server_id
 
+    Tool version history is removed with the server row in one transaction that
+    holds the server's pin lock, so the delete either keeps both or drops both and
+    a concurrent pin cannot write history for a server that is being removed.
+
     The server-row delete is the commit point. Per-user credential and env var
     rows have no FK cascade, so they are cleaned up afterwards on a best-effort
     basis: a transient failure there leaves only orphaned rows pointing at a
@@ -1018,12 +1030,16 @@ async def delete_mcp_server(
 
     Returns the deleted mcp server record if it exists, otherwise None
     """
-    deleted_server: Final = await MCPServerRepository(prisma_client).table.delete(
-        where={
-            "server_id": server_id,
-        },
-    )
+    async with prisma_client.tx() as tx:
+        _ = await tx.execute_raw(_MCP_PIN_ADVISORY_LOCK_SQL, f"mcp_pin:{server_id}")
+        _ = await tx.litellm_mcptoolversion.delete_many(where={"server_id": server_id})
+        deleted_server: Final[prisma_db_models.LiteLLM_MCPServerTable | None] = await tx.litellm_mcpservertable.delete(
+            where={"server_id": server_id}
+        )
     if deleted_server is not None:
+        from litellm.proxy.common_utils.config_sync_pubsub import publish_config_change_for_object_type
+
+        await publish_config_change_for_object_type("litellm_mcpservertable")
         credential_user_ids: list[str] = []
         try:
             credential_rows: Sequence[prisma_db_models.LiteLLM_MCPUserCredentials] = await _user_credential_actions(
@@ -2321,21 +2337,140 @@ async def set_mcp_server_pinned_tools(
     server_id: str,
     pinned_tools: Mapping[str, PinnedMCPTool] | None,
     touched_by: str,
+    changelog: str | None = None,
 ) -> LiteLLM_MCPServerTable | None:
     """Replace the server's pinned catalog; ``None`` unpins. Only this write path sets the pin."""
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-    if await _db_find_mcp_server_row(prisma_client, server_id) is None:
-        return None
-    snapshot: Final = {name: tool.model_dump() for name, tool in (pinned_tools or {}).items()}
-    updated: Final = await _db_update_mcp_server_row(
-        prisma_client,
-        server_id,
-        {"pinned_tools": safe_dumps(snapshot), "updated_by": touched_by},
-    )
-    table: Final = LiteLLM_MCPServerTable.model_validate(updated.model_dump())
-    decrypt_global_env_var_values(table.env_vars)
+    async with prisma_client.tx() as tx:
+        _ = await tx.execute_raw(_MCP_PIN_ADVISORY_LOCK_SQL, f"mcp_pin:{server_id}")
+        server_row: Final = await tx.litellm_mcpservertable.find_unique(where={"server_id": server_id})
+        if server_row is None:
+            return None
+        if pinned_tools is not None:
+            from litellm.proxy._experimental.mcp_server.tool_versioning import plan_tool_versions
+
+            existing_versions: Final = await _list_mcp_tool_versions_from_actions(tx.litellm_mcptoolversion, server_id)
+            latest_versions: Final = {row.tool_name: row for row in reversed(existing_versions)}
+            planned_versions: Final = plan_tool_versions(latest_versions, pinned_tools)
+            version_rows: Final = tuple(
+                {
+                    "server_id": server_id,
+                    "tool_name": planned.tool_name,
+                    "version": planned.version,
+                    "description": planned.tool.description,
+                    "input_schema": safe_dumps(planned.tool.input_schema),
+                    "change_kind": planned.change_kind,
+                    "changes": safe_dumps([change.model_dump() for change in planned.changes]),
+                    "changelog": changelog,
+                    "created_by": touched_by,
+                }
+                for planned in planned_versions
+            )
+            if version_rows:
+                await tx.litellm_mcptoolversion.create_many(data=version_rows)
+        snapshot: Final = {name: tool.model_dump() for name, tool in (pinned_tools or {}).items()}
+        updated: Final = await tx.litellm_mcpservertable.update(
+            where={"server_id": server_id},
+            data={"pinned_tools": safe_dumps(snapshot), "updated_by": touched_by},
+        )
+        if updated is None:
+            raise ValueError(f"MCP server not found, passed server_id={server_id}")
+        table: Final = LiteLLM_MCPServerTable.model_validate(updated.model_dump())
+        decrypt_global_env_var_values(table.env_vars)
+    from litellm.proxy.common_utils.config_sync_pubsub import publish_config_change_for_object_type
+
+    await publish_config_change_for_object_type("litellm_mcpservertable")
     return table
+
+
+async def _list_mcp_tool_versions_from_actions(
+    table: "TableActions[prisma_db_models.LiteLLM_MCPToolVersion]",
+    server_id: str,
+) -> Sequence[MCPToolVersion]:
+    rows: Final[Sequence[prisma_db_models.LiteLLM_MCPToolVersion]] = await table.find_many(
+        where={"server_id": server_id},
+        order=[{"tool_name": "asc"}, {"version": "desc"}],
+    )
+    return [MCPToolVersion.model_validate(row.model_dump()) for row in rows]
+
+
+async def list_mcp_tool_versions(
+    prisma_client: PrismaClient,
+    server_id: str,
+    server_created_at: datetime | None = None,
+) -> Sequence[MCPToolVersion]:
+    """
+    Read a server's tool history on the writer under the server's pin lock.
+
+    ``server_created_at`` ties the read to the server row the caller authorized:
+    if that server was deleted, or deleted and re-created under the same id,
+    the caller gets no history instead of the other server's.
+    """
+    async with prisma_client.tx() as tx:
+        _ = await tx.execute_raw(_MCP_PIN_ADVISORY_LOCK_SQL, f"mcp_pin:{server_id}")
+        if not await _is_authorized_server_row(tx.litellm_mcpservertable, server_id, server_created_at):
+            return []
+        return await _list_mcp_tool_versions_from_actions(tx.litellm_mcptoolversion, server_id)
+
+
+async def _is_authorized_server_row(
+    servers: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]",
+    server_id: str,
+    server_created_at: datetime | None,
+) -> bool:
+    if server_created_at is None:
+        return True
+    current: Final = await servers.find_unique(where={"server_id": server_id})
+    return current is not None and current.created_at == server_created_at
+
+
+async def set_mcp_tool_version_deprecation(
+    prisma_client: PrismaClient,
+    server_id: str,
+    tool_name: str,
+    version: int,
+    deprecation: MCPToolDeprecationRequest | None,
+    server_created_at: datetime | None = None,
+) -> MCPToolVersion | None:
+    """
+    ``server_created_at`` ties the write to the server row the caller authorized,
+    so a deleted and re-created server with the same id is left untouched.
+    """
+    unique_where: Final = {
+        "server_id_tool_name_version": {
+            "server_id": server_id,
+            "tool_name": tool_name,
+            "version": version,
+        }
+    }
+    async with prisma_client.tx() as tx:
+        _ = await tx.execute_raw(_MCP_PIN_ADVISORY_LOCK_SQL, f"mcp_pin:{server_id}")
+        if not await _is_authorized_server_row(tx.litellm_mcpservertable, server_id, server_created_at):
+            return None
+        row: Final[prisma_db_models.LiteLLM_MCPToolVersion | None] = await tx.litellm_mcptoolversion.find_unique(
+            where=unique_where
+        )
+        if row is None:
+            return None
+        data: Final = (
+            {
+                "deprecated_at": None,
+                "sunset_date": None,
+                "deprecation_note": None,
+            }
+            if deprecation is None
+            else {
+                "deprecated_at": row.deprecated_at or datetime.now(timezone.utc),
+                "sunset_date": deprecation.sunset_date,
+                "deprecation_note": deprecation.deprecation_note,
+            }
+        )
+        updated: Final[prisma_db_models.LiteLLM_MCPToolVersion | None] = await tx.litellm_mcptoolversion.update(
+            where=unique_where,
+            data=data,
+        )
+        return MCPToolVersion.model_validate(updated.model_dump()) if updated is not None else None
 
 
 async def reject_mcp_server(
