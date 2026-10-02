@@ -385,12 +385,25 @@ async fn listed_agent_names_preserve_scope_and_cursor(
             "otel_traces",
             vec![serde_json::from_value(serde_json::json!({
                 "Timestamp": timestamp, "TraceId": trace, "SpanId": span, "ParentSpanId": parent,
-                "ServiceName": "shared-app", "SpanName": "operation", "AgentName": agent,
+                "ServiceName": "shared-app", "SpanName": span, "AgentName": agent,
+                "ObservationType": "agent",
                 "ResourceAttributes": {"litellm.team_id": team, "litellm.api_key_hash": key}
             }))?],
         )
         .await?;
     }
+    let historical_rows = (0..5000)
+        .map(|index| {
+            serde_json::from_value(serde_json::json!({
+                "Timestamp": timestamp - 86_400_000_000_000_i64,
+                "TraceId": "shared", "SpanId": format!("historical-{index}"),
+                "ParentSpanId": "", "SpanName": "historical", "AgentName": "private_agent",
+                "ObservationType": "agent", "ServiceName": "shared-app",
+                "ResourceAttributes": {"litellm.team_id": "alpha", "litellm.api_key_hash": "history"}
+            }))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    insert_rows(&database, "otel_traces", historical_rows).await?;
     let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
     let parameters = BTreeMap::from([
         ("team_ids".into(), Parameter::Strings(vec!["alpha".into()])),
@@ -464,6 +477,25 @@ async fn listed_agent_names_preserve_scope_and_cursor(
         serde_json::json!(["research_agent", "reviewer"])
     );
     assert_eq!(names["second"], serde_json::json!(["support_agent"]));
+    let counts = [&first["data"][0], &second["data"][0]]
+        .into_iter()
+        .map(|row| {
+            (
+                row["trace_id"].as_str().unwrap(),
+                row["agent_count"].as_u64(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(counts["shared"], Some(3));
+    assert_eq!(counts["second"], Some(1));
+    for page in [&first, &second] {
+        assert!(
+            page["statistics"]["rows_read"]
+                .as_u64()
+                .ok_or("missing read statistics")?
+                < 5000
+        );
+    }
     Ok(())
 }
 
@@ -481,6 +513,7 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
     let root = serde_json::from_value(serde_json::json!({
         "Timestamp": day_start - 1_000_000_000, "TraceId": "cross-day", "SpanId": "span-root",
         "ParentSpanId": "", "ServiceName": "proxy", "SpanName": "root", "Input": "root input",
+        "AgentName": "lead", "ObservationType": "agent",
         "StatusCode": "STATUS_CODE_ERROR",
         "ResourceAttributes": {"litellm.team_id": "team-1"}
     }))?;
@@ -488,6 +521,7 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
     let child = serde_json::from_value(serde_json::json!({
         "Timestamp": day_start + 1_000_000_000, "TraceId": "cross-day", "SpanId": "span-child",
         "ParentSpanId": "span-root", "ServiceName": "proxy", "SpanName": "child",
+        "AgentName": "researcher", "ObservationType": "agent",
         "StatusCode": "STATUS_CODE_UNSET",
         "ResourceAttributes": {"litellm.team_id": "team-1"}
     }))?;
@@ -511,6 +545,33 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
             "RootStatus": "STATUS_CODE_ERROR", "SpanCount": 2
         }])
     );
+    let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let parameters = BTreeMap::from([
+        ("team_ids".into(), Parameter::Strings(vec!["team-1".into()])),
+        ("api_key_hash".into(), Parameter::Text(String::new())),
+        (
+            "start_ms".into(),
+            Parameter::Integer(day_start / 1_000_000 - 2000),
+        ),
+        ("end_ms".into(), Parameter::Integer(day_start / 1_000_000)),
+        ("cursor_ms".into(), Parameter::Integer(0)),
+        ("cursor_trace_id".into(), Parameter::Text(String::new())),
+        ("limit".into(), Parameter::Integer(10)),
+    ]);
+    let listed: serde_json::Value = serde_json::from_str(
+        &execute_named_read(
+            &database.client,
+            &connection,
+            ReadQuery::ListTraces,
+            &parameters,
+        )
+        .await?,
+    )?;
+    assert_eq!(
+        listed["data"][0]["agent_names"],
+        serde_json::json!(["lead", "researcher"])
+    );
+    assert_eq!(listed["data"][0]["agent_count"], 2);
     Ok(())
 }
 

@@ -5,8 +5,9 @@ SELECT TraceId AS trace_id,
        ifNull(any(RootName), '') AS name, any(ServiceName) AS service,
        ifNull(any(RootInput), '') AS input_preview, ifNull(any(RootStatus), '') AS status,
        toUnixTimestamp64Milli(min(StartTs)) AS start_ms,
+       min(StartTs) AS trace_start, max(EndTs) AS trace_end,
        dateDiff('millisecond', min(StartTs), max(EndTs)) AS duration_ms,
-       sum(SpanCount) AS span_count, length(groupUniqArrayArray(AgentNames)) AS agent_count,
+       sum(SpanCount) AS span_count,
        sum(AgentCount) AS agent_invocations,
        sum(LlmCount) AS llm_calls, sum(ToolCount) AS tool_calls,
        sum(InputTokens) AS input_tokens, sum(OutputTokens) AS output_tokens,
@@ -23,12 +24,16 @@ HAVING min(StartTs) >= fromUnixTimestamp64Milli({start_ms:Int64})
 ORDER BY start_ms DESC, trace_ref DESC
 LIMIT {limit:UInt32}
 )
-SELECT page.*, identities.agent_names AS agent_names
+SELECT page.* EXCEPT (trace_start, trace_end),
+       identities.agent_names AS agent_names, identities.agent_count AS agent_count
 FROM page
 LEFT JOIN (
-    SELECT TeamId, ApiKeyHash, TraceId, arraySort(groupUniqArray(AgentName)) AS agent_names
+    SELECT TeamId, ApiKeyHash, TraceId,
+           arraySort(groupUniqArrayIf(AgentName, AgentName != '')) AS agent_names,
+           uniqExactIf(if(AgentName = '', SpanName, AgentName), ObservationType = 'agent') AS agent_count
     FROM otel_traces
-    WHERE AgentName != ''
+    WHERE Timestamp >= (SELECT min(trace_start) FROM page)
+      AND Timestamp <= (SELECT max(trace_end) FROM page)
       AND TraceId IN (SELECT trace_id FROM page)
       AND (TeamId, ApiKeyHash, TraceId) IN (SELECT team_id, api_key_hash, trace_id FROM page)
     GROUP BY TeamId, ApiKeyHash, TraceId

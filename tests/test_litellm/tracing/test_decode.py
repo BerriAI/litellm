@@ -114,20 +114,30 @@ def test_hermes_resource_name_replaces_only_its_plugin_default(
     assert row["AgentName"] == expected
 
 
-def test_openinference_middleware_is_not_a_separate_agent():
+@pytest.mark.parametrize("agent_name", ["research_agent", ""])
+def test_openinference_middleware_is_not_a_separate_agent(agent_name: str):
     span = _span(
         "PatchToolCallsMiddleware.before_agent", b"\x02" * 8, b"\x01" * 8,
-        openinference__span__kind="AGENT", metadata='{"lc_agent_name":"research_agent"}',
+        openinference__span__kind="AGENT", metadata=json.dumps({"lc_agent_name": agent_name}),
     )
     row = decode_otlp(_export(span, scope="openinference.instrumentation.langchain"), "application/x-protobuf")[0]
-    assert (row["ObservationType"], row["AgentName"]) == ("framework", "research_agent")
+    assert (row["ObservationType"], row["AgentName"]) == ("framework", agent_name)
 
 
+@pytest.mark.parametrize("scope", ["test", "openinference.instrumentation.langchain"])
+@pytest.mark.parametrize("kind", ["CHAIN", "AGENT"])
 @pytest.mark.parametrize("metadata", ["not json", "[]", '{"lc_agent_name":null}', "{}"])
-def test_unnamed_framework_does_not_invent_an_agent_from_service(metadata: str):
-    span = _span("workflow", b"\x02" * 8, openinference__span__kind="CHAIN", metadata=metadata)
-    row = decode_otlp(_export(span), "application/x-protobuf")[0]
+def test_unnamed_framework_does_not_invent_an_agent_from_service(metadata: str, scope: str, kind: str):
+    span = _span("workflow", b"\x02" * 8, openinference__span__kind=kind, metadata=metadata)
+    row = decode_otlp(_export(span, scope=scope), "application/x-protobuf")[0]
     assert row["AgentName"] == ""
+
+
+@pytest.mark.parametrize("name,expected", [("support", "support"), ("LangGraph", "")])
+def test_langgraph_distinguishes_configured_graph_name_from_default(name: str, expected: str):
+    span = _span(name, b"\x02" * 8, openinference__span__kind="CHAIN", metadata='{"ls_integration":"langgraph"}')
+    row = decode_otlp(_export(span, scope="openinference.instrumentation.langchain"), "application/x-protobuf")[0]
+    assert row["AgentName"] == expected
 
 
 def _span(name: str, span_id: bytes, parent: bytes = b"", **attributes: str | int) -> Span:

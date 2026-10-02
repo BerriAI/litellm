@@ -157,7 +157,6 @@ struct AgentMetadata {
 }
 
 fn recorded_agent_name(
-    scope_name: &str,
     name: &str,
     attributes: &BTreeMap<String, String>,
     span: &NormalizedSpan,
@@ -183,9 +182,7 @@ fn recorded_agent_name(
         if !node.is_empty() {
             return node.to_owned();
         }
-        if metadata.ls_integration == "langgraph"
-            || scope_name == "openinference.instrumentation.langchain"
-        {
+        if metadata.ls_integration == "langgraph" && name != "LangGraph" && !is_middleware(name) {
             return name.to_owned();
         }
     }
@@ -221,11 +218,10 @@ pub fn normalize(
         .find(|normalizer| normalizer.matches(scope_name, attributes))
         .expect("GenAI fallback always matches");
     let span = normalizer.normalize(name, parent_span_id, attributes)?;
-    let agent_name = recorded_agent_name(scope_name, name, attributes, &span);
+    let agent_name = recorded_agent_name(name, attributes, &span);
     let observation_type = if !parent_span_id.is_empty()
         && scope_name == "openinference.instrumentation.langchain"
         && is_middleware(name)
-        && !agent_name.is_empty()
     {
         ObservationType::Framework
     } else {
