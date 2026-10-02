@@ -1,5 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/cva.config";
+import { ROOT_BLOCK_STYLES } from "./json_root_blocks";
 import type { SystemOneQuestion, SystemOneRequest } from "./system_one_schemas";
 
 function formatState(state: unknown): string {
@@ -76,7 +78,10 @@ export default function SystemOneQuestionBreakdown({ payload }: { payload?: Syst
         <CardDescription>Review the state and criteria that will be sent.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
-        <section aria-labelledby="system-one-state-heading" className="grid gap-2">
+        <section
+          aria-labelledby="system-one-state-heading"
+          className={cn("grid gap-2 border-l-2 pl-3", ROOT_BLOCK_STYLES.state.accent)}
+        >
           <h3 id="system-one-state-heading" className="text-sm font-medium">
             State
           </h3>
@@ -84,7 +89,7 @@ export default function SystemOneQuestionBreakdown({ payload }: { payload?: Syst
             {formatState(payload.state)}
           </pre>
         </section>
-        <div className="grid gap-3">
+        <div className={cn("grid gap-3 border-l-2 pl-3", ROOT_BLOCK_STYLES.questions.accent)}>
           {Object.entries(payload.questions).map(([id, question]) => (
             <section key={id} className="grid gap-3 rounded-md border p-3" aria-labelledby={`question-${id}`}>
               <div className="flex flex-wrap items-center justify-between gap-2">

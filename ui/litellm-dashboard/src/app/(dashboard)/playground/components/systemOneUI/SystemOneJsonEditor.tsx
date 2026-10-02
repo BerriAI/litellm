@@ -1,9 +1,10 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cva.config";
 import { CircleAlert, CircleCheck, TriangleAlert } from "lucide-react";
-import { useId, useRef } from "react";
+import { useId, useMemo, useRef } from "react";
 import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
+import { findRootBlocks, ROOT_BLOCK_STYLES } from "./json_root_blocks";
 import type { SystemOnePayloadValidation } from "./validate_system_one_payload";
 
 SyntaxHighlighter.registerLanguage("json", json);
@@ -67,12 +68,17 @@ export default function SystemOneJsonEditor({ value, onChange, validation }: Sys
   const issuesId = useId();
   const gutterRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
+  const blocksRef = useRef<HTMLDivElement>(null);
+  const rootBlocks = useMemo(() => findRootBlocks(value), [value]);
   const lineCount = value.split("\n").length;
   const hasErrors = !validation.isValid;
 
   function syncScroll(textarea: HTMLTextAreaElement) {
     if (gutterRef.current) {
       gutterRef.current.scrollTop = textarea.scrollTop;
+    }
+    if (blocksRef.current) {
+      blocksRef.current.style.transform = `translateY(-${textarea.scrollTop}px)`;
     }
     if (highlightRef.current) {
       highlightRef.current.scrollTop = textarea.scrollTop;
@@ -110,6 +116,20 @@ export default function SystemOneJsonEditor({ value, onChange, validation }: Sys
           ))}
         </div>
         <div className="relative flex-1">
+          <div aria-hidden="true" className="absolute inset-0 overflow-hidden">
+            <div ref={blocksRef}>
+              {rootBlocks.map(({ key, startLine, endLine }) => (
+                <div
+                  key={key}
+                  className={cn("absolute inset-x-1 rounded-sm border", ROOT_BLOCK_STYLES[key].band)}
+                  style={{
+                    top: `calc(0.75rem + ${startLine * 1.25}rem)`,
+                    height: `${(endLine - startLine + 1) * 1.25}rem`,
+                  }}
+                />
+              ))}
+            </div>
+          </div>
           <div ref={highlightRef} aria-hidden="true" className={cn("absolute inset-0 overflow-hidden", TOKEN_COLORS)}>
             <SyntaxHighlighter
               language="json"
