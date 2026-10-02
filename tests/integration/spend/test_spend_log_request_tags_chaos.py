@@ -11,8 +11,8 @@ from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from integration.spend._request_tag_helpers import (
-    ANTHROPIC_ANTHROPIC_MODEL,
-    OPENAI_ANTHROPIC_MODEL,
+    ANTHROPIC_MODEL,
+    OPENAI_MODEL,
     T3,
     provider_env,
     provider_reply,
@@ -59,7 +59,7 @@ def _tagged_requests(
         candidate.request(
             "POST",
             "/openai/v1/chat/completions",
-            {"model": OPENAI_ANTHROPIC_MODEL, "messages": [{"role": "user", "content": marker}], "stream": stream},
+            {"model": OPENAI_MODEL, "messages": [{"role": "user", "content": marker}], "stream": stream},
             key=key,
             headers=HEADERS,
         ),
@@ -87,7 +87,7 @@ def _tagged_requests(
 
 def _deployments(scenario, url: str) -> tuple[str, str]:
     return (
-        scenario.model(model=f"anthropic/{MODEL}", api_base=url, api_key="synthetic-anthropic-key"),
+        scenario.model(model=f"anthropic/{ANTHROPIC_MODEL}", api_base=url, api_key="synthetic-anthropic-key"),
         scenario.model(model=f"openai/{OPENAI_MODEL}", api_base=f"{url}/v1"),
     )
 
