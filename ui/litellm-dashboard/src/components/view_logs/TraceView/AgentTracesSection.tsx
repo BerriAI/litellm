@@ -1,4 +1,5 @@
 "use client";
+import { useLensDemo } from "@/components/lens/LensDemoContext";
 
 import moment from "moment";
 import { useMemo, useState } from "react";
@@ -103,6 +104,7 @@ export function AgentTracesSection({
   readOnly = false,
   canMintTracingKey = false,
 }: AgentTracesSectionProps) {
+  const demo = useLensDemo();
   const [openTrace, setOpenTrace] = useState<TraceSummary | null>(null);
   const [query, setQuery] = useState("");
   const [agent, setAgent] = useState(ALL_AGENTS);
@@ -185,11 +187,7 @@ export function AgentTracesSection({
   return (
     <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-card">
       {checkHistory && <TraceHistoryError history={history} />}
-      {setup.received && (
-        <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
-          Traces received. Select a run to inspect it.
-        </p>
-      )}
+      <TracesReceived received={setup.received} />
       <RunDrawer trace={openTrace} runs={runs} accessToken={accessToken} onSelect={openRun} />
       <RunsToolbar
         query={query}
@@ -200,16 +198,19 @@ export function AgentTracesSection({
         onAgentChange={setAgent}
         onStatusChange={setStatus}
       >
-        <Button variant="outline" size="sm" onClick={() => setShowSetup(true)} className="shrink-0 gap-1.5">
-          <ActiveDot />
-          Set up tracing
-        </Button>
+        {!demo && (
+          <Button variant="outline" size="sm" onClick={() => setShowSetup(true)} className="shrink-0 gap-1.5">
+            <ActiveDot />
+            Set up tracing
+          </Button>
+        )}
         {timeControls && (
           <TimeRangeControls
             range={zoom ?? range}
             rangeHours={timeControls.rangeHours}
             onRangeHoursChange={(hours) => changeRange(hours, timeControls.onRangeHoursChange)}
             live={isLiveTail}
+            showLive={!demo}
             onLiveChange={timeControls.onLiveChange}
             zoomed={zoom !== null}
             onResetZoom={() => setZoom(null)}
@@ -234,6 +235,16 @@ export function AgentTracesSection({
         onResetZoom={() => setZoom(null)}
       />
     </div>
+  );
+}
+
+function TracesReceived({ received }: { received: boolean }) {
+  const demo = useLensDemo();
+  if (!received || demo) return null;
+  return (
+    <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
+      Traces received. Select a run to inspect it.
+    </p>
   );
 }
 

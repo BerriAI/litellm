@@ -1,4 +1,5 @@
 "use client";
+import { useLensDemo } from "@/components/lens/LensDemoContext";
 
 import moment from "moment";
 import { useMemo, useState } from "react";
@@ -19,6 +20,7 @@ export default function AgentTracesPage({
   readOnly?: boolean;
   canMintTracingKey?: boolean;
 }) {
+  const demo = useLensDemo();
   const [rangeHours, setRangeHours] = useState(DEFAULT_RANGE_HOURS);
   const [live, setLive] = useState(true);
   const [anchor, setAnchor] = useState(() => moment());
@@ -43,7 +45,7 @@ export default function AgentTracesPage({
         startTime={startTime}
         endTime={endTime}
         isCustomDate={false}
-        isLiveTail={live}
+        isLiveTail={live && !demo}
         readOnly={readOnly}
         canMintTracingKey={canMintTracingKey}
         timeControls={{ rangeHours, onRangeHoursChange: changeRange, onLiveChange: setLive }}
