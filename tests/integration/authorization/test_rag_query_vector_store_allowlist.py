@@ -182,34 +182,44 @@ def _strict_denied_request(
     granted: Final = _permission_for_stores(store_id)
     empty: Final = _permission_for_stores()
     if case == "standalone_key_no_permission":
-        key = scenario.key(models=models)
-        return strict.gateway.request("POST", "/v1/rag/query", _rag_query_body(model, marker, store_id), key=key), (
+        standalone_key: Final = scenario.key(models=models)
+        return strict.gateway.request(
+            "POST", "/v1/rag/query", _rag_query_body(model, marker, store_id), key=standalone_key
+        ), (
             "key_vector_store_access_denied"
         )
     if case in ("team_key_empty_key_grants", "team_key_empty_team_grants"):
         key_grants_store: Final = case == "team_key_empty_team_grants"
-        team = scenario.team(models=models, object_permission=empty if key_grants_store else granted)
-        key = scenario.key(team_id=team, models=models, object_permission=granted if key_grants_store else empty)
+        team: Final = scenario.team(models=models, object_permission=empty if key_grants_store else granted)
+        team_key: Final = scenario.key(
+            team_id=team, models=models, object_permission=granted if key_grants_store else empty
+        )
         error_type: Final = "team_vector_store_access_denied" if key_grants_store else "key_vector_store_access_denied"
-        return strict.gateway.request("POST", "/v1/rag/query", _rag_query_body(model, marker, store_id), key=key), (
+        return strict.gateway.request(
+            "POST", "/v1/rag/query", _rag_query_body(model, marker, store_id), key=team_key
+        ), (
             error_type
         )
     if case == "multi_store_one_ungranted":
-        key = scenario.key(models=models, object_permission=_permission_for_stores(store_id))
+        partial_key: Final = scenario.key(models=models, object_permission=_permission_for_stores(store_id))
         body: Final[JsonObject] = {
             **_rag_query_body(model, marker, store_id),
             "tools": _json_array({"type": "file_search", "vector_store_ids": _json_array(CONFIG_STORE_ID)}),
         }
-        return strict.gateway.request("POST", "/v1/chat/completions", body, key=key), "key_vector_store_access_denied"
+        return strict.gateway.request(
+            "POST", "/v1/chat/completions", body, key=partial_key
+        ), "key_vector_store_access_denied"
     if case == "rag_alias_no_permission":
-        key = scenario.key(models=models)
-        return strict.gateway.request("POST", "/rag/query", _rag_query_body(model, marker, store_id), key=key), (
+        alias_key: Final = scenario.key(models=models)
+        return strict.gateway.request("POST", "/rag/query", _rag_query_body(model, marker, store_id), key=alias_key), (
             "key_vector_store_access_denied"
         )
     if case == "chat_retrieval_config_no_permission":
-        key = scenario.key(models=models)
+        chat_key: Final = scenario.key(models=models)
         return (
-            strict.gateway.request("POST", "/v1/chat/completions", _rag_query_body(model, marker, store_id), key=key),
+            strict.gateway.request(
+                "POST", "/v1/chat/completions", _rag_query_body(model, marker, store_id), key=chat_key
+            ),
             "key_vector_store_access_denied",
         )
     user: Final = scenario.user(user_role="internal_user")
@@ -267,13 +277,15 @@ def _strict_granted_request(
     granted: Final = _permission_for_stores(store_id)
     body: Final = _rag_query_body(model, marker, store_id)
     if case in ("standalone_key_granted_registered_store", "team_key_both_grant_unregistered_store"):
-        team = scenario.team(models=models, object_permission=granted) if case.startswith("team") else None
-        key = scenario.key(models=models, object_permission=granted, **({} if team is None else {"team_id": team}))
-        return strict.gateway.request("POST", "/v1/rag/query", body, key=key)
+        key_team: Final = scenario.team(models=models, object_permission=granted) if case.startswith("team") else None
+        granted_key: Final = scenario.key(
+            models=models, object_permission=granted, **({} if key_team is None else {"team_id": key_team})
+        )
+        return strict.gateway.request("POST", "/v1/rag/query", body, key=granted_key)
     if case == "jwt_team_member_team_grant_only":
-        team = scenario.team(models=models, object_permission=granted)
-        member: Final = scenario.member(team)
-        return strict.gateway.request("POST", "/v1/rag/query", body, key=strict.jwt(member, (team,)))
+        member_team: Final = scenario.team(models=models, object_permission=granted)
+        member: Final = scenario.member(member_team)
+        return strict.gateway.request("POST", "/v1/rag/query", body, key=strict.jwt(member, (member_team,)))
     if case == "jwt_user_personal_grant":
         user: Final = scenario.user(user_role="internal_user", object_permission=granted)
         return strict.gateway.request("POST", "/v1/rag/query", body, key=strict.jwt(user))
@@ -457,3 +469,73 @@ def test_explicit_false_flag_keeps_legacy_vector_store_outcomes(tmp_path: Path) 
             assert denied.status_code == 401, denied.text
             assert denied.json()["error"]["type"] == "key_vector_store_access_denied"
             assert _searches_for_marker(upstream_gateway, denied_marker) == ()
+
+
+def _strict_no_registry_config(directory: Path) -> Path:
+    config: Final = object_value(yaml.safe_load(_no_registry_config(directory).read_text()))
+    general_settings: Final = object_value(config["general_settings"])
+    strict: Final[JsonObject] = {
+        **config,
+        "general_settings": {**general_settings, "vector_store_deny_by_default": True},
+    }
+    path: Final = directory / "proxy_vector_store_deny_by_default_no_registry.yaml"
+    path.write_text(yaml.safe_dump(strict))
+    return path
+
+
+def test_deny_by_default_without_registry_checks_search_route_and_file_search_tools(tmp_path: Path) -> None:
+    with gateway_from_environment() as upstream_gateway:
+        with owned_proxy(
+            upstream_gateway,
+            tmp_path,
+            _openai_environment(upstream_gateway),
+            config=_strict_no_registry_config(tmp_path),
+            remove_environment=REMOVE_OPENAI_API_BASE,
+        ) as gateway:
+            with gateway.scenario() as scenario:
+                model: Final = scenario.model()
+                store_id: Final = f"vs_unregistered_{uuid.uuid4().hex}"
+                search_marker: Final = f"lit6035 no registry search {uuid.uuid4().hex}"
+                responses_marker: Final = f"lit6035 no registry responses {uuid.uuid4().hex}"
+                granted_marker: Final = f"lit6035 no registry granted search {uuid.uuid4().hex}"
+                ungranted_key: Final = scenario.key(models=_json_array(model))
+                granted_key: Final = scenario.key(
+                    models=_json_array(model), object_permission=_permission_for_stores(store_id)
+                )
+
+                search_denied: Final = gateway.request(
+                    "POST", f"/v1/vector_stores/{store_id}/search", {"query": search_marker}, key=ungranted_key
+                )
+                responses_denied: Final = gateway.request(
+                    "POST",
+                    "/v1/responses",
+                    {
+                        "model": model,
+                        "input": responses_marker,
+                        "tools": _json_array({"type": "file_search", "vector_store_ids": _json_array(store_id)}),
+                    },
+                    key=ungranted_key,
+                )
+                search_granted: Final = gateway.request(
+                    "POST", f"/v1/vector_stores/{store_id}/search", {"query": granted_marker}, key=granted_key
+                )
+
+            observations: Final = upstream_observations(upstream_gateway)
+            denied_observations: Final = tuple(
+                observation
+                for observation in observations
+                if search_marker in str(observation["body"]) or responses_marker in str(observation["body"])
+            )
+            granted_searches: Final = tuple(
+                observation
+                for observation in observations
+                if observation["path"] == f"/vector_stores/{store_id}/search"
+                and granted_marker in str(observation["body"])
+            )
+            assert search_denied.status_code == 401, search_denied.text
+            assert search_denied.json()["error"]["type"] == "key_vector_store_access_denied", search_denied.text
+            assert responses_denied.status_code == 401, responses_denied.text
+            assert responses_denied.json()["error"]["type"] == "key_vector_store_access_denied", responses_denied.text
+            assert denied_observations == ()
+            assert search_granted.status_code == 200, search_granted.text
+            assert len(granted_searches) == 1, granted_searches
