@@ -27,6 +27,7 @@ from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
     LiteLLM_OrganizationTable,
+    LiteLLM_TagTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     Litellm_EntityType,
@@ -47,6 +48,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import get_client_requested_model
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.auth.user_api_key_auth import (
     _check_key_model_budget_with_fallback,
     _ensure_litellm_received_at_on_request_state,
@@ -9694,3 +9696,354 @@ async def test_enterprise_custom_auth_key_return_stays_a_proxy_validated_key(mon
     )
     assert admitted.authenticated_by_custom_auth is False
     assert admitted.via_virtual_key is True
+
+
+# ---------------------------------------------------------------------------
+# Tag ownership enforcement end to end through user_api_key_auth
+# ---------------------------------------------------------------------------
+
+
+def _tag_ownership_prisma(tag_rows):
+    mock_prisma = MagicMock()
+    registry = [SimpleNamespace(tag_name=row.tag_name) for row in tag_rows]
+
+    async def find_many(**kwargs):
+        if "where" in kwargs:
+            names = set(kwargs["where"]["tag_name"]["in"])
+            return [row for row in tag_rows if row.tag_name in names]
+        return list(registry)
+
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=find_many)
+    return mock_prisma
+
+
+def _tag_ownership_request(route, headers=(), body=None):
+    from fastapi import Request
+
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "path": route,
+            "headers": [(key.encode(), value.encode()) for key, value in headers],
+            "query_string": b"",
+        }
+    )
+    request._body = json.dumps(body if body is not None else {"model": "gpt-4o"}).encode()
+    return request
+
+
+@contextmanager
+def _tag_ownership_proxy_env(*, prisma, general_settings=None, user_custom_auth=None, jwt_handler=None):
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    mock_proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+
+    attrs = {
+        "prisma_client": prisma,
+        "user_api_key_cache": UserApiKeyCache(),
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-tag-e2e",
+        "general_settings": general_settings or {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": user_custom_auth,
+        "jwt_handler": jwt_handler,
+        "litellm_proxy_admin_name": "admin",
+    }
+    originals = {attr: getattr(_proxy_server_mod, attr, None) for attr in attrs}
+    try:
+        for attr, val in attrs.items():
+            setattr(_proxy_server_mod, attr, val)
+        yield
+    finally:
+        for attr, val in originals.items():
+            setattr(_proxy_server_mod, attr, val)
+
+
+def _jwt_handler_for_result(jwt_result):
+    jwt_handler = MagicMock()
+    jwt_handler.is_jwt.return_value = True
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+    return jwt_handler
+
+
+async def _run_tag_ownership_auth(*, api_key, request, prisma, valid_token=None, jwt_result=None, general_settings=None, user_custom_auth=None):
+    patches = [
+        patch(  # test-quality-ok: the builder has no DI seam for the key lookup; stands in for the DB
+            "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+            new_callable=AsyncMock,
+            return_value=valid_token,
+        ),
+        patch(  # test-quality-ok: JWT verification is a boundary; auth_builder returns the resolved identity
+            "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+            new_callable=AsyncMock,
+            return_value=jwt_result,
+        ),
+        patch(  # test-quality-ok: no DB in this test; team row lookup is orthogonal to tag ownership
+            "litellm.proxy.auth.user_api_key_auth.get_team_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(  # test-quality-ok: no DB in this test; user row lookup is orthogonal to tag ownership
+            "litellm.proxy.auth.user_api_key_auth.get_user_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(  # test-quality-ok: the deny must precede reservation; the observable is whether this ran
+            "litellm.proxy.auth.user_api_key_auth._reserve_budget_after_common_checks",
+            new_callable=AsyncMock,
+        ),
+    ]
+    jwt_handler = _jwt_handler_for_result(jwt_result) if jwt_result is not None else None
+    with (
+        _tag_ownership_proxy_env(
+            prisma=prisma,
+            general_settings=general_settings,
+            user_custom_auth=user_custom_auth,
+            jwt_handler=jwt_handler,
+        ),
+        patches[0],
+        patches[1],
+        patches[2],
+        patches[3],
+        patches[4] as mock_reserve,
+    ):
+        try:
+            result = await user_api_key_auth(request=request, api_key=api_key)
+            return result, mock_reserve
+        except ProxyException as exc:
+            return exc, mock_reserve
+
+
+def _virtual_key_token(team_id="team-a", **kwargs):
+    from litellm.proxy.proxy_server import hash_token
+
+    return UserAPIKeyAuth(api_key="Bearer sk-e2e", token=hash_token("sk-e2e"), team_id=team_id, **kwargs)
+
+
+def _jwt_result(team_id="team-a"):
+    return {
+        "is_proxy_admin": False,
+        "team_object": None,
+        "user_object": None,
+        "end_user_object": None,
+        "org_object": None,
+        "token": "jwt-token",
+        "team_id": team_id,
+        "user_id": None,
+        "user_email": None,
+        "end_user_id": None,
+        "org_id": None,
+        "team_membership": None,
+        "jwt_claims": {"sub": "jwt-user"},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_path", ["virtual_key", "jwt"])
+async def test_tag_ownership_foreign_tag_denied_virtual_key_and_jwt(auth_path):
+    prisma = _tag_ownership_prisma(
+        [LiteLLM_TagTable(tag_name="foreign-tag", team_id="team-b")]
+    )
+    request = _tag_ownership_request(
+        "/chat/completions",
+        body={"model": "gpt-4o", "metadata": {"tags": ["foreign-tag"]}},
+    )
+    outcome, mock_reserve = await _run_tag_ownership_auth(
+        api_key="Bearer sk-e2e" if auth_path == "virtual_key" else "jwt-token",
+        request=request,
+        prisma=prisma,
+        valid_token=_virtual_key_token() if auth_path == "virtual_key" else None,
+        jwt_result=_jwt_result() if auth_path == "jwt" else None,
+        general_settings={"enable_jwt_auth": True} if auth_path == "jwt" else None,
+    )
+    assert isinstance(outcome, ProxyException)
+    assert outcome.type == ProxyErrorTypes.tag_ownership_denied
+    assert int(outcome.code) == status.HTTP_403_FORBIDDEN
+    assert "foreign-tag" in outcome.message
+    assert "team-b" in outcome.message
+    mock_reserve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_path", ["virtual_key", "jwt"])
+async def test_tag_ownership_matching_tag_allowed_virtual_key_and_jwt(auth_path):
+    prisma = _tag_ownership_prisma(
+        [LiteLLM_TagTable(tag_name="owned-tag", team_id="team-a")]
+    )
+    request = _tag_ownership_request(
+        "/chat/completions",
+        body={"model": "gpt-4o", "metadata": {"tags": ["owned-tag"]}},
+    )
+    outcome, mock_reserve = await _run_tag_ownership_auth(
+        api_key="Bearer sk-e2e" if auth_path == "virtual_key" else "jwt-token",
+        request=request,
+        prisma=prisma,
+        valid_token=_virtual_key_token() if auth_path == "virtual_key" else None,
+        jwt_result=_jwt_result() if auth_path == "jwt" else None,
+        general_settings={"enable_jwt_auth": True} if auth_path == "jwt" else None,
+    )
+    assert isinstance(outcome, UserAPIKeyAuth)
+    mock_reserve.assert_awaited_once()
+
+
+_TAG_OWNERSHIP_SOURCES = [
+    "header",
+    "root-tags",
+    "metadata-tags",
+    "litellm-metadata-tags",
+    "key-metadata",
+    "team-metadata",
+    "project-metadata",
+]
+
+
+def _token_with_source(source, tag):
+    kwargs = {"metadata": {}, "team_metadata": {}, "project_metadata": {}}
+    if source == "key-metadata":
+        kwargs["metadata"] = {"tags": [tag]}
+    elif source == "team-metadata":
+        kwargs["team_metadata"] = {"tags": [tag]}
+    elif source == "project-metadata":
+        kwargs["project_metadata"] = {"tags": [tag]}
+    return _virtual_key_token(**kwargs)
+
+
+def _request_with_source(source, route, tag):
+    headers = [("x-litellm-tags", tag)] if source == "header" else []
+    body = {"model": "gpt-4o"}
+    if source == "root-tags":
+        body["tags"] = [tag]
+    elif source == "metadata-tags":
+        body["metadata"] = {"tags": [tag]}
+    elif source == "litellm-metadata-tags":
+        body["litellm_metadata"] = {"tags": [tag]}
+    return _tag_ownership_request(route, headers=headers, body=body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", _TAG_OWNERSHIP_SOURCES)
+async def test_tag_ownership_every_source_denied_when_foreign(source):
+    prisma = _tag_ownership_prisma(
+        [LiteLLM_TagTable(tag_name="foreign-tag", team_id="team-b")]
+    )
+    outcome, _ = await _run_tag_ownership_auth(
+        api_key="Bearer sk-e2e",
+        request=_request_with_source(source, "/chat/completions", "foreign-tag"),
+        prisma=prisma,
+        valid_token=_token_with_source(source, "foreign-tag"),
+    )
+    assert isinstance(outcome, ProxyException)
+    assert outcome.type == ProxyErrorTypes.tag_ownership_denied
+    assert "foreign-tag" in outcome.message
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_inherited_foreign_tag_denied_without_caller_tags():
+    prisma = _tag_ownership_prisma(
+        [LiteLLM_TagTable(tag_name="inherited-foreign", team_id="team-b")]
+    )
+    outcome, _ = await _run_tag_ownership_auth(
+        api_key="Bearer sk-e2e",
+        request=_tag_ownership_request("/chat/completions", body={"model": "gpt-4o"}),
+        prisma=prisma,
+        valid_token=_virtual_key_token(team_metadata={"tags": ["inherited-foreign"]}),
+    )
+    assert isinstance(outcome, ProxyException)
+    assert "inherited-foreign" in outcome.message
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_permitted_tag_cannot_hide_foreign_tag():
+    prisma = _tag_ownership_prisma(
+        [
+            LiteLLM_TagTable(tag_name="mine", team_id="team-a"),
+            LiteLLM_TagTable(tag_name="theirs", team_id="team-b"),
+        ]
+    )
+    outcome, _ = await _run_tag_ownership_auth(
+        api_key="Bearer sk-e2e",
+        request=_tag_ownership_request(
+            "/chat/completions",
+            headers=[("x-litellm-tags", "mine")],
+            body={"model": "gpt-4o", "metadata": {"tags": ["theirs"]}},
+        ),
+        prisma=prisma,
+        valid_token=_virtual_key_token(),
+    )
+    assert isinstance(outcome, ProxyException)
+    assert "theirs" in outcome.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route,tag_slot",
+    [
+        ("/chat/completions", "metadata"),
+        ("/v1/responses", "litellm_metadata"),
+        ("/v1/messages", "litellm_metadata"),
+    ],
+)
+async def test_tag_ownership_enforced_on_every_llm_surface(route, tag_slot):
+    prisma = _tag_ownership_prisma(
+        [LiteLLM_TagTable(tag_name="foreign-tag", team_id="team-b")]
+    )
+    outcome, _ = await _run_tag_ownership_auth(
+        api_key="Bearer sk-e2e",
+        request=_tag_ownership_request(
+            route,
+            body={"model": "gpt-4o", tag_slot: {"tags": ["foreign-tag"]}},
+        ),
+        prisma=prisma,
+        valid_token=_virtual_key_token(),
+    )
+    assert isinstance(outcome, ProxyException)
+    assert outcome.type == ProxyErrorTypes.tag_ownership_denied
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_master_key_cannot_use_owned_tag():
+    prisma = _tag_ownership_prisma(
+        [LiteLLM_TagTable(tag_name="owned-tag", team_id="team-a")]
+    )
+    outcome, _ = await _run_tag_ownership_auth(
+        api_key="Bearer sk-master-tag-e2e",
+        request=_tag_ownership_request(
+            "/chat/completions",
+            body={"model": "gpt-4o", "metadata": {"tags": ["owned-tag"]}},
+        ),
+        prisma=prisma,
+    )
+    assert isinstance(outcome, ProxyException)
+    assert outcome.type == ProxyErrorTypes.tag_ownership_denied
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flagged", [True, False], ids=["opt_in_enforced", "unset_not_enforced"])
+async def test_tag_ownership_custom_auth_enforced_only_with_flag(flagged):
+    prisma = _tag_ownership_prisma(
+        [LiteLLM_TagTable(tag_name="foreign-tag", team_id="team-b")]
+    )
+    trusted_token = UserAPIKeyAuth(api_key="Bearer sk-custom", user_id="custom-user", team_id="team-c")
+    outcome, _ = await _run_tag_ownership_auth(
+        api_key="Bearer sk-custom",
+        request=_tag_ownership_request(
+            "/chat/completions",
+            body={"model": "gpt-4o", "metadata": {"tags": ["foreign-tag"]}},
+        ),
+        prisma=prisma,
+        general_settings={"custom_auth_run_common_checks": True} if flagged else {},
+        user_custom_auth=AsyncMock(return_value=trusted_token),
+    )
+    if flagged:
+        assert isinstance(outcome, ProxyException)
+        assert outcome.type == ProxyErrorTypes.tag_ownership_denied
+    else:
+        assert isinstance(outcome, UserAPIKeyAuth)
