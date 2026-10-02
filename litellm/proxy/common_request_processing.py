@@ -79,6 +79,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 )
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
+    _enforce_tag_ownership,
     can_key_call_resolved_model,
     request_skips_budget_checks,
     tag_max_budget_check_for_tags,
@@ -711,9 +712,18 @@ async def _enforce_guardrail_added_tag_budgets(
     added_tags: Final = tuple(
         tag for tag in get_tags_from_request_body(request_body=data) if tag not in tags_before_guardrails
     )
-    if not added_tags or request_skips_budget_checks(route=route, model=_request_model(data), llm_router=llm_router):
+    if not added_tags:
         return
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    tag_objects: Final = await _enforce_tag_ownership(
+        tags=added_tags,
+        valid_token=user_api_key_dict,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if request_skips_budget_checks(route=route, model=_request_model(data), llm_router=llm_router):
+        return
 
     try:
         await tag_max_budget_check_for_tags(
@@ -722,6 +732,7 @@ async def _enforce_guardrail_added_tag_budgets(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
             valid_token=user_api_key_dict,
+            tag_objects=tag_objects,
         )
     except litellm.BudgetExceededError as e:
         raise ProxyException(

@@ -60,8 +60,9 @@ from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_g
 from litellm.proxy.common_utils.sse_keepalive import ANTHROPIC_PING_SSE_CHUNK
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy._types import LiteLLM_TagTable, ProxyErrorTypes, ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
@@ -616,8 +617,7 @@ class TestProxyBaseLLMRequestProcessing:
         )
         tag_budget_check = AsyncMock()
         monkeypatch.setattr(litellm.proxy.common_request_processing, "tag_max_budget_check_for_tags", tag_budget_check)
-        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
-        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+        _empty_tag_ownership_db(monkeypatch)
         return processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, tag_budget_check
 
     @staticmethod
@@ -811,8 +811,7 @@ class TestProxyBaseLLMRequestProcessing:
 
         tag_budget_check = AsyncMock()
         monkeypatch.setattr(litellm.proxy.common_request_processing, "tag_max_budget_check_for_tags", tag_budget_check)
-        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
-        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+        _empty_tag_ownership_db(monkeypatch)
 
         user_api_key_dict = ProxyUserAPIKeyAuth(api_key="sk-test")
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -859,8 +858,7 @@ class TestProxyBaseLLMRequestProcessing:
                 )
             ),
         )
-        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
-        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+        _empty_tag_ownership_db(monkeypatch)
 
         with pytest.raises(ProxyException) as exc_info:
             await _enforce_guardrail_added_tag_budgets(
@@ -882,8 +880,7 @@ class TestProxyBaseLLMRequestProcessing:
 
         tag_budget_check = AsyncMock()
         monkeypatch.setattr(litellm.proxy.common_request_processing, "tag_max_budget_check_for_tags", tag_budget_check)
-        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
-        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+        _empty_tag_ownership_db(monkeypatch)
 
         await _enforce_guardrail_added_tag_budgets(
             data={"model": 5, "metadata": {"tags": ["guardrail-tag"]}},
@@ -10282,3 +10279,107 @@ class TestStreamingContainerOwnershipRecordedBeforeDone:
         assert tuple(chunk for chunk, _ in observed) == self.CHUNKS
         assert tuple(count for _, count in observed) == (0, 0, 0, 0)
         recorder.assert_awaited_once()
+
+
+def _empty_tag_ownership_db(monkeypatch):
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    return mock_prisma
+
+
+def _tag_ownership_db(monkeypatch, tag_rows):
+    mock_prisma = MagicMock()
+
+    async def find_many(**kwargs):
+        if "where" in kwargs:
+            names = set(kwargs["where"]["tag_name"]["in"])
+            return [row for row in tag_rows if row.tag_name in names]
+        return [SimpleNamespace(tag_name=row.tag_name) for row in tag_rows]
+
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(side_effect=find_many)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    return mock_prisma
+
+
+@pytest.mark.asyncio
+async def test_guardrail_added_foreign_tag_is_denied_before_provider_call(monkeypatch):
+    from litellm.proxy.common_request_processing import _enforce_guardrail_added_tag_budgets
+
+    tag_budget_check = AsyncMock()
+    monkeypatch.setattr(litellm.proxy.common_request_processing, "tag_max_budget_check_for_tags", tag_budget_check)
+    _tag_ownership_db(monkeypatch, [LiteLLM_TagTable(tag_name="guardrail-tag", team_id="team-b")])
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _enforce_guardrail_added_tag_budgets(
+            data={"metadata": {"tags": ["guardrail-tag"]}},
+            tags_before_guardrails=frozenset(),
+            route="/v1/chat/completions",
+            llm_router=None,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", team_id="team-a"),
+            proxy_logging_obj=MagicMock(spec=ProxyLogging),
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.tag_ownership_denied
+    assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
+    assert "guardrail-tag" in exc_info.value.message
+    assert "team-b" in exc_info.value.message
+    tag_budget_check.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_guardrail_added_foreign_tag_is_denied_on_free_model(monkeypatch):
+    from litellm.proxy.common_request_processing import _enforce_guardrail_added_tag_budgets
+
+    tag_budget_check = AsyncMock()
+    monkeypatch.setattr(litellm.proxy.common_request_processing, "tag_max_budget_check_for_tags", tag_budget_check)
+    _tag_ownership_db(monkeypatch, [LiteLLM_TagTable(tag_name="guardrail-tag", team_id="team-b")])
+    router = Router(
+        model_list=[
+            {
+                "model_name": "free-model",
+                "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "sk-test"},
+                "model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0},
+            }
+        ]
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _enforce_guardrail_added_tag_budgets(
+            data={"model": "free-model", "metadata": {"tags": ["guardrail-tag"]}},
+            tags_before_guardrails=frozenset(),
+            route="/v1/chat/completions",
+            llm_router=router,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", team_id="team-a"),
+            proxy_logging_obj=MagicMock(spec=ProxyLogging),
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.tag_ownership_denied
+    tag_budget_check.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_guardrail_added_owned_tag_reaches_budget_check(monkeypatch):
+    from litellm.proxy.common_request_processing import _enforce_guardrail_added_tag_budgets
+
+    tag_budget_check = AsyncMock()
+    monkeypatch.setattr(litellm.proxy.common_request_processing, "tag_max_budget_check_for_tags", tag_budget_check)
+    prisma = _tag_ownership_db(monkeypatch, [LiteLLM_TagTable(tag_name="guardrail-tag", team_id="team-a")])
+
+    await _enforce_guardrail_added_tag_budgets(
+        data={"metadata": {"tags": ["guardrail-tag"]}},
+        tags_before_guardrails=frozenset(),
+        route="/v1/chat/completions",
+        llm_router=None,
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", team_id="team-a"),
+        proxy_logging_obj=MagicMock(spec=ProxyLogging),
+    )
+
+    tag_budget_check.assert_awaited_once()
+    _, call_kwargs = tag_budget_check.call_args
+    assert call_kwargs["tags"] == ("guardrail-tag",)
+    assert call_kwargs["tag_objects"]["guardrail-tag"].team_id == "team-a"
+    per_name_queries = [call for call in prisma.db.litellm_tagtable.find_many.await_args_list if "where" in call.kwargs]
+    assert len(per_name_queries) == 1

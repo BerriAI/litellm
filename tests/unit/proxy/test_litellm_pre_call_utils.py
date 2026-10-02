@@ -5862,10 +5862,13 @@ class TestApplyClientTagPolicyPreAuth:
                 return 0.50
             return fallback_spend
 
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_tagtable.find_many = AsyncMock(return_value=[tag_object])
+
         with (
             patch(
                 "litellm.proxy.proxy_server.prisma_client",
-                MagicMock(),
+                mock_prisma_client,
             ),
             patch(
                 "litellm.proxy.proxy_server.get_current_spend",
