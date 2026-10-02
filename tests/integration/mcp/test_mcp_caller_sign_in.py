@@ -364,7 +364,12 @@ def test_agent_365_prm_advertises_the_servers_configured_scopes(gateway: Gateway
         candidate.scenario() as scenario,
     ):
         scoped: Final = "a365" + uuid.uuid4().hex[:8]
-        register_mcp(scenario, peer, scoped, scopes=["https://example/mcp/scoped/access_as_user", "offline_access"])
+        register_mcp(
+            scenario,
+            peer,
+            scoped,
+            credentials={"scopes": ["https://example/mcp/scoped/access_as_user", "offline_access"]},
+        )
         unscoped: Final = "a365" + uuid.uuid4().hex[:8]
         register_mcp(scenario, peer, unscoped)
 
