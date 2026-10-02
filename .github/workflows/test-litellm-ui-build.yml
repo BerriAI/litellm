@@ -33,8 +33,8 @@ jobs:
       # Built through the image stage rather than the checkout, because the
       # stage copies ui/litellm-dashboard/ alone: an import reaching above the
       # dashboard root resolves in a checkout and fails in every image we ship.
-      # Dockerfile, docker/Dockerfile.non_root and ui/Dockerfile share this
-      # stage verbatim, so building one covers all three.
+      # The shipped image serves this stage's output in every component, so
+      # building the stage here covers what ships.
       - name: Build the dashboard as the shipped images build it
         if: steps.changes.outputs.decision != 'skip'
         run: docker build --target ui-builder -f Dockerfile .
