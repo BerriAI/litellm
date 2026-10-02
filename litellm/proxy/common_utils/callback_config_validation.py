@@ -193,20 +193,30 @@ def cross_entry_family_error(
     )
 
 
+def _conflicting_option_error(var: str, incoming: str, stored_vars_by_entry: Sequence[Mapping[str, str]]) -> str | None:
+    return next(
+        (
+            f"{var} is already set to {stored!r} by another callback entry. "
+            f"Every entry shares one value: remove that entry or send the same value."
+            for entry in stored_vars_by_entry
+            if (stored := entry.get(var)) not in (None, incoming)
+        ),
+        None,
+    )
+
+
 def conflicting_shared_option_error(
     callback_vars: Mapping[str, str] | None,
     stored_vars_by_entry: Sequence[Mapping[str, str]],
 ) -> str | None:
     if not callback_vars:
         return None
+    incoming_by_var: Final = {var: callback_vars[var] for var in _SHARED_OPTION_VARS if var in callback_vars}
     return next(
         (
-            f"{var} is already set to {stored!r} by another callback entry. "
-            f"Every entry shares one value: remove that entry or send the same value."
-            for var in _SHARED_OPTION_VARS
-            if (incoming := callback_vars.get(var)) is not None
-            for entry in stored_vars_by_entry
-            if (stored := entry.get(var)) not in (None, incoming)
+            error
+            for var, incoming in incoming_by_var.items()
+            if (error := _conflicting_option_error(var, incoming, stored_vars_by_entry)) is not None
         ),
         None,
     )

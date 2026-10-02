@@ -17402,6 +17402,7 @@ export interface paths {
          *         - langfuse_host: The host for the Langfuse callback
          *         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
          *         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
+         *         - capture_message_content: For the OTel v2 callbacks (langfuse_otel, arize, weave_otel, newrelic), "no_content" strips prompt and response content from this team's exported spans, "span_only" keeps whatever the global capture policy collects. Omitted behaves like "span_only". It only narrows: a team gets content only when the proxy's global OTel v2 capture is enabled
          *         - gcs_bucket_name: The name of the GCS bucket
          *         - gcs_path_service_account: The path to the GCS service account
          *         - langsmith_api_key: The API key for the Langsmith callback
