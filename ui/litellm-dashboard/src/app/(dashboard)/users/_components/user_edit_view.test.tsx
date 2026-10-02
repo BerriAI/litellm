@@ -464,7 +464,7 @@ describe("UserEditView", () => {
       user_info: {
         ...MOCK_USER_DATA.user_info,
         tpm_limit: 100000,
-        rpm_limit: null,
+        rpm_limit: 50,
       },
     });
 
@@ -472,7 +472,30 @@ describe("UserEditView", () => {
       renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} />);
 
       expect(await screen.findByRole("spinbutton", { name: /tpm limit/i })).toHaveValue(100000);
+      expect(await screen.findByRole("spinbutton", { name: /rpm limit/i })).toHaveValue(50);
+    });
+
+    it("keeps unset rate limits empty and omits them from an untouched save", async () => {
+      const onSubmit = vi.fn();
+      const userDataWithNullRateLimits = {
+        ...MOCK_USER_DATA,
+        user_info: {
+          ...MOCK_USER_DATA.user_info,
+          tpm_limit: null,
+          rpm_limit: null,
+        },
+      };
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithNullRateLimits} onSubmit={onSubmit} />);
+
+      expect(await screen.findByRole("spinbutton", { name: /tpm limit/i })).toHaveValue(null);
       expect(await screen.findByRole("spinbutton", { name: /rpm limit/i })).toHaveValue(null);
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("tpm_limit");
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("rpm_limit");
     });
 
     it("omits unchanged rate limits from the submit payload", async () => {
