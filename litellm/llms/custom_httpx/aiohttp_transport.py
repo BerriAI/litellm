@@ -288,6 +288,13 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         cls._background_close_tasks.add(task)
         task.add_done_callback(cls._on_close_task_done)
 
+    def __del__(self) -> None:
+        try:
+            if self._owns_session:
+                self._close_recycled_session(self.client)  # pyright: ignore[reportArgumentType]
+        except (RuntimeError, AttributeError, OSError) as e:
+            verbose_logger.debug("Error closing session on transport finalization: %s", e)
+
     def _get_valid_client_session(self) -> ClientSession:
         """
         Helper to get a valid ClientSession for the current event loop.
