@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import ClassVar, Final
+from typing import ClassVar, Final, cast
 
 import httpx
 
@@ -429,8 +429,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     ),
                     status_code=400,
                 )
-            existing_output_config: Final = optional_params.get("output_config")
-            explicit_effort: Final = AnthropicMessagesConfig._explicit_output_config_effort(existing_output_config)
+            existing_output_config: Final = cast(  # cast-ok: optional_params is an untyped dict
+                object, optional_params.get("output_config")
+            )
+            explicit_effort: Final = AnthropicMessagesConfig.explicit_output_config_effort(existing_output_config)
             resolved_effort: Final = (
                 explicit_effort
                 if explicit_effort is not None
@@ -446,7 +448,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             )
 
     @staticmethod
-    def _explicit_output_config_effort(output_config: object) -> str | None:
+    def explicit_output_config_effort(output_config: object) -> str | None:
         match output_config:
             case {"effort": str() as effort}:
                 return effort

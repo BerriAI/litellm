@@ -676,14 +676,17 @@ class AmazonAnthropicClaudeMessagesConfig(
         clamped: Final = {"effort": effort}
         normalize_bedrock_opus_output_config_effort(model=model, output_config=clamped)
         optional_params["reasoning_effort"] = clamped["effort"]
-        explicit_effort: Final = AnthropicMessagesConfig._explicit_output_config_effort(
-            optional_params.get("output_config")
+        explicit_effort: Final = AnthropicMessagesConfig.explicit_output_config_effort(
+            cast(object, optional_params.get("output_config"))  # cast-ok: optional_params is an untyped dict
         )
         if explicit_effort is None:
             return
         clamped_explicit: Final = {"effort": explicit_effort}
         normalize_bedrock_opus_output_config_effort(model=model, output_config=clamped_explicit)
-        optional_params["output_config"] = {**optional_params["output_config"], **clamped_explicit}
+        optional_params["output_config"] = {  # rebind-ok: in-place fill is this method's contract
+            **optional_params["output_config"],
+            **clamped_explicit,
+        }
 
     def transform_anthropic_messages_request(
         self,
