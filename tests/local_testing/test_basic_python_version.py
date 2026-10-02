@@ -210,6 +210,32 @@ def test_locked_aiohttp_version_is_not_pool_poisoning():
     )
 
 
+def test_anyio_dependency_excludes_cancelled_waiter_deadlock() -> None:
+    from packaging.requirements import Requirement
+
+    pyproject: Final = _load_toml(os.path.join(PROJECT_ROOT, "pyproject.toml"))
+    dependencies: Final = (
+        Requirement(value) for value in pyproject["project"]["dependencies"]
+    )
+    anyio: Final = next(
+        (
+            dependency
+            for dependency in dependencies
+            if dependency.name.lower() == "anyio"
+        ),
+        None,
+    )
+
+    source: Final = (
+        "AnyIO 4.14.0 release notes (2026-06-15): "
+        "https://github.com/agronholm/anyio/releases/tag/4.14.0"
+    )
+    assert anyio is not None, f"anyio must be a direct runtime dependency; {source}"
+    assert anyio.specifier.contains("4.14.0") and not anyio.specifier.contains(
+        "4.13.0"
+    ), f"anyio{anyio.specifier} does not enforce the fixed release floor; {source}"
+
+
 import os
 import subprocess
 
