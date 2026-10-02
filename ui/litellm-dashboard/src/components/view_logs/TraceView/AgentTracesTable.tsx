@@ -36,17 +36,12 @@ const TD_NUM = "px-3 text-right font-mono tabular-nums text-muted-foreground";
 function AgentCell({ run }: { run: TraceSummary }) {
   const framework = traceFramework(run);
   const agents = traceAgentNames(run).join(", ");
-  const title = [framework?.label, agents].filter(Boolean).join(" · ");
+  const title = [agents, framework?.label].filter(Boolean).join(" · ");
   return (
     <td className="px-3 text-muted-foreground" title={title}>
       <div className="flex min-w-0 items-center gap-1.5">
-        {framework && (
-          <>
-            <FrameworkLogo framework={framework} />
-            <span className="shrink-0 text-foreground">{framework.label}</span>
-          </>
-        )}
-        <span className="truncate">{agents || (framework ? "" : "—")}</span>
+        {framework && <FrameworkLogo framework={framework} />}
+        <span className="truncate">{agents || framework?.label || "—"}</span>
       </div>
     </td>
   );
