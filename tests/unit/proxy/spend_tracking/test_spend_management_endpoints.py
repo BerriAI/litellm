@@ -8043,3 +8043,30 @@ async def test_log_team_dependency_preserves_checks_before_permission_lookup(
 
     assert response.status_code == expected_status, response.text
     assert team_reads == []
+
+
+@pytest.mark.asyncio
+async def test_management_team_lookup_without_memberships_keeps_own_user_scope(monkeypatch):
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.spend_tracking.log_visibility import resolve_log_read_scope
+
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="caller", value=LiteLLM_UserTable(user_id="caller", teams=[]), model_type=LiteLLM_UserTable
+    )
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    auth = UserAPIKeyAuth(user_id="caller", user_role=LitellmUserRoles.INTERNAL_USER)
+    rows = (
+        _payload_row("own", "shared", "caller", "own payload"),
+        _payload_row("foreign", "shared", "other", "foreign payload"),
+    )
+    prisma = _make_payload_lookup_prisma(rows)
+
+    async def lookup():
+        return await spend_management_endpoints._get_permitted_team_ids_for_spend_logs(prisma, auth)
+
+    assert await lookup() == []
+    scope = await resolve_log_read_scope(auth.user_id, lookup)
+    query, params = spend_management_endpoints._spend_log_payload_query("shared", scope)
+    assert await prisma.db.query_raw(query, *params) == [rows[0]]
