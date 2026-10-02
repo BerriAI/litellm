@@ -39,6 +39,8 @@ def test_official_scenario_through_gateway(gateway: Gateway, tmp_path: Path, unu
                             assert result.is_error is False and len(result.content) == 1, result
                             content: Final = result.content[0]
                             assert isinstance(content, ImageContent) and content.mime_type == "image/png", content
+                            # Pinned official image fixture, verified 2026-10-02 UTC:
+                            # https://github.com/modelcontextprotocol/conformance/blob/8f3994c75ff1aed1e39f91cff9358e2bc2c81dcd/examples/servers/typescript/everything-server.ts#L76-L78
                             assert content.data == (
                                 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlE"
                                 "QVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
@@ -50,6 +52,8 @@ def test_official_scenario_through_gateway(gateway: Gateway, tmp_path: Path, unu
         assert tuple(check.status for check in proxied if check.id == name) == ("SUCCESS",)
         listed, called = official_client_outcomes(gateway, key, f"/{alias}/mcp", f"{alias}-test_simple_text", {})
         assert f"{alias}-test_simple_text" in listed.tools, listed
+        # Pinned official text fixture, verified 2026-10-02 UTC:
+        # https://github.com/modelcontextprotocol/conformance/blob/8f3994c75ff1aed1e39f91cff9358e2bc2c81dcd/examples/servers/typescript/everything-server.ts#L159-L173
         assert called.ok and called.text == "This is a simple text response for testing.", called
 
 
