@@ -27,6 +27,7 @@ from litellm.constants import (
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
+    SERVER_STREAMING_CLASSIFICATION_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
@@ -2024,7 +2025,7 @@ def refresh_proxy_server_request_body_snapshot(
     if not isinstance(proxy_server_request, dict):
         return
     _body_snapshot_exclude: Final = (
-        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj"})
+        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj", SERVER_STREAMING_CLASSIFICATION_KEY})
         | _TRANSPORT_ONLY_CREDENTIAL_KEYS
         | _CALLBACK_CREDENTIAL_KEYS
     )

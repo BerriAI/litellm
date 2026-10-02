@@ -1222,15 +1222,13 @@ async def pass_through_request(
         if _parsed_body is None:
             _parsed_body = {}
         _parsed_body["litellm_logging_obj"] = logging_obj
-        _parsed_body = guardrail_request_data_with_streaming(
-            _parsed_body,
-            is_streaming=bool(
-                HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
-                    parsed_body=_parsed_body,
-                    stream=stream,
-                )
-            ),
+        is_streaming_pass_through: Final = bool(
+            HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
+                parsed_body=_parsed_body,
+                stream=stream,
+            )
         )
+        _parsed_body = guardrail_request_data_with_streaming(_parsed_body, is_streaming=is_streaming_pass_through)
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         _parsed_body = await proxy_logging_obj.pre_call_hook(

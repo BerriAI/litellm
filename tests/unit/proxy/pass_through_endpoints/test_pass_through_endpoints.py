@@ -1668,6 +1668,63 @@ async def test_pass_through_request_preserves_caller_streaming_request_field(bod
 
 
 @pytest.mark.asyncio
+async def test_streaming_pass_through_drops_marker_after_hook_rebuilds_body_from_json():
+    async def json_rebuilding_pre_call(user_api_key_dict, data, call_type, endpoint_type: EndpointType):
+        rebuilt = json.loads(json.dumps({k: v for k, v in data.items() if k != "litellm_logging_obj"}))
+        return {**rebuilt, "litellm_logging_obj": data["litellm_logging_obj"]}
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.PassThroughStreamingHandler.chunk_processor"
+            ) as mock_chunk_processor:
+                mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=json_rebuilding_pre_call)
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+
+                upstream_response = MagicMock()
+                upstream_response.status_code = 200
+                upstream_response.headers = {}
+                upstream_response.raise_for_status = MagicMock()
+
+                async_client = MagicMock()
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
+
+                async def _empty_chunks(*args, **kwargs):
+                    return
+                    yield  # pragma: no cover
+
+                mock_chunk_processor.return_value = _empty_chunks()
+
+                mock_request = MagicMock(spec=Request)
+                mock_request.method = "POST"
+                mock_request.url = httpx.URL("http://test-proxy.com/openai/v1/chat/completions")
+                mock_request.scope = {"path": "/openai/v1/chat/completions"}
+                request_body: Final = {
+                    "model": "gpt-5-mini",
+                    "stream": True,
+                    "messages": [{"role": "user", "content": "hi"}],
+                }
+                mock_request.body = AsyncMock(return_value=json.dumps(request_body).encode())
+                mock_request.headers = Headers({"content-type": "application/json"})
+                mock_request.query_params = QueryParams({})
+
+                await pass_through_request(
+                    request=mock_request,
+                    target="https://api.openai.com/v1/chat/completions",
+                    custom_headers={},
+                    user_api_key_dict=MagicMock(),
+                )
+
+                upstream_json = async_client.build_request.call_args.kwargs["json"]
+                assert upstream_json == request_body, upstream_json
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("route_stream", "body_stream", "expected_streaming"),
     [

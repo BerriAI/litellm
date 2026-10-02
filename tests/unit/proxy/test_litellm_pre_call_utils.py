@@ -8617,3 +8617,19 @@ def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
         team_callback_settings_obj=None,
     )
     assert under_other.callback_vars == {"langfuse_host": "https://cloud.langfuse.com"}
+
+
+def test_body_snapshot_excludes_the_server_streaming_marker() -> None:
+    from litellm.constants import SERVER_STREAMING_CLASSIFICATION_KEY, SERVER_STREAMING_CLASSIFICATION_MARKER
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    proxy_request: Final = {"body": {}}
+    data: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        SERVER_STREAMING_CLASSIFICATION_KEY: SERVER_STREAMING_CLASSIFICATION_MARKER,
+        "proxy_server_request": proxy_request,
+    }
+
+    refresh_proxy_server_request_body_snapshot(data)
+
+    assert proxy_request == {"body": {"messages": [{"role": "user", "content": "hi"}]}}

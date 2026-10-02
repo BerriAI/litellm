@@ -1443,7 +1443,10 @@ def test_eb_namespaced_caller_body_field_cannot_flip_classification(
     provider_rows: Final = _matching_requests(rig.provider, marker)
     assert len(provider_rows) == 1, (marker, provider_rows)
     provider_body: Final = JSON_OBJECT.validate_json(provider_rows[0].body)
-    assert provider_body.get("litellm_server_streaming_classification") == value, provider_rows[0].body.decode()
+    if endpoint == "passthrough" and value == "litellm-server-streaming":
+        assert "litellm_server_streaming_classification" not in provider_body, provider_rows[0].body.decode()
+    else:
+        assert provider_body.get("litellm_server_streaming_classification") == value, provider_rows[0].body.decode()
     sink_rows: Final = rig.sink.drain()
     streaming_rows, non_streaming_rows = _scoped_rows(
         sink_rows,

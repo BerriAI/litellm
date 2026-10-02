@@ -1,6 +1,8 @@
 import asyncio
+import copy
 import datetime as dt
 import json
+import pickle
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 from unittest.mock import AsyncMock
 
@@ -717,7 +719,7 @@ class TestCustomGuardrailStreamScope:
         assert _request_is_streaming(round_tripped) is False
         assert round_tripped["litellm_server_streaming_classification"] == "litellm-server-streaming"
         assert isinstance(round_tripped["litellm_server_streaming_classification"], str)
-        assert without_server_streaming_classification(round_tripped) == round_tripped
+        assert "litellm_server_streaming_classification" not in without_server_streaming_classification(round_tripped)
 
     def test_streaming_classification_preserves_caller_fields_and_removes_only_server_marker(self):
         caller_data: Final = {
@@ -3429,3 +3431,27 @@ class TestCustomGuardrailTimeout:
         )
 
         assert guardrail.timeout == 7.0
+
+
+@pytest.mark.parametrize("stream_scope", [None, "both", {"post_call": "streaming"}])
+def test_guardrail_survives_deepcopy_and_pickle_with_its_stream_scope(stream_scope):
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="copyable",
+        default_on=True,
+        event_hook=GuardrailEventHooks.post_call,
+        stream_scope=stream_scope,
+    )
+    expected: Final = guardrail.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call)
+    for clone in (copy.deepcopy(guardrail), pickle.loads(pickle.dumps(guardrail))):
+        assert dict(clone.stream_scope_by_hook) == dict(guardrail.stream_scope_by_hook)
+        assert clone.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is expected
+
+
+def test_subclass_that_skips_super_init_still_runs_with_default_scope():
+    class NoSuperInit(CustomGuardrail):
+        def __init__(self) -> None:
+            self.guardrail_name = "no-super"
+            self.event_hook = None
+            self.default_on = True
+
+    assert NoSuperInit().should_run_guardrail({"stream": True}, GuardrailEventHooks.pre_call) is True

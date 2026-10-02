@@ -1144,3 +1144,12 @@ def test_configure_callback_scoping_copies_stream_scope_when_constructor_omits_i
     assert instance.stream_scope_default == "streaming"
     assert instance.should_run_guardrail({"stream": True}, GuardrailEventHooks.post_call) is True
     assert instance.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is False
+
+
+def test_configure_callback_scoping_tolerates_a_custom_logger_callback():
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.guardrails.guardrail_registry import _configure_callback_scoping
+
+    callback: Final = CustomLogger()
+    _configure_callback_scoping(callback, "logger-backed", LitellmParams(guardrail="custom", mode="pre_call"))  # pyright: ignore[reportArgumentType]  # module-path guardrails may be plain CustomLogger
+    assert "stream_scope_by_hook" not in vars(callback)

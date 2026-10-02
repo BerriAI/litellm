@@ -460,7 +460,8 @@ def _configure_callback_scoping(
             "skip_tool_message_in_guardrail are enabled together, which excludes every message from "
             "scanning, so no request content would ever be scanned. Remove one of the two."
         )
-    custom_guardrail_callback.apply_stream_scope(litellm_params.stream_scope)
+    if isinstance(custom_guardrail_callback, CustomGuardrail):  # pyright: ignore[reportUnnecessaryIsInstance]  # module-path classes may only subclass CustomLogger
+        custom_guardrail_callback.apply_stream_scope(litellm_params.stream_scope)
     _apply_configured_bool_overrides(custom_guardrail_callback, litellm_params)
 
 

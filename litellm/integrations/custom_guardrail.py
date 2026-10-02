@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import (
+    DEFAULT_GUARDRAIL_STREAM_SCOPE,
     DynamicGuardrailParams,
     GuardrailEventHooks,
     GuardrailStreamScope,
@@ -180,7 +181,7 @@ def without_server_streaming_classification(data: Mapping[str, object]) -> dict[
     return {
         key: value
         for key, value in data.items()
-        if key != SERVER_STREAMING_CLASSIFICATION_KEY or value is not SERVER_STREAMING_CLASSIFICATION_MARKER
+        if key != SERVER_STREAMING_CLASSIFICATION_KEY or value != SERVER_STREAMING_CLASSIFICATION_MARKER
     }
 
 
@@ -217,6 +218,9 @@ class CustomGuardrail(CustomLogger):
     use_native_lifecycle_hooks: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
+
+    stream_scope_default: GuardrailStreamScope = DEFAULT_GUARDRAIL_STREAM_SCOPE
+    stream_scope_by_hook: Mapping[str, GuardrailStreamScope] = MappingProxyType({})
 
     timeout: float | httpx.Timeout | None = None
 
@@ -1099,8 +1103,24 @@ class CustomGuardrail(CustomLogger):
 
     def apply_stream_scope(self, stream_scope: object) -> None:
         default, by_hook = runtime_stream_scope(stream_scope)
-        self.stream_scope_default: GuardrailStreamScope = default
-        self.stream_scope_by_hook: MappingProxyType[str, GuardrailStreamScope] = by_hook
+        self.stream_scope_default = default
+        self.stream_scope_by_hook = by_hook
+
+    def __getstate__(
+        self,
+    ) -> tuple[tuple[tuple[str, object], ...], tuple[tuple[str, GuardrailStreamScope], ...]]:
+        return (
+            tuple((key, value) for key, value in self.__dict__.items() if key != "stream_scope_by_hook"),
+            tuple(self.stream_scope_by_hook.items()),
+        )
+
+    def __setstate__(
+        self,
+        state: tuple[tuple[tuple[str, object], ...], tuple[tuple[str, GuardrailStreamScope], ...]],
+    ) -> None:
+        attributes, stream_scope_by_hook = state
+        self.__dict__.update(attributes)
+        self.stream_scope_by_hook = MappingProxyType(dict(stream_scope_by_hook))
 
     def stream_scope_allows(self, data: object, event_type: GuardrailEventHooks) -> bool:
         scope: Final = self.stream_scope_by_hook.get(event_type.value, self.stream_scope_default)
