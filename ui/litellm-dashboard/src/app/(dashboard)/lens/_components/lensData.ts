@@ -68,6 +68,13 @@ export function evidenceTarget(id: string): { source: string; team: string; id: 
 
 export type Job = components["schemas"]["Job"];
 
+export const analysisStages = [
+  { stage: "Collecting executions", label: "Collect runs" },
+  { stage: "Reading executions", label: "Review runs" },
+  { stage: "Grouping observations", label: "Find patterns" },
+  { stage: "Checking original evidence", label: "Check evidence" },
+] as const;
+
 export function analysisProgress(job: Job) {
   const {
     screened = 0,
@@ -86,9 +93,12 @@ export function analysisProgress(job: Job) {
       detail: "The worker picks up queued investigations automatically.",
     };
   }
+  if (job.stage === "Collecting executions") {
+    return { step: 0, title: "Collecting runs", done: 0, total: 0, detail: "Selecting runs in the time window" };
+  }
   if (job.stage === "Grouping observations") {
     return {
-      step: 1,
+      step: 2,
       title: "Finding patterns",
       done: grouped_batches,
       total: grouping_batches,
@@ -99,7 +109,7 @@ export function analysisProgress(job: Job) {
   }
   if (job.stage === "Checking original evidence") {
     return {
-      step: 2,
+      step: 3,
       title: "Checking evidence",
       done: investigated,
       total: candidates,
@@ -109,7 +119,7 @@ export function analysisProgress(job: Job) {
     };
   }
   return {
-    step: 0,
+    step: 1,
     title: "Reviewing activity",
     done: screened,
     total: selected,
@@ -117,12 +127,35 @@ export function analysisProgress(job: Job) {
   };
 }
 
-export function analysisElapsed(createdAt: string, now: number): string {
-  const seconds = Math.max(0, Math.floor((now - Date.parse(createdAt)) / 1000));
+export function stageTimings(job: Job, now: number): (number | undefined)[] {
+  const starts = analysisStages.map(({ stage }) => job.timeline?.find((mark) => mark.stage === stage)?.started_at);
+  return starts.map((start, index) => {
+    if (!start) return undefined;
+    const next = starts.slice(index + 1).find(Boolean);
+    return Math.max(0, ((next ? Date.parse(next) : now) - Date.parse(start)) / 1000);
+  });
+}
+
+export function stageRemaining(done: number, total: number, stageSeconds: number | undefined): number | undefined {
+  if (stageSeconds === undefined || done < 1 || total <= done) return undefined;
+  return ((total - done) * stageSeconds) / done;
+}
+
+export function formatDuration(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
   if (!Number.isFinite(seconds)) return "0s";
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}
+
+export function remainingLabel(seconds: number): string {
+  if (seconds < 60) return "Less than a minute left";
+  return `About ${Math.ceil(seconds / 60)} min left`;
+}
+
+export function analysisElapsed(createdAt: string, now: number): string {
+  return formatDuration((now - Date.parse(createdAt)) / 1000);
 }
 
 export interface AnalysisModelInfo {
