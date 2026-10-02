@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from fastapi import HTTPException, status
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -163,36 +164,43 @@ REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
     "aembedding": ("input",),
     "aresponses": ("input",),
     "acreate_batch": ("input_file_id", "endpoint", "completion_window"),
-    "aspeech": ("input",),
-    "amoderation": ("input",),
-    "aimage_generation": ("prompt",),
-    "asearch": ("query",),
-    "atext_completion": ("prompt",),
-    "atranscription": ("file",),
-    "arerank": ("query", "documents"),
-    "acompact_responses": ("input",),
-    "anthropic_messages": ("messages", "max_tokens"),
-    "agenerate_content": ("contents",),
-    "aocr": ("document",),
-    "avector_store_search": ("query",),
-    "avector_store_file_create": ("file_id",),
-    "avector_store_file_update": ("attributes",),
-    "avideo_generation": ("prompt",),
-    "avideo_remix": ("prompt",),
-    "avideo_edit": ("prompt",),
-    "avideo_extension": ("prompt", "seconds"),
-    "avideo_create_character": ("name", "video"),
-    "acreate_container": ("name",),
-    "aupload_container_file": ("file",),
-    "acreate_agent": ("name",),
-    "acreate_interaction": ("input",),
-    "acreate_eval": ("data_source_config", "testing_criteria"),
-    "acreate_run": ("data_source",),
 }
+
+REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "aspeech": ("input",),
+        "amoderation": ("input",),
+        "aimage_generation": ("prompt",),
+        "asearch": ("query",),
+        "atext_completion": ("prompt",),
+        "atranscription": ("file",),
+        "arerank": ("query", "documents"),
+        "acompact_responses": ("input",),
+        "anthropic_messages": ("messages", "max_tokens"),
+        "agenerate_content": ("contents",),
+        "aocr": ("document",),
+        "avector_store_search": ("query",),
+        "avector_store_file_create": ("file_id",),
+        "avector_store_file_update": ("attributes",),
+        "avideo_generation": ("prompt",),
+        "avideo_remix": ("prompt",),
+        "avideo_edit": ("prompt",),
+        "avideo_extension": ("prompt", "seconds"),
+        "avideo_create_character": ("name", "video"),
+        "acreate_container": ("name",),
+        "aupload_container_file": ("file",),
+        "acreate_agent": ("name",),
+        "acreate_interaction": ("input",),
+        "acreate_eval": ("data_source_config", "testing_criteria"),
+        "acreate_run": ("data_source",),
+    }
+)
 
 REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
     {"acreate_interaction": ("model", "agent")}
 )
+
+JSON_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 
 
 class ProxyMissingRequiredParamError(ProxyException):
@@ -205,18 +213,68 @@ class ProxyMissingRequiredParamError(ProxyException):
         )
 
 
-def _find_missing_required_body_param(route_type: str, data: Mapping[str, object]) -> str | None:
+def _find_missing_required_body_param(
+    route_type: str,
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+) -> str | None:
     one_of_params: Final = REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE.get(route_type)
-    if one_of_params is not None and all(data.get(param) is None for param in one_of_params):
+    if one_of_params is not None and not any(param in data for param in one_of_params):
         return one_of_params[0]
-    return next(
+    missing_merge_base_param: Final = next(
         (param for param in REQUIRED_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if data.get(param) is None),
+        None,
+    )
+    if missing_merge_base_param is not None:
+        return missing_merge_base_param
+    missing_present_params: Final = tuple(
+        param for param in REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if param not in data
+    )
+    if not missing_present_params:
+        return None
+    candidate_litellm_params: Final = _candidate_deployment_litellm_params(data, llm_router)
+    return next(
+        (
+            param
+            for param in missing_present_params
+            if not any(deployment_params.get(param) is not None for deployment_params in candidate_litellm_params)
+        ),
         None,
     )
 
 
-def raise_if_required_body_param_missing(route_type: str, data: Mapping[str, object]) -> None:
-    missing_param: Final = _find_missing_required_body_param(route_type, data)
+def _candidate_deployment_litellm_params(
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+) -> tuple[dict[str, object], ...]:
+    model_name: Final = data.get("model")
+    if llm_router is None or not isinstance(model_name, str):
+        return ()
+    deployments: Final = (
+        llm_router.get_model_list(
+            model_name=model_name,
+            team_id=get_team_id_from_data(dict(data)),
+        )
+        or ()
+    )
+    return tuple(
+        params for deployment in deployments if (params := _validated_deployment_litellm_params(deployment)) is not None
+    )
+
+
+def _validated_deployment_litellm_params(deployment: Mapping[str, object]) -> dict[str, object] | None:
+    try:
+        return JSON_OBJECT_ADAPTER.validate_python(deployment.get("litellm_params"))
+    except ValidationError:
+        return None
+
+
+def raise_if_required_body_param_missing(
+    route_type: str,
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+) -> None:
+    missing_param: Final = _find_missing_required_body_param(route_type, data, llm_router)
     if missing_param is None:
         return
     raise ProxyMissingRequiredParamError(
@@ -506,7 +564,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     route_type: RouteType,
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
-    raise_if_required_body_param_missing(route_type=route_type, data=data)
+    raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=llm_router)
 
     await add_shared_session_to_data(data)
 

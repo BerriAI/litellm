@@ -745,14 +745,22 @@ def _register(
     route: str,
     *,
     streaming: bool = False,
+    deployment_params: dict[str, JsonValue] | None = None,
+    provider_model: str | None = None,
+    response_route: str | None = None,
 ) -> tuple[str, str, ScenarioHandle]:
     identity: Final = f"audit-{route}-{uuid.uuid4().hex}"
-    handle: Final = register_scenario(identity, _response(route, streaming=streaming))
+    handle: Final = register_scenario(identity, _response(response_route or route, streaming=streaming))
     scenario.cleanups.callback(delete_scenario, handle)
     model: Final = (
         ""
         if route == "asearch"
-        else scenario.model(model=_ROUTES[route][4], api_base=handle.api_base(), api_key=identity)
+        else scenario.model(
+            model=provider_model or _ROUTES[route][4],
+            api_base=handle.api_base(),
+            api_key=identity,
+            **(deployment_params or {}),
+        )
     )
     return model, identity, handle
 
@@ -987,6 +995,81 @@ def test_valid_required_fields_reach_upstream(gateway: Gateway, route: str) -> N
         ), matches
         if route == "avideo_edit":
             assert outbound.get("video") == {"id": "video-audit"}, matches
+
+
+def test_anthropic_messages_uses_deployment_max_tokens_default(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model, identity, _handle = _register(
+            scenario,
+            "anthropic_messages",
+            deployment_params={"max_tokens": 32},
+        )
+        response: Final = _post(
+            gateway,
+            "/v1/messages",
+            {"model": model, "messages": [{"role": "user", "content": "default max tokens"}]},
+        )
+        assert response.status_code == 200, response.text
+        _assert_scripted_response("anthropic_messages", JSON_OBJECT.validate_python(response.json()))
+        observations: Final = _Observations(gateway.upstream_url)
+        captured: Final = eventually(
+            observations.read,
+            lambda _items: any(item.get("method") == "POST" for item in observations.for_scenario(identity)),
+            seconds=20,
+        )
+        provider_requests: Final = tuple(
+            item for item in observations.for_scenario(identity) if item.get("method") == "POST"
+        )
+        assert len(provider_requests) == 1, captured
+        outbound: Final = object_value(provider_requests[0]["body"])
+        assert outbound.get("max_tokens") == 32, provider_requests
+
+
+def test_anthropic_messages_explicit_null_reaches_upstream(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model, identity, _handle = _register(
+            scenario,
+            "anthropic_messages",
+            deployment_params={"max_tokens": 32},
+            provider_model="openai/gpt-4o-mini",
+            response_route="acompletion",
+        )
+        response: Final = _post(
+            gateway,
+            "/v1/messages",
+            {"model": model, "messages": [{"role": "user", "content": "null max tokens"}], "max_tokens": None},
+        )
+        assert response.status_code == 200, response.text
+        observations: Final = _Observations(gateway.upstream_url)
+        captured: Final = eventually(
+            observations.read,
+            lambda _items: any(item.get("method") == "POST" for item in observations.for_scenario(identity)),
+            seconds=20,
+        )
+        provider_requests: Final = tuple(
+            item for item in observations.for_scenario(identity) if item.get("method") == "POST"
+        )
+        assert len(provider_requests) == 1, captured
+
+
+def test_image_generation_null_prompt_reaches_upstream(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model, identity, _handle = _register(scenario, "aimage_generation")
+        response: Final = _post(gateway, "/v1/images/generations", {"model": model, "prompt": None})
+        assert response.status_code == 200, response.text
+        _assert_scripted_response("aimage_generation", JSON_OBJECT.validate_python(response.json()))
+        observations: Final = _Observations(gateway.upstream_url)
+        captured: Final = eventually(
+            observations.read,
+            lambda _items: any(item.get("method") == "POST" for item in observations.for_scenario(identity)),
+            seconds=20,
+        )
+        provider_requests: Final = tuple(
+            item for item in observations.for_scenario(identity) if item.get("method") == "POST"
+        )
+        assert len(provider_requests) == 1, captured
+        outbound: Final = object_value(provider_requests[0]["body"])
+        assert "prompt" in outbound and outbound["prompt"] is None, provider_requests
 
 
 def test_valid_agent_creation_reaches_upstream(gateway: Gateway) -> None:

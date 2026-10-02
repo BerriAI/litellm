@@ -1070,32 +1070,18 @@ async def test_route_request_override_enable_tag_filtering_beats_body_value():
         ("acreate_run", "data_source", "/evals/{eval_id}/runs"),
     ],
 )
-@pytest.mark.parametrize(
-    "data_extra",
-    [
-        {},
-        {
-            "messages": None,
-            "input": None,
-            "input_file_id": None,
-            "prompt": None,
-            "query": None,
-            "file": None,
-            "image": None,
-            "contents": None,
-            "document": None,
-            "name": None,
-        },
-    ],
-)
-def test_raise_if_required_body_param_missing_rejects_missing_param(route_type, param, route, data_extra):
+def test_raise_if_required_body_param_missing_rejects_missing_param(route_type, param, route):
     from litellm.proxy.route_llm_request import (
         ProxyMissingRequiredParamError,
         raise_if_required_body_param_missing,
     )
 
     with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
-        raise_if_required_body_param_missing(route_type=route_type, data={"model": "gpt-4o", **data_extra})
+        raise_if_required_body_param_missing(
+            route_type=route_type,
+            data={"model": "gpt-4o"},
+            llm_router=None,
+        )
 
     assert exc_info.value.code == "400"
     assert exc_info.value.param == param
@@ -1119,9 +1105,112 @@ def test_raise_if_required_body_param_missing_names_first_missing_batch_param(da
     )
 
     with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
-        raise_if_required_body_param_missing(route_type="acreate_batch", data=data)
+        raise_if_required_body_param_missing(route_type="acreate_batch", data=data, llm_router=None)
 
     assert exc_info.value.param == param
+
+
+def test_raise_if_required_body_param_missing_rejects_null_for_merge_base_route() -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="aembedding",
+            data={"model": "text-embedding-3-small", "input": None},
+            llm_router=None,
+        )
+
+    assert exc_info.value.param == "input"
+
+
+@pytest.mark.parametrize(
+    ("route_type", "data"),
+    (
+        pytest.param(
+            "anthropic_messages",
+            {"model": "claude", "messages": [], "max_tokens": None},
+            id="anthropic-max-tokens",
+        ),
+        pytest.param(
+            "aimage_generation",
+            {"model": "gpt-image-1", "prompt": None},
+            id="image-prompt",
+        ),
+    ),
+)
+def test_required_present_body_param_accepts_explicit_null(route_type: str, data: dict[str, object]) -> None:
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=None)
+
+
+def test_required_present_body_param_uses_router_deployment_default() -> None:
+    import litellm
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-default",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                    "max_tokens": 32,
+                },
+            }
+        ]
+    )
+
+    raise_if_required_body_param_missing(
+        route_type="anthropic_messages",
+        data={"model": "claude-default", "messages": []},
+        llm_router=router,
+    )
+
+
+def test_required_present_body_param_without_router_default_still_raises() -> None:
+    import litellm
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-without-default",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data={"model": "claude-without-default", "messages": []},
+            llm_router=router,
+        )
+
+    assert exc_info.value.param == "max_tokens"
+
+
+@pytest.mark.parametrize(
+    "data",
+    (
+        {"model": None, "input": "hi"},
+        {"agent": None, "input": "hi"},
+    ),
+)
+def test_interaction_one_of_uses_key_presence(data: dict[str, object]) -> None:
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    raise_if_required_body_param_missing(route_type="acreate_interaction", data=data, llm_router=None)
 
 
 @pytest.mark.parametrize(
@@ -1133,7 +1222,6 @@ def test_raise_if_required_body_param_missing_names_first_missing_batch_param(da
         ("avideo_create_character", {"name": "hero"}, "video"),
         ("acreate_eval", {"data_source_config": {"type": "custom"}}, "testing_criteria"),
         ("acreate_interaction", {"input": "hi"}, "model"),
-        ("acreate_interaction", {"model": None, "agent": None, "input": "hi"}, "model"),
         ("acreate_interaction", {"model": "gemini-3-pro-preview"}, "input"),
     ],
 )
@@ -1144,7 +1232,7 @@ def test_raise_if_required_body_param_missing_names_each_missing_param(route_typ
     )
 
     with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
-        raise_if_required_body_param_missing(route_type=route_type, data=data)
+        raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=None)
 
     assert exc_info.value.code == "400"
     assert exc_info.value.param == param
@@ -1181,7 +1269,7 @@ def test_raise_if_required_body_param_missing_names_each_missing_param(route_typ
 def test_raise_if_required_body_param_missing_allows_valid_requests(route_type, data):
     from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 
-    raise_if_required_body_param_missing(route_type=route_type, data=data)
+    raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=None)
 
 
 @pytest.mark.asyncio
