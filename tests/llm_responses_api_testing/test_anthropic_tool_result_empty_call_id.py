@@ -11,12 +11,9 @@ The issue occurs when:
 3. The message is sent to Anthropic without a corresponding tool_use block
 """
 
-import os
-import sys
 import pytest
 from unittest.mock import patch, MagicMock
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,

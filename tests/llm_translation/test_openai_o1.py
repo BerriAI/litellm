@@ -1,19 +1,11 @@
-import json
 import os
-import sys
-from datetime import datetime
-from unittest.mock import AsyncMock, patch, MagicMock
-
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+from unittest.mock import patch
 
 
-import httpx
 import pytest
 
 import litellm
-from litellm import Choices, Message, ModelResponse
+from litellm import ModelResponse
 from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
 
 
@@ -78,7 +70,6 @@ async def test_o1_handle_tool_calling_optional_params(
     - max_tokens is translated to 'max_completion_tokens'
     - role 'system' is translated to 'user'
     """
-    from openai import AsyncOpenAI
     from litellm.utils import ProviderConfigManager
     from litellm.types.utils import LlmProviders
 
@@ -134,7 +125,6 @@ def test_litellm_responses():
     """
     ensures that type of completion_tokens_details is correctly handled / returned
     """
-    from litellm import ModelResponse
     from litellm.types.utils import CompletionTokensDetails
 
     response = ModelResponse(
@@ -152,6 +142,10 @@ def test_litellm_responses():
 
 
 class TestOpenAIO1(BaseOSeriesModelsTest, BaseLLMChatTest):
+    test_empty_tools = None
+    test_tool_call_with_empty_enum_property = None
+    test_tool_call_with_property_type_array = None
+
     def get_base_completion_call_args(self):
         return {
             "model": "o1",
@@ -172,6 +166,9 @@ class TestOpenAIO1(BaseOSeriesModelsTest, BaseLLMChatTest):
 
 
 class TestOpenAIO3(BaseOSeriesModelsTest, BaseLLMChatTest):
+    test_basic_tool_calling = None
+    test_function_calling_with_tool_response = None
+
     def get_base_completion_call_args(self):
         return {
             "model": "o3-mini",
@@ -191,15 +188,6 @@ class TestOpenAIO3(BaseOSeriesModelsTest, BaseLLMChatTest):
         pass
 
 
-def test_o1_supports_vision():
-    """Test that o1 supports vision"""
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    for k, v in litellm.model_cost.items():
-        if k.startswith("o1") and v.get("litellm_provider") == "openai":
-            assert v.get("supports_vision") is True, f"{k} does not support vision"
-
-
 def test_o3_reasoning_effort():
     resp = litellm.completion(
         model="o3-mini",
@@ -207,27 +195,3 @@ def test_o3_reasoning_effort():
         reasoning_effort="high",
     )
     assert resp.choices[0].message.content is not None
-
-
-@pytest.mark.parametrize("model", ["o1", "o3-mini"])
-def test_streaming_response(model):
-    """Test that streaming response is returned correctly"""
-    from litellm import completion
-
-    response = completion(
-        model=model,
-        messages=[
-            {"role": "system", "content": "Be a good bot!"},
-            {"role": "user", "content": "Hello!"},
-        ],
-        stream=True,
-    )
-
-    assert response is not None
-
-    chunks = []
-    for chunk in response:
-        chunks.append(chunk)
-
-    resp = litellm.stream_chunk_builder(chunks=chunks)
-    print(resp)

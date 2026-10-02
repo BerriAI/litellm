@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.stability import (
     OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO,
@@ -84,6 +85,14 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                 return True
         return False
 
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: base passes response headers as a dict
+    ) -> BedrockError:
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Return list of OpenAI params supported by Bedrock Stability.
@@ -116,7 +125,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         }
 
         # Create a copy to not mutate original - convert TypedDict to regular dict
-        mapped_params: Final[dict[str, Any]] = dict(image_edit_optional_params)
+        mapped_params: Final[dict[str, object]] = dict(image_edit_optional_params)
 
         for k, v in image_edit_optional_params.items():
             if k in param_mapping:
@@ -163,7 +172,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         Returns the request body dict that will be JSON-encoded by the handler.
         """
         # Build Bedrock Stability request
-        data: Final[dict[str, Any]] = {
+        data: Final[dict[str, object]] = {
             "output_format": "png",  # Default to PNG
         }
 

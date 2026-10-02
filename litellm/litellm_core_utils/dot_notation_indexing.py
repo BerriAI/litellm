@@ -23,12 +23,14 @@ Used by JWT Auth to get the user role from the token, and by
 additional_drop_params to remove nested fields from optional parameters.
 """
 
+from collections.abc import Mapping, Sequence
+from functools import reduce
 from typing import Any, Final, TypeVar
 
 T = TypeVar("T")
 
 
-def get_nested_value(data: dict[str, Any], key_path: str, default: T | None = None) -> T | None:
+def get_nested_value(data: Mapping[str, object], key_path: str, default: T | None = None) -> T | None:
     """
     Retrieves a value from a nested dictionary using dot notation.
 
@@ -107,7 +109,7 @@ def _parse_path_segments(path: str) -> list:
 
 
 def _delete_nested_value_custom(
-    data: dict[str, Any] | list[Any],
+    data: dict[str, object] | list[object],
     segments: list,
     segment_index: int = 0,
 ) -> None:
@@ -168,13 +170,15 @@ def _delete_nested_value_custom(
             if segment in data:
                 next_segment: Final = segments[segment_index + 1] if segment_index + 1 < len(segments) else None
 
+                child: Final = data[segment]
+
                 # If next segment is array notation, current field should be list
                 if next_segment and (next_segment.startswith("[")):
-                    if isinstance(data[segment], list):
-                        _delete_nested_value_custom(data[segment], segments, segment_index + 1)
+                    if isinstance(child, list):
+                        _delete_nested_value_custom(child, segments, segment_index + 1)
                 # Otherwise navigate into dict
-                elif isinstance(data[segment], dict):
-                    _delete_nested_value_custom(data[segment], segments, segment_index + 1)
+                elif isinstance(child, dict):
+                    _delete_nested_value_custom(child, segments, segment_index + 1)
 
 
 def delete_nested_value(
@@ -182,7 +186,7 @@ def delete_nested_value(
     path: str,
     depth: int = 0,
     max_depth: int = 20,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Delete a field from nested data using JSONPath notation.
 
@@ -243,43 +247,18 @@ _PAYLOAD_KEYS_EXCLUDED_FROM_BARE_DROP: Final = frozenset({"messages", "input"})
 
 
 def apply_additional_drop_params(
-    data: dict[str, Any],
-    paths: list[str],
-) -> dict[str, Any]:
-    """Apply ``additional_drop_params`` without touching conversation payload.
-
-    A bare key such as ``thinking`` is removed from the top-level request dict
-    only. Nested JSONPath entries such as ``tools[*].input_examples`` still
-    delete at that explicit path. ``messages`` and ``input`` are held aside for
-    the duration of a bare drop so a param name that also appears inside a
-    content block cannot strip user data. An explicit path that starts with
-    ``messages`` or ``input`` is still honored.
-    """
+    data: Mapping[str, object],
+    paths: Sequence[str],
+) -> Mapping[str, object]:
+    """Drop bare request keys at the top level and honor explicit nested paths."""
     import copy
 
-    cloned: Final = copy.deepcopy(data)
-    stashed: Final = {key: cloned[key] for key in _PAYLOAD_KEYS_EXCLUDED_FROM_BARE_DROP if key in cloned}
-    dropped: dict[str, Any] = {key: value for key, value in cloned.items() if key not in stashed}
-    payload: dict[str, Any] = dict(stashed)
-
-    for path in paths:
-        if not isinstance(path, str):
-            continue
+    def drop_path(current: Mapping[str, object], path: str) -> Mapping[str, object]:
         if is_nested_path(path):
-            segments: Final = _parse_path_segments(path)
-            first_segment: Final = segments[0] if segments else ""
-            if first_segment in payload:
-                wrapped: Final = {first_segment: payload[first_segment]}
-                updated: Final = delete_nested_value(wrapped, path)
-                payload = {
-                    **payload,
-                    first_segment: updated[first_segment],
-                }  # rebind-ok: rebuild payload after explicit nested drop
-            else:
-                dropped = delete_nested_value(dropped, path)  # rebind-ok: each nested path returns a new dict
-        elif path not in _PAYLOAD_KEYS_EXCLUDED_FROM_BARE_DROP:
-            dropped = {
-                key: value for key, value in dropped.items() if key != path
-            }  # rebind-ok: bare drop rebuilds without the key
+            return delete_nested_value(dict(current), path)
+        return {
+            key: value for key, value in current.items() if key != path or key in _PAYLOAD_KEYS_EXCLUDED_FROM_BARE_DROP
+        }
 
-    return {**dropped, **payload}
+    cloned: Final = copy.deepcopy(dict(data))
+    return reduce(drop_path, (path for path in paths if isinstance(path, str)), cloned)

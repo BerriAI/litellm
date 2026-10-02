@@ -1,0 +1,135 @@
+# Lint config for the test tree, which ruff.toml excludes from `ruff check`.
+#
+# Every rule here catches a test that cannot fail. Rules land one at a time, each
+# with its existing violations already fixed, so this list never needs a budget
+# file or a ratchet.
+#
+# F821    a name that does not exist raises NameError, and a test body wrapped in
+#         `except Exception: pass` swallows that NameError and reports green
+# B011    `assert False` inside `try:` raises AssertionError, which the `except
+#         Exception` below it catches. `pytest.fail` raises BaseException and escapes
+# PT015   same site as B011, from the pytest ruleset
+# B015    a bare `a == b` statement is evaluated and thrown away; the missing `assert`
+#         means the test checks nothing
+# B018    a bare attribute access or literal, usually a call missing its parens
+# PLW0127 `x = x` self-assignment, dead code that reads like a narrowing or a fixup
+# PLR0133 comparison of two constants, e.g. `assert True == True`
+# B017    `pytest.raises(Exception)` accepts the TypeError a refactor introduced just as
+#         readily as the rejection under test, so a crash reads as a pass. Narrow to the
+#         real type, or add `match=` where the code genuinely raises a bare Exception
+# PT012   a `pytest.raises` block that runs on past the raising call. Everything after
+#         that call is dead, so an `assert` sitting there is never checked. Keep the
+#         block to the call itself and put the assertions below it
+# PT011   `pytest.raises(Exception)` / `(ValueError)` / `(OSError)` with no `match=`. The
+#         block passes on any error that broad, so the TypeError a refactor introduced
+#         reads as the rejection under test. Pin the message the code actually raises
+# PT014   the same `parametrize` case listed twice. The copy re-runs an assertion that
+#         already passed and adds no coverage, and it usually marks a case someone meant
+#         to vary and forgot to edit
+# F811    a name bound twice where the first binding was never used. Mostly a repeated
+#         import, but the same rule is what catches a second `def test_x` silently
+#         replacing the first, and a local that shadows an import the module still calls
+# PT017   an `assert` on the caught error inside `except`. Nothing runs the handler when
+#         the call stops raising, so the test goes green on the exact regression it was
+#         written to catch. `pytest.raises` fails when the call succeeds
+# RUF043  a `match=` pattern carrying regex metacharacters in a plain string. `match=` is
+#         `re.search`, so a `.` copied out of an error message is a wildcard and the block
+#         accepts messages the author never meant to accept. Mark a real regex raw, wrap a
+#         literal message in `re.escape`, and the pattern says which one it is
+# F823    a module-level name read inside a function that also binds it lower down. The
+#         later binding makes the name local for the whole body, so the read raises
+#         UnboundLocalError, and in an autouse fixture that takes every test in the
+#         directory down with it
+# F601    the same key literal twice in one dict. Python keeps the last value, so the
+#         first is dropped before the test ever runs, and a fixture that looks like it
+#         covers two cases covers one
+# B023    a closure over a loop variable. Every closure sees the last iteration's value,
+#         so a per-case callback built in a loop checks the last case N times. Bind the
+#         value as a parameter instead
+# B025    an `except` for a type an earlier `except` already catches. The second handler
+#         is unreachable, so the recovery or skip written there never happens
+# F632    `is` against a literal. It compares identity, so it passes only where CPython
+#         happens to intern the value and stops meaning what it says the moment the
+#         value is built at runtime
+# B003    `os.environ = {...}` rebinds the mapping instead of mutating it, so `putenv`
+#         never fires and a subprocess still reads the real keys the test believes it
+#         cleared. The manual restore underneath is skipped whenever the body raises,
+#         so every later test in that worker inherits a plain dict for an environment
+# PGH005  an assertion on a mock attribute the library never defines. `assert
+#         m.called_once` and a bare `m.assert_called_once` both read as checks and
+#         neither is one: a Mock invents whatever attribute it is asked for, so the
+#         first is always truthy and the second is an attribute nobody calls
+# F631    `assert (cond, "message")` asserts a two-element tuple, which is always
+#         truthy. The message meant to explain the failure is what stops the assertion
+#         from ever having one
+# F634    `if (a, b):` branches on a tuple, so the branch is always taken and the
+#         condition it was written to test is never evaluated
+# PT010   `pytest.raises()` with no exception type accepts anything the block raises,
+#         including the TypeError a refactor introduced
+# PT030   the `pytest.warns` twin of PT011. `Warning` or `UserWarning` with no `match=`
+#         passes on any warning that broad
+# PT031   the `pytest.warns` twin of PT012. Everything after the warning call is dead,
+#         so an `assert` sitting there is never checked
+# B012    a `return`, `break` or `continue` inside `finally` discards whatever exception
+#         was in flight, so the AssertionError the test just raised is thrown away and
+#         the test reports green
+# B013    a one-element tuple where the exception class was meant, which reads as a
+#         wider handler than it is
+# B014    an exception named twice in one handler, or a subclass beside its parent. The
+#         second name does nothing, and it is usually the one someone meant to change
+# B016    `raise "message"` raises a str, so the failure the test set up is replaced by
+#         a TypeError from the raise itself
+# B022    `contextlib.suppress()` with no arguments suppresses nothing, so the call it
+#         wraps still raises
+# B029    `except ():` catches nothing, so the recovery or skip written in that handler
+#         never happens
+# B030    an `except` naming something that is not an exception class raises TypeError
+#         while unwinding, replacing the error under test
+# F707    a bare `except:` ahead of another handler makes every handler below it
+#         unreachable
+# PLE0704 a bare `raise` outside an except block raises RuntimeError instead of
+#         re-raising anything
+#
+# No target-version here on purpose: it resolves from requires-python (>=3.10), so
+# 3.11-only builtins like BaseExceptionGroup are correctly flagged in a tree that
+# still has to run on 3.10.
+
+line-length = 120
+
+lint.select = [
+    "F811",
+    "F821",
+    "B011",
+    "B015",
+    "B017",
+    "B018",
+    "PT011",
+    "PT012",
+    "PT014",
+    "PT015",
+    "PT017",
+    "PLR0133",
+    "PLW0127",
+    "RUF043",
+    "F823",
+    "F601",
+    "B023",
+    "B025",
+    "F632",
+    "B003",
+    "PGH005",
+    "F631",
+    "F634",
+    "PT010",
+    "PT030",
+    "PT031",
+    "B012",
+    "B013",
+    "B014",
+    "B016",
+    "B022",
+    "B029",
+    "B030",
+    "F707",
+    "PLE0704",
+]

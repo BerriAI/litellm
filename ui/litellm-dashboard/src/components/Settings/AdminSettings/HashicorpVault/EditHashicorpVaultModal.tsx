@@ -6,7 +6,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { toast } from "@/lib/toast";
 import React, { useMemo } from "react";
 import { z } from "zod/v4";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Button } from "@/components/ui/button";
@@ -26,7 +26,14 @@ interface VaultFieldGroup {
 const FIELD_GROUPS: VaultFieldGroup[] = [
   {
     title: "Connection",
-    fields: ["vault_addr", "vault_namespace", "vault_mount_name", "vault_path_prefix"],
+    fields: [
+      "vault_addr",
+      "vault_namespace",
+      "vault_login_namespace",
+      "vault_secret_namespace",
+      "vault_mount_name",
+      "vault_path_prefix",
+    ],
   },
   {
     title: "Token Authentication",

@@ -32,12 +32,8 @@ export function FallbackGroupConfig({
   // Filter available options for fallbacks (exclude primary only, allow already selected to be shown for deselection)
   const availableFallbackOptions = availableModels.filter((m) => m !== group.primaryModel);
 
-  const handlePrimaryChange = (value: string) => {
-    let newFallbacks = [...group.fallbackModels];
-    // Remove from fallbacks if it was there
-    if (newFallbacks.includes(value)) {
-      newFallbacks = newFallbacks.filter((m) => m !== value);
-    }
+  const handlePrimaryChange = (value: string | null) => {
+    const newFallbacks = group.fallbackModels.filter((model) => model !== value);
     onChange({
       ...group,
       primaryModel: value,
@@ -76,7 +72,7 @@ export function FallbackGroupConfig({
         <SearchSelect
           inputId={primaryModelInputId}
           options={availableModels.map((m) => ({ label: m, value: m }))}
-          value={group.primaryModel ?? ""}
+          value={group.primaryModel}
           onValueChange={handlePrimaryChange}
           placeholder="Select primary model"
           emptyText="No models found"
@@ -92,8 +88,8 @@ export function FallbackGroupConfig({
       </div>
 
       {/* Visual Connection */}
-      <div className="flex items-center justify-center -my-4 z-10">
-        <div className="bg-indigo-50 text-indigo-500 px-4 py-1 rounded-full text-xs font-bold border border-indigo-100 flex items-center gap-2 shadow-xs">
+      <div className="flex items-center justify-center -my-4 z-raised">
+        <div className="bg-indigo-50 text-indigo-500 px-4 py-1 rounded-full text-xs font-bold border border-indigo-100 flex items-center gap-2 shadow-xs dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-900">
           <ArrowDown className="w-4 h-4" />
           IF FAILS, TRY...
         </div>
@@ -134,7 +130,7 @@ export function FallbackGroupConfig({
           {/* Fallback List */}
           <div className="space-y-2 min-h-[100px]">
             {group.fallbackModels.length === 0 ? (
-              <div className="h-32 border-2 border-dashed border-border rounded-lg flex flex-col items-center justify-center text-muted-foreground/70">
+              <div className="h-32 border-2 border-dashed border-border rounded-lg flex flex-col items-center justify-center text-muted-foreground">
                 <span className="text-sm">No fallback models selected</span>
                 <span className="text-xs mt-1">Add models from the dropdown above</span>
               </div>
@@ -146,7 +142,7 @@ export function FallbackGroupConfig({
                     className="group flex items-center justify-between p-3 bg-card rounded-lg border border-border hover:border-indigo-300 hover:shadow-xs transition-all"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="flex items-center justify-center w-6 h-6 rounded-sm bg-muted text-muted-foreground/70 group-hover:text-indigo-500 group-hover:bg-indigo-50">
+                      <div className="flex items-center justify-center w-6 h-6 rounded-sm bg-muted text-muted-foreground group-hover:text-indigo-500 group-hover:bg-indigo-50 dark:group-hover:text-indigo-300 dark:group-hover:bg-indigo-950">
                         <span className="text-xs font-bold">{index + 1}</span>
                       </div>
                       <div>
@@ -158,7 +154,7 @@ export function FallbackGroupConfig({
                       type="button"
                       aria-label={`Remove ${modelValue}`}
                       onClick={() => removeFallback(index)}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground/70 hover:text-destructive p-1"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive p-1"
                     >
                       <X className="w-4 h-4" />
                     </button>

@@ -1,11 +1,6 @@
 import json
-import os
-import sys
 from datetime import datetime
 
-sys.path.insert(
-    0, os.path.abspath("../../../")
-)  # Adds the parent directory to the system path
 
 import litellm
 import pytest
@@ -982,7 +977,7 @@ def test_convert_to_model_response_object_with_real_error():
         },
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception) as exc_info:  # noqa: PT011  # message rides on .message, str() is empty
         convert_to_model_response_object(
             model_response_object=ModelResponse(),
             response_object=response_object,
@@ -1243,7 +1238,7 @@ def test_convert_to_model_response_object_with_error_code_only():
         },
     }
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception) as exc_info:  # noqa: B017, PT011  # bare Exception, empty message, so status_code is the assertion
         convert_to_model_response_object(
             model_response_object=ModelResponse(),
             response_object=response_object,
@@ -1254,6 +1249,8 @@ def test_convert_to_model_response_object_with_error_code_only():
             _response_headers=None,
             convert_tool_call_to_json_mode=False,
         )
+
+    assert exc_info.value.status_code == 500
 
 
 def test_model_prefix_preservation():
@@ -1421,7 +1418,7 @@ def test_error_message_includes_function_args():
         "choices": [{"index": 0}],
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='in convert_to_model_response_object') as exc_info:
         convert_to_model_response_object(
             model_response_object=ModelResponse(),
             response_object=response_object,
@@ -1626,15 +1623,11 @@ class TestMissingChoicesGuard:
 
         assert "no 'choices'" in exc_info.value.message
 
-    def test_convert_to_model_response_object_empty_choices_raises_api_error(self):
-        """Empty choices list raises APIError, same as missing/null choices.
+    def test_convert_to_model_response_object_empty_choices_returns_empty_list(self):
+        """An empty choices list is a real provider answer, so it converts to choices=[] instead of raising.
 
-        Provider-specific repair (e.g. github_copilot synthesizing choices for
-        Anthropic-native responses) happens before this guard, in the provider
-        config; the core utility keeps treating empty choices as an error.
+        See: https://github.com/BerriAI/litellm/issues/40276
         """
-        from litellm.exceptions import APIError
-
         response_object = {
             "id": "msg_123",
             "model": "some-model",
@@ -1642,16 +1635,17 @@ class TestMissingChoicesGuard:
             "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
         }
 
-        with pytest.raises(APIError) as exc_info:
-            convert_to_model_response_object(
-                response_object=response_object,
-                model_response_object=ModelResponse(),
-            )
+        result = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=ModelResponse(),
+        )
 
-        assert "no 'choices'" in exc_info.value.message
+        assert isinstance(result, ModelResponse)
+        assert result.choices == []
+        assert result.usage.prompt_tokens == 10
 
     def test_convert_to_model_response_object_null_choices_raises_api_error(self):
-        """choices=None raises APIError."""
+        """choices=None raises APIError that names the type instead of claiming the key is missing."""
         from litellm.exceptions import APIError
 
         response_object = {
@@ -1667,7 +1661,7 @@ class TestMissingChoicesGuard:
                 model_response_object=ModelResponse(),
             )
 
-        assert "no 'choices'" in exc_info.value.message
+        assert "'choices' that is not a list (NoneType)" in exc_info.value.message
 
     def test_convert_to_streaming_response_no_choices_raises_api_error(self):
         """Missing choices in streaming cache-hit path raises APIError."""
@@ -2473,14 +2467,14 @@ class TestConvertToModelResponseObjectCompletion:
         assert "reasoning_content" not in (message.provider_specific_fields or {})
 
     def test_response_none_raises(self):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Invalid response object"):
             convert_to_model_response_object(
                 response_object=None,
                 model_response_object=ModelResponse(),
             )
 
     def test_model_response_none_raises(self):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Invalid response object"):
             convert_to_model_response_object(
                 response_object={
                     "choices": [

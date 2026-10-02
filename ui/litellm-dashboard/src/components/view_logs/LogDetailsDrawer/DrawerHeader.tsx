@@ -7,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { LogEntry } from "../columns";
 import { AutoRouterTag } from "@/components/shared/table_cells";
 import { ClassifyTag } from "./ClassifyTag";
+import { SidebarToggle } from "./SidebarToggle";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
 import {
   DRAWER_HEADER_PADDING,
@@ -26,6 +27,8 @@ interface DrawerHeaderProps {
   statusLabel: string;
   statusColor: "error" | "success";
   environment: string;
+  isSidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
 }
 
 /**
@@ -40,35 +43,64 @@ export function DrawerHeader({
   statusLabel,
   statusColor,
   environment,
+  isSidebarCollapsed,
+  onToggleSidebar,
 }: DrawerHeaderProps) {
   const provider = log.custom_llm_provider || "";
   const providerInfo = provider ? getProviderLogoAndName(provider) : null;
+  const showToggleWithProvider = isSidebarCollapsed && Boolean(providerInfo || log.model);
+  const showToggleWithRequestId = isSidebarCollapsed && !showToggleWithProvider;
+  const callId: string | null =
+    log.litellm_call_id && log.litellm_call_id !== log.request_id ? log.litellm_call_id : null;
 
   return (
     <div
+      className="z-chrome"
       style={{
         padding: DRAWER_HEADER_PADDING,
         borderBottom: `1px solid ${COLOR_BORDER}`,
         backgroundColor: COLOR_BACKGROUND,
         position: "sticky",
         top: 0,
-        zIndex: 10,
       }}
     >
       {/* Row 0: Model + Provider with Logo */}
-      <ModelProviderSection
-        model={log.model}
-        modelGroup={log.model_group}
-        internalCallOrigin={log.metadata?.internal_call_origin}
-        providerLogo={providerInfo?.logo}
-        providerName={providerInfo?.displayName}
-      />
+      <div className="flex items-center gap-2" style={{ marginBottom: SPACING_MEDIUM }}>
+        {showToggleWithProvider && <SidebarToggle isCollapsed onToggle={onToggleSidebar} />}
+        <ModelProviderSection
+          model={log.model}
+          modelGroup={log.model_group}
+          internalCallOrigin={log.metadata?.internal_call_origin}
+          providerLogo={providerInfo?.logo}
+          providerName={providerInfo?.displayName}
+        />
+      </div>
 
       {/* Row 1: Request ID + Actions */}
       <div
-        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: SPACING_MEDIUM }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 4,
+          marginBottom: SPACING_MEDIUM,
+        }}
       >
-        <RequestIdSection requestId={log.request_id} />
+        {showToggleWithRequestId && <SidebarToggle isCollapsed onToggle={onToggleSidebar} />}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <CopyableId value={log.request_id} label="Request ID" fontSize={FONT_SIZE_HEADER} />
+          {callId && (
+            <div className="flex items-center gap-1">
+              <span
+                className="text-muted-foreground"
+                style={{ fontSize: FONT_SIZE_MEDIUM, fontFamily: FONT_FAMILY_MONO, whiteSpace: "nowrap" }}
+              >
+                x-litellm-call-id:
+              </span>
+              <CopyableId value={callId} label="x-litellm-call-id" fontSize={FONT_SIZE_MEDIUM} muted />
+            </div>
+          )}
+        </div>
         <NavigationSection onPrevious={onPrevious} onNext={onNext} onClose={onClose} />
       </div>
 
@@ -95,7 +127,7 @@ function ModelProviderSection({
   providerName?: string;
 }) {
   return (
-    <div className="flex items-center gap-2" style={{ marginBottom: SPACING_MEDIUM }}>
+    <div className="flex min-w-0 items-center gap-2">
       {providerLogo && (
         <img
           src={providerLogo}
@@ -123,15 +155,22 @@ function ModelProviderSection({
   );
 }
 
-/**
- * Request ID display with copy functionality
- */
-function RequestIdSection({ requestId }: { requestId: string }) {
+function CopyableId({
+  value,
+  label,
+  fontSize,
+  muted,
+}: {
+  value: string;
+  label: string;
+  fontSize: number;
+  muted?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(requestId);
+      await navigator.clipboard.writeText(value);
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
     } catch {
@@ -140,38 +179,36 @@ function RequestIdSection({ requestId }: { requestId: string }) {
   };
 
   return (
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span
-                className="font-semibold"
-                style={{
-                  fontSize: FONT_SIZE_HEADER,
-                  fontFamily: FONT_FAMILY_MONO,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  display: "block",
-                }}
-              />
-            }
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              className={muted ? "text-muted-foreground" : "font-semibold"}
+              style={{
+                fontSize,
+                fontFamily: FONT_FAMILY_MONO,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                display: "block",
+              }}
+            />
+          }
+        >
+          {value}
+          <button
+            type="button"
+            aria-label={copied ? "Copied!" : `Copy ${label}`}
+            onClick={handleCopy}
+            className="ml-1 align-middle text-muted-foreground hover:text-foreground"
           >
-            {requestId}
-            <button
-              type="button"
-              aria-label={copied ? "Copied!" : "Copy Request ID"}
-              onClick={handleCopy}
-              className="ml-1 align-middle text-muted-foreground hover:text-foreground"
-            >
-              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>{requestId}</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-    </div>
+            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>{value}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
@@ -189,13 +226,13 @@ function NavigationSection({
   onClose: () => void;
 }) {
   const keyboardShortcutStyle = {
-    border: "1px solid #d9d9d9",
+    border: "1px solid var(--color-border)",
     borderRadius: 4,
     padding: "0 4px",
     fontSize: 12,
     fontFamily: "monospace",
     marginLeft: 4,
-    background: "#fafafa",
+    background: "var(--color-muted)",
   };
   const splitStyle = { width: 1, height: 20, background: COLOR_BORDER };
 

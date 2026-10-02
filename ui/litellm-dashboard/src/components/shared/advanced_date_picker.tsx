@@ -295,7 +295,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
               <span className="text-foreground">{formatDisplayRange(value.from, value.to)}</span>
             </span>
             <svg
-              className={`w-4 h-4 text-muted-foreground/70 transition-transform ${isOpen ? "rotate-180" : ""}`}
+              className={`w-4 h-4 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`}
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -311,7 +311,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
             data-slot="advanced-date-picker-panel"
             data-align={align}
             className={cn(
-              "absolute top-full z-9999 min-w-[600px] mt-1 bg-card border border-border rounded-lg shadow-xl",
+              "absolute top-full z-floating min-w-[600px] mt-1 bg-card border border-border rounded-lg shadow-xl",
               align === "left" ? "left-0" : "right-0",
             )}
           >

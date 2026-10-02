@@ -1,7 +1,9 @@
 import { useCallback, useState } from "react";
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { ColumnFiltersState, OnChangeFn, PaginationState } from "@tanstack/react-table";
 import { resolveLogoSrc } from "@/lib/assetPaths";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { uiAuditLogsCall } from "../networking";
 import { AuditLogEntry } from "./AuditLogsTableColumns";
 import { AuditLogsTable } from "./AuditLogsTable";
@@ -39,18 +41,23 @@ export default function AuditLogsPanel({
 }: AuditLogsProps) {
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [searchInput, setSearchInput] = useState("");
+  const [debouncedSearch] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
   const [selectedLog, setSelectedLog] = useState<AuditLogEntry | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const searchTerm = debouncedSearch.trim();
 
   const getFilterValue = (columnId: string): string | undefined => {
     const entry = columnFilters.find((filter) => filter.id === columnId);
     return typeof entry?.value === "string" && entry.value.trim() ? entry.value.trim() : undefined;
   };
 
-  const canQueryAuditLogs = !!accessToken && !!token && !!userRole && !!userID && isActive && premiumUser;
+  const hasSession = [accessToken, token, userRole, userID].every(Boolean);
+  const canQueryAuditLogs = hasSession && isActive && premiumUser;
 
   const query = useQuery<AuditLogsResponse>({
-    queryKey: ["audit_logs", pagination.pageIndex, pagination.pageSize, columnFilters],
+    queryKey: ["audit_logs", pagination.pageIndex, pagination.pageSize, columnFilters, searchTerm],
     queryFn: async () => {
       if (!accessToken) {
         return { audit_logs: [], total: 0, page: 1, page_size: pagination.pageSize, total_pages: 0 };
@@ -60,6 +67,7 @@ export default function AuditLogsPanel({
         page: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
         params: {
+          search: searchTerm || undefined,
           object_id: getFilterValue("object_id"),
           changed_by: getFilterValue("changed_by"),
           object_key_hash: getFilterValue("key_hash"),
@@ -77,6 +85,11 @@ export default function AuditLogsPanel({
 
   const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>((updaterOrValue) => {
     setColumnFilters(updaterOrValue);
+    setPagination((prev) => ({ ...prev, pageIndex: 0 }));
+  }, []);
+
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchInput(value);
     setPagination((prev) => ({ ...prev, pageIndex: 0 }));
   }, []);
 
@@ -128,6 +141,8 @@ export default function AuditLogsPanel({
         onPaginationChange={setPagination}
         columnFilters={columnFilters}
         onColumnFiltersChange={handleColumnFiltersChange}
+        searchValue={searchInput}
+        onSearchChange={handleSearchChange}
         onRefresh={() => query.refetch()}
         onViewLog={handleViewLog}
       />

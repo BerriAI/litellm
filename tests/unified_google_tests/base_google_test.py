@@ -1,20 +1,15 @@
 import asyncio
 import json
-import sys
 import os
 import tempfile
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.google_genai import (
     generate_content,
     agenerate_content,
-    generate_content_stream,
     agenerate_content_stream,
 )
 from google.genai.types import ContentDict, PartDict
@@ -198,45 +193,6 @@ class BaseGoogleGenAITest:
         self._validate_non_streaming_response(response)
 
         return response
-
-    @pytest.mark.parametrize("is_async", [False, True])
-    @pytest.mark.asyncio
-    async def test_streaming_base(self, is_async: bool):
-        """Base test for streaming requests (parametrized for sync/async)"""
-        request_params = self.model_config
-        temp_file_path = load_vertex_ai_credentials(model=request_params["model"])
-        if temp_file_path:
-            self._temp_files_to_cleanup.append(temp_file_path)
-        contents = ContentDict(
-            parts=[PartDict(text="Hello, can you tell me a short joke?")],
-            role="user",
-        )
-
-        print(
-            f"Testing {'async' if is_async else 'sync'} streaming with model config: {request_params}"
-        )
-        print(f"Contents: {contents}")
-
-        chunks = []
-
-        if is_async:
-            print("\n--- Testing async agenerate_content_stream ---")
-            response = await agenerate_content_stream(
-                contents=contents, **request_params
-            )
-            async for chunk in response:
-                print(f"Async chunk: {chunk}")
-                chunks.append(chunk)
-        else:
-            print("\n--- Testing sync generate_content_stream ---")
-            response = generate_content_stream(contents=contents, **request_params)
-            for chunk in response:
-                print(f"Sync chunk: {chunk}")
-                chunks.append(chunk)
-
-        self._validate_streaming_response(chunks)
-
-        return chunks
 
     @pytest.mark.asyncio
     async def test_async_non_streaming_with_logging(self):

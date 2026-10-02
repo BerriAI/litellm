@@ -16,7 +16,7 @@ function FilePreviewCard({ file, previewUrl, onRemove }: FilePreviewCardProps) {
         <div className="relative inline-block">
           {isPdf ? (
             <div className="w-10 h-10 rounded-md bg-destructive flex items-center justify-center">
-              <FileText className="size-4 text-white" aria-hidden="true" />
+              <FileText className="size-4 text-destructive-foreground" aria-hidden="true" />
             </div>
           ) : (
             <img
@@ -35,7 +35,7 @@ function FilePreviewCard({ file, previewUrl, onRemove }: FilePreviewCardProps) {
           variant="ghost"
           size="icon-xs"
           aria-label={`Remove ${file.name}`}
-          className="text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent"
+          className="text-muted-foreground hover:text-foreground hover:bg-accent"
           onClick={onRemove}
         >
           <X className="size-3" />

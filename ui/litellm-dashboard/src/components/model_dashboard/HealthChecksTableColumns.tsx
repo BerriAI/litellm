@@ -135,8 +135,8 @@ function RunHealthCheckButton({
       className={cn(
         "rounded-md p-2 transition-colors",
         isLoading
-          ? "cursor-not-allowed bg-muted text-muted-foreground/70"
-          : "text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700",
+          ? "cursor-not-allowed bg-muted text-muted-foreground"
+          : "text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700 dark:text-indigo-300 dark:hover:bg-indigo-950 dark:hover:text-indigo-200",
       )}
     >
       <RunButtonIcon isLoading={isLoading} hasExistingStatus={hasExistingStatus} />

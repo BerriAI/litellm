@@ -7,18 +7,18 @@ Tests the exact 3 scenarios requested:
 3. Request 3: Safe query in French that should pass (allowed)
 """
 
-import sys
 import os
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
+from litellm.proxy.guardrails.content_filter_data import POLICY_TEMPLATES_DIR
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
+from fastapi import HTTPException
 
 
 @pytest.fixture
@@ -26,14 +26,7 @@ def content_filter_guardrail():
     """Initialize content filter guardrail with EU AI Act Article 5 French template."""
 
     # Get absolute path to the French policy template
-    content_filter_dir = os.path.join(
-        os.path.dirname(__file__),
-        "../../litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter",
-    )
-    policy_template_path = os.path.join(
-        content_filter_dir, "policy_templates/eu_ai_act_article5_fr.yaml"
-    )
-    policy_template_path = os.path.abspath(policy_template_path)
+    policy_template_path = os.path.join(POLICY_TEMPLATES_DIR, "eu_ai_act_article5_fr.yaml")
 
     # Load the EU AI Act Article 5 French policy template
     categories = [
@@ -82,7 +75,7 @@ class TestEUAIActFrench3Scenarios:
         print(f"{'='*70}\n")
 
         # Should raise an exception (blocked)
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="prohibited_practices_fr conditional match 'concevoir \\+") as exc_info:
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -122,7 +115,7 @@ class TestEUAIActFrench3Scenarios:
         print(f"{'='*70}\n")
 
         # Should raise an exception (blocked)
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="prohibited_practices_fr conditional match 'créer \\+") as exc_info:
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -193,7 +186,7 @@ class TestEUAIActFrench3Scenarios:
         print(f"{'='*70}\n")
 
         # Should raise an exception (blocked by conditional matching)
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="prohibited_practices_fr conditional match 'développer \\+") as exc_info:
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -228,7 +221,7 @@ class TestFrenchEdgeCases:
         request_data = {"messages": [{"role": "user", "content": sentence}]}
 
         # Should block (contains "build" and "système de crédit social")
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -257,7 +250,7 @@ class TestFrenchEdgeCases:
         request_data = {"messages": [{"role": "user", "content": sentence}]}
 
         # Should block (case-insensitive)
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -277,7 +270,7 @@ class TestFrenchEdgeCases:
         request_data = {"messages": [{"role": "user", "content": sentence}]}
 
         # Should still block (no exception bypass)
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="prohibited_practices_fr conditional match 'créer \\+ crédit") as exc_info:
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,

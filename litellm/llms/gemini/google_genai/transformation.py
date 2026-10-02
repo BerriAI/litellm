@@ -117,7 +117,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             _snake_to_camel,
         )
 
-        _generate_content_config_dict: Final[dict[str, Any]] = {}
+        _generate_content_config_dict: Final[dict[str, object]] = {}
         supported_google_genai_params: Final = self.get_supported_generate_content_optional_params(model)
         # Create a set with both camelCase and snake_case versions for faster lookup
         supported_params_set: Final = set(supported_google_genai_params)
@@ -175,7 +175,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
     def _get_common_auth_components(
         self,
         litellm_params: dict,
-    ) -> tuple[Any, str | None, str | None]:
+    ) -> tuple[str | None, str | None, str | None]:
         """
         Get common authentication components used by both sync and async methods.
 
@@ -193,7 +193,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         auth_header: str | None,
         vertex_project: str | None,
         vertex_location: str | None,
-        vertex_credentials: Any,
+        vertex_credentials: str | None,
         stream: bool,
         api_base: str | None,
         litellm_params: dict,

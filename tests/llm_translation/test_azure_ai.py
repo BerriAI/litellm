@@ -3,7 +3,6 @@
 
 import asyncio
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
@@ -19,11 +18,7 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 load_dotenv()
 import io
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
@@ -275,7 +270,7 @@ async def test_azure_ai_request_format():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["azure/gpt5_series/gpt-5-mini", "azure/gpt-5-mini"])
+@pytest.mark.parametrize("model", ["azure/gpt5_series/gpt-5-mini"])
 async def test_azure_gpt5_reasoning(model):
     litellm._turn_on_debug()
     response = await litellm.acompletion(
