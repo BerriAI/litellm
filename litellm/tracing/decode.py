@@ -177,6 +177,7 @@ def _span_row(span: DecodedSpan) -> SpanRow:
         StatusMessage=span["status_message"] or _exception_message(span),
         TeamId="",
         ApiKeyHash="",
+        UserId="",
         ObservationType=normalized.observation_type,
         AgentName=normalized.agent_name,
         Framework=normalized.framework,

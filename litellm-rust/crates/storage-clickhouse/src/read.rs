@@ -1,17 +1,19 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use litellm_http::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{Connection, Error};
 
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum Parameter {
     Text(String),
     Integer(i64),
+    Unsigned(u64),
+    Float(f64),
     Strings(Vec<String>),
 }
 
@@ -20,6 +22,8 @@ impl Parameter {
         match self {
             Self::Text(value) => escaped(value),
             Self::Integer(value) => value.to_string(),
+            Self::Unsigned(value) => value.to_string(),
+            Self::Float(value) => value.to_string(),
             Self::Strings(values) => format!(
                 "[{}]",
                 values
@@ -110,4 +114,46 @@ pub async fn execute_read(
         return Err(Error::InvalidResponse);
     }
     String::from_utf8(body).map_err(|_| Error::InvalidResponse)
+}
+
+pub trait Query {
+    type Params: Serialize;
+    type Row: DeserializeOwned;
+
+    const SQL: &'static str;
+}
+
+#[derive(Deserialize)]
+struct Rows<T> {
+    data: Vec<T>,
+}
+
+fn parameters<T: Serialize>(params: &T) -> Result<BTreeMap<String, Parameter>, Error> {
+    let value = serde_json::to_value(params).map_err(|_| Error::InvalidParameters)?;
+    serde_json::from_value(value).map_err(|_| Error::InvalidParameters)
+}
+
+pub async fn fetch<Q: Query>(
+    client: &Client,
+    connection: &Connection,
+    params: &Q::Params,
+) -> Result<Vec<Q::Row>, Error> {
+    let body = execute_read(client, connection, Q::SQL, &parameters(params)?).await?;
+    decode_rows::<Q::Row>(&body)
+}
+
+pub async fn fetch_json<Q: Query>(
+    client: &Client,
+    connection: &Connection,
+    params: &Q::Params,
+) -> Result<String, Error> {
+    let body = execute_read(client, connection, Q::SQL, &parameters(params)?).await?;
+    decode_rows::<Q::Row>(&body)?;
+    Ok(body)
+}
+
+fn decode_rows<T: DeserializeOwned>(body: &str) -> Result<Vec<T>, Error> {
+    serde_json::from_str::<Rows<T>>(body)
+        .map(|rows| rows.data)
+        .map_err(|_| Error::InvalidResponse)
 }

@@ -10,6 +10,8 @@ pub enum Error {
     InvalidSchema,
     #[error("SQL query must not be empty")]
     EmptySql,
+    #[error("invalid ClickHouse query parameters")]
+    InvalidParameters,
     #[error("unknown ClickHouse read query")]
     InvalidQuery,
     #[error("ClickHouse query failed with HTTP status {0}")]

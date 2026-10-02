@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value, json};
 
 use super::{NormalizedSpan, ObservationType, SpanNormalizer, attr, first, tokens};
-use crate::{DecodeError, otlp::DecodedEvent};
+use crate::{Error, otlp::DecodedEvent};
 
 pub(crate) const CLAUDE_CODE_SCOPE: &str = "com.anthropic.claude_code.tracing";
 pub(crate) const CLAUDE_CODE_AGENT: &str = "claude-code";
@@ -144,13 +144,13 @@ fn llm_output(attributes: &BTreeMap<String, String>) -> String {
     }
 }
 
-fn input_tokens(attributes: &BTreeMap<String, String>) -> Result<u32, DecodeError> {
+fn input_tokens(attributes: &BTreeMap<String, String>) -> Result<u32, Error> {
     ["input_tokens", "cache_read_tokens", "cache_creation_tokens"]
         .into_iter()
         .try_fold(0u32, |total, key| {
             total
                 .checked_add(tokens(attributes, key)?)
-                .ok_or(DecodeError::TokenCountOutOfRange)
+                .ok_or(Error::TokenCountOutOfRange)
         })
 }
 
@@ -180,7 +180,7 @@ impl SpanNormalizer for ClaudeCodeNormalizer {
         _parent_span_id: &str,
         attributes: &BTreeMap<String, String>,
         events: &[DecodedEvent],
-    ) -> Result<NormalizedSpan, DecodeError> {
+    ) -> Result<NormalizedSpan, Error> {
         let base = NormalizedSpan {
             observation_type: ObservationType::Framework,
             agent_name: CLAUDE_CODE_AGENT.to_owned(),
@@ -228,7 +228,7 @@ mod tests {
     use serde_json::Value;
 
     use super::{CLAUDE_CODE_SCOPE, ClaudeCodeNormalizer, SpanNormalizer};
-    use crate::{DecodeError, normalize::ObservationType, otlp::DecodedEvent};
+    use crate::{Error, normalize::ObservationType, otlp::DecodedEvent};
 
     fn attributes(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
@@ -341,7 +341,7 @@ mod tests {
             ]),
             &[],
         );
-        assert!(matches!(result, Err(DecodeError::TokenCountOutOfRange)));
+        assert!(matches!(result, Err(Error::TokenCountOutOfRange)));
     }
 
     #[rstest]

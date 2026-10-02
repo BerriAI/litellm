@@ -3,7 +3,7 @@ use std::fmt;
 use prost::encoding::{DecodeContext, WireType, decode_key, decode_varint, skip_field};
 use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 
-use crate::{DecodeError, Shared};
+use crate::{Error, Shared};
 
 pub(super) const MAX_DEPTH: usize = 32;
 pub(super) const MAX_NODES: usize = 65_536;
@@ -12,7 +12,7 @@ pub(super) const MAX_ATTRIBUTES: usize = 256;
 pub(super) const MAX_EVENTS: usize = 256;
 pub(super) const MAX_DECODED_SPAN_BYTES: usize = 16 * 1024 * 1024;
 
-pub(super) fn json_preflight(payload: &[u8]) -> Result<(), DecodeError> {
+pub(super) fn json_preflight(payload: &[u8]) -> Result<(), Error> {
     let mut nodes = 0;
     let mut exceeded = false;
     let mut decoder = serde_json::Deserializer::from_slice(payload);
@@ -24,9 +24,9 @@ pub(super) fn json_preflight(payload: &[u8]) -> Result<(), DecodeError> {
     .deserialize(&mut decoder)
     .and_then(|()| decoder.end());
     if exceeded {
-        return Err(DecodeError::TooLarge);
+        return Err(Error::TooLarge);
     }
-    result.map_err(|_| DecodeError::InvalidPayload)
+    result.map_err(|_| Error::InvalidPayload)
 }
 
 struct JsonBudget<'a> {
@@ -146,7 +146,7 @@ impl MessageKind {
     }
 }
 
-pub(super) fn protobuf_preflight(payload: &[u8]) -> Result<(), DecodeError> {
+pub(super) fn protobuf_preflight(payload: &[u8]) -> Result<(), Error> {
     scan_message(payload, MessageKind::Export, 0, &mut 0)
 }
 
@@ -155,27 +155,27 @@ fn scan_message(
     kind: MessageKind,
     depth: usize,
     nodes: &mut usize,
-) -> Result<(), DecodeError> {
+) -> Result<(), Error> {
     if depth > MAX_DEPTH {
-        return Err(DecodeError::TooLarge);
+        return Err(Error::TooLarge);
     }
     while !payload.is_empty() {
         *nodes += 1;
         if *nodes > MAX_NODES {
-            return Err(DecodeError::TooLarge);
+            return Err(Error::TooLarge);
         }
-        let (tag, wire) = decode_key(&mut payload).map_err(|_| DecodeError::InvalidPayload)?;
+        let (tag, wire) = decode_key(&mut payload).map_err(|_| Error::InvalidPayload)?;
         if let (WireType::LengthDelimited, Some(child)) = (wire, kind.child(tag)) {
-            let length = decode_varint(&mut payload).map_err(|_| DecodeError::InvalidPayload)?;
-            let length = usize::try_from(length).map_err(|_| DecodeError::InvalidPayload)?;
+            let length = decode_varint(&mut payload).map_err(|_| Error::InvalidPayload)?;
+            let length = usize::try_from(length).map_err(|_| Error::InvalidPayload)?;
             let (message, rest) = payload
                 .split_at_checked(length)
-                .ok_or(DecodeError::InvalidPayload)?;
+                .ok_or(Error::InvalidPayload)?;
             scan_message(message, child, depth + 1, nodes)?;
             payload = rest;
         } else {
             skip_field(wire, tag, &mut payload, DecodeContext::default())
-                .map_err(|_| DecodeError::InvalidPayload)?;
+                .map_err(|_| Error::InvalidPayload)?;
         }
     }
     Ok(())
@@ -194,7 +194,7 @@ impl Budget {
         &mut self,
         value: &Shared<T>,
         allocated_bytes: impl FnOnce(&T) -> usize,
-    ) -> Result<Shared<T>, DecodeError> {
+    ) -> Result<Shared<T>, Error> {
         let cloned = value.clone();
         if !value.shares_storage_with(&cloned) {
             self.consume(allocated_bytes(value))?;
@@ -202,11 +202,8 @@ impl Budget {
         Ok(cloned)
     }
 
-    pub(super) fn consume(&mut self, bytes: usize) -> Result<(), DecodeError> {
-        self.remaining = self
-            .remaining
-            .checked_sub(bytes)
-            .ok_or(DecodeError::TooLarge)?;
+    pub(super) fn consume(&mut self, bytes: usize) -> Result<(), Error> {
+        self.remaining = self.remaining.checked_sub(bytes).ok_or(Error::TooLarge)?;
         Ok(())
     }
 }

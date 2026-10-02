@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::{DecodeError, otlp::DecodedEvent};
+use crate::{Error, otlp::DecodedEvent};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -32,71 +32,6 @@ pub(crate) struct Normalization {
     pub consumed_attributes: [&'static str; 2],
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-pub struct NormalizedFieldDefinition {
-    pub name: &'static str,
-    pub clickhouse_column: &'static str,
-    pub clickhouse_type: &'static str,
-    pub meaning: &'static str,
-}
-
-pub const NORMALIZED_FIELD_DEFINITIONS: [NormalizedFieldDefinition; 9] = [
-    NormalizedFieldDefinition {
-        name: "observation_type",
-        clickhouse_column: "ObservationType",
-        clickhouse_type: "LowCardinality(String)",
-        meaning: "Agent, LLM, tool, chain, or framework span",
-    },
-    NormalizedFieldDefinition {
-        name: "agent_name",
-        clickhouse_column: "AgentName",
-        clickhouse_type: "LowCardinality(String)",
-        meaning: "Agent associated with this span",
-    },
-    NormalizedFieldDefinition {
-        name: "framework",
-        clickhouse_column: "Framework",
-        clickhouse_type: "LowCardinality(String)",
-        meaning: "Agent framework or SDK that emitted this span, e.g. claude-agent-sdk",
-    },
-    NormalizedFieldDefinition {
-        name: "litellm_request_id",
-        clickhouse_column: "LiteLLMRequestId",
-        clickhouse_type: "String",
-        meaning: "LiteLLM response ID used to link a span to a spend log",
-    },
-    NormalizedFieldDefinition {
-        name: "model",
-        clickhouse_column: "Model",
-        clickhouse_type: "LowCardinality(String)",
-        meaning: "Model used by this span",
-    },
-    NormalizedFieldDefinition {
-        name: "input_tokens",
-        clickhouse_column: "InputTokens",
-        clickhouse_type: "UInt32",
-        meaning: "Input token count",
-    },
-    NormalizedFieldDefinition {
-        name: "output_tokens",
-        clickhouse_column: "OutputTokens",
-        clickhouse_type: "UInt32",
-        meaning: "Output token count",
-    },
-    NormalizedFieldDefinition {
-        name: "input",
-        clickhouse_column: "Input",
-        clickhouse_type: "String",
-        meaning: "Normalized input payload",
-    },
-    NormalizedFieldDefinition {
-        name: "output",
-        clickhouse_column: "Output",
-        clickhouse_type: "String",
-        meaning: "Normalized output payload",
-    },
-];
-
 trait SpanNormalizer {
     fn matches(&self, scope_name: &str, attributes: &BTreeMap<String, String>) -> bool;
     fn consumed_attributes(&self, attributes: &BTreeMap<String, String>) -> [&'static str; 2];
@@ -106,7 +41,7 @@ trait SpanNormalizer {
         parent_span_id: &str,
         attributes: &BTreeMap<String, String>,
         events: &[DecodedEvent],
-    ) -> Result<NormalizedSpan, DecodeError>;
+    ) -> Result<NormalizedSpan, Error>;
     fn display_name(&self, _attributes: &BTreeMap<String, String>) -> Option<String> {
         None
     }
@@ -136,27 +71,27 @@ fn first<'a>(attributes: &'a BTreeMap<String, String>, left: &str, right: &str) 
     }
 }
 
-fn tokens(attributes: &BTreeMap<String, String>, key: &str) -> Result<u32, DecodeError> {
+fn tokens(attributes: &BTreeMap<String, String>, key: &str) -> Result<u32, Error> {
     let value = attr(attributes, key).trim();
     if value.is_empty() {
         return Ok(0);
     }
     match value.parse::<i128>() {
         Ok(number) if (0..=u32::MAX as i128).contains(&number) => Ok(number as u32),
-        Ok(_) => Err(DecodeError::TokenCountOutOfRange),
+        Ok(_) => Err(Error::TokenCountOutOfRange),
         Err(_)
             if value
                 .trim_start_matches(['+', '-'])
                 .bytes()
                 .all(|byte| byte.is_ascii_digit()) =>
         {
-            Err(DecodeError::TokenCountOutOfRange)
+            Err(Error::TokenCountOutOfRange)
         }
         Err(_) => Ok(0),
     }
 }
 
-fn usage_tokens(attributes: &BTreeMap<String, String>) -> Result<(u32, u32), DecodeError> {
+fn usage_tokens(attributes: &BTreeMap<String, String>) -> Result<(u32, u32), Error> {
     Ok((
         tokens(attributes, "gen_ai.usage.input_tokens")?,
         tokens(attributes, "gen_ai.usage.output_tokens")?,
@@ -223,7 +158,7 @@ pub fn normalize(
     parent_span_id: &str,
     attributes: &BTreeMap<String, String>,
     events: &[DecodedEvent],
-) -> Result<Normalization, DecodeError> {
+) -> Result<Normalization, Error> {
     let normalizers: [&dyn SpanNormalizer; 4] = [
         &ClaudeCodeNormalizer,
         &LangSmithNormalizer,
@@ -257,11 +192,11 @@ pub fn normalize(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
 
     use rstest::rstest;
 
-    use super::{NORMALIZED_FIELD_DEFINITIONS, ObservationType, normalize};
+    use super::{ObservationType, normalize};
 
     #[rstest]
     #[case::langsmith("langsmith", [("langsmith.span.kind", "llm"), ("openinference.span.kind", "TOOL")], ObservationType::Llm)]
@@ -284,25 +219,6 @@ mod tests {
         if expected == ObservationType::Tool {
             assert_eq!(fields.input_tokens, 7);
         }
-    }
-
-    #[rstest]
-    fn field_definitions_match_serialized_normalized_span() {
-        let fields = normalize("", "root", "", &BTreeMap::new(), &[])
-            .expect("valid tokens")
-            .span;
-        let serialized = serde_json::to_value(fields).expect("serializable fields");
-        let keys: BTreeSet<_> = serialized
-            .as_object()
-            .expect("field object")
-            .keys()
-            .map(String::as_str)
-            .collect();
-        let mapped: BTreeSet<_> = NORMALIZED_FIELD_DEFINITIONS
-            .iter()
-            .map(|field| field.name)
-            .collect();
-        assert_eq!(keys, mapped);
     }
 
     #[rstest]

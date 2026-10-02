@@ -1,0 +1,31 @@
+[package]
+name = "litellm-traces-clickhouse"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+askama.workspace = true
+flate2.workspace = true
+futures-util.workspace = true
+hmac = "0.12.1"
+litellm-http.workspace = true
+litellm-migrate.workspace = true
+litellm-storage-clickhouse.workspace = true
+litellm-traces.workspace = true
+moka.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+strum.workspace = true
+thiserror.workspace = true
+time = { workspace = true, features = ["formatting"] }
+tokio.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
+rstest.workspace = true
+testcontainers-modules = { version = "0.15.0", features = ["clickhouse"] }
+wiremock.workspace = true

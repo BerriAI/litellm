@@ -4425,3 +4425,19 @@ def test_legacy_sse_respects_virtual_key_route_permissions(route: str, route_gro
         request_data={},
     )
     assert RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=token, request=request)
+
+
+@pytest.mark.parametrize(
+    "route",
+    ("/v1/traces", "/v1/traces/trace-id", "/v1/traces/trace-id/spans/span-id",
+     "/v1/traces/trace-id/spans/span-id/error"),
+)
+def test_non_admin_trace_reads_reach_endpoint_visibility_checks(route: str) -> None:
+    user_role: Final = LitellmUserRoles.INTERNAL_USER
+    user: Final = LiteLLM_UserTable(user_id="reader", user_role=user_role.value)
+    auth: Final = UserAPIKeyAuth(user_id="reader", user_role=user_role)
+    request: Final = Request({"type": "http", "method": "GET", "query_string": b""})
+    assert RouteChecks.is_llm_api_route(route)
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user, _user_role=user_role.value, route=route, request=request, valid_token=auth, request_data={}
+    )

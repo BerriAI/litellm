@@ -103,8 +103,10 @@ class SpanErrorPage(TypedDict):
 
 
 class TraceScope(TypedDict):
-    """Who is asking. Empty team_ids = all teams (admins only)."""
+    """Authenticated request-log visibility."""
 
+    all_teams: ReadOnly[Literal[0, 1]]
+    user_id: ReadOnly[str]
     team_ids: ReadOnly[tuple[str, ...]]
     api_key_hash: ReadOnly[str]
 
@@ -129,6 +131,7 @@ class SpanRow(TypedDict):
     StatusMessage: ReadOnly[str]
     TeamId: ReadOnly[str]
     ApiKeyHash: ReadOnly[str]
+    UserId: ReadOnly[str]
     ObservationType: SpanType
     AgentName: str
     Framework: ReadOnly[str]

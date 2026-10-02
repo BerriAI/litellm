@@ -1,7 +1,6 @@
-- Keep OTLP decoding, trace schema, row encoding and named query selection here. Generic ClickHouse connections and HTTP execution belong in `litellm-storage-clickhouse`
-- Keep this crate independent of Python; PyO3 conversion and public Python exceptions belong in `python-bridge`
-- Keep the SQL migrations here as the only ClickHouse schema definition, as `migrations/NNNN_description.sql` files embedded by `litellm_migrate::migrate!`; adding a file is the only step
-- Use typed query parameters and a dedicated SELECT-only reader with server-side limits
-- Keep `config/reader.xml` grants on the database the schema is created in (CLICKHOUSE_DATABASE, default `litellm`)
-- Bound insert time and encoded bytes; make retry deduplication behavior explicit for supported ClickHouse versions
-- Test storage behavior through the crate's public API against ClickHouse
+- Own OTLP decoding, normalization, shared authorization and named query contracts; remain independent of storage and Python
+- Never depend on `litellm-traces-clickhouse` or `litellm-storage-clickhouse`
+- Preserve decoding limits, normalization precedence and shared resource identity
+- Keep ClickHouse schema, row encoding and queries in `litellm-traces-clickhouse`; keep PyO3 conversion in `python-bridge`
+- Test decoding and normalization through the public API
+- Expose one top-level `Error` enum in `src/error.rs` for decoding and normalization failures

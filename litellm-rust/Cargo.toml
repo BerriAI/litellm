@@ -13,6 +13,7 @@ litellm-config = { path = "crates/config" }
 litellm-router = { path = "crates/router" }
 litellm-tracing = { path = "crates/tracing" }
 litellm-traces = { path = "crates/traces" }
+litellm-traces-clickhouse = { path = "crates/traces-clickhouse" }
 litellm-storage-clickhouse = { path = "crates/storage-clickhouse" }
 litellm-migrate = { path = "crates/migrate" }
 litellm-migrate-macros = { path = "crates/migrate-macros" }

@@ -45,10 +45,11 @@ class TracingOverloadedError(RuntimeError):
 class Tenant:
     """Who sent the spans. Always taken from auth, never from span attributes."""
 
-    def __init__(self, team_id: str, api_key_hash: str, org_id: str = "") -> None:
+    def __init__(self, team_id: str, api_key_hash: str, org_id: str = "", user_id: str = "") -> None:
         self.team_id = team_id
         self.api_key_hash = api_key_hash
         self.org_id = org_id
+        self.user_id = user_id
 
     def stamp(self, row: SpanRow) -> SpanRow:
         return self.stamp_rows((row,))[0]
@@ -63,6 +64,7 @@ class Tenant:
                         "litellm.team_id": self.team_id,
                         "litellm.api_key_hash": self.api_key_hash,
                         "litellm.org_id": self.org_id,
+                        "litellm.user_id": self.user_id,
                     }
                 )
                 for identity, attributes in resources.items()
@@ -75,6 +77,7 @@ class Tenant:
             **row,
             "TeamId": self.team_id,
             "ApiKeyHash": self.api_key_hash,
+            "UserId": self.user_id,
             "ResourceAttributes": resource,
         }
         return stamped

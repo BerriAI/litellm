@@ -15,10 +15,44 @@ from litellm.proxy import tracing_endpoints
 from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
+from litellm.rust_bridge.trace_queries import SPAN_DETAIL, SpanDetailParams
+from litellm.rust_bridge.trace_query_responses import TraceQueryHelp, TraceSQLResponse
 from litellm.rust_bridge.traces import ClickHouseStorage
 from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.store import TraceStore
 from litellm.tracing.types import TraceScope
+
+SQL_ENVELOPE: Final = {
+    "meta": [{"name": "value", "type": "UInt64"}],
+    "data": [{"value": "9007199254740993"}],
+    "rows": 1,
+    "statistics": {"elapsed": 0.01, "rows_read": 1, "bytes_read": 8},
+    "rows_before_limit_at_least": 1,
+}
+QUERY_HELP: Final = {
+    "dialect": "test SQL",
+    "access": "authenticated scope",
+    "response": "JSON envelope",
+    "tables": [{"name": "traces", "columns": [{"name": "value", "type": "String", "comment": "label"}]}],
+    "normalized_fields": [],
+    "metadata": {
+        "table": "traces",
+        "column": "metadata",
+        "fields": [],
+        "sampled_rows": 0,
+        "invalid_json_rows": 0,
+        "truncated": True,
+        "sample_sql": "SELECT metadata FROM traces",
+        "scope": "bounded sample",
+        "error": "discovery unavailable",
+    },
+    "attributes": [],
+    "relationships": [],
+    "examples": [{"name": "recent", "sql": "SELECT * FROM traces LIMIT 1"}],
+    "gotchas": ["Keep queries bounded"],
+    "guide": "scoped",
+}
+
 
 TEAM_KEY = UserAPIKeyAuth(
     token="hashed-key", team_id="team-research", org_id="org-1", user_role=LitellmUserRoles.INTERNAL_USER
@@ -61,25 +95,25 @@ SPAN_DETAIL_RESPONSE: Final = {
     (
         pytest.param(
             UserAPIKeyAuth(token="admin-key", team_id="team-a", user_role=LitellmUserRoles.PROXY_ADMIN),
-            TraceScope(team_ids=(), api_key_hash=""),
+            TraceScope(all_teams=1, user_id="", team_ids=(), api_key_hash=""),
             True,
             id="admin",
         ),
         pytest.param(
             UserAPIKeyAuth(token="view-key", team_id="team-a", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
-            TraceScope(team_ids=(), api_key_hash=""),
+            TraceScope(all_teams=1, user_id="", team_ids=(), api_key_hash=""),
             False,
             id="view-only-admin",
         ),
         pytest.param(
             TEAM_KEY,
-            TraceScope(team_ids=("team-research",), api_key_hash=""),
+            TraceScope(all_teams=0, user_id="", team_ids=(), api_key_hash="hashed-key"),
             True,
             id="team-key",
         ),
         pytest.param(
             UserAPIKeyAuth(token="hashed-key", user_role=LitellmUserRoles.INTERNAL_USER),
-            TraceScope(team_ids=("",), api_key_hash="hashed-key"),
+            TraceScope(all_teams=0, user_id="", team_ids=(), api_key_hash="hashed-key"),
             True,
             id="teamless-key",
         ),
@@ -191,7 +225,10 @@ def test_list_traces_passes_scope_window_and_cursor(client, receiver):
     assert response.status_code == 200
     assert response.json() == {"data": [], "next_cursor": None}
     receiver.list_traces.assert_awaited_once_with(
-        scope={"team_ids": ("team-research",), "api_key_hash": ""}, start_ms=1, end_ms=2, cursor="abc"
+        scope={"all_teams": 0, "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"},
+        start_ms=1,
+        end_ms=2,
+        cursor="abc",
     )
 
 
@@ -208,7 +245,9 @@ def test_get_trace_404_and_200(client, receiver):
     response = client.get("/v1/traces/t1")
     assert response.status_code == 200
     assert response.json() == TRACE_RESPONSE
-    receiver.get_trace.assert_awaited_with("t1", {"team_ids": ("team-research",), "api_key_hash": ""}, "")
+    receiver.get_trace.assert_awaited_with(
+        "t1", {"all_teams": 0, "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"}, ""
+    )
 
 
 def test_get_span_404_and_200(client, receiver):
@@ -217,7 +256,9 @@ def test_get_span_404_and_200(client, receiver):
     response = client.get("/v1/traces/t1/spans/s1")
     assert response.status_code == 200
     assert response.json()["span_id"] == "s1"
-    receiver.get_span.assert_awaited_with("t1", "s1", {"team_ids": ("team-research",), "api_key_hash": ""}, "")
+    receiver.get_span.assert_awaited_with(
+        "t1", "s1", {"all_teams": 0, "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"}, ""
+    )
 
 
 def test_get_span_serves_ui_content_from_stored_payloads(client):
@@ -227,7 +268,7 @@ def test_get_span_serves_ui_content_from_stored_payloads(client):
         return_value=[{"span_id": "s1", "input": '{"city": "Paris"}', "output": stored_output, "attributes": {}}]
     )
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
-    body = client.get("/v1/traces/t1/spans/s1").json()
+    body = client.get("/v1/traces/t1/spans/s1?trace_ref=run-one").json()
     assert body["output"] == stored_output
     assert body["input_ui"] == {"kind": "fields", "fields": [{"key": "city", "value": "Paris"}]}
     assert body["output_ui"] == {
@@ -241,7 +282,9 @@ def test_get_span_serves_ui_content_from_stored_payloads(client):
 def test_trace_detail_passes_scoped_reference(client, receiver):
     receiver.get_trace.return_value = TRACE_RESPONSE
     assert client.get("/v1/traces/t1?trace_ref=run-one").status_code == 200
-    receiver.get_trace.assert_awaited_with("t1", {"team_ids": ("team-research",), "api_key_hash": ""}, "run-one")
+    receiver.get_trace.assert_awaited_with(
+        "t1", {"all_teams": 0, "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"}, "run-one"
+    )
 
 
 def test_invalid_export_and_cursor_are_client_errors(client, receiver):
@@ -350,6 +393,7 @@ def test_injected_receiver_persists_authenticated_tenant(client: TestClient) -> 
         "litellm.team_id": TEAM_KEY.team_id,
         "litellm.api_key_hash": TEAM_KEY.token,
         "litellm.org_id": TEAM_KEY.org_id,
+        "litellm.user_id": TEAM_KEY.user_id or "",
     }
 
 
@@ -428,24 +472,28 @@ def test_lifespan_receivers_are_app_local() -> None:
     }
     assert first_storage.query.await_count == 2
     first_storage.query.assert_awaited_with(
-        "span_detail",
-        {
-            "team_ids": (TEAM_KEY.team_id,),
-            "api_key_hash": "",
-            "trace_id": "t1",
-            "span_id": "first-span",
-            "trace_ref": "first-run",
-        },
+        SPAN_DETAIL,
+        SpanDetailParams(
+            all_teams=0,
+            user_id="",
+            team_ids=(),
+            api_key_hash=TEAM_KEY.token,
+            trace_id="t1",
+            span_id="first-span",
+            trace_ref="first-run",
+        ),
     )
     second_storage.query.assert_awaited_once_with(
-        "span_detail",
-        {
-            "team_ids": (TEAM_KEY.team_id,),
-            "api_key_hash": "",
-            "trace_id": "t1",
-            "span_id": "second-span",
-            "trace_ref": "second-run",
-        },
+        SPAN_DETAIL,
+        SpanDetailParams(
+            all_teams=0,
+            user_id="",
+            team_ids=(),
+            api_key_hash=TEAM_KEY.token,
+            trace_id="t1",
+            span_id="second-span",
+            trace_ref="second-run",
+        ),
     )
 
 
@@ -504,7 +552,7 @@ def test_lens_reads_from_the_lifespan_storage() -> None:
     assert response.status_code == 200, response.text
     assert response.json()["executions"] == []
     storage.lens_sample.assert_awaited_once()
-    assert storage.lens_sample.await_args.args[0]["all_teams"] == 1
+    assert storage.lens_sample.await_args.args[0].all_teams == 1
 
 
 def test_lens_reads_from_injected_storage_without_receiver() -> None:
@@ -534,12 +582,12 @@ def test_lens_reads_from_injected_storage_without_receiver() -> None:
     (
         (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), {"kind": "admin"}),
         (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY), {"kind": "admin"}),
-        (TEAM_KEY, {"kind": "team", "team_id": "team-research"}),
+        (TEAM_KEY, {"kind": "logs", "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"}),
         (
             UserAPIKeyAuth(token="project-key", team_id="team-a", project_id="project-a"),
-            {"kind": "key", "team_id": "team-a", "api_key_hash": "project-key"},
+            {"kind": "logs", "user_id": "", "team_ids": (), "api_key_hash": "project-key"},
         ),
-        (UserAPIKeyAuth(token="solo-key"), {"kind": "key", "team_id": "", "api_key_hash": "solo-key"}),
+        (UserAPIKeyAuth(token="solo-key"), {"kind": "logs", "user_id": "", "team_ids": (), "api_key_hash": "solo-key"}),
     ),
 )
 def test_sql_and_help_use_authenticated_scope(
@@ -547,17 +595,17 @@ def test_sql_and_help_use_authenticated_scope(
 ) -> None:
     client.app.dependency_overrides[user_api_key_auth] = lambda: auth
     client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
-    receiver.store.storage.query_sql = AsyncMock(return_value='{"data":[{"value":1}]}')
-    receiver.store.storage.query_help = AsyncMock(return_value='{"guide":"scoped"}')
+    receiver.store.storage.query_sql = AsyncMock(return_value=TraceSQLResponse.model_validate(SQL_ENVELOPE))
+    receiver.store.storage.query_help = AsyncMock(return_value=TraceQueryHelp.model_validate(QUERY_HELP))
     result: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
     assert result.status_code == 200, result.text
-    assert result.json() == {"data": [{"value": 1}]}
+    assert result.json() == SQL_ENVELOPE
     receiver.store.storage.query_sql.assert_awaited_once_with(
         "SELECT * FROM otel_traces", expected_scope, "test-secret"
     )
     help_result: Final = client.get("/v1/traces/query/help")
     assert help_result.status_code == 200, help_result.text
-    assert help_result.json() == {"guide": "scoped"}
+    assert help_result.json() == QUERY_HELP
     receiver.store.storage.query_help.assert_awaited_once_with(expected_scope, "test-secret")
     forged: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1", "scope": {"kind": "admin"}})
     assert forged.status_code == 422, forged.text
@@ -588,7 +636,7 @@ def test_sql_reports_rejected_queries_and_unavailable_readers(
     result: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1"})
     assert result.status_code == status, result.text
     receiver.store.storage.query_sql.assert_awaited_once_with(
-        "SELECT 1", {"kind": "team", "team_id": "team-research"}, "test-secret"
+        "SELECT 1", {"kind": "logs", "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"}, "test-secret"
     )
 
 
@@ -598,7 +646,7 @@ def test_query_help_does_not_fall_back_when_reader_provisioning_fails(client: Te
     result: Final = client.get("/v1/traces/query/help")
     assert result.status_code == 503, result.text
     receiver.store.storage.query_help.assert_awaited_once_with(
-        {"kind": "team", "team_id": "team-research"}, "test-secret"
+        {"kind": "logs", "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"}, "test-secret"
     )
 
 
@@ -609,7 +657,7 @@ def test_queries_require_a_proxy_secret(
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "master_key", secret)
-    receiver.store.storage.query_sql = AsyncMock(return_value='{"data":[]}')
+    receiver.store.storage.query_sql = AsyncMock(return_value=TraceSQLResponse.model_validate(SQL_ENVELOPE))
     result: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1"})
     if secret is None:
         assert result.status_code == 503, result.text
@@ -618,5 +666,5 @@ def test_queries_require_a_proxy_secret(
         return
     assert result.status_code == 200, result.text
     receiver.store.storage.query_sql.assert_awaited_once_with(
-        "SELECT 1", {"kind": "team", "team_id": "team-research"}, secret
+        "SELECT 1", {"kind": "logs", "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"}, secret
     )
