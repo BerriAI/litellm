@@ -12,13 +12,13 @@
      {
       "key": "os.type",
       "value": {
-       "stringValue": "darwin"
+       "stringValue": "linux"
       }
      },
      {
       "key": "os.version",
       "value": {
-       "stringValue": "24.5.0"
+       "stringValue": "0.0.0"
       }
      },
      {
