@@ -2441,7 +2441,7 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: str | None = None,
-        request_kwargs: dict[str, Any] | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
         messages: Sequence[Mapping[str, object]] | None = None,
     ) -> tuple[ComplexityTier | str, float | None]:
         """
