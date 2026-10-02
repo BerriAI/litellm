@@ -38,12 +38,12 @@ from litellm.litellm_core_utils.classifier_logging import classifier_audit_field
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.authorization import (
-    AllLogs,
-    LogReadScope,
-    OwnedLogs,
+    AllRows,
+    OwnedRows,
+    ReadScope,
     can_read_log_owner,
     can_read_team_logs,
-    resolve_log_read_scope,
+    resolve_owned_read_scope,
 )
 from litellm.proxy.auth.authorization_dependencies import (
     LogTeamLookup,
@@ -2784,7 +2784,7 @@ async def ui_view_spend_logs(
             and (is_request_id_lookup or _can_user_view_spend_log(user_api_key_dict=user_api_key_dict))
         )
         read_scope: Final = (
-            await _spend_log_read_scope(user_api_key_dict, log_team_lookup) if user_scope_applies else AllLogs()
+            await _spend_log_read_scope(user_api_key_dict, log_team_lookup) if user_scope_applies else AllRows()
         )
         if not is_admin_view:
             if team_id is not None:
@@ -4531,11 +4531,11 @@ async def ui_view_session_spend_logs(
             )
 
         read_scope: Final = (
-            AllLogs()
+            AllRows()
             if _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
             else await _spend_log_read_scope(user_api_key_dict, log_team_lookup)
             if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
-            else OwnedLogs(user_api_key_dict.user_id)
+            else OwnedRows(user_api_key_dict.user_id)
         )
         scope_clause, scope_params = read_scope_sql(read_scope, 4)
         scope_sql: Final = f" AND {scope_clause}" if scope_clause else ""
@@ -4888,15 +4888,15 @@ async def _assert_user_can_view_request_id(
     raise _spend_log_forbidden(request_id)
 
 
-async def _spend_log_read_scope(user_api_key_dict: UserAPIKeyAuth, log_team_lookup: LogTeamLookup) -> OwnedLogs:
-    return await resolve_log_read_scope(
+async def _spend_log_read_scope(user_api_key_dict: UserAPIKeyAuth, log_team_lookup: LogTeamLookup) -> OwnedRows:
+    return await resolve_owned_read_scope(
         user_api_key_dict.user_id,
         partial(log_team_lookup, user_api_key_dict),
     )
 
 
-def read_scope_sql(scope: LogReadScope, next_param: int) -> tuple[str, tuple[object, ...]]:
-    if isinstance(scope, AllLogs):
+def read_scope_sql(scope: ReadScope, next_param: int) -> tuple[str, tuple[object, ...]]:
+    if isinstance(scope, AllRows):
         return ("", ())
     user_grant: Final[tuple[tuple[str, object], ...]] = (
         (('"user" = ${}', scope.user_id),) if scope.user_id is not None else ()
@@ -4910,8 +4910,8 @@ def read_scope_sql(scope: LogReadScope, next_param: int) -> tuple[str, tuple[obj
     return (sql, tuple(param for _, param in grants))
 
 
-def _read_scope_where(scope: LogReadScope) -> Mapping[str, object]:
-    if isinstance(scope, AllLogs):
+def _read_scope_where(scope: ReadScope) -> Mapping[str, object]:
+    if isinstance(scope, AllRows):
         return {}
     user_grant: Final = ({"user": scope.user_id},) if scope.user_id is not None else ()
     team_grant: Final = ({"team_id": {"in": list(scope.team_ids)}},) if scope.team_ids else ()
@@ -4919,7 +4919,7 @@ def _read_scope_where(scope: LogReadScope) -> Mapping[str, object]:
     return grants[0] if len(grants) == 1 else {"OR": list(grants)}
 
 
-def _spend_log_payload_query(request_id: str, scope: LogReadScope) -> tuple[str, tuple[object, ...]]:
+def _spend_log_payload_query(request_id: str, scope: ReadScope) -> tuple[str, tuple[object, ...]]:
     """
     Fetch the one row an id lookup resolves to, preferring the exact ``request_id``
     match over rows that merely carry the id as their client-set ``litellm_call_id``.
@@ -4953,7 +4953,7 @@ async def _resolve_spend_log_payload_row(
     that id is only the caller's ``litellm_call_id``; the row's stored
     ``request_id`` is the key that names the caller's own request.
     """
-    scope: Final = AllLogs() if caller_is_admin else await _spend_log_read_scope(user_api_key_dict, log_team_lookup)
+    scope: Final = AllRows() if caller_is_admin else await _spend_log_read_scope(user_api_key_dict, log_team_lookup)
     sql_query, sql_params = _spend_log_payload_query(request_id, scope)
     rows: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(prisma_client, sql_query, *sql_params)
     if not rows:

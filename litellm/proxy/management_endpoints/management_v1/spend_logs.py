@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
-from litellm.proxy.auth.authorization import resolve_log_read_scope
+from litellm.proxy.auth.authorization import resolve_owned_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookup, LogTeamLookupDependency
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.list_api.common import (
@@ -52,7 +52,9 @@ async def _spend_log_scope_clause(
 
     if _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
         return None, ()
-    scope: Final = await resolve_log_read_scope(user_api_key_dict.user_id, partial(log_team_lookup, user_api_key_dict))
+    scope: Final = await resolve_owned_read_scope(
+        user_api_key_dict.user_id, partial(log_team_lookup, user_api_key_dict)
+    )
     return read_scope_sql(scope, next_param_index)
 
 

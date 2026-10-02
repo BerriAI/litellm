@@ -142,17 +142,13 @@ impl QueryReaders {
 }
 
 fn predicate(scope: &QueryScope, table: TraceTable) -> String {
-    let (team, key) = match table {
-        TraceTable::OtelTraces | TraceTable::AgentTracesByKey => ("TeamId", "ApiKeyHash"),
-        TraceTable::SpendLogs => ("team_id", "api_key"),
+    let team = match table {
+        TraceTable::OtelTraces | TraceTable::AgentTracesByKey => "TeamId",
+        TraceTable::SpendLogs => "team_id",
     };
     match scope {
         QueryScope::Admin => "1".to_owned(),
-        QueryScope::Logs {
-            user_id,
-            team_ids,
-            api_key_hash,
-        } => {
+        QueryScope::Logs { user_id, team_ids } => {
             let owner = literal(user_id);
             let user_clause = match table {
                 TraceTable::OtelTraces => format!("UserId = {owner}"),
@@ -169,21 +165,9 @@ fn predicate(scope: &QueryScope, table: TraceTable) -> String {
             } else {
                 format!("{team} IN ({teams})")
             };
-            format!(
-                "({owner} != '' AND {user_clause}) OR ({team_clause}) OR ({hash} != '' AND {key} = {hash})",
-                owner = owner,
-                hash = literal(api_key_hash),
-            )
+            format!("({owner} != '' AND {user_clause}) OR ({team_clause})")
         }
         QueryScope::Team { team_id } => format!("{team} = {}", literal(team_id)),
-        QueryScope::Key {
-            team_id,
-            api_key_hash,
-        } => format!(
-            "{team} = {} AND {key} = {}",
-            literal(team_id),
-            literal(api_key_hash)
-        ),
     }
 }
 
@@ -205,14 +189,10 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case::otel(TraceTable::OtelTraces, "TeamId", "ApiKeyHash")]
-    #[case::agent(TraceTable::AgentTracesByKey, "TeamId", "ApiKeyHash")]
-    #[case::spend(TraceTable::SpendLogs, "team_id", "api_key")]
-    fn predicates_preserve_scope_and_escape_values(
-        #[case] table: TraceTable,
-        #[case] team: &str,
-        #[case] key: &str,
-    ) {
+    #[case::otel(TraceTable::OtelTraces, "TeamId")]
+    #[case::agent(TraceTable::AgentTracesByKey, "TeamId")]
+    #[case::spend(TraceTable::SpendLogs, "team_id")]
+    fn predicates_preserve_scope_and_escape_values(#[case] table: TraceTable, #[case] team: &str) {
         assert_eq!(predicate(&QueryScope::Admin, table), "1");
         assert_eq!(
             predicate(
@@ -222,16 +202,6 @@ mod tests {
                 table
             ),
             format!("{team} = 'team\\'\\\\'")
-        );
-        assert_eq!(
-            predicate(
-                &QueryScope::Key {
-                    team_id: "".into(),
-                    api_key_hash: "key'\\".into()
-                },
-                table
-            ),
-            format!("{team} = '' AND {key} = 'key\\'\\\\'")
         );
     }
 }

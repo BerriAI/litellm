@@ -55,14 +55,13 @@ def span_row() -> dict[str, JsonValue]:
         "output_tokens": 0,
         "litellm_request_id": "",
         "team_id": "",
-        "api_key_hash": "",
         "user_id": "",
     }
 
 
 @pytest.fixture
 def span_params() -> dict[str, str | int | list[str]]:
-    return {"trace_id": "trace-1", "trace_ref": "", "all_teams": 1, "user_id": "", "team_ids": [], "api_key_hash": ""}
+    return {"trace_id": "trace-1", "trace_ref": "", "all_teams": 1, "user_id": "", "team_ids": []}
 
 
 @pytest.mark.asyncio
@@ -128,7 +127,7 @@ async def test_from_env_reads_with_clickhouse_url(
     recording_server.enqueue(ResponseSpec(body={"data": []}))
     monkeypatch.setenv("CLICKHOUSE_URL", recording_server.base_url)
     monkeypatch.delenv("CLICKHOUSE_READER_URL", raising=False)
-    scope: Final[TraceScope] = {"all_teams": 1, "user_id": "", "team_ids": (), "api_key_hash": ""}
+    scope: Final[TraceScope] = {"all_teams": 1, "user_id": "", "team_ids": ()}
     page: Final = await TraceReceiver.from_env().list_traces(scope, 0, 1)
     assert page == {"data": (), "next_cursor": None}
     assert len(recording_server.requests) == 1

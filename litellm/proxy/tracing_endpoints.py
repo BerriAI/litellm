@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import OTLP_RETRY_AFTER_SECONDS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.authorization import AllLogs, TraceReadScope, resolve_trace_read_scope
+from litellm.proxy.auth.authorization import AllRows, ReadScope, resolve_trace_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
@@ -45,7 +45,7 @@ MS_PER_DAY: Final = 24 * 60 * 60 * 1000
 @dataclass(frozen=True, slots=True)
 class TraceAccessContext:
     receiver: TraceReceiver | None
-    read_scope: TraceReadScope | None
+    read_scope: ReadScope | None
     write_tenant: Tenant | None
 
     def reader(self) -> tuple[TraceReceiver, TraceScope]:
@@ -73,14 +73,13 @@ async def provide_trace_access(
     return TraceAccessContext(tracing, read_scope, write_tenant)
 
 
-def _trace_scope(scope: TraceReadScope) -> TraceScope:
-    if isinstance(scope, AllLogs):
-        return TraceScope(all_teams=1, user_id="", team_ids=(), api_key_hash="")
+def _trace_scope(scope: ReadScope) -> TraceScope:
+    if isinstance(scope, AllRows):
+        return TraceScope(all_teams=1, user_id="", team_ids=())
     return TraceScope(
         all_teams=0,
-        user_id=scope.logs.user_id or "",
-        team_ids=scope.logs.team_ids,
-        api_key_hash=scope.api_key_hash or "",
+        user_id=scope.user_id or "",
+        team_ids=scope.team_ids,
     )
 
 
@@ -159,7 +158,7 @@ class TraceQueryRequest(BaseModel):
 @dataclass(frozen=True, slots=True)
 class TraceQueryAccess:
     storage: ClickHouseStorage
-    scope: TraceReadScope
+    scope: ReadScope
     secret: str
 
 
@@ -171,14 +170,13 @@ def provide_trace_query_secret() -> str:
     return master_key
 
 
-def trace_query_scope(scope: TraceReadScope) -> AdminQueryScope | LogQueryScope:
-    if isinstance(scope, AllLogs):
+def trace_query_scope(scope: ReadScope) -> AdminQueryScope | LogQueryScope:
+    if isinstance(scope, AllRows):
         return AdminQueryScope(kind="admin")
     return LogQueryScope(
         kind="logs",
-        user_id=scope.logs.user_id or "",
-        team_ids=scope.logs.team_ids,
-        api_key_hash=scope.api_key_hash or "",
+        user_id=scope.user_id or "",
+        team_ids=scope.team_ids,
     )
 
 

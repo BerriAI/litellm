@@ -6,33 +6,33 @@ from litellm.proxy._types import KeyManagementRoutes, LiteLLM_TeamTable, Litellm
 
 
 @dataclass(frozen=True, slots=True)
-class AllLogs:
+class AllRows:
     """Unrestricted reads, granted by the consuming endpoint's role checks."""
 
 
 @dataclass(frozen=True, slots=True)
-class OwnedLogs:
+class OwnedRows:
     """Rows owned by ``user_id`` or by any of ``team_ids``; a ``None`` user grants no own-user rows."""
 
     user_id: str | None
     team_ids: tuple[str, ...] = ()
 
 
-LogReadScope: TypeAlias = AllLogs | OwnedLogs
+ReadScope: TypeAlias = AllRows | OwnedRows
 
 
-async def resolve_log_read_scope(
+async def resolve_owned_read_scope(
     user_id: str | None,
     permitted_team_lookup: Callable[[], Awaitable[Sequence[str]]],
-) -> OwnedLogs:
+) -> OwnedRows:
     """Resolve own-user and permitted-team reads, falling back to own-user on lookup failure."""
     if user_id is None:
-        return OwnedLogs(None)
+        return OwnedRows(None)
     try:
         team_ids: Final = tuple(await permitted_team_lookup())
     except Exception:  # noqa: BLE001  # preserve spend-log own-user fallback for every permission lookup failure
-        return OwnedLogs(user_id)
-    return OwnedLogs(user_id, team_ids)
+        return OwnedRows(user_id)
+    return OwnedRows(user_id, team_ids)
 
 
 def can_read_team_logs(auth: UserAPIKeyAuth, team: LiteLLM_TeamTable) -> bool:
@@ -66,21 +66,12 @@ async def can_read_log_owner(
     return False
 
 
-@dataclass(frozen=True, slots=True)
-class OwnedTraces:
-    logs: OwnedLogs
-    api_key_hash: str | None
-
-
-TraceReadScope: TypeAlias = AllLogs | OwnedTraces
-
-
 async def resolve_trace_read_scope(
     auth: UserAPIKeyAuth,
     permitted_team_lookup: Callable[[], Awaitable[Sequence[str]]],
-) -> TraceReadScope | None:
+) -> ReadScope | None:
     if auth.user_role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
-        return AllLogs()
-    if not auth.user_id and not auth.token:
+        return AllRows()
+    if not auth.user_id:
         return None
-    return OwnedTraces(await resolve_log_read_scope(auth.user_id or None, permitted_team_lookup), auth.token or None)
+    return await resolve_owned_read_scope(auth.user_id, permitted_team_lookup)

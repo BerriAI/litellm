@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 import litellm
 import litellm.proxy.proxy_server as ps
-from litellm.proxy.auth.authorization import AllLogs, LogReadScope, OwnedLogs
+from litellm.proxy.auth.authorization import AllRows, OwnedRows, ReadScope
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup, load_permitted_log_team_ids
 
 
@@ -1736,12 +1736,12 @@ async def test_ui_view_spend_logs_without_user_filter_includes_permitted_team_sc
 
 @pytest.mark.asyncio
 async def test_permitted_team_scope_falls_back_to_own_user_when_lookup_fails():
-    from litellm.proxy.auth.authorization import resolve_log_read_scope
+    from litellm.proxy.auth.authorization import resolve_owned_read_scope
 
     async def unavailable():
         raise RuntimeError("database unavailable")
 
-    assert await resolve_log_read_scope("caller", unavailable) == OwnedLogs("caller")
+    assert await resolve_owned_read_scope("caller", unavailable) == OwnedRows("caller")
 
 
 _SCOPE_ROWS: Final = tuple(
@@ -1761,16 +1761,16 @@ _SCOPE_ROWS: Final = tuple(
 @pytest.mark.parametrize(
     ("scope", "user_filter", "expected"),
     [
-        (AllLogs(), None, ("foreign", "own", "ownerless", "team-1", "team-2", "team-ownerless")),
-        (OwnedLogs("caller"), None, ("own",)),
-        (OwnedLogs(None), None, ()),
-        (OwnedLogs("caller", ("first", "second")), None, ("own", "team-1", "team-2", "team-ownerless")),
-        (OwnedLogs("caller", ("first", "second")), "other", ("team-1",)),
-        (OwnedLogs("caller", ("first' OR TRUE --",)), None, ("own",)),
+        (AllRows(), None, ("foreign", "own", "ownerless", "team-1", "team-2", "team-ownerless")),
+        (OwnedRows("caller"), None, ("own",)),
+        (OwnedRows(None), None, ()),
+        (OwnedRows("caller", ("first", "second")), None, ("own", "team-1", "team-2", "team-ownerless")),
+        (OwnedRows("caller", ("first", "second")), "other", ("team-1",)),
+        (OwnedRows("caller", ("first' OR TRUE --",)), None, ("own",)),
     ],
 )
 def test_log_scope_sql_selects_owned_rows_and_intersects_explicit_user_filter(
-    scope: LogReadScope, user_filter: str | None, expected: tuple[str, ...], next_param: int
+    scope: ReadScope, user_filter: str | None, expected: tuple[str, ...], next_param: int
 ) -> None:
     clause, scope_params = spend_management_endpoints.read_scope_sql(scope, next_param)
     filter_sql: Final = f' AND "user" = ${next_param + len(scope_params)}' if user_filter else ""
@@ -8052,7 +8052,7 @@ async def test_shared_owner_policy_propagates_team_lookup_failure():
 
 @pytest.mark.asyncio
 async def test_payload_scope_filters_colliding_foreign_request_id():
-    scope = OwnedLogs("caller", ("allowed",))
+    scope = OwnedRows("caller", ("allowed",))
     rows = (
         {**_payload_row("collision", "unrelated", "other", "foreign payload"), "team_id": "outside"},
         _payload_row("own", "collision", "caller", "own payload"),
@@ -8107,7 +8107,7 @@ async def test_log_team_dependency_preserves_checks_before_permission_lookup(
 @pytest.mark.asyncio
 async def test_management_team_lookup_without_memberships_keeps_own_user_scope():
     from litellm.proxy._types import LiteLLM_UserTable
-    from litellm.proxy.auth.authorization import resolve_log_read_scope
+    from litellm.proxy.auth.authorization import resolve_owned_read_scope
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     cache = UserApiKeyCache()
@@ -8127,6 +8127,6 @@ async def test_management_team_lookup_without_memberships_keeps_own_user_scope()
         )
 
     assert await lookup() == ()
-    scope = await resolve_log_read_scope(auth.user_id, lookup)
+    scope = await resolve_owned_read_scope(auth.user_id, lookup)
     query, params = spend_management_endpoints._spend_log_payload_query("shared", scope)
     assert await prisma.db.query_raw(query, *params) == [rows[0]]
