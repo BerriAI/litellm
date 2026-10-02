@@ -7,7 +7,7 @@ import { Info, PiggyBank } from "lucide-react";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { Alert, AlertDescription } from "@/components/shared/Alert";
 import { TabsContent } from "@/components/ui/tabs";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import UsageTab from "./UsageTab";
 import PromptCompressionTab from "./PromptCompressionTab";
 import PromptCachingTab from "./PromptCachingTab";
@@ -36,13 +36,17 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
   return (
     <Page>
       <PageTabs defaultValue="usage" onValueChange={handleTabChange}>
-        <PageHeader
-          icon={<PiggyBank />}
-          title="Cost Optimization"
-          subtitle="Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers live under Models + Endpoints, on the Auto-Routers tab"
-          tabs={({ leadingControls }) => (
+        <PageHeader>
+          <PageHeaderTitle>
+            <PiggyBank />
+            Cost Optimization
+          </PageHeaderTitle>
+          <PageHeaderDescription>
+            Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers
+            live under Models + Endpoints, on the Auto-Routers tab
+          </PageHeaderDescription>
+          <PageHeaderControls>
             <PageTabsList>
-              {leadingControls}
               <PageTabsTrigger value="usage">Overall</PageTabsTrigger>
               {canViewProxyWideCostData && (
                 <>
@@ -52,8 +56,8 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
                 </>
               )}
             </PageTabsList>
-          )}
-        />
+          </PageHeaderControls>
+        </PageHeader>
 
         <div
           role="alert"

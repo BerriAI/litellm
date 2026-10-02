@@ -21,7 +21,8 @@ import { ChevronDown, Plus, Users } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { z } from "zod/v4";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
+import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { Button as UIButton } from "@/components/ui/button";
 import { teamsTableKeys } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { parseAsString, useQueryState } from "nuqs";
@@ -674,29 +675,31 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
         />
       ) : (
         <PageTabs defaultValue={tabItems[0].key}>
-          <PageHeader
-            icon={<Users />}
-            title="Teams"
-            subtitle="Manage teams, members, and their access to models and budgets"
-            primaryAction={
-              canCreateOrManageTeams(userRole, userID, organizations) ? (
-                <UIButton onClick={openCreateTeamModal} data-testid="create-team-button">
-                  <Plus className="size-4" />
-                  Create Team
-                </UIButton>
-              ) : undefined
-            }
-            tabs={({ leadingControls }) => (
+          <PageHeader>
+            <PageHeaderTitle>
+              <Users />
+              Teams
+            </PageHeaderTitle>
+            <PageHeaderDescription>Manage teams, members, and their access to models and budgets</PageHeaderDescription>
+            <PageHeaderControls>
               <PageTabsList>
-                {leadingControls}
+                {canCreateOrManageTeams(userRole, userID, organizations) && (
+                  <>
+                    <UIButton onClick={openCreateTeamModal} data-testid="create-team-button">
+                      <Plus className="size-4" />
+                      Create Team
+                    </UIButton>
+                    <ToolbarSeparator className="mx-0 h-6" />
+                  </>
+                )}
                 {tabItems.map((item) => (
                   <PageTabsTrigger key={item.key} value={item.key}>
                     {item.label}
                   </PageTabsTrigger>
                 ))}
               </PageTabsList>
-            )}
-          />
+            </PageHeaderControls>
+          </PageHeader>
           {tabItems.map((item) => (
             <TabsContent key={item.key} value={item.key} className={item.className}>
               {item.children}

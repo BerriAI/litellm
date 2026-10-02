@@ -10,7 +10,8 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { prism } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
+import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
@@ -81,26 +82,28 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   return (
     <Page className="h-full">
       <PageTabs defaultValue="budgets">
-        <PageHeader
-          icon={<Wallet />}
-          title="Budgets"
-          subtitle="Spend, TPM and RPM limits you can assign to customers."
-          primaryAction={
-            canModify ? (
-              <Button onClick={() => setIsCreateModelVisible(true)}>
-                <Plus className="size-4" />
-                Create Budget
-              </Button>
-            ) : undefined
-          }
-          tabs={({ leadingControls }) => (
+        <PageHeader>
+          <PageHeaderTitle>
+            <Wallet />
+            Budgets
+          </PageHeaderTitle>
+          <PageHeaderDescription>Spend, TPM and RPM limits you can assign to customers.</PageHeaderDescription>
+          <PageHeaderControls>
             <PageTabsList>
-              {leadingControls}
+              {canModify && (
+                <>
+                  <Button onClick={() => setIsCreateModelVisible(true)}>
+                    <Plus className="size-4" />
+                    Create Budget
+                  </Button>
+                  <ToolbarSeparator className="mx-0 h-6" />
+                </>
+              )}
               <PageTabsTrigger value="budgets">Budgets</PageTabsTrigger>
               <PageTabsTrigger value="examples">Examples</PageTabsTrigger>
             </PageTabsList>
-          )}
-        />
+          </PageHeaderControls>
+        </PageHeader>
         <TabsContent value="budgets" className="flex min-h-0 flex-1 flex-col" keepMounted>
           <div className="flex min-h-0 flex-1 flex-col">
             <BudgetModal isModalVisible={isCreateModelVisible} setIsModalVisible={setIsCreateModelVisible} />

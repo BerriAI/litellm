@@ -5,7 +5,7 @@ import React from "react";
 import { Calculator, RefreshCw } from "lucide-react";
 
 import { apiClient } from "@/components/networking";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -220,25 +220,25 @@ export default function ROICalculatorView({
 
   return (
     <Page>
-      <PageHeader
-        icon={<Calculator />}
-        title="ROI Calculator"
-        subtitle={
-          <>
-            {summary
-              ? `${summary.start} through ${summary.end} · UTC`
-              : "Compare gateway spend with estimated engineering effort for merged pull requests"}
-            {syncedAt && (
-              <span className="mt-1 block text-xs text-muted-foreground" role="status">
-                Last synced {formatSyncedAt(syncedAt)}
-                {!status.running && status.phase === "complete" && status.reused > 0
-                  ? ` · ${status.reused} of ${status.total} estimates reused`
-                  : ""}
-              </span>
-            )}
-          </>
-        }
-      />
+      <PageHeader>
+        <PageHeaderTitle>
+          <Calculator />
+          ROI Calculator
+        </PageHeaderTitle>
+        <PageHeaderDescription>
+          {summary
+            ? `${summary.start} through ${summary.end} · UTC`
+            : "Compare gateway spend with estimated engineering effort for merged pull requests"}
+          {syncedAt && (
+            <span className="mt-1 block text-xs text-muted-foreground" role="status">
+              Last synced {formatSyncedAt(syncedAt)}
+              {!status.running && status.phase === "complete" && status.reused > 0
+                ? ` · ${status.reused} of ${status.total} estimates reused`
+                : ""}
+            </span>
+          )}
+        </PageHeaderDescription>
+      </PageHeader>
       {!liveSummary && showLiveStatus && (
         <Button variant="outline" onClick={() => void previewSample()}>
           Preview sample report
