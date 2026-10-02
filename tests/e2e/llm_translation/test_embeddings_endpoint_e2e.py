@@ -27,6 +27,8 @@ pytestmark = pytest.mark.e2e
 VERTEX_TEXT_EMBEDDING: Final = "vertex_ai/text-embedding-005"
 VERTEX_MULTIMODAL_EMBEDDING: Final = "vertex_ai/multimodalembedding@001"
 TOKENS_TEXT: Final = "The quick brown fox jumps over the lazy dog"
+# tiktoken 0.12.0 cl100k_base encoding of TOKENS_TEXT (checked 2026-10-02), the vocabulary behind the proxy's
+# litellm.decode(model="gpt-3.5-turbo") token-array decode
 TOKENS: Final = (791, 4062, 14198, 39935, 35308, 927, 279, 16053, 5679)
 
 
