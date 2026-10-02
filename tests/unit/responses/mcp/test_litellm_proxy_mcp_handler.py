@@ -1316,13 +1316,30 @@ async def test_responses_discovery_logs_sanitized_caller_headers(monkeypatch: py
 
 
 @pytest.mark.asyncio
-async def test_get_mcp_tools_from_manager_records_the_served_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("allowed_tools", "expected_names"),
+    [
+        ([], ["responses_slot-echo", "responses_slot-status"]),
+        (["echo"], ["responses_slot-echo"]),
+        (["responses_slot-echo"], ["responses_slot-echo"]),
+        (["absent"], []),
+    ],
+)
+async def test_get_mcp_tools_from_manager_records_the_served_catalog(
+    monkeypatch: pytest.MonkeyPatch, allowed_tools: list[str], expected_names: list[str]
+) -> None:
     """The Responses bridge serves the listing to the model and its own tools/call reads the slot, so
     this listing records the caller's catalog."""
     manager: Final = mcp_operations.global_mcp_server_manager
-    server: Final = MCPServer(server_id="responses-slot", name="responses-slot", transport=MCPTransport.http)
+    server: Final = MCPServer(
+        server_id="responses-slot", name="responses_slot", alias="responses_slot", transport=MCPTransport.http
+    )
     user: Final = UserAPIKeyAuth(api_key="sk-responses-slot", user_id="responder")
-    upstream: Final = [MCPTool(name="echo", description="Echo text back", inputSchema={"type": "object"})]
+    upstream: Final = [
+        MCPTool(name="echo", description="Echo text back", inputSchema={"type": "object"}),
+        MCPTool(name="status", description="Report status", inputSchema={"type": "object"}),
+        MCPTool(name="echo", description="Duplicate echo", inputSchema={"type": "object", "properties": {}}),
+    ]
     fake_manager: Final = types.SimpleNamespace(
         get_registry=MagicMock(return_value={}),
         get_allowed_mcp_servers=AsyncMock(return_value=[]),
@@ -1340,16 +1357,35 @@ async def test_get_mcp_tools_from_manager_records_the_served_catalog(monkeypatch
         patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
     ):
         try:
-            tools, _server_names = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
+            tools, _server_names = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
                 user_api_key_auth=user,
-                mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/responses-slot"}],
+                mcp_tools_with_litellm_proxy=[
+                    {
+                        "type": "mcp",
+                        "server_url": "litellm_proxy/mcp/responses-slot",
+                        "allowed_tools": allowed_tools,
+                    }
+                ],
             )
-            listed: Final = manager.get_listed_tool(server, "echo", ListedToolsCaller(user_api_key_auth=user))
+            caller: Final = ListedToolsCaller(user_api_key_auth=user)
+            recorded: Final = {
+                tool.name: (listed.description, listed.input_schema)
+                for tool in upstream
+                if (listed := manager.get_listed_tool(server, tool.name, caller)) is not None
+            }
+            assert recorded == {
+                tool.name.removeprefix("responses_slot-"): (tool.description, tool.input_schema) for tool in tools
+            }
+            assert (
+                manager.get_listed_tool(
+                    server, "echo", ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(api_key="sk-other-caller"))
+                )
+                is None
+            )
         finally:
             manager._drop_listed_tools(server.server_id)
 
-    assert [tool.name for tool in tools] == ["responses-slot-echo"]
-    assert listed is not None and listed.description == "Echo text back"
+    assert [tool.name for tool in tools] == expected_names
 
 
 def _toolset_gateway_manager(toolset_id: str, server_id: str) -> types.SimpleNamespace:

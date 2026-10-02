@@ -318,6 +318,13 @@ class LiteLLM_Proxy_MCP_Handler:
         # names), so use None and let the auth object's mcp_servers do the filtering.
         effective_server_filter: Final = None if resolved_toolset_ids else (resolved_mcp_servers or None)
 
+        def served_tools(tools: list[MCPTool]) -> list[MCPTool]:
+            filtered: Final = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+                tools, mcp_tools_with_litellm_proxy
+            )
+            deduplicated, _server_map = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(filtered, [])
+            return deduplicated
+
         listing: Final = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
@@ -329,6 +336,7 @@ class LiteLLM_Proxy_MCP_Handler:
             request_tags=request_tags,
             raw_headers=raw_headers,
             record_listing=True,
+            served_tool_selector=served_tools,
         )
         tools: Final = listing.tools
 
