@@ -494,6 +494,20 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
         default=None,
         description="Path to a JSON file containing ad-hoc recognizers for Presidio",
     )
+    presidio_stable_tokens: bool | None = Field(
+        default=None,
+        description=(
+            "Derive PII placeholders from the value instead of its order in the request, "
+            "so the same value maps to the same token across turns. Requires presidio_token_salt."
+        ),
+    )
+    presidio_token_salt: str | None = Field(
+        default=None,
+        description=(
+            "os.environ/<VAR> reference holding the HMAC key behind stable tokens. "
+            "A literal is refused: guardrail params are logged in full at debug level."
+        ),
+    )
     presidio_analyze_chunk_size_bytes: int | None = Field(
         default=None,
         description=(
