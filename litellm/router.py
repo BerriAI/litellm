@@ -7659,6 +7659,9 @@ class Router:
 
     @tracer.wrap()
     async def async_function_with_retries(self, *args, **kwargs):
+        typed_request_kwargs: Final = cast(  # cast-ok: Python kwargs always have str keys and arbitrary object values
+            Mapping[str, object], kwargs
+        )
         verbose_router_logger.debug("Inside async function with retries.")
         original_function: Final = kwargs.pop("original_function")
         fallbacks: Final = kwargs.pop("fallbacks", self.fallbacks)
@@ -7716,7 +7719,7 @@ class Router:
             ) = await self._async_get_healthy_deployments(
                 model=kwargs.get("model") or "",
                 parent_otel_span=parent_otel_span,
-                request_kwargs=kwargs,
+                request_kwargs=typed_request_kwargs,
             )
 
             # Check retry policy FIRST, before should_retry_this_error
@@ -7809,7 +7812,7 @@ class Router:
                         ) = await self._async_get_healthy_deployments(
                             model=_model,
                             parent_otel_span=parent_otel_span,
-                            request_kwargs=kwargs,
+                            request_kwargs=typed_request_kwargs,
                         )
                     else:
                         _healthy_deployments = []
@@ -13026,7 +13029,10 @@ class Router:
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
             verbose_router_logger.debug("healthy_deployments after web search filter: %s", healthy_deployments)
 
-        healthy_deployments = filter_pinned_deployment(model, healthy_deployments, request_kwargs)
+        pinned_request_kwargs: Final = cast(  # cast-ok: this API's legacy bare dict is a str-keyed request mapping
+            Mapping[str, object], request_kwargs
+        )
+        healthy_deployments = filter_pinned_deployment(model, healthy_deployments, pinned_request_kwargs)
 
         if isinstance(healthy_deployments, dict):
             if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
@@ -14174,7 +14180,14 @@ class Router:
             specific_deployment=specific_deployment,
             request_kwargs=request_kwargs,
         )
-        healthy_deployments = filter_pinned_deployment(model, healthy_deployments, request_kwargs)
+        pinned_request_kwargs: Final = (
+            cast(  # cast-ok: this API's legacy bare dict is a str-keyed request mapping
+                Mapping[str, object], request_kwargs
+            )
+            if request_kwargs is not None
+            else None
+        )
+        healthy_deployments = filter_pinned_deployment(model, healthy_deployments, pinned_request_kwargs)
         strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
 
         if isinstance(healthy_deployments, dict):

@@ -107,6 +107,8 @@ def video_id_for_provider(llm_router: Router, video_id: str) -> str:
 
 
 def encode_video_id_in_response(response: object, fallback_model: str | None) -> object:
+    hidden_provider: Final = _hidden_param(response, "custom_llm_provider")
+    hidden_model_id: Final = _hidden_param(response, "model_id")
     video_id: Final = response.get("id") if isinstance(response, dict) else getattr(response, "id", None)
     if not isinstance(video_id, str) or not video_id:
         return response
@@ -114,8 +116,8 @@ def encode_video_id_in_response(response: object, fallback_model: str | None) ->
     decoded: Final = decode_video_id_with_provider(video_id)
     encoded: Final = encode_video_id_with_provider(
         video_id=decoded.get("video_id", ""),
-        provider=_hidden_param(response, "custom_llm_provider") or decoded.get("custom_llm_provider") or "openai",
-        model_id=_hidden_param(response, "model_id") or fallback_model or decoded.get("model_id"),
+        provider=hidden_provider or decoded.get("custom_llm_provider") or "openai",
+        model_id=hidden_model_id or fallback_model or decoded.get("model_id"),
     )
     if isinstance(response, dict):
         response["id"] = encoded  # rebind-ok: in-place id rewrite, matching encode_character_id_in_response
