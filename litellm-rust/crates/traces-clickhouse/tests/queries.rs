@@ -231,7 +231,29 @@ async fn captured_deeplite_exports_round_trip_through_clickhouse(
     };
     let stored = fetch::<TraceSpans>(&fixture.database.client, &reader, &params).await?;
     assert_eq!(stored.len(), decoded.len());
-    assert!(stored.iter().any(|row| row.0.status == "STATUS_CODE_ERROR"));
+    let list_params = ListTracesParams::from(contracts::ListTracesParams {
+        access: params.access,
+        start_ms: 0,
+        end_ms: i64::MAX / 1_000_000,
+        cursor_ms: 0,
+        cursor_trace_id: String::new(),
+        limit: 10,
+    });
+    let traces = fetch::<ListTraces>(&fixture.database.client, &reader, &list_params).await?;
+    assert_eq!(traces.len(), 1);
+    let roots = decoded
+        .iter()
+        .filter(|span| span.parent_span_id.is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(roots.len(), 1);
+    assert_eq!(traces[0].0.status, roots[0].status_code);
+    assert_eq!(
+        traces[0].0.error_count,
+        decoded
+            .iter()
+            .filter(|span| span.status_code == "STATUS_CODE_ERROR")
+            .count() as u64
+    );
     let by_id: BTreeMap<_, _> = stored
         .iter()
         .map(|row| (row.0.span_id.as_str(), &row.0))
