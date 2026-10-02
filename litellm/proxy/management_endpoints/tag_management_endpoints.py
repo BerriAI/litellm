@@ -808,12 +808,23 @@ async def delete_tag(
         if existing_tag is None:
             raise HTTPException(status_code=404, detail=f"Tag {data.name} not found")
 
+        if not is_proxy_admin(user_api_key_dict):
+            if existing_tag.team_id is None or not await _caller_administers_team(
+                prisma_client, user_api_key_dict, existing_tag.team_id
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Caller does not administer the team that owns this tag",
+                )
+
         # Delete tag from database
         await _table(TagRepository(prisma_client)).delete(where={"tag_name": data.name})
 
         await _evict_tag_cache_keys((tag_cache_key(data.name), tag_registry_cache_key()))
 
         return {"message": f"Tag {data.name} deleted successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

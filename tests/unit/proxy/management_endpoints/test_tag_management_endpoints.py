@@ -2046,3 +2046,44 @@ async def test_regular_team_member_cannot_manage_tags(case):
         response = client.post(route, json=body, headers=_ADMIN_HEADERS)
         assert response.status_code == 403, response.text
         assert fake_db.tag_rows == before
+
+
+@pytest.mark.asyncio
+async def test_proxy_admin_deletes_any_tag():
+    fake_db = _team_a_db()
+    fake_db.tag_rows["team-b-tag"] = _new_tag_row(tag_name="team-b-tag", team_id="team-b")
+    with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
+        response = client.post("/tag/delete", json={"name": "team-b-tag"}, headers=_ADMIN_HEADERS)
+        assert response.status_code == 200, response.text
+        assert "team-b-tag" not in fake_db.tag_rows
+
+
+@pytest.mark.asyncio
+async def test_team_admin_deletes_own_team_tag():
+    fake_db = _team_a_db()
+    fake_db.tag_rows["team-tag"] = _new_tag_row(tag_name="team-tag", team_id="team-a")
+    with _tag_ownership_gateway(fake_db, _team_admin_auth()):
+        response = client.post("/tag/delete", json={"name": "team-tag"}, headers=_ADMIN_HEADERS)
+        assert response.status_code == 200, response.text
+        assert "team-tag" not in fake_db.tag_rows
+
+
+@pytest.mark.parametrize("owner_team_id", [None, "team-b"], ids=["unowned", "other-team"])
+@pytest.mark.asyncio
+async def test_team_admin_cannot_delete_tag_they_do_not_administer(owner_team_id):
+    fake_db = _team_a_db()
+    fake_db.tag_rows["tag-x"] = _new_tag_row(tag_name="tag-x", team_id=owner_team_id)
+    with _tag_ownership_gateway(fake_db, _team_admin_auth()):
+        response = client.post("/tag/delete", json={"name": "tag-x"}, headers=_ADMIN_HEADERS)
+        assert response.status_code == 403, response.text
+        assert "tag-x" in fake_db.tag_rows
+
+
+@pytest.mark.asyncio
+async def test_regular_team_member_cannot_delete_tag():
+    fake_db = _team_a_db()
+    fake_db.tag_rows["team-tag"] = _new_tag_row(tag_name="team-tag", team_id="team-a")
+    with _tag_ownership_gateway(fake_db, _team_member_auth()):
+        response = client.post("/tag/delete", json={"name": "team-tag"}, headers=_ADMIN_HEADERS)
+        assert response.status_code == 403, response.text
+        assert "team-tag" in fake_db.tag_rows
