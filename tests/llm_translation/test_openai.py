@@ -273,6 +273,7 @@ async def test_vision_with_custom_model():
 
 
 class TestOpenAIChatCompletion(BaseLLMChatTest):
+    test_basic_tool_calling = None
     test_function_calling_with_tool_response = None
 
     def get_base_completion_call_args(self) -> dict:

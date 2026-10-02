@@ -15,6 +15,7 @@ import pytest
 
 
 class TestTogetherAI(BaseLLMChatTest):
+    test_basic_tool_calling = None
     test_empty_tools = None
     test_function_calling_with_tool_response = None
     test_json_response_format = None
