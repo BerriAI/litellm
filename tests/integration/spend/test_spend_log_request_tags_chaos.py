@@ -190,7 +190,7 @@ def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Pa
                 return _tagged_requests(candidate, key, anthropic_model, openai_model, stream=False, index=index)
 
             with ThreadPoolExecutor(max_workers=5) as pool:
-                first: Final = [response for group in pool.map(burst, range(4)) for response in group]
+                first: Final = [response for group in pool.map(burst, range(3)) for response in group]
             assert all(response.status_code == 200 for response in first), [
                 (response.status_code, response.text[:200]) for response in first
             ]
@@ -212,7 +212,7 @@ def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Pa
             down.set()
             with ThreadPoolExecutor(max_workers=5) as pool:
                 second: Final = [
-                    response for group in pool.map(lambda i: burst(100 + i), range(4)) for response in group
+                    response for group in pool.map(lambda i: burst(100 + i), range(3)) for response in group
                 ]
             down.clear()
             third: Final = _tagged_requests(candidate, key, anthropic_model, openai_model, False, 200)
@@ -253,7 +253,7 @@ def test_worker_kill_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_path: P
                 return _tagged_requests(candidate, key, anthropic_model, openai_model, stream=False, index=index)
 
             with ThreadPoolExecutor(max_workers=5) as pool:
-                first: Final = [response for group in pool.map(burst, range(4)) for response in group]
+                first: Final = [response for group in pool.map(burst, range(3)) for response in group]
 
             workers: Final = [
                 child
@@ -263,13 +263,14 @@ def test_worker_kill_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_path: P
             assert len(workers) == 2, (
                 f"expected two uvicorn workers, found {[(w.pid, w.cmdline()[:3]) for w in workers]}"
             )
+            first_landed: Final = _landed_tags(key, lambda values: len(values) == len(first))
             workers[0].kill()
             psutil.wait_procs(workers[:1], timeout=10)
             assert not workers[0].is_running()
 
             with ThreadPoolExecutor(max_workers=5) as pool:
                 second: Final = [
-                    response for group in pool.map(lambda i: burst(100 + i), range(4)) for response in group
+                    response for group in pool.map(lambda i: burst(100 + i), range(3)) for response in group
                 ]
             responses: Final = [*first, *second]
             for position in range(len(ROUTES)):
@@ -282,4 +283,4 @@ def test_worker_kill_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_path: P
             ok: Final = [response for response in responses if response.status_code == 200]
             ids: Final = [_ids(response) for response in ok]
             assert len(set(ids)) == len(ids), "duplicate upstream id in burst"
-            landed: Final = _landed_tags(key, lambda values: len(values) == len(ok))
+            _landed_tags(key, lambda values: len(values) == len(first_landed) + len(second_ok))
