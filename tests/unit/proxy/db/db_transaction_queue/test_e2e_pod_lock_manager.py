@@ -1,3 +1,5 @@
+from typing import Final
+
 import os
 import traceback
 from litellm._uuid import uuid
@@ -19,12 +21,10 @@ import fakeredis
 # this file is to test litellm/proxy
 
 import asyncio
-import logging
 
 import pytest
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 import litellm
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     new_user,
     user_info,
@@ -66,7 +66,7 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 
-verbose_proxy_logger.setLevel(level=logging.DEBUG)
+pytestmark: Final = pytest.mark.usefixtures("debug_proxy_logging")
 
 from starlette.datastructures import URL
 

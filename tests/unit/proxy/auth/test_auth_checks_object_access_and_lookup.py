@@ -110,22 +110,26 @@ def set_salt_key(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def reset_constants_module():
+def reset_constants_module() -> Iterator[None]:
     """Reset constants module to ensure clean state before each test"""
     import importlib
 
     from litellm import constants
     from litellm.proxy.auth import auth_checks
 
+    original_organization_error: Final = auth_checks.OrganizationNotFoundError
+
     # Reload modules before test
     importlib.reload(constants)
     importlib.reload(auth_checks)
+    auth_checks.OrganizationNotFoundError = original_organization_error
 
     yield
 
     # Reload modules after test to clean up
     importlib.reload(constants)
     importlib.reload(auth_checks)
+    auth_checks.OrganizationNotFoundError = original_organization_error
 
 
 @pytest.fixture

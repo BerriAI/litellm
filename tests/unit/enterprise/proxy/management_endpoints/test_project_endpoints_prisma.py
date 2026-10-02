@@ -1,3 +1,5 @@
+from typing import Final
+
 import os
 import traceback
 from litellm._uuid import uuid
@@ -14,7 +16,6 @@ import logging
 import pytest
 
 import litellm
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy.management_endpoints.team_endpoints import (
     new_team,
 )
@@ -30,7 +31,7 @@ from litellm.proxy.proxy_server import (
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
-verbose_proxy_logger.setLevel(level=logging.DEBUG)
+pytestmark: Final = pytest.mark.usefixtures("debug_proxy_logging")
 
 
 from litellm.caching.caching import DualCache
