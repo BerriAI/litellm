@@ -1,7 +1,7 @@
 import base64
 import binascii
-import itertools
 import datetime
+import itertools
 import json
 import struct
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock.chat.invoke_handler import (
@@ -20,10 +21,10 @@ from litellm.llms.bedrock.chat.invoke_handler import (
     make_call,
     make_sync_call,
 )
-from litellm.exceptions import MidStreamFallbackError
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import ModelResponseStream
+from tests.unit.llms.bedrock.slow_upstream import slow_upstream
 
 
 def test_transform_thinking_blocks_with_redacted_content():
@@ -214,9 +215,7 @@ def test_bedrock_converse_streaming_consistent_id():
     expected_id = f"chatcmpl-{native_conversation_id}"
 
     for response in parsed_responses:
-        assert (
-            response.id == expected_id
-        ), "All chunk IDs must match the one captured from the messageStart event"
+        assert response.id == expected_id, "All chunk IDs must match the one captured from the messageStart event"
 
 
 def test_converse_streaming_usage_uses_provider_thinking_tokens():
@@ -721,8 +720,8 @@ def _bedrock_event_stream_frame(chunk: Mapping[str, object]) -> bytes:
     def header(name: str, value: str) -> bytes:
         return bytes([len(name)]) + name.encode() + bytes([7]) + struct.pack(">H", len(value)) + value.encode()
 
-    headers: Final = header(":event-type", "chunk") + header(":content-type", "application/json") + header(
-        ":message-type", "event"
+    headers: Final = (
+        header(":event-type", "chunk") + header(":content-type", "application/json") + header(":message-type", "event")
     )
     payload: Final = json.dumps({"bytes": base64.b64encode(json.dumps(chunk).encode()).decode()}).encode()
     prelude: Final = struct.pack(">II", 12 + len(headers) + len(payload) + 4, len(headers))
@@ -925,3 +924,39 @@ async def test_async_converse_stream_with_an_empty_200_body_raises_instead_of_an
         _ = [chunk async for chunk in stream]
 
     _assert_empty_stream_surfaced_as_bad_gateway(exc_info.value)
+
+
+STREAM_TIMEOUT_SECONDS: Final = 0.5
+SLOW_UPSTREAM_SECONDS: Final = 6.0
+
+
+def _invoke_streaming_kwargs(api_base: str) -> dict[str, object]:
+    return {
+        "model": "bedrock/invoke/anthropic.claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+        "timeout": STREAM_TIMEOUT_SECONDS,
+        "api_base": api_base,
+        "aws_access_key_id": "fake",
+        "aws_secret_access_key": "fake",
+        "aws_region_name": "us-east-1",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller_client", ["pooled", "own"])
+async def test_async_invoke_streaming_fails_at_the_request_timeout_not_the_upstreams_pace(caller_client: str) -> None:
+    client: Final = None if caller_client == "pooled" else AsyncHTTPHandler()
+    with slow_upstream(SLOW_UPSTREAM_SECONDS) as upstream:
+        with pytest.raises(litellm.Timeout):
+            await litellm.acompletion(client=client, **_invoke_streaming_kwargs(upstream.base_url))
+        assert upstream.seconds_since_first_request() < upstream.delay_seconds / 2
+
+
+@pytest.mark.parametrize("caller_client", ["pooled", "own"])
+def test_sync_invoke_streaming_fails_at_the_request_timeout_not_the_upstreams_pace(caller_client: str) -> None:
+    client: Final = None if caller_client == "pooled" else HTTPHandler()
+    with slow_upstream(SLOW_UPSTREAM_SECONDS) as upstream:
+        with pytest.raises(litellm.Timeout):
+            litellm.completion(client=client, **_invoke_streaming_kwargs(upstream.base_url))
+        assert upstream.seconds_since_first_request() < upstream.delay_seconds / 2
