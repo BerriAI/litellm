@@ -143,6 +143,13 @@ def _ends_call_stack(frame: FrameType) -> bool:
     return isinstance(module, str) and module.startswith(_CALL_STACK_END_MODULES)
 
 
+def _caller_frames(first: FrameType) -> Iterator[FrameType]:
+    frame: FrameType | None = first
+    while frame is not None and not _ends_call_stack(frame):
+        yield frame
+        frame = frame.f_back
+
+
 def _get_call_stack_info(num_frames: int = 2) -> str:
     """
     Get the function names of the nearest meaningful callers of the cache method.
@@ -171,16 +178,11 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
         first: Final = f_back.f_back
         if first is None:
             return "unknown"
-        function_names: Final[list[str]] = []
-        raw_names: Final[list[str]] = []
-
-        frame: FrameType | None = first
-        while frame is not None and len(function_names) < num_frames and not _ends_call_stack(frame):
-            if len(raw_names) < num_frames:
-                raw_names.append(frame.f_code.co_name)
-            if not _is_generic_caller_frame(frame):
-                function_names.append(frame.f_code.co_name)
-            frame = frame.f_back
+        frames: Final = tuple(_caller_frames(first))
+        function_names: Final = tuple(frame.f_code.co_name for frame in frames if not _is_generic_caller_frame(frame))[
+            :num_frames
+        ]
+        raw_names: Final = tuple(frame.f_code.co_name for frame in frames[:num_frames])
 
         if function_names:
             return " <- ".join(function_names)

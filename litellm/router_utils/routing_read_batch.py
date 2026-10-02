@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
+ROUTER_COOLDOWNS_USAGE_TARGET: Final = "router_cooldowns_usage"
 _PREFETCH_SLOT: Final = "routing_read"
 
 
@@ -193,7 +194,7 @@ class RoutingReadBatch:
             (litellm_router_instance.cooldown_cache.cooldown_store, cooldown_keys),
             *(() if selector is None else ((selector.router_cache, list(usage_keys)),)),
         )
-        with service_target(ROUTER_COOLDOWNS_TARGET):
+        with service_target(ROUTER_COOLDOWNS_TARGET if selector is None else ROUTER_COOLDOWNS_USAGE_TARGET):
             results: Final = await self._read_prefetched(reads) or await DualCache.async_batch_get_cache_shared(
                 reads, parent_otel_span=parent_otel_span
             )
