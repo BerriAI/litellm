@@ -74,18 +74,20 @@ class testLogger(CustomLogger):
         self.reaches_sync_failure_event = True
 
 
-router = Router(
-    model_list=[
-        {
-            "model_name": "fake-model",
-            "litellm_params": {
-                "model": "openai/fake",
-                "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
-                "api_key": "sk-12345",
-            },
-        }
-    ]
-)
+@pytest.fixture
+def router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "fake-model",
+                "litellm_params": {
+                    "model": "openai/fake",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_key": "sk-12345",
+                },
+            }
+        ]
+    )
 
 
 def _register_proxy_test_logger(callback_logger: testLogger) -> None:
@@ -130,7 +132,7 @@ def _register_proxy_test_logger(callback_logger: testLogger) -> None:
     ],
 )
 @pytest.mark.asyncio
-async def test_chat_completion_request_with_redaction(route, body):
+async def test_chat_completion_request_with_redaction(route, body, router, monkeypatch):
     """
     IMPORTANT Enterprise Test - Do not delete it:
     Makes a /chat/completions request on LiteLLM Proxy
@@ -139,7 +141,7 @@ async def test_chat_completion_request_with_redaction(route, body):
     """
     from litellm.proxy import proxy_server
 
-    setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
     _test_logger = testLogger()
     _register_proxy_test_logger(_test_logger)
     litellm.set_verbose = True

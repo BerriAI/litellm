@@ -1881,9 +1881,10 @@ async def test_health_check_not_called_when_disabled(monkeypatch):
         }
     },
 )
-def test_custom_openapi(mock_get_openapi_schema):
-    from litellm.proxy.proxy_server import custom_openapi
+def test_custom_openapi(mock_get_openapi_schema, monkeypatch):
+    from litellm.proxy.proxy_server import app, custom_openapi
 
+    monkeypatch.setattr(app, "openapi_schema", None)
     openapi_schema = custom_openapi()
     assert openapi_schema is not None
 
