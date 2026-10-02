@@ -1789,6 +1789,10 @@ async def test_vector_store_access_check_enforces_team_allowlist_for_rag_query(
 
 
 
+_KEY_DENIED: Final = ProxyErrorTypes.key_vector_store_access_denied
+_TEAM_DENIED: Final = ProxyErrorTypes.team_vector_store_access_denied
+
+
 def _virtual_key(
     object_permission_id: str | None = None,
     api_key: str = "sk-standalone",
@@ -1811,9 +1815,14 @@ async def _common_checks_for_rag_query(
     valid_token: UserAPIKeyAuth,
     key_permission: SimpleNamespace | None,
     team_object: LiteLLM_TeamTable | None = None,
+    team_permission: SimpleNamespace | None = None,
+    user_object: LiteLLM_UserTable | None = None,
 ) -> bool:
+    permissions: Final = {"key-permission": key_permission, "team-permission": team_permission}
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=key_permission)
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        side_effect=lambda where: permissions.get(where["object_permission_id"])
+    )
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
     request_body = {
         "model": "gpt-4o-mini",
@@ -1831,7 +1840,7 @@ async def _common_checks_for_rag_query(
         return await common_checks(
             request_body=request_body,
             team_object=team_object,
-            user_object=None,
+            user_object=user_object,
             end_user_object=None,
             global_proxy_spend=None,
             general_settings=dict(general_settings),
@@ -1843,45 +1852,59 @@ async def _common_checks_for_rag_query(
         )
 
 
-async def _assert_rag_query_outcome(request: Awaitable[bool], allowed: bool) -> None:
-    if allowed:
+async def _assert_rag_query_outcome(request: Awaitable[bool], denied_by: ProxyErrorTypes | None) -> None:
+    if denied_by is None:
         assert await request is True
         return
     with pytest.raises(ProxyException) as exc_info:
         await request
-    assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (
-        ProxyErrorTypes.key_vector_store_access_denied,
-        "vector_store",
-        "401",
+    assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (denied_by, "vector_store", "401")
+
+
+async def _team_key_rag_query(
+    general_settings: Mapping[str, object],
+    key_vector_stores: list[str] | None,
+    team_vector_stores: list[str] | None,
+    user_object: LiteLLM_UserTable | None = None,
+) -> bool:
+    return await _common_checks_for_rag_query(
+        general_settings,
+        _virtual_key(object_permission_id=None if key_vector_stores is None else "key-permission", team_id="team-1"),
+        None if key_vector_stores is None else SimpleNamespace(vector_stores=key_vector_stores),
+        LiteLLM_TeamTable(
+            team_id="team-1", object_permission_id=None if team_vector_stores is None else "team-permission"
+        ),
+        None if team_vector_stores is None else SimpleNamespace(vector_stores=team_vector_stores),
+        user_object,
     )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("general_settings", "allowed"),
-    [({}, True), ({"vector_store_deny_by_default": False}, True), ({"vector_store_deny_by_default": True}, False)],
+    ("general_settings", "denied_by"),
+    [({}, None), ({"vector_store_deny_by_default": False}, None), ({"vector_store_deny_by_default": True}, _KEY_DENIED)],
     ids=["flag-omitted", "flag-false", "flag-true"],
 )
 async def test_standalone_key_without_vector_store_permission_follows_deny_by_default(
-    general_settings: Mapping[str, object], allowed: bool
+    general_settings: Mapping[str, object], denied_by: ProxyErrorTypes | None
 ):
-    await _assert_rag_query_outcome(_common_checks_for_rag_query(general_settings, _virtual_key(), None), allowed)
+    await _assert_rag_query_outcome(_common_checks_for_rag_query(general_settings, _virtual_key(), None), denied_by)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("deny_by_default", "vector_stores", "allowed"),
+    ("deny_by_default", "vector_stores", "denied_by"),
     [
-        (True, [], False),
-        (True, ["KBSTOREA"], True),
-        (True, ["KBSTOREB"], False),
-        (True, None, False),
-        (False, ["KBSTOREB"], False),
+        (True, [], _KEY_DENIED),
+        (True, ["KBSTOREA"], None),
+        (True, ["KBSTOREB"], _KEY_DENIED),
+        (True, None, _KEY_DENIED),
+        (False, ["KBSTOREB"], _KEY_DENIED),
     ],
     ids=["enabled-empty", "enabled-contains", "enabled-excludes", "enabled-null", "disabled-excludes"],
 )
 async def test_standalone_key_vector_store_permission_record_under_deny_by_default(
-    deny_by_default: bool, vector_stores: list[str] | None, allowed: bool
+    deny_by_default: bool, vector_stores: list[str] | None, denied_by: ProxyErrorTypes | None
 ):
     await _assert_rag_query_outcome(
         _common_checks_for_rag_query(
@@ -1889,7 +1912,7 @@ async def test_standalone_key_vector_store_permission_record_under_deny_by_defau
             _virtual_key(object_permission_id="key-permission"),
             SimpleNamespace(vector_stores=vector_stores),
         ),
-        allowed,
+        denied_by,
     )
 
 
@@ -1899,24 +1922,82 @@ async def test_master_key_rag_query_is_unchanged_by_deny_by_default(deny_by_defa
     master_key = _virtual_key(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN)
 
     await _assert_rag_query_outcome(
-        _common_checks_for_rag_query({"vector_store_deny_by_default": deny_by_default}, master_key, None), True
+        _common_checks_for_rag_query({"vector_store_deny_by_default": deny_by_default}, master_key, None), None
     )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("valid_token", "team_object", "allowed"),
+    ("general_settings", "vector_stores", "denied_by"),
     [
-        (_virtual_key(user_role=LitellmUserRoles.PROXY_ADMIN), None, False),
-        (_virtual_key(team_id="team-1"), LiteLLM_TeamTable(team_id="team-1"), True),
+        ({}, None, None),
+        ({"vector_store_deny_by_default": False}, None, None),
+        ({"vector_store_deny_by_default": False}, ["KBSTOREB"], _KEY_DENIED),
     ],
-    ids=["admin-owned-standalone-key-denied", "team-key-deferred"],
+    ids=["flag-omitted-no-record", "flag-false-no-record", "flag-false-excludes"],
 )
-async def test_deny_by_default_scope_is_standalone_virtual_keys(
-    valid_token: UserAPIKeyAuth, team_object: LiteLLM_TeamTable | None, allowed: bool
+async def test_proxy_admin_virtual_key_keeps_flag_off_vector_store_behavior(
+    general_settings: Mapping[str, object], vector_stores: list[str] | None, denied_by: ProxyErrorTypes | None
+):
+    admin_key = _virtual_key(
+        object_permission_id=None if vector_stores is None else "key-permission", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    key_permission = None if vector_stores is None else SimpleNamespace(vector_stores=vector_stores)
+
+    await _assert_rag_query_outcome(_common_checks_for_rag_query(general_settings, admin_key, key_permission), denied_by)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_vector_stores", "team_vector_stores", "denied_by"),
+    [
+        (["KBSTOREA"], ["KBSTOREA"], None),
+        (None, ["KBSTOREA"], _KEY_DENIED),
+        ([], ["KBSTOREA"], _KEY_DENIED),
+        (["KBSTOREA"], None, _TEAM_DENIED),
+        (["KBSTOREA"], [], _TEAM_DENIED),
+        (["KBSTOREB"], ["KBSTOREA"], _KEY_DENIED),
+        (["KBSTOREA"], ["KBSTOREB"], _TEAM_DENIED),
+    ],
+    ids=["both-grant", "key-no-record", "key-empty", "team-no-record", "team-empty", "key-excludes", "team-excludes"],
+)
+async def test_team_key_requires_key_and_team_grant_under_deny_by_default(
+    key_vector_stores: list[str] | None, team_vector_stores: list[str] | None, denied_by: ProxyErrorTypes | None
 ):
     await _assert_rag_query_outcome(
-        _common_checks_for_rag_query({"vector_store_deny_by_default": True}, valid_token, None, team_object), allowed
+        _team_key_rag_query({"vector_store_deny_by_default": True}, key_vector_stores, team_vector_stores), denied_by
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("general_settings", "key_vector_stores", "team_vector_stores", "denied_by"),
+    [
+        ({}, [], ["KBSTOREA"], None),
+        ({"vector_store_deny_by_default": False}, [], ["KBSTOREA"], None),
+        ({"vector_store_deny_by_default": False}, None, None, None),
+        ({"vector_store_deny_by_default": False}, ["KBSTOREB"], ["KBSTOREA"], _KEY_DENIED),
+        ({"vector_store_deny_by_default": False}, ["KBSTOREA"], ["KBSTOREB"], _TEAM_DENIED),
+    ],
+    ids=["omitted-key-empty", "false-key-empty", "false-no-records", "false-key-excludes", "false-team-excludes"],
+)
+async def test_team_key_keeps_legacy_vector_store_behavior_when_flag_off(
+    general_settings: Mapping[str, object],
+    key_vector_stores: list[str] | None,
+    team_vector_stores: list[str] | None,
+    denied_by: ProxyErrorTypes | None,
+):
+    await _assert_rag_query_outcome(
+        _team_key_rag_query(general_settings, key_vector_stores, team_vector_stores), denied_by
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_owned_team_key_without_key_grant_is_denied_despite_team_membership():
+    team_member = LiteLLM_UserTable(user_id="key-owner", teams=["team-1"], user_role=LitellmUserRoles.INTERNAL_USER)
+
+    await _assert_rag_query_outcome(
+        _team_key_rag_query({"vector_store_deny_by_default": True}, [], ["KBSTOREA"], team_member), _KEY_DENIED
     )
 
 

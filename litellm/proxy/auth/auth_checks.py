@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
     RBAC_ROLES,
+    UI_TEAM_ID,
     CallInfo,
     ConfigGeneralSettings,
     LiteLLM_AccessGroupTable,
@@ -6803,30 +6804,31 @@ def _get_rag_query_vector_store_id(request_body: Mapping[str, object]) -> str | 
     return vector_store_id if isinstance(vector_store_id, str) and vector_store_id else None
 
 
-def _is_standalone_virtual_key(valid_token: UserAPIKeyAuth | None, team_object: LiteLLM_TeamTable | None) -> bool:
+def _is_strict_vector_store_virtual_key(valid_token: UserAPIKeyAuth | None) -> bool:
     return (
         valid_token is not None
         and valid_token.via_virtual_key
         and valid_token.api_key != LITELLM_PROXY_MASTER_KEY_ALIAS
-        and valid_token.team_id is None
-        and team_object is None
+        and valid_token.team_id != UI_TEAM_ID
     )
 
 
-def _require_key_vector_store_grant(
-    vector_store_ids_to_run: Sequence[str], key_object_permission: _VectorStorePermissionsRow | None
+def _require_vector_store_grant(
+    object_type: Literal["key", "team"],
+    vector_store_ids_to_run: Sequence[str],
+    object_permission: _VectorStorePermissionsRow | None,
 ) -> None:
-    if key_object_permission is None or not key_object_permission.vector_stores:
+    if object_permission is None or not object_permission.vector_stores:
         raise ProxyException(
-            message=f"Key not allowed to access vector store. Tried to access {vector_store_ids_to_run[0]}. vector_store_deny_by_default is enabled and the key has no vector store grants",
-            type=ProxyErrorTypes.key_vector_store_access_denied,
+            message=f"{object_type.capitalize()} not allowed to access vector store. Tried to access {vector_store_ids_to_run[0]}. vector_store_deny_by_default is enabled and the {object_type} has no vector store grants",
+            type=ProxyErrorTypes.get_vector_store_access_error_type_for_object(object_type),
             param="vector_store",
             code=status.HTTP_401_UNAUTHORIZED,
         )
     _can_object_call_vector_stores(
-        object_type="key",
+        object_type=object_type,
         vector_store_ids_to_run=vector_store_ids_to_run,
-        object_permissions=key_object_permission,
+        object_permissions=object_permission,
     )
 
 
@@ -6876,8 +6878,9 @@ async def vector_store_access_check(
         if valid_token is not None and valid_token.object_permission_id is not None
         else None
     )
-    if deny_by_default and _is_standalone_virtual_key(valid_token, team_object):
-        _require_key_vector_store_grant(vector_store_ids_to_run, key_object_permission)
+    strict_key: Final = deny_by_default and _is_strict_vector_store_virtual_key(valid_token)
+    if strict_key:
+        _require_vector_store_grant("key", vector_store_ids_to_run, key_object_permission)
     elif key_object_permission is not None:
         _can_object_call_vector_stores(
             object_type="key",
@@ -6886,18 +6889,21 @@ async def vector_store_access_check(
         )
 
     # Check if the team can access the vector store
-    if team_object is not None and team_object.object_permission_id is not None:
-        team_object_permission: Final = await _object_permission_table(
-            ObjectPermissionRepository(prisma_client)
-        ).find_unique(
+    team_object_permission: Final = (
+        await _object_permission_table(ObjectPermissionRepository(prisma_client)).find_unique(
             where={"object_permission_id": team_object.object_permission_id},
         )
-        if team_object_permission is not None:
-            _can_object_call_vector_stores(
-                object_type="team",
-                vector_store_ids_to_run=vector_store_ids_to_run,
-                object_permissions=team_object_permission,
-            )
+        if team_object is not None and team_object.object_permission_id is not None
+        else None
+    )
+    if strict_key and (team_object is not None or (valid_token is not None and valid_token.team_id is not None)):
+        _require_vector_store_grant("team", vector_store_ids_to_run, team_object_permission)
+    elif team_object_permission is not None:
+        _can_object_call_vector_stores(
+            object_type="team",
+            vector_store_ids_to_run=vector_store_ids_to_run,
+            object_permissions=team_object_permission,
+        )
     return True
 
 
