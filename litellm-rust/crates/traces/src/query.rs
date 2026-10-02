@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use futures_util::future::{join_all, try_join_all};
+use futures_util::{
+    StreamExt,
+    stream::{self, TryStreamExt},
+};
 use litellm_http::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -209,22 +212,20 @@ fn metadata_catalog(sample: &[MetadataRow]) -> MetadataCatalog {
 }
 
 pub async fn query_help(client: &Client, connection: &Connection) -> Result<String, Error> {
-    let tables = try_join_all(
-        ["otel_traces", "agent_traces_by_key", "spend_logs"]
-            .into_iter()
-            .map(|table| async move {
-                Ok::<_, Error>(TableSchema {
-                    name: table,
-                    columns: rows::<ColumnSchema>(
-                        client,
-                        connection,
-                        &format!("DESCRIBE TABLE {table}"),
-                    )
-                    .await?,
-                })
-            }),
-    )
-    .await?;
+    let tables = stream::iter(["otel_traces", "agent_traces_by_key", "spend_logs"])
+        .then(|table| async move {
+            Ok::<_, Error>(TableSchema {
+                name: table,
+                columns: rows::<ColumnSchema>(
+                    client,
+                    connection,
+                    &format!("DESCRIBE TABLE {table}"),
+                )
+                .await?,
+            })
+        })
+        .try_collect::<Vec<_>>()
+        .await?;
     let metadata = match rows::<MetadataRow>(client, connection, METADATA_SQL).await {
         Ok(sample) => metadata_catalog(&sample),
         Err(error) => MetadataCatalog {
@@ -233,8 +234,8 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Stri
             ..metadata_catalog(&[])
         },
     };
-    let attributes = join_all(["SpanAttributes", "ResourceAttributes"].into_iter().map(
-        |column| async move {
+    let attributes = stream::iter(["SpanAttributes", "ResourceAttributes"])
+        .then(|column| async move {
             let sql = format!(
                 "SELECT DISTINCT arrayJoin(mapKeys({column})) AS key FROM \
              (SELECT {column} FROM otel_traces WHERE Timestamp >= now() - INTERVAL 7 DAY \
@@ -262,9 +263,9 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Stri
                 scope: ATTRIBUTE_SCOPE,
                 error,
             }
-        },
-    ))
-    .await;
+        })
+        .collect::<Vec<_>>()
+        .await;
     let guide = guide::QueryGuide {
         tables: &tables,
         normalized_fields: &NORMALIZED_FIELD_DEFINITIONS,
