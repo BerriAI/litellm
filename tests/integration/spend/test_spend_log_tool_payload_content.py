@@ -3,6 +3,7 @@ import json
 import threading
 import time
 from collections import Counter
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Final
@@ -58,6 +59,20 @@ def _prompt_storage_config(
 
 def _json_object(body: bytes) -> dict[str, JsonValue]:
     return JSON_OBJECT.validate_json(body)
+
+
+def _answering_model_listing(respond: Callable[[Request], Reply]) -> Callable[[Request], Reply]:
+    def answer(request: Request) -> Reply:
+        if request.method == "GET":
+            assert request.target == "/v1/models", request.target
+            return Reply(body=b'{"object":"list","data":[]}')
+        return respond(request)
+
+    return answer
+
+
+def _provider_calls(requests: tuple[Request, ...]) -> tuple[Request, ...]:
+    return tuple(request for request in requests if request.method != "GET" or request.target != "/v1/models")
 
 
 def _objects(value: JsonValue) -> tuple[dict[str, JsonValue], ...]:
@@ -305,14 +320,11 @@ def test_stored_chat_response_keeps_logprob_tokens(gateway: Gateway, tmp_path: P
     }
 
     def respond(request: Request) -> Reply:
-        if request.method == "GET":
-            assert request.target == "/v1/models"
-            return Reply(body=b'{"object":"list","data":[]}')
         assert request.method == "POST"
         return Reply(body=json.dumps(response_body).encode())
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
         isolated.scenario() as scenario,
     ):
@@ -345,12 +357,9 @@ def test_stored_chat_response_keeps_logprob_tokens(gateway: Gateway, tmp_path: P
         assert caller_message["role"] == "assistant"
         assert caller_message["content"] == "sort_key"
         assert caller_response["system_fingerprint"] == "fp_scripted"
-        upstream: Final = wire.drain()
+        upstream: Final = _provider_calls(wire.drain())
         post_requests: Final = tuple(request for request in upstream if request.method == "POST")
-        model_discovery_requests: Final = tuple(request for request in upstream if request.method == "GET")
         assert len(post_requests) == 1
-        assert len(upstream) == len(post_requests) + len(model_discovery_requests)
-        assert all(request.target == "/v1/models" and request.body == b"" for request in model_discovery_requests)
         upstream_body: Final = _json_object(post_requests[0].body)
         assert upstream_body["logprobs"] is True
         assert upstream_body["top_logprobs"] == 1
@@ -408,7 +417,7 @@ def test_stored_messages_keep_tool_use_input(gateway: Gateway, tmp_path: Path) -
         return Reply(body=json.dumps(response_body).encode())
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
         isolated.scenario() as scenario,
     ):
@@ -465,7 +474,7 @@ def test_stored_messages_keep_tool_use_input(gateway: Gateway, tmp_path: Path) -
             "token_type": "bearer",
         }
         assert stored_request["aws_secret_access_key"] == REDACTED
-        observed: Final = wire.drain()
+        observed: Final = _provider_calls(wire.drain())
         assert len(observed) == 1
         assert _json_object(observed[0].body)["messages"][1]["content"][0]["input"] == tool_input
 
@@ -483,7 +492,7 @@ def test_previous_response_id_replay_sends_real_tool_payloads(gateway: Gateway, 
         return Reply(body=json.dumps(_anthropic_message(f"msg-responses-replay-{uuid4()}", "OK")).encode())
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
         isolated.scenario() as scenario,
     ):
@@ -537,7 +546,7 @@ def test_previous_response_id_replay_sends_real_tool_payloads(gateway: Gateway, 
         second_row: Final = _stored_row(second_response_id, responses_api=True)
         second_stored_request: Final = object_value(second_row["proxy_server_request"])
         assert second_stored_request["input"] == "List the values"
-        observed: Final = wire.drain()
+        observed: Final = _provider_calls(wire.drain())
         assert len(observed) == 2
         second_request: Final = _json_object(observed[1].body)
         assert second_request["messages"][1]["role"] == "assistant"
@@ -640,7 +649,7 @@ def test_chat_sdk_keeps_logprob_tokens(gateway: Gateway, tmp_path: Path, client_
         return Reply(body=json.dumps(_chat_completion(response_id_from_wire, "sort_key", logprobs=True)).encode())
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
         isolated.scenario() as scenario,
     ):
@@ -662,7 +671,7 @@ def test_chat_sdk_keeps_logprob_tokens(gateway: Gateway, tmp_path: Path, client_
         assert [entry["token"] for entry in stored_response["choices"][0]["logprobs"]["content"]] == ["sort", "_key"]
         assert stored_request["prompt_cache_key"] == REDACTED
         assert stored_request["aws_secret_access_key"] == REDACTED
-        observed: Final = wire.drain()
+        observed: Final = _provider_calls(wire.drain())
         assert len(observed) == 1
         assert _json_object(observed[0].body)["messages"] == [{"role": "user", "content": "hi"}]
 
@@ -685,9 +694,6 @@ def test_chat_sdk_stream_include_usage_masks_request_fields(gateway: Gateway, tm
     ]
 
     def respond(request: Request) -> Reply:
-        if request.method == "GET":
-            assert request.target == "/v1/models"
-            return Reply(body=b'{"object":"list","data":[]}')
         received: Final = _json_object(request.body)
         assert received["stream"] is True
         assert received["stream_options"] == {"include_usage": True}
@@ -695,7 +701,7 @@ def test_chat_sdk_stream_include_usage_masks_request_fields(gateway: Gateway, tm
         return _chat_stream(response_id_from_wire, "sort_key", include_usage=True)
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
         isolated.scenario() as scenario,
     ):
@@ -710,12 +716,9 @@ def test_chat_sdk_stream_include_usage_masks_request_fields(gateway: Gateway, tm
         assert stored_request["prompt_cache_key"] == REDACTED
         assert stored_request["aws_secret_access_key"] == REDACTED
         assert len(_stored_rows((response_id,))) == 1
-        observed: Final = wire.drain()
+        observed: Final = _provider_calls(wire.drain())
         post_requests: Final = tuple(request for request in observed if request.method == "POST")
-        model_discovery_requests: Final = tuple(request for request in observed if request.method == "GET")
         assert len(post_requests) == 1
-        assert len(observed) == len(post_requests) + len(model_discovery_requests)
-        assert all(request.target == "/v1/models" and request.body == b"" for request in model_discovery_requests)
 
 
 def test_chat_history_keeps_string_tool_arguments_and_tool_content(gateway: Gateway, tmp_path: Path) -> None:
@@ -743,7 +746,7 @@ def test_chat_history_keeps_string_tool_arguments_and_tool_content(gateway: Gate
         return Reply(body=json.dumps(_chat_completion(response_id_from_wire, "done")).encode())
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
         isolated.scenario() as scenario,
     ):
@@ -759,7 +762,7 @@ def test_chat_history_keeps_string_tool_arguments_and_tool_content(gateway: Gate
         stored_request: Final = object_value(row["proxy_server_request"])
         assert stored_request["messages"][1]["tool_calls"][0]["function"]["arguments"] == arguments
         assert stored_request["messages"][2]["content"] == tool_content
-        observed: Final = wire.drain()
+        observed: Final = _provider_calls(wire.drain())
         assert len(observed) == 1
         assert _json_object(observed[0].body)["messages"] == messages
 
@@ -829,7 +832,7 @@ def test_messages_sdk_keeps_tool_use_input(gateway: Gateway, tmp_path: Path, cli
         )
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
         isolated.scenario() as scenario,
     ):
@@ -852,7 +855,7 @@ def test_messages_sdk_keeps_tool_use_input(gateway: Gateway, tmp_path: Path, cli
             )
             == response_tool_input
         )
-        observed: Final = wire.drain()
+        observed: Final = _provider_calls(wire.drain())
         assert len(observed) == 1
         assert _json_object(observed[0].body)["messages"][1]["content"][0]["input"] == request_tool_input
 
@@ -875,7 +878,7 @@ def test_messages_stream_keeps_tool_use_input(gateway: Gateway, tmp_path: Path) 
         return Reply(content_type="text/event-stream", chunks=_anthropic_sse(response_id_from_wire, "streamed"))
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
         isolated.scenario() as scenario,
     ):
@@ -905,7 +908,7 @@ def test_messages_stream_keeps_tool_use_input(gateway: Gateway, tmp_path: Path) 
         row: Final = _stored_row(response_id)
         stored_request: Final = object_value(row["proxy_server_request"])
         assert stored_request["messages"][1]["content"][0]["input"] == request_tool_input
-        observed: Final = wire.drain()
+        observed: Final = _provider_calls(wire.drain())
         assert len(observed) == 1
 
 
@@ -921,7 +924,7 @@ def test_responses_stream_keeps_function_call_arguments(gateway: Gateway, tmp_pa
         return Reply(content_type="text/event-stream", chunks=_anthropic_sse(response_id_from_wire, "streamed"))
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
         isolated.scenario() as scenario,
     ):
@@ -952,7 +955,7 @@ def test_responses_stream_keeps_function_call_arguments(gateway: Gateway, tmp_pa
         row: Final = _stored_row(response_id, responses_api=True)
         stored_request: Final = object_value(row["proxy_server_request"])
         assert stored_request["input"][1]["arguments"] == function_arguments
-        observed: Final = wire.drain()
+        observed: Final = _provider_calls(wire.drain())
         assert len(observed) == 1
         assert "created_at" in observed[0].body.decode()
 
@@ -1002,7 +1005,7 @@ def test_native_responses_keeps_logprob_tokens(gateway: Gateway, tmp_path: Path)
         return Reply(body=json.dumps(response_body).encode())
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
         isolated.scenario() as scenario,
     ):
@@ -1031,7 +1034,7 @@ def test_native_responses_keeps_logprob_tokens(gateway: Gateway, tmp_path: Path)
         assert stored_logprobs[0]["token"] == "sort"
         assert stored_request["prompt_cache_key"] == REDACTED
         assert stored_response["prompt_cache_key"] == REDACTED
-        observed: Final = wire.drain()
+        observed: Final = _provider_calls(wire.drain())
         assert len(observed) == 1
         assert observed[0].target.endswith("/responses"), observed[0].target
 
@@ -1048,7 +1051,7 @@ def test_malformed_tool_blocks_keep_only_recognized_content(gateway: Gateway, tm
         return Reply(body=json.dumps(_chat_completion(response_id_from_wire, "done")).encode())
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
         isolated.scenario() as scenario,
     ):
@@ -1070,7 +1073,7 @@ def test_malformed_tool_blocks_keep_only_recognized_content(gateway: Gateway, tm
         assert stored_blocks[0]["api_key"] == REDACTED
         assert object_value(stored_blocks[1]["input"])["api_key"] == REDACTED
         assert object_value(stored_blocks[0]["input"])["sort_key"] == "created_at"
-        observed: Final = wire.drain()
+        observed: Final = _provider_calls(wire.drain())
         assert len(observed) == 1
         assert _json_object(observed[0].body)["messages"] == [{"role": "user", "content": "extra blocks control"}]
 
@@ -1093,7 +1096,7 @@ def test_messages_tool_input_handles_mixed_values_and_truncation(gateway: Gatewa
         return Reply(body=json.dumps(_anthropic_message(response_id_from_wire, "done")).encode())
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
         isolated.scenario() as scenario,
     ):
@@ -1128,7 +1131,7 @@ def test_messages_tool_input_handles_mixed_values_and_truncation(gateway: Gatewa
         assert REDACTED not in partition_key
         assert LITELLM_TRUNCATED_PAYLOAD_FIELD in partition_key
         assert LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE in partition_key
-        observed: Final = wire.drain()
+        observed: Final = _provider_calls(wire.drain())
         assert len(observed) == 1
 
 
@@ -1139,7 +1142,7 @@ def test_messages_without_auth_create_no_spend_row(gateway: Gateway, tmp_path: P
         raise AssertionError("Unauthenticated requests must not reach the upstream")
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
     ):
         response: Final = isolated.client.post(
@@ -1161,7 +1164,7 @@ def test_messages_without_auth_create_no_spend_row(gateway: Gateway, tmp_path: P
             return_last_on_timeout=True,
         )
         assert rows == []
-        assert wire.drain() == ()
+        assert _provider_calls(wire.drain()) == ()
 
 
 def test_messages_upstream_error_keeps_tool_input(gateway: Gateway, tmp_path: Path) -> None:
@@ -1178,7 +1181,7 @@ def test_messages_upstream_error_keeps_tool_input(gateway: Gateway, tmp_path: Pa
         return Reply(status=400, content_type="application/json", body=json.dumps(error_body).encode())
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
         isolated.scenario() as scenario,
     ):
@@ -1212,7 +1215,7 @@ def test_messages_upstream_error_keeps_tool_input(gateway: Gateway, tmp_path: Pa
         stored_request: Final = object_value(rows[0]["proxy_server_request"])
         assert object_value(stored_request["messages"][1])["content"][0]["input"] == tool_input
         assert rows[0]["status"] == "failure"
-        observed: Final = wire.drain()
+        observed: Final = _provider_calls(wire.drain())
         assert len(observed) == 1
 
 
@@ -1226,7 +1229,7 @@ def test_store_prompts_off_keeps_chat_and_messages_representation_equal(gateway:
         return Reply(body=json.dumps(_anthropic_message(messages_response_id, "messages")).encode())
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(
             gateway,
             tmp_path,
@@ -1264,7 +1267,7 @@ def test_store_prompts_off_keeps_chat_and_messages_representation_equal(gateway:
         messages_row: Final = _stored_row(messages_id)
         assert object_value(chat_row["proxy_server_request"]) == {}
         assert object_value(messages_row["proxy_server_request"]) == {}
-        assert len(wire.drain()) == 2
+        assert len(_provider_calls(wire.drain())) == 2
 
 
 def test_identical_messages_requests_have_distinct_spend_rows(gateway: Gateway, tmp_path: Path) -> None:
@@ -1279,7 +1282,7 @@ def test_identical_messages_requests_have_distinct_spend_rows(gateway: Gateway, 
         return Reply(body=json.dumps(_anthropic_message(f"msg-identical-{uuid4()}", "same")).encode())
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
         isolated.scenario() as scenario,
     ):
@@ -1290,7 +1293,7 @@ def test_identical_messages_requests_have_distinct_spend_rows(gateway: Gateway, 
         )
         assert len(set(response_ids)) == 3
         assert len(_stored_rows(response_ids)) == 3
-        assert len(wire.drain()) == 3
+        assert len(_provider_calls(wire.drain())) == 3
 
 
 def test_chat_cache_hit_keeps_logprob_tokens(gateway: Gateway, tmp_path: Path) -> None:
@@ -1298,7 +1301,7 @@ def test_chat_cache_hit_keeps_logprob_tokens(gateway: Gateway, tmp_path: Path) -
         return Reply(body=json.dumps(_chat_completion(f"chat-cache-{uuid4()}", "sort_key", logprobs=True)).encode())
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(
             gateway,
             tmp_path,
@@ -1332,7 +1335,7 @@ def test_chat_cache_hit_keeps_logprob_tokens(gateway: Gateway, tmp_path: Path) -
         assert stored_request["aws_secret_access_key"] == REDACTED
         assert "secret_fields" not in stored_request
         assert stored_response["system_fingerprint"] == REDACTED
-        assert len(wire.drain()) == 1
+        assert len(_provider_calls(wire.drain())) == 1
         assert len(_stored_rows((first_id,))) == 1
 
 
@@ -1345,7 +1348,7 @@ def test_messages_cache_hit_keeps_tool_input(gateway: Gateway, tmp_path: Path) -
         )
 
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(
             gateway,
             tmp_path,
@@ -1380,7 +1383,7 @@ def test_messages_cache_hit_keeps_tool_input(gateway: Gateway, tmp_path: Path) -
         assert stored_request["messages"][1]["content"][0]["input"] == tool_input
         assert stored_request["aws_secret_access_key"] == REDACTED
         assert "secret_fields" not in stored_request
-        assert len(wire.drain()) == 1
+        assert len(_provider_calls(wire.drain())) == 1
         assert len(_stored_rows((first_id,))) == 1
 
 
@@ -1520,12 +1523,9 @@ def _assert_burst_upstream(
     markers: tuple[str, ...],
     expected_posts: int,
 ) -> None:
-    post_requests: Final = tuple(request for request in requests if request.method == "POST")
-    model_discovery_requests: Final = tuple(request for request in requests if request.method == "GET")
-    assert len(post_requests) == expected_posts
-    assert len(requests) == len(post_requests) + len(model_discovery_requests)
-    assert all(request.target == "/v1/models" and request.body == b"" for request in model_discovery_requests)
-    assert Counter(_burst_marker(request, prefix) for request in post_requests) == Counter(markers)
+    assert len(requests) == expected_posts
+    assert all(request.method == "POST" for request in requests)
+    assert Counter(_burst_marker(request, prefix) for request in requests) == Counter(markers)
 
 
 def _burst_response_id(response: httpx.Response, kind: str, marker: str) -> str:
@@ -1600,9 +1600,6 @@ def _assert_burst_row(
 @pytest.mark.timeout(240)
 def test_concurrent_mixed_requests_land_once(gateway: Gateway, tmp_path: Path) -> None:
     def respond(request: Request) -> Reply:
-        if request.method == "GET":
-            assert request.target == "/v1/models"
-            return Reply(body=b'{"object":"list","data":[]}')
         marker: Final = _burst_marker(request, "audit-x1")
         response_id: Final = f"{'chatcmpl' if request.target.endswith('/chat/completions') else 'msg'}-{uuid4()}"
         body: Final = _json_object(request.body)
@@ -1617,7 +1614,7 @@ def test_concurrent_mixed_requests_land_once(gateway: Gateway, tmp_path: Path) -
     chat_model: Final = f"integration-x1-chat-{uuid4().hex}"
     messages_model: Final = f"integration-x1-messages-{uuid4().hex}"
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(
             gateway,
             tmp_path,
@@ -1642,7 +1639,7 @@ def test_concurrent_mixed_requests_land_once(gateway: Gateway, tmp_path: Path) -
         for row, (kind, marker, _) in zip(rows, cases):
             _assert_burst_row(row, kind, marker)
         _assert_burst_upstream(
-            wire.drain(),
+            _provider_calls(wire.drain()),
             "audit-x1",
             tuple(marker for _, marker, _ in cases),
             30,
@@ -1652,9 +1649,6 @@ def test_concurrent_mixed_requests_land_once(gateway: Gateway, tmp_path: Path) -
 @pytest.mark.timeout(240)
 def test_slow_upstream_burst_lands_once(gateway: Gateway, tmp_path: Path) -> None:
     def respond(request: Request) -> Reply:
-        if request.method == "GET":
-            assert request.target == "/v1/models"
-            return Reply(body=b'{"object":"list","data":[]}')
         time.sleep(1)
         marker: Final = _burst_marker(request, "audit-x2")
         response_id: Final = f"{'chatcmpl' if request.target.endswith('/chat/completions') else 'msg'}-{uuid4()}"
@@ -1670,7 +1664,7 @@ def test_slow_upstream_burst_lands_once(gateway: Gateway, tmp_path: Path) -> Non
     chat_model: Final = f"integration-x2-chat-{uuid4().hex}"
     messages_model: Final = f"integration-x2-messages-{uuid4().hex}"
     with (
-        wire_server(respond) as wire,
+        wire_server(_answering_model_listing(respond)) as wire,
         owned_proxy(
             gateway,
             tmp_path,
@@ -1695,7 +1689,7 @@ def test_slow_upstream_burst_lands_once(gateway: Gateway, tmp_path: Path) -> Non
         for row, (kind, marker, _) in zip(rows, cases):
             _assert_burst_row(row, kind, marker)
         _assert_burst_upstream(
-            wire.drain(),
+            _provider_calls(wire.drain()),
             "audit-x2",
             tuple(marker for _, marker, _ in cases),
             15,
@@ -1715,7 +1709,7 @@ def test_upstream_stop_returns_errors_and_recovers(gateway: Gateway, tmp_path: P
         isolated.scenario() as scenario,
     ):
         with ThreadPoolExecutor(max_workers=1) as executor:
-            with wire_server(stopped_respond) as wire:
+            with wire_server(_answering_model_listing(stopped_respond)) as wire:
                 failed_model: Final = scenario.model(
                     model="openai/gpt-4o-mini",
                     api_base=wire.url,
@@ -1733,13 +1727,13 @@ def test_upstream_stop_returns_errors_and_recovers(gateway: Gateway, tmp_path: P
                     for marker in (f"audit-x3-{uuid4()}" for _ in range(10))
                 )
                 future: Final = executor.submit(asyncio.run, _send_burst(isolated, failed_cases))
-                eventually(
-                    lambda: wire.received.qsize(),
-                    lambda count: count >= 1,
+                arrived_provider_calls: Final = eventually(
+                    lambda: _provider_calls(wire.drain()),
+                    lambda requests: len(requests) >= 1,
                     seconds=20,
                 )
                 release.set()
-            failed_upstream: Final = wire.drain()
+            failed_upstream: Final = (*arrived_provider_calls, *_provider_calls(wire.drain()))
             assert failed_upstream
             failed_responses: Final = future.result(timeout=60)
             assert all(response.status_code >= 400 and response.text for response in failed_responses)
@@ -1750,7 +1744,7 @@ def test_upstream_stop_returns_errors_and_recovers(gateway: Gateway, tmp_path: P
                 marker: Final = _burst_marker(request, "audit-x3-recovery")
                 return Reply(body=json.dumps(_chat_completion(f"chatcmpl-{uuid4()}", marker)).encode())
 
-            with wire_server(recovered_respond) as recovered_wire:
+            with wire_server(_answering_model_listing(recovered_respond)) as recovered_wire:
                 recovered_model: Final = scenario.model(
                     model="openai/gpt-4o-mini",
                     api_base=recovered_wire.url,
@@ -1777,4 +1771,4 @@ def test_upstream_stop_returns_errors_and_recovers(gateway: Gateway, tmp_path: P
                 recovered_rows: Final = _stored_rows(recovered_ids)
                 for row, (_, marker, _) in zip(recovered_rows, recovered_cases):
                     _assert_burst_row(row, "chat_nonstream", marker, require_chat_logprobs=False)
-                assert len(recovered_wire.drain()) == 5
+                assert len(_provider_calls(recovered_wire.drain())) == 5
