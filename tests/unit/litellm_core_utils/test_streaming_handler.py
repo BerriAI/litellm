@@ -2346,6 +2346,58 @@ def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     ), f"Expected completion_tokens=135 from provider, got {hidden_usage.completion_tokens}"
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("ends_with_finish_chunk", [True, False])
+@pytest.mark.asyncio
+async def test_stream_without_provider_usage_falls_back_to_the_token_estimate(
+    sync_mode: bool, ends_with_finish_chunk: bool
+) -> None:
+    model: Final = "gpt-4o"
+    messages: Final = [{"role": "user", "content": "Write a long sentence about a fox. " * 30}]
+    text: Final = "The quick brown fox jumps over the lazy dog. " * 20
+    content_chunk: Final = ModelResponseStream(
+        id="chatcmpl-no-usage",
+        created=1741037890,
+        model=model,
+        choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content=text))],
+    )
+    finish_chunk: Final = ModelResponseStream(
+        id="chatcmpl-no-usage",
+        created=1741037890,
+        model=model,
+        choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[content_chunk, finish_chunk] if ends_with_finish_chunk else [content_chunk]
+        ),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=Logging(
+            model=model,
+            messages=messages,
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="no-usage-call",
+            function_id="no-usage-fn",
+        ),
+        stream_options=None,
+    )
+
+    collected: Final = [chunk for chunk in wrapper] if sync_mode else [chunk async for chunk in wrapper]
+
+    expected: Final = (
+        litellm.token_counter(model=model, messages=messages),
+        litellm.token_counter(model=model, text=text, count_response_tokens=True),
+    )
+    assembled: Final = litellm.stream_chunk_builder(chunks=collected, messages=messages)
+    assert assembled is not None
+    assert (assembled.usage.prompt_tokens, assembled.usage.completion_tokens) == expected
+    hidden_usage: Final = collected[-1]._hidden_params["usage"]
+    assert (hidden_usage.prompt_tokens, hidden_usage.completion_tokens) == expected
+
+
 @pytest.mark.asyncio
 async def test_custom_stream_wrapper_aclose():
     """Test that aclose() delegates to the underlying completion_stream's aclose()"""
