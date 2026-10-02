@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use litellm_host_python::{FromPythonCache, ToPythonCache};
 use litellm_http::ClientVariant;
 use litellm_traces::{
-    Config, Error, InsertTable, Parameter, QueryAccessError, QueryReaders, QueryScope, ReadQuery, Shared,
+    Config, Error, InsertTable, Parameter, QueryAccessError, QueryReaders, QueryScope, ReadQuery,
+    Shared,
 };
 use prost::Message;
 use pyo3::{
@@ -59,7 +60,7 @@ fn map_query_access_error(error: QueryAccessError) -> PyErr {
         QueryAccessError::Storage(error) => map_sql_error(error),
         QueryAccessError::InvalidScope => PyValueError::new_err(error.to_string()),
         error => PyRuntimeError::new_err(error.to_string()),
-}
+    }
 }
 
 #[pyclass(frozen)]
@@ -88,7 +89,10 @@ impl NativeTraceStorage {
     #[new]
     fn new(config: PyRef<'_, NativeTraceConfig>) -> PyResult<Self> {
         Ok(Self {
-            query_readers: QueryReaders::new(config.inner.storage().writer().clone(), config.inner.storage().database().to_owned()),
+            query_readers: QueryReaders::new(
+                config.inner.storage().writer().clone(),
+                config.inner.storage().database().to_owned(),
+            ),
             config: config.inner.clone(),
         })
     }

@@ -269,7 +269,7 @@ def test_trace_sql_endpoint_executes_for_admin_and_preserves_clickhouse_envelope
     for _ in range(11):
         recording_server.enqueue(ResponseSpec(body=""))
     recording_server.enqueue(ResponseSpec(body=envelope))
-    storage: Final = ClickHouseStorage("trace_test", recording_server.base_url, recording_server.base_url)
+    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
     app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[provide_trace_query_secret] = lambda: "test-master-secret"
@@ -304,7 +304,7 @@ def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(recording
         {"data": [{"key": "custom.resource"}]},
     ):
         recording_server.enqueue(ResponseSpec(body=response))
-    storage: Final = ClickHouseStorage("trace_test", recording_server.base_url, recording_server.base_url)
+    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
     app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[provide_trace_query_secret] = lambda: "test-master-secret"
@@ -343,7 +343,7 @@ def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
     recording_server.enqueue(ResponseSpec(status=clickhouse_status, body=b"ClickHouse rejected the query"))
     envelope: Final = {"meta": [{"name": "answer", "type": "UInt8"}], "data": [{"answer": 42}], "rows": 1}
     recording_server.enqueue(ResponseSpec(body=envelope))
-    storage: Final = ClickHouseStorage("trace_test", recording_server.base_url, recording_server.base_url)
+    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
     app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[provide_trace_query_secret] = lambda: "test-master-secret"

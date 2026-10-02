@@ -221,7 +221,6 @@ async fn normalized_fields_match_clickhouse_catalog(
         &Connection::writer(&database.url)?,
         "trace_test",
         7,
-        14,
     )
     .await?;
     let catalog = read_json(&database, "SELECT name, type FROM system.columns WHERE database = 'trace_test' AND table = 'otel_traces'").await?;
@@ -1034,7 +1033,7 @@ fn schema_includes_every_migration_file() -> TestResult {
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "sql"))
         .count();
-    assert_eq!(schema_statements("trace_test", 7, 14)?.len(), 1 + files);
+    assert_eq!(schema_statements("trace_test", 7)?.len(), 1 + files);
     Ok(())
 }
 
@@ -1046,7 +1045,7 @@ async fn lens_agent_discovery_and_selection_preserve_scope(
     use litellm_traces::LensQuery;
     let database = database.await?;
     let writer = Connection::writer(&database.url)?;
-    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
     for (team, key, trace, agent, span, parent) in [
         ("alpha", "one", "research", "research_agent", "root", ""),
@@ -1153,7 +1152,7 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
 ) -> TestResult {
     let database = database?;
     let writer = Connection::writer(&database.url)?;
-    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     execute_write(&database, "CREATE USER help_reader").await?;
     for table in ["otel_traces", "agent_traces_by_key", "spend_logs"] {
         execute_write(
@@ -1364,7 +1363,7 @@ async fn query_help_preserves_schema_and_guide_when_discovery_hits_reader_limits
 ) -> TestResult {
     let database = database?;
     let writer = Connection::writer(&database.url)?;
-    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     execute_write(
         &database,
         "CREATE USER help_reader SETTINGS max_rows_to_read = 1",

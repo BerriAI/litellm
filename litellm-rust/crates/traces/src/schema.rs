@@ -22,7 +22,9 @@ pub fn schema_statements(database: &str, retention_days: u32) -> Result<Vec<Stri
     Ok(
         std::iter::once(format!("CREATE DATABASE IF NOT EXISTS {database}"))
             .chain(MIGRATIONS.iter().map(|migration| {
-                migration.sql.replace("{database}", &database)
+                migration
+                    .sql
+                    .replace("{database}", &database)
                     .replace("{retention_days}", &retention_days.to_string())
             }))
             .collect(),

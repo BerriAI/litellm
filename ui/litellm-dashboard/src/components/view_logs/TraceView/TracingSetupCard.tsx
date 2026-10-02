@@ -576,7 +576,7 @@ function EnableTracing({ checked, checking, onCheck }: { checked: boolean; check
     <>
       <Step title="Enable tracing on the proxy">
         <p className="mb-3 text-sm leading-6 text-muted-foreground">
-          Set your ClickHouse writer and read-only reader URLs, add this to config.yaml, then restart the proxy. Ask
+          Set your ClickHouse URL, add this to config.yaml, then restart the proxy. Ask
           your proxy administrator if you don’t manage this deployment.
         </p>
         <CodeBlock code={PROXY_CONFIG_SNIPPET} tabs={<FileLabel>config.yaml</FileLabel>} />
