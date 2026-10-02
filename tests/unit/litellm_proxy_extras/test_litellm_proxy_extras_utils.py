@@ -1029,6 +1029,84 @@ class TestJWTKeyMappingCascade:
 
 
 
+class TestStripPrismaQueryParams:
+    """The psycopg URL the job connects with is derived from the Prisma-dialect
+    DATABASE_URL, whose TLS params mean something else to libpq."""
+
+    @staticmethod
+    def _query(url: str) -> dict[str, str]:
+        from urllib.parse import parse_qsl, urlparse
+
+        return dict(parse_qsl(urlparse(url).query))
+
+    def test_prisma_ca_sslcert_becomes_sslrootcert_with_verify_full(self):
+        url = "postgresql://u:p@writer:5432/db?schema=public&sslmode=require&sslcert=/tmp/pinned.pem&sslaccept=strict"
+
+        cleaned = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {"sslmode": "verify-full", "sslrootcert": "/tmp/pinned.pem"}
+        assert cleaned.startswith("postgresql://u:p@writer:5432/db?")
+
+    @pytest.mark.parametrize("sslmode", ["prefer", "require"])
+    @pytest.mark.parametrize("sslaccept", ["strict", "unknown-mode-prisma-treats-as-strict"])
+    def test_strict_verifies_chain_and_hostname_whatever_sslmode_prisma_was_given(self, sslmode, sslaccept):
+        url = f"postgresql://writer/db?sslmode={sslmode}&sslcert=/certs/ca.pem&sslaccept={sslaccept}"
+
+        cleaned = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {"sslmode": "verify-full", "sslrootcert": "/certs/ca.pem"}
+
+    def test_strict_with_tls_disabled_stays_off(self):
+        url = "postgresql://writer/db?sslmode=disable&sslcert=/certs/ca.pem&sslaccept=strict"
+
+        cleaned = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {"sslmode": "disable"}
+
+    @pytest.mark.parametrize("sslaccept", ["&sslaccept=accept_invalid_certs", ""])
+    def test_without_strict_the_ca_is_dropped_so_libpq_checks_nothing_like_prisma(self, sslaccept):
+        url = f"postgresql://writer/db?sslmode=require&sslcert=/certs/ca.pem{sslaccept}"
+
+        cleaned = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {"sslmode": "require"}
+
+    def test_a_ca_alone_without_strict_or_sslmode_leaves_libpq_its_defaults(self):
+        cleaned = ProxyExtrasDBManager._strip_prisma_query_params("postgresql://writer/db?sslcert=/certs/ca.pem")
+
+        assert cleaned == "postgresql://writer/db"
+
+    def test_a_libpq_client_certificate_pair_is_left_alone(self):
+        url = "postgresql://writer/db?sslmode=verify-full&sslrootcert=/ca.pem&sslcert=/client.crt&sslkey=/client.key"
+
+        cleaned = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {
+            "sslmode": "verify-full",
+            "sslrootcert": "/ca.pem",
+            "sslcert": "/client.crt",
+            "sslkey": "/client.key",
+        }
+
+    def test_an_explicit_sslrootcert_wins_over_the_prisma_sslcert(self):
+        url = "postgresql://writer/db?sslmode=require&sslrootcert=/ca.pem&sslcert=/pinned.pem&sslaccept=strict"
+
+        cleaned = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {"sslmode": "verify-full", "sslrootcert": "/ca.pem"}
+
+    def test_prisma_only_params_are_dropped_and_plain_urls_pass_through(self):
+        url = "postgresql://u:p@pooler:6543/db?schema=tenant&pgbouncer=true&connection_limit=5&connect_timeout=3"
+
+        cleaned = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert cleaned == "postgresql://u:p@pooler:6543/db?connect_timeout=3"
+        assert (
+            ProxyExtrasDBManager._strip_prisma_query_params("postgresql://u:p@writer/db")
+            == "postgresql://u:p@writer/db"
+        )
+
+
 class TestBuildRequestLogIndexes:
     """The migration job hands the index build the direct database URL and the schema
     the migrations target, waits for it, and reports its result."""
