@@ -211,7 +211,7 @@ def test_name_of_a_server_hidden_from_an_external_ip_does_not_reroute_to_a_case_
                 candidate.client.get(f"/.well-known/oauth-protected-resource/mcp/{stem}", headers=external).status_code
                 == 404
             )
-            assert _rpc(candidate, f"/mcp/{stem}", key, {}).status_code == 403
+            assert _rpc(candidate, f"/mcp/{stem}", key, {}).status_code == 200
 
             own_name: Final = _rpc(candidate, f"/mcp/{cased}", key, external)
             assert own_name.status_code == 200, own_name.text

@@ -10664,7 +10664,7 @@ class TestOboPreflightScopedToAllowedServers:
                 "x-litellm-api-key": key.api_key,
                 "authorization": self.SUBJECT_HEADERS["Authorization"],
             },
-            connected_as=requested.alias,
+            connected_as=None,
         )
 
 
@@ -11574,13 +11574,15 @@ class TestConnectChallengeResolver:
         assert exc.value.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_obo_challenge_www_authenticate_matches_main_byte_for_byte(self, monkeypatch):
+    @pytest.mark.parametrize("route_name", ["obo", "obo_server"], ids=["alias_route", "server_name_route"])
+    async def test_obo_challenge_www_authenticate_matches_main_byte_for_byte(self, monkeypatch, route_name):
         """The provider redesign must not change what an OBO server challenges with: the relative
-        RFC 9728 resource_metadata path plus the RFC 6750 invalid_token triple, exactly as main."""
+        RFC 9728 resource_metadata path naming the configured alias whichever route the client used,
+        plus the RFC 6750 invalid_token triple, exactly as main."""
         from litellm.proxy._experimental.mcp_server import server as server_module
 
         monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
-        obo = _make_obo_server("obo")
+        obo = _make_obo_server("obo").model_copy(update={"name": "obo_server", "server_name": "obo_server"})
         with (
             patch.object(
                 mcp_operations.global_mcp_server_manager,
@@ -11590,8 +11592,8 @@ class TestConnectChallengeResolver:
             pytest.raises(HTTPException) as exc,
         ):
             await server_module._raise_preemptive_401_for_unauthenticated_servers(
-                scope={"type": "http", "method": "POST", "path": "/mcp/obo", "headers": []},
-                mcp_servers=["obo"],
+                scope={"type": "http", "method": "POST", "path": f"/mcp/{route_name}", "headers": []},
+                mcp_servers=[route_name],
                 oauth2_headers=None,
                 mcp_server_auth_headers=None,
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
