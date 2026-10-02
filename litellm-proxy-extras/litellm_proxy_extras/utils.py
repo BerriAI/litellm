@@ -697,6 +697,9 @@ class ProxyExtrasDBManager:
         if not parsed.query:
             return url
         libpq_params = {
+            "host",
+            "hostaddr",
+            "port",
             "sslmode",
             "sslcert",
             "sslkey",
