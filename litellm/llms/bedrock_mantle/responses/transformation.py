@@ -132,7 +132,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
                 list(dropped_types),
                 sorted(_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES),
             )
-        stripped = strip_unsupported_web_search_tool_fields(kept)
+        stripped: Final = strip_unsupported_web_search_tool_fields(kept)
         if isinstance(stripped, list):
             return stripped
         return [*kept]  # mutable-ok: inherited filter return type is list[object]
