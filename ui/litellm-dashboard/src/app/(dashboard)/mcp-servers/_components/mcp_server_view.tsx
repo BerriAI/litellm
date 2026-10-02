@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-import { MCPServer, handleTransport, handleAuth } from "@/components/mcp_tools/types";
+import { MCPServer, TRANSPORT, handleTransport, handleAuth } from "@/components/mcp_tools/types";
 // TODO: Move Tools viewer from index file
 import { MCPToolsViewer } from ".";
 import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
@@ -15,6 +15,7 @@ import { MCPServerUserCredentialsPanel } from "./MCPServerUserCredentialsPanel";
 import { getSecureItem } from "@/utils/secureStorage";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import MCPServerCostDisplay from "./mcp_server_cost_display";
+import { StdioDisabledBanner } from "./StdioAvailability";
 import { getMaskedAndFullUrl, getMCPNetworkAccess } from "./utils";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
@@ -31,6 +32,7 @@ interface MCPServerViewProps {
   availableAccessGroups: string[];
   existingServers?: MCPServer[];
   initialTabIndex?: number;
+  stdioEnabled?: boolean;
 }
 
 // True when this render is the return from the edit-settings OAuth redirect for this
@@ -63,6 +65,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   availableAccessGroups,
   existingServers,
   initialTabIndex = 0,
+  stdioEnabled = true,
 }) => {
   // Open the editing Settings tab on first render when returning from the edit OAuth
   // redirect, so the "token fetched" feedback shows where the user left off (Settings=2).
@@ -74,6 +77,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   const networkAccess = getMCPNetworkAccess(mcpServer);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialTabIndex);
+  const editFormShowsStdioBanner = selectedTabIndex === 2 && editing && canEdit;
+  const showStdioBanner = mcpServer.transport === TRANSPORT.STDIO && !stdioEnabled && !editFormShowsStdioBanner;
   const canViewUserCredentials = userRole !== null && isProxyAdminTierRole(userRole);
   const canRevokeUserCredentials = userRole !== null && isProxyAdminRole(userRole) && !isViewOnly;
 
@@ -143,6 +148,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         </div>
         {mcpServer.description && <p className="mt-2 text-sm text-muted-foreground">{mcpServer.description}</p>}
       </div>
+
+      {showStdioBanner && <StdioDisabledBanner />}
 
       <Tabs value={String(selectedTabIndex)} onValueChange={(v: unknown) => setSelectedTabIndex(Number(v))}>
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
@@ -253,6 +260,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                 onSuccess={handleSuccess}
                 availableAccessGroups={availableAccessGroups}
                 existingServers={existingServers}
+                stdioEnabled={stdioEnabled}
               />
             ) : (
               <div className="divide-y divide-border">

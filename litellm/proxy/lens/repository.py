@@ -1,11 +1,12 @@
-from collections.abc import Awaitable, Callable
+import json
+from collections.abc import AsyncIterator, Awaitable, Callable
 from types import MappingProxyType
 from typing import Final, Protocol
 
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from litellm.proxy.db.prisma_client import PrismaWrapper
-from litellm.proxy.lens.models import Job, Lens, Worker
+from litellm.proxy.lens.models import Job, Lens, Scope, Worker
 
 
 class Database(Protocol):
@@ -116,6 +117,33 @@ class LensRepository:
     async def workers(self) -> tuple[Worker, ...]:
         rows: Final = _ROWS.validate_python(await self.db.query_raw('SELECT data FROM "LiteLLM_LensWorker"'))
         return tuple(Worker.model_validate(row.data) for row in rows)
+
+    async def eligible_workers(self, scope: Scope) -> AsyncIterator[Worker]:
+        scoped: Final = (
+            {"all_teams": True}
+            if scope.all_teams
+            else {"team_id": scope.team_id}
+            if scope.team_id
+            else {"team_id": "", "api_key_hash": scope.api_key_hash}
+        )
+        cursor = ""  # rebind-ok: advance the keyset cursor after each bounded page
+        while True:
+            rows = _ROWS.validate_python(
+                await self.db.query_raw(
+                    """SELECT data FROM "LiteLLM_LensWorker"
+                    WHERE data @> '{"revoked": false}'::jsonb AND id > $1
+                    AND (data->'scope' @> '{"all_teams": true}'::jsonb OR data->'scope' @> $2::jsonb)
+                    ORDER BY id LIMIT 50""",
+                    cursor,
+                    json.dumps(scoped),
+                )
+            )
+            workers = tuple(Worker.model_validate(row.data) for row in rows)
+            for worker in workers:
+                yield worker
+            if len(workers) < 50:
+                return
+            cursor = workers[-1].id
 
     async def worker(self, token_hash: str) -> Worker | None:
         rows: Final = _ROWS.validate_python(

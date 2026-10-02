@@ -116,7 +116,8 @@ describe("AgentTracesSection", () => {
 
     const card = await screen.findByTestId("tracing-setup-card");
     expect(card).toHaveTextContent("Tracing is not enabled");
-    expect(card).toHaveTextContent("store: clickhouse");
+    expect(card).toHaveTextContent("type: clickhouse");
+    expect(card).toHaveTextContent("url: os.environ/CLICKHOUSE_URL");
     expect(screen.getByRole("button", { name: "Check setup" })).toBeEnabled();
     expect(card).not.toHaveTextContent(/langsmith/i);
     expect(card).toHaveTextContent("ClickHouse and proxy setup");
@@ -225,7 +226,7 @@ describe("AgentTracesSection", () => {
 
     const card = await screen.findByTestId("tracing-setup-card");
     expect(card).toHaveTextContent("Tracing is not enabled");
-    expect(card).toHaveTextContent("CLICKHOUSE_READER_URL");
+    expect(card).toHaveTextContent("url: os.environ/CLICKHOUSE_URL");
   });
 
   it("lists every run with its input, counts and failed column", async () => {
@@ -270,10 +271,13 @@ describe("AgentTracesSection", () => {
     expect(rows[0]).toHaveTextContent("Should we store OTEL agent spans");
   });
 
-  it("labels the OTEL service as the agent and filters runs by it", async () => {
+  it("uses recorded agent names for the column and filter even when services are shared", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({
       ...(traceList as TracePage),
-      data: [...runs.slice(1), { ...runs[0], service: "billing-agent" }],
+      data: [
+        ...runs.slice(1).map((run) => ({ ...run, service: "shared-app", agent_names: ["research-agent"] })),
+        { ...runs[0], service: "shared-app", agent_names: ["billing-agent", "review-agent"] },
+      ],
     });
     const user = userEvent.setup();
     renderSection();
@@ -287,9 +291,37 @@ describe("AgentTracesSection", () => {
     const rows = screen.getAllByTestId("agent-trace-row");
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent("billing-agent");
+    expect(rows[0]).not.toHaveTextContent("shared-app");
+
+    await chooseSelectOption(user, agentFilter, "review-agent");
+    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(1);
 
     await chooseSelectOption(user, agentFilter, "All agents");
     expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
+  });
+
+  it("shows each run's agent name with the logo of the SDK that produced it", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue({
+      ...(traceList as TracePage),
+      data: [
+        { ...runs[0], agent_names: ["research-bot"], frameworks: ["claude-agent-sdk", "claude-code"] },
+        { ...runs[1], agent_names: [], frameworks: ["claude-code"] },
+        { ...runs[2], frameworks: [] },
+      ],
+    });
+    renderSection();
+    const [sdkRun, cliRun, plainRun] = await screen.findAllByTestId("agent-trace-row");
+    const agentCell = (row: HTMLElement) => within(row).getAllByRole("cell")[1];
+
+    expect(agentCell(sdkRun)).toHaveTextContent(/^research-bot$/);
+    expect(agentCell(sdkRun)).toHaveAttribute("title", "research-bot · Claude Agent SDK");
+    expect(within(sdkRun).getByRole("img", { name: "Claude Agent SDK logo", hidden: true })).toHaveAttribute(
+      "src",
+      expect.stringContaining("anthropic.svg"),
+    );
+    expect(agentCell(cliRun)).toHaveTextContent(/^Claude Code$/);
+    expect(within(plainRun).queryByRole("img", { hidden: true })).not.toBeInTheDocument();
+    expect(agentCell(plainRun)).toHaveTextContent((runs[2].agent_names ?? [runs[2].service]).join(", "));
   });
 
   it("status filter 'Failed' keeps only runs with errors", () => {

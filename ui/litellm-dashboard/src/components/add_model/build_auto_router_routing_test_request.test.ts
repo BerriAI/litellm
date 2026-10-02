@@ -33,20 +33,20 @@ describe("buildAutoRouterRoutingTestRequest", () => {
     const expectedRequest = {
       prompt: JEV_CONNECTION_TEST_PROMPT,
       complexity_router_config: {
-        classifier_type: "jev",
+        classifier_type: "oss_classifier",
         tiers: CONFIG.tiers,
-        jev_classifier_config: defaultJevClassifierConfig(),
+        opensource_classifier_config: defaultJevClassifierConfig(),
       },
       saved_model_id: "saved-id",
     };
     expect(request).toEqual(expectedRequest);
-    expect(request?.complexity_router_config.jev_classifier_config).not.toHaveProperty("api_key");
-    expect(request?.complexity_router_config.jev_classifier_config).not.toHaveProperty("api_base");
+    expect(request?.complexity_router_config.opensource_classifier_config).not.toHaveProperty("api_key");
+    expect(request?.complexity_router_config.opensource_classifier_config).not.toHaveProperty("api_base");
   });
-  it.each(["object", "json"])("probes saved JEV %s configuration with custom tiers and team context", (format) => {
+  it.each(["object", "json"])("probes saved Laya %s configuration with custom tiers and team context", (format) => {
     const config = {
-      classifier_type: "jev",
-      jev_classifier_config: { model: "jev-test", timeout_ms: 900 },
+      classifier_type: "oss_classifier",
+      opensource_classifier_config: { provider: "laya", model: "english", timeout_ms: 900 },
       tiers: { QUICK: ["fast"], DEEP: ["strong"] },
       tier_definitions: { QUICK: "Simple questions", DEEP: "Complex questions" },
       fallback_tier: "DEEP",
