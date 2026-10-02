@@ -6,9 +6,10 @@ import os
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import chain, count
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, TypeVar, cast
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 import litellm
 from litellm import Router
@@ -54,6 +55,7 @@ from .guardrail_hooks.llm_as_a_judge import (
     initialize_guardrail as initialize_llm_as_a_judge,
 )
 from .guardrail_initializers import (
+    _configured_event_hooks,
     initialize_bedrock,
     initialize_hide_secrets,
     initialize_lakera,
@@ -436,9 +438,46 @@ def _as_callback_tuple(
     return (initialized,)
 
 
-def _configure_callback_scoping(
+def _logging_only_scope_error(
     custom_guardrail_callback: CustomGuardrail, guardrail_name: str, litellm_params: LitellmParams
+) -> str | None:
+    logging_only_scope: Final = litellm_params.logging_only_scope
+    if logging_only_scope is not None and GuardrailEventHooks.logging_only.value not in _configured_event_hooks(
+        litellm_params.mode
+    ):
+        return (
+            f"Guardrail {guardrail_name}: logging_only_scope is set, but mode does not include logging_only, "
+            "so it would never apply. Add logging_only to mode or remove logging_only_scope."
+        )
+    if logging_only_scope in ("input", "output") and not custom_guardrail_callback.supports_logging_only_scope():
+        return (
+            f"Guardrail {guardrail_name}: logging_only_scope={logging_only_scope!r} is not supported by this "
+            "guardrail, whose logging_only hook scans on its own. Remove logging_only_scope."
+        )
+    return None
+
+
+def _configure_callback_scoping(
+    custom_guardrail_callback: CustomGuardrail,
+    guardrail_name: str,
+    litellm_params: LitellmParams,
+    *,
+    reject_invalid_logging_only_scope: bool = False,
 ) -> None:
+    logging_only_scope: Final = litellm_params.logging_only_scope
+    logging_only_scope_error: Final = _logging_only_scope_error(
+        custom_guardrail_callback, guardrail_name, litellm_params
+    )
+    if logging_only_scope_error is not None:
+        if reject_invalid_logging_only_scope:
+            raise ValueError(logging_only_scope_error)
+        verbose_proxy_logger.error(
+            "%s Ignoring logging_only_scope; the guardrail keeps its configured mode.",
+            logging_only_scope_error.replace("\r", "").replace("\n", ""),
+        )
+        custom_guardrail_callback.logging_only_scope = None
+    else:
+        custom_guardrail_callback.logging_only_scope = logging_only_scope
     for scoping_param in (
         "skip_system_message_in_guardrail",
         "skip_tool_message_in_guardrail",
@@ -459,6 +498,28 @@ def _configure_callback_scoping(
             "scanning, so no request content would ever be scanned. Remove one of the two."
         )
     _apply_configured_bool_overrides(custom_guardrail_callback, litellm_params)
+
+
+_ParamsT = TypeVar("_ParamsT", bound=BaseModel)
+
+
+def parse_tolerant_litellm_params(
+    litellm_params_data: Mapping[str, object],
+    guardrail_name: str,
+    params_model: type[_ParamsT] = LitellmParams,
+) -> _ParamsT:
+    try:
+        return params_model(**litellm_params_data)
+    except ValidationError as validation_error:
+        if any(tuple(error["loc"]) != ("logging_only_scope",) for error in validation_error.errors()):
+            raise
+        verbose_proxy_logger.error(
+            "Guardrail %s: logging_only_scope=%r is not one of 'input', 'output' or 'both'. "
+            "Ignoring logging_only_scope; the guardrail keeps its configured mode.",
+            guardrail_name.replace("\r", "").replace("\n", ""),
+            str(litellm_params_data.get("logging_only_scope")).replace("\r", "").replace("\n", "")[:100],
+        )
+        return params_model(**MappingProxyType({**litellm_params_data, "logging_only_scope": None}))
 
 
 class InMemoryGuardrailHandler:
@@ -497,6 +558,8 @@ class InMemoryGuardrailHandler:
         config_file_path: str | None = None,
         llm_router: Optional["Router"] = None,
         source: Literal["db", "config"] = "config",
+        *,
+        reject_invalid_logging_only_scope: bool = False,
     ) -> Guardrail | None:
         """
         Initialize a guardrail from a dictionary and add it to the litellm callback manager
@@ -517,7 +580,10 @@ class InMemoryGuardrailHandler:
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
         if isinstance(litellm_params_data, dict):
-            litellm_params = LitellmParams(**litellm_params_data)
+            if reject_invalid_logging_only_scope:
+                litellm_params = LitellmParams(**litellm_params_data)
+            else:
+                litellm_params = parse_tolerant_litellm_params(litellm_params_data, guardrail["guardrail_name"])
         else:
             litellm_params = litellm_params_data
 
@@ -543,8 +609,18 @@ class InMemoryGuardrailHandler:
             config_file_path=config_file_path,
             llm_router=llm_router,
         )
-        for custom_guardrail_callback in created_callbacks:
-            _configure_callback_scoping(custom_guardrail_callback, guardrail["guardrail_name"], litellm_params)
+        try:
+            for custom_guardrail_callback in created_callbacks:
+                _configure_callback_scoping(
+                    custom_guardrail_callback,
+                    guardrail["guardrail_name"],
+                    litellm_params,
+                    reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
+                )
+        except Exception:
+            for custom_guardrail_callback in created_callbacks:
+                litellm.logging_callback_manager.remove_callback_from_all_lists(custom_guardrail_callback)
+            raise
 
         parsed_guardrail: Final = Guardrail(
             guardrail_id=guardrail.get("guardrail_id"),
@@ -652,6 +728,8 @@ class InMemoryGuardrailHandler:
         guardrail_id: str,
         guardrail: Guardrail,
         source: Literal["db", "config"] = "db",
+        *,
+        reject_invalid_logging_only_scope: bool = False,
     ) -> None:
         """
         Update a guardrail in memory: a changed name or litellm_params rebuilds the
@@ -659,8 +737,12 @@ class InMemoryGuardrailHandler:
         previous instance and raises), anything else only refreshes the stored row
         """
         updated_guardrail: Final = cast(Guardrail, {**guardrail, "guardrail_id": guardrail_id})
-        if self._has_guardrail_params_changed(guardrail_id, updated_guardrail):
-            self.reinitialize_guardrail(guardrail=updated_guardrail, source=source)
+        if reject_invalid_logging_only_scope or self._has_guardrail_params_changed(guardrail_id, updated_guardrail):
+            self.reinitialize_guardrail(
+                guardrail=updated_guardrail,
+                source=source,
+                reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
+            )
             return
         self.IN_MEMORY_GUARDRAILS[guardrail_id] = updated_guardrail
         self._sources[guardrail_id] = source
@@ -747,6 +829,7 @@ class InMemoryGuardrailHandler:
     @staticmethod
     def _normalize_litellm_params_for_comparison(
         params: LitellmParams | Mapping[str, object] | None,
+        guardrail_name: str,
     ) -> Mapping[str, object] | None:
         """
         Render litellm_params to a canonical dict so an in-memory LitellmParams and
@@ -763,7 +846,7 @@ class InMemoryGuardrailHandler:
             return params.model_dump()
         if isinstance(params, dict):
             try:
-                return LitellmParams(**params).model_dump()
+                return parse_tolerant_litellm_params(params, guardrail_name).model_dump()
             except ValidationError as e:
                 verbose_proxy_logger.warning(
                     "Could not normalize guardrail litellm_params for comparison; treating the guardrail as changed. Error: %s",
@@ -786,8 +869,12 @@ class InMemoryGuardrailHandler:
             return True
 
         # Compare litellm_params
-        existing_dict: Final = self._normalize_litellm_params_for_comparison(existing.get("litellm_params"))
-        new_dict: Final = self._normalize_litellm_params_for_comparison(new_guardrail.get("litellm_params"))
+        existing_dict: Final = self._normalize_litellm_params_for_comparison(
+            existing.get("litellm_params"), existing.get("guardrail_name", "Unknown")
+        )
+        new_dict: Final = self._normalize_litellm_params_for_comparison(
+            new_guardrail.get("litellm_params"), new_guardrail.get("guardrail_name", "Unknown")
+        )
 
         # Compare and identify specific differences
         changed_fields = {}
@@ -813,6 +900,8 @@ class InMemoryGuardrailHandler:
         guardrail: Guardrail,
         config_file_path: str | None = None,
         source: Literal["db", "config"] = "config",
+        *,
+        reject_invalid_logging_only_scope: bool = False,
     ) -> Guardrail | None:
         """
         Force re-initialization of a guardrail even if it exists in memory.
@@ -842,7 +931,12 @@ class InMemoryGuardrailHandler:
         # instance instead of leaving the guardrail silently removed: a guardrail
         # that was enforcing must never fail open because an update was bad.
         try:
-            return self.initialize_guardrail(guardrail=guardrail, config_file_path=config_file_path, source=source)
+            return self.initialize_guardrail(
+                guardrail=guardrail,
+                config_file_path=config_file_path,
+                source=source,
+                reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
+            )
         except Exception as init_error:
             if previous_guardrail is not None:
                 verbose_proxy_logger.exception(
@@ -857,7 +951,13 @@ class InMemoryGuardrailHandler:
                     verbose_proxy_logger.exception("Restoring previous guardrail %s also failed", guardrail_id)
             raise ValueError(f"Guardrail initialization failed: {init_error}") from init_error
 
-    def sync_guardrail_from_db(self, guardrail: Guardrail, config_file_path: str | None = None) -> Guardrail | None:
+    def sync_guardrail_from_db(
+        self,
+        guardrail: Guardrail,
+        config_file_path: str | None = None,
+        *,
+        reject_invalid_logging_only_scope: bool = False,
+    ) -> Guardrail | None:
         """
         Sync a guardrail from DB - initializes if new, re-initializes if changed.
         This is the method to call during DB polling.
@@ -867,7 +967,7 @@ class InMemoryGuardrailHandler:
             verbose_proxy_logger.error("Cannot sync guardrail without guardrail_id")
             return None
 
-        if self._has_guardrail_params_changed(guardrail_id, guardrail):
+        if reject_invalid_logging_only_scope or self._has_guardrail_params_changed(guardrail_id, guardrail):
             guardrail_name: Final = guardrail.get("guardrail_name", "Unknown")
             verbose_proxy_logger.info(
                 "Guardrail '%s' (ID: %s) params changed, re-initializing...", guardrail_name, guardrail_id
@@ -876,6 +976,7 @@ class InMemoryGuardrailHandler:
                 guardrail=guardrail,
                 config_file_path=config_file_path,
                 source="db",
+                reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
             )
 
         # Params unchanged but the entry is still DB-backed; make sure the

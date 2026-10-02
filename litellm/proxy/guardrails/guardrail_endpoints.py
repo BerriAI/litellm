@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union,
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -33,7 +33,11 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
     build_sandbox_globals,
     compile_sandboxed,
 )
-from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
+from litellm.proxy.guardrails.guardrail_registry import (
+    GuardrailRegistry,
+    _configured_event_hooks,
+    parse_tolerant_litellm_params,
+)
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.repositories.prisma_protocols import TableActions
@@ -266,7 +270,13 @@ async def list_guardrails_v2(
                 number_of_asterisks=4,
             )
             masked_litellm_params = (
-                BaseLitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
+                parse_tolerant_litellm_params(
+                    masked_litellm_params_dict,
+                    guardrail.get("guardrail_name") or "Unknown",
+                    params_model=BaseLitellmParams,
+                )
+                if masked_litellm_params_dict
+                else None
             )
             guardrail_configs.append(
                 GuardrailInfoResponse(
@@ -307,7 +317,13 @@ async def list_guardrails_v2(
                 number_of_asterisks=4,
             )
             masked_in_memory_litellm_params_typed = (
-                BaseLitellmParams(**masked_in_memory_litellm_params) if masked_in_memory_litellm_params else None
+                parse_tolerant_litellm_params(
+                    masked_in_memory_litellm_params,
+                    guardrail.get("guardrail_name") or "Unknown",
+                    params_model=BaseLitellmParams,
+                )
+                if masked_in_memory_litellm_params
+                else None
             )
             guardrail_configs.append(
                 GuardrailInfoResponse(
@@ -404,7 +420,11 @@ async def create_guardrail(
         guardrail_id: Final = result.get("guardrail_id", "Unknown")
 
         try:
-            IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(guardrail=cast(Guardrail, result), source="db")
+            IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
+                guardrail=cast(Guardrail, result),
+                source="db",
+                reject_invalid_logging_only_scope=True,
+            )
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully initialized guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
@@ -527,7 +547,10 @@ async def update_guardrail(
         guardrail_name: Final = result.get("guardrail_name", "Unknown")
 
         try:
-            IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(guardrail=cast(Guardrail, result))
+            IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
+                guardrail=cast(Guardrail, result),
+                reject_invalid_logging_only_scope=True,
+            )
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
@@ -1206,19 +1229,35 @@ async def patch_guardrail(
 
         # Update litellm_params if default_on is provided or pii_entities_config is provided
         existing_litellm_params: Final = _as_str_object_mapping(dict(existing_guardrail.get("litellm_params", {})))
-        litellm_params = LitellmParams(**existing_litellm_params)
-        if request.litellm_params is not None:
-            requested_litellm_params: Final = request.litellm_params.model_dump(exclude_unset=True)
-            litellm_params_dict: Final = litellm_params.model_dump(exclude_unset=True)
-            litellm_params_dict.update(requested_litellm_params)
-            merged_litellm_params: Final = _as_str_object_mapping(litellm_params_dict)
-            try:
-                litellm_params = LitellmParams(**merged_litellm_params)
-            except ValidationError as validation_error:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Invalid guardrail configuration, update rejected: {validation_error}",
-                ) from validation_error
+        current_litellm_params: Final = parse_tolerant_litellm_params(
+            existing_litellm_params,
+            existing_guardrail.get("guardrail_name") or "Unknown",
+        )
+        requested_litellm_params: Final[Mapping[str, object]] = (
+            MappingProxyType(request.litellm_params.model_dump(exclude_unset=True))
+            if request.litellm_params is not None
+            else MappingProxyType({})
+        )
+        merged_litellm_params: Final = _as_str_object_mapping(
+            MappingProxyType({**current_litellm_params.model_dump(exclude_unset=True), **requested_litellm_params})
+        )
+        try:
+            parsed_litellm_params: Final = LitellmParams(**merged_litellm_params)
+        except ValidationError as validation_error:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid guardrail configuration, update rejected: {validation_error}",
+            ) from validation_error
+        clear_stored_scope: Final = (
+            "logging_only_scope" not in requested_litellm_params
+            and parsed_litellm_params.logging_only_scope is not None
+            and GuardrailEventHooks.logging_only.value not in _configured_event_hooks(parsed_litellm_params.mode)
+        )
+        litellm_params: Final = (
+            LitellmParams(**MappingProxyType({**merged_litellm_params, "logging_only_scope": None}))
+            if clear_stored_scope
+            else parsed_litellm_params
+        )
 
         # Update guardrail_info if provided
         guardrail_info: Final = (
@@ -1247,6 +1286,7 @@ async def patch_guardrail(
         try:
             IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                 guardrail=guardrail,
+                reject_invalid_logging_only_scope="logging_only_scope" in requested_litellm_params,
             )
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
@@ -1260,15 +1300,7 @@ async def patch_guardrail(
             # the caller instead of a misleading 200.
             await GUARDRAIL_REGISTRY.update_guardrail_in_db(
                 guardrail_id=guardrail_id,
-                guardrail=Guardrail(
-                    guardrail_id=guardrail_id,
-                    guardrail_name=existing_guardrail.get("guardrail_name") or "",
-                    litellm_params=LitellmParams(**existing_litellm_params),
-                    guardrail_info=existing_guardrail.get(
-                        "guardrail_info",
-                        {},
-                    ),
-                ),
+                guardrail=existing_guardrail,
                 prisma_client=prisma_client,
             )
             raise HTTPException(
@@ -1369,7 +1401,15 @@ async def get_guardrail_info(guardrail_id: str):
             unmasked_length=4,
             number_of_asterisks=4,
         )
-        masked_litellm_params = BaseLitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
+        masked_litellm_params = (
+            parse_tolerant_litellm_params(
+                masked_litellm_params_dict,
+                result.get("guardrail_name") or "Unknown",
+                params_model=BaseLitellmParams,
+            )
+            if masked_litellm_params_dict
+            else None
+        )
 
         return GuardrailInfoResponse(
             guardrail_id=result.get("guardrail_id"),
@@ -1391,7 +1431,7 @@ async def get_guardrail_info(guardrail_id: str):
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_guardrail_ui_settings():
+async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
     """
     Get the UI settings for the guardrails
 
@@ -1425,12 +1465,20 @@ async def get_guardrail_ui_settings():
         # above; it only runs on pre_call.
         {SupportedGuardrailIntegrations.HIDE_SECRETS.value: [GuardrailEventHooks.pre_call.value]}
     )
+    providers_without_directional_logging_only_scope: Final = TypeAdapter(list[str]).validate_python(
+        tuple(
+            provider
+            for provider, guardrail_class in guardrail_class_registry.items()
+            if not guardrail_class.supports_logging_only_scope()
+        )
+    )
 
     return GuardrailUIAddGuardrailSettings(
         supported_entities=[entity.value for entity in PiiEntityType],
         supported_actions=[action.value for action in PiiAction],
         supported_modes=[mode.value for mode in GuardrailEventHooks],
         supported_modes_by_provider=supported_modes_by_provider,
+        providers_without_directional_logging_only_scope=providers_without_directional_logging_only_scope,
         pii_entity_categories=category_maps,
         content_filter_settings={
             "prebuilt_patterns": get_pattern_metadata(),
