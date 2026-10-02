@@ -145,11 +145,11 @@ def _route_level_dependencies(app: FastAPI, path: str) -> list[object]:
     return [dep.dependency for dep in chain.from_iterable(route.dependencies for route in matching)]
 
 
-def _is_proxy_only_error(proxy_logging: ProxyLogging, original_exception: Exception, route: str) -> bool:
-    return proxy_logging._is_proxy_only_llm_api_error(  # pyright: ignore[reportPrivateUsage]  # asserts the failure-spend gate
-        original_exception=original_exception,
-        route=route,
+def _is_proxy_only_error(proxy_log: ProxyLogging, original_exception: Exception, route: str) -> bool:
+    is_proxy_only: Final = (
+        proxy_log._is_proxy_only_llm_api_error  # pyright: ignore[reportPrivateUsage]  # only observable as a DB row
     )
+    return is_proxy_only(original_exception=original_exception, route=route)
 
 
 _CONFIG_OMITTED: Final = {
@@ -184,8 +184,22 @@ _DB_AUTH_FALSE: Final = PassThroughGenericEndpoint(
 @pytest.mark.parametrize(
     ("endpoint", "endpoint_id", "path", "enforced", "route"),
     [
-        pytest.param(_CONFIG_OMITTED, "cfg-omitted", "/cfg-omitted-pt", True, "/cfg-omitted-pt", id="config-omitted-exact"),
-        pytest.param(_CONFIG_OMITTED, "cfg-omitted", "/cfg-omitted-pt", True, "/cfg-omitted-pt/sub", id="config-omitted-sub"),
+        pytest.param(
+            _CONFIG_OMITTED,
+            "cfg-omitted",
+            "/cfg-omitted-pt",
+            True,
+            "/cfg-omitted-pt",
+            id="config-omitted-exact",
+        ),
+        pytest.param(
+            _CONFIG_OMITTED,
+            "cfg-omitted",
+            "/cfg-omitted-pt",
+            True,
+            "/cfg-omitted-pt/sub",
+            id="config-omitted-sub",
+        ),
         pytest.param(
             _CONFIG_AUTH_FALSE,
             "cfg-authfalse",
@@ -204,7 +218,14 @@ _DB_AUTH_FALSE: Final = PassThroughGenericEndpoint(
         ),
         pytest.param(_DB_DEFAULT, "db-default", "/db-default-pt", True, "/db-default-pt", id="db-default-exact"),
         pytest.param(_DB_DEFAULT, "db-default", "/db-default-pt", True, "/db-default-pt/sub", id="db-default-sub"),
-        pytest.param(_DB_AUTH_FALSE, "db-authfalse", "/db-authfalse-pt", False, "/db-authfalse-pt", id="db-authfalse-exact"),
+        pytest.param(
+            _DB_AUTH_FALSE,
+            "db-authfalse",
+            "/db-authfalse-pt",
+            False,
+            "/db-authfalse-pt",
+            id="db-authfalse-exact",
+        ),
         pytest.param(
             _DB_AUTH_FALSE,
             "db-authfalse",
