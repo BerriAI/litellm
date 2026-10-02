@@ -1460,7 +1460,7 @@ def completion_cost(
 
         potential_model_names: Final = sorted(
             (selected_model, _get_response_model(completion_response), *((model,) if model is not None else ())),
-            key=lambda candidate: _prices_only_via_capability_rule(candidate, custom_llm_provider),
+            key=lambda candidate: _prices_only_via_capability_rule(candidate, cast(str | None, custom_llm_provider)),
         )
 
         for idx, model in enumerate(potential_model_names):
@@ -1476,7 +1476,7 @@ def completion_cost(
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(usage_obj=usage_obj):
-                        _usage_for_dump = cast(BaseModel, usage_obj)
+                        _usage_for_dump = usage_obj
                         setattr(
                             completion_response,
                             "usage",
@@ -1485,7 +1485,7 @@ def completion_cost(
                     if usage_obj is None:
                         _usage = {}
                     elif isinstance(usage_obj, BaseModel):
-                        _usage = cast(BaseModel, usage_obj).model_dump()
+                        _usage = usage_obj.model_dump()
                     else:
                         _usage = usage_obj
 
