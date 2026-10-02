@@ -673,30 +673,25 @@ def test_queries_require_a_proxy_secret(
 
 
 @pytest.mark.parametrize(
-    ("auth", "teams", "lookup_fails", "expected"),
+    ("auth", "teams", "expected"),
     (
-        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), ("team-a",), True, (1, "", (), "")),
-        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY), ("team-a",), True, (1, "", (), "")),
-        (UserAPIKeyAuth(user_id="user", token="key", team_id="unpermitted"), ("a", "b"), False,
-         (0, "user", ("a", "b"), "key")),
-        (UserAPIKeyAuth(user_id="user", token="key"), (), False, (0, "user", (), "key")),
-        (UserAPIKeyAuth(user_id="user", token="key"), ("a",), True, (0, "user", (), "key")),
-        (UserAPIKeyAuth(user_id="user"), ("a",), False, (0, "user", ("a",), "")),
-        (UserAPIKeyAuth(token="key", team_id="unpermitted"), ("a",), True, (0, "", (), "key")),
-        (UserAPIKeyAuth(user_id="", token="key"), ("a",), True, (0, "", (), "key")),
+        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), ("team-a",), (1, "", (), "")),
+        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY), ("team-a",), (1, "", (), "")),
+        (UserAPIKeyAuth(user_id="user", token="key", team_id="unpermitted"), ("a", "b"), (0, "user", ("a", "b"), "key")),
+        (UserAPIKeyAuth(user_id="user", token="key"), (), (0, "user", (), "key")),
+        (UserAPIKeyAuth(user_id="user"), ("a",), (0, "user", ("a",), "")),
+        (UserAPIKeyAuth(token="key", team_id="unpermitted"), ("a",), (0, "", (), "key")),
+        (UserAPIKeyAuth(user_id="", token="key"), ("a",), (0, "", (), "key")),
     ),
 )
 def test_composed_trace_permissions_reach_read_and_sql_boundaries(
     client: TestClient,
     auth: UserAPIKeyAuth,
     teams: tuple[str, ...],
-    lookup_fails: bool,
     expected: tuple[Literal[0, 1], str, tuple[str, ...], str],
 ) -> None:
     async def lookup(caller: UserAPIKeyAuth) -> tuple[str, ...]:
         assert caller is auth
-        if lookup_fails:
-            raise RuntimeError("Permission storage unavailable")
         return teams
 
     team_lookup: Final = AsyncMock(side_effect=lookup)

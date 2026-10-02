@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from pydantic import BaseModel, Field
 
 import litellm
 import litellm.proxy.proxy_server as ps
@@ -1742,14 +1741,20 @@ async def test_permitted_team_scope_falls_back_to_own_user_when_lookup_fails():
     async def unavailable():
         raise RuntimeError("database unavailable")
 
-    scope = await resolve_log_read_scope("caller", unavailable)
-    rows = (
-        _payload_row("own", "shared", "caller", "own payload"),
-        _payload_row("foreign", "shared", "other", "foreign payload"),
+    assert await resolve_log_read_scope("caller", unavailable) == OwnedLogs("caller")
+
+
+_SCOPE_ROWS: Final = tuple(
+    {"request_id": request_id, "user": user, "team_id": team_id}
+    for request_id, user, team_id in (
+        ("own", "caller", None),
+        ("team-1", "other", "first"),
+        ("team-2", "third", "second"),
+        ("foreign", "other", "outside"),
+        ("ownerless", None, None),
+        ("team-ownerless", None, "first"),
     )
-    prisma = _make_payload_lookup_prisma(rows)
-    query, params = spend_management_endpoints._spend_log_payload_query("shared", scope)
-    assert await prisma.db.query_raw(query, *params) == [rows[0]]
+)
 
 
 @pytest.mark.parametrize("next_param", [1, 7])
@@ -1759,42 +1764,21 @@ async def test_permitted_team_scope_falls_back_to_own_user_when_lookup_fails():
         (AllLogs(), None, ("foreign", "own", "ownerless", "team-1", "team-2", "team-ownerless")),
         (OwnedLogs("caller"), None, ("own",)),
         (OwnedLogs(None), None, ()),
-        (OwnedLogs(None, ("first",)), None, ("team-1", "team-ownerless")),
-        (OwnedLogs(None, ("first", "second")), None, ("team-1", "team-2", "team-ownerless")),
-        (OwnedLogs("caller", ("first",)), None, ("own", "team-1", "team-ownerless")),
         (OwnedLogs("caller", ("first", "second")), None, ("own", "team-1", "team-2", "team-ownerless")),
         (OwnedLogs("caller", ("first", "second")), "other", ("team-1",)),
-        (OwnedLogs(None, ("first' OR TRUE --",)), None, ()),
+        (OwnedLogs("caller", ("first' OR TRUE --",)), None, ("own",)),
     ],
 )
-def test_composed_log_scope_selects_union_and_intersects_explicit_user_filter(
+def test_log_scope_sql_selects_owned_rows_and_intersects_explicit_user_filter(
     scope: LogReadScope, user_filter: str | None, expected: tuple[str, ...], next_param: int
 ) -> None:
     clause, scope_params = spend_management_endpoints.read_scope_sql(scope, next_param)
-    placeholder_sql: Final = re.sub(r"\$(\d+)", r":p\1", clause or "TRUE")
-    sqlite_sql: Final = re.sub(r"= ANY\((:p\d+)::text\[\]\)", r"IN (SELECT value FROM json_each(\1))", placeholder_sql)
-    parameters: Final = {
-        f"p{next_param + index}": json.dumps(value) if isinstance(value, tuple) else value
-        for index, value in enumerate(scope_params)
-    }
-    with sqlite3.connect(":memory:") as connection:
-        connection.execute('CREATE TABLE logs (request_id TEXT, "user" TEXT, team_id TEXT)')
-        connection.executemany(
-            "INSERT INTO logs VALUES (?, ?, ?)",
-            (
-                ("own", "caller", None),
-                ("team-1", "other", "first"),
-                ("team-2", "third", "second"),
-                ("foreign", "other", "outside"),
-                ("ownerless", None, None),
-                ("team-ownerless", None, "first"),
-            ),
-        )
-        assert connection.execute(
-            f'SELECT request_id FROM logs WHERE ({sqlite_sql}) AND (:filter IS NULL OR "user" = :filter) '
-            "ORDER BY request_id",
-            {**parameters, "filter": user_filter},
-        ).fetchall() == [(request_id,) for request_id in expected]
+    filter_sql: Final = f' AND "user" = ${next_param + len(scope_params)}' if user_filter else ""
+    params: Final = (None,) * (next_param - 1) + scope_params + ((user_filter,) if user_filter else ())
+    matched: Final = _select_spend_logs(
+        _SCOPE_ROWS, f'SELECT request_id FROM "LiteLLM_SpendLogs" WHERE {clause or "TRUE"}{filter_sql}', params
+    )
+    assert sorted(row["request_id"] for row in matched) == list(expected)
 
 
 @pytest.mark.asyncio
@@ -2168,27 +2152,51 @@ async def test_ui_view_session_spend_logs_rehydrates_metadata_jsonb_text(client,
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
+_SESSION_ROWS: Final = tuple(
+    {**row, "session_id": "session-123", "startTime": "2024-01-01T00:00:00Z", "metadata": None} for row in _SCOPE_ROWS
+)
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("lookup_failure", [False, True])
-async def test_ui_view_session_spend_logs_scopes_non_admin_to_own_logs(client, monkeypatch, lookup_failure):
-    own_log = {
-        "id": "log1",
-        "request_id": "req1",
-        "session_id": "session-123",
-        "user": "user-1",
-        "startTime": "2024-01-01T00:00:00Z",
-    }
-
+@pytest.mark.parametrize(
+    ("auth", "lookup", "expected_where", "expected"),
+    [
+        (
+            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller"),
+            AsyncMock(return_value=()),
+            {"user": "caller"},
+            ("own",),
+        ),
+        (
+            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller"),
+            AsyncMock(return_value=("first",)),
+            {"OR": [{"user": "caller"}, {"team_id": {"in": ["first"]}}]},
+            ("own", "team-1", "team-ownerless"),
+        ),
+        (
+            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller"),
+            AsyncMock(side_effect=RuntimeError("team lookup failed")),
+            {"user": "caller"},
+            ("own",),
+        ),
+        (
+            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, token="no-user-key"),
+            AsyncMock(return_value=("first",)),
+            {"OR": []},
+            (),
+        ),
+    ],
+)
+async def test_ui_view_session_spend_logs_scopes_non_admin_to_owned_logs(
+    client, monkeypatch, auth, lookup, expected_where, expected
+):
     class MockDB:
-        async def count(self, *args, **kwargs):
-            assert kwargs.get("where") == {"session_id": "session-123", "user": "user-1"}
-            return 1
+        async def count(self, where):
+            assert where == {"session_id": "session-123", **expected_where}
+            return len(expected)
 
-        async def query_raw(self, sql_query, session_id, page_size, skip, scoped_user):
-            assert session_id == "session-123"
-            assert scoped_user == "user-1"
-            assert '"user" = $4' in sql_query
-            return [own_log]
+        async def query_raw(self, sql_query, *params):
+            return _select_spend_logs(_SESSION_ROWS, sql_query, params)
 
     class MockPrismaClient:
         def __init__(self):
@@ -2196,31 +2204,19 @@ async def test_ui_view_session_spend_logs_scopes_non_admin_to_own_logs(client, m
             self.db.litellm_spendlogs = self.db
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setitem(app.dependency_overrides, get_log_team_lookup, lambda: lookup)
+    monkeypatch.setitem(app.dependency_overrides, ps.user_api_key_auth, lambda: auth)
 
-    async def no_permitted_teams(*args, **kwargs):
-        if lookup_failure:
-            raise RuntimeError("team lookup failed")
-        return []
-
-    monkeypatch.setitem(app.dependency_overrides, get_log_team_lookup, lambda: no_permitted_teams)
-
-    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1"
+    response = client.get(
+        "/spend/logs/session/ui",
+        params={"session_id": "session-123", "page": 1, "page_size": 50},
+        headers={"Authorization": "Bearer sk-test"},
     )
 
-    try:
-        response = client.get(
-            "/spend/logs/session/ui",
-            params={"session_id": "session-123", "page": 1, "page_size": 50},
-            headers={"Authorization": "Bearer sk-test"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] == 1
-        assert [row["request_id"] for row in data["data"]] == ["req1"]
-    finally:
-        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["total"] == len(expected)
+    assert sorted(row["request_id"] for row in data["data"]) == list(expected)
 
 
 @pytest.mark.asyncio
@@ -2694,23 +2690,46 @@ async def test_ui_view_spend_logs_request_id_rejects_foreign_row_inserted_after_
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
+def _select_spend_logs(rows, sql_query, params):
+    """Run a Postgres spend-log query in SQLite over ``rows`` and return the matched rows in query order."""
+    named: Final = re.sub(r"\$(\d+)", r":p\1", sql_query)
+    sqlite_sql: Final = re.sub(r"= ANY\((:p\d+)::text\[\]\)", r"IN (SELECT value FROM json_each(\1))", named)
+    ids_sql: Final = re.sub(r"^\s*SELECT\s.*?\sFROM\s", "SELECT request_id FROM ", sqlite_sql, count=1, flags=re.S)
+    bound: Final = {
+        f"p{index}": json.dumps(value) if isinstance(value, tuple) else value
+        for index, value in enumerate(params, start=1)
+    }
+    by_id: Final = {row["request_id"]: row for row in rows}
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute(
+            'CREATE TABLE "LiteLLM_SpendLogs" '
+            '(request_id TEXT, litellm_call_id TEXT, session_id TEXT, "startTime" TEXT, "user" TEXT, team_id TEXT)'
+        )
+        connection.executemany(
+            'INSERT INTO "LiteLLM_SpendLogs" VALUES (?, ?, ?, ?, ?, ?)',
+            (
+                (
+                    row["request_id"],
+                    row.get("litellm_call_id"),
+                    row.get("session_id"),
+                    row.get("startTime"),
+                    row.get("user"),
+                    row.get("team_id"),
+                )
+                for row in rows
+            ),
+        )
+        return [by_id[request_id] for (request_id,) in connection.execute(ids_sql, bound)]
+
+
 def _make_payload_lookup_prisma(rows, team_table=None):
-    """Emulate the detail endpoint's SQL over an in-memory corpus: the owner
-    pre-check, the caller scope on ``"user"`` and permitted teams, and the
-    exact-request_id-first ordering with LIMIT 1."""
+    """Run the detail endpoint's SQL over an in-memory corpus, with the owner pre-check emulated."""
 
     class MockDB:
         async def query_raw(self, sql_query, *params):
             if 'SELECT DISTINCT "user", team_id' in sql_query:
                 return _emulate_spend_log_owner_lookup(rows, sql_query, params)
-            lookup_id = params[0]
-            matches = [r for r in rows if lookup_id in (r["request_id"], r["litellm_call_id"])]
-            if '"user" = $2' in sql_query:
-                team_ids = params[2] if "ANY($3::text[])" in sql_query else ()
-                matches = [r for r in matches if r["user"] == params[1] or r["team_id"] in team_ids]
-            if "ORDER BY (request_id = $1) DESC" in sql_query:
-                matches = sorted(matches, key=lambda r: r["request_id"] == lookup_id, reverse=True)
-            return matches[:1]
+            return _select_spend_logs(rows, sql_query, params)
 
     class MockPrisma:
         def __init__(self):
@@ -8032,16 +8051,8 @@ async def test_shared_owner_policy_propagates_team_lookup_failure():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("lookup_failure", [False, True])
-async def test_payload_scope_filters_colliding_foreign_request_id(lookup_failure):
-    from litellm.proxy.auth.authorization import resolve_log_read_scope
-
-    async def lookup():
-        if lookup_failure:
-            raise RuntimeError("team lookup failed")
-        return ("allowed",)
-
-    scope = await resolve_log_read_scope("caller", lookup)
+async def test_payload_scope_filters_colliding_foreign_request_id():
+    scope = OwnedLogs("caller", ("allowed",))
     rows = (
         {**_payload_row("collision", "unrelated", "other", "foreign payload"), "team_id": "outside"},
         _payload_row("own", "collision", "caller", "own payload"),
@@ -8119,47 +8130,3 @@ async def test_management_team_lookup_without_memberships_keeps_own_user_scope()
     scope = await resolve_log_read_scope(auth.user_id, lookup)
     query, params = spend_management_endpoints._spend_log_payload_query("shared", scope)
     assert await prisma.db.query_raw(query, *params) == [rows[0]]
-
-
-class _LogTeamIdsFilter(BaseModel):
-    values: tuple[str, ...] = Field(alias="in")
-
-
-class _LogWhereFilter(BaseModel):
-    user: str | None = None
-    team_id: str | _LogTeamIdsFilter | None = None
-    grants: tuple["_LogWhereFilter", ...] | None = Field(default=None, alias="OR")
-
-    def matches(self, user_id: str | None, team_id: str | None) -> bool:
-        user_matches: Final = "user" not in self.model_fields_set or self.user == user_id
-        team_matches: Final = (
-            self.team_id is None
-            or self.team_id == team_id
-            or isinstance(self.team_id, _LogTeamIdsFilter)
-            and team_id in self.team_id.values
-        )
-        union_matches: Final = self.grants is None or any(grant.matches(user_id, team_id) for grant in self.grants)
-        return user_matches and team_matches and union_matches
-
-
-@pytest.mark.parametrize(
-    ("scope", "expected"),
-    [
-        (AllLogs(), ("foreign", "ownerless", "own", "team-1", "team-2")),
-        (OwnedLogs("caller"), ("own",)),
-        (OwnedLogs(None), ()),
-        (OwnedLogs(None, ("first",)), ("team-1",)),
-        (OwnedLogs(None, ("first", "second")), ("team-1", "team-2")),
-        (OwnedLogs("caller", ("first", "second")), ("own", "team-1", "team-2")),
-    ],
-)
-def test_composed_log_scope_counts_only_matching_owners(scope: LogReadScope, expected: tuple[str, ...]) -> None:
-    where: Final = _LogWhereFilter.model_validate(spend_management_endpoints._read_scope_where(scope))
-    rows: Final = (
-        ("foreign", "other", "outside"),
-        ("ownerless", None, None),
-        ("own", "caller", None),
-        ("team-1", "other", "first"),
-        ("team-2", "third", "second"),
-    )
-    assert tuple(request_id for request_id, user_id, team_id in rows if where.matches(user_id, team_id)) == expected

@@ -27,6 +27,8 @@ async def load_permitted_log_team_ids(
     from litellm.proxy.auth.auth_checks import get_user_object
     from litellm.repositories.team_repository import TeamRepository
 
+    if prisma_client is None:
+        return ()
     user_obj: Final = await get_user_object(
         user_id=auth.user_id,
         prisma_client=prisma_client,
