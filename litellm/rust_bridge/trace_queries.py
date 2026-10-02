@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Annotated, Final, Generic, Literal, TypeAlias, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 ReadQueryName: TypeAlias = Literal[
     "list_traces",
@@ -167,6 +167,8 @@ class ListTracesRow(TypedDict):
     span_count: ReadOnly[int]
     agent_count: ReadOnly[int]
     agent_invocations: ReadOnly[int]
+    agent_names: NotRequired[ReadOnly[tuple[str, ...]]]
+    frameworks: NotRequired[ReadOnly[tuple[str, ...]]]
     llm_calls: ReadOnly[int]
     tool_calls: ReadOnly[int]
     input_tokens: ReadOnly[int]
@@ -182,6 +184,7 @@ class TraceSpansRow(TypedDict):
     name: ReadOnly[str]
     type: ReadOnly[Literal["agent", "llm", "tool", "chain", "framework"]]
     agent: ReadOnly[str]
+    framework: NotRequired[ReadOnly[str]]
     status: ReadOnly[str]
     status_message: ReadOnly[str]
     error_truncated: ReadOnly[bool]

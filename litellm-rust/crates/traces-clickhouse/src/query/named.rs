@@ -53,6 +53,10 @@ struct ListTracesRowEncoding {
     pub agent_count: u64,
     #[serde(deserialize_with = "super::number::deserialize")]
     pub agent_invocations: u64,
+    #[serde(default)]
+    pub agent_names: Vec<String>,
+    #[serde(default)]
+    pub frameworks: Vec<String>,
     #[serde(deserialize_with = "super::number::deserialize")]
     pub llm_calls: u64,
     #[serde(deserialize_with = "super::number::deserialize")]
@@ -81,6 +85,8 @@ struct TraceSpansRowEncoding {
     #[serde(rename = "type")]
     pub kind: String,
     pub agent: String,
+    #[serde(default)]
+    pub framework: String,
     pub status: String,
     pub status_message: String,
     #[serde(deserialize_with = "super::number::deserialize")]
@@ -273,11 +279,11 @@ mod tests {
     #[case::quoted(true)]
     fn rows_decode_into_neutral_contracts(#[case] quoted: bool) {
         round_trip::<ListTracesRow>(
-            json!({"trace_id": "trace", "trace_ref": "ref", "team_id": "team", "api_key_hash": "key", "user_id": "user", "name": "agent", "service": "service", "input_preview": "input", "status": "ok", "start_ms": -1, "duration_ms": 20, "span_count": u64::MAX, "agent_count": 1, "agent_invocations": 2, "llm_calls": 3, "tool_calls": 4, "input_tokens": 5, "output_tokens": 6, "models": ["model"], "error_count": 0, "request_ids": ["request"]}),
+            json!({"trace_id": "trace", "trace_ref": "ref", "team_id": "team", "api_key_hash": "key", "user_id": "user", "name": "agent", "service": "service", "input_preview": "input", "status": "ok", "start_ms": -1, "duration_ms": 20, "span_count": u64::MAX, "agent_count": 1, "agent_invocations": 2, "agent_names": ["agent"], "frameworks": ["claude-agent-sdk"], "llm_calls": 3, "tool_calls": 4, "input_tokens": 5, "output_tokens": 6, "models": ["model"], "error_count": 0, "request_ids": ["request"]}),
             quoted,
         );
         round_trip::<TraceSpansRow>(
-            json!({"span_id": "span", "parent_span_id": "parent", "name": "agent", "type": "agent", "agent": "agent", "status": "error", "status_message": "error", "error_truncated": 1, "start_ns": -1, "duration_ns": u64::MAX, "service": "service", "input_preview": "input", "model": "model", "input_tokens": u32::MAX, "output_tokens": 6, "litellm_request_id": "request", "team_id": "team", "api_key_hash": "key", "user_id": "user"}),
+            json!({"span_id": "span", "parent_span_id": "parent", "name": "agent", "type": "agent", "agent": "agent", "framework": "claude-agent-sdk", "status": "error", "status_message": "error", "error_truncated": 1, "start_ns": -1, "duration_ns": u64::MAX, "service": "service", "input_preview": "input", "model": "model", "input_tokens": u32::MAX, "output_tokens": 6, "litellm_request_id": "request", "team_id": "team", "api_key_hash": "key", "user_id": "user"}),
             quoted,
         );
         round_trip::<SpanDetailRow>(

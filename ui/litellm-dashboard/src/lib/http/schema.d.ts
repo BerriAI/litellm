@@ -44995,6 +44995,8 @@ export interface components {
             error: string | null;
             /** Error Truncated */
             error_truncated: boolean;
+            /** Framework */
+            framework: string;
             /** Input Preview */
             input_preview: string;
             /** Input Tokens */
@@ -47062,6 +47064,8 @@ export interface components {
             duration_ms: number;
             /** Error Count */
             error_count: number;
+            /** Frameworks */
+            frameworks?: string[];
             /** Input Preview */
             input_preview: string;
             /** Input Tokens */

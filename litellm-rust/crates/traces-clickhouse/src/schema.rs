@@ -78,7 +78,7 @@ pub struct NormalizedFieldDefinition {
     pub meaning: &'static str,
 }
 
-pub const NORMALIZED_FIELD_DEFINITIONS: [NormalizedFieldDefinition; 8] = [
+pub const NORMALIZED_FIELD_DEFINITIONS: [NormalizedFieldDefinition; 9] = [
     NormalizedFieldDefinition {
         name: "observation_type",
         clickhouse_column: "ObservationType",
@@ -90,6 +90,12 @@ pub const NORMALIZED_FIELD_DEFINITIONS: [NormalizedFieldDefinition; 8] = [
         clickhouse_column: "AgentName",
         clickhouse_type: "LowCardinality(String)",
         meaning: "Agent associated with this span",
+    },
+    NormalizedFieldDefinition {
+        name: "framework",
+        clickhouse_column: "Framework",
+        clickhouse_type: "LowCardinality(String)",
+        meaning: "Agent framework or SDK that emitted this span, e.g. claude-agent-sdk",
     },
     NormalizedFieldDefinition {
         name: "litellm_request_id",

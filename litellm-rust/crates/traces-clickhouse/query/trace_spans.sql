@@ -1,5 +1,6 @@
 SELECT o.SpanId AS span_id, o.ParentSpanId AS parent_span_id, o.SpanName AS name,
-       o.ObservationType AS type, o.AgentName AS agent, o.StatusCode AS status,
+       o.ObservationType AS type, o.AgentName AS agent,
+       o.Framework AS framework, o.StatusCode AS status,
        substringUTF8(o.StatusMessage, 1, 128) AS status_message,
        lengthUTF8(o.StatusMessage) > 128 AS error_truncated,
        toUnixTimestamp64Nano(o.Timestamp) AS start_ns, o.Duration AS duration_ns,

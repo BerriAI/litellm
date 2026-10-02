@@ -366,14 +366,54 @@ async fn listed_agent_names_preserve_scope_and_cursor(
     let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
-    for (team, key, trace, agent, span, parent) in [
-        ("alpha", "one", "shared", "research_agent", "root", ""),
-        ("alpha", "one", "shared", "reviewer", "child", "root"),
-        ("alpha", "one", "shared", "reviewer", "repeated", "root"),
-        ("alpha", "one", "shared", "", "unnamed", "root"),
-        ("alpha", "one", "second", "support_agent", "root", ""),
-        ("alpha", "two", "shared", "private_agent", "root", ""),
-        ("beta", "other", "shared", "other_agent", "root", ""),
+    for (team, key, trace, agent, span, parent, framework) in [
+        (
+            "alpha",
+            "one",
+            "shared",
+            "research_agent",
+            "root",
+            "",
+            "claude-code",
+        ),
+        (
+            "alpha",
+            "one",
+            "shared",
+            "reviewer",
+            "child",
+            "root",
+            "claude-agent-sdk",
+        ),
+        (
+            "alpha",
+            "one",
+            "shared",
+            "reviewer",
+            "repeated",
+            "root",
+            "claude-agent-sdk",
+        ),
+        ("alpha", "one", "shared", "", "unnamed", "root", ""),
+        ("alpha", "one", "second", "support_agent", "root", "", ""),
+        (
+            "alpha",
+            "two",
+            "shared",
+            "private_agent",
+            "root",
+            "",
+            "private-sdk",
+        ),
+        (
+            "beta",
+            "other",
+            "shared",
+            "other_agent",
+            "root",
+            "",
+            "other-sdk",
+        ),
     ] {
         insert_rows(
             &database,
@@ -381,7 +421,7 @@ async fn listed_agent_names_preserve_scope_and_cursor(
             vec![serde_json::from_value(serde_json::json!({
                 "Timestamp": timestamp, "TraceId": trace, "SpanId": span, "ParentSpanId": parent,
                 "ServiceName": "shared-app", "SpanName": span, "AgentName": agent,
-                "ObservationType": "agent",
+                "Framework": framework, "ObservationType": "agent",
                 "ResourceAttributes": {"litellm.team_id": team, "litellm.api_key_hash": key}
             }))?],
         )
@@ -474,6 +514,15 @@ async fn listed_agent_names_preserve_scope_and_cursor(
         serde_json::json!(["research_agent", "reviewer"])
     );
     assert_eq!(names["second"], serde_json::json!(["support_agent"]));
+    let frameworks = [&first["data"][0], &second["data"][0]]
+        .into_iter()
+        .map(|row| (row["trace_id"].as_str().unwrap(), row["frameworks"].clone()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        frameworks["shared"],
+        serde_json::json!(["claude-agent-sdk", "claude-code"])
+    );
+    assert_eq!(frameworks["second"], serde_json::json!([]));
     let counts = [&first["data"][0], &second["data"][0]]
         .into_iter()
         .map(|row| {
@@ -1829,5 +1878,94 @@ async fn rollup_cost_completeness_preserves_missing_ids_and_fails_closed_for_his
         }
     }
     assert_eq!(mutation_rows(&database).await?, initial_mutations);
+    Ok(())
+}
+
+#[rstest]
+#[case::admin(1, "", vec![], "", "own answer")]
+#[case::user(0, "owner", vec![], "", "own answer")]
+#[case::team(0, "", vec!["alpha"], "", "own answer")]
+#[case::key(0, "", vec![], "one", "own answer")]
+#[case::no_identity(0, "", vec![], "", "")]
+#[tokio::test]
+async fn agent_final_answer_preserves_visibility_and_trace_ownership(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] all_teams: u8,
+    #[case] user: &str,
+    #[case] teams: Vec<&str>,
+    #[case] key: &str,
+    #[case] expected: &str,
+) -> TestResult {
+    use litellm_traces_clickhouse::query::named::{ReadAccessParams, SpanDetail, SpanDetailParams};
+
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let rows = [
+        ("alpha", "one", "owner", "root", "", "agent", ""),
+        (
+            "alpha",
+            "one",
+            "owner",
+            "child",
+            "root",
+            "llm",
+            "own answer",
+        ),
+        (
+            "alpha",
+            "two",
+            "other",
+            "child",
+            "root",
+            "llm",
+            "other key answer",
+        ),
+        (
+            "beta",
+            "one",
+            "other",
+            "child",
+            "root",
+            "llm",
+            "other team answer",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (team, key, user, span, parent, kind, output))| {
+        serde_json::from_value(serde_json::json!({
+            "Timestamp": timestamp + index as i64, "TraceId": "shared", "SpanId": span,
+            "ParentSpanId": parent, "TeamId": team, "ApiKeyHash": key, "UserId": user,
+            "ObservationType": kind, "Input": "prompt", "Output": output,
+        }))
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+    insert_rows(&database, "otel_traces", rows).await?;
+    let reader = Connection::reader(&database.url, "trace_test")?;
+    let details = litellm_storage_clickhouse::fetch::<SpanDetail>(
+        &database.client,
+        &reader,
+        &SpanDetailParams {
+            access: ReadAccessParams {
+                all_teams,
+                user_id: user.into(),
+                team_ids: teams.into_iter().map(str::to_owned).collect(),
+                api_key_hash: key.into(),
+            },
+            trace_id: "shared".into(),
+            trace_ref: String::new(),
+            span_id: "root".into(),
+        },
+    )
+    .await?;
+    if expected.is_empty() {
+        assert!(details.is_empty());
+    } else {
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].0.input, "prompt");
+        assert_eq!(details[0].0.output, expected);
+    }
     Ok(())
 }

@@ -36,6 +36,10 @@ pub struct ListTracesRow {
     pub span_count: u64,
     pub agent_count: u64,
     pub agent_invocations: u64,
+    #[serde(default)]
+    pub agent_names: Vec<String>,
+    #[serde(default)]
+    pub frameworks: Vec<String>,
     pub llm_calls: u64,
     pub tool_calls: u64,
     pub input_tokens: u64,
@@ -61,6 +65,8 @@ pub struct TraceSpansRow {
     #[serde(rename = "type")]
     pub kind: String,
     pub agent: String,
+    #[serde(default)]
+    pub framework: String,
     pub status: String,
     pub status_message: String,
     pub error_truncated: u8,

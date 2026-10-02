@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -58,6 +58,27 @@ describe("RunView", () => {
     expect(header).toHaveTextContent("duration 40.20s");
     expect(header).toHaveTextContent(`steps ${research.summary.span_count}`);
     expect(header).not.toHaveTextContent("failed");
+  });
+
+  it("shows the agent name with the SDK logo in the run header instead of the generic agent icon", async () => {
+    renderRun({
+      ...research,
+      summary: { ...research.summary, agent_names: ["research-bot"], frameworks: ["claude-agent-sdk", "claude-code"] },
+    });
+
+    const header = await screen.findByRole("banner");
+    expect(within(header).getByTestId("run-framework")).toHaveTextContent(/^research-bot$/);
+    expect(within(header).getByTestId("run-framework")).toHaveAttribute("title", "Claude Agent SDK");
+    expect(within(header).getByRole("img", { name: "Claude Agent SDK logo", hidden: true })).toBeInTheDocument();
+    expect(within(header).queryByTestId("span-icon")).not.toBeInTheDocument();
+  });
+
+  it("keeps the generic agent icon when the trace has no known SDK", async () => {
+    renderRun({ ...research, summary: { ...research.summary, frameworks: ["some-other-sdk"] } });
+
+    const header = await screen.findByRole("banner");
+    expect(within(header).getByTestId("span-icon")).toBeInTheDocument();
+    expect(within(header).queryByTestId("run-framework")).not.toBeInTheDocument();
   });
 
   it("folds researcher ×12 in the span tree", async () => {

@@ -7,7 +7,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from litellm.rust_bridge.trace_queries import SPAN_ERROR, SpanErrorParams, SpanErrorRow, SpendRow
+from litellm.rust_bridge.trace_queries import (
+    LIST_TRACES,
+    TRACE_SPANS,
+    SPAN_ERROR,
+    SpanErrorParams,
+    SpanErrorRow,
+    SpendRow,
+)
 from litellm.tracing.store import (
     TraceStore,
     agent_nodes,
@@ -244,6 +251,30 @@ def test_trace_groups_normalized_names_and_preserves_span_labels():
     assert agents["researcher"]["llm_calls"] == 1
 
 
+def test_trace_frameworks_are_the_sorted_distinct_span_frameworks():
+    rows = [
+        _row("root", "", "claude_code.interaction", "agent", "claude-code", framework="claude-code"),
+        _llm_row("llm", "root", "claude-code", "msg_1", framework="claude-agent-sdk"),
+        _row("tool", "root", "Bash", "tool", "claude-code", framework="claude-code"),
+        _row("other", "root", "step", "chain", "claude-code", framework=""),
+    ]
+    validated_rows: Final = TRACE_SPANS.response.validate_python({"data": rows}).data
+    trace = trace_from_rows("t1", validated_rows)
+    assert trace is not None
+    assert trace["summary"]["frameworks"] == ("claude-agent-sdk", "claude-code")
+    spans = {span["span_id"]: span for span in trace["spans"]}
+    assert (spans["llm"]["framework"], spans["other"]["framework"]) == ("claude-agent-sdk", "")
+    assert trace["agents"][0]["llm_calls"] == 1
+    assert trace["agents"][0]["tool_calls"] == 1
+
+
+def test_spans_without_a_framework_column_report_none():
+    trace = trace_from_rows("t1", _deep_agent_rows())
+    assert trace is not None
+    assert trace["summary"]["frameworks"] == ()
+    assert {span["framework"] for span in trace["spans"]} == {""}
+
+
 # ---------------------------------------------------------------- list helpers
 
 
@@ -261,25 +292,40 @@ def test_invalid_cursor_is_rejected(cursor):
 
 
 def test_trace_summary_from_row():
-    summary = trace_summary_from_row(
+    rows: Final = LIST_TRACES.response.validate_python(
         {
-            "trace_id": "t1",
-            "name": "deep_research_agent",
-            "service": "agent-demo",
-            "input_preview": "hi",
-            "start_ms": 1790742989377,
-            "duration_ms": 51385,
-            "status": "STATUS_CODE_OK",
-            "span_count": "126",
-            "agent_count": "2",
-            "llm_calls": "7",
-            "tool_calls": "26",
-            "error_count": "1",
-            "input_tokens": "30175",
-            "output_tokens": "2620",
-            "models": ["claude-sonnet-4-5"],
+            "data": [
+                {
+                    "trace_id": "t1",
+                    "trace_ref": "ref",
+                    "team_id": "team",
+                    "api_key_hash": "key",
+                    "user_id": "owner",
+                    "agent_invocations": 2,
+                    "agent_names": ["deep_research_agent"],
+                    "request_ids": [],
+                    "name": "deep_research_agent",
+                    "service": "agent-demo",
+                    "input_preview": "hi",
+                    "start_ms": 1790742989377,
+                    "duration_ms": 51385,
+                    "status": "STATUS_CODE_OK",
+                    "span_count": "126",
+                    "agent_count": "2",
+                    "llm_calls": "7",
+                    "tool_calls": "26",
+                    "error_count": "1",
+                    "input_tokens": "30175",
+                    "output_tokens": "2620",
+                    "models": ["claude-sonnet-4-5"],
+                    "frameworks": ["claude-agent-sdk", "claude-code"],
+                }
+            ]
         }
-    )
+    ).data
+    summary: Final = trace_summary_from_row(rows[0])
+    assert summary["agent_names"] == ("deep_research_agent",)
+    assert summary["frameworks"] == ("claude-agent-sdk", "claude-code")
     assert summary["status"] == "ok"
     assert (summary["span_count"], summary["error_count"]) == (126, 1)
     assert summary["start_time"] == "2026-09-30T04:36:29.377000+00:00"

@@ -39,6 +39,7 @@ class NormalizedSpan(BaseModel):
 
     observation_type: Literal["agent", "llm", "tool", "chain", "framework"]
     agent_name: str
+    framework: str
     litellm_request_id: str
     model: str
     input_tokens: int = Field(ge=0, le=2**32 - 1)
