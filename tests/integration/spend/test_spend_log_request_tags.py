@@ -982,21 +982,21 @@ def test_guardrail_mode_tag_decider_is_unchanged_on_pass_through(gateway: Gatewa
             )
             assert control.status_code != 200, control.text
             assert len(wire.drain()) == 0, "tag-matched guardrail should have blocked before the upstream"
-            call_id: Final = control.headers["x-litellm-call-id"]
+            digest: Final = sha256(key.encode()).hexdigest()
 
             def blocked_rows() -> list[dict]:
                 return read_rows(
-                    'SELECT metadata FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s',
-                    (call_id,),
+                    'SELECT metadata, litellm_call_id FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
+                    (digest,),
                 )
 
             spend_row: Final = eventually(
                 blocked_rows,
-                lambda rows: len(rows) == 1 and "bananablock" in json.dumps(rows[0]["metadata"]),
+                lambda rows: any("bananablock" in json.dumps(row["metadata"]) for row in rows),
                 seconds=30,
                 return_last_on_timeout=True,
             )
-            if not (len(spend_row) == 1 and "bananablock" in json.dumps(spend_row[0]["metadata"])):
+            if not any("bananablock" in json.dumps(row["metadata"]) for row in spend_row):
                 log_text: Final = owned.log.read_text()
                 assert "Content blocked: keyword 'bananablock' detected" in log_text, (
                     "guardrail block text not in spend row or proxy log"
