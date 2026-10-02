@@ -6,7 +6,12 @@ import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
 import { setSecureItem } from "@/utils/secureStorage";
 import * as networking from "@/components/networking";
 import { toast } from "@/lib/toast";
+import { useUISettings } from "../../hooks/uiSettings/useUISettings";
 import { selectOption } from "./testUtils";
+
+vi.mock("../../hooks/uiSettings/useUISettings", () => ({
+  useUISettings: vi.fn(() => ({ data: { values: { enable_stdio_mcp: false } } })),
+}));
 
 vi.mock("@/components/networking", () => ({
   updateMCPServer: vi.fn(),
@@ -129,9 +134,12 @@ const interactiveOAuthServer = {
 describe("MCPServerEdit (stdio)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(useUISettings).mockReturnValue({
+      data: { values: { enable_stdio_mcp: false } },
+    } as unknown as ReturnType<typeof useUISettings>);
   });
 
-  it("should render without crashing", () => {
+  it("keeps the existing stdio transport selectable while disabled", async () => {
     render(
       <MCPServerEdit
         mcpServer={{
@@ -160,6 +168,8 @@ describe("MCPServerEdit (stdio)", () => {
     );
 
     expect(screen.getByRole("tab", { name: "Server Configuration" })).toBeInTheDocument();
+    await userEvent.setup({ delay: null }).click(screen.getByLabelText("Transport Type"));
+    expect(await screen.findByRole("option", { name: "Standard Input/Output (stdio)" })).toBeInTheDocument();
   });
 
   it("should allow updating stdio transport configuration", async () => {
@@ -511,6 +521,9 @@ describe("MCPServerEdit OAuth token invalidation", () => {
     );
 
   it("invalidates a session-authorized token when the transport switches to stdio", async () => {
+    vi.mocked(useUISettings).mockReturnValue({
+      data: { values: { enable_stdio_mcp: true } },
+    } as unknown as ReturnType<typeof useUISettings>);
     // Switching to stdio clears url/auth_type via programmatic form.setFieldsValue, which antd does
     // not report through onValuesChange; the explicit recheck in handleTransportChange must catch it.
     // Regression: the token used to survive this switch (sessionStorage + hook state kept the old

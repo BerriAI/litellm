@@ -271,6 +271,11 @@ export const TRANSPORT_ITEMS = [
   { value: TRANSPORT.OPENAPI, label: "OpenAPI Spec" },
 ];
 
+export const transportItemsFor = (stdioEnabled: boolean, currentTransport?: string | null) =>
+  TRANSPORT_ITEMS.filter(
+    (item) => item.value !== TRANSPORT.STDIO || stdioEnabled || currentTransport === TRANSPORT.STDIO,
+  );
+
 export const handleTransport = (transport?: string | null, specPath?: string | null): string => {
   if (transport === null || transport === undefined) {
     return TRANSPORT.SSE;

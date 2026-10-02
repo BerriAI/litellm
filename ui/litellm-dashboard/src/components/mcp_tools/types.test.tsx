@@ -16,6 +16,8 @@ import {
   withoutMintedTokenCredentials,
   credentialAuthClass,
   isUnsupportedOnGatewayConnect,
+  TRANSPORT_ITEMS,
+  transportItemsFor,
 } from "./types";
 
 describe("getOAuthAuthorizationIdentity", () => {
@@ -86,6 +88,20 @@ describe("handleTransport", () => {
 
   it("should return the transport as-is when no specPath", () => {
     expect(handleTransport("http")).toBe("http");
+  });
+});
+
+describe("transportItemsFor", () => {
+  it("hides stdio when the proxy does not enable it", () => {
+    expect(transportItemsFor(false)).toEqual(TRANSPORT_ITEMS.filter((item) => item.value !== TRANSPORT.STDIO));
+  });
+
+  it("keeps stdio when the proxy enables it", () => {
+    expect(transportItemsFor(true)).toEqual(TRANSPORT_ITEMS);
+  });
+
+  it("keeps an existing stdio server's transport selectable while disabled", () => {
+    expect(transportItemsFor(false, TRANSPORT.STDIO)).toEqual(TRANSPORT_ITEMS);
   });
 });
 

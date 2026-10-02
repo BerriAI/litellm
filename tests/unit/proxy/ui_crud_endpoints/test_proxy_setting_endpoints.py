@@ -1,6 +1,7 @@
 import json
 import os
 from typing import Final
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -3681,6 +3682,82 @@ class TestPtuCostAttributionUISetting:
         assert not mock_prisma.db.litellm_uisettings.upsert.called
 
 
+@pytest.mark.usefixtures("mock_auth")
+class TestStdioMcpUISetting:
+    @staticmethod
+    def _mock_prisma(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        from unittest.mock import AsyncMock
+
+        mock_prisma: Final = MagicMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+        return mock_prisma
+
+    def test_reports_false_when_stdio_is_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("litellm.constants.MCP_STDIO_TRANSPORT_ENABLED", False)
+        self._mock_prisma(monkeypatch)
+
+        response: Final = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["enable_stdio_mcp"] is False
+        assert response.json()["source"]["enable_stdio_mcp"] == "default"
+
+    def test_reports_true_when_stdio_is_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("litellm.constants.MCP_STDIO_TRANSPORT_ENABLED", True)
+        self._mock_prisma(monkeypatch)
+
+        response: Final = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["enable_stdio_mcp"] is True
+        assert response.json()["source"]["enable_stdio_mcp"] == "config"
+
+    def test_patch_rejects_a_value_that_differs_from_the_process_setting(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr("litellm.constants.MCP_STDIO_TRANSPORT_ENABLED", False)
+        mock_prisma: Final = self._mock_prisma(monkeypatch)
+
+        try:
+            response: Final = client.patch("/update/ui_settings", json={"enable_stdio_mcp": True})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 400
+        assert "enable_stdio_mcp" in str(response.json()["detail"])
+        assert not mock_prisma.db.litellm_uisettings.upsert.called
+
+    def test_unchanged_get_value_is_accepted_by_patch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr("litellm.constants.MCP_STDIO_TRANSPORT_ENABLED", False)
+        mock_prisma: Final = self._mock_prisma(monkeypatch)
+
+        try:
+            round_tripped: Final = client.get("/get/ui_settings").json()["values"]
+            assert round_tripped["enable_stdio_mcp"] is False
+            response: Final = client.patch("/update/ui_settings", json=round_tripped)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        assert mock_prisma.db.litellm_uisettings.upsert.called
+
+
 class TestApplyUserBudgetToTeamKeysUISetting:
     """``apply_user_budget_to_team_keys`` mirrors general_settings on every GET.
 
@@ -4075,4 +4152,3 @@ class TestSyncUiSettingsToGeneralSettings:
 
         assert general_settings["forward_client_headers_to_llm_api"] is False
         assert general_settings.source("forward_client_headers_to_llm_api") == "config"
-

@@ -3,8 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
 import { setToken } from "@/utils/mcpTokenStore";
+import { useUISettings } from "../../hooks/uiSettings/useUISettings";
 import CreateMCPServer from "./CreateMCPServer";
 import { selectOption } from "./testUtils";
+
+vi.mock("../../hooks/uiSettings/useUISettings", () => ({
+  useUISettings: vi.fn(() => ({ data: { values: { enable_stdio_mcp: false } } })),
+}));
 
 vi.mock("@/components/networking", () => ({
   createMCPServer: vi.fn(),
@@ -110,6 +115,9 @@ const getServerNameInput = () => document.getElementById("server_name") as HTMLI
 describe("CreateMCPServer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(useUISettings).mockReturnValue({
+      data: { values: { enable_stdio_mcp: false } },
+    } as unknown as ReturnType<typeof useUISettings>);
     oauthHook.tokenResponse = null;
     oauthHook.onTokenReceived = null;
   });
@@ -173,6 +181,38 @@ describe("CreateMCPServer", () => {
     await waitFor(() => {
       expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
     });
+  });
+
+  it("does not offer stdio when the setting is absent", async () => {
+    vi.mocked(useUISettings).mockReturnValue({
+      data: { values: {} },
+    } as unknown as ReturnType<typeof useUISettings>);
+    render(<CreateMCPServer {...defaultProps} />);
+
+    await userEvent.setup({ delay: null }).click(screen.getByLabelText("Transport Type"));
+
+    expect(await screen.findByRole("option", { name: "Streamable HTTP (Recommended)" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Standard Input/Output (stdio)" })).not.toBeInTheDocument();
+  });
+
+  it("does not offer stdio when the setting is false", async () => {
+    render(<CreateMCPServer {...defaultProps} />);
+
+    await userEvent.setup({ delay: null }).click(screen.getByLabelText("Transport Type"));
+
+    expect(await screen.findByRole("option", { name: "Streamable HTTP (Recommended)" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Standard Input/Output (stdio)" })).not.toBeInTheDocument();
+  });
+
+  it("offers stdio when the setting is true", async () => {
+    vi.mocked(useUISettings).mockReturnValue({
+      data: { values: { enable_stdio_mcp: true } },
+    } as unknown as ReturnType<typeof useUISettings>);
+    render(<CreateMCPServer {...defaultProps} />);
+
+    await userEvent.setup({ delay: null }).click(screen.getByLabelText("Transport Type"));
+
+    expect(await screen.findByRole("option", { name: "Standard Input/Output (stdio)" })).toBeInTheDocument();
   });
 
   describe("when HTTP transport is selected", () => {
@@ -989,6 +1029,9 @@ describe("CreateMCPServer", () => {
     });
 
     it("shows the token-exchange fields only for the OAuth Token Exchange (OBO) auth type", async () => {
+      vi.mocked(useUISettings).mockReturnValue({
+        data: { values: { enable_stdio_mcp: true } },
+      } as unknown as ReturnType<typeof useUISettings>);
       await selectHttpTransport();
 
       // Plain OAuth must not render the token-exchange section.
@@ -1913,6 +1956,9 @@ describe("CreateMCPServer", () => {
 
   describe("when stdio transport is selected", () => {
     it("should not show auth type or URL fields", async () => {
+      vi.mocked(useUISettings).mockReturnValue({
+        data: { values: { enable_stdio_mcp: true } },
+      } as unknown as ReturnType<typeof useUISettings>);
       render(<CreateMCPServer {...defaultProps} />);
 
       await selectOption("Transport Type", "Standard Input/Output");

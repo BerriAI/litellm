@@ -25,10 +25,10 @@ import {
   MCPServer,
   MCPServerCostInfo,
   TRANSPORT,
-  TRANSPORT_ITEMS,
   AUTH_TYPE_ITEMS,
   getMcpOAuthMode,
   oauth2FlowToFormValue,
+  transportItemsFor,
 } from "@/components/mcp_tools/types";
 import {
   updateMCPServer,
@@ -55,6 +55,7 @@ import { DUPLICATE_IDENTIFIER_MESSAGE, findDuplicateMcpServer, mcpSubmitErrorRea
 import { toast } from "@/lib/toast";
 import { getEditToolPreview } from "./editToolPreview";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
+import { useStdioMcpEnabled } from "../../hooks/uiSettings/useStdioMcpEnabled";
 import {
   MountedFormField,
   MountedFormProvider,
@@ -104,6 +105,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   availableAccessGroups,
   existingServers,
 }) => {
+  const stdioMcpEnabled = useStdioMcpEnabled();
+  const transportItems = transportItemsFor(stdioMcpEnabled, mcpServer.transport);
   const initialStaticHeaders = React.useMemo(() => {
     if (!mcpServer.static_headers) {
       return [];
@@ -867,7 +870,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 >
                   {(control) => (
                     <Select
-                      items={TRANSPORT_ITEMS}
+                      items={transportItems}
                       value={(control.value as string | undefined) ?? null}
                       onValueChange={handleTransportSelected(control.onChange)}
                     >
@@ -875,7 +878,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {TRANSPORT_ITEMS.map((item) => (
+                        {transportItems.map((item) => (
                           <SelectItem key={item.value} value={item.value}>
                             {item.label}
                           </SelectItem>

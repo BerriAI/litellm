@@ -18,7 +18,6 @@ import {
   MCPServer,
   MCPServerCostInfo,
   TRANSPORT,
-  TRANSPORT_ITEMS,
   AUTH_TYPE_ITEMS,
   getMcpOAuthMode,
   MCP_OAUTH2_FLOW_M2M,
@@ -28,6 +27,7 @@ import {
   isHeldOAuthTokenStale,
   preservedAdminCredentials,
   preservedDeclaredAppCredentials,
+  transportItemsFor,
 } from "@/components/mcp_tools/types";
 import {
   AUTH_TYPES_REQUIRING_AUTH_VALUE,
@@ -57,6 +57,7 @@ import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import { toast } from "@/lib/toast";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
+import { useStdioMcpEnabled } from "../../hooks/uiSettings/useStdioMcpEnabled";
 import {
   MountedFormField,
   MountedFormProvider,
@@ -114,6 +115,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   prefillData,
   onBackToDiscovery,
 }) => {
+  const stdioMcpEnabled = useStdioMcpEnabled();
+  const transportItems = transportItemsFor(stdioMcpEnabled);
   const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: CREATE_DEFAULTS });
   const registry = useMountRegistry();
   const [isLoading, setIsLoading] = useState(false);
@@ -742,7 +745,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   >
                     {(control) => (
                       <Select
-                        items={TRANSPORT_ITEMS}
+                        items={transportItems}
                         value={(control.value as string | undefined) ?? null}
                         onValueChange={handleTransportSelected(control.onChange)}
                       >
@@ -750,7 +753,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                           <SelectValue placeholder="Select transport" />
                         </SelectTrigger>
                         <SelectContent>
-                          {TRANSPORT_ITEMS.map((item) => (
+                          {transportItems.map((item) => (
                             <SelectItem key={item.value} value={item.value}>
                               {item.label}
                             </SelectItem>
