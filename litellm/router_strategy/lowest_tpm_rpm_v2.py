@@ -70,6 +70,13 @@ class PrefetchedUsage:
         return _active_prefetched_usage.get()
 
 
+def _declares_tpm_limit(deployment: Mapping[str, object]) -> bool:
+    """Whether the deployment carries a ``tpm`` limit that selection has to weigh the prompt against."""
+    nested: Final = (deployment.get("litellm_params"), deployment.get("model_info"))
+    sources: Final = (deployment, *(source for source in nested if isinstance(source, Mapping)))
+    return any(source.get("tpm") is not None for source in sources)
+
+
 class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     """
     Updated version of TPM/RPM Logging.
@@ -416,10 +423,12 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         for idx, key in enumerate(rpm_keys):
             rpm_dict[rpm_keys[idx].split(":")[0]] = rpm_values[idx]
 
-        try:
-            input_tokens = token_counter(messages=messages, text=input)
-        except Exception:
-            input_tokens = 0
+        input_tokens = 0
+        if any(_declares_tpm_limit(deployment) for deployment in healthy_deployments):
+            try:
+                input_tokens = token_counter(messages=messages, text=input)
+            except Exception:
+                input_tokens = 0
         verbose_router_logger.debug("input_tokens=%s", input_tokens)
         # -----------------------
         # Find lowest used model
