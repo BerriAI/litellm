@@ -10340,6 +10340,32 @@ def test_get_configured_service_tiers_does_not_apply_a_wildcard_deployment_to_ma
     assert router.get_configured_service_tiers("openai/gpt-6-astra") == ()
 
 
+def test_get_configured_service_tiers_reads_only_the_deployments_a_request_can_route_to():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://paused.example"},
+                "model_info": {"blocked": True},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://team-2.example"},
+                "model_info": {"team_id": "team-2"},
+            },
+        ]
+    )
+
+    assert router.get_configured_service_tiers("gpt-6-astra", team_id="team-1") == (["ultrafast"],)
+    assert router.get_configured_service_tiers("gpt-6-astra", team_id="team-2") == (["ultrafast"], None)
+    assert router.get_configured_service_tiers("gpt-6-astra") == (["ultrafast"], None)
+
+
 def test_get_configured_display_name_treats_malformed_values_as_absent():
     malformed = ["", "   ", 12345, ["Kimi K3"], {"name": "Kimi K3"}, True]
     router = litellm.Router(

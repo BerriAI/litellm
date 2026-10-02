@@ -11700,7 +11700,10 @@ async def model_list(
         admin_listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
         if client_version is not None:
             return Response(
-                content=codex_model_list_body(admin_listing, admin_entries, llm_router), media_type="application/json"
+                content=codex_model_list_body(
+                    admin_listing, admin_entries, llm_router, team_id or user_api_key_dict.team_id
+                ),
+                media_type="application/json",
             )
 
         if wants_anthropic_format:
@@ -11764,7 +11767,10 @@ async def model_list(
 
     listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
     if client_version is not None:
-        return Response(content=codex_model_list_body(listing, entries, llm_router), media_type="application/json")
+        return Response(
+            content=codex_model_list_body(listing, entries, llm_router, team_id or user_api_key_dict.team_id),
+            media_type="application/json",
+        )
 
     if wants_anthropic_format:
         return create_anthropic_model_list_response(

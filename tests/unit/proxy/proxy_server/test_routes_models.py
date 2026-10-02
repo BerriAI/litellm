@@ -444,7 +444,7 @@ def test_codex_format_carries_configured_service_tiers(client, auth_as, patched_
     """A deployment's ``model_info.service_tiers`` becomes the entry's ``service_tiers``, which Codex
     offers as slash commands; a model without one offers none, and the OpenAI shape gains no field."""
     patched_models.get_configured_service_tiers = MagicMock(
-        side_effect=lambda model_name: (["ultrafast"],) if model_name == "gpt-4" else (None,)
+        side_effect=lambda model_name, team_id=None: (["ultrafast"],) if model_name == "gpt-4" else (None,)
     )
 
     with auth_as():
@@ -457,6 +457,23 @@ def test_codex_format_carries_configured_service_tiers(client, auth_as, patched_
     ]
     assert claude["service_tiers"] == []
     assert all("service_tiers" not in m for m in openai_response.json()["data"])
+
+
+@pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
+def test_codex_service_tiers_are_read_for_the_key_team(client, auth_as, patched_models, params):
+    """A tier is read off the deployments the key's team can route to, so both listing paths hand the
+    router the key's team; a key without one reads every deployment of the name."""
+    patched_models.get_configured_service_tiers = MagicMock(
+        side_effect=lambda model_name, team_id=None: (["ultrafast"],) if team_id == "team-1" else (None,)
+    )
+
+    with auth_as(team_id="team-1"):
+        team_response = client.get("/v1/models", params={**params, "client_version": "0.159.3"})
+    with auth_as():
+        teamless_response = client.get("/v1/models", params={**params, "client_version": "0.159.3"})
+
+    assert [[t["id"] for t in m["service_tiers"]] for m in team_response.json()["models"]] == [["ultrafast"]] * 2
+    assert [m["service_tiers"] for m in teamless_response.json()["models"]] == [[], []]
 
 
 @pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
@@ -475,7 +492,7 @@ def test_codex_service_tiers_resolved_via_internal_team_key(client, auth_as, pat
     )
     patched_models.get_model_names = MagicMock(return_value=[internal_name])
     patched_models.get_configured_service_tiers = MagicMock(
-        side_effect=lambda model_name: (["ultrafast"],) if model_name == internal_name else ()
+        side_effect=lambda model_name, team_id=None: (["ultrafast"],) if model_name == internal_name else ()
     )
 
     async def _fake_get_available_models_for_user(**kwargs):

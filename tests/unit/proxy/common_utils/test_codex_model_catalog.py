@@ -7,6 +7,7 @@ import pytest
 
 import litellm
 from litellm.proxy.common_utils.codex_model_catalog import (
+    codex_model_list_body,
     CODEX_CATALOG_BYTE_LIMIT,
     CodexCatalogRow,
     CodexServiceTier,
@@ -342,6 +343,33 @@ def test_catalog_rows_read_the_router_by_each_entry_lookup_id():
         ),
         CodexCatalogRow(id="plain", upstream_model="openai/some-unmapped-model", service_tiers=(None,)),
     )
+
+
+def test_model_list_body_offers_a_tier_only_off_the_deployments_the_key_team_can_route_to():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://team-2.example"},
+                "model_info": {"team_id": "team-2"},
+            },
+        ]
+    )
+    listing = ({"id": "gpt-6-astra", "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"},)
+    entries = (("gpt-6-astra", "gpt-6-astra"),)
+
+    def offered(team_id):
+        (entry,) = json.loads(codex_model_list_body(listing, entries, router, team_id))["models"]
+        return [tier["id"] for tier in entry["service_tiers"]]
+
+    assert offered("team-1") == ["ultrafast"]
+    assert offered("team-2") == []
+    assert offered(None) == []
 
 
 def test_catalog_rows_without_a_router_carry_only_the_listing():

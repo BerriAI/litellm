@@ -477,6 +477,10 @@ _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 
 
+def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, object]:
+    return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
+
+
 def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
     return tuple(item for item in value if isinstance(item, str)) if isinstance(value, tuple) else ()
 
@@ -10530,23 +10534,27 @@ class Router:
             return display_name
         return None
 
-    @staticmethod
-    def _configured_service_tiers_of(deployment: Mapping[str, object]) -> object:
-        return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {}).get("service_tiers")
-
-    def get_configured_service_tiers(self, model_name: str) -> tuple[object, ...]:
+    def get_configured_service_tiers(self, model_name: str, team_id: str | None = None) -> tuple[object, ...]:
         """
-        Return the service_tiers value each concrete deployment of model_name
+        Return the service_tiers value each routable deployment of model_name
         configures in its model_info, unvalidated and in model_list order, None
         for a deployment that sets none, via the same O(1) index lookup as
         get_configured_display_name; the caller validates the shape it expects
         and decides how the deployments combine.
 
+        Routable means what a request from team_id can reach, selected the way
+        routing selects deployments: another team's deployment of the name is
+        left out, and so is one an admin paused via
+        `LiteLLM_ProxyModelTable.blocked`.
+
         Returns an empty tuple for wildcard-expanded or unknown names.
         """
+        model_infos: Final = tuple(
+            _configured_model_info(deployment)
+            for deployment in self._get_all_deployments(model_name=model_name, team_id=team_id)
+        )
         return tuple(
-            self._configured_service_tiers_of(deployment)
-            for deployment in self._get_all_deployments(model_name=model_name)
+            model_info.get("service_tiers") for model_info in model_infos if model_info.get("blocked") is not True
         )
 
     def get_credential_deployment(self, model_id: str, team_id: str | None = None) -> Deployment | None:

@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from functools import cache
 from itertools import accumulate
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, NoneType
 from typing import TYPE_CHECKING, Annotated, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, StringConstraints, TypeAdapter, ValidationError
@@ -83,20 +83,20 @@ class CodexFallbackModel(BaseModel):
 
     slug: str
     display_name: str
-    description: None = None
+    description: NoneType = None
     supported_reasoning_levels: tuple[()] = ()
     shell_type: Literal["unified_exec"] = "unified_exec"
     visibility: Literal["list"] = "list"
     supported_in_api: Literal[True] = True
     priority: int
     service_tiers: tuple[CodexServiceTier, ...] = ()
-    availability_nux: None = None
-    upgrade: None = None
+    availability_nux: NoneType = None
+    upgrade: NoneType = None
     support_verbosity: Literal[False] = False
     supports_reasoning_summaries: Literal[False] = False
     supports_parallel_tool_calls: Literal[False] = False
-    default_verbosity: None = None
-    apply_patch_tool_type: None = None
+    default_verbosity: NoneType = None
+    apply_patch_tool_type: NoneType = None
     truncation_policy: CodexTruncationPolicy = CodexTruncationPolicy()
     experimental_supported_tools: tuple[()] = ()
     context_window: int | None
@@ -354,7 +354,9 @@ def codex_models_response_json(
     )
 
 
-def _catalog_row(row: ModelInfoResponse, lookup_id: str, llm_router: Router | None) -> CodexCatalogRow:
+def _catalog_row(
+    row: ModelInfoResponse, lookup_id: str, llm_router: Router | None, team_id: str | None
+) -> CodexCatalogRow:
     deployment: Final = (
         llm_router.get_deployment_by_model_group_name(model_group_name=lookup_id) if llm_router is not None else None
     )
@@ -364,7 +366,7 @@ def _catalog_row(row: ModelInfoResponse, lookup_id: str, llm_router: Router | No
         max_input_tokens=row.get("max_input_tokens"),
         upstream_model=deployment.litellm_params.model if deployment is not None else None,
         display_name=llm_router.get_configured_display_name(lookup_id) if llm_router is not None else None,
-        service_tiers=llm_router.get_configured_service_tiers(lookup_id) if llm_router is not None else (),
+        service_tiers=llm_router.get_configured_service_tiers(lookup_id, team_id) if llm_router is not None else (),
     )
 
 
@@ -372,20 +374,23 @@ def codex_catalog_rows(
     rows: Sequence[ModelInfoResponse],
     entries: Sequence[tuple[str, str]],
     llm_router: Router | None,
+    team_id: str | None = None,
 ) -> tuple[CodexCatalogRow, ...]:
     """`rows` joined with the router's configured metadata, looked up by each entry's internal id so
-    team-scoped rows resolve the way the Anthropic listing's display names do."""
+    team-scoped rows resolve the way the Anthropic listing's display names do; `team_id` is the
+    requesting key's team, so a tier is read only off the deployments its requests can route to."""
     lookup_ids: Final = MappingProxyType(dict(entries))
-    return tuple(_catalog_row(row, lookup_ids.get(row["id"], row["id"]), llm_router) for row in rows)
+    return tuple(_catalog_row(row, lookup_ids.get(row["id"], row["id"]), llm_router, team_id) for row in rows)
 
 
 def codex_model_list_body(
     rows: Sequence[ModelInfoResponse],
     entries: Sequence[tuple[str, str]],
     llm_router: Router | None,
+    team_id: str | None = None,
 ) -> str:
     """The `/v1/models?client_version=...` body, logging the models Codex's byte limit left out."""
-    body: Final = codex_models_response_json(codex_catalog_rows(rows, entries, llm_router))
+    body: Final = codex_models_response_json(codex_catalog_rows(rows, entries, llm_router, team_id))
     if body.left_out:
         verbose_proxy_logger.warning(
             "Codex model catalog cut at %d bytes, left out: %s. List the models Codex users need first in model_list",
