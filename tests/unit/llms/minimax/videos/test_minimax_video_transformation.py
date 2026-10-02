@@ -11,6 +11,7 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
+import litellm
 from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.minimax.videos.transformation import (
@@ -179,6 +180,16 @@ class TestMinimaxVideoCreateRequest:
         )
 
         assert mapped == {"callback_url": "https://cb.example/hook", "ratio": "1:1"}
+
+    def test_non_object_parameters_is_a_bad_request(self):
+        with pytest.raises(BadRequestError, match="parameters") as raised:
+            MinimaxVideoConfig().map_openai_params(
+                video_create_optional_params={"parameters": "callback_url=x"},
+                model="MiniMax-H3",
+                drop_params=False,
+            )
+
+        assert raised.value.status_code == 400
 
     def test_image_reference_file_becomes_first_frame_data_uri(self):
         """A file input_reference must arrive as a first_frame content item
@@ -546,6 +557,56 @@ class TestMinimaxVideoContentDownload:
                 logging_obj=None,
             )
 
+    def test_sync_download_returns_the_bytes_from_the_task_url(self, monkeypatch):
+        from litellm.llms.minimax.videos import transformation
+
+        client = Mock()
+        client.get.return_value = Mock(content=b"mp4-bytes", raise_for_status=Mock())
+        monkeypatch.setattr(litellm, "user_url_validation", False)
+        monkeypatch.setattr(transformation, "_get_httpx_client", lambda *args, **kwargs: client)
+
+        content = MinimaxVideoConfig().transform_video_content_response(
+            raw_response=_query_response(
+                {"id": "t1", "status": "succeeded", "content": {"url": "https://cdn.example.com/v.mp4"}}
+            ),
+            logging_obj=None,
+        )
+
+        assert content == b"mp4-bytes"
+        assert client.get.call_args.args[0] == "https://cdn.example.com/v.mp4"
+
+    @pytest.mark.asyncio
+    async def test_async_download_returns_the_bytes_from_the_task_url(self, monkeypatch):
+        from litellm.llms.minimax.videos import transformation
+
+        response = Mock(content=b"mp4-bytes", raise_for_status=Mock())
+
+        async def get(url, **kwargs):
+            return response
+
+        client = Mock()
+        client.get = get
+        monkeypatch.setattr(litellm, "user_url_validation", False)
+        monkeypatch.setattr(transformation, "get_async_httpx_client", lambda **kwargs: client)
+
+        content = await MinimaxVideoConfig().async_transform_video_content_response(
+            raw_response=_query_response(
+                {"id": "t1", "status": "succeeded", "content": {"url": "https://cdn.example.com/v.mp4"}}
+            ),
+            logging_obj=None,
+        )
+
+        assert content == b"mp4-bytes"
+
+    def test_download_of_a_finished_task_without_a_url_is_a_client_error(self):
+        with pytest.raises(MinimaxVideoError, match="no downloadable content") as raised:
+            MinimaxVideoConfig().transform_video_content_response(
+                raw_response=_query_response({"id": "t1", "status": "succeeded"}),
+                logging_obj=None,
+            )
+
+        assert raised.value.status_code == 400
+
 
 class TestMinimaxVideoList:
     def test_request_maps_limit_and_extra_query(self):
@@ -630,6 +691,13 @@ class TestMinimaxVideoRemix:
                 api_base=API_BASE,
                 litellm_params=GenericLiteLLMParams(),
                 headers={},
+            )
+
+    def test_remix_response_is_rejected(self):
+        with pytest.raises(NotImplementedError, match="remix is not supported by MiniMax"):
+            MinimaxVideoConfig().transform_video_remix_response(
+                raw_response=_mock_response({}),
+                logging_obj=None,
             )
 
 
