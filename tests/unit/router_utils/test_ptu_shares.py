@@ -4,12 +4,13 @@ from typing import Final
 
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.router_utils.ptu_shares import (
-    PTUTeamCeiling,
     filter_ptu_shared_deployments,
     model_group_deployments,
     model_group_ptu_capacity,
     ptu_capacity_warning,
+    PTUTeamCeiling,
     team_ptu_ceiling,
+    team_servable_deployments,
 )
 
 _GPT41: Final = AZURE_PTU_CAPACITY["gpt-4.1"]
@@ -78,6 +79,18 @@ def test_a_single_team_deployment_and_a_malformed_share_map_are_not_filtered_her
     result: Final = filter_ptu_shared_deployments([_single_team(), _shared(shares={"team-a": 0})], "team-z")
     assert [d["model_info"]["id"] for d in result.deployments] == ["single", "shared"]
     assert result.withheld is False
+
+
+def test_a_team_is_served_from_its_shared_deployment_first_and_never_from_another_teams_reservation():
+    """team-b holds a share on the shared deployment and the open one serves everyone, while the
+    deployment reserved for team-a alone is withheld from it the way the router withholds it."""
+    servable: Final = team_servable_deployments([_single_team(), _OPEN, _shared()], "team-b")
+    assert [d["model_info"]["id"] for d in servable] == ["shared", "open"]
+
+
+def test_the_owning_team_keeps_its_reservation_behind_its_share():
+    servable: Final = team_servable_deployments([_single_team(), _OPEN, _shared()], "team-a")
+    assert [d["model_info"]["id"] for d in servable] == ["shared", "single", "open"]
 
 
 def test_a_share_converts_to_the_models_input_tpm_per_ptu():

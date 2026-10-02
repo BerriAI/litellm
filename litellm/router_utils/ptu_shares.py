@@ -12,6 +12,7 @@ from typing import Final, Generic, TypeVar
 
 from litellm.litellm_core_utils.ptu_pricing import is_model_info_mapping, parsed_ptu_shares, ptu_terms
 from litellm.llms.azure.ptu_capacity import PTUCapacity, deployment_ptu_capacity, is_azure_deployment
+from litellm.router_utils.common_utils import team_may_use_deployment
 
 _DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
@@ -157,9 +158,18 @@ def _model_group_of(
     )
 
 
+def _deployment_owner(deployment: Mapping[str, object]) -> object:
+    model_info: Final = deployment.get("model_info")
+    return model_info.get("team_id") if isinstance(model_info, Mapping) else None
+
+
 def team_servable_deployments(deployments: Sequence[_DeploymentT], team_id: str) -> tuple[_DeploymentT, ...]:
-    """The deployments ``team_id`` can be served from, the ones it holds a share on first."""
-    servable: Final = filter_ptu_shared_deployments(deployments, team_id).deployments
+    """The deployments ``team_id`` can be served from, the ones it holds a share on first: never one
+    reserved for another team, nor one split into shares it holds none of."""
+    shareable: Final = filter_ptu_shared_deployments(deployments, team_id).deployments
+    servable: Final = tuple(
+        deployment for deployment in shareable if team_may_use_deployment(_deployment_owner(deployment), team_id)
+    )
     return tuple(sorted(servable, key=lambda deployment: _deployment_shares(deployment) is None))
 
 

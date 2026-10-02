@@ -205,6 +205,48 @@ def _mixed_ptu_router() -> Router:
     )
 
 
+def _reserved_ptu_router() -> Router:
+    """A gpt-4.1 PTU deployment reserved for team-x alone the single-team way, beside an open
+    pay-as-you-go deployment of gpt-4.1 that serves every other team."""
+    return Router(
+        model_list=[
+            {
+                "model_name": "reserved",
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-ptu", "api_base": "https://ptu.example"},
+                "model_info": {
+                    "id": "reserved-41",
+                    "team_id": "team-x",
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2026-01-01T00:00:00Z",
+                },
+            },
+            {
+                "model_name": "gpt-4.1",
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-payg", "api_base": "https://payg.example"},
+                "model_info": {"id": "payg"},
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize(("team_id", "expected_on_the_provider_model"), [("team-x", 1.0), ("team-y", 0.0), (None, 1.0)])
+def test_another_teams_single_team_reservation_sizes_nothing_on_a_teams_page(
+    monkeypatch, team_id: str | None, expected_on_the_provider_model: float
+):
+    """A provider-model row reaches the reserved deployment only for the team it is reserved for: any
+    other team was served by the open deployment, so its page counts no PTU-hours on that row, while
+    a page spanning teams keeps the reserved deployment's sizing."""
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    one_hour: Final = {"azure/gpt-4.1": _bucket(_metrics(prompt=_ONE_PTU_HOUR_OF_INPUT, completion=0))}
+
+    attached: Final = with_ptu_consumption(_response(_day("2026-09-23", one_hour)), _reserved_ptu_router(), team_id)
+
+    row: Final = attached.results[0].breakdown.model_groups["azure/gpt-4.1"]
+    assert row.metrics.ptu_hours == pytest.approx(expected_on_the_provider_model)
+    assert attached.metadata.total_ptu_hours == pytest.approx(expected_on_the_provider_model)
+
+
 _ONE_GPT_41_PTU_HOUR_ON_GPT_55: Final = _ONE_PTU_HOUR_OF_INPUT / AZURE_PTU_CAPACITY["gpt-5.5"].normalized_tokens_per_ptu_hour
 
 

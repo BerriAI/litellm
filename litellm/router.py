@@ -185,6 +185,7 @@ from litellm.router_utils.common_utils import (
     get_request_team_id,
     provider_for_generic_call,
     resolve_model_group_alias,
+    team_may_use_deployment,
     truncate_fallback_error_detail,
     warn_on_provider_credential_mismatch,
 )
@@ -10325,8 +10326,7 @@ class Router:
         callers from that same team; deployments without a team owner are shared.
         """
         model_info: Final = model.get("model_info") if isinstance(model, dict) else model.model_info
-        owner_team_id: Final = model_info.get("team_id") if model_info is not None else None
-        return owner_team_id is None or owner_team_id == team_id
+        return team_may_use_deployment(model_info.get("team_id") if model_info is not None else None, team_id)
 
     def _get_model_group_deployment_usable_by_team(
         self, model_group_name: str, team_id: str | None
