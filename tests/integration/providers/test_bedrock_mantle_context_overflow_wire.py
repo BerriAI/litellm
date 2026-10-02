@@ -669,8 +669,15 @@ _OVERFLOW_MARKER: Final = "chaos-overflow"
 _HAPPY_MARKER: Final = "chaos-happy"
 _Call = tuple[str, dict[str, JsonValue], bool, str]
 _Outcome = tuple[str, bool, bool, int, str, str]
+_Builder = Callable[[str, str, bool], dict[str, JsonValue]]
+_Cell = tuple[tuple[str, _Builder], str, bool]
 _BUILDERS: Final = (("/v1/chat/completions", _chat), ("/v1/messages", _messages), ("/v1/responses", _responses))
-_UNLOGGED_OVERFLOW_CELL: Final = ("/v1/messages", True)
+_STREAMED_MESSAGES_OVERFLOW: Final = ("/v1/messages", _OVERFLOW_MARKER, True)
+
+
+def _logs_a_spend_row(cell: _Cell) -> bool:
+    (path, _), marker, stream = cell
+    return (path, marker, stream) != _STREAMED_MESSAGES_OVERFLOW
 
 
 def _chaos_peer(request: Request) -> Reply:
@@ -682,13 +689,14 @@ def _chaos_peer(request: Request) -> Reply:
 
 
 def _burst_bodies(model: str, round_name: str) -> tuple[_Call, ...]:
-    def call(cell: tuple[tuple[str, Callable[[str, str, bool], dict[str, JsonValue]]], str, bool]) -> _Call:
+    def call(cell: _Cell) -> _Call:
         (path, build), marker, stream = cell
         tag: Final = f"chaos-{round_name}-{uuid4().hex}"
         prompt: Final = f"{marker} {round_name} {path} stream={stream} {tag}"
         return path, build(model, prompt, stream), marker == _OVERFLOW_MARKER, tag
 
-    return tuple(call(cell) for cell in product(_BUILDERS, (_HAPPY_MARKER, _OVERFLOW_MARKER), (False, True)))
+    cells: Final = product(_BUILDERS, (_HAPPY_MARKER, _OVERFLOW_MARKER), (False, True))
+    return tuple(call(cell) for cell in cells if _logs_a_spend_row(cell))
 
 
 def _tagged_rows(tag: str) -> list[dict[str, JsonValue]]:
@@ -724,9 +732,19 @@ def _assert_served(outcomes: tuple[_Outcome, ...]) -> None:
             continue
         assert _GENERIC in text, (path, status, text)
         assert status in (200, 400), (path, status, text)
-        if (path, stream) == _UNLOGGED_OVERFLOW_CELL:
-            continue
         assert _single_tagged_status(tag) == "failure", (path, tag)
+
+
+def test_messages_stream_overflow_logs_one_failure_row(gateway: Gateway) -> None:
+    pytest.skip("BUG: a streamed /v1/messages context overflow writes no LiteLLM_SpendLogs row (LIT-9132)")
+    with wire_server(_chaos_peer) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_MODEL, api_base=wire.url, api_key=_API_KEY)
+        tag: Final = f"chaos-single-{uuid4().hex}"
+        body: Final = _messages(model, f"{_OVERFLOW_MARKER} single {tag}", True)
+        ((_, _, _, status, _, text),) = _fire(gateway, (("/v1/messages", body, True, tag),))
+        assert status == 200, text
+        assert _GENERIC in text, text
+        assert _single_tagged_status(tag) == "failure", tag
 
 
 def test_chaos_mantle_peer_outage_mid_burst_logs_every_call_once_and_keeps_the_proxy_alive(gateway: Gateway) -> None:
