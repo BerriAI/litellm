@@ -1921,7 +1921,9 @@ class MCPServerManager:
         per_user_oauth_token_store: InvalidatableOAuthTokenStore | None = None,
         per_user_token_cache: MCPPerUserTokenCache | None = None,
         discovery_clock: Callable[[], float] = time.monotonic,
+        upstream_transport: httpx2.AsyncBaseTransport | None = None,
     ):
+        self._upstream_transport: httpx2.AsyncBaseTransport | None = upstream_transport
         self._per_user_oauth_token_store = per_user_oauth_token_store or LazyPerUserOAuthTokenStore(
             self.get_mcp_server_by_id
         )
@@ -4358,6 +4360,7 @@ class MCPServerManager:
                         server_url=server_url,
                         transport_type=transport,
                         protocol_version=protocol_version,
+                        upstream_transport=self._upstream_transport,
                         auth_type=resolved_server.auth_type,
                         timeout=(
                             resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT
@@ -4402,6 +4405,7 @@ class MCPServerManager:
                     server_url=server_url,
                     transport_type=transport,
                     protocol_version=protocol_version,
+                    upstream_transport=self._upstream_transport,
                     auth_type=resolved_server.auth_type,
                     auth_value=auth_value,
                     auth_header_name=auth_header_name,
@@ -7170,7 +7174,10 @@ class MCPServerManager:
                     return "ok"
 
                 # Add timeout wrapper to prevent hanging
-                await asyncio.wait_for(client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT)
+                await asyncio.wait_for(
+                    client.run_with_session(_noop, quiet_on_error=True),
+                    timeout=MCP_HEALTH_CHECK_TIMEOUT,
+                )
                 self._remember_upstream_initialize_instructions(server, client)
                 status = "healthy"
             except asyncio.TimeoutError:
@@ -7182,6 +7189,12 @@ class MCPServerManager:
             except Exception as e:
                 health_check_error = str(e)
                 status = "unhealthy"
+                verbose_logger.warning(
+                    "MCP health check failed for %s: %s%s",
+                    server.name,
+                    type(e).__name__,
+                    _upstream_failure_suffix(e),
+                )
 
         return LiteLLM_MCPServerTable(
             server_id=server.server_id,

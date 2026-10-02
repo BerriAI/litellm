@@ -13871,6 +13871,73 @@ def _mcp_upstream(respond):
         yield
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("responder", "expects_exchange", "expected_fragments"),
+    (
+        pytest.param(
+            AsyncMock(return_value=httpx2.Response(500, json={"error": "health-check-boom"})),
+            True,
+            (
+                "MCP health check failed for",
+                "upstream exchange:",
+                "-> HTTP 500",
+                '"method":"initialize"',
+                "health-check-boom",
+            ),
+            id="upstream-http-500",
+        ),
+        pytest.param(
+            AsyncMock(side_effect=httpx2.ConnectError("connection failed")),
+            False,
+            ("MCP health check failed for",),
+            id="connect-error",
+        ),
+    ),
+)
+async def test_health_check_logs_upstream_exchange_only_for_http_failures(
+    caplog: pytest.LogCaptureFixture,
+    responder: AsyncMock,
+    expects_exchange: bool,
+    expected_fragments: tuple[str, ...],
+) -> None:
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(responder))
+    token: Final = "health-check-secret-0123456789"
+    server: Final = MCPServer(
+        server_id="health-check-upstream",
+        name="health_check_upstream",
+        url="https://upstream.example/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.bearer_token,
+        authentication_token=token,
+    )
+    manager.registry[server.server_id] = server
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = await manager.health_check_server(server.server_id)
+
+    assert result.status == "unhealthy"
+    warning_messages: Final = tuple(
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "LiteLLM"
+        and record.levelno == logging.WARNING
+        and "MCP health check failed for" in record.getMessage()
+    )
+    assert len(warning_messages) == 1
+    warning: Final = warning_messages[0]
+    assert all(fragment in warning for fragment in expected_fragments)
+    assert ("upstream exchange:" in warning) is expects_exchange
+    assert not any(
+        record.name == "LiteLLM"
+        and record.levelno == logging.WARNING
+        and "run_with_session failed" in record.getMessage()
+        for record in caplog.records
+    )
+    assert token not in caplog.text
+    assert responder.await_args_list[0].args[0].headers["Authorization"] == f"Bearer {token}"
+
+
 class _DiscoveryUpstream:
     def __init__(self) -> None:
         self.requests: tuple[tuple[str, str], ...] = ()
