@@ -1070,10 +1070,17 @@ def test_burst_with_platform_outage_recovers_without_duplicate_spend(rig: Rig) -
 
 
 # C2: one proxy worker is killed during a burst; the other keeps serving and detect still runs for each call
+def _is_live_worker(child: psutil.Process, exclude: int) -> bool:
+    if child.pid == exclude:
+        return False
+    try:
+        return child.status() != psutil.STATUS_ZOMBIE and "spawn_main" in " ".join(child.cmdline())
+    except psutil.Error:
+        return False
+
+
 def _uvicorn_workers(parent: psutil.Process, *, exclude: int = 0) -> tuple[psutil.Process, ...]:
-    return tuple(
-        c for c in parent.children() if c.is_running() and c.pid != exclude and "spawn_main" in " ".join(c.cmdline())
-    )
+    return tuple(c for c in parent.children() if _is_live_worker(c, exclude))
 
 
 def test_burst_survives_one_worker_kill(rig: Rig) -> None:
