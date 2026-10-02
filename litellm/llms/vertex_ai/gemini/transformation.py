@@ -481,7 +481,7 @@ def _process_gemini_media(
     format: str | None = None,
     media_resolution_enum: dict[str, str] | None = None,
     model: str | None = None,
-    video_metadata: dict[str, Any] | None = None,
+    video_metadata: Mapping[str, object] | None = None,
     vertex_project: str | None = None,
     vertex_credentials: object = None,
 ) -> PartType:
@@ -1037,9 +1037,7 @@ def _gemini_convert_messages_with_history(
                                 }
                             }
                             if "thought_signature" in invocation:
-                                valid_inv_sig = _get_valid_base64_thought_signature(invocation["thought_signature"])
-                                if valid_inv_sig:
-                                    tc_part["thoughtSignature"] = valid_inv_sig
+                                tc_part["thoughtSignature"] = invocation["thought_signature"]
                             assistant_content.append(tc_part)
 
                             # Re-inject toolResponse part if response is present
@@ -1052,11 +1050,7 @@ def _gemini_convert_messages_with_history(
                                     tr_dict["toolType"] = invocation["tool_type"]
                                 tr_part: dict[str, object] = {"toolResponse": tr_dict}
                                 if "response_thought_signature" in invocation:
-                                    valid_resp_sig = _get_valid_base64_thought_signature(
-                                        invocation["response_thought_signature"]
-                                    )
-                                    if valid_resp_sig:
-                                        tr_part["thoughtSignature"] = valid_resp_sig
+                                    tr_part["thoughtSignature"] = invocation["response_thought_signature"]
                                 assistant_content.append(tr_part)
 
                 msg_i += 1
