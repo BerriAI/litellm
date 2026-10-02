@@ -128,27 +128,27 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         self, user_id: str, team_id: str | None
     ) -> LiteLLM_VerificationToken | None:
         records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(
-            where={  # mutable-ok: the prisma where clause contract is a plain dict
+            where={
                 "user_id": user_id,
                 "team_id": team_id,
                 "expires": None,
-                "AND": [  # mutable-ok: prisma filter literal
-                    {"OR": [{"blocked": False}, {"blocked": None}]},  # mutable-ok: prisma filter literal
-                    {  # mutable-ok: prisma filter literal
-                        "OR": [  # mutable-ok: prisma filter literal
-                            {"team_id": None},  # mutable-ok: prisma filter literal
-                            {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}},  # mutable-ok: prisma filter literal
+                "AND": [
+                    {"OR": [{"blocked": False}, {"blocked": None}]},
+                    {
+                        "OR": [
+                            {"team_id": None},
+                            {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}},
                         ]
                     },
-                    {  # mutable-ok: prisma filter literal
-                        "OR": [  # mutable-ok: prisma filter literal
-                            {"allowed_routes": {"is_empty": True}},  # mutable-ok: prisma filter literal
-                            {"allowed_routes": {"has": "llm_api_routes"}},  # mutable-ok: prisma filter literal
+                    {
+                        "OR": [
+                            {"allowed_routes": {"is_empty": True}},
+                            {"allowed_routes": {"has": "llm_api_routes"}},
                         ]
                     },
                 ],
             },
-            order={"created_at": "desc"},  # mutable-ok: prisma order literal
+            order={"created_at": "desc"},
         )
         return next(
             (key for key in self._to_model_list(records) if key.metadata.get("auto_registered") is not True),

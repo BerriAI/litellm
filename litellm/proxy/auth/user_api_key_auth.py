@@ -1017,7 +1017,7 @@ async def _auto_register_jwt_mapping(
             user_id=user_id,
             organization_id=org_id,
             agent_id=agent_id,
-            metadata={  # mutable-ok: GenerateKeyRequest metadata is a plain dict field
+            metadata={
                 "auto_registered": True,
                 "jwt_claim_field": virtual_key_claim_field,
                 "jwt_claim_value": claim_value,
@@ -1055,9 +1055,7 @@ async def _auto_register_jwt_mapping(
             )
             if minted:
                 try:
-                    await prisma_client.db.litellm_verificationtoken.delete(
-                        where={"token": token_hash}  # mutable-ok: prisma where clause contract is a plain dict
-                    )
+                    await prisma_client.db.litellm_verificationtoken.delete(where={"token": token_hash})
                 except Exception as delete_err:
                     # Don't fail the request if cleanup fails — the orphan is
                     # unmapped and inert. Log so an operator can prune it later.
