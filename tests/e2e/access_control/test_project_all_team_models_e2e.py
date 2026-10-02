@@ -10,6 +10,8 @@ model the team could reach.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from access_control_client import (
     ALL_PROXY_MODELS,
@@ -18,9 +20,9 @@ from access_control_client import (
     TEAM_MODEL_ACCESS_DENIED_MARKER,
     AccessControlClient,
 )
-from e2e_config import unique_marker
+from e2e_config import settle_propagation, unique_marker
 from lifecycle import ResourceManager
-from models import ChatResponse
+from models import ChatResponse, TeamInfoResponse
 
 pytestmark = pytest.mark.e2e
 
@@ -69,6 +71,13 @@ class TestProjectAllTeamModels:
         resources.defer(lambda: client.delete_key(key))
 
         client.set_team_models(team_id, f"e2e-proj-team-{marker}", [TEAM_MODEL])
+        written_at = time.monotonic()
+        _ = client.proxy.read_body_back_everywhere(
+            f"/team/info?team_id={team_id}",
+            TeamInfoResponse,
+            settled=lambda response: response.team_id == team_id and response.team_info.models == [TEAM_MODEL],
+        )
+        settle_propagation(written_at)
 
         _chat_assert_completion(client, key, TEAM_MODEL)
 
