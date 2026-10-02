@@ -326,6 +326,92 @@ def test_oversized_non_content_fields_still_fit_the_limit():
     assert kept[1]["content"].startswith("\u2014")
 
 
+@pytest.mark.parametrize("single", [False, True])
+@pytest.mark.parametrize("filler", ["x", "界", "\x00"])
+def test_oversized_parts_keep_text_and_small_calls(single: bool, filler: str):
+    assistant = {
+        "role": "assistant",
+        "parts": [
+            {"type": "text", "content": "answer " + filler * 2000},
+            {"type": "tool_call", "name": "lookup", "arguments": {"id": 7}},
+        ],
+    }
+    messages = (
+        [assistant]
+        if single
+        else [
+            {
+                "role": "user",
+                "parts": [
+                    {"type": "text", "content": "question " + "x" * 2000},
+                ],
+            },
+            assistant,
+        ]
+    )
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 1000):
+        encoded = decode._truncate_payload(json.dumps(messages))
+    kept = json.loads(encoded)
+    assert len(encoded.encode()) <= 1000
+    assert kept[-1]["content"].startswith("answer ")
+    assert "truncated" in kept[-1]["content"]
+    assert kept[-1]["tool_calls"] == [{"name": "lookup", "args": {"id": 7}}]
+    assert "parts" not in kept[-1]
+
+
+def test_oversized_parts_do_not_override_explicit_content():
+    messages = [
+        {"role": "user", "content": "explicit " + "x" * 2000, "parts": [{"type": "text", "content": "fallback"}]}
+    ]
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 400):
+        encoded = decode._truncate_payload(json.dumps(messages))
+    assert len(encoded.encode()) <= 400
+    assert json.loads(encoded)[0]["content"].startswith("explicit ")
+
+
+def test_oversized_single_message_role_cannot_exceed_limit():
+    messages = [{"role": "r" * 2000, "parts": [{"type": "text", "content": "answer"}]}]
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 400):
+        encoded = decode._truncate_payload(json.dumps(messages))
+    assert len(encoded.encode()) <= 400
+    assert json.loads(encoded) == [{"role": "system", "content": "…[1 earlier messages truncated]"}]
+
+
+def test_oversized_parts_keep_explicit_calls_without_duplicates():
+    calls = [{"name": "explicit", "args": {"id": 9}, "id": "call-9"}]
+    message = {
+        "role": "assistant",
+        "tool_calls": calls,
+        "parts": [
+            {"type": "text", "content": "answer " + "x" * 2000},
+            {"type": "tool_call", "name": "embedded", "arguments": {"id": 7}},
+        ],
+    }
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 1000):
+        encoded = decode._truncate_payload(json.dumps([message]))
+    kept = json.loads(encoded)[0]
+    assert len(encoded.encode()) <= 1000
+    assert kept["tool_calls"] == calls
+    assert kept["content"].startswith("answer ")
+
+
+def test_oversized_empty_message_array_stays_valid_json():
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 400):
+        encoded = decode._truncate_payload("[" + " " * 1000 + "]")
+    assert encoded == "[]"
+
+
+def test_oversized_parts_history_keeps_first_and_latest_messages():
+    messages = [{"role": "user", "parts": [{"type": "text", "content": f"turn {i} " + "x" * 60}]} for i in range(12)]
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 400):
+        encoded = decode._truncate_payload(json.dumps(messages))
+    kept = json.loads(encoded)
+    assert len(encoded.encode()) <= 400
+    assert kept[0] == messages[0]
+    assert kept[-1] == messages[-1]
+    assert "earlier messages truncated" in kept[1]["content"]
+
+
 # ---------------------------------------------------------------- status / exceptions
 
 
