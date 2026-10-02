@@ -1633,8 +1633,12 @@ if MCP_AVAILABLE:
                 if registry_pick and mcp_servers is not None and len(mcp_servers) == 1
                 else ()
             )
-            granted = operations.global_mcp_server_manager.get_mcp_server_answering_to(
-                server_name, client_ip=client_ip, among=allowed_single
+            granted = (
+                operations.global_mcp_server_manager.get_mcp_server_answering_to(
+                    server_name, client_ip=client_ip, among=allowed_single
+                )
+                if allowed_single
+                else None
             )
             server = granted if granted is not None else registry_pick
             granted_single = granted is not None
