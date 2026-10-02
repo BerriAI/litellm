@@ -15,7 +15,7 @@ from litellm.proxy.lens.models import (
     TracePart,
 )
 from litellm.proxy.lens.state import queue_job
-from litellm.proxy.lens.worker import LensWorker
+from litellm.proxy.lens.worker import LensWorker, failure_message
 from tests.unit.proxy.lens.test_state import NOW, lens
 
 
@@ -126,6 +126,34 @@ async def test_worker_reads_claimed_activity_and_reports_analysis_or_failure(mod
         assert result.coverage.screened == 1
         assert result.coverage.unassessable == 0
     elif model_status == 402:
-        assert result.error == "Monthly budget reached"
+        assert "HTTP 402" in result.error and "remaining budget" in result.error
     else:
-        assert result.error.startswith("Analysis interrupted.")
+        assert result.error.startswith("Model request failed (HTTP 503).")
+
+
+@pytest.mark.parametrize("status", (400, 401, 402, 403, 404, 409, 429, 503))
+def test_failure_reports_action_and_status_without_private_response_content(status: int) -> None:
+    request: Final = httpx.Request(
+        "POST", "https://private-host.test/lens/worker/private-lens/private-run/model?token=secret"
+    )
+    response: Final = httpx.Response(status, request=request, text="private trace content and key")
+    error: Final = httpx.HTTPStatusError("private exception details", request=request, response=response)
+    message: Final = failure_message(error)
+    assert message.startswith(f"Model request failed (HTTP {status}).")
+    assert "private" not in message and "secret" not in message
+
+
+@pytest.mark.parametrize(
+    "route,action", (("sample", "Reading trace data"), ("content", "Reading trace data"), ("result", "Saving results"))
+)
+def test_failure_identifies_the_failing_worker_operation(route: str, action: str) -> None:
+    request: Final = httpx.Request("GET", f"https://proxy.test/lens/worker/lens/job/{route}")
+    response: Final = httpx.Response(503, request=request)
+    error: Final = httpx.HTTPStatusError("private body", request=request, response=response)
+    assert failure_message(error).startswith(f"{action} failed (HTTP 503).")
+
+
+def test_connection_timeout_and_invalid_response_have_distinct_private_diagnostics() -> None:
+    assert "connect to the proxy" in failure_message(httpx.ConnectError("private hostname"))
+    assert "timed out" in failure_message(httpx.ReadTimeout("private prompt"))
+    assert "structured JSON" in failure_message(ValueError("private model response"))

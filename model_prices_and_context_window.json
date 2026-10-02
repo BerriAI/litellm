@@ -5516,7 +5516,7 @@
         "supports_web_search": false
     },
     "azure/gpt-4.1-nano": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_batches": 5e-08,
@@ -5550,7 +5550,7 @@
         "supports_vision": true
     },
     "azure/gpt-4.1-nano-2025-04-14": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_batches": 5e-08,
@@ -6133,7 +6133,7 @@
         "cache_creation_input_audio_token_cost": 4e-07,
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
-        "deprecation_date": "2027-06-25",
+        "deprecation_date": "2027-07-31",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
         "input_cost_per_token": 4e-06,
@@ -6168,7 +6168,7 @@
         "cache_creation_input_audio_token_cost": 3e-07,
         "cache_read_input_audio_token_cost": 3e-07,
         "cache_read_input_token_cost": 6e-08,
-        "deprecation_date": "2027-06-25",
+        "deprecation_date": "2027-07-31",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_image_token": 8e-07,
         "input_cost_per_token": 6e-07,
@@ -6346,7 +6346,7 @@
         "supports_tool_choice": true
     },
     "azure/gpt-4o-transcribe": {
-        "deprecation_date": "2026-10-15",
+        "deprecation_date": "2026-12-31",
         "input_cost_per_audio_token": 2.5e-06,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
@@ -6354,6 +6354,7 @@
         "max_output_tokens": 2000,
         "mode": "audio_transcription",
         "output_cost_per_token": 1e-05,
+        "source": "https://management.azure.com/subscriptions/c873328e-b572-4770-8dff-aaeb6f1f0e79/providers/Microsoft.CognitiveServices/locations/eastus2/models?api-version=2024-10-01",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
         ]
@@ -8571,6 +8572,7 @@
         "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
         "cache_read_input_token_cost": 1e-07,
         "cache_read_input_token_cost_above_272k_tokens": 2e-07,
+        "deprecation_date": "2028-03-11",
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_272k_tokens": 4e-06,
         "litellm_provider": "azure",
@@ -8619,6 +8621,7 @@
         "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
         "cache_read_input_token_cost": 1e-07,
         "cache_read_input_token_cost_above_272k_tokens": 2e-07,
+        "deprecation_date": "2028-03-11",
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_272k_tokens": 4e-06,
         "litellm_provider": "azure",
@@ -10972,7 +10975,7 @@
         "supports_web_search": false
     },
     "azure/us/gpt-4.1-nano-2025-04-14": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_batches": 5.5e-08,
@@ -42206,14 +42209,14 @@
         "supports_web_search": false
     },
     "openrouter/deepseek/deepseek-v4-pro": {
-        "cache_read_input_token_cost": 6.525e-08,
-        "input_cost_per_token": 7.83e-07,
+        "cache_read_input_token_cost": 1.74e-08,
+        "input_cost_per_token": 2.088e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
-        "output_cost_per_token": 1.566e-06,
+        "output_cost_per_token": 4.176e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -42226,14 +42229,14 @@
         "supports_web_search": false
     },
     "openrouter/deepseek/deepseek-v4.1-flash": {
-        "cache_read_input_token_cost": 2.91e-09,
-        "input_cost_per_token": 1.98e-08,
+        "cache_read_input_token_cost": 1e-08,
+        "input_cost_per_token": 3e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
         "max_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 3.96e-07,
+        "output_cost_per_token": 5e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -42820,14 +42823,14 @@
         "supports_web_search": false
     },
     "openrouter/nvidia/nemotron-3.5-lightning": {
-        "cache_read_input_token_cost": 3e-08,
-        "input_cost_per_token": 6e-08,
+        "cache_read_input_token_cost": 2.975e-08,
+        "input_cost_per_token": 5.95e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 1.6e-07,
+        "output_cost_per_token": 1.7e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -43829,6 +43832,7 @@
     "openrouter/z-ai/glm-4.7": {
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 1.1e-07,
+        "deprecation_date": "2026-12-31",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 204800,
@@ -67382,13 +67386,13 @@
         "supports_web_search": false
     },
     "openrouter/z-ai/glm-5.3": {
-        "input_cost_per_token": 1.4e-06,
-        "output_cost_per_token": 4.4e-06,
-        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 2.219e-07,
+        "output_cost_per_token": 3.39e-06,
+        "cache_read_input_token_cost": 1.775e-07,
         "litellm_provider": "openrouter",
-        "max_input_tokens": 1310720,
-        "max_output_tokens": 943717,
-        "max_tokens": 943717,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 943718,
+        "max_tokens": 943718,
         "mode": "chat",
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
@@ -67519,8 +67523,8 @@
         "supports_prompt_caching": true
     },
     "openrouter/deepseek/deepseek-v4-flash-0731": {
-        "cache_read_input_token_cost": 8.9e-09,
-        "input_cost_per_token": 8.9e-09,
+        "cache_read_input_token_cost": 1.08e-08,
+        "input_cost_per_token": 1.08e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
@@ -67608,8 +67612,8 @@
         "supports_web_search": false
     },
     "openrouter/moonshotai/kimi-k3": {
-        "cache_read_input_token_cost": 2.7e-07,
-        "input_cost_per_token": 2.8e-07,
+        "cache_read_input_token_cost": 4.357e-07,
+        "input_cost_per_token": 4.357e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
@@ -67732,7 +67736,7 @@
     },
     "openrouter/z-ai/glm-5.2": {
         "cache_read_input_token_cost": 2.6e-07,
-        "input_cost_per_token": 3.249e-07,
+        "input_cost_per_token": 4.1e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
@@ -68094,14 +68098,14 @@
         "supports_web_search": true
     },
     "openrouter/deepseek/deepseek-v4-flash": {
-        "cache_read_input_token_cost": 1.5708e-08,
-        "input_cost_per_token": 7.854e-08,
+        "cache_read_input_token_cost": 8.372e-09,
+        "input_cost_per_token": 4.186e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 384000,
-        "max_tokens": 384000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 1.5708e-07,
+        "output_cost_per_token": 8.372e-08,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -68114,9 +68118,9 @@
         "supports_web_search": false
     },
     "openrouter/moonshotai/kimi-k2.6": {
-        "input_cost_per_token": 6.5e-07,
-        "output_cost_per_token": 3.41e-06,
-        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 4.3415e-07,
+        "output_cost_per_token": 1.828e-06,
+        "cache_read_input_token_cost": 7.312e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
         "max_output_tokens": 235929,
@@ -68563,7 +68567,7 @@
     "openrouter/z-ai/glm-4.6v": {
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 9e-07,
-        "cache_read_input_token_cost": 5.5e-08,
+        "cache_read_input_token_cost": 5e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 131072,
         "max_output_tokens": 32768,
@@ -69229,7 +69233,7 @@
         "supports_web_search": false
     },
     "openrouter/minimax/minimax-m1": {
-        "input_cost_per_token": 4e-07,
+        "input_cost_per_token": 5.5e-07,
         "output_cost_per_token": 2.2e-06,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1000000,
@@ -70653,7 +70657,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-4.1-nano": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_batches": 5.5e-08,
@@ -71102,7 +71106,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-4.1-nano": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_batches": 5.5e-08,
