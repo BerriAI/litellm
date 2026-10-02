@@ -8986,7 +8986,7 @@ class TestConnectPreflightRoutesLikeTheScopedRouter:
         assert guardrail.asked_about == ["d-id"]
 
     @staticmethod
-    def _register_obo_alias_collision() -> tuple[MCPServer, MCPServer]:
+    def _register_obo_alias_collision() -> None:
         obo: Final = MCPServer(
             server_id="o-id",
             name="obo_server",
@@ -9008,7 +9008,6 @@ class TestConnectPreflightRoutesLikeTheScopedRouter:
             auth_type=MCPAuth.none,
         )
         mcp_operations.global_mcp_server_manager.registry.update({"o-id": obo, "p-id": plain})
-        return obo, plain
 
     @staticmethod
     async def _connect_to(route_name: str) -> None:
@@ -9027,20 +9026,26 @@ class TestConnectPreflightRoutesLikeTheScopedRouter:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("route_name", ["obo", "OBO"], ids=["exact_alias", "case_variant"])
     async def test_granted_plain_server_connects_past_an_ungranted_obo_alias_holder(self, route_name):
-        _, plain = self._register_obo_alias_collision()
-        preflight: Final = AsyncMock()
+        self._register_obo_alias_collision()
+
+        async def report_exchange(server, **kwargs):
+            raise HTTPException(
+                status_code=401, detail=f"exchange ran for {server.server_id} as {kwargs['connected_as']}"
+            )
+
         with (
             patch.object(  # test-quality-ok: the key's grant list lives in the DB; the real router runs on it
                 mcp_operations.global_mcp_server_manager, "get_allowed_mcp_servers", AsyncMock(return_value=["p-id"])
             ),
-            patch.object(  # test-quality-ok: a real exchanger would call an IdP; this one records which server ran
-                mcp_operations.global_mcp_server_manager, "preflight_token_exchange", preflight
+            patch.object(  # test-quality-ok: a real exchanger would call an IdP; this one reports which server it ran for
+                mcp_operations.global_mcp_server_manager, "preflight_token_exchange", report_exchange
             ),
+            pytest.raises(HTTPException) as exc,
         ):
             await self._connect_to(route_name)
 
-        assert preflight.await_args is not None, "the granted plain server must reach the preflight, not a 401"
-        assert preflight.await_args.kwargs["server"] is plain
+        assert exc.value.status_code == 401
+        assert exc.value.detail == f"exchange ran for p-id as {route_name}"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("route_name", ["obo", "obo_server"], ids=["alias", "server_name"])
