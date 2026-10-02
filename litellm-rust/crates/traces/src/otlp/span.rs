@@ -155,6 +155,12 @@ fn decoded_span(
         (Some(name), "") => name.clone(),
         (Some(name), "hermes-agent") if scope_name.as_ref() == "hermes-otel-plugin" => name.clone(),
         (Some(name), CLAUDE_CODE_AGENT) if scope_name.as_ref() == CLAUDE_CODE_SCOPE => name.clone(),
+        (None, CLAUDE_CODE_AGENT) if scope_name.as_ref() == CLAUDE_CODE_SCOPE => {
+            resource_attributes
+                .get("service.name")
+                .filter(|name| !name.is_empty())
+                .map_or_else(|| CLAUDE_CODE_AGENT.to_owned(), Clone::clone)
+        }
         (_, name) => name.to_owned(),
     };
     let normalized = crate::normalize::NormalizedSpan {
