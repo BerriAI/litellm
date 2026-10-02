@@ -73,8 +73,9 @@ def app():
     so the startup event (DB connect, Router init, OTEL setup) never fires.
     Module import still runs once; module-level globals are harmless.
     """
-    os.environ.setdefault("LITELLM_LOG", "ERROR")
-    from litellm.proxy.proxy_server import app as _app
+    with pytest.MonkeyPatch.context() as environment:
+        environment.setenv("LITELLM_LOG", os.environ.get("LITELLM_LOG", "ERROR"))
+        from litellm.proxy.proxy_server import app as _app
 
     return _app
 

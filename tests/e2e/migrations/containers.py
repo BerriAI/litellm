@@ -97,6 +97,19 @@ def ready(replicas: tuple[Replica, ...], database: Database) -> None:
         replica.usable(database)
 
 
+def seeded(seed: Replica, database: Database) -> None:
+    ready((seed,), database)
+    until("the seed replica to finish its request-log indexes", lambda: request_log_indexes_built(database))
+
+
+def request_log_indexes_built(database: Database) -> bool:
+    return database.query(
+        "SELECT count(*) FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid "
+        "JOIN pg_namespace n ON n.oid = i.relnamespace WHERE n.nspname = current_schema() AND x.indisvalid "
+        "AND i.relname IN ('LiteLLM_SpendLogs_api_key_startTime_idx', 'LiteLLM_SpendLogs_litellm_call_id_idx')"
+    ) == ((2,),)
+
+
 def failed(replicas: tuple[Replica, ...], marker: str) -> None:
     def all_stopped() -> bool:
         observations: Final = tuple(replica.observe() for replica in replicas)

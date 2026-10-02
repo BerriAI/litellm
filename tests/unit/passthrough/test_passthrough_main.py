@@ -205,8 +205,8 @@ def mock_request():
             self.query_params = QueryParams()
             self.method = method
             self.request_body = request_body or {}
-            # Add url attribute that the actual code expects
-            self.url = "http://localhost:8000/test"
+            self.url = httpx.URL("http://localhost:8000/test")
+            self.scope = {"type": "http", "method": method, "path": "/test"}
 
         async def body(self) -> bytes:
             return bytes(json.dumps(self.request_body), "utf-8")

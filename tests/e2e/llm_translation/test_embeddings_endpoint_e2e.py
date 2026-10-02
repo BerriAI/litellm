@@ -10,6 +10,7 @@ SDK refuses to build stay on the shared transport.
 
 from __future__ import annotations
 
+import math
 from typing import Final
 
 import pytest
@@ -25,6 +26,10 @@ pytestmark = pytest.mark.e2e
 
 VERTEX_TEXT_EMBEDDING: Final = "vertex_ai/text-embedding-005"
 VERTEX_MULTIMODAL_EMBEDDING: Final = "vertex_ai/multimodalembedding@001"
+TOKENS_TEXT: Final = "The quick brown fox jumps over the lazy dog"
+# tiktoken 0.12.0 cl100k_base encoding of TOKENS_TEXT (checked 2026-10-02), the vocabulary behind the proxy's
+# litellm.decode(model="gpt-3.5-turbo") token-array decode
+TOKENS: Final = (791, 4062, 14198, 39935, 35308, 927, 279, 16053, 5679)
 
 
 class _OptionalEmbeddingsBody(BaseModel):
@@ -32,9 +37,19 @@ class _OptionalEmbeddingsBody(BaseModel):
     input: str | list[str] | None = None
 
 
-class _TokenEmbeddingsBody(BaseModel):
-    model: str
-    input: list[list[int]]
+def _cosine(left: list[float], right: list[float]) -> float:
+    dot: Final = sum(a * b for a, b in zip(left, right, strict=True))
+    norms: Final = math.sqrt(sum(a * a for a in left)) * math.sqrt(sum(b * b for b in right))
+    return dot / norms
+
+
+def _titan_params() -> LiteLLMParamsBody:
+    return LiteLLMParamsBody(
+        model="bedrock/amazon.titan-embed-text-v2:0",
+        aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+        aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+        aws_region_name="os.environ/AWS_REGION",
+    )
 
 
 def _vertex_params(model: str) -> LiteLLMParamsBody:
@@ -94,12 +109,7 @@ class TestEmbeddingsEndpoint:
             resources,
             sdk,
             "e2e-embeddings-bedrock",
-            LiteLLMParamsBody(
-                model="bedrock/amazon.titan-embed-text-v2:0",
-                aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
-                aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
-                aws_region_name="os.environ/AWS_REGION",
-            ),
+            _titan_params(),
         )
 
     @pytest.mark.covers("llm.embeddings.cohere.basic.nonstream.works")
@@ -171,28 +181,20 @@ class TestEmbeddingsEndpoint:
         cost = response_header(raw.headers, "x-litellm-response-cost")
         assert cost is not None and float(cost) > 0, f"multimodal embedding was not costed: {cost!r}"
 
-    def test_bedrock_titan_rejects_token_array_input_as_bad_request(
-        self, proxy: ProxyClient, resources: ResourceManager
+    def test_bedrock_titan_embeds_token_array_input_as_its_decoded_text(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        model, key = _register(
-            proxy,
-            resources,
-            "e2e-embeddings-titan-tokens",
-            LiteLLMParamsBody(
-                model="bedrock/amazon.titan-embed-text-v2:0",
-                aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
-                aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
-                aws_region_name="os.environ/AWS_REGION",
-            ),
-        )
-        result = proxy.transport.send(
-            "/embeddings",
-            headers=proxy.transport.bearer(key),
-            json=_TokenEmbeddingsBody(model=model, input=[[1]]),
-        )
-        assert result.status_code == 400, (
-            f"titan cannot embed token arrays, so the caller must get a 400, got {result.status_code}: "
-            f"{result.body[:300]}"
+        model, key = _register(proxy, resources, "e2e-embeddings-titan-tokens", _titan_params())
+        client: Final = sdk.openai(key)
+
+        from_tokens: Final = client.embeddings.create(model=model, input=[TOKENS], extra_body=NO_PROXY_CACHE)
+        from_text: Final = client.embeddings.create(model=model, input=TOKENS_TEXT, extra_body=NO_PROXY_CACHE)
+
+        assert len(from_tokens.data) == 1, f"one token array must yield one vector: {from_tokens!r}"
+        similarity: Final = _cosine(from_tokens.data[0].embedding, from_text.data[0].embedding)
+        assert similarity > 0.99, (
+            f"titan cannot embed token ids, so the proxy must decode them to {TOKENS_TEXT!r} first; "
+            f"the token-array vector only has cosine {similarity:.4f} with that text's vector"
         )
 
     @pytest.mark.replayable

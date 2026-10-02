@@ -5,7 +5,7 @@ from typing import Final, Literal
 import pytest
 
 from .checks import COMPLETE, assert_completed, confirmed_history, assert_original_proof, start_replicas
-from .containers import Containers, failed, ready
+from .containers import Containers, failed, ready, seeded
 from .database import Database, Databases
 
 pytestmark: Final = [pytest.mark.e2e, pytest.mark.migration_startup]
@@ -69,7 +69,7 @@ class TestLegacyMigrations:
     ) -> None:
         with databases.create(schema="migration tenant") as database:
             with containers.start(database) as seed:
-                ready((seed,), database)
+                seeded(seed, database)
             match scenario:
                 case "upgrade":
                     with ExitStack() as stack:

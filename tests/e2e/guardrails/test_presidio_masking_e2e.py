@@ -29,15 +29,14 @@ this suite deliberately requires the detected-entity details to remain visible.
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Final, Literal
 
 import pytest
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from e2e_config import unique_marker
 from e2e_http import Result, StreamingResponse, Success
@@ -74,6 +73,7 @@ FAKE_PHONE = "+1 415-555-0134"
 FAKE_VISA_TEST_CARD = "4111 1111 1111 1111"
 
 _CARD_DIGIT_RUN: Final = re.compile(r"(?:\d[ -]?){13,19}")
+_CONTENT_KEYS: Final = frozenset({"content", "text"})
 
 
 def _presidio_bases() -> tuple[str, str]:
@@ -516,7 +516,21 @@ def _spend_log_response_text(client: GuardrailsClient, key: str, call_id: str) -
     )
     row = next((row for row in rows if row.litellm_call_id == call_id), None)
     assert row is not None, f"no spend log row ever appeared for x-litellm-call-id {call_id}"
-    return json.dumps(row.response)
+    return "\n".join(_stored_content(row.response))
+
+
+def _stored_content(node: JsonValue, key: str | None = None) -> Iterator[str]:
+    match node:
+        case str() if key in _CONTENT_KEYS:
+            yield node
+        case dict():
+            for child_key, child in node.items():
+                yield from _stored_content(child, child_key)
+        case list():
+            for item in node:
+                yield from _stored_content(item, key)
+        case _:
+            return
 
 
 class TestPresidioSpendLogStoresMaskedOutput:
