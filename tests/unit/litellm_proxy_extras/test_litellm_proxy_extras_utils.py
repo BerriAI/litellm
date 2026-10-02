@@ -15,6 +15,7 @@ sys.path.insert(
     ),
 )
 
+from litellm_proxy_extras.request_log_indexes import REQUEST_LOG_INDEXES_ENV_VAR
 from litellm_proxy_extras.utils import (
     PARTITIONED_SPEND_LOGS_PUSH_ERROR,
     ProxyExtrasDBManager,
@@ -1033,6 +1034,10 @@ class TestBuildRequestLogIndexes:
     """The migration job hands the index build the direct database URL and the schema
     the migrations target, waits for it, and reports its result."""
 
+    @pytest.fixture(autouse=True)
+    def _enable_request_log_index_build(self, monkeypatch):
+        monkeypatch.setenv(REQUEST_LOG_INDEXES_ENV_VAR, "true")
+
     @pytest.fixture
     def builds(self):
         return []
@@ -1068,6 +1073,22 @@ class TestBuildRequestLogIndexes:
 
     def test_without_a_database_url_nothing_is_built(self, monkeypatch, builds, build):
         monkeypatch.delenv("DATABASE_URL", raising=False)
+
+        assert ProxyExtrasDBManager.build_request_log_indexes(build=build) is True
+
+        assert builds == []
+
+    def test_without_the_opt_in_nothing_is_built(self, monkeypatch, builds, build):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@primary:5432/db")
+        monkeypatch.delenv(REQUEST_LOG_INDEXES_ENV_VAR, raising=False)
+
+        assert ProxyExtrasDBManager.build_request_log_indexes(build=build) is True
+
+        assert builds == []
+
+    def test_an_opt_in_of_false_builds_nothing(self, monkeypatch, builds, build):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@primary:5432/db")
+        monkeypatch.setenv(REQUEST_LOG_INDEXES_ENV_VAR, "false")
 
         assert ProxyExtrasDBManager.build_request_log_indexes(build=build) is True
 

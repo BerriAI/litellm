@@ -26,7 +26,11 @@ from litellm_proxy_extras.replica_identity import (
     REPLICA_IDENTITY_FULL_ENV_VAR,
     apply_replica_identity_full,
 )
-from litellm_proxy_extras.request_log_indexes import ensure_request_log_indexes, filter_request_log_index_diff
+from litellm_proxy_extras.request_log_indexes import (
+    REQUEST_LOG_INDEXES_ENV_VAR,
+    ensure_request_log_indexes,
+    filter_request_log_index_diff,
+)
 
 if TYPE_CHECKING:
     import psycopg
@@ -1232,9 +1236,16 @@ class ProxyExtrasDBManager:
     @staticmethod
     def build_request_log_indexes(build: Callable[[str, str], bool] = ensure_request_log_indexes) -> bool:
         """Build the indexes in `REQUEST_LOG_INDEXES` on the writer, in the schema the
-        migrations target. Idempotent and never raises; False when an index is still
-        missing or invalid, so the migration job reports it and gets rerun instead of
-        leaving the table unindexed until the next deploy."""
+        migrations target. Does nothing unless `LITELLM_BUILD_SPEND_LOGS_INDEXES` is set.
+        Idempotent and never raises; False when an index is still missing or invalid, so
+        the migration job reports it and gets rerun instead of leaving the table unindexed
+        until the next deploy."""
+        if not str_to_bool(os.getenv(REQUEST_LOG_INDEXES_ENV_VAR)):
+            logger.info(
+                "%s is not enabled, skipping the request-log index build",
+                REQUEST_LOG_INDEXES_ENV_VAR,
+            )
+            return True
         database_url: Final = os.environ.get("DATABASE_URL")
         if not database_url:
             return True
