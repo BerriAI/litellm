@@ -1095,16 +1095,32 @@ def _get_messages_for_spend_logs_payload(
 
 _SENSITIVE_REQUEST_BODY_KEYS: Final = frozenset({"secret_fields"})
 _REQUEST_BODY_CREDENTIAL_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset({"apikey"}))
+_TOOL_INPUT_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use", "mcp_tool_use"})
+_TOOL_OUTPUT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result", "function_call_output"})
 
 
 def _is_request_body_credential(key: str, value: object) -> bool:
     return isinstance(value, str) and _REQUEST_BODY_CREDENTIAL_MASKER.is_sensitive_key(key)
 
 
+def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
+    block_type: Final = parent.get("type")
+    block_type_name: Final = block_type if isinstance(block_type, str) else None
+    return (
+        key in ("arguments", "logprobs")
+        or (key == "input" and block_type_name in _TOOL_INPUT_BLOCK_TYPES)
+        or (
+            key in ("content", "output")
+            and (block_type_name in _TOOL_OUTPUT_BLOCK_TYPES or parent.get("role") == "tool")
+        )
+    )
+
+
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: Mapping[str, object],
     visited: set | None = None,
     max_string_length_prompt_in_db: int | None = None,
+    mask_credentials: bool = True,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
@@ -1112,7 +1128,8 @@ def _sanitize_request_body_for_spend_logs_payload(
 
     At every nesting level, also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields,
     which holds raw HTTP headers including Authorization tokens), and replaces string values under keys
-    SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING.
+    SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING, except inside tool payloads
+    and logprobs.
     """
     from litellm.constants import (
         LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -1130,11 +1147,13 @@ def _sanitize_request_body_for_spend_logs_payload(
         return {}
     visited.add(obj_id)
 
-    def _sanitize_value(value: object) -> object:
+    def _sanitize_value(value: object, mask_credentials: bool) -> object:
         if isinstance(value, Mapping):
-            return _sanitize_request_body_for_spend_logs_payload(value, visited, max_string_length_prompt_in_db)
+            return _sanitize_request_body_for_spend_logs_payload(
+                value, visited, max_string_length_prompt_in_db, mask_credentials
+            )
         elif isinstance(value, list):
-            return [_sanitize_value(item) for item in value]
+            return [_sanitize_value(item, mask_credentials) for item in value]
         elif isinstance(value, str):
             if len(value) > max_string_length_prompt_in_db:
                 # Keep 35% from beginning and 65% from end (end is usually more important)
@@ -1170,7 +1189,9 @@ def _sanitize_request_body_for_spend_logs_payload(
         return value
 
     return {
-        k: REDACTED_BY_LITELM_STRING if _is_request_body_credential(k, v) else _sanitize_value(v)
+        k: REDACTED_BY_LITELM_STRING
+        if mask_credentials and _is_request_body_credential(k, v)
+        else _sanitize_value(v, mask_credentials and not _is_spend_log_content(request_body, k))
         for k, v in request_body.items()
         if k not in _SENSITIVE_REQUEST_BODY_KEYS
     }
