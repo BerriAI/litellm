@@ -1782,4 +1782,4 @@ class LiteLLMAnthropicMessagesAdapter:
             type="content_block_delta",
             index=current_content_block_index,
             delta=content_block_delta,
-            )
+        )
