@@ -280,6 +280,12 @@ class MCPServer(BaseModel):
             self.protocol_version = TypeAdapter(MCPUpstreamProtocol).validate_python(
                 self.mcp_info.get("protocol_version", "auto")
             )
+        if self.protocol_version != "auto":
+            from litellm.proxy._experimental.mcp_server.capabilities import REVISION_SUPPORT
+
+            if self.transport not in REVISION_SUPPORT[self.protocol_version].transports:
+                transport: Final = getattr(self.transport, "value", self.transport)
+                raise ValueError(f"MCP {self.protocol_version} does not support the {transport} transport")
         return self
 
     @model_validator(mode="after")

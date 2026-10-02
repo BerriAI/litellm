@@ -3094,6 +3094,68 @@ async def test_modern_pin_adopts_upstream_discovery():
     assert methods == ["server/discover", "tools/list"]
 
 
+@asynccontextmanager
+async def _http_upstream(seen: list[tuple[str, str | None]]) -> AsyncIterator[str]:
+    """A real MCP SDK server over streamable HTTP on a local port. Records each request's JSON-RPC
+    method and the MCP-Protocol-Version header it arrived with."""
+    import uvicorn
+    from mcp.server import MCPServer
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    versions: Final[list[str | None]] = []
+
+    async def record(ctx, call_next):
+        seen.append((ctx.method, versions[-1] if versions else None))
+        return await call_next(ctx)
+
+    upstream: Final = MCPServer("upstream", middleware=[record])
+
+    @upstream.tool(name="add")
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    mcp_app: Final = upstream.streamable_http_app(stateless_http=True, json_response=True)
+
+    async def with_headers(scope, receive, send):
+        if scope["type"] == "http":
+            versions.append(dict(scope["headers"]).get(b"mcp-protocol-version", b"").decode() or None)
+        await mcp_app(scope, receive, send)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        async with upstream.session_manager.run():
+            yield
+
+    server: Final = uvicorn.Server(
+        uvicorn.Config(Starlette(routes=[Mount("/", app=with_headers)], lifespan=lifespan), host="127.0.0.1", port=0, log_level="warning")
+    )
+    serving: Final = asyncio.create_task(server.serve())
+    try:
+        while not server.started:
+            await asyncio.sleep(0.01)
+        port: Final = server.servers[0].sockets[0].getsockname()[1]
+        yield f"http://127.0.0.1:{port}/mcp"
+    finally:
+        server.should_exit = True
+        await serving
+
+
+@pytest.mark.asyncio
+async def test_modern_pin_calls_a_tool_over_http():
+    seen: Final[list[tuple[str, str | None]]] = []
+    async with _http_upstream(seen) as url:
+        client: Final = MCPClient(server_url=url, transport_type=MCPTransport.http, protocol_version="2026-07-28", timeout=10)
+        result: Final = await client.call_tool(CallToolRequestParams(name="add", arguments={"a": 2, "b": 3}), raise_on_error=True)
+
+    assert not result.is_error
+    assert [block.text for block in result.content] == ["5"]
+    methods: Final = [method for method, _ in seen]
+    assert methods[0] == "server/discover"
+    assert "tools/call" in methods and "initialize" not in methods
+    assert {version for _, version in seen} == {"2026-07-28"}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "discover,code",

@@ -15231,6 +15231,23 @@ async def test_configured_protocol_rejects_unknown_revisions(config_only_mcp_man
     assert not manager.config_mcp_servers
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport,accepted", [("sse", False), ("http", True), ("stdio", True)])
+async def test_configured_modern_protocol_requires_a_transport_that_carries_it(
+    config_only_mcp_manager_factory, transport, accepted
+):
+    manager = config_only_mcp_manager_factory()
+    endpoint: Final = {"command": "python", "args": []} if transport == "stdio" else {"url": "http://127.0.0.1:9/mcp"}
+    config: Final = {"modern": {**endpoint, "transport": transport, "protocol_version": "2026-07-28"}}
+    if accepted:
+        await manager.load_servers_from_config(config)
+        assert next(iter(manager.config_mcp_servers.values())).protocol_version == "2026-07-28"
+    else:
+        with pytest.raises(ValidationError, match="does not support the sse transport"):
+            await manager.load_servers_from_config(config)
+        assert not manager.config_mcp_servers
+
+
 @pytest.mark.parametrize("revision", ("auto", "2024-11-05", "2025-06-18"))
 @pytest.mark.parametrize("explicit", (None, "auto", "2025-11-25"))
 def test_runtime_protocol_metadata_preserves_explicit_precedence(
