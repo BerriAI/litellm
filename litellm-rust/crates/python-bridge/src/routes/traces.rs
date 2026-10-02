@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use litellm_host_python::{FromPythonCache, ToPythonCache};
 use litellm_http::ClientVariant;
 use litellm_storage_clickhouse::Storage;
-use litellm_traces::{Error, InsertTable, Parameter, ReadQuery, Shared};
+use litellm_traces::{
+    Error, InsertTable, Parameter, QueryAccessError, QueryReaders, QueryScope, ReadQuery, Shared,
+};
 use prost::Message;
 use pyo3::{
     exceptions::{PyOverflowError, PyRuntimeError, PyValueError},
@@ -46,9 +48,25 @@ fn map_error(error: Error) -> PyErr {
     }
 }
 
+fn map_sql_error(error: Error) -> PyErr {
+    match error {
+        Error::QueryFailed(400 | 404) => PyValueError::new_err(error.to_string()),
+        error => map_error(error),
+    }
+}
+
+fn map_query_access_error(error: QueryAccessError) -> PyErr {
+    match error {
+        QueryAccessError::Storage(error) => map_sql_error(error),
+        QueryAccessError::InvalidScope => PyValueError::new_err(error.to_string()),
+        error => PyRuntimeError::new_err(error.to_string()),
+    }
+}
+
 #[pyclass]
 pub struct NativeTraceStorage {
     storage: Storage,
+    query_readers: QueryReaders,
 }
 
 #[pymethods]
@@ -57,8 +75,13 @@ impl NativeTraceStorage {
     #[pyo3(signature = (database, url, reader_url = None))]
     fn new(database: String, url: &str, reader_url: Option<&str>) -> PyResult<Self> {
         litellm_traces::schema_statements(&database, 1, 1).map_err(map_error)?;
+        let storage = Storage::new(database, url, reader_url).map_err(map_error)?;
         Ok(Self {
-            storage: Storage::new(database, url, reader_url).map_err(map_error)?,
+            query_readers: QueryReaders::new(
+                storage.writer().clone(),
+                storage.database().to_owned(),
+            ),
+            storage,
         })
     }
 
@@ -104,6 +127,52 @@ impl NativeTraceStorage {
                     .await
             },
             map_error,
+        )
+    }
+
+    fn query_sql<'py>(
+        &self,
+        py: Python<'py>,
+        sql: String,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
+        secret: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        if sql.trim().is_empty() {
+            return Err(map_error(Error::EmptySql));
+        }
+        let readers = self.query_readers.clone();
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        crate::execution::run_async(
+            py,
+            async move {
+                let _permit = readers.acquire()?;
+                let connection = readers.connection(&client, &scope, &secret).await?;
+                litellm_traces::query_sql(&client, &connection, &sql)
+                    .await
+                    .map_err(QueryAccessError::Storage)
+            },
+            map_query_access_error,
+        )
+    }
+
+    fn query_help<'py>(
+        &self,
+        py: Python<'py>,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
+        secret: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let readers = self.query_readers.clone();
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        crate::execution::run_async(
+            py,
+            async move {
+                let _permit = readers.acquire()?;
+                let connection = readers.connection(&client, &scope, &secret).await?;
+                litellm_traces::query_help(&client, &connection)
+                    .await
+                    .map_err(QueryAccessError::Storage)
+            },
+            map_query_access_error,
         )
     }
 

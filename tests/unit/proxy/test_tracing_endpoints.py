@@ -141,7 +141,9 @@ def test_501_when_tracing_not_enabled(
     assert response.status_code == 501
     assert response.headers["content-type"] == "application/x-protobuf"
     assert Status.FromString(response.content).message == (
-        "Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL." if native_available else ""
+        "Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL."
+        if native_available
+        else ""
     )
     assert client.get("/v1/traces").status_code == 501
 
@@ -525,3 +527,96 @@ def test_lens_reads_from_injected_storage_without_receiver() -> None:
     assert response.status_code == 200, response.text
     assert response.json()["executions"] == []
     storage.lens_sample.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("auth", "expected_scope"),
+    (
+        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), {"kind": "admin"}),
+        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY), {"kind": "admin"}),
+        (TEAM_KEY, {"kind": "team", "team_id": "team-research"}),
+        (
+            UserAPIKeyAuth(token="project-key", team_id="team-a", project_id="project-a"),
+            {"kind": "key", "team_id": "team-a", "api_key_hash": "project-key"},
+        ),
+        (UserAPIKeyAuth(token="solo-key"), {"kind": "key", "team_id": "", "api_key_hash": "solo-key"}),
+    ),
+)
+def test_sql_and_help_use_authenticated_scope(
+    client: TestClient, receiver: MagicMock, auth: UserAPIKeyAuth, expected_scope: dict[str, str]
+) -> None:
+    client.app.dependency_overrides[user_api_key_auth] = lambda: auth
+    client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
+    receiver.store.storage.query_sql = AsyncMock(return_value='{"data":[{"value":1}]}')
+    receiver.store.storage.query_help = AsyncMock(return_value='{"guide":"scoped"}')
+    result: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
+    assert result.status_code == 200, result.text
+    assert result.json() == {"data": [{"value": 1}]}
+    receiver.store.storage.query_sql.assert_awaited_once_with(
+        "SELECT * FROM otel_traces", expected_scope, "test-secret"
+    )
+    help_result: Final = client.get("/v1/traces/query/help")
+    assert help_result.status_code == 200, help_result.text
+    assert help_result.json() == {"guide": "scoped"}
+    receiver.store.storage.query_help.assert_awaited_once_with(expected_scope, "test-secret")
+    forged: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1", "scope": {"kind": "admin"}})
+    assert forged.status_code == 422, forged.text
+    assert receiver.store.storage.query_sql.await_count == 1
+
+
+@pytest.mark.parametrize("auth", (UserAPIKeyAuth(), UserAPIKeyAuth(team_id="a", project_id="p")))
+def test_sql_rejects_missing_identity_without_querying(
+    client: TestClient, receiver: MagicMock, auth: UserAPIKeyAuth
+) -> None:
+    client.app.dependency_overrides[user_api_key_auth] = lambda: auth
+    client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
+    result: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
+    assert result.status_code == 403, result.text
+    assert client.get("/v1/traces/query/help").status_code == 403
+    receiver.store.storage.query_sql.assert_not_called()
+    receiver.store.storage.query_help.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("error", "status"), ((ValueError("invalid SQL"), 400), (RuntimeError("reader unavailable"), 503))
+)
+def test_sql_reports_rejected_queries_and_unavailable_readers(
+    client: TestClient, receiver: MagicMock, error: Exception, status: int
+) -> None:
+    client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
+    receiver.store.storage.query_sql = AsyncMock(side_effect=error)
+    result: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1"})
+    assert result.status_code == status, result.text
+    receiver.store.storage.query_sql.assert_awaited_once_with(
+        "SELECT 1", {"kind": "team", "team_id": "team-research"}, "test-secret"
+    )
+
+
+def test_query_help_does_not_fall_back_when_reader_provisioning_fails(client: TestClient, receiver: MagicMock) -> None:
+    client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
+    receiver.store.storage.query_help = AsyncMock(side_effect=RuntimeError("reader provisioning failed"))
+    result: Final = client.get("/v1/traces/query/help")
+    assert result.status_code == 503, result.text
+    receiver.store.storage.query_help.assert_awaited_once_with(
+        {"kind": "team", "team_id": "team-research"}, "test-secret"
+    )
+
+
+@pytest.mark.parametrize("secret", (None, "configured-master-key"))
+def test_queries_require_a_proxy_secret(
+    client: TestClient, receiver: MagicMock, monkeypatch: pytest.MonkeyPatch, secret: str | None
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "master_key", secret)
+    receiver.store.storage.query_sql = AsyncMock(return_value='{"data":[]}')
+    result: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1"})
+    if secret is None:
+        assert result.status_code == 503, result.text
+        assert "master key" in result.json()["detail"]
+        receiver.store.storage.query_sql.assert_not_awaited()
+        return
+    assert result.status_code == 200, result.text
+    receiver.store.storage.query_sql.assert_awaited_once_with(
+        "SELECT 1", {"kind": "team", "team_id": "team-research"}, secret
+    )
