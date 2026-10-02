@@ -279,6 +279,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_MCPUserCredentials",
         "LiteLLM_MCPUserEnvVars",
         "LiteLLM_MCPServerOAuthClient",
+        "LiteLLM_MCPToolVersion",
         "LiteLLM_SSOIdentityAssertion",
         "LiteLLM_VerificationToken",
         "LiteLLM_JWTKeyMapping",

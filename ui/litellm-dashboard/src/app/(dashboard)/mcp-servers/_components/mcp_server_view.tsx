@@ -232,6 +232,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
             userID={userID}
             serverAlias={mcpServer.alias}
             extraHeaders={mcpServer.extra_headers}
+            canManageVersions={canEdit}
           />
         </TabsContent>
 

@@ -10,7 +10,12 @@ import type { MCPServer } from "@/components/mcp_tools/types";
 import { mcpServersKeys } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 
 vi.mock(".", () => ({
-  MCPToolsViewer: () => <div>tools viewer</div>,
+  MCPToolsViewer: ({ canManageVersions }: { canManageVersions?: boolean }) => (
+    <div>
+      tools viewer
+      {canManageVersions !== undefined && <span>{String(canManageVersions)}</span>}
+    </div>
+  ),
 }));
 
 vi.mock("./mcp_server_edit", () => ({
@@ -29,6 +34,10 @@ vi.mock("@/components/networking", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/components/networking")>()),
   fetchMCPServerUserCredentials: vi.fn(),
   revokeMCPServerUserCredential: vi.fn(),
+  getMCPToolVersions: vi.fn().mockResolvedValue([]),
+  pinMCPServerTools: vi.fn(),
+  setMCPToolVersionDeprecation: vi.fn(),
+  clearMCPToolVersionDeprecation: vi.fn(),
 }));
 
 const baseServer = {
@@ -131,6 +140,7 @@ describe("MCPServerView", () => {
     await userEvent.click(screen.getByRole("tab", { name: "MCP Tools" }));
 
     expect(await screen.findByText("tools viewer")).toBeInTheDocument();
+    expect(screen.getByText("true")).toBeInTheDocument();
   });
 
   it("shows the read-only settings summary before editing", async () => {

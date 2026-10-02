@@ -12,6 +12,7 @@ import {
   getMcpOAuthMode,
 } from "@/components/mcp_tools/types";
 import { listMCPTools, callMCPTool, getMCPOAuthUserCredentialStatus } from "@/components/networking";
+import { MCPToolVersionsPanel } from "./MCPToolVersionsPanel";
 import { isTokenValid, getToken, removeToken } from "@/utils/mcpTokenStore";
 import { sanitizeMcpAliasForHeader, buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import { useToolsOAuthFlow } from "@/hooks/useToolsOAuthFlow";
@@ -38,6 +39,7 @@ const MCPToolsViewer = ({
   userID,
   serverAlias,
   extraHeaders,
+  canManageVersions,
 }: MCPToolsViewerProps) => {
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
   const [toolResult, setToolResult] = useState<MCPContent[] | null>(null);
@@ -580,6 +582,14 @@ const MCPToolsViewer = ({
           </div>
         </div>
       </Card>
+      {canManageVersions !== undefined && (
+        <MCPToolVersionsPanel
+          serverId={serverId}
+          accessToken={accessToken}
+          isProxyAdmin={canManageVersions}
+          customHeaders={buildCustomHeaders()}
+        />
+      )}
     </div>
   );
 };

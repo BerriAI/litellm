@@ -405,6 +405,7 @@ export interface MCPToolsViewerProps {
   userID: string | null;
   serverAlias?: string | null;
   extraHeaders?: string[] | null;
+  canManageVersions?: boolean;
 }
 
 export const MCP_REACHABLE_DESCRIPTION = "Server responded. Authentication and tools were not checked";
