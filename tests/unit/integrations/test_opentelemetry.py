@@ -3636,6 +3636,48 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         error_spans = [s for s in spans if s.status.status_code == StatusCode.ERROR]
         self.assertTrue(error_spans, "Expected at least one span with ERROR status")
 
+    def test_get_error_status_description_from_error_information(self):
+        """The ERROR status description mirrors the error_message attribute
+        text, so backends that render the span status show the actual error
+        (issue #44184)."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel_integration = OpenTelemetry()
+        kwargs = {
+            "standard_logging_object": {
+                "error_information": {
+                    "error_code": "500",
+                    "error_class": "ValueError",
+                    "error_message": "Test error message",
+                },
+                "error_str": "Test error message",
+            },
+        }
+        self.assertEqual(otel_integration._get_error_status_description(kwargs), "Test error message")
+
+    def test_get_error_status_description_falls_back_to_error_str(self):
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel_integration = OpenTelemetry()
+        kwargs = {
+            "standard_logging_object": {
+                "error_information": None,
+                "error_str": "Fallback error message",
+            },
+        }
+        self.assertEqual(otel_integration._get_error_status_description(kwargs), "Fallback error message")
+
+    def test_get_error_status_description_none_when_no_error(self):
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel_integration = OpenTelemetry()
+        self.assertIsNone(otel_integration._get_error_status_description({}))
+        self.assertIsNone(
+            otel_integration._get_error_status_description(
+                {"standard_logging_object": {"error_information": None, "error_str": ""}}
+            )
+        )
+
 
 class TestRawSpanAttributeIsolation(unittest.TestCase):
     """Issue #3: raw_gen_ai_request span should only contain provider-specific
