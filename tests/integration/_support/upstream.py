@@ -83,6 +83,24 @@ def _aws_str_header(name: str, value: str) -> bytes:
     )
 
 
+def _aws_int_header(name: str, value: int) -> bytes:
+    name_bytes: Final = name.encode()
+    return struct.pack("!B", len(name_bytes)) + name_bytes + struct.pack("!B", 4) + struct.pack("!i", value)
+
+
+def aws_event_stream_frame(headers: Mapping[str, str | int], payload: bytes) -> bytes:
+    """One AWS event-stream frame: a string header is wire type 7, an int header wire type 4 (int32)."""
+    headers_bytes: Final = b"".join(
+        _aws_str_header(name, value) if isinstance(value, str) else _aws_int_header(name, value)
+        for name, value in headers.items()
+    )
+    total_length: Final = 12 + len(headers_bytes) + len(payload) + 4
+    prelude: Final = struct.pack("!II", total_length, len(headers_bytes))
+    prelude_crc: Final = struct.pack("!I", zlib.crc32(prelude) & 0xFFFFFFFF)
+    message: Final = prelude + prelude_crc + headers_bytes + payload
+    return message + struct.pack("!I", zlib.crc32(message) & 0xFFFFFFFF)
+
+
 def _aws_event_frame(
     event_type: str,
     payload: Mapping[str, JsonValue],
@@ -95,16 +113,9 @@ def _aws_event_frame(
         .replace("$UNIQUE_ID", unique_id)
         .encode()
     )
-    headers_bytes: Final = (
-        _aws_str_header(":event-type", event_type)
-        + _aws_str_header(":content-type", "application/json")
-        + _aws_str_header(":message-type", "event")
+    return aws_event_stream_frame(
+        {":event-type": event_type, ":content-type": "application/json", ":message-type": "event"}, payload_bytes
     )
-    total_length: Final = 12 + len(headers_bytes) + len(payload_bytes) + 4
-    prelude: Final = struct.pack("!II", total_length, len(headers_bytes))
-    prelude_crc: Final = struct.pack("!I", zlib.crc32(prelude) & 0xFFFFFFFF)
-    message: Final = prelude + prelude_crc + headers_bytes + payload_bytes
-    return message + struct.pack("!I", zlib.crc32(message) & 0xFFFFFFFF)
 
 
 class ScenarioStore:

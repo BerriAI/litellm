@@ -7,30 +7,30 @@ import { Button } from "@/components/ui/button";
 
 import { AgentTracesTable } from "./AgentTracesTable";
 import { RunDrawer } from "./RunDrawer";
-import { ALL_SERVICES, RunsToolbar, type RunStatusFilter } from "./RunsToolbar";
+import { ALL_AGENTS, RunsToolbar, type RunStatusFilter } from "./RunsToolbar";
 import type { TraceSummary } from "./traceTypes";
-import { previewText } from "./traceUtils";
+import { previewText, traceAgentNames } from "./traceUtils";
 import { TimeRangeControls } from "./TimeRangeControls";
 import { TracesTimeline, type TimeWindow } from "./TracesTimeline";
 import { ActiveDot } from "./ActiveDot";
 import { TracingSetupCard } from "./TracingSetupCard";
 import { type AgentTracesResult, traceWindowStartMs, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
 
-/** Client-side search (input text or trace id) plus service / status filters over the loaded runs. */
+/** Client-side search (input text or trace id) plus agent / status filters over the loaded runs. */
 export function filterRuns(
   runs: TraceSummary[],
   query: string,
-  service: string,
+  agent: string,
   status: RunStatusFilter,
 ): TraceSummary[] {
   const q = query.trim().toLowerCase();
   return runs.filter((run) => {
     const haystack = [run.trace_id, previewText(run.input_preview), run.name].map((s) => s.toLowerCase());
     const matchesQuery = !q || haystack.some((text) => text.includes(q));
-    const matchesService = service === ALL_SERVICES || run.service === service;
+    const matchesAgent = agent === ALL_AGENTS || traceAgentNames(run).includes(agent);
     const failed = run.error_count > 0;
     const matchesStatus = status === "all" || (status === "error" ? failed : !failed);
-    return matchesQuery && matchesService && matchesStatus;
+    return matchesQuery && matchesAgent && matchesStatus;
   });
 }
 
@@ -105,7 +105,7 @@ export function AgentTracesSection({
 }: AgentTracesSectionProps) {
   const [openTrace, setOpenTrace] = useState<TraceSummary | null>(null);
   const [query, setQuery] = useState("");
-  const [service, setService] = useState(ALL_SERVICES);
+  const [agent, setAgent] = useState(ALL_AGENTS);
   const [status, setStatus] = useState<RunStatusFilter>("all");
   const [showSetup, setShowSetup] = useState(false);
   const [zoom, setZoom] = useState<TimeWindow | null>(null);
@@ -121,7 +121,7 @@ export function AgentTracesSection({
     if (setup.disabledDetail == null) void history.refetch();
   };
 
-  const services = useMemo(() => Array.from(new Set(traces.traces.map((t) => t.service))).sort(), [traces.traces]);
+  const agents = useMemo(() => Array.from(new Set(traces.traces.flatMap(traceAgentNames))).sort(), [traces.traces]);
   // Relative ranges end "now" (the list query uses Date.now() too); round to the minute so the histogram is stable.
   const endMs = isCustomDate ? moment(endTime).valueOf() : moment().endOf("minute").valueOf();
   const range = useMemo(
@@ -129,8 +129,8 @@ export function AgentTracesSection({
     [startTime, endTime, isCustomDate, endMs],
   );
   const filtered = useMemo(
-    () => filterRuns(traces.traces, query, service, status),
-    [traces.traces, query, service, status],
+    () => filterRuns(traces.traces, query, agent, status),
+    [traces.traces, query, agent, status],
   );
   const runs = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
 
@@ -193,11 +193,11 @@ export function AgentTracesSection({
       <RunDrawer trace={openTrace} runs={runs} accessToken={accessToken} onSelect={openRun} />
       <RunsToolbar
         query={query}
-        service={service}
+        agent={agent}
         status={status}
-        services={services}
+        agents={agents}
         onQueryChange={setQuery}
-        onServiceChange={setService}
+        onAgentChange={setAgent}
         onStatusChange={setStatus}
       >
         <Button variant="outline" size="sm" onClick={() => setShowSetup(true)} className="shrink-0 gap-1.5">
@@ -226,23 +226,49 @@ export function AgentTracesSection({
         onOpenTrace={toggleRun}
         selectedKey={openTrace === null ? null : runKey(openTrace)}
       />
-      <footer
-        data-testid="runs-footer"
-        className="flex h-8 shrink-0 items-center border-t border-border bg-muted/40 px-3 font-mono text-[11px] text-muted-foreground"
-      >
-        {runs.length} {runs.length === 1 ? "run" : "runs"}
-        {zoom && (
-          <button
-            type="button"
-            onClick={() => setZoom(null)}
-            aria-label="Clear time zoom"
-            className="ml-3 rounded border border-info/40 bg-info/10 px-1.5 text-info hover:bg-info/20"
-          >
-            {moment(zoom.startMs).format("MMM DD, HH:mm")} to {moment(zoom.endMs).format("MMM DD, HH:mm")} ×
-          </button>
-        )}
-        <span className="ml-auto">{traces.isFetching ? "Updating…" : "Updated just now"}</span>
-      </footer>
+      <RunsFooter
+        count={runs.length}
+        zoom={zoom}
+        isFetching={traces.isFetching}
+        failed={!!traces.error}
+        onResetZoom={() => setZoom(null)}
+      />
     </div>
+  );
+}
+
+function RunsFooter({
+  count,
+  zoom,
+  isFetching,
+  failed,
+  onResetZoom,
+}: {
+  count: number;
+  zoom: TimeWindow | null;
+  isFetching: boolean;
+  failed: boolean;
+  onResetZoom: () => void;
+}) {
+  const settled = failed ? "Update failed" : "Updated just now";
+  const status = isFetching ? "Updating…" : settled;
+  return (
+    <footer
+      data-testid="runs-footer"
+      className="flex h-8 shrink-0 items-center border-t border-border bg-muted/40 px-3 font-mono text-[11px] text-muted-foreground"
+    >
+      {count} {count === 1 ? "run" : "runs"}
+      {zoom && (
+        <button
+          type="button"
+          onClick={() => onResetZoom()}
+          aria-label="Clear time zoom"
+          className="ml-3 rounded border border-info/40 bg-info/10 px-1.5 text-info hover:bg-info/20"
+        >
+          {moment(zoom.startMs).format("MMM DD, HH:mm")} to {moment(zoom.endMs).format("MMM DD, HH:mm")} ×
+        </button>
+      )}
+      <span className="ml-auto">{status}</span>
+    </footer>
   );
 }

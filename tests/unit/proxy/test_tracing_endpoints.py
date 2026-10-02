@@ -15,14 +15,79 @@ from litellm.proxy import tracing_endpoints
 from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
+from litellm.rust_bridge.trace_queries import SPAN_DETAIL, SpanDetailParams
+from litellm.rust_bridge.trace_query_responses import TraceQueryHelp, TraceSQLResponse
 from litellm.rust_bridge.traces import ClickHouseStorage
 from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.store import TraceStore
 from litellm.tracing.types import TraceScope
 
+SQL_ENVELOPE: Final = {
+    "meta": [{"name": "value", "type": "UInt64"}],
+    "data": [{"value": "9007199254740993"}],
+    "rows": 1,
+    "statistics": {"elapsed": 0.01, "rows_read": 1, "bytes_read": 8},
+    "rows_before_limit_at_least": 1,
+}
+QUERY_HELP: Final = {
+    "dialect": "test SQL",
+    "access": "authenticated scope",
+    "response": "JSON envelope",
+    "tables": [{"name": "traces", "columns": [{"name": "value", "type": "String", "comment": "label"}]}],
+    "normalized_fields": [],
+    "metadata": {
+        "table": "traces",
+        "column": "metadata",
+        "fields": [],
+        "sampled_rows": 0,
+        "invalid_json_rows": 0,
+        "truncated": True,
+        "sample_sql": "SELECT metadata FROM traces",
+        "scope": "bounded sample",
+        "error": "discovery unavailable",
+    },
+    "attributes": [],
+    "relationships": [],
+    "examples": [{"name": "recent", "sql": "SELECT * FROM traces LIMIT 1"}],
+    "gotchas": ["Keep queries bounded"],
+    "guide": "scoped",
+}
+
+
 TEAM_KEY = UserAPIKeyAuth(
     token="hashed-key", team_id="team-research", org_id="org-1", user_role=LitellmUserRoles.INTERNAL_USER
 )
+TRACE_RESPONSE: Final = {
+    "summary": {
+        "trace_id": "t1",
+        "name": "trace",
+        "service": "test",
+        "input_preview": "",
+        "start_time": "2026-01-01T00:00:00Z",
+        "duration_ms": 0,
+        "status": "ok",
+        "span_count": 0,
+        "agent_count": 0,
+        "agent_invocations": 0,
+        "llm_calls": 0,
+        "tool_calls": 0,
+        "error_count": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "models": [],
+        "spend": None,
+    },
+    "agents": [],
+    "spans": [],
+}
+SPAN_DETAIL_RESPONSE: Final = {
+    "span_id": "s1",
+    "input": "",
+    "output": "",
+    "input_ui": {"kind": "text", "text": ""},
+    "output_ui": {"kind": "text", "text": ""},
+    "attributes": {},
+}
 
 
 @pytest.mark.parametrize(
@@ -30,25 +95,25 @@ TEAM_KEY = UserAPIKeyAuth(
     (
         pytest.param(
             UserAPIKeyAuth(token="admin-key", team_id="team-a", user_role=LitellmUserRoles.PROXY_ADMIN),
-            TraceScope(team_ids=(), api_key_hash=""),
+            TraceScope(all_teams=1, user_id="", team_ids=(), api_key_hash=""),
             True,
             id="admin",
         ),
         pytest.param(
             UserAPIKeyAuth(token="view-key", team_id="team-a", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
-            TraceScope(team_ids=(), api_key_hash=""),
+            TraceScope(all_teams=1, user_id="", team_ids=(), api_key_hash=""),
             False,
             id="view-only-admin",
         ),
         pytest.param(
             TEAM_KEY,
-            TraceScope(team_ids=("team-research",), api_key_hash=""),
+            TraceScope(all_teams=0, user_id="", team_ids=(), api_key_hash="hashed-key"),
             True,
             id="team-key",
         ),
         pytest.param(
             UserAPIKeyAuth(token="hashed-key", user_role=LitellmUserRoles.INTERNAL_USER),
-            TraceScope(team_ids=("",), api_key_hash="hashed-key"),
+            TraceScope(all_teams=0, user_id="", team_ids=(), api_key_hash="hashed-key"),
             True,
             id="teamless-key",
         ),
@@ -110,7 +175,9 @@ def test_501_when_tracing_not_enabled(
     assert response.status_code == 501
     assert response.headers["content-type"] == "application/x-protobuf"
     assert Status.FromString(response.content).message == (
-        "Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL." if native_available else ""
+        "Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL."
+        if native_available
+        else ""
     )
     assert client.get("/v1/traces").status_code == 501
 
@@ -158,7 +225,10 @@ def test_list_traces_passes_scope_window_and_cursor(client, receiver):
     assert response.status_code == 200
     assert response.json() == {"data": [], "next_cursor": None}
     receiver.list_traces.assert_awaited_once_with(
-        scope={"team_ids": ("team-research",), "api_key_hash": ""}, start_ms=1, end_ms=2, cursor="abc"
+        scope={"all_teams": 0, "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"},
+        start_ms=1,
+        end_ms=2,
+        cursor="abc",
     )
 
 
@@ -171,21 +241,24 @@ def test_list_traces_defaults_to_last_24h(client, receiver):
 
 def test_get_trace_404_and_200(client, receiver):
     assert client.get("/v1/traces/missing").status_code == 404
-    trace = {"summary": {"trace_id": "t1"}, "agents": [], "spans": []}
-    receiver.get_trace.return_value = trace
+    receiver.get_trace.return_value = TRACE_RESPONSE
     response = client.get("/v1/traces/t1")
     assert response.status_code == 200
-    assert response.json() == trace
-    receiver.get_trace.assert_awaited_with("t1", {"team_ids": ("team-research",), "api_key_hash": ""}, "")
+    assert response.json() == TRACE_RESPONSE
+    receiver.get_trace.assert_awaited_with(
+        "t1", {"all_teams": 0, "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"}, ""
+    )
 
 
 def test_get_span_404_and_200(client, receiver):
     assert client.get("/v1/traces/t1/spans/s1").status_code == 404
-    receiver.get_span.return_value = {"span_id": "s1", "input": "", "output": "", "attributes": {}}
+    receiver.get_span.return_value = SPAN_DETAIL_RESPONSE
     response = client.get("/v1/traces/t1/spans/s1")
     assert response.status_code == 200
     assert response.json()["span_id"] == "s1"
-    receiver.get_span.assert_awaited_with("t1", "s1", {"team_ids": ("team-research",), "api_key_hash": ""}, "")
+    receiver.get_span.assert_awaited_with(
+        "t1", "s1", {"all_teams": 0, "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"}, ""
+    )
 
 
 def test_get_span_serves_ui_content_from_stored_payloads(client):
@@ -195,7 +268,7 @@ def test_get_span_serves_ui_content_from_stored_payloads(client):
         return_value=[{"span_id": "s1", "input": '{"city": "Paris"}', "output": stored_output, "attributes": {}}]
     )
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
-    body = client.get("/v1/traces/t1/spans/s1").json()
+    body = client.get("/v1/traces/t1/spans/s1?trace_ref=run-one").json()
     assert body["output"] == stored_output
     assert body["input_ui"] == {"kind": "fields", "fields": [{"key": "city", "value": "Paris"}]}
     assert body["output_ui"] == {
@@ -207,9 +280,11 @@ def test_get_span_serves_ui_content_from_stored_payloads(client):
 
 
 def test_trace_detail_passes_scoped_reference(client, receiver):
-    receiver.get_trace.return_value = {"summary": {"trace_id": "t1"}, "agents": [], "spans": []}
+    receiver.get_trace.return_value = TRACE_RESPONSE
     assert client.get("/v1/traces/t1?trace_ref=run-one").status_code == 200
-    receiver.get_trace.assert_awaited_with("t1", {"team_ids": ("team-research",), "api_key_hash": ""}, "run-one")
+    receiver.get_trace.assert_awaited_with(
+        "t1", {"all_teams": 0, "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"}, "run-one"
+    )
 
 
 def test_invalid_export_and_cursor_are_client_errors(client, receiver):
@@ -318,6 +393,7 @@ def test_injected_receiver_persists_authenticated_tenant(client: TestClient) -> 
         "litellm.team_id": TEAM_KEY.team_id,
         "litellm.api_key_hash": TEAM_KEY.token,
         "litellm.org_id": TEAM_KEY.org_id,
+        "litellm.user_id": TEAM_KEY.user_id or "",
     }
 
 
@@ -396,24 +472,28 @@ def test_lifespan_receivers_are_app_local() -> None:
     }
     assert first_storage.query.await_count == 2
     first_storage.query.assert_awaited_with(
-        "span_detail",
-        {
-            "team_ids": (TEAM_KEY.team_id,),
-            "api_key_hash": "",
-            "trace_id": "t1",
-            "span_id": "first-span",
-            "trace_ref": "first-run",
-        },
+        SPAN_DETAIL,
+        SpanDetailParams(
+            all_teams=0,
+            user_id="",
+            team_ids=(),
+            api_key_hash=TEAM_KEY.token,
+            trace_id="t1",
+            span_id="first-span",
+            trace_ref="first-run",
+        ),
     )
     second_storage.query.assert_awaited_once_with(
-        "span_detail",
-        {
-            "team_ids": (TEAM_KEY.team_id,),
-            "api_key_hash": "",
-            "trace_id": "t1",
-            "span_id": "second-span",
-            "trace_ref": "second-run",
-        },
+        SPAN_DETAIL,
+        SpanDetailParams(
+            all_teams=0,
+            user_id="",
+            team_ids=(),
+            api_key_hash=TEAM_KEY.token,
+            trace_id="t1",
+            span_id="second-span",
+            trace_ref="second-run",
+        ),
     )
 
 
@@ -472,7 +552,7 @@ def test_lens_reads_from_the_lifespan_storage() -> None:
     assert response.status_code == 200, response.text
     assert response.json()["executions"] == []
     storage.lens_sample.assert_awaited_once()
-    assert storage.lens_sample.await_args.args[0]["all_teams"] == 1
+    assert storage.lens_sample.await_args.args[0].all_teams == 1
 
 
 def test_lens_reads_from_injected_storage_without_receiver() -> None:
@@ -495,3 +575,96 @@ def test_lens_reads_from_injected_storage_without_receiver() -> None:
     assert response.status_code == 200, response.text
     assert response.json()["executions"] == []
     storage.lens_sample.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("auth", "expected_scope"),
+    (
+        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), {"kind": "admin"}),
+        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY), {"kind": "admin"}),
+        (TEAM_KEY, {"kind": "logs", "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"}),
+        (
+            UserAPIKeyAuth(token="project-key", team_id="team-a", project_id="project-a"),
+            {"kind": "logs", "user_id": "", "team_ids": (), "api_key_hash": "project-key"},
+        ),
+        (UserAPIKeyAuth(token="solo-key"), {"kind": "logs", "user_id": "", "team_ids": (), "api_key_hash": "solo-key"}),
+    ),
+)
+def test_sql_and_help_use_authenticated_scope(
+    client: TestClient, receiver: MagicMock, auth: UserAPIKeyAuth, expected_scope: dict[str, str]
+) -> None:
+    client.app.dependency_overrides[user_api_key_auth] = lambda: auth
+    client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
+    receiver.store.storage.query_sql = AsyncMock(return_value=TraceSQLResponse.model_validate(SQL_ENVELOPE))
+    receiver.store.storage.query_help = AsyncMock(return_value=TraceQueryHelp.model_validate(QUERY_HELP))
+    result: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
+    assert result.status_code == 200, result.text
+    assert result.json() == SQL_ENVELOPE
+    receiver.store.storage.query_sql.assert_awaited_once_with(
+        "SELECT * FROM otel_traces", expected_scope, "test-secret"
+    )
+    help_result: Final = client.get("/v1/traces/query/help")
+    assert help_result.status_code == 200, help_result.text
+    assert help_result.json() == QUERY_HELP
+    receiver.store.storage.query_help.assert_awaited_once_with(expected_scope, "test-secret")
+    forged: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1", "scope": {"kind": "admin"}})
+    assert forged.status_code == 422, forged.text
+    assert receiver.store.storage.query_sql.await_count == 1
+
+
+@pytest.mark.parametrize("auth", (UserAPIKeyAuth(), UserAPIKeyAuth(team_id="a", project_id="p")))
+def test_sql_rejects_missing_identity_without_querying(
+    client: TestClient, receiver: MagicMock, auth: UserAPIKeyAuth
+) -> None:
+    client.app.dependency_overrides[user_api_key_auth] = lambda: auth
+    client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
+    result: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
+    assert result.status_code == 403, result.text
+    assert client.get("/v1/traces/query/help").status_code == 403
+    receiver.store.storage.query_sql.assert_not_called()
+    receiver.store.storage.query_help.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("error", "status"), ((ValueError("invalid SQL"), 400), (RuntimeError("reader unavailable"), 503))
+)
+def test_sql_reports_rejected_queries_and_unavailable_readers(
+    client: TestClient, receiver: MagicMock, error: Exception, status: int
+) -> None:
+    client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
+    receiver.store.storage.query_sql = AsyncMock(side_effect=error)
+    result: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1"})
+    assert result.status_code == status, result.text
+    receiver.store.storage.query_sql.assert_awaited_once_with(
+        "SELECT 1", {"kind": "logs", "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"}, "test-secret"
+    )
+
+
+def test_query_help_does_not_fall_back_when_reader_provisioning_fails(client: TestClient, receiver: MagicMock) -> None:
+    client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
+    receiver.store.storage.query_help = AsyncMock(side_effect=RuntimeError("reader provisioning failed"))
+    result: Final = client.get("/v1/traces/query/help")
+    assert result.status_code == 503, result.text
+    receiver.store.storage.query_help.assert_awaited_once_with(
+        {"kind": "logs", "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"}, "test-secret"
+    )
+
+
+@pytest.mark.parametrize("secret", (None, "configured-master-key"))
+def test_queries_require_a_proxy_secret(
+    client: TestClient, receiver: MagicMock, monkeypatch: pytest.MonkeyPatch, secret: str | None
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "master_key", secret)
+    receiver.store.storage.query_sql = AsyncMock(return_value=TraceSQLResponse.model_validate(SQL_ENVELOPE))
+    result: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1"})
+    if secret is None:
+        assert result.status_code == 503, result.text
+        assert "master key" in result.json()["detail"]
+        receiver.store.storage.query_sql.assert_not_awaited()
+        return
+    assert result.status_code == 200, result.text
+    receiver.store.storage.query_sql.assert_awaited_once_with(
+        "SELECT 1", {"kind": "logs", "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"}, secret
+    )

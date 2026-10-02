@@ -62,9 +62,6 @@ class _LoopThread:
                 self._thread.start()
             return self._loop
 
-    def in_loop_thread(self) -> bool:
-        return self._thread is not None and threading.current_thread() is self._thread
-
     def submit(self, coro: Coroutine[Any, Any, T]) -> Future[T]:
         return asyncio.run_coroutine_threadsafe(coro, self.loop())
 
