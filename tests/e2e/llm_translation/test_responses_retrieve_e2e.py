@@ -6,16 +6,29 @@ Creates a stored response, retrieves it by id, and pins invalid-id error handlin
 from __future__ import annotations
 
 import time
+from typing import Final
 
+import openai
 import pytest
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
 from e2e_http import NoBody, Success, UnknownApiError, unwrap
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from openai.types.responses import (
+    ResponseCreatedEvent,
+    ResponseInputMessageItem,
+    ResponseInputText,
+    ResponseQueuedEvent,
+)
 from proxy_client import ProxyClient
 from pydantic import BaseModel
+from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
+
+OPENAI_BACKEND: Final = "openai/gpt-5.5"
+LONG_TASK: Final = "Write a numbered list counting from 1 to 400, one number per line, with a short word after each."
+CANCELLABLE_STATUSES: Final = frozenset({"queued", "in_progress"})
 
 
 class ResponsesCreateBody(BaseModel):
@@ -105,3 +118,92 @@ class TestResponsesRetrieve:
                 return
             case other:
                 pytest.fail(f"invalid response id expected 404, got {other!r}")
+
+
+def _register_openai(proxy: ProxyClient, resources: ResourceManager, prefix: str) -> str:
+    model = f"{prefix}-{unique_marker()}"
+    model_id = proxy.create_model(model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY"))
+    resources.defer(lambda: proxy.delete_model(model_id))
+    return model
+
+
+def _input_texts(item: object) -> tuple[str, ...]:
+    if not isinstance(item, ResponseInputMessageItem):
+        return ()
+    return tuple(part.text for part in item.content if isinstance(part, ResponseInputText))
+
+
+@pytest.mark.provider_live
+class TestStoredResponseLifecycle:
+    def test_input_items_list_the_stored_prompt(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model = _register_openai(proxy, resources, "e2e-resp-items")
+        client = sdk.openai(resources.key())
+        marker = unique_marker()
+
+        created = client.responses.create(
+            model=model, input=f"Reply with one word. {marker}", store=True, extra_body=NO_PROXY_CACHE
+        )
+        items = client.responses.input_items.list(created.id, limit=20, order="desc").data
+
+        texts = tuple(text for item in items for text in _input_texts(item))
+        assert any(marker in text for text in texts), f"input_items did not list the stored prompt: {items!r}"
+
+    def test_deleted_response_is_no_longer_retrievable(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model = _register_openai(proxy, resources, "e2e-resp-delete")
+        client = sdk.openai(resources.key())
+
+        created = client.responses.create(
+            model=model, input=f"Reply with one word. {unique_marker()}", store=True, extra_body=NO_PROXY_CACHE
+        )
+        retrieved = client.responses.retrieve(created.id)
+        assert retrieved.status == "completed", f"stored response not retrievable as completed: {retrieved!r}"
+
+        client.responses.delete(created.id)
+
+        with pytest.raises(openai.APIStatusError) as gone:
+            client.responses.retrieve(created.id)
+        assert 400 <= gone.value.status_code < 500, f"retrieve after delete expected a 4xx: {gone.value!r}"
+
+
+@pytest.mark.provider_live
+class TestBackgroundResponseCancel:
+    def test_cancel_background_response(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model = _register_openai(proxy, resources, "e2e-resp-cancel")
+        client = sdk.openai(resources.key())
+
+        created = client.responses.create(
+            model=model, input=f"{LONG_TASK} {unique_marker()}", background=True, extra_body=NO_PROXY_CACHE
+        )
+        assert created.status in CANCELLABLE_STATUSES, f"background response was not queued: {created.status}"
+
+        cancelled = client.responses.cancel(created.id)
+        assert cancelled.status == "cancelled", f"cancel did not stop the response: {cancelled.status}"
+
+    def test_cancel_background_streaming_response_by_streamed_id(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model = _register_openai(proxy, resources, "e2e-resp-cancel-stream")
+        client = sdk.openai(resources.key())
+
+        stream = client.responses.create(
+            model=model,
+            input=f"{LONG_TASK} {unique_marker()}",
+            background=True,
+            stream=True,
+            extra_body=NO_PROXY_CACHE,
+        )
+        response_id = next(
+            (event.response.id for event in stream if isinstance(event, (ResponseCreatedEvent, ResponseQueuedEvent))),
+            None,
+        )
+        stream.close()
+        assert response_id, "background stream advertised no response id before the first output"
+
+        cancelled = client.responses.cancel(response_id)
+        assert cancelled.status == "cancelled", f"cancel by streamed id did not stop the response: {cancelled.status}"

@@ -217,13 +217,6 @@ class BaseRealtimeTest(ABC):
                 f"exception: {type(caught_exception).__name__}: {caught_exception}"
             )
 
-        # Skip on transient connection failures
-        if (
-            not websocket_client.connection_successful
-            and websocket_client.close_code is not None
-        ):
-            pytest.skip(f"Transient connection failure: {'; '.join(error_details)}")
-
         # Assertions
         assert (
             websocket_client.connection_successful

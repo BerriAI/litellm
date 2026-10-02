@@ -49,6 +49,7 @@ from provider_edge_bedrock import bedrock_signer
 from proxy_client import ProxyClient
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from sdk_clients import NO_PROXY_CACHE, SdkClients, response_header
+from structured_output import SENTIMENT_OUTPUT_FORMAT, SENTIMENT_PROMPT, assert_sentiment_json
 
 pytestmark = [pytest.mark.e2e, pytest.mark.replayable]
 
@@ -104,6 +105,7 @@ def _text(message: Message) -> str:
 
 def _user_turn(text: str) -> MessageParam:
     return {"role": "user", "content": text}
+
 
 
 class TestAnthropicMessages:
@@ -239,6 +241,21 @@ class TestAnthropicMessages:
         assert any(isinstance(block, ToolUseBlock) for block in message.content), (
             f"model did not call the tool: {message.content!r}"
         )
+
+    @pytest.mark.covers("llm.messages.anthropic.structured_output.nonstream.works")
+    def test_messages_output_format_returns_schema_json(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model, key = _register(proxy, resources)
+        client = sdk.anthropic(key)
+
+        message = client.messages.create(
+            model=model,
+            max_tokens=128,
+            messages=[_user_turn(SENTIMENT_PROMPT)],
+            extra_body={**NO_PROXY_CACHE, "output_format": SENTIMENT_OUTPUT_FORMAT},
+        )
+        assert_sentiment_json(_text(message))
 
     @pytest.mark.skip(
         reason="stage red: product gap, /v1/messages 500s (anthropic_messages TypeError) on missing messages instead of 400"

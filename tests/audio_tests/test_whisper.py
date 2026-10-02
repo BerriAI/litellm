@@ -67,22 +67,6 @@ async def _run_transcription(
 )
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
-async def test_transcription_openai_whisper(response_format, timestamp_granularities):
-    await _run_transcription(
-        model="whisper-1",
-        api_key=None,
-        api_base=None,
-        response_format=response_format,
-        timestamp_granularities=timestamp_granularities,
-    )
-
-
-@pytest.mark.parametrize(
-    "response_format, timestamp_granularities",
-    [("json", None), ("vtt", None), ("verbose_json", ["word"])],
-)
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
 async def test_transcription_azure_whisper(response_format, timestamp_granularities):
     await _run_transcription(
         model="azure/whisper",

@@ -46,6 +46,7 @@ import os
 from types import MappingProxyType
 from typing import Final
 
+import openai
 import pytest
 from e2e_config import REQUEST_TIMEOUT, unique_marker
 from e2e_http import unwrap
@@ -198,3 +199,25 @@ class TestAzureContainerFiles:
         )
         resources.defer(lambda: client.containers.delete(native_id, extra_query=AZURE_PROVIDER_QUERY))
         _assert_file_round_trip(client, native_id, marker)
+
+
+class TestOpenAIContainerFiles:
+    def test_container_file_lifecycle_through_the_gateway(self, resources: ResourceManager, sdk: SdkClients) -> None:
+        client: Final = sdk.openai(resources.key())
+        marker: Final = unique_marker()
+
+        container: Final = client.containers.create(
+            name=f"e2e-container-{marker}", expires_after={"anchor": "last_active_at", "minutes": 5}
+        )
+        resources.defer(lambda: client.containers.delete(container.id))
+        assert not client.containers.files.list(container.id).data, "a new container must start with no files"
+
+        payload: Final = f"e2e container payload {marker}".encode()
+        uploaded: Final = client.containers.files.create(container.id, file=(f"{marker}.txt", payload))
+        listed: Final = tuple(entry.id for entry in client.containers.files.list(container.id).data)
+        assert uploaded.id in listed, f"uploaded file {uploaded.id} missing from the container listing {listed}"
+        assert client.containers.files.content.retrieve(uploaded.id, container_id=container.id).read() == payload
+
+        client.containers.files.delete(uploaded.id, container_id=container.id)
+        with pytest.raises(openai.NotFoundError):
+            client.containers.files.retrieve(uploaded.id, container_id=container.id)

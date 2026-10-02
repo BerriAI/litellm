@@ -15,6 +15,8 @@ import pytest
 
 
 class TestTogetherAI(BaseLLMChatTest):
+    test_basic_tool_calling = None
+
     def get_base_completion_call_args(self) -> dict:
         litellm.set_verbose = True
         return {

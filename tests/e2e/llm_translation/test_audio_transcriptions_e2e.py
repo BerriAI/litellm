@@ -17,11 +17,11 @@ from typing import Final
 
 import pytest
 from e2e_config import unique_marker
-from e2e_http import UnknownApiError
+from e2e_http import UnknownApiError, unwrap
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sdk_clients import SdkClients
 
 pytestmark = pytest.mark.e2e
@@ -119,3 +119,60 @@ class TestAudioTranscriptions:
                 )
             case other:
                 pytest.fail(f"missing model expected a model-specific 400, got {other!r}")
+
+
+class _WhisperForm(BaseModel):
+    model: str
+    response_format: str
+    timestamp_granularities: str | None = Field(default=None, serialization_alias="timestamp_granularities[]")
+
+
+class _TranscriptWord(BaseModel):
+    word: str
+    start: float
+    end: float
+
+
+class _VerboseTranscription(BaseModel):
+    text: str
+    words: list[_TranscriptWord] = []
+
+
+class TestWhisperTranscriptionFormats:
+    def _upload[R: BaseModel](
+        self, proxy: ProxyClient, resources: ResourceManager, form: _WhisperForm, response_type: type[R]
+    ) -> R:
+        model_id = proxy.create_model(
+            form.model, LiteLLMParamsBody(model="openai/whisper-1", api_key="os.environ/OPENAI_API_KEY")
+        )
+        resources.defer(lambda: proxy.delete_model(model_id))
+        return unwrap(
+            proxy.transport.upload(
+                "/v1/audio/transcriptions",
+                headers=proxy.transport.bearer(resources.key()),
+                form=form,
+                filename=WEATHER_WAV.name,
+                content=WEATHER_WAV.read_bytes(),
+                file_content_type="audio/wav",
+                response_type=response_type,
+            )
+        )
+
+    def test_vtt_format_returns_webvtt_transcript(self, proxy: ProxyClient, resources: ResourceManager) -> None:
+        form = _WhisperForm(model=f"e2e-whisper-vtt-{unique_marker()}", response_format="vtt")
+        transcript = self._upload(proxy, resources, form, _TranscriptionResult)
+        assert transcript.text.lstrip().startswith("WEBVTT"), f"vtt transcript is not WebVTT: {transcript.text[:200]!r}"
+        assert "weather" in transcript.text.lower(), f"vtt transcript lost the spoken words: {transcript.text!r}"
+
+    def test_verbose_json_returns_word_timestamps(self, proxy: ProxyClient, resources: ResourceManager) -> None:
+        form = _WhisperForm(
+            model=f"e2e-whisper-verbose-{unique_marker()}",
+            response_format="verbose_json",
+            timestamp_granularities="word",
+        )
+        transcript = self._upload(proxy, resources, form, _VerboseTranscription)
+        assert "weather" in transcript.text.lower(), f"verbose transcript lost the spoken words: {transcript.text!r}"
+        assert transcript.words, f"word timestamps were requested but none came back: {transcript!r}"
+        assert all(word.start <= word.end for word in transcript.words), (
+            f"word timings out of order: {transcript.words}"
+        )

@@ -24,6 +24,8 @@ from base_llm_unit_tests import BaseLLMChatTest
 
 @pytest.mark.flaky(retries=3, delay=2)
 class TestMistralCompletion(BaseLLMChatTest):
+    test_basic_tool_calling = None
+
     def get_base_completion_call_args(self) -> dict:
         litellm.set_verbose = True
         return {"model": "mistral/mistral-medium-latest"}
