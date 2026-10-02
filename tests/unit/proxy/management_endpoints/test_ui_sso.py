@@ -939,6 +939,83 @@ def test_build_sso_user_update_data_normalizes_email():
     assert "user_role" not in update_data
 
 
+def test_build_sso_user_update_data_fills_empty_user_alias_from_display_name():
+    """
+    An existing SSO user with no alias gets the IdP display name on login.
+    """
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import _build_sso_user_update_data
+
+    sso_result = CustomOpenID(
+        id="S-1-5-21-adfs-user",
+        email="jane.doe@example.com",
+        first_name="Jane",
+        last_name="Doe",
+        display_name="Doe, Jane",
+        provider="generic",
+        team_ids=[],
+    )
+
+    update_data = _build_sso_user_update_data(
+        result=sso_result,
+        user_email="jane.doe@example.com",
+        user_id="S-1-5-21-adfs-user",
+        existing_user_alias=None,
+    )
+
+    assert update_data == {"user_email": "jane.doe@example.com", "user_alias": "Doe, Jane"}
+
+
+def test_build_sso_user_update_data_keeps_existing_user_alias():
+    """
+    An alias already stored for the user is never overwritten by the IdP display name.
+    """
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import _build_sso_user_update_data
+
+    sso_result = CustomOpenID(
+        id="S-1-5-21-adfs-user",
+        email="jane.doe@example.com",
+        display_name="Doe, Jane",
+        provider="generic",
+        team_ids=[],
+    )
+
+    update_data = _build_sso_user_update_data(
+        result=sso_result,
+        user_email="jane.doe@example.com",
+        user_id="S-1-5-21-adfs-user",
+        existing_user_alias="Admin-set alias",
+    )
+
+    assert update_data == {"user_email": "jane.doe@example.com"}
+
+
+@pytest.mark.parametrize(
+    "result, expected_alias",
+    [
+        (
+            CustomOpenID(id="user-1", display_name="Doe, Jane", first_name="Jane", last_name="Doe", team_ids=[]),
+            "Doe, Jane",
+        ),
+        (CustomOpenID(id="user-1", first_name="Jane", last_name="Doe", team_ids=[]), "Jane Doe"),
+        (CustomOpenID(id="user-1", display_name="user-1", first_name="Jane", team_ids=[]), "Jane"),
+        (CustomOpenID(id="user-1", display_name="user-1", team_ids=[]), None),
+        (CustomOpenID(id="user-1", display_name="   ", first_name=" Jane ", last_name="Doe", team_ids=[]), "Jane Doe"),
+        (CustomOpenID(id="user-1", display_name="   ", first_name=" ", team_ids=[]), None),
+        ({"id": "user-1", "display_name": "Dict User", "first_name": None, "last_name": None}, "Dict User"),
+        (None, None),
+    ],
+)
+def test_get_sso_user_alias(result: CustomOpenID | dict[str, str | None] | None, expected_alias: str | None):
+    """
+    The alias is the IdP display name unless it is just the user id, then the joined first/last name.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import _get_sso_user_alias
+
+    assert _get_sso_user_alias(result) == expected_alias
+
+
 def test_generic_response_convertor_normalizes_email():
     """
     Test that generic_response_convertor normalizes email addresses.
@@ -1020,6 +1097,87 @@ async def test_upsert_sso_user_updates_role_for_existing_user():
     assert call_args.kwargs["where"] == {"user_id": "test-user-123"}
     assert call_args.kwargs["data"]["user_email"] == "test@example.com"
     assert call_args.kwargs["data"]["user_role"] == "proxy_admin"
+
+
+@pytest.mark.asyncio
+async def test_upsert_sso_user_fills_user_alias_for_existing_user():
+    """
+    An existing user row without an alias is updated with the SSO display name on login.
+    """
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+
+    existing_user = LiteLLM_UserTable(
+        user_id="S-1-5-21-adfs-user",
+        user_email="jane.doe@example.com",
+        user_role="internal_user",
+        user_alias=None,
+    )
+    sso_result = CustomOpenID(
+        id="S-1-5-21-adfs-user",
+        email="jane.doe@example.com",
+        first_name="Jane",
+        last_name="Doe",
+        display_name="Doe, Jane",
+        provider="generic",
+        team_ids=[],
+    )
+
+    await SSOAuthenticationHandler.upsert_sso_user(
+        result=sso_result,
+        user_info=existing_user,
+        user_email="jane.doe@example.com",
+        user_defined_values=None,
+        prisma_client=mock_prisma,
+    )
+
+    mock_prisma.db.litellm_usertable.update_many.assert_called_once_with(
+        where={"user_id": "S-1-5-21-adfs-user"},
+        data={"user_email": "jane.doe@example.com", "user_alias": "Doe, Jane"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_insert_sso_user_sets_user_alias_from_display_name():
+    """
+    A newly created SSO user is inserted with the IdP display name as user_alias.
+    """
+    from litellm.proxy._types import NewUserResponse, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import insert_sso_user
+
+    sso_result = CustomOpenID(
+        id="S-1-5-21-adfs-user",
+        email="jane.doe@example.com",
+        first_name="Jane",
+        last_name="Doe",
+        display_name="Doe, Jane",
+        provider="generic",
+        team_ids=[],
+    )
+    user_defined_values: SSOUserDefinedValues = {
+        "models": [],
+        "user_id": "S-1-5-21-adfs-user",
+        "user_email": "jane.doe@example.com",
+        "max_budget": None,
+        "user_role": "internal_user",
+        "budget_duration": None,
+    }
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.new_user",
+        return_value=NewUserResponse(user_id="S-1-5-21-adfs-user", key="sk-xxxxx", teams=None),
+    ) as mock_new_user:
+        await insert_sso_user(result_openid=sso_result, user_defined_values=user_defined_values)
+
+    new_user_request = mock_new_user.call_args.kwargs["data"]
+    assert new_user_request.user_id == "S-1-5-21-adfs-user"
+    assert new_user_request.user_email == "jane.doe@example.com"
+    assert new_user_request.user_alias == "Doe, Jane"
 
 
 @pytest.mark.asyncio
