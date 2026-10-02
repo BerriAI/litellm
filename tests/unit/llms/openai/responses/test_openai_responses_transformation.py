@@ -1860,11 +1860,13 @@ class TestResponsesSurfaceSharesTheEffortRule:
 
     @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
     def test_effort_levels_the_map_row_turns_off_are_dropped_or_refused(self, local_model_cost_map, level):
-        """Same row as the chat gate, read opt-out for every level. gpt-6.1-sol's row turns none
-        and minimal off: OpenAI lists low, medium, high, xhigh and max for it
+        """Same row as the chat gate, read opt-out for every level but max. gpt-6.1-sol's row turns
+        none and minimal off: OpenAI lists low, medium, high, xhigh and max for it
         (https://developers.openai.com/api/docs/models/gpt-6.1-sol, via #43910), and a local proxy
         got OpenAI's 400 for none and minimal through /v1/responses on 2026-09-30."""
-        forwarded = litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is not False
+        forwarded = (
+            level == "max" or litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is not False
+        )
         dropped = OpenAIResponsesAPIConfig().map_openai_params(
             response_api_optional_params={"reasoning": {"effort": level}},
             model="gpt-6.1-sol",
@@ -1893,7 +1895,7 @@ class TestResponsesSurfaceSharesTheEffortRule:
             ({"supports_none_reasoning_effort": False}, "none", False),
             ({"supports_none_reasoning_effort": True}, "none", True),
             ({"supports_minimal_reasoning_effort": False}, "minimal", False),
-            ({"supports_max_reasoning_effort": False}, "max", False),
+            ({"supports_max_reasoning_effort": False}, "max", True),
             ({}, "xhigh", True),
             ({"supports_xhigh_reasoning_effort": False}, "xhigh", False),
             ({"supports_none_reasoning_effort": False}, "medium", True),
@@ -1903,7 +1905,9 @@ class TestResponsesSurfaceSharesTheEffortRule:
         self, local_model_cost_map, monkeypatch, flags, level, forwarded
     ):
         """Same model name, rewritten row: this surface reads every level opt-out, xhigh included,
-        so the gate flips with the flags alone. The chat test module pins the real row's facts."""
+        so the gate flips with the flags alone. max is the one level no flag can turn off here,
+        since the same model honors it on this route and refuses it on chat. The chat test module
+        pins the real row's facts."""
         real_row = litellm.model_cost["gpt-6.1-sol"]
         without_flags = {
             field: value
@@ -1928,7 +1932,7 @@ class TestResponsesSurfaceSharesTheEffortRule:
     def test_dropping_a_refused_effort_keeps_the_rest_of_the_reasoning_object(self, local_model_cost_map):
         refused = next(
             level
-            for level in ("none", "minimal", "low", "max")
+            for level in ("none", "minimal", "low")
             if litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is False
         )
         mapped = OpenAIResponsesAPIConfig().map_openai_params(
@@ -1937,6 +1941,31 @@ class TestResponsesSurfaceSharesTheEffortRule:
             drop_params=True,
         )
         assert mapped["reasoning"] == {"summary": "auto"}
+
+    @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+    def test_gpt5_3_codex_forwards_exactly_the_effort_levels_its_map_row_allows(self, local_model_cost_map, level):
+        """The gate turns a stale false into a local refusal, so the Responses-only codex row has to
+        say what the route does. On 2026-10-01 /v1/responses answered gpt-5.3-codex none and xhigh
+        with 200 (effort echoed back) and minimal and max with 400 unsupported_value naming none,
+        low, medium, high and xhigh, so the row takes none and xhigh and turns minimal off."""
+        forwarded = (
+            level == "max" or litellm.model_cost["gpt-5.3-codex"].get(f"supports_{level}_reasoning_effort") is not False
+        )
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": level}},
+            model="gpt-5.3-codex",
+            drop_params=True,
+        )
+        assert ("reasoning" in mapped) is forwarded
+
+    def test_gpt5_3_codex_row_takes_none_and_xhigh(self, local_model_cost_map):
+        """Pinned on purpose so the row-derived test above cannot go vacuous: the live answers of
+        2026-10-01 listed above. When OpenAI changes the set, flip the row and this assertion
+        together."""
+        row = litellm.model_cost["gpt-5.3-codex"]
+        assert row["supports_none_reasoning_effort"] is True
+        assert row["supports_xhigh_reasoning_effort"] is True
+        assert row["supports_minimal_reasoning_effort"] is False
 
     def test_top_p_raises_without_drop_params(self, local_model_cost_map):
         with pytest.raises(litellm.UnsupportedParamsError):

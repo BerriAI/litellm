@@ -432,7 +432,10 @@ def test_gpt5_drops_reasoning_effort_minimal_when_requested(config: OpenAIConfig
 
 
 def _chat_row_forwards(row: dict, level: str) -> bool:
-    """Chat polarity: xhigh needs an explicit true, every other level only has to not be false."""
+    """Chat polarity: max is never gated, xhigh needs an explicit true, every other level only has
+    to not be false."""
+    if level == "max":
+        return True
     flag = row.get(f"supports_{level}_reasoning_effort")
     return flag is True if level == "xhigh" else flag is not False
 
@@ -495,7 +498,7 @@ def _row_without_effort_flags(row: dict) -> dict:
         ({"supports_none_reasoning_effort": False}, "none", False),
         ({"supports_none_reasoning_effort": True}, "none", True),
         ({"supports_minimal_reasoning_effort": False}, "minimal", False),
-        ({"supports_max_reasoning_effort": False}, "max", False),
+        ({"supports_max_reasoning_effort": False}, "max", True),
         ({}, "max", True),
         ({}, "xhigh", False),
         ({"supports_xhigh_reasoning_effort": True}, "xhigh", True),

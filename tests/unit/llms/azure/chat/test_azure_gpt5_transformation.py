@@ -371,7 +371,10 @@ def test_azure_reasoning_effort_none_unlocks_temperature_off_the_azure_row(
 
 
 def _azure_chat_row_forwards(row: dict, level: str) -> bool:
-    """Azure chat polarity: xhigh and none need an explicit true, every other level only has to not be false."""
+    """Azure chat polarity: max is never gated, xhigh and none need an explicit true, every other
+    level only has to not be false."""
+    if level == "max":
+        return True
     flag = row.get(f"supports_{level}_reasoning_effort")
     return flag is True if level in ("xhigh", "none") else flag is not False
 
@@ -383,8 +386,9 @@ def test_azure_gpt6_astra_forwards_exactly_the_effort_levels_its_map_row_allows(
 ):
     """The azure/ row is the whole contract for a Foundry deployment. A live Foundry gpt-6-astra
     (model gpt-6-astra-2026-09-03) answered reasoning_effort none with a 400 naming low, medium,
-    high and xhigh on 2026-10-01, so its row turns none and minimal off; max stays on because the
-    Responses route honors it, and chat's 400 for max is the provider's own."""
+    high and xhigh on 2026-10-01, so its row turns none and minimal off. The row keeps max off too,
+    since chat refuses it, but no gate reads that flag: the Responses route honors max, so chat
+    forwards it for the bridge and a plain chat call gets the provider's own 400."""
     forwarded = _azure_chat_row_forwards(litellm.model_cost[model], level)
     dropped = config.map_openai_params(
         non_default_params={"reasoning_effort": level},
@@ -417,8 +421,10 @@ def test_azure_gpt6_astra_forwards_exactly_the_effort_levels_its_map_row_allows(
 def test_azure_gpt6_astra_row_turns_none_and_minimal_off():
     """Pinned on purpose so the row-derived test above cannot go vacuous: a Foundry gpt-6-astra
     deployment refused none on chat and on Responses on 2026-10-01 (400 unsupported_value naming
-    low, medium, high, xhigh), and minimal the same way. When Azure adds a level, flip the row and
+    low, medium, high, xhigh), and minimal the same way; max it refused on chat while honoring it
+    on Responses, so the route-blind flag stays off. When Azure adds a level, flip the row and
     this assertion together."""
     row = litellm.model_cost["azure/gpt-6-astra"]
     assert row["supports_none_reasoning_effort"] is False
     assert row["supports_minimal_reasoning_effort"] is False
+    assert row["supports_max_reasoning_effort"] is False

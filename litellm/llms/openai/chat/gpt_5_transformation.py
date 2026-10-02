@@ -87,6 +87,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     """
 
     OPT_IN_REASONING_EFFORTS: ClassVar[frozenset[str]] = frozenset(("xhigh",))
+    ROUTE_SPECIFIC_REASONING_EFFORTS: ClassVar[frozenset[str]] = frozenset(("max",))
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
@@ -224,9 +225,23 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         flag, keeps forwarding what it was sent, and a level with no flag at all (medium, high) is
         never refused. So a new model in the family needs its map row and no code change, the
         row's supports_<level>_reasoning_effort flags being the whole contract.
+
+        A route-specific level (max) is never refused by either gate: the same model honors it
+        on Responses and refuses it on Chat Completions, so one row flag cannot gate it on
+        either route. Chat forwards it for the Responses bridge and a plain chat call gets the
+        provider's own 400, exactly as before the gate read every level.
         """
+        if level in cls.ROUTE_SPECIFIC_REASONING_EFFORTS:
+            return False
         if level in cls.OPT_IN_REASONING_EFFORTS:
             return not cls._supports_reasoning_effort_level(model, level)
+        return cls.is_reasoning_effort_level_explicitly_disabled(model, level)
+
+    @classmethod
+    def row_disables_reasoning_effort_level(cls, model: str, level: str) -> bool:
+        """The Responses gate: opt-out for every level except the route-specific ones."""
+        if level in cls.ROUTE_SPECIFIC_REASONING_EFFORTS:
+            return False
         return cls.is_reasoning_effort_level_explicitly_disabled(model, level)
 
     def get_supported_openai_params(self, model: str) -> list:
