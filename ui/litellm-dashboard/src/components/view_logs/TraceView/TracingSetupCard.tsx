@@ -21,7 +21,6 @@ import vercelLogo from "../../../../public/assets/logos/vercel.svg";
 import { agentTraceCall, apiClient, getProxyBaseUrl, sendOtlpTraceCall } from "../../networking";
 import { ActiveDot } from "./ActiveDot";
 import { sampleTraceExport } from "./sampleTrace";
-import { TracePreview } from "./TracePreview";
 import type { TraceSummary } from "./traceTypes";
 
 const COPIED_RESET_MS = 1500;
@@ -733,15 +732,6 @@ function ConnectAgent({
       </details>
 
       <TraceReceipt connected={connected} checked={checked} checking={checking} onCheck={onCheck} />
-
-      {!connected && (
-        <section className="mt-6">
-          <h3 className="mb-2 text-sm font-medium">
-            Example run <span className="font-normal text-muted-foreground">(sample data, not your runs)</span>
-          </h3>
-          <TracePreview />
-        </section>
-      )}
     </>
   );
 }
@@ -755,6 +745,7 @@ export function TracingSetupCard({
   checking = false,
   readOnly = false,
   canMintTracingKey = false,
+  onDemo,
 }: {
   detail: string | null;
   accessToken: string;
@@ -764,6 +755,7 @@ export function TracingSetupCard({
   checking?: boolean;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
+  onDemo?: () => void;
 }) {
   const [checked, setChecked] = useState(false);
   const enabled = detail === null;
@@ -773,7 +765,12 @@ export function TracingSetupCard({
   };
 
   return (
-    <div className="w-full py-6 pb-12" data-testid="tracing-setup-card">
+    <div className="w-full pb-12" data-testid="tracing-setup-card">
+      {onDemo && (
+        <Button variant="outline" className="mb-6" onClick={onDemo}>
+          Preview sample
+        </Button>
+      )}
       <div className="flex items-start gap-4">
         <h2 className="text-xl font-semibold tracking-tight">{setupTitle(enabled, connected)}</h2>
         <a

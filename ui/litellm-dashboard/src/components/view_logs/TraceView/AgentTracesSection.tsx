@@ -62,6 +62,7 @@ interface AgentTracesSectionProps {
   onRunOpenChange?: (open: boolean) => void;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
+  onDemo?: () => void;
 }
 
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
@@ -103,6 +104,7 @@ export function AgentTracesSection({
   onRunOpenChange,
   readOnly = false,
   canMintTracingKey = false,
+  onDemo,
 }: AgentTracesSectionProps) {
   const demo = useLensDemo();
   const [openTrace, setOpenTrace] = useState<TraceSummary | null>(null);
@@ -162,10 +164,11 @@ export function AgentTracesSection({
     checking: traces.isFetching,
   };
 
-  if (setup.disabledDetail != null) return <TracingSetupCard detail={setup.disabledDetail} {...setupProps} />;
+  if (setup.disabledDetail != null)
+    return <TracingSetupCard detail={setup.disabledDetail} onDemo={onDemo} {...setupProps} />;
   // Onboarding only on the first, default view; an empty range the user picked keeps its controls.
   if (checkHistory && !history.error && history.data === false)
-    return <TracingSetupCard detail={null} {...setupProps} />;
+    return <TracingSetupCard detail={null} onDemo={onDemo} {...setupProps} />;
   if (showSetup) {
     return (
       <div>

@@ -41,6 +41,7 @@ const renderSection = () =>
       endTime="2026-09-30T00:00"
       isCustomDate={false}
       isLiveTail={false}
+      onDemo={vi.fn()}
     />,
   );
 
@@ -116,6 +117,7 @@ describe("AgentTracesSection", () => {
 
     const card = await screen.findByTestId("tracing-setup-card");
     expect(card).toHaveTextContent("Tracing is not enabled");
+    expect(screen.getByRole("button", { name: "Preview sample" })).toBeVisible();
     expect(card).toHaveTextContent("type: clickhouse");
     expect(card).toHaveTextContent("url: os.environ/CLICKHOUSE_URL");
     expect(screen.getByRole("button", { name: "Check setup" })).toBeEnabled();
@@ -131,6 +133,7 @@ describe("AgentTracesSection", () => {
     const card = await screen.findByTestId("tracing-setup-card");
     expect(card).toHaveTextContent("Connect your agent");
     expect(card).toHaveTextContent("Waiting for your first trace");
+    expect(screen.getByRole("button", { name: "Preview sample" })).toBeVisible();
     expect(card).not.toHaveTextContent("store: clickhouse");
   });
 
@@ -140,6 +143,7 @@ describe("AgentTracesSection", () => {
     renderSection();
     expect(await screen.findByText("No runs match these filters.")).toBeVisible();
     expect(screen.queryByTestId("tracing-setup-card")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
     expect(apiClient.get).toHaveBeenCalledWith("/v1/traces", { accessToken: "sk-test", query: { start_ms: 0 } });
   });
 
@@ -155,6 +159,7 @@ describe("AgentTracesSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check for traces" }));
     expect(await screen.findAllByTestId("agent-trace-row")).toHaveLength(runs.length);
     expect(screen.getByText("Traces received. Select a run to inspect it.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
     expect(screen.queryByTestId("tracing-setup-card")).not.toBeInTheDocument();
   });
 

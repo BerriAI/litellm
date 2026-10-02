@@ -31,6 +31,7 @@ const renderCard = (
     onCheck?: () => void;
     readOnly?: boolean;
     canMintTracingKey?: boolean;
+    onDemo?: () => void;
   } = {},
 ) => {
   const onOpenTrace = vi.fn();
@@ -38,6 +39,7 @@ const renderCard = (
     <TracingSetupCard
       detail={props.detail ?? null}
       connected={props.connected}
+      onDemo={props.onDemo}
       onCheck={props.onCheck}
       readOnly={props.readOnly}
       canMintTracingKey={props.canMintTracingKey ?? true}
@@ -51,14 +53,16 @@ const renderCard = (
 beforeEach(() => vi.clearAllMocks());
 
 describe("TracingSetupCard", () => {
-  it("shows agent connection guidance and labels the example run as sample data", async () => {
+  it("offers the interactive demo while waiting for the first trace", async () => {
     const user = userEvent.setup();
-    const { card } = renderCard();
+    const onDemo = vi.fn();
+    const { card } = renderCard({ onDemo });
     expect(screen.getByRole("heading", { name: "Connect your agent" })).toBeVisible();
     expect(screen.getByText("Tracing enabled")).toBeVisible();
     expect(screen.getByText("Waiting for your first trace")).toBeVisible();
-    expect(screen.getByTestId("trace-preview")).toBeVisible();
-    expect(card).toHaveTextContent("sample data, not your runs");
+    await user.click(screen.getByRole("button", { name: "Preview sample" }));
+    expect(onDemo).toHaveBeenCalledOnce();
+    expect(sendOtlpTraceCall).not.toHaveBeenCalled();
     expect(card).not.toHaveTextContent("store: clickhouse");
     await user.click(screen.getByText("Set up manually"));
     expect(screen.getByText(/^export OTEL_EXPORTER_OTLP_ENDPOINT=http:\/\/proxy.test/)).toBeVisible();
@@ -74,10 +78,10 @@ describe("TracingSetupCard", () => {
     expect(copyToClipboard).toHaveBeenLastCalledWith("http://proxy.test/v1/traces");
   });
 
-  it("hides the sample preview once traces are arriving", () => {
+  it("shows connection guidance for another agent without a demo", () => {
     renderCard({ connected: true });
     expect(screen.getByRole("heading", { name: "Connect another agent" })).toBeVisible();
-    expect(screen.queryByTestId("trace-preview")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
   });
 
   it("builds the coding agent command for the selected framework and keeps both manual installers", async () => {

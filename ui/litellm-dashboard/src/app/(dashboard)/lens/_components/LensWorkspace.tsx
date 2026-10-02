@@ -64,26 +64,20 @@ function LensContent({
   const openDemo = onDemo ? () => onDemo(activeTab) : undefined;
   return (
     <main className="flex w-full min-w-0 flex-1 flex-col gap-5 p-6 md:p-8">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-          <Aperture aria-hidden="true" className="size-7" strokeWidth={1.75} />
-          Lens
-        </h1>
-        {demo ? (
-          <div className="flex items-center gap-3">
-            <span role="status" className="text-sm text-muted-foreground">
-              Demo data
-            </span>
-            <Button variant="outline" size="sm" onClick={onExit}>
-              Exit demo
-            </Button>
-          </div>
-        ) : (
-          <Button variant="outline" size="sm" onClick={openDemo}>
-            Try demo
+      <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
+        <Aperture aria-hidden="true" className="size-7" strokeWidth={1.75} />
+        Lens
+      </h1>
+      {demo && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/40 px-4 py-2">
+          <p role="status" className="text-sm">
+            You’re viewing demo data
+          </p>
+          <Button variant="outline" size="sm" onClick={onExit}>
+            Exit demo
           </Button>
-        )}
-      </div>
+        </div>
+      )}
       <Tabs
         value={activeTab}
         onValueChange={(value) => (demo ? setDemoTab(value as Tab) : void setTab(value as Tab))}
@@ -103,6 +97,7 @@ function LensContent({
             isActive={activeTab === "traces"}
             readOnly={readOnly}
             canMintTracingKey={!demo && isProxyAdminRole(userRole)}
+            onDemo={openDemo}
           />
         </TabsContent>
         <TabsContent value="investigations" keepMounted={!!demo}>

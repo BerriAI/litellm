@@ -305,7 +305,7 @@ export function LensView({
           }}
           onConnect={() => setWorkerSetup(true)}
           onCreate={() => setEditing("new")}
-          onDemo={onDemo}
+          onDemo={activity.isSuccess && !ready ? onDemo : undefined}
         />
       )}
       {showReadiness && !ready && (
