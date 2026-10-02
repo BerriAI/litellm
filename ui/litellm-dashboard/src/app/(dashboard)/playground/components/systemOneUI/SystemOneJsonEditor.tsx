@@ -3,7 +3,7 @@ import { cn } from "@/lib/cva.config";
 import { CircleAlert, CircleCheck, TriangleAlert } from "lucide-react";
 import { useId, useMemo, useRef } from "react";
 import { createElement, PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
-import type { rendererProps } from "react-syntax-highlighter";
+import type { SyntaxHighlighterProps } from "react-syntax-highlighter";
 import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
 import { findRootBlocks, ROOT_BLOCK_STYLES, type RootBlock } from "./json_root_blocks";
 import type { SystemOnePayloadValidation } from "./validate_system_one_payload";
@@ -12,6 +12,7 @@ SyntaxHighlighter.registerLanguage("json", json);
 
 const EDITOR_TEXT = "m-0 whitespace-pre-wrap wrap-anywhere py-3 font-mono text-xs leading-5 [scrollbar-gutter:stable]";
 const GUTTER_WIDTH = "w-11";
+type LineRendererProps = Parameters<NonNullable<SyntaxHighlighterProps["renderer"]>>[0];
 const CONTENT_INSET = "pl-14 pr-3";
 const CODE_TAG_PROPS = { className: "language-json", style: { whiteSpace: "pre-wrap" } } as const;
 
@@ -69,7 +70,7 @@ function IssueList({ id, validation }: { id: string; validation: SystemOnePayloa
 }
 
 function renderLines(rootBlocks: RootBlock[]) {
-  return function LineRows({ rows, stylesheet, useInlineStyles }: rendererProps) {
+  return function LineRows({ rows, stylesheet, useInlineStyles }: LineRendererProps) {
     return rows.map((row, line) => {
       const lineElement = { node: row, stylesheet, useInlineStyles, key: line };
       const block = rootBlocks.find(({ startLine, endLine }) => line >= startLine && line <= endLine);
