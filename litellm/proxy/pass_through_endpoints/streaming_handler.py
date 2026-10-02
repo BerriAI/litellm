@@ -280,7 +280,7 @@ class PassThroughStreamingHandler:
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        request_body: dict,
+        request_body: dict[str, object],
         endpoint_type: EndpointType,
         start_time: datetime,
         raw_bytes: Sequence[bytes],
