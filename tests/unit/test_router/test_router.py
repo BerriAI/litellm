@@ -2902,17 +2902,19 @@ def test_build_completion_continuation_input_folds_into_trailing_plain_assistant
 
 
 def test_build_completion_continuation_input_keeps_structured_assistant_content():
-    """Content blocks on a trailing assistant turn stay blocks: the partial lands as one more text
-    block instead of a stringified list, and a content shape that cannot be extended declines."""
+    """Content blocks on a trailing assistant turn stay blocks: the partial continues the last text
+    block in place (a block boundary would let a provider drop the space between "Sure, " and "here"),
+    lands as a new text block only after a non-text block, and a content shape that cannot be extended declines."""
+    from litellm.router import _extend_trailing_text_block
+
     messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": [{"type": "text", "text": "Sure, "}]}]
     built = litellm.Router._build_completion_continuation_input(messages, "here it is")
     assert built is not None
     assert [m["role"] for m in built] == ["user", "assistant"]
-    assert built[-1] == {
-        "role": "assistant",
-        "content": [{"type": "text", "text": "Sure, "}, {"type": "text", "text": "here it is"}],
-        "prefix": True,
-    }
+    assert built[-1] == {"role": "assistant", "content": [{"type": "text", "text": "Sure, here it is"}], "prefix": True}
+    image_block = {"type": "image_url", "image_url": {"url": "https://example.test/a.png"}}
+    assert _extend_trailing_text_block([image_block], "here it is") == [image_block, {"type": "text", "text": "here it is"}]
+    assert _extend_trailing_text_block([], "here it is") == [{"type": "text", "text": "here it is"}]
     assert litellm.Router._build_completion_continuation_input([{"role": "assistant", "content": 42}], "x") is None
 
 

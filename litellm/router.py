@@ -478,6 +478,14 @@ _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 
 
+def _extend_trailing_text_block(blocks: Sequence[Mapping[str, object]], text: str) -> Sequence[Mapping[str, object]]:
+    """Continue the last text block in place so the prefill reads exactly as the text the caller already received."""
+    last: Final = blocks[-1] if blocks else None
+    if last is not None and last.get("type") == "text" and isinstance(last_text := last.get("text"), str):
+        return [*blocks[:-1], {**last, "text": f"{last_text}{text}"}]
+    return [*blocks, {"type": "text", "text": text}]
+
+
 def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
     return tuple(item for item in value if isinstance(item, str)) if isinstance(value, tuple) else ()
 
@@ -3260,7 +3268,7 @@ class Router:
             blocks: Final = _CONTENT_BLOCKS_ADAPTER.validate_python(content)
         except ValidationError:
             return None
-        extended: Final = [*blocks, {"type": "text", "text": generated_content}]
+        extended: Final = _extend_trailing_text_block(blocks, generated_content)
         return [*messages[:-1], {**last, "content": extended, "prefix": True}]
 
     @staticmethod
