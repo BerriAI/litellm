@@ -22,7 +22,6 @@ from prisma.errors import ClientNotConnectedError
 
 
 async def _run_prisma_query() -> None:
-    """One round trip through the tracked engine wrapper, which is what marks a call as real DB I/O."""
     engine = _TrackedPrismaEngine(SimpleNamespace(query=AsyncMock(return_value={})), _PrismaDrainTracker())
     await engine.query("{}", tx_id=None)
 

@@ -27,11 +27,7 @@ def _safe_db_event_metadata(kwargs: dict) -> dict[str, str] | None:
 
 
 class _DbIoWitness:
-    """One per ``log_db_metrics`` activation; marked by the Prisma engine wrapper on every query.
-
-    Marks propagate to the enclosing activation so a decorated function that reaches the
-    database only through another decorated function still records its own event.
-    """
+    """Marks propagate to the enclosing activation so nested decorated calls each record their own event."""
 
     __slots__ = ("_parent", "_touched")
 
@@ -53,7 +49,6 @@ _db_io_witness: Final[ContextVar["_DbIoWitness | None"]] = ContextVar("litellm_d
 
 
 def record_db_io() -> None:
-    """Tell the enclosing ``log_db_metrics`` activations that a real database round trip happened."""
     witness: Final = _db_io_witness.get()
     if witness is not None:
         witness.mark()
@@ -62,10 +57,6 @@ def record_db_io() -> None:
 def log_db_metrics(func):
     """
     Decorator to log the duration of a DB related function to ServiceLogger()
-
-    The DB success event is emitted only when the wrapped call performed database I/O
-    (reported through ``record_db_io`` by the Prisma engine wrapper), so cache hits in
-    cache-first helpers produce no ``postgres <fn>`` span or DB service metric
 
     Handles logging DB success/failure to ServiceLogger(), which logs to Prometheus, OTEL, Datadog
 

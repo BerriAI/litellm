@@ -14,10 +14,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest, litellm
 import httpx
+from prisma import Prisma
 from litellm._service_logger import ServiceTypes
 from litellm.proxy._types import LiteLLM_OrganizationTable, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import get_org_object, get_user_object
-from litellm.proxy.db.prisma_client import _PrismaDrainTracker, _TrackedPrismaEngine
+from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.auth.auth_checks import get_end_user_object
 from litellm.caching.caching import DualCache
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -1516,16 +1517,24 @@ async def _db_service_call_types(hook: AsyncMock) -> tuple[str, ...]:
     return tuple(call.kwargs["call_type"] for call in hook.await_args_list if call.kwargs["service"] == ServiceTypes.DB)
 
 
-def _prisma_client_serving(row: LiteLLM_UserTable) -> SimpleNamespace:
-    """A Prisma client whose user table answers ``find_unique`` through the real tracked engine wrapper,
-    the same path a generated Prisma action takes, with only the query engine itself faked."""
-    engine: Final = _TrackedPrismaEngine(SimpleNamespace(query=AsyncMock(return_value={})), _PrismaDrainTracker())
-
-    async def find_unique(**kwargs: object) -> LiteLLM_UserTable:
-        await engine.query("{}", tx_id=None)
-        return row
-
-    return SimpleNamespace(db=SimpleNamespace(litellm_usertable=SimpleNamespace(find_unique=find_unique)))
+def _prisma_client_serving(user_id: str) -> SimpleNamespace:
+    row: Final = {
+        "user_id": user_id,
+        "user_role": "internal_user",
+        "teams": [],
+        "spend": 0.0,
+        "models": [],
+        "metadata": "{}",
+        "allowed_cache_controls": [],
+        "policies": [],
+        "model_spend": "{}",
+        "model_max_budget": "{}",
+        "organization_memberships": [],
+    }
+    engine: Final = SimpleNamespace(query=AsyncMock(return_value={"data": {"result": row}}), stop=lambda: None)
+    generated_client: Final = Prisma()
+    generated_client._engine = engine
+    return SimpleNamespace(db=PrismaWrapper(original_prisma=generated_client, iam_token_db_auth=False))
 
 
 @pytest.mark.asyncio
@@ -1573,7 +1582,7 @@ async def test_get_user_object_cache_miss_emits_exactly_one_postgres_get_user_ob
     db_success_hook: AsyncMock,
 ) -> None:
     user_id: Final = f"db-user-{uuid.uuid4()}"
-    prisma_client: Final = _prisma_client_serving(LiteLLM_UserTable(user_id=user_id, user_role="internal_user"))
+    prisma_client: Final = _prisma_client_serving(user_id)
 
     result: Final = await get_user_object(
         user_id=user_id,
