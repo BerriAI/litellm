@@ -173,7 +173,17 @@ def test_exact_name_wins_over_a_case_folded_config_alias_for_connect_discovery_a
             assert tool_calls(obo_peer.drain()) == ()
             assert _advertised(candidate, cased) == _advertised(candidate, by_name)
 
-            challenged: Final = _rpc(candidate, f"/mcp/{stem}", key, {})
+            same_name: Final = _rpc(candidate, f"/mcp/{stem}", key, {})
+            assert same_name.status_code == 200, same_name.text
+            assert "www-authenticate" not in same_name.headers, same_name.headers
+            via_alias: Final = _rpc(
+                candidate, f"/mcp/{stem}", key, {}, method="tools/call", params={"name": add, "arguments": ADD}
+            )
+            assert json.loads(_sse_data(via_alias))["result"]["content"][0]["text"] == "5", via_alias.text
+            assert len(tool_calls(math_peer.drain())) == 1
+            assert tool_calls(obo_peer.drain()) == ()
+
+            challenged: Final = _rpc(candidate, f"/mcp/{stem}", scenario.key(), {})
             assert challenged.status_code == 401, challenged.text
             assert f'resource_metadata="/.well-known/oauth-protected-resource/mcp/{stem}"' in challenged.headers.get(
                 "www-authenticate", ""
