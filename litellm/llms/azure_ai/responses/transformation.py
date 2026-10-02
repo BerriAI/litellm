@@ -3,6 +3,7 @@ from typing import Final
 import httpx
 
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
 from litellm.llms.azure_ai.common_utils import (
     AzureFoundryModelInfo,
     api_key_header_for_base,
@@ -26,6 +27,18 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.AZURE_AI
+
+    @staticmethod
+    def _supports_reasoning_effort_none(model: str) -> bool:
+        return AzureAIGPT5Config._supports_reasoning_effort_level(model, "none")
+
+    @staticmethod
+    def _effort_level_is_disabled(model: str, level: str) -> bool:
+        return AzureAIGPT5Config.row_disables_reasoning_effort_level(model, level)
+
+    @staticmethod
+    def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
+        return AzureAIGPT5Config.effort_resolves_to_none(model, effort)
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         params: Final = litellm_params or GenericLiteLLMParams()

@@ -208,17 +208,36 @@ class TestTheNormalizedTierIsTheTierSent:
     @pytest.mark.parametrize(
         "model, provider",
         [
+            ("gpt-5.5", "azure_ai"),
+            ("azure_ai/gpt-5.5", "azure_ai"),
+            ("gpt-5.6", "azure"),
+            ("us/gpt-5.6", "azure"),
+        ],
+    )
+    def test_an_azure_hosted_deployment_without_the_flag_drops_to_the_tier_it_accepts(
+        self, local_model_cost_map, model, provider
+    ):
+        """Chat Completions answers ``max`` on gpt-5.6 with a 400 naming ``none`` through ``xhigh``
+        (OpenAI, 2026-10-01) and none of these Azure rows declares the level, so the adapter sends
+        the tier below instead of the rejected one."""
+        assert _reasoning_effort_sent(model, provider, "max") == "xhigh"
+
+    @pytest.mark.parametrize(
+        "model, provider",
+        [
             ("gpt-6-astra", "azure_ai"),
             ("azure_ai/gpt-6-astra", "azure_ai"),
             ("gpt-6-astra", "azure"),
             ("us/gpt-6-astra", "azure"),
         ],
     )
-    def test_an_azure_hosted_astra_deployment_drops_to_the_tier_it_accepts(
+    def test_an_azure_hosted_astra_deployment_drops_to_the_tier_its_chat_route_accepts(
         self, local_model_cost_map, model, provider
     ):
-        """The deployment answers ``max`` with a 400 naming ``none`` through ``xhigh``, so the rows
-        say so and the adapter sends the tier below instead of the rejected one."""
+        """A Foundry gpt-6-astra answers a Chat Completions ``max`` with a 400 naming low through
+        xhigh while honoring the same level on the Responses route (2026-10-01). The row's flag is
+        route-blind, so it keeps max off and the adapter, which cannot know which route the call
+        takes, sends the tier below instead of the level chat rejects."""
         assert _reasoning_effort_sent(model, provider, "max") == "xhigh"
 
     def test_the_openai_hosted_twin_still_sends_max(self, local_model_cost_map):

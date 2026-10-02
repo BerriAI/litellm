@@ -108,6 +108,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
 from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
     foundry_chat_rejects_function_tools_while_reasoning,
@@ -1076,6 +1077,16 @@ def _resolve_openai_api_base(api_base: str | None) -> str:
     )
 
 
+def _chat_gate_refuses_reasoning_effort_none(model: str, custom_llm_provider: str) -> bool:
+    match custom_llm_provider:
+        case "azure":
+            return litellm.AzureOpenAIGPT5Config.refuses_reasoning_effort_level(model, "none")
+        case "azure_ai":
+            return AzureAIGPT5Config.refuses_reasoning_effort_level(model, "none")
+        case _:
+            return OpenAIGPT5Config.refuses_reasoning_effort_level(model, "none")
+
+
 def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
@@ -1125,7 +1136,9 @@ def responses_api_bridge_check(
     #   server-side), and Chat Completions rejects function tools whenever reasoning is
     #   on ("Function tools with reasoning_effort are not supported ... use
     #   /v1/responses or set reasoning_effort to 'none'"), so only an explicit
-    #   ``"none"`` keeps the request chat-servable. Custom (grammar) tools are served
+    #   ``"none"`` the chat gate forwards keeps the request chat-servable: a ``none``
+    #   the model's map row refuses is dropped (or refused) before the call, which
+    #   leaves the provider's default effort in force. Custom (grammar) tools are served
     #   natively by Chat Completions with reasoning on, so custom-only requests stay on
     #   chat and keep their native custom tool_call response shape.
     # - The UNSET-effort arm only fires against endpoints known to enforce that
@@ -1148,10 +1161,13 @@ def responses_api_bridge_check(
         )
         for tool in (tools or ())
     )
-    if isinstance(reasoning_effort, dict):
-        reasoning_active = reasoning_effort.get("effort") != "none" or reasoning_effort.get("summary") is not None
-    else:
-        reasoning_active = reasoning_effort != "none"
+    requested_effort: Final = reasoning_effort.get("effort") if isinstance(reasoning_effort, dict) else reasoning_effort
+    requested_summary: Final = reasoning_effort.get("summary") if isinstance(reasoning_effort, dict) else None
+    reasoning_active: Final = (
+        requested_effort != "none"
+        or requested_summary is not None
+        or _chat_gate_refuses_reasoning_effort_none(model, custom_llm_provider)
+    )
     # The reasoning+tools constraint is enforced by the real OpenAI backend behind any api.openai.com
     # host (the default URL or a PrivateLink hostname such as <region>.privatelink.api.openai.com) and
     # by Azure OpenAI through the azure provider. Resolve the effective OpenAI base arg>global>env>default

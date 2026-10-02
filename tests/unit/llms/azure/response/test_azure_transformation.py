@@ -651,16 +651,21 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     litellm.add_known_models(model_cost_map=litellm.model_cost)
 
 
-def test_azure_responses_gpt6_astra_reasoning_effort_none_unlocks_temperature(local_model_cost_map: None):
-    """Foundry's gpt-6-astra accepts reasoning.effort='none' with a non-default temperature
-    while OpenAI's gpt-6-astra does not, so the gate must read the azure/ cost-map entry
-    for the bare deployment name rather than OpenAI's."""
+def test_azure_responses_reasoning_effort_none_unlocks_temperature_off_the_azure_row(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+):
+    """The gate reads the azure/ cost-map entry for the bare deployment name rather than OpenAI's
+    twin: with OpenAI's gpt-6-sol row turned off for none, azure/gpt-6-sol's row still lets none
+    through and, only then, a non-default temperature."""
+    monkeypatch.setitem(
+        litellm.model_cost, "gpt-6-sol", {**litellm.model_cost["gpt-6-sol"], "supports_none_reasoning_effort": False}
+    )
     params = AzureOpenAIResponsesAPIConfig().map_openai_params(
         response_api_optional_params=ResponsesAPIOptionalRequestParams(
             temperature=0.2,
             reasoning={"effort": "none"},
         ),
-        model="gpt-6-astra",
+        model="gpt-6-sol",
         drop_params=False,
     )
     assert params["temperature"] == 0.2
@@ -677,6 +682,116 @@ def test_azure_responses_gpt6_astra_rejects_temperature_while_reasoning(local_mo
             model="gpt-6-astra",
             drop_params=False,
         )
+
+
+@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6.1-sol"])
+@pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+def test_azure_responses_gpt6_effort_levels_follow_the_azure_row(local_model_cost_map: None, model: str, level: str):
+    """A bare deployment name reads the azure/ row, opt-out for every level but max, so the none
+    and minimal Foundry refuses on this route (live 400s on 2026-10-01 for gpt-6-astra and 2026-10-02
+    for gpt-6.1-sol) are dropped or refused here while the max it honors goes through whatever the
+    route-blind flag says."""
+    forwarded = (
+        level == "max" or litellm.model_cost[f"azure/{model}"].get(f"supports_{level}_reasoning_effort") is not False
+    )
+    dropped = AzureOpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": level}),
+        model=model,
+        drop_params=True,
+    )
+    assert ("reasoning" in dropped) is forwarded
+    if forwarded:
+        kept = AzureOpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": level}),
+            model=model,
+            drop_params=False,
+        )
+        assert kept["reasoning"] == {"effort": level}
+    else:
+        with pytest.raises(litellm.UnsupportedParamsError):
+            AzureOpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": level}),
+                model=model,
+                drop_params=False,
+            )
+
+
+def test_azure_gpt6_astra_keeps_max_on_this_route_whatever_its_row_says(local_model_cost_map: None):
+    """Pinned on purpose: the row-derived test above exempts max by hand, so this one has to fail
+    if the gate ever reads the flag. A Foundry gpt-6-astra deployment answered reasoning.effort max
+    through /v1/responses with 200, the effort echoed back and reasoning tokens billed, on
+    2026-10-01, while chat refuses the same level, as OpenAI's chat does. The row keeps max off for
+    the adapter and the picker, and this gate still forwards it even under drop_params."""
+    assert litellm.model_cost["azure/gpt-6-astra"]["supports_max_reasoning_effort"] is False
+    kept = AzureOpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": "max"}),
+        model="gpt-6-astra",
+        drop_params=True,
+    )
+    assert kept["reasoning"] == {"effort": "max"}
+
+
+@pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+def test_azure_responses_effort_gate_fires_when_azure_ai_prefix_survives_provider_remap(
+    local_model_cost_map: None, level: str
+):
+    """litellm.responses(model="azure_ai/gpt-6.1-sol", api_base=<Foundry host>) is re-routed to the
+    azure provider with the prefix intact, so this config sees the prefixed name. The gate used to
+    skip every prefixed name as another provider's pass-through, and a live Foundry gpt-6.1-sol
+    answered the forwarded none and minimal with 400 on 2026-10-02 even under drop_params. The
+    prefixed name reads the azure_ai/ row and drops or refuses exactly what that row turns off."""
+    forwarded = (
+        level == "max"
+        or litellm.model_cost["azure_ai/gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is not False
+    )
+    dropped = AzureOpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            max_output_tokens=60, reasoning={"effort": level}
+        ),
+        model="azure_ai/gpt-6.1-sol",
+        drop_params=True,
+    )
+    assert ("reasoning" in dropped) is forwarded
+    if forwarded:
+        return
+    with pytest.raises(litellm.UnsupportedParamsError):
+        AzureOpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                max_output_tokens=60, reasoning={"effort": level}
+            ),
+            model="azure_ai/gpt-6.1-sol",
+            drop_params=False,
+        )
+
+
+def test_azure_responses_prefixed_name_reads_the_foundry_row_not_the_azure_twin(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+):
+    """The rows are made to disagree on low, a level neither real row flags, so the prefixed name
+    proving it reads azure_ai/gpt-6-sol cannot pass by reading azure/gpt-6-sol, which the bare
+    deployment name keeps reading."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure_ai/gpt-6-sol",
+        {**litellm.model_cost["azure_ai/gpt-6-sol"], "supports_low_reasoning_effort": False},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/gpt-6-sol",
+        {**litellm.model_cost["azure/gpt-6-sol"], "supports_low_reasoning_effort": True},
+    )
+    prefixed = AzureOpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": "low"}),
+        model="azure_ai/gpt-6-sol",
+        drop_params=True,
+    )
+    assert "reasoning" not in prefixed
+    bare = AzureOpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": "low"}),
+        model="gpt-6-sol",
+        drop_params=True,
+    )
+    assert bare["reasoning"] == {"effort": "low"}
 
 
 def test_azure_responses_sends_the_deployment_name_when_azure_ai_prefix_survives_provider_remap():
