@@ -510,7 +510,8 @@ async def test_malformed_diagnostic_cursor_never_reaches_storage(cursor):
 @pytest.mark.parametrize(
     ("trace_team", "trace_user", "trace_key", "spend_team", "spend_user", "spend_key", "known"),
     (
-        ("team", "", "export", "team", "", "request", True),
+        ("team", "", "export", "team", "", "request", False),
+        ("team", "", "export", "team", "", "export", True),
         ("", "user", "export", "", "user", "request", True),
         ("", "", "key", "", "", "key", True),
         ("team", "user", "key", "other-team", "user", "key", False),
@@ -587,7 +588,7 @@ def test_incomplete_llm_cost_never_becomes_a_partial_trace_or_agent_total(failur
         response_id="first",
         team_id="team",
         user="",
-        api_key="request",
+        api_key="export",
         spend=0.25,
         start_ms=0,
     )

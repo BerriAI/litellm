@@ -77,9 +77,7 @@ def _spend_for(
         for row in rows
         if row.response_id == request_id
         and row.team_id == team_id
-        and (
-            bool(team_id) or bool(user_id and row.user == user_id) or bool(api_key_hash and row.api_key == api_key_hash)
-        )
+        and (bool(user_id and row.user == user_id) or bool(api_key_hash and row.api_key == api_key_hash))
     )
     return matches[0].spend if len(matches) == 1 else None
 

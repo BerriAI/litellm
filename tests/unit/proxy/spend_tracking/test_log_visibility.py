@@ -15,7 +15,7 @@ from litellm.proxy.spend_tracking.log_visibility import LogVisibility, log_visib
         (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY), LogVisibility(all_teams=True)),
         (
             UserAPIKeyAuth(user_id="user", token="key", team_id="unpermitted"),
-            LogVisibility(user_id="user", team_ids=("permitted",)),
+            LogVisibility(user_id="user", team_ids=("permitted",), api_key_hash="key"),
         ),
         (UserAPIKeyAuth(token="key", team_id="unpermitted"), LogVisibility(api_key_hash="key")),
     ),
@@ -32,12 +32,12 @@ async def test_log_visibility_uses_user_and_permitted_teams_instead_of_key_team_
 
 
 @pytest.mark.asyncio
-async def test_missing_team_permissions_preserve_only_authenticated_user_visibility() -> None:
+async def test_missing_team_permissions_preserve_authenticated_user_and_key_visibility() -> None:
     async def no_teams(auth: UserAPIKeyAuth) -> tuple[str, ...]:
         return ()
 
     auth: Final = UserAPIKeyAuth(user_id="user", token="key", team_id="team")
-    assert await log_visibility(auth, no_teams) == LogVisibility(user_id=auth.user_id)
+    assert await log_visibility(auth, no_teams) == LogVisibility(user_id=auth.user_id, api_key_hash="key")
 
 
 @pytest.mark.asyncio

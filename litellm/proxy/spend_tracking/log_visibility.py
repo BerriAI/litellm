@@ -38,7 +38,7 @@ async def log_visibility(
         return LogVisibility(all_teams=True)
     if auth.user_id:
         team_ids: Final = await team_lookup(auth)
-        return LogVisibility(user_id=auth.user_id, team_ids=team_ids)
+        return LogVisibility(user_id=auth.user_id, team_ids=team_ids, api_key_hash=auth.token or "")
     if auth.token:
         return LogVisibility(api_key_hash=auth.token)
     raise HTTPException(status_code=403, detail="Not allowed to view logs")
