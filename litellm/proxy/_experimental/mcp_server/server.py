@@ -2275,7 +2275,7 @@ if MCP_AVAILABLE:
                     ):
                         delete_capacity_response: Final = JSONResponse(
                             status_code=429,
-                            content={  # mutable-ok: JSONResponse content must be a plain dict
+                            content={
                                 "error": "Too Many Requests",
                                 "details": "Too many recently terminated MCP sessions. Retry after idle records expire.",
                             },
