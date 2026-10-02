@@ -116,7 +116,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, tag_cache_key
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
     build_model_max_budget_usage,
@@ -186,6 +186,7 @@ from litellm.repositories.table_repositories import (
     DeletedTeamRepository,
     ModelTableRepository,
     OrganizationMembershipRepository,
+    TagRepository,
     TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
@@ -4479,6 +4480,11 @@ async def delete_team(
     # the lock before this transaction starts, in which case this sweep reaches what it wrote,
     # or is still waiting on the lock, in which case its own re-read happens after this commits
     # and sees the row gone before it writes anything.
+    owned_tag_names: Final[tuple[str, ...]] = tuple(
+        row.tag_name
+        for row in await TagRepository(prisma_client).table.find_many(where={"team_id": {"in": data.team_ids}})
+    )
+
     delete_filter: Final[_TeamIdInFilter] = {"team_id": {"in": data.team_ids}}
     async with prisma_client.tx() as tx:
         for team_id in sorted(data.team_ids):
@@ -4498,6 +4504,11 @@ async def delete_team(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
+    if owned_tag_names:
+        await evict_and_broadcast(
+            cache_keys=tuple(tag_cache_key(tag_name) for tag_name in owned_tag_names),
+            user_api_key_cache=user_api_key_cache,
+        )
     await _invalidate_deleted_team_member_cache(
         member_ids_per_team=member_ids_per_team,
         user_api_key_cache=user_api_key_cache,

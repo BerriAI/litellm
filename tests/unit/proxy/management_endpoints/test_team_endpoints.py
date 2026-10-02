@@ -9295,6 +9295,250 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     assert published == ["hashed-doomed-key", "team_id:team-doomed", "team_alias:doomed-team"]
 
 
+def _wire_team_delete_with_owned_tags(mock_prisma_client, team_ids, tag_rows):
+    """Tag rows the way Postgres presents them around a team delete: readable before the
+    transaction, ``team_id`` nulled by ON DELETE SET NULL once the team row is gone."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        side_effect=lambda where: (
+            LiteLLM_TeamTable(
+                team_id=where["team_id"],
+                team_alias=where["team_id"],
+                members_with_roles=[],
+                metadata={},
+                model_max_budget={},
+                model_spend={},
+            )
+            if where["team_id"] in team_ids
+            else None
+        )
+    )
+    mock_prisma_client.delete_data = AsyncMock(return_value={"deleted_teams": list(team_ids)})
+    mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.execute_raw = AsyncMock()
+    mock_prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
+
+    async def find_owned_tags(**kwargs):
+        where = kwargs.get("where") or {}
+        if "team_id" in where:
+            owner_filter = where["team_id"]["in"]
+            return [row for row in tag_rows if row.team_id in owner_filter]
+        if "tag_name" in where:
+            names = where["tag_name"]["in"]
+            return [row for row in tag_rows if row.tag_name in names]
+        return list(tag_rows)
+
+    mock_prisma_client.db.litellm_tagtable.find_many = AsyncMock(side_effect=find_owned_tags)
+
+    async def drop_teams(**kwargs):
+        for row in tag_rows:
+            if row.team_id in kwargs["where"]["team_id"]["in"]:
+                row.team_id = None
+
+    mock_prisma_client.db.litellm_teamtable.delete_many = AsyncMock(side_effect=drop_teams)
+
+    mock_tx = AsyncMock()
+    mock_tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.tx = MagicMock()
+    _wire_team_delete_tx(mock_prisma_client)
+
+    owners_before_tx = {id(row): row.team_id for row in tag_rows}
+    tx_cm = mock_prisma_client.tx.return_value
+
+    async def rollback_tag_rows_on_failure(exc_type, exc, tb):
+        if exc_type is not None:
+            for row in tag_rows:
+                row.team_id = owners_before_tx[id(row)]
+        return False
+
+    tx_cm.__aexit__ = AsyncMock(side_effect=rollback_tag_rows_on_failure)
+
+
+@pytest.mark.asyncio
+async def test_delete_team_evicts_owned_tag_cache_but_keeps_tags_registered(
+    monkeypatch,
+    disable_audit_logging_for_mocked_team,
+):
+    """
+    Deleting a tag's owning team leaves the tag registered with a null owner (ON DELETE SET NULL),
+    so only each tag's own cache key may be evicted. Evicting the tag registry would make the
+    still-registered tags invisible to auth until the TTL expires.
+    """
+    from litellm.models.tag import LiteLLM_TagTable
+    from litellm.proxy._types import DeleteTeamRequest
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        UserApiKeyCache,
+        tag_cache_key,
+        tag_registry_cache_key,
+    )
+
+    tag_rows = [
+        LiteLLM_TagTable(tag_name="doomed-tag", team_id="team-doomed"),
+        LiteLLM_TagTable(tag_name="other-tag", team_id="team-other"),
+    ]
+    mock_prisma_client = AsyncMock()
+    _wire_team_delete_with_owned_tags(mock_prisma_client, team_ids={"team-doomed"}, tag_rows=tag_rows)
+
+    fresh_cache = UserApiKeyCache()
+    fresh_cache.set_cache(
+        key=tag_cache_key("doomed-tag"),
+        value=LiteLLM_TagTable(tag_name="doomed-tag", team_id="team-doomed"),
+    )
+    fresh_cache.set_cache(
+        key=tag_registry_cache_key(),
+        value={"doomed-tag", "other-tag"},
+    )
+
+    published = []
+
+    async def record_publish(cache_key):
+        published.append(cache_key)
+
+    monkeypatch.setattr(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        record_publish,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", fresh_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    await delete_team(
+        data=DeleteTeamRequest(team_ids=["team-doomed"]),
+        http_request=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+        litellm_changed_by="admin-user",
+    )
+
+    assert tag_cache_key("doomed-tag") in published
+    assert tag_cache_key("other-tag") not in published
+    assert tag_registry_cache_key() not in published
+    assert fresh_cache.get_cache(key=tag_cache_key("doomed-tag")) is None
+    assert fresh_cache.get_cache(key=tag_registry_cache_key()) == {"doomed-tag", "other-tag"}
+    assert tag_rows[0].team_id is None
+    assert tag_rows[1].team_id == "team-other"
+
+    from litellm.proxy.auth.auth_checks import get_tag_object
+
+    found = await get_tag_object(
+        tag_name="doomed-tag",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=fresh_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+    )
+    assert found is not None
+    assert found.team_id is None
+
+
+@pytest.mark.asyncio
+async def test_delete_team_evicts_tags_across_every_deleted_team(
+    monkeypatch,
+    disable_audit_logging_for_mocked_team,
+):
+    """A batch delete covers tags owned by any of the deleted teams, not just the first."""
+    from litellm.proxy._types import DeleteTeamRequest
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, tag_cache_key
+
+    tag_rows = [
+        SimpleNamespace(tag_name="tag-one", team_id="team-one"),
+        SimpleNamespace(tag_name="tag-two", team_id="team-two"),
+        SimpleNamespace(tag_name="tag-three", team_id="team-three"),
+    ]
+    mock_prisma_client = AsyncMock()
+    _wire_team_delete_with_owned_tags(mock_prisma_client, team_ids={"team-one", "team-two"}, tag_rows=tag_rows)
+
+    fresh_cache = UserApiKeyCache()
+    for name in ("tag-one", "tag-two", "tag-three"):
+        fresh_cache.set_cache(key=tag_cache_key(name), value={"tag_name": name})
+
+    published = []
+
+    async def record_publish(cache_key):
+        published.append(cache_key)
+
+    monkeypatch.setattr(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        record_publish,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", fresh_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    await delete_team(
+        data=DeleteTeamRequest(team_ids=["team-one", "team-two"]),
+        http_request=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+        litellm_changed_by="admin-user",
+    )
+
+    assert tag_cache_key("tag-one") in published
+    assert tag_cache_key("tag-two") in published
+    assert tag_cache_key("tag-three") not in published
+    assert fresh_cache.get_cache(key=tag_cache_key("tag-three")) is not None
+    assert [row.team_id for row in tag_rows] == [None, None, "team-three"]
+
+
+@pytest.mark.asyncio
+async def test_delete_team_failing_delete_leaves_tag_cache_alone(
+    monkeypatch,
+    disable_audit_logging_for_mocked_team,
+):
+    """Tag eviction runs after the delete transaction commits, so a rollback must not
+    evict tag entries for owners that still exist."""
+    from litellm.proxy._types import DeleteTeamRequest
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, tag_cache_key
+
+    tag_rows = [SimpleNamespace(tag_name="doomed-tag", team_id="team-doomed")]
+    mock_prisma_client = AsyncMock()
+    _wire_team_delete_with_owned_tags(mock_prisma_client, team_ids={"team-doomed"}, tag_rows=tag_rows)
+    mock_prisma_client.db.execute_raw.side_effect = [None, ConnectionError("db went away")]
+
+    fresh_cache = UserApiKeyCache()
+    fresh_cache.set_cache(key=tag_cache_key("doomed-tag"), value={"tag_name": "doomed-tag"})
+
+    published = []
+
+    async def record_publish(cache_key):
+        published.append(cache_key)
+
+    monkeypatch.setattr(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        record_publish,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", fresh_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    with pytest.raises(ConnectionError):
+        await delete_team(
+            data=DeleteTeamRequest(team_ids=["team-doomed"]),
+            http_request=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="admin-user",
+                api_key="sk-admin",
+                user_role=LitellmUserRoles.PROXY_ADMIN.value,
+            ),
+            litellm_changed_by="admin-user",
+        )
+
+    assert tag_cache_key("doomed-tag") not in published
+    assert fresh_cache.get_cache(key=tag_cache_key("doomed-tag")) is not None
+    assert tag_rows[0].team_id == "team-doomed"
+
+
 @pytest.mark.asyncio
 async def test_delete_team_survives_a_failing_cache_backend(
     monkeypatch,
@@ -15008,6 +15252,7 @@ async def test_new_team_and_delete_team_both_drive_the_mirror(
     ):
         prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
         prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_tagtable.find_many = AsyncMock(return_value=[])
         prisma.delete_data = AsyncMock(return_value=[team_row])
         prisma.db.execute_raw = AsyncMock(return_value=0)
         prisma.db.litellm_teammembership.delete_many = AsyncMock(return_value=0)

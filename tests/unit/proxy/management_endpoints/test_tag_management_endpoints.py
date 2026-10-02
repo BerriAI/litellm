@@ -23,6 +23,11 @@ from unittest.mock import AsyncMock, Mock, patch
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    tag_cache_key,
+    tag_registry_cache_key,
+)
 from litellm.proxy.proxy_server import app
 from litellm.types.tag_management import TagDeleteRequest, TagInfoRequest, TagNewRequest
 
@@ -1648,7 +1653,10 @@ class _TagRecord(SimpleNamespace):
     """Record shape the auth_checks tag lookup consumes: ``.dict()`` feeds ``model_validate``."""
 
     def dict(self):
-        return dict(vars(self))
+        data = dict(vars(self))
+        if isinstance(data.get("model_info"), str):
+            data["model_info"] = json.loads(data["model_info"])
+        return data
 
 
 class FakeTagOwnershipDb:
@@ -2138,3 +2146,149 @@ async def test_scoped_user_without_team_keeps_empty_list_without_usage():
         response = client.get("/tag/list", headers=_ADMIN_HEADERS)
         assert response.status_code == 200, response.text
         assert response.json() == []
+
+
+
+@contextmanager
+def _tag_ownership_gateway_with_real_cache(fake_db: FakeTagOwnershipDb, auth: UserAPIKeyAuth):
+    """Same gateway, but with a real ``UserApiKeyCache`` and a recorded publisher so tests can
+    warm the cache through the real ``auth_checks.get_tag_object`` and prove eviction."""
+    published: list[str] = []
+
+    async def record_publish(cache_key):
+        published.append(cache_key)
+
+    fresh_cache = UserApiKeyCache()
+    app.dependency_overrides[user_api_key_auth] = lambda: auth
+    mock_prisma = SimpleNamespace(db=fake_db, jsonify_object=lambda data: dict(data))
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.user_api_key_cache", fresh_cache),
+            patch(
+                "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+                record_publish,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", object()),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        ):
+            yield fresh_cache, published, mock_prisma
+    finally:
+        app.dependency_overrides.clear()
+
+
+async def _lookup_tag(mock_prisma, cache, name: str):
+    from litellm.proxy.auth.auth_checks import get_tag_object
+
+    return await get_tag_object(
+        tag_name=name,
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_created_tag_is_visible_to_warmed_tag_registry():
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
+    with _tag_ownership_gateway_with_real_cache(fake_db, _proxy_admin_auth()) as (
+        fresh_cache,
+        published,
+        mock_prisma,
+    ):
+        assert await _lookup_tag(mock_prisma, fresh_cache, "new-tag") is None
+        response = client.post(
+            "/tag/new",
+            json={"name": "new-tag", "team_id": "team-a", "models": []},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        found = await _lookup_tag(mock_prisma, fresh_cache, "new-tag")
+        assert found is not None
+        assert found.team_id == "team-a"
+        assert tag_cache_key("new-tag") in published
+        assert tag_registry_cache_key() in published
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_transfer_reaches_warmed_cache():
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a", "team-b"})
+    fake_db.tag_rows["tag-x"] = _new_tag_row(tag_name="tag-x", team_id="team-a")
+    with _tag_ownership_gateway_with_real_cache(fake_db, _proxy_admin_auth()) as (
+        fresh_cache,
+        published,
+        mock_prisma,
+    ):
+        warmed = await _lookup_tag(mock_prisma, fresh_cache, "tag-x")
+        assert warmed is not None and warmed.team_id == "team-a"
+        response = client.post(
+            "/tag/update",
+            json={"name": "tag-x", "team_id": "team-b"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        found = await _lookup_tag(mock_prisma, fresh_cache, "tag-x")
+        assert found is not None
+        assert found.team_id == "team-b"
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_release_reaches_warmed_cache():
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
+    fake_db.tag_rows["tag-x"] = _new_tag_row(tag_name="tag-x", team_id="team-a")
+    with _tag_ownership_gateway_with_real_cache(fake_db, _proxy_admin_auth()) as (
+        fresh_cache,
+        published,
+        mock_prisma,
+    ):
+        warmed = await _lookup_tag(mock_prisma, fresh_cache, "tag-x")
+        assert warmed is not None and warmed.team_id == "team-a"
+        response = client.post(
+            "/tag/update",
+            json={"name": "tag-x", "team_id": None},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        found = await _lookup_tag(mock_prisma, fresh_cache, "tag-x")
+        assert found is not None
+        assert found.team_id is None
+
+
+@pytest.mark.asyncio
+async def test_deleted_tag_drops_out_of_warmed_cache():
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
+    fake_db.tag_rows["tag-x"] = _new_tag_row(tag_name="tag-x", team_id="team-a")
+    with _tag_ownership_gateway_with_real_cache(fake_db, _proxy_admin_auth()) as (
+        fresh_cache,
+        published,
+        mock_prisma,
+    ):
+        assert await _lookup_tag(mock_prisma, fresh_cache, "tag-x") is not None
+        response = client.post("/tag/delete", json={"name": "tag-x"}, headers=_ADMIN_HEADERS)
+        assert response.status_code == 200, response.text
+        assert await _lookup_tag(mock_prisma, fresh_cache, "tag-x") is None
+
+
+@pytest.mark.asyncio
+async def test_forbidden_tag_update_leaves_warmed_cache_and_row_unchanged():
+    fake_db = _team_a_db()
+    fake_db.tag_rows["team-tag"] = _new_tag_row(tag_name="team-tag", team_id="team-a")
+    before = dict(fake_db.tag_rows["team-tag"])
+    with _tag_ownership_gateway_with_real_cache(fake_db, _team_admin_auth()) as (
+        fresh_cache,
+        published,
+        mock_prisma,
+    ):
+        warmed = await _lookup_tag(mock_prisma, fresh_cache, "team-tag")
+        assert warmed is not None and warmed.team_id == "team-a"
+        response = client.post(
+            "/tag/update",
+            json={"name": "team-tag", "team_id": "team-b"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 403, response.text
+        cached = await _lookup_tag(mock_prisma, fresh_cache, "team-tag")
+        assert cached is not None
+        assert cached.team_id == "team-a"
+        assert fake_db.tag_rows["team-tag"] == before
