@@ -19,9 +19,6 @@ async def test_openai_realtime_direct_call_no_intent():
     End-to-end test calling the actual OpenAI realtime endpoint via LiteLLM SDK
     without intent parameter. This should succeed without "Invalid intent" error.
     Uses real websocket connection to OpenAI.
-
-    Note: This test may be skipped on transient connection failures since it depends
-    on external OpenAI API availability.
     """
     import asyncio
     import json
@@ -125,16 +122,6 @@ async def test_openai_realtime_direct_call_no_intent():
             f"exception: {type(caught_exception).__name__}: {caught_exception}"
         )
 
-    # Skip test on transient connection failures (e.g., WebSocket connection rejected)
-    # These are not regressions, just external API availability issues
-    if (
-        not websocket_client.connection_successful
-        and websocket_client.close_code is not None
-    ):
-        pytest.skip(
-            f"Skipping due to transient connection failure: close_code={websocket_client.close_code}, close_reason={websocket_client.close_reason}"
-        )
-
     assert (
         websocket_client.connection_successful
     ), f"Failed to establish connection. Debug info: {'; '.join(error_details)}"
@@ -164,9 +151,6 @@ async def test_openai_realtime_direct_call_with_intent():
     End-to-end test calling the actual OpenAI realtime endpoint via LiteLLM SDK
     with explicit intent parameter. This should include the intent in the URL.
     Uses real websocket connection to OpenAI.
-
-    Note: This test may be skipped on transient connection failures since it depends
-    on external OpenAI API availability.
     """
     import asyncio
     import json
@@ -245,7 +229,6 @@ async def test_openai_realtime_direct_call_with_intent():
             return {}
 
     websocket_client = RealTimeWebSocketClient()
-    caught_exception = None
 
     # OpenAI shut down the gpt-4o-realtime-preview family (incl. the undated
     # alias) on 2026-05-07; gpt-realtime is the GA successor.
@@ -264,64 +247,28 @@ async def test_openai_realtime_direct_call_with_intent():
         )
     except (ConnectionClosedOK, ConnectionClosedError):
         pass
-    except Exception as e:
-        caught_exception = e
-        if "invalid_intent" in str(e).lower():
-            pytest.fail(f"Unexpected invalid intent error: {e}")
-        # Other exceptions are recorded but don't fail immediately
 
-    if websocket_client.intent_error_received:
-        websocket_client.connection_successful = True
-
-    # Build detailed error message for debugging
-    error_details = []
-    error_details.append(f"messages_sent count: {len(websocket_client.messages_sent)}")
-    error_details.append(
-        f"messages_received count: {len(websocket_client.messages_received)}"
+    errors = [
+        message["error"]
+        for message in websocket_client.messages_received
+        if message.get("type") == "error"
+    ]
+    assert not websocket_client.received_session_created, (
+        "OpenAI opened a session, so intent=chat never reached it: "
+        f"{websocket_client.messages_received}"
     )
-    error_details.append(f"close_code: {websocket_client.close_code}")
-    error_details.append(f"close_reason: {websocket_client.close_reason}")
-    if caught_exception:
-        error_details.append(
-            f"exception: {type(caught_exception).__name__}: {caught_exception}"
-        )
-
-    # Skip test on transient connection failures (e.g., WebSocket connection rejected)
-    # These are not regressions, just external API availability issues
-    if (
-        not websocket_client.connection_successful
-        and websocket_client.close_code is not None
-    ):
-        pytest.skip(
-            f"Skipping due to transient connection failure: close_code={websocket_client.close_code}, close_reason={websocket_client.close_reason}"
-        )
-
-    assert (
-        websocket_client.connection_successful
-    ), f"Failed to establish connection or verify intent parameter pass-through. Debug info: {'; '.join(error_details)}"
-
-    if websocket_client.received_session_created:
-        assert len(websocket_client.messages_received) > 0, "No messages received"
-        session_message = websocket_client.messages_received[0]
-        assert (
-            session_message["type"] == "session.created"
-        ), f"Expected session.created, got {session_message.get('type')}"
-        assert (
-            "session" in session_message
-        ), "session.created response missing session object"
-        assert "id" in session_message["session"], "Session object missing id field"
-        assert (
-            "model" in session_message["session"]
-        ), "Session object missing model field"
-    elif websocket_client.intent_error_received:
-        # invalid_intent error confirms intent parameter was passed through
-        pass
-    else:
-        pytest.fail(
-            f"Unexpected test state: connection_successful={websocket_client.connection_successful}, "
-            f"received_session_created={websocket_client.received_session_created}, "
-            f"intent_error_received={websocket_client.intent_error_received}"
-        )
+    assert websocket_client.intent_error_received is not None and errors, (
+        "expected OpenAI to reject the forwarded intent; got "
+        f"messages={websocket_client.messages_received} close_code={websocket_client.close_code} "
+        f"close_reason={websocket_client.close_reason}"
+    )
+    assert errors[0].get("code") == "invalid_intent" and "chat" in errors[0].get(
+        "message", ""
+    ), (
+        "the first upstream error must reject the exact intent we sent "
+        "(OpenAI answered 'Invalid intent chat' with code invalid_intent, observed 2026-10-01): "
+        f"{errors[0]}"
+    )
 
 
 def test_realtime_query_params_construction():

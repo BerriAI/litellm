@@ -71,7 +71,11 @@ class TestBedrockMessages:
             for event in events
             if isinstance(event, RawContentBlockDeltaEvent) and isinstance(event.delta, TextDelta)
         )
-        assert "hello" in text.lower(), f"streamed Nova reply did not answer the prompt: {text!r}"
-        usage = next((event.usage for event in events if isinstance(event, RawMessageDeltaEvent)), None)
-        assert usage is not None and usage.output_tokens > 0, f"stream never reported output usage: {types}"
-        assert types[-1] == "message_stop", f"stream did not end with message_stop: {types}"
+        assert text.strip(), f"streamed Nova reply carried no text: {types}"
+        assert types[0] == "message_start" and types[-1] == "message_stop", (
+            f"stream must open with message_start and end with message_stop: {types}"
+        )
+        deltas = tuple(event for event in events if isinstance(event, RawMessageDeltaEvent))
+        assert len(deltas) == 1, f"expected exactly one message_delta: {types}"
+        assert deltas[0].delta.stop_reason is not None, f"message_delta carried no stop_reason: {deltas[0]!r}"
+        assert deltas[0].usage.output_tokens > 0, f"message_delta reported no output tokens: {deltas[0]!r}"
