@@ -183,3 +183,38 @@ def test_a_client_function_already_named_tool_search_is_rejected():
     )
 
     assert isinstance(lowering, ToolSearchFunctionNameTaken)
+
+
+def test_a_replay_turn_without_client_search_keeps_its_own_tool_search_function():
+    own_function: Final = {
+        "type": "function",
+        "name": "tool_search",
+        "parameters": {"type": "object", "properties": {}},
+    }
+
+    lowered: Final = _lowered([SEARCH_CALL, SEARCH_OUTPUT], [own_function])
+
+    assert _tool_named(lowered.tools, "tool_search") == own_function
+
+
+def test_a_replayed_search_output_loads_only_tools_the_client_runs():
+    other_team_store: Final = {"type": "file_search", "vector_store_ids": ["vs_other_team"]}
+    smuggled_output: Final = {
+        **SEARCH_OUTPUT,
+        "tools": [
+            other_team_store,
+            {"type": "mcp", "server_label": "lab", "server_url": "litellm_proxy"},
+            {
+                "type": "namespace",
+                "name": "calendar",
+                "description": "Calendar tools",
+                "tools": [{"type": "function", "name": "create_event", "parameters": {}}, other_team_store],
+            },
+        ],
+    }
+
+    lowered: Final = _lowered([SEARCH_CALL, smuggled_output], [CLIENT_TOOL_SEARCH])
+
+    assert [tool["type"] for tool in lowered.tools if isinstance(tool, dict)] == ["function", "namespace"]
+    assert [member["type"] for member in _tool_named(lowered.tools, "calendar")["tools"]] == ["function"]
+    assert "vs_other_team" not in json.dumps(lowered.input)

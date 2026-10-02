@@ -13,6 +13,9 @@ _DEFAULT_TOOL_SEARCH_DESCRIPTION: Final = (
     "Search the client tool catalog and load the matching tools for the next call."
 )
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+# a replayed search may only load tools the client runs itself, never hosted ones the proxy would run
+_LOADABLE_TOOL_TYPES: Final = frozenset({"function", "custom", "namespace"})
+_LOADABLE_MEMBER_TYPES: Final = frozenset({"function", "custom"})
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
@@ -84,8 +87,12 @@ def _is_tool_search_item(item: object) -> bool:
     return _parsed(_ReplayedToolSearchCall, item) is not None or _parsed(_ReplayedToolSearchOutput, item) is not None
 
 
+def _declares_client_tool_search(tools: Sequence[object]) -> bool:
+    return any(_parsed(_ClientToolSearchDeclaration, tool) is not None for tool in tools)
+
+
 def needs_tool_search_lowering(input: str | ResponseInputParam, tools: Sequence[object] | None) -> bool:
-    if any(_parsed(_ClientToolSearchDeclaration, tool) is not None for tool in tools or ()):
+    if _declares_client_tool_search(tools or ()):
         return True
     return not isinstance(input, str) and any(_is_tool_search_item(item) for item in input)
 
@@ -124,11 +131,23 @@ def _loaded_definition(tool: dict[str, object]) -> dict[str, object]:
     return loaded
 
 
+def _has_type(tool: object, types: frozenset[str]) -> bool:
+    kind: Final = _parsed(_Typed, tool)
+    return kind is not None and kind.type in types
+
+
 def _loaded_tool(tool: dict[str, object]) -> dict[str, object]:
     namespace: Final = _parsed(_Namespace, tool)
     if namespace is None:
         return _loaded_definition(tool)
-    return {**_loaded_definition(tool), "tools": [_loaded_definition(member) for member in namespace.tools]}
+    members: Final = [
+        _loaded_definition(member) for member in namespace.tools if _has_type(member, _LOADABLE_MEMBER_TYPES)
+    ]
+    return {**_loaded_definition(tool), "tools": members}
+
+
+def _loadable_tools(output: _ReplayedToolSearchOutput) -> tuple[dict[str, object], ...]:
+    return tuple(_loaded_tool(tool) for tool in output.tools if _has_type(tool, _LOADABLE_TOOL_TYPES))
 
 
 def _visible_loaded_tool(tool: dict[str, object]) -> dict[str, object]:
@@ -150,7 +169,7 @@ def _lowered_item(item: object) -> object:
     output: Final = _parsed(_ReplayedToolSearchOutput, item)
     if output is None:
         return item
-    visible_tools: Final = [_visible_loaded_tool(_loaded_tool(tool)) for tool in output.tools]
+    visible_tools: Final = [_visible_loaded_tool(tool) for tool in _loadable_tools(output)]
     return {
         "type": "function_call_output",
         "call_id": output.call_id,
@@ -160,8 +179,7 @@ def _lowered_item(item: object) -> object:
 
 def _loaded_tools(items: Sequence[object]) -> tuple[dict[str, object], ...]:
     outputs: Final = tuple(_parsed(_ReplayedToolSearchOutput, item) for item in items)
-    replayed: Final = (output.tools for output in outputs if output is not None)
-    return tuple(_loaded_tool(tool) for tool in chain.from_iterable(replayed))
+    return tuple(chain.from_iterable(_loadable_tools(output) for output in outputs if output is not None))
 
 
 def _merge_key(index: int, tool: object) -> tuple[str, str]:
@@ -199,13 +217,17 @@ def _lowered_tool_choice(tool_choice: ToolChoice | None) -> ToolChoice | None:
     return {"type": "function", "name": TOOL_SEARCH_FUNCTION_NAME}
 
 
+def declares_function(tools: Sequence[object] | None, name: str) -> bool:
+    return ("function", name) in (_merge_key(index, tool) for index, tool in enumerate(tools or ()))
+
+
 def lower_tool_search_request(
     input: str | ResponseInputParam,
     tools: Sequence[object] | None,
     tool_choice: ToolChoice | None,
 ) -> ToolSearchLowering:
     declared: Final = tuple(tools or ())
-    if ("function", TOOL_SEARCH_FUNCTION_NAME) in (_merge_key(index, tool) for index, tool in enumerate(declared)):
+    if _declares_client_tool_search(declared) and declares_function(declared, TOOL_SEARCH_FUNCTION_NAME):
         return ToolSearchFunctionNameTaken()
     items: Final = () if isinstance(input, str) else tuple(input)
     lowered_tools: Final = _merged_tools((*(_lowered_tool(tool) for tool in declared), *_loaded_tools(items)))

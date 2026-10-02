@@ -185,6 +185,22 @@ async def test_a_client_function_named_tool_search_is_rejected_before_any_upstre
 
 
 @pytest.mark.asyncio
+async def test_emulated_file_search_leaves_client_tool_search_as_declared():
+    upstream: Final = _Upstream()
+
+    await litellm.aresponses(
+        model="fireworks_ai/qwen",
+        api_key="test-key",
+        api_base="http://fireworks.test/v1",
+        input="find a calendar tool",
+        tools=[CLIENT_TOOL_SEARCH, {"type": "file_search", "vector_store_ids": ["vs_lab"]}],
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream)),
+    )
+
+    assert _types(upstream.bodies[0]["tools"]) == ["tool_search", "function"]
+
+
+@pytest.mark.asyncio
 async def test_the_call_is_logged_once_with_the_tool_search_call(monkeypatch: pytest.MonkeyPatch):
     success_log: Final = _SuccessLog("tool-search-logged-once")
     monkeypatch.setattr(litellm, "callbacks", [success_log])
