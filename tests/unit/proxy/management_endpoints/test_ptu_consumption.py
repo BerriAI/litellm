@@ -4,8 +4,9 @@ from typing import Final
 
 import pytest
 
-from litellm.llms.azure.ptu_capacity import PTUCapacity
-from litellm.proxy.management_endpoints.ptu_consumption import attach_ptu_hours
+from litellm import Router
+from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY, PTUCapacity
+from litellm.proxy.management_endpoints.ptu_consumption import attach_ptu_hours, with_ptu_consumption
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     BreakdownMetrics,
     DailySpendData,
@@ -19,6 +20,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 _ROW: Final = PTUCapacity(input_tpm_per_ptu=1_000, output_to_input_ratio=4.0)
 _CACHED_ROW: Final = PTUCapacity(input_tpm_per_ptu=1_000, output_to_input_ratio=4.0, cached_input_ratio=0.1)
 _CAPACITY: Final = {"gpt-4.1-ptu": _ROW, "gpt-6-ptu": _CACHED_ROW}
+_ONE_PTU_HOUR_OF_INPUT: Final = AZURE_PTU_CAPACITY["gpt-4.1"].normalized_tokens_per_ptu_hour
 
 
 def _metrics(prompt: int, completion: int, cached: int = 0) -> SpendMetrics:
@@ -128,3 +130,38 @@ def test_a_page_with_no_ptu_group_is_returned_unchanged():
     assert attached.results[0] is day
     assert attached.metadata.total_ptu_hours == 0.0
     assert response.metadata.total_ptu_hours == 0.0
+
+
+def _shared_ptu_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-4.1-ptu",
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-ptu", "api_base": "https://ptu.example"},
+                "model_info": {
+                    "id": "shared-ptu",
+                    "base_model": "azure/gpt-4.1",
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2026-01-01T00:00:00Z",
+                    "ptu_shares": {"team-a": 30, "team-b": 20},
+                },
+            }
+        ],
+        model_group_alias={"ptu-alias": {"model": "gpt-4.1-ptu", "hidden": True}},
+    )
+
+
+def test_rows_keyed_by_an_alias_a_deployment_id_or_a_provider_model_are_sized_like_the_group(monkeypatch):
+    """The ceiling charges a request however it names the shared deployment, so the usage row
+    that request lands in, keyed by the name it used, reports the same PTU-hours as the group."""
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    names: Final = ("gpt-4.1-ptu", "ptu-alias", "shared-ptu", "azure/gpt-4.1")
+    one_hour_each: Final = {name: _bucket(_metrics(prompt=_ONE_PTU_HOUR_OF_INPUT, completion=0)) for name in names}
+
+    attached: Final = with_ptu_consumption(_response(_day("2026-09-23", one_hour_each)), _shared_ptu_router())
+
+    groups: Final = attached.results[0].breakdown.model_groups
+    assert [groups[name].metrics.ptu_hours for name in names] == [pytest.approx(1.0)] * len(names)
+    assert attached.results[0].metrics.ptu_hours == pytest.approx(float(len(names)))
+    assert attached.metadata.total_ptu_hours == pytest.approx(float(len(names)))

@@ -130,7 +130,7 @@ def _deployment_model_group(deployment: Mapping[str, object]) -> str | None:
     return model_name if isinstance(model_name, str) else None
 
 
-def _routed_deployments(
+def routed_deployments(
     listed_rows: Sequence[Mapping[str, object]], deployments: Sequence[Mapping[str, object]], requested_model: str
 ) -> tuple[Mapping[str, object], ...]:
     """The router's own deployments behind ``requested_model``: those of the rows listed under it
@@ -150,7 +150,7 @@ def _model_group_of(
 ) -> str:
     """The group of the deployment behind ``requested_model`` this team can be served from, one
     holding its share first."""
-    routed: Final = _routed_deployments(listed_rows, deployments, requested_model)
+    routed: Final = routed_deployments(listed_rows, deployments, requested_model)
     servable: Final = filter_ptu_shared_deployments(routed, team_id).deployments
     shared_first: Final = sorted(servable, key=lambda deployment: _deployment_shares(deployment) is None)
     return next(

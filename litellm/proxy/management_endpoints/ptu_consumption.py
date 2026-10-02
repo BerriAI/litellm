@@ -12,7 +12,8 @@ from typing import Final
 from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabled
 from litellm.llms.azure.ptu_capacity import PTUCapacity, normalized_tokens, ptu_hours
 from litellm.router import Router
-from litellm.router_utils.ptu_shares import model_group_deployments, model_group_ptu_capacity
+from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.router_utils.ptu_shares import model_group_ptu_capacity, routed_deployments
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendData,
     MetricWithMetadata,
@@ -98,16 +99,31 @@ def attach_ptu_hours(
     )
 
 
+def capacity_by_requested_name(llm_router: Router) -> Callable[[str], PTUCapacity | None]:
+    """The sizing row behind the name a usage row is keyed by, resolved the way the ceiling
+    resolves a request: an alias to its group, then a group, a routing group, a deployment id,
+    or a provider model to the deployments it is served from."""
+    listed_rows: Final = llm_router.get_model_list() or ()
+    aliases: Final = llm_router.model_group_alias
+
+    def capacity_for(requested_model: str) -> PTUCapacity | None:
+        model_group: Final = resolve_model_group_alias(aliases, requested_model) or requested_model
+        return model_group_ptu_capacity(
+            routed_deployments(
+                listed_rows,
+                llm_router.model_list,  # pyright: ignore[reportUnknownArgumentType]  # Router.model_list is a bare list
+                model_group,
+            )
+        )
+
+    return capacity_for
+
+
 def with_ptu_consumption(
     activity: SpendAnalyticsPaginatedResponse, llm_router: Router | None
 ) -> SpendAnalyticsPaginatedResponse:
-    """``activity`` with PTU-hours attached from the router's sized model groups, untouched while
+    """``activity`` with PTU-hours attached from the router's sized deployments, untouched while
     PTU cost attribution is off or no router is loaded."""
     if llm_router is None or not is_ptu_cost_attribution_enabled():
         return activity
-    return attach_ptu_hours(
-        activity,
-        lambda model_group: model_group_ptu_capacity(
-            model_group_deployments(llm_router.get_model_list() or (), model_group)
-        ),
-    )
+    return attach_ptu_hours(activity, capacity_by_requested_name(llm_router))
