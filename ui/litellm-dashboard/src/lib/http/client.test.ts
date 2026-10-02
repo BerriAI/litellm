@@ -113,6 +113,25 @@ describe("createApiClient", () => {
     expect(init.headers).toEqual({ "Content-Type": "application/json" });
   });
 
+  it("getBlob returns the response body as a Blob on success", async () => {
+    const blob = new Blob(["csv,data"], { type: "text/csv" });
+    const fetchImpl = vi.fn(async () => ({ ok: true, status: 200, blob: async () => blob }) as unknown as Response);
+    const client = createApiClient({ getBaseUrl: () => "https://proxy.example", fetchImpl });
+
+    const result = await client.getBlob("/user/daily/activity/export", { accessToken: "sk" });
+
+    expect(result).toBe(blob);
+    const [, blobInit] = fetchImpl.mock.calls[0] as unknown as [unknown, RequestInit];
+    expect(blobInit.method).toBe("GET");
+  });
+
+  it("getBlob throws ApiError on a non-2xx response", async () => {
+    const fetchImpl = vi.fn(async () => errorResponse(500, { error: "export failed" }));
+    const client = createApiClient({ getBaseUrl: () => "", fetchImpl });
+
+    await expect(client.getBlob("/user/daily/activity/export", { accessToken: "sk" })).rejects.toBeInstanceOf(ApiError);
+  });
+
   it("resolves the global fetch per call, so a swap after construction takes effect", async () => {
     const client = createApiClient({ getBaseUrl: () => "" });
 

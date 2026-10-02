@@ -4,7 +4,7 @@ import React from "react";
 import { Info, PiggyBank } from "lucide-react";
 
 import useCan from "@/app/(dashboard)/hooks/useCan";
-import PaginationStatusAlerts from "@/components/shared/PaginationStatusAlerts";
+import { Alert, AlertDescription } from "@/components/shared/Alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/shared/PageHeader";
 import UsageTab from "./UsageTab";
@@ -84,13 +84,14 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
           </p>
         </div>
 
-        <PaginationStatusAlerts
-          isFetchingMore={activity.isFetchingMore}
-          cancelled={activity.cancelled}
-          failed={activity.failed}
-          progress={activity.progress}
-          cancel={activity.cancel}
-        />
+        {activity.failed && (
+          <Alert variant="error">
+            <AlertDescription className="text-inherit">
+              Fetching spend data failed, so the savings below may be empty rather than final. Reload the page to try
+              again.
+            </AlertDescription>
+          </Alert>
+        )}
         <TabsContent value="usage" keepMounted={visitedTabs.includes("usage")}>
           <UsageTab accessToken={accessToken} activity={activity} />
         </TabsContent>

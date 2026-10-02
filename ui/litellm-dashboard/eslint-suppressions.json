@@ -1140,15 +1140,7 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 3
-    }
-  },
-  "src/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity.ts": {
-    "react-hooks/refs": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
+      "count": 2
     }
   },
   "src/app/(dashboard)/users/_components/BulkEditUsers.tsx": {
@@ -1277,11 +1269,6 @@
   "src/components/CreateUserButton.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
-    }
-  },
-  "src/components/EntityUsageExport/utils.ts": {
-    "max-params": {
-      "count": 3
     }
   },
   "src/components/GuardrailSettingsView.tsx": {
@@ -1786,13 +1773,13 @@
       "count": 1
     },
     "max-params": {
-      "count": 21
+      "count": 15
     },
     "no-nested-ternary": {
       "count": 5
     },
     "no-restricted-syntax": {
-      "count": 147
+      "count": 146
     },
     "prefer-const": {
       "count": 31
