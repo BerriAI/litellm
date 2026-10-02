@@ -169,6 +169,16 @@ class TestDeepSeekVisionMultimodalContent:
 
             assert result[0]["content"] == "what is in this image?"
 
+    def test_tool_result_image_reaches_vision_model(self):
+        tool_message = {**self._image_message(role="tool"), "tool_call_id": "call_1"}
+        image_block = tool_message["content"][1]
+
+        result = self.config._transform_messages([tool_message], model=self.VISION_MODEL)
+
+        assert result[0]["role"] == "tool"
+        assert result[0]["tool_call_id"] == "call_1"
+        assert any(isinstance(message["content"], list) and image_block in message["content"] for message in result)
+
     def test_audio_block_collapsed_even_on_vision_model(self):
         messages = [
             {
