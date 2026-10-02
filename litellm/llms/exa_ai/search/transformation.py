@@ -182,13 +182,13 @@ class ExaAISearchConfig(BaseSearchConfig):
         # Transform results to SearchResult objects
         results: Final = []
         for result in response_json.get("results", []):
-            snippet: Final = (
-                result.get("text") or "\n\n".join(result.get("highlights") or []) or result.get("summary") or ""
-            )
             search_result = SearchResult(
                 title=result.get("title", ""),
                 url=result.get("url", ""),
-                snippet=snippet,
+                snippet=result.get("text")
+                or "\n\n".join(result.get("highlights") or [])
+                or result.get("summary")
+                or "",
                 date=result.get("publishedDate"),  # ISO 8601 datetime string
                 last_updated=None,  # Exa AI doesn't provide last_updated in response
             )
