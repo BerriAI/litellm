@@ -12,6 +12,7 @@
 
 import asyncio
 import logging
+from typing import Final
 
 import pytest
 
@@ -116,6 +117,45 @@ def test_a_bare_excluded_services_env_var_is_ignored(monkeypatch, name):
         monkeypatch.delenv(env_name, raising=False)
     monkeypatch.setenv(name, "redis,postgres")
     assert OpenTelemetryV2Config().excluded_services == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("set_env_name", "env_value", "case_sensitive", "env_ignore_empty", "env_parse_none_str"),
+    [
+        pytest.param("otel_service_name", "lower", True, False, None, id="case-sensitive"),
+        pytest.param("OTEL_SERVICE_NAME", "", False, True, None, id="ignore-empty"),
+        pytest.param("OTEL_ENDPOINT", "null", False, False, "null", id="parse-none"),
+        pytest.param("excluded_services", "redis", True, False, None, id="bare-exclusion"),
+    ],
+)
+def test_env_source_preserves_runtime_options(
+    monkeypatch: pytest.MonkeyPatch,
+    set_env_name: str,
+    env_value: str,
+    case_sensitive: bool,
+    env_ignore_empty: bool,
+    env_parse_none_str: str | None,
+) -> None:
+    for env_name in (
+        "OTEL_SERVICE_NAME",
+        "otel_service_name",
+        "OTEL_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "LITELLM_OTEL_EXCLUDED_SERVICES",
+        "EXCLUDED_SERVICES",
+        "excluded_services",
+        "Excluded_Services",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setenv(set_env_name, env_value)
+    config: Final = OpenTelemetryV2Config(
+        _case_sensitive=case_sensitive,
+        _env_ignore_empty=env_ignore_empty,
+        _env_parse_none_str=env_parse_none_str,
+    )
+    assert config.service_name == "litellm"
+    assert config.endpoint is None
+    assert config.excluded_services == frozenset()
 
 
 def test_the_documented_env_var_wins_over_a_bare_excluded_services(monkeypatch):

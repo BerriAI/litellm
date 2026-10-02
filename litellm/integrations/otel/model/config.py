@@ -5,7 +5,8 @@ from functools import lru_cache
 from typing import Annotated, Any, Final
 
 from pydantic import AliasChoices, BaseModel, Field, TypeAdapter, ValidationError, field_validator, model_validator
-from pydantic_settings import BaseSettings, EnvSettingsSource, NoDecode, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic.fields import FieldInfo
+from pydantic_settings import BaseSettings, NoDecode, PydanticBaseSettingsSource, SettingsConfigDict
 
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.baggage import (
@@ -121,9 +122,16 @@ class ExporterSpec(BaseModel):
     )
 
 
-class _EnvWithoutBareExcludedServices(EnvSettingsSource):
+class _EnvWithoutBareExcludedServices(PydanticBaseSettingsSource):
+    def __init__(self, settings_cls: type[BaseSettings], env_settings: PydanticBaseSettingsSource) -> None:
+        super().__init__(settings_cls)
+        self._env_settings: Final = env_settings
+
+    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[object, str, bool]:
+        return self._env_settings.get_field_value(field, field_name)
+
     def __call__(self) -> dict[str, object]:
-        return {key: value for key, value in super().__call__().items() if key != "excluded_services"}
+        return {key: value for key, value in self._env_settings().items() if key != "excluded_services"}
 
 
 class OpenTelemetryV2Config(BaseSettings):
@@ -140,7 +148,7 @@ class OpenTelemetryV2Config(BaseSettings):
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         return (
             init_settings,
-            _EnvWithoutBareExcludedServices(settings_cls),
+            _EnvWithoutBareExcludedServices(settings_cls, env_settings),
             dotenv_settings,
             file_secret_settings,
         )
