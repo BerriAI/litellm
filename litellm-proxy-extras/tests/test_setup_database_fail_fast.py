@@ -315,6 +315,27 @@ def test_v2_p3009_empty_ledger_logs_do_not_prove_completion(monkeypatch, tmp_pat
     )
 
 
+def test_v2_p3009_ledger_logs_surface_in_error(monkeypatch, tmp_path):
+    """v2: Prisma's P3009 stderr never carries the SQL error, only the ledger row does.
+    The failed row's logs are included so the operator sees why the migration failed."""
+    _stub_v2_env(monkeypatch, tmp_path, ledger_logs="ERROR: the pgaudit extension is not enabled")
+
+    stderr = (
+        "Error: P3009\n"
+        "migrate found failed migrations in the target database\n"
+        "The `20250327180120_add_api_requests_to_daily_user_table` migration "
+        "started at 2026-09-01 18:46:13 UTC failed"
+    )
+    with patch(
+        "litellm_proxy_extras.prisma_toolchain.run_prisma", side_effect=_fake_migrate_deploy_failure(1, stderr)
+    ) as run:
+        with pytest.raises(RuntimeError, match="the pgaudit extension is not enabled"):
+            ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+    assert tuple(call.args[0][1:] for call in run.call_args_list if "migrate" in call.args[0]) == (
+        ["migrate", "deploy"],
+    )
+
+
 def test_v2_p3009_unreadable_ledger_still_raises(monkeypatch, tmp_path):
     """v2: an unreadable ledger cannot establish that P3009 was a deadlock."""
     _stub_v2_env(monkeypatch, tmp_path, ledger_logs=None)

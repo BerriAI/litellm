@@ -1130,19 +1130,26 @@ class ProxyExtrasDBManager:
 
         if "P3009" in stderr:
             migration_name = ProxyExtrasDBManager._v2_failed_migration_name(stderr)
-            if migration_name:
-                ledger_logs = ProxyExtrasDBManager._failed_migration_logs(migration_name)
-                if ledger_logs and _MIGRATION_DEADLOCK_MARKER in ledger_logs:
-                    logger.info(
-                        "Migration %s failed in a concurrent migrate deploy "
-                        "deadlock race, rolling its ledger row back and retrying",
-                        migration_name,
-                    )
-                    ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name)
-                    return budget.spend()
+            ledger_logs = (
+                ProxyExtrasDBManager._failed_migration_logs(migration_name) if migration_name else None
+            )
+            if ledger_logs and _MIGRATION_DEADLOCK_MARKER in ledger_logs:
+                logger.info(
+                    "Migration %s failed in a concurrent migrate deploy "
+                    "deadlock race, rolling its ledger row back and retrying",
+                    migration_name,
+                )
+                ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name)
+                return budget.spend()
+            ledger_detail = (
+                f"Failed migration {migration_name} logs from _prisma_migrations:\n{ledger_logs}\n\n"
+                if ledger_logs
+                else ""
+            )
             raise RuntimeError(
                 "Migration completion could not be verified. LiteLLM startup has stopped.\n\n"
                 f"Prisma migration history (migration name and start time):\n{stderr}\n\n"
+                f"{ledger_detail}"
                 "A migration has a start record but no successful completion record. "
                 "LiteLLM cannot determine whether its SQL committed from this record alone. "
                 "Startup stopped to avoid repeating or skipping database changes.\n\n"
