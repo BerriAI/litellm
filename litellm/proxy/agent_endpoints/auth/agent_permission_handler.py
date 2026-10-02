@@ -52,16 +52,14 @@ class AgentAccessLookup(Protocol):
     def __call__(self, user_api_key_auth: UserAPIKeyAuth | None, /, *, strict: bool) -> Awaitable[AgentAccess]: ...
 
 
-_REQUIRE_ACCESS_FLAG: Final = TypeAdapter(bool)
+_DEFAULT_DENY_FLAG: Final = TypeAdapter(bool)
 
 
-def require_key_agent_access_defined() -> bool:
+def agent_access_default_deny() -> bool:
     from litellm.proxy.proxy_server import general_settings_view
 
     try:
-        return _REQUIRE_ACCESS_FLAG.validate_python(
-            general_settings_view().get("require_key_agent_access_defined", False)
-        )
+        return _DEFAULT_DENY_FLAG.validate_python(general_settings_view().get("agent_access_default_deny", False))
     except ValidationError:
         return True
 
@@ -106,7 +104,7 @@ class AgentRequestHandler:
     - If team has restrictions and key has restrictions: use intersection
     - If team has restrictions and key has none: inherit from team
     - If team has no restrictions: use key restrictions
-    - If no restrictions: allow all agents unless require_key_agent_access_defined is enabled for a non-admin key
+    - If no restrictions: allow all agents unless agent_access_default_deny is enabled for a non-admin key
     """
 
     @staticmethod
@@ -115,7 +113,7 @@ class AgentRequestHandler:
         resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
         *,
         strict: bool = False,
-        require_access_defined: Callable[[], bool] = require_key_agent_access_defined,
+        default_deny: Callable[[], bool] = agent_access_default_deny,
         lookup_key_access: AgentAccessLookup | None = None,
         lookup_team_access: AgentAccessLookup | None = None,
     ) -> AgentAccess:
@@ -129,7 +127,7 @@ class AgentRequestHandler:
             lookup_key_access=lookup_key_access,
             lookup_team_access=lookup_team_access,
         )
-        deny_undefined: Final = strict or (not _is_proxy_admin(user_api_key_auth) and require_access_defined())
+        deny_undefined: Final = strict or (not _is_proxy_admin(user_api_key_auth) and default_deny())
         if deny_undefined and isinstance(key_team_access, UnrestrictedAgentAccess):
             return RestrictedAgentAccess(frozenset())
         caller_access: Final = await AgentRequestHandler.agent_caller_access(user_api_key_auth, strict=strict)

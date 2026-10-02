@@ -3157,7 +3157,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "(see GitHub issue #12905)."
         ),
     )
-    require_key_agent_access_defined: bool = Field(
+    agent_access_default_deny: bool = Field(
         False,
         description=(
             "When true, a key with no agent grants on itself or its team can reach no agents instead of all agents. "

@@ -18212,7 +18212,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "cancel_on_disconnect": "Boolean",
         "disable_auto_add_proxy_admin_to_teams": "Boolean",
         "apply_user_budget_to_team_keys": "Boolean",
-        "require_key_agent_access_defined": "Boolean",
+        "agent_access_default_deny": "Boolean",
         "user_api_key_cache_max_size": "Integer",
         "transcribe_media_buckets": "List",
     }

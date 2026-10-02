@@ -13,7 +13,7 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 
 
-def _write_access_config(directory: Path, *, require_access_defined: bool, model_name: str, api_base: str) -> Path:
+def _write_access_config(directory: Path, *, default_deny: bool, model_name: str, api_base: str) -> Path:
     source: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config: Final = {
         **source,
@@ -29,7 +29,7 @@ def _write_access_config(directory: Path, *, require_access_defined: bool, model
         ],
         "general_settings": {
             **source["general_settings"],
-            "require_key_agent_access_defined": require_access_defined,
+            "agent_access_default_deny": default_deny,
         },
     }
     path: Final = directory / f"agent-access-{uuid.uuid4().hex}.yaml"
@@ -188,13 +188,13 @@ def _assert_denial(response: httpx.Response, agent_id: str) -> None:
 
 
 @pytest.mark.timeout(180)
-def test_require_key_agent_access_defined_denies_ungranted_key_but_keeps_explicit_grants(
+def test_agent_access_default_deny_denies_ungranted_key_but_keeps_explicit_grants(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     agent_name: Final = "least-privilege-" + uuid.uuid4().hex
     v2_model: Final = "listing-" + agent_name
     config: Final = _write_access_config(
-        tmp_path, require_access_defined=True, model_name=v2_model, api_base=gateway.upstream_url + "/v1"
+        tmp_path, default_deny=True, model_name=v2_model, api_base=gateway.upstream_url + "/v1"
     )
 
     def upstream(request: Request) -> Reply:
@@ -269,7 +269,7 @@ def test_require_key_agent_access_defined_denies_ungranted_key_but_keeps_explici
 
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("workers", [2, 4])
-def test_require_key_agent_access_defined_toggles_at_runtime_through_config_api(
+def test_agent_access_default_deny_toggles_at_runtime_through_config_api(
     gateway: Gateway, tmp_path: Path, workers: int
 ) -> None:
     agent_name: Final = "runtime-agent-" + uuid.uuid4().hex
@@ -298,7 +298,7 @@ def test_require_key_agent_access_defined_toggles_at_runtime_through_config_api(
             "/config/field/update",
             {
                 "config_type": "general_settings",
-                "field_name": "require_key_agent_access_defined",
+                "field_name": "agent_access_default_deny",
                 "field_value": "true",
             },
         )
@@ -312,7 +312,7 @@ def test_require_key_agent_access_defined_toggles_at_runtime_through_config_api(
         setting: Final = next(
             object_value(field)
             for field in config_fields.json()
-            if object_value(field)["field_name"] == "require_key_agent_access_defined"
+            if object_value(field)["field_name"] == "agent_access_default_deny"
         )
         assert setting["field_type"] == "Boolean" and setting["field_value"] == "true", setting
         eventually(
@@ -326,7 +326,7 @@ def test_require_key_agent_access_defined_toggles_at_runtime_through_config_api(
             "/config/field/update",
             {
                 "config_type": "general_settings",
-                "field_name": "require_key_agent_access_defined",
+                "field_name": "agent_access_default_deny",
                 "field_value": False,
             },
         )
