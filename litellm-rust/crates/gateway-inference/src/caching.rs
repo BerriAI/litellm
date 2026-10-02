@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_cache_response::{CacheOptions, CacheScope};
+use litellm_cache_response::{CacheOptions, CachePolicy, CacheScope};
 use litellm_gateway_auth::AuthenticatedRequest;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -38,11 +38,13 @@ pub(crate) fn prepare(
         .map_err(|error| Error::InvalidBody(error.to_string()))?;
     let caller = identity.caller();
     let options = CacheOptions {
-        caching,
-        no_cache: controls.no_cache,
-        no_store: controls.no_store,
-        ttl: controls.ttl.map(duration).transpose()?,
-        max_age: controls.max_age.map(duration).transpose()?,
+        policy: CachePolicy {
+            caching,
+            no_cache: controls.no_cache,
+            no_store: controls.no_store,
+            ttl: controls.ttl.map(duration).transpose()?,
+            max_age: controls.max_age.map(duration).transpose()?,
+        },
         scope: CacheScope::Isolated(
             serde_json::json!([
                 caller.principal().authority(),

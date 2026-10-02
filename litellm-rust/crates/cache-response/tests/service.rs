@@ -129,11 +129,20 @@ async fn isolated_policy_controls_actual_entry_reuse(
     #[case] first: &str,
     #[case] second: &str,
     #[case] hit: bool,
+    #[values(false, true)] override_policy: bool,
 ) {
-    use litellm_cache_response::{CacheOptions, CacheScope};
-    let service = ResponseCache::new(Arc::new(InMemoryCache::<CacheEntry>::default()));
-    let request =
-        |scope| CacheOptions::new(scope).request("test", "messages", json!({"prompt":"hello"}));
+    use litellm_cache_response::{CachePolicy, CacheScope, ScopedCache};
+    let service = Arc::new(ResponseCache::new(Arc::new(
+        InMemoryCache::<CacheEntry>::default(),
+    )));
+    let request = |scope| {
+        ScopedCache::new(service.clone(), scope)
+            .options(override_policy.then_some(CachePolicy {
+                ttl: Some(Duration::from_secs(30)),
+                ..CachePolicy::default()
+            }))
+            .request("test", "messages", json!({"prompt":"hello"}))
+    };
     service
         .async_store(
             &request(CacheScope::Isolated(first.into())),
