@@ -141,7 +141,32 @@ const expansionColumns: ColumnDef<Person, unknown>[] = [
   },
 ];
 
+const numericColumns: ColumnDef<Person, unknown>[] = [
+  {
+    accessorKey: "name",
+    header: "Name",
+    cell: ({ row }) => <span data-testid="name-cell">{row.original.name}</span>,
+  },
+  {
+    id: "spend",
+    header: ({ column }) => <DataTableSortHeader column={column} title="Spend" />,
+    meta: { numeric: true },
+    cell: () => <span>$1.50</span>,
+  },
+];
+
 const CHARLIE_ALICE_BOB: Person[] = [person("c", "Charlie"), person("a", "Alice"), person("b", "Bob")];
+
+describe("DataTable numeric columns", () => {
+  it("right-aligns the header and cells of a numeric column only", () => {
+    render(<DataTable data={[person("a", "Alice")]} columns={numericColumns} sortingMode="client" />);
+
+    expect(screen.getByRole("columnheader", { name: "Spend" })).toHaveClass("text-right", "tabular-nums");
+    expect(screen.getByRole("cell", { name: "$1.50" })).toHaveClass("text-right", "tabular-nums");
+    expect(screen.getByRole("columnheader", { name: "Name" })).not.toHaveClass("text-right");
+    expect(screen.getByRole("cell", { name: "Alice" })).not.toHaveClass("text-right");
+  });
+});
 
 describe("DataTable sorting", () => {
   it("client mode reorders rows when the sort header is clicked", async () => {
