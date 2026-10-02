@@ -112,15 +112,15 @@ export function ActivityScope({
       },
     });
   };
-  const discoveryScope: ActivitySelection = {
-    source: value.source,
-    service: "",
-    filters: [],
-    lookback_hours: value.lookback_hours,
-  };
   const discoveryOptions = {
     queryKey: ["lens-activity-options", value.source, value.lookback_hours, asOf, accessToken],
-    queryFn: () => load(discoveryScope),
+    queryFn: () =>
+      load({
+        source: value.source,
+        service: "",
+        filters: [],
+        lookback_hours: value.lookback_hours,
+      }),
     staleTime: 60000,
     enabled: validWindow,
   };

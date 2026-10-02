@@ -155,7 +155,7 @@ const MCPToolsViewer = ({
     error: mcpToolsError,
     refetch: refetchTools,
   } = useQuery({
-    queryKey: ["mcpTools", serverId, passthroughHeaders, oauthToken],
+    queryKey: ["mcpTools", serverId, passthroughHeaders, oauthToken, userID],
     queryFn: async () => {
       if (!accessToken) throw new Error("Access Token required");
       const result = await listMCPTools(accessToken, serverId, buildCustomHeaders());

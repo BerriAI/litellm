@@ -116,6 +116,36 @@ describe("useTeams", () => {
     expect(fetchTeams).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps team list results scoped to the authorized user and role", async () => {
+    const otherUserTeams = [mockTeams[1]];
+    vi.mocked(fetchTeams).mockResolvedValueOnce(mockTeams).mockResolvedValueOnce(otherUserTeams);
+
+    const { result, rerender } = renderHook(() => useTeams(), { wrapper });
+
+    await waitFor(() => expect(result.current.data).toEqual(mockTeams));
+
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userId: "another-user-id",
+      userRole: "Internal User",
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+    rerender();
+
+    await waitFor(() => expect(result.current.data).toEqual(otherUserTeams));
+    expect(fetchTeams).toHaveBeenCalledTimes(2);
+    expect(
+      queryClient
+        .getQueriesData<Team[]>({ queryKey: ["teams", "list"] })
+        .map(([, teams]) => teams?.[0]?.team_id)
+        .sort(),
+    ).toEqual(["team-1", "team-2"]);
+  });
+
   it("should handle error when fetchTeams fails", async () => {
     const errorMessage = "Failed to fetch teams";
     const testError = new Error(errorMessage);
@@ -398,7 +428,10 @@ describe("useTeam", () => {
   });
 
   it("should use initialData from teams list cache when available", async () => {
-    queryClient.setQueryData(["teams", "list", { params: {} }], mockTeams);
+    queryClient.setQueryData(
+      ["teams", "list", { params: { filters: { userId: "test-user-id", userRole: "Admin" } } }],
+      mockTeams,
+    );
 
     const { result } = renderHook(() => useTeam("team-1"), { wrapper });
 
@@ -413,7 +446,10 @@ describe("useTeam", () => {
   });
 
   it("should return undefined initialData when teamId is not in cache", () => {
-    queryClient.setQueryData(["teams", "list", { params: {} }], mockTeams);
+    queryClient.setQueryData(
+      ["teams", "list", { params: { filters: { userId: "test-user-id", userRole: "Admin" } } }],
+      mockTeams,
+    );
 
     const { result } = renderHook(() => useTeam("non-existent-team"), { wrapper });
 
