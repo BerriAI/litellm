@@ -37,6 +37,7 @@ from litellm.repositories.table_repositories import (
     TagRepository,
     TeamRepository,
 )
+from litellm.repositories.team_repository import TeamRepository as TeamDomainRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
@@ -153,20 +154,66 @@ def _table(
     return prisma_table
 
 
-def _require_proxy_admin_for_tag_ownership(
-    tag: TagNewRequest | TagUpdateRequest,
-    user_api_key_dict: UserAPIKeyAuth,
-) -> None:
-    if "team_id" in tag.model_fields_set and not is_proxy_admin(user_api_key_dict):
-        raise HTTPException(status_code=403, detail="Only proxy admins can set tag team ownership")
-
-
 async def _require_existing_team(prisma_client: "PrismaClient", team_id: str | None) -> None:
     if (
         team_id is not None
         and await _table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id}) is None
     ):
         raise HTTPException(status_code=400, detail=f"Team {team_id} does not exist")
+
+
+async def _caller_administers_team(
+    prisma_client: "PrismaClient",
+    user_api_key_dict: UserAPIKeyAuth,
+    team_id: str,
+) -> bool:
+    from litellm.proxy.management.teams.access import TEAM_ADMIN_ONLY
+    from litellm.proxy.management.teams.dependencies import get_team_access
+
+    team: Final = await TeamDomainRepository(prisma_client).find_by_id(team_id, id_field="team_id")
+    if team is None:
+        return False
+    return await get_team_access().allows(user_api_key_dict, team, TEAM_ADMIN_ONLY)
+
+
+async def _require_tag_create_permission(
+    tag: TagNewRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: "PrismaClient",
+) -> None:
+    if is_proxy_admin(user_api_key_dict):
+        await _require_existing_team(prisma_client, tag.team_id)
+        return
+    if tag.team_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Non-admin tag creation requires a team_id the caller administers",
+        )
+    await _require_existing_team(prisma_client, tag.team_id)
+    if not await _caller_administers_team(prisma_client, user_api_key_dict, tag.team_id):
+        raise HTTPException(status_code=403, detail=f"Caller does not administer team {tag.team_id}")
+    if tag.models:
+        raise HTTPException(status_code=403, detail="Only proxy admins can attach deployments to a tag")
+
+
+async def _require_tag_update_permission(
+    tag: TagUpdateRequest,
+    existing_tag: "_TagRecord",
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: "PrismaClient",
+) -> None:
+    if is_proxy_admin(user_api_key_dict):
+        if "team_id" in tag.model_fields_set:
+            await _require_existing_team(prisma_client, tag.team_id)
+        return
+    if existing_tag.team_id is None:
+        raise HTTPException(status_code=403, detail="Tag is not owned by a team")
+    if not await _caller_administers_team(prisma_client, user_api_key_dict, existing_tag.team_id):
+        raise HTTPException(status_code=403, detail=f"Caller does not administer team {existing_tag.team_id}")
+    if tag.models:
+        raise HTTPException(status_code=403, detail="Only proxy admins can attach deployments to a tag")
+    if "team_id" in tag.model_fields_set and tag.team_id != existing_tag.team_id:
+        raise HTTPException(status_code=403, detail="Team admins cannot change tag team ownership")
 
 
 async def _evict_tag_cache_keys(cache_keys: Sequence[str]) -> None:
@@ -314,14 +361,16 @@ async def new_tag(
     if llm_router is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.no_llm_router.value)
     try:
-        _require_proxy_admin_for_tag_ownership(tag=tag, user_api_key_dict=user_api_key_dict)
-
         # Check if tag already exists
         existing_tag: Final = await _table(TagRepository(prisma_client)).find_unique(where={"tag_name": tag.name})
         if existing_tag is not None:
             raise HTTPException(status_code=400, detail=f"Tag {tag.name} already exists")
 
-        await _require_existing_team(prisma_client, tag.team_id)
+        await _require_tag_create_permission(
+            tag=tag,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
 
         # Handle budget creation/assignment using common helper
         budget_id: Final = await handle_budget_for_entity(
@@ -464,15 +513,17 @@ async def update_tag(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        _require_proxy_admin_for_tag_ownership(tag=tag, user_api_key_dict=user_api_key_dict)
-
         # Check if tag exists
         existing_tag: Final = await _table(TagRepository(prisma_client)).find_unique(where={"tag_name": tag.name})
         if existing_tag is None:
             raise HTTPException(status_code=404, detail=f"Tag {tag.name} not found")
 
-        if "team_id" in tag.model_fields_set:
-            await _require_existing_team(prisma_client, tag.team_id)
+        await _require_tag_update_permission(
+            tag=tag,
+            existing_tag=existing_tag,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
 
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 

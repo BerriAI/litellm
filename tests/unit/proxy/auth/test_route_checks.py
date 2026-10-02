@@ -4425,3 +4425,33 @@ def test_legacy_sse_respects_virtual_key_route_permissions(route: str, route_gro
         request_data={},
     )
     assert RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=token, request=request)
+
+
+@pytest.mark.parametrize("route", ("/tag/new", "/tag/update", "/tag/delete"))
+def test_tag_management_routes_reachable_by_internal_users(route: str) -> None:
+    request: Final = Request({"type": "http", "method": "POST", "path": route})
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=None,
+        _user_role=LitellmUserRoles.INTERNAL_USER,
+        route=route,
+        request=request,
+        valid_token=UserAPIKeyAuth(user_id="tag-caller", user_role=LitellmUserRoles.INTERNAL_USER),
+        request_data={},
+    )
+
+
+@pytest.mark.parametrize("route", ("/tag/new", "/tag/update", "/tag/delete"))
+def test_tag_management_routes_reject_proxy_admin_view_only(route: str) -> None:
+    request: Final = Request({"type": "http", "method": "POST", "path": route})
+    with pytest.raises(HTTPException) as caught:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+            route=route,
+            request=request,
+            valid_token=UserAPIKeyAuth(
+                user_id="tag-viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+            ),
+            request_data={},
+        )
+    assert caught.value.status_code == 403

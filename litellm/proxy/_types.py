@@ -991,6 +991,10 @@ class LiteLLMRoutes(enum.Enum):
         # Project write routes - endpoint checks team admin + team_admin_editable_team_fields "projects"
         "/project/new",
         "/project/update",
+        # Tag write routes - handler enforces proxy admin vs team admin
+        "/tag/new",
+        "/tag/update",
+        "/tag/delete",
         # Endpoint enforces proxy-admin vs team-admin model access itself.
         "/health/test_connection",
         # Invitation routes - org/team admins checked in endpoint via _user_has_admin_privileges
