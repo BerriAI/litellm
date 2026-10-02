@@ -6,6 +6,7 @@ import os
 import selectors
 import sys
 from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import ModuleType
 from typing import Final
@@ -15,14 +16,18 @@ import anyio
 import httpx2
 import pytest
 from mcp import MCPError
+from mcp.server import Server
+from mcp.shared.memory import create_client_server_memory_streams
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.message import SessionMessage
 from mcp.types import (
     CONNECTION_CLOSED,
     INTERNAL_ERROR,
+    METHOD_NOT_FOUND,
     REQUEST_TIMEOUT,
     CallToolRequestParams,
     CallToolResult,
+    DiscoverResult,
     ErrorData,
     Implementation,
     InitializeResult,
@@ -30,8 +35,10 @@ from mcp.types import (
     JSONRPCMessage,
     JSONRPCRequest,
     JSONRPCResponse,
+    ListToolsResult,
     LoggingMessageNotificationParams,
     ServerCapabilities,
+    Tool,
 )
 from mcp_types.version import LATEST_HANDSHAKE_VERSION
 from pydantic import TypeAdapter, ValidationError
@@ -3028,9 +3035,145 @@ async def test_configured_upstream_revision_is_offered_and_checked(revision, acc
             await client.list_tools(raise_on_error=True)
 
 
-@pytest.mark.parametrize("revision", ["2026-07-28", "unknown", "", None])
+@pytest.mark.parametrize("revision", ["2099-01-01", "unknown", "", None])
 def test_upstream_protocol_configuration_rejects_unavailable_modes(revision):
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
         MCPClient(protocol_version=revision)
+
+
+class _InProcessClient(MCPClient):
+    """An MCPClient whose transport is a real in-process MCP SDK server over memory streams."""
+
+    def __init__(self, server: Server, **kwargs):
+        super().__init__(server_url="http://upstream.invalid/mcp", **kwargs)
+        self._server = server
+
+    @asynccontextmanager
+    async def _serve(self):
+        async with create_client_server_memory_streams() as (client_streams, server_streams):
+            async with anyio.create_task_group() as task_group:
+                task_group.start_soon(
+                    self._server.run, *server_streams, self._server.create_initialization_options()
+                )
+                yield client_streams
+                task_group.cancel_scope.cancel()
+
+    def _create_transport_context(self) -> tuple[_TransportContext, None]:
+        return self._serve(), None
+
+
+def _recorded_upstream(methods: list[str], discover: Callable | None = None) -> Server:
+    async def list_tools(ctx, params) -> ListToolsResult:
+        return ListToolsResult(tools=[Tool(name="echo", input_schema={"type": "object"})])
+
+    async def record(ctx, call_next):
+        methods.append(ctx.method)
+        if ctx.method == "server/discover" and discover is not None:
+            return await discover(ctx)
+        return await call_next(ctx)
+
+    server: Final = Server("upstream", version="1", instructions="  prefer echo  ", on_list_tools=list_tools)
+    server.middleware.append(record)
+    return server
+
+
+@pytest.mark.asyncio
+async def test_modern_pin_adopts_upstream_discovery():
+    methods: Final[list[str]] = []
+    client: Final = _InProcessClient(_recorded_upstream(methods), protocol_version="2026-07-28")
+
+    async def operation(session):
+        return session.protocol_version, await session.list_tools()
+
+    negotiated, listed = await client.run_with_session(operation)
+    assert negotiated == "2026-07-28"
+    assert [tool.name for tool in listed.tools] == ["echo"]
+    assert client._last_initialize_instructions == "prefer echo"
+    assert methods == ["server/discover", "tools/list"]
+
+
+@asynccontextmanager
+async def _http_upstream(seen: list[tuple[str, str | None]]) -> AsyncIterator[str]:
+    """A real MCP SDK server over streamable HTTP on a local port. Records each request's JSON-RPC
+    method and the MCP-Protocol-Version header it arrived with."""
+    import uvicorn
+    from mcp.server import MCPServer
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    versions: Final[list[str | None]] = []
+
+    async def record(ctx, call_next):
+        seen.append((ctx.method, versions[-1] if versions else None))
+        return await call_next(ctx)
+
+    upstream: Final = MCPServer("upstream", middleware=[record])
+
+    @upstream.tool(name="add")
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    mcp_app: Final = upstream.streamable_http_app(stateless_http=True, json_response=True)
+
+    async def with_headers(scope, receive, send):
+        if scope["type"] == "http":
+            versions.append(dict(scope["headers"]).get(b"mcp-protocol-version", b"").decode() or None)
+        await mcp_app(scope, receive, send)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        async with upstream.session_manager.run():
+            yield
+
+    server: Final = uvicorn.Server(
+        uvicorn.Config(Starlette(routes=[Mount("/", app=with_headers)], lifespan=lifespan), host="127.0.0.1", port=0, log_level="warning")
+    )
+    serving: Final = asyncio.create_task(server.serve())
+    try:
+        while not server.started:
+            await asyncio.sleep(0.01)
+        port: Final = server.servers[0].sockets[0].getsockname()[1]
+        yield f"http://127.0.0.1:{port}/mcp"
+    finally:
+        server.should_exit = True
+        await serving
+
+
+@pytest.mark.asyncio
+async def test_modern_pin_calls_a_tool_over_http():
+    seen: Final[list[tuple[str, str | None]]] = []
+    async with _http_upstream(seen) as url:
+        client: Final = MCPClient(server_url=url, transport_type=MCPTransport.http, protocol_version="2026-07-28", timeout=10)
+        result: Final = await client.call_tool(CallToolRequestParams(name="add", arguments={"a": 2, "b": 3}), raise_on_error=True)
+
+    assert not result.is_error
+    assert [block.text for block in result.content] == ["5"]
+    methods: Final = [method for method, _ in seen]
+    assert methods[0] == "server/discover"
+    assert "tools/call" in methods and "initialize" not in methods
+    assert {version for _, version in seen} == {"2026-07-28"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "discover,code",
+    [
+        (AsyncMock(return_value=DiscoverResult(supported_versions=["2025-11-25"], capabilities=ServerCapabilities())), -32022),
+        (AsyncMock(side_effect=MCPError(code=METHOD_NOT_FOUND, message="Method not found")), METHOD_NOT_FOUND),
+        (
+            AsyncMock(side_effect=MCPError(code=-32022, message="Unsupported", data={"supported": ["2025-11-25"]})),
+            -32022,
+        ),
+    ],
+)
+async def test_modern_pin_never_falls_back_to_the_handshake(discover, code):
+    methods: Final[list[str]] = []
+    client: Final = _InProcessClient(_recorded_upstream(methods, discover), protocol_version="2026-07-28")
+    operation: Final = AsyncMock()
+
+    with pytest.RaisesGroup(pytest.RaisesExc(MCPError, check=lambda error: error.error.code == code), allow_unwrapped=True, flatten_subgroups=True):
+        await client.run_with_session(operation)
+    operation.assert_not_awaited()
+    assert methods == ["server/discover"]

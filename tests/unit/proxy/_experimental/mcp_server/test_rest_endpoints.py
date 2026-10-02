@@ -4665,7 +4665,7 @@ class TestClientAllowlistOnRestRoutes:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("revision", ("auto", "2024-11-05", "2025-06-18"))
+@pytest.mark.parametrize("revision", ("auto", "2024-11-05", "2025-06-18", "2026-07-28"))
 async def test_preview_client_honors_protocol_metadata(revision: MCPUpstreamProtocol) -> None:
     from litellm.experimental_mcp_client.client import MCPClient
 

@@ -397,7 +397,16 @@ def test_mcp_advertised_versions_reject_unavailable_revisions(versions):
         ConfigGeneralSettings(mcp_advertised_versions=versions)
 
 
-@pytest.mark.parametrize("revision", ["2026-07-28", "unknown", None])
+@pytest.mark.parametrize("revision", ["auto", "2025-11-25", "2026-07-28"])
+def test_mcp_metadata_accepts_upstream_protocol_pins(revision):
+    from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
+
+    payload = {"server_id": "test", "transport": "http", "url": "https://example.com/mcp", "mcp_info": {"protocol_version": revision}}
+    for model in (NewMCPServerRequest, UpdateMCPServerRequest):
+        assert model.model_validate(payload).mcp_info["protocol_version"] == revision
+
+
+@pytest.mark.parametrize("revision", ["2099-01-01", "unknown", None])
 def test_mcp_metadata_rejects_unavailable_upstream_protocol(revision):
     from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
 
