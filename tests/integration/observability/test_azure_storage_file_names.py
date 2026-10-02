@@ -19,6 +19,7 @@ from integration._support.wire import Reply, Request, wire_server
 from litellm.constants import MAX_LITELLM_CALL_ID_LENGTH
 
 ADLS_SAFE_FILE_NAME: Final = re.compile(r"^[A-Za-z0-9._+-]+\.json$")
+WORKERS: Final = 2
 
 
 def _responses_id(candidate: Gateway, model: str, key: str, marker: str) -> str:
@@ -40,7 +41,7 @@ def test_responses_ids_with_base64_padding_land_under_adls_safe_names(gateway: G
         environment: Final = {**azure_storage_environment(store.url, cert), "DEFAULT_FLUSH_INTERVAL_SECONDS": "1"}
         config: Final = azure_storage_config(tmp_path)
         with (
-            owned_proxy(gateway, tmp_path, environment, config=config, workers=1) as candidate,
+            owned_proxy(gateway, tmp_path, environment, config=config, workers=WORKERS) as candidate,
             candidate.scenario() as scenario,
         ):
             model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
@@ -100,7 +101,7 @@ def _log_names_by_call_id(
         environment: Final = {**azure_storage_environment(store.url, cert), "DEFAULT_FLUSH_INTERVAL_SECONDS": "1"}
         config: Final = azure_storage_config(tmp_path)
         with (
-            owned_proxy(gateway, tmp_path, environment, config=config, workers=1) as candidate,
+            owned_proxy(gateway, tmp_path, environment, config=config, workers=WORKERS) as candidate,
             candidate.scenario() as scenario,
         ):
             model: Final = scenario.model(
