@@ -470,6 +470,20 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
     let database = database?;
     let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 30, 30).await?;
+    let tables = read_json(
+        &database,
+        "SELECT name FROM system.tables WHERE database = 'trace_test' \
+         AND match(engine_full, 'materialize_ttl_recalculate_only = 1') ORDER BY name",
+    )
+    .await?;
+    assert_eq!(
+        tables["data"],
+        serde_json::json!([
+            {"name": "agent_traces_by_key"},
+            {"name": "otel_traces"},
+            {"name": "spend_logs"}
+        ])
+    );
     let old_time = time::OffsetDateTime::now_utc() - time::Duration::days(20);
     let old_timestamp_ns = old_time.unix_timestamp_nanos() as i64;
     let old_timestamp_ms = old_timestamp_ns / 1_000_000;
