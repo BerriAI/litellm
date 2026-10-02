@@ -39,7 +39,7 @@ def get_current_weather(location, unit="fahrenheit"):
 @pytest.mark.parametrize(
     "model",
     [
-        "gpt-3.5-turbo-1106",
+        "gpt-6-luna",
         "mistral/mistral-large-latest",
         "claude-haiku-4-5-20251001",
         "gemini/gemini-2.5-flash-lite",
@@ -324,7 +324,7 @@ def test_parallel_function_call_anthropic_error_msg(model, messages):
     Anthropic (and Bedrock Invoke via ``AnthropicConfig.transform_request``)
     inject a dummy tool so CLIs work with ``modify_params`` left off. Bedrock
     Converse's no-raise behavior is covered offline in
-    ``tests/test_litellm/llms/bedrock/chat/test_converse_transformation.py``
+    ``tests/unit/llms/bedrock/chat/test_converse_transformation.py``
     (see #24158, #27138), which needs no live credentials.
     """
     # Force modify_params off as a clean baseline: it exercises the Anthropic
@@ -386,7 +386,7 @@ def test_parallel_function_call_stream():
             }
         ]
         response = litellm.completion(
-            model="gpt-3.5-turbo-1106",
+            model="gpt-6-luna",
             messages=messages,
             tools=tools,
             stream=True,
@@ -435,7 +435,7 @@ def test_parallel_function_call_stream():
                 )  # extend conversation with function response
             print(f"messages: {messages}")
             second_response = litellm.completion(
-                model="gpt-3.5-turbo-1106", messages=messages, temperature=0.2, seed=22
+                model="gpt-6-luna", messages=messages, temperature=0.2, seed=22, reasoning_effort="none"
             )  # get a new response from the model where it can see the function response
             print("second response\n", second_response)
             return second_response

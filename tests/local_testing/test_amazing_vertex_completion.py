@@ -2863,7 +2863,7 @@ def test_gemini_function_call_parameter_in_messages():
             mock_client.return_value = mock_response
             try:
                 completion(
-                    model="vertex_ai/gemini-2.0-flash",
+                    model="vertex_ai/gemini-2.5-flash-preview-09-2025",
                     messages=messages,
                     tools=tools,
                     tool_choice="auto",
@@ -3263,7 +3263,7 @@ def test_vertex_anthropic_completion():
         client, "post", side_effect=vertex_ai_anthropic_thinking_mock_response
     ):
         response = completion(
-            model="vertex_ai/claude-3-7-sonnet@20250219",
+            model="vertex_ai/claude-sonnet-4-6@default",
             messages=[{"role": "user", "content": "Hello, world!"}],
             vertex_ai_location="us-east5",
             vertex_ai_project="test-project",
@@ -3271,7 +3271,7 @@ def test_vertex_anthropic_completion():
             client=client,
         )
         print(response)
-        assert response.model == "claude-3-7-sonnet@20250219"
+        assert response.model == "claude-sonnet-4-6@default"
         assert response._hidden_params["response_cost"] is not None
         assert response._hidden_params["response_cost"] > 0
 
@@ -3331,7 +3331,7 @@ def test_gemini_fine_tuned_model_request_consistency():
     Assert the same transformation is applied to Fine tuned gemini 2.0 flash and gemini 2.0 flash
 
     - Request 1: Fine tuned: vertex_ai/gemini/ft-uuid
-    - Request 2: vertex_ai/gemini-2.0-flash-001
+    - Request 2: vertex_ai/gemini-2.5-flash
     """
     litellm.set_verbose = True
     load_vertex_ai_credentials()
@@ -3403,7 +3403,7 @@ def test_gemini_fine_tuned_model_request_consistency():
     with patch.object(client, "post", new=MagicMock()) as mock_post_2:
         try:
             response_2 = completion(
-                model="vertex_ai/gemini-2.0-flash-001",
+                model="vertex_ai/gemini-2.5-flash",
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",

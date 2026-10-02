@@ -2,6 +2,7 @@ import atexit
 import secrets
 import signal
 import threading
+from collections.abc import Mapping
 from types import FrameType
 from typing import Final
 
@@ -67,7 +68,7 @@ def _ensure_master_key() -> str:
     master_key: Final = secrets.token_urlsafe(32)
     general_settings: Final = generated.get("general_settings")
     updated_settings: Final[dict[str, JsonValue]] = {
-        **(general_settings if isinstance(general_settings, dict) else {}),
+        **(general_settings if isinstance(general_settings, Mapping) else {}),
         "master_key": master_key,
     }
     updated: Final[dict[str, JsonValue]] = {**generated, "general_settings": updated_settings}

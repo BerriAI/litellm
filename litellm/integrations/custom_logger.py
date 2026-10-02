@@ -421,6 +421,24 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ):  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
         pass
 
+    async def async_filter_listed_models(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        model_names: Sequence[str],
+    ) -> Sequence[str]:
+        """Runs on the model listing routes (`/v1/models`, `/v1/models/{id}`, `/model/info`,
+        `/model_group/info`) with the public model names the route would otherwise return, so a
+        lookup of one model may offer just that name: decide per name, never by position in the
+        sequence. Return the names to keep as a sequence of strings; a name left out disappears
+        from every listing, any alias of it offered in the same call goes with it, and
+        `/v1/models/{id}` answers 404 for it, exactly as for a model that does not exist. Names
+        outside `model_names` are ignored, so a callback can only narrow the listing, never widen
+        it. Under `use_team_public_model_name: false`, `/v1/models` and `/model_group/info` list a
+        team model by its internal routing name while `/model/info` keeps its public name, so hide
+        both names to hide it on every route.
+        """
+        return model_names
+
     async def async_post_call_response_headers_hook(
         self,
         data: dict,
@@ -574,11 +592,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         Useful if you want to modify the standard logging payload after the MCP tool call is made.
 
-        To change what the caller sends back to the MCP client, mutate ``response_obj``
-        in place: every call site discards the returned object, because the
-        dispatcher unwraps it to ``mcp_tool_call_response`` (a raw content list, not
-        a ``CallToolResult``) which the tool-call paths cannot forward. Guardrails
-        that mask or reject tool output should use ``post_mcp_call`` instead.
+        Modify ``mcp_tool_call_response`` in place or return a replacement response
+        object to change what the caller sends back to the MCP client. Content rewrites
+        discard stale structured output and mark those results as tool errors.
+        Use ``post_mcp_call`` guardrails for schema-preserving structured redaction.
         """
         return None
 

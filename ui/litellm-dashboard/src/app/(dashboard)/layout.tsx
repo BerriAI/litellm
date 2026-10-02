@@ -7,13 +7,15 @@ import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
 import { NoRedisWarningBanner } from "@/components/NoRedisWarningBanner";
 import { EnvCredentialLoginWarningBanner } from "@/components/EnvCredentialLoginWarningBanner";
 import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
 import { UserBanner } from "@/components/UserBanner";
-import { uiHref } from "@/utils/uiHref";
+import LiteAdmin from "@/components/liteadmin/LiteAdmin";
+import { UpgradeBanner } from "@/components/UpgradeBanner";
+import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
@@ -97,10 +99,18 @@ export function AgentControlPlaneView() {
   );
 }
 
+const FULL_BLEED_SEGMENTS = new Set(["logs"]);
+
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const { accessToken } = useAuth();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { mode } = usePluginMode();
+  const routeSegment = routeSegmentForPathname(usePathname());
+  const isPlayground = routeSegment === "playground";
+  const isFullBleed = FULL_BLEED_SEGMENTS.has(routeSegment);
+  // A manual toggle holds only for the route it was made on; full-bleed routes default to collapsed.
+  const [sidebarOverride, setSidebarOverride] = useState<{ segment: string; collapsed: boolean } | null>(null);
+  const sidebarCollapsed = sidebarOverride?.segment === routeSegment ? sidebarOverride.collapsed : isFullBleed;
+  const toggleSidebar = () => setSidebarOverride({ segment: routeSegment, collapsed: !sidebarCollapsed });
 
   const isGateway = mode === "ai-gateway";
 
@@ -117,6 +127,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <EnvCredentialLoginWarningBanner accessToken={accessToken} />
         <LicenseExpiryBanner accessToken={accessToken} />
         <UserBanner accessToken={accessToken} />
+        <UpgradeBanner accessToken={accessToken} />
         <main className="flex min-h-0 flex-1 overflow-hidden">
           <AgentControlPlaneView />
         </main>
@@ -129,7 +140,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   // so the page can't be dragged past the end of the nav.
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((v) => !v)} />
+      <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <DashboardHeader />
         <DebugWarningBanner accessToken={accessToken} />
@@ -137,7 +148,9 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <EnvCredentialLoginWarningBanner accessToken={accessToken} />
         <LicenseExpiryBanner accessToken={accessToken} />
         <UserBanner accessToken={accessToken} />
+        <UpgradeBanner accessToken={accessToken} />
         <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
+        {!isPlayground && <LiteAdmin />}
       </div>
     </div>
   );
@@ -146,7 +159,8 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 function LayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { accessToken, authLoading } = useAuth();
+  const pathname = usePathname();
+  const { accessToken, authLoading, passwordResetRequired } = useAuth();
   const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
 
   // Legacy invitation links point at /ui/?invitation_id=; the onboarding form now lives at its own
@@ -156,6 +170,14 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
       router.replace(`${uiHref("onboarding")}?${searchParams.toString()}`);
     }
   }, [authLoading, isInvitationFlow, router, searchParams]);
+
+  // A session flagged for a forced password reset can only reach the change-password
+  // endpoint server-side; keep the UI on the matching page.
+  useEffect(() => {
+    if (!authLoading && passwordResetRequired && !pathname?.endsWith("/change-password")) {
+      router.replace(uiHref("change-password"));
+    }
+  }, [authLoading, passwordResetRequired, pathname, router]);
 
   if (authLoading || isInvitationFlow) {
     return <LoadingScreen />;

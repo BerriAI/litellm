@@ -25,6 +25,8 @@ from e2e_http import (
     unwrap,
 )
 from models import (
+    AuditLogPage,
+    AuditLogParams,
     ChatBody,
     ChatMessage,
     ConnectionTestBody,
@@ -35,6 +37,7 @@ from models import (
     CustomerResponse,
     KeyBlockBody,
     KeyDeleteBody,
+    KeyDeleteByAliasBody,
     KeyGenerateBody,
     KeyGenerateResponse,
     KeyInfoParams,
@@ -158,6 +161,31 @@ class ManagementClient:
 
     def update_key_models(self, key: str, models: list[str]) -> None:
         _ = unwrap(self.update_key(KeyUpdateBody(key=key, models=models)))
+
+    def delete_key_by_alias(self, key_alias: str) -> None:
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/key/delete",
+                headers=self.proxy.management_headers(),
+                json=KeyDeleteByAliasBody(key_aliases=[key_alias]),
+                response_type=NoBody,
+            )
+        )
+
+    def key_deleted_audit_logs(self, token_hash: str) -> AuditLogPage:
+        return unwrap(
+            self.proxy.transport.get(
+                "/audit",
+                headers=self.proxy.management_headers(),
+                params=AuditLogParams(
+                    object_id=token_hash,
+                    action="deleted",
+                    table_name="LiteLLM_VerificationToken",
+                    page_size=100,
+                ),
+                response_type=AuditLogPage,
+            )
+        )
 
     def key_info_as(self, key: str, *, caller_key: str | None = None) -> Result[KeyInfoResponse]:
         return self.proxy.transport.get(
@@ -382,6 +410,27 @@ class ManagementClient:
                     break
         assert last is not None
         raise AssertionError(last)
+
+    def add_team_members(self, team_id: str, members: list[TeamMemberEntry]) -> None:
+        """Bulk form of /team/member_add: `member` accepts a list, so one call
+        seeds a whole roster the way an admin import does."""
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/team/member_add",
+                headers=self.proxy.management_headers(),
+                json=TeamMemberAddBody(team_id=team_id, member=members),
+                response_type=NoBody,
+            )
+        )
+
+    def delete_team_status(self, team_id: str) -> StreamingResponse:
+        """POST /team/delete judged by HTTP outcome: the raw status and body, so a
+        test can assert on what a caller actually sees when the delete fails."""
+        return self.proxy.transport.send(
+            "/team/delete",
+            headers=self.proxy.management_headers(),
+            json=TeamDeleteBody(team_ids=[team_id]),
+        )
 
     def delete_team_member(self, team_id: str, user_id: str) -> None:
         _ = unwrap(

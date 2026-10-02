@@ -1,7 +1,8 @@
 import asyncio
 import json
+from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
 
@@ -22,6 +23,9 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.utils import _hash_token_if_needed
 from litellm.secret_managers.base_secret_manager import BaseSecretManager
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 # NOTE: This is the prefix for all virtual keys stored in AWS Secrets Manager
 LITELLM_PREFIX_STORED_VIRTUAL_KEYS: Final = "litellm/"
@@ -233,6 +237,19 @@ class KeyManagementEventHooks:
         Handles the following:
         - Storing Audit Logs for key deletion
         """
+        KeyManagementEventHooks.create_key_deleted_audit_logs(
+            keys_being_deleted=keys_being_deleted,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
+        await KeyManagementEventHooks._delete_virtual_keys_from_secret_manager(keys_being_deleted=keys_being_deleted)
+
+    @staticmethod
+    def create_key_deleted_audit_logs(
+        keys_being_deleted: Sequence["LiteLLM_VerificationToken | prisma_models.LiteLLM_VerificationToken"],
+        user_api_key_dict: UserAPIKeyAuth,
+        litellm_changed_by: str | None = None,
+    ) -> None:
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
             get_audit_log_changed_by,
@@ -240,35 +257,33 @@ class KeyManagementEventHooks:
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-        # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
-        if is_audit_logging_enabled() and data.keys is not None:
-            # make an audit log for each key deleted
-            for key in keys_being_deleted:
-                if key.token is None:
-                    continue
-                _key_row = key.model_dump_json(exclude_none=True)
+        if not is_audit_logging_enabled():
+            return
+        for key in keys_being_deleted:
+            key_row = LiteLLM_VerificationToken.model_validate(key, from_attributes=True)
+            if key_row.token is None:
+                continue
+            _key_row = key_row.model_dump_json(exclude_none=True)
 
-                asyncio.create_task(
-                    create_audit_log_for_update(
-                        request_data=LiteLLM_AuditLogs(
-                            id=str(uuid.uuid4()),
-                            updated_at=datetime.now(timezone.utc),
-                            changed_by=get_audit_log_changed_by(
-                                litellm_changed_by=litellm_changed_by,
-                                user_api_key_dict=user_api_key_dict,
-                                litellm_proxy_admin_name=litellm_proxy_admin_name,
-                            ),
-                            changed_by_api_key=user_api_key_dict.token,
-                            table_name=LitellmTableNames.KEY_TABLE_NAME,
-                            object_id=key.token,
-                            action="deleted",
-                            updated_values="{}",
-                            before_value=_key_row,
-                        )
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
+                        changed_by_api_key=user_api_key_dict.token,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=key_row.token,
+                        action="deleted",
+                        updated_values="{}",
+                        before_value=_key_row,
                     )
                 )
-        # delete the keys from the secret manager
-        await KeyManagementEventHooks._delete_virtual_keys_from_secret_manager(keys_being_deleted=keys_being_deleted)
+            )
 
     @staticmethod
     async def _store_virtual_key_in_secret_manager(secret_name: str, secret_token: str, team_id: str | None = None):

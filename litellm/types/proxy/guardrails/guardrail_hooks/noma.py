@@ -39,6 +39,10 @@ class NomaV2GuardrailConfigModel(GuardrailConfigModel):
         default=None,
         description="The Noma Application ID. Reads from NOMA_APPLICATION_ID env var if None.",
     )
+    gateway_name: str | None = Field(
+        default=None,
+        description="Gateway name, used as the gateway_host label on Noma scans. Falls back to NOMA_GATEWAY_NAME.",
+    )
     monitor_mode: bool | None = Field(
         default=None,
         description="When true, run guardrail checks in monitor mode.",

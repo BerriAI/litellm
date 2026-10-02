@@ -109,6 +109,7 @@ class _BaseChunk(TypedDict, total=False):
     created: ReadOnly[int]
     model: ReadOnly[str]
     system_fingerprint: ReadOnly[str | None]
+    service_tier: ReadOnly[str | None]
     choices: ReadOnly[Required[Sequence[StreamingChoices]]]
     _hidden_params: ReadOnly[_ChunkHiddenParams]
 
@@ -138,7 +139,11 @@ class _ToolCallDelta(TypedDict, total=False):
 
 
 class _ToolCallChoice(TypedDict, total=False):
+    index: ReadOnly[int]
     delta: ReadOnly[_ToolCallDelta]
+
+
+_ToolCallKey: TypeAlias = tuple[int, int]
 
 
 class _ToolCallChunk(TypedDict):
@@ -159,6 +164,14 @@ class _UsageSummary(TypedDict):
     completion_tokens_details: CompletionTokensDetails | None
     prompt_tokens_details: PromptTokensDetailsWrapper | None
     cost: float | None
+
+
+def _reports_prompt_side_usage(usage_summary: "_UsageSummary") -> bool:
+    return (
+        (usage_summary["prompt_tokens"] or 0) > 0
+        or (usage_summary["cache_creation_input_tokens"] or 0) > 0
+        or (usage_summary["cache_read_input_tokens"] or 0) > 0
+    )
 
 
 def capture_cache_creation_token_details(
@@ -357,6 +370,13 @@ class ChunkProcessor:
         # Fall back to first chunk's model if no different model found
         return first_chunk_model
 
+    @staticmethod
+    def _get_service_tier_from_chunks(chunks: Sequence["_BaseChunk"]) -> str | None:
+        return next(
+            (tier for chunk in reversed(chunks) if isinstance(tier := chunk.get("service_tier"), str) and tier),
+            None,
+        )
+
     def build_base_response(self, chunks: Sequence["_BaseChunk"]) -> ModelResponse:
         chunk = self.first_chunk
         id: Final = ChunkProcessor._get_chunk_id(chunks)
@@ -366,6 +386,7 @@ class ChunkProcessor:
         # Get the actual model - for Azure Model Router, this finds the real model from later chunks
         model: Final = ChunkProcessor._get_model_from_chunks(chunks, first_chunk_model)
         system_fingerprint: Final = chunk.get("system_fingerprint", None)
+        service_tier: Final = ChunkProcessor._get_service_tier_from_chunks(chunks)
 
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason = "stop"
@@ -387,6 +408,11 @@ class ChunkProcessor:
                 "created": created,
                 "model": model,
                 "system_fingerprint": system_fingerprint,
+                **(
+                    MappingProxyType({"service_tier": service_tier})
+                    if service_tier is not None
+                    else MappingProxyType({})
+                ),
                 "choices": [
                     {
                         "index": 0,
@@ -417,40 +443,41 @@ class ChunkProcessor:
     @staticmethod
     def _iter_tool_call_fragments(
         tool_call_chunks: Sequence["_ToolCallChunk"],
-    ) -> Iterator[tuple[int, str, str]]:
+    ) -> Iterator[tuple[_ToolCallKey, str, str]]:
         for chunk in tool_call_chunks:
             for choice in chunk["choices"]:
                 delta = choice.get("delta")
                 if not delta:
                     continue
-                for tool_call in delta.get("tool_calls", ()):
+                choice_index = choice.get("index", 0)
+                for tool_call in delta.get("tool_calls") or ():
                     if not tool_call:
                         continue
                     if isinstance(tool_call, dict):
-                        index = tool_call.get("index", 0)
+                        key = (choice_index, tool_call.get("index", 0))
                         function = tool_call.get("function")
                         if isinstance(function, dict):
                             if fragment_arguments := function.get("arguments"):
-                                yield index, "arguments", fragment_arguments
+                                yield key, "arguments", fragment_arguments
                         elif function_arguments := getattr(function, "arguments", None):
-                            yield index, "arguments", function_arguments
+                            yield key, "arguments", function_arguments
                         custom = tool_call.get("custom")
                         if isinstance(custom, dict) and (custom_input := custom.get("input")):
-                            yield index, "custom_input", custom_input
+                            yield key, "custom_input", custom_input
                     else:
-                        index = getattr(tool_call, "index", 0)
+                        key = (choice_index, getattr(tool_call, "index", 0))
                         function = getattr(tool_call, "function", None)
                         if object_arguments := getattr(function, "arguments", None):
-                            yield index, "arguments", object_arguments
+                            yield key, "arguments", object_arguments
                         custom = getattr(tool_call, "custom", None)
                         if object_custom_input := getattr(custom, "input", None):
-                            yield index, "custom_input", object_custom_input
+                            yield key, "custom_input", object_custom_input
 
     @staticmethod
-    def _join_fragments_by_index_and_field(
-        fragment_records: Iterator[tuple[int, str, str]],
-    ) -> Mapping[tuple[int, str], str]:
-        def group_key(record: tuple[int, str, str]) -> tuple[int, str]:
+    def _join_fragments_by_key_and_field(
+        fragment_records: Iterator[tuple[_ToolCallKey, str, str]],
+    ) -> Mapping[tuple[_ToolCallKey, str], str]:
+        def group_key(record: tuple[_ToolCallKey, str, str]) -> tuple[_ToolCallKey, str]:
             return record[0], record[1]
 
         return MappingProxyType(
@@ -462,19 +489,16 @@ class ChunkProcessor:
 
     def get_combined_tool_content(
         self, tool_call_chunks: Sequence["_ToolCallChunk"]
-    ) -> list[
-        ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
-    ]:  # mutable-ok: assigned verbatim to Message.tool_calls, a list field
-        tool_calls_list: list[
-            ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
-        ] = []  # mutable-ok: see return type
-        tool_call_map: Final[dict[int, dict[str, Any]]] = {}  # Map to store tool calls by index
+    ) -> list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall]:
+        tool_calls_list: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] = []
+        tool_call_map: Final[dict[_ToolCallKey, dict[str, Any]]] = {}
 
         for chunk in tool_call_chunks:
             choices = chunk["choices"]
             for choice in choices:
                 delta = choice.get("delta", {})
-                tool_calls = delta.get("tool_calls", [])
+                tool_calls = delta.get("tool_calls") or ()
+                choice_index = choice.get("index", 0)
 
                 for tool_call in tool_calls:
                     # Handle both dict and object formats
@@ -496,9 +520,9 @@ class ChunkProcessor:
 
                     # Get index (handle both dict and object)
                     if isinstance(tool_call, dict):
-                        index = tool_call.get("index", 0)
+                        index = (choice_index, tool_call.get("index", 0))
                     else:
-                        index = getattr(tool_call, "index", 0)
+                        index = (choice_index, getattr(tool_call, "index", 0))
 
                     if index not in tool_call_map:
                         tool_call_map[index] = {
@@ -573,7 +597,7 @@ class ChunkProcessor:
                         if isinstance(provider_fields, dict):
                             merged_provider_fields.update(provider_fields)
 
-        joined_fragments: Final = self._join_fragments_by_index_and_field(
+        joined_fragments: Final = self._join_fragments_by_key_and_field(
             self._iter_tool_call_fragments(tool_call_chunks)
         )
 
@@ -673,7 +697,7 @@ class ChunkProcessor:
 
         def _flush_thinking_block() -> None:
             nonlocal current_thinking_text_parts, current_signature
-            if len(current_thinking_text_parts) > 0 and current_signature:
+            if current_signature:
                 thinking_blocks.append(
                     ChatCompletionThinkingBlock(
                         type="thinking",
@@ -833,15 +857,17 @@ class ChunkProcessor:
             UsagePerChunk,
         )
 
-        # # Update usage information if needed
-        prompt_tokens = 0
-        completion_tokens = 0
+        # None means no usage chunk reported the count, which is the only case
+        # calculate_usage() estimates with the tokenizer. An explicit provider 0
+        # is a reported count and stays 0; a reported count is never replaced by
+        # a later chunk's 0 (Ollama sends 0/0 on every chunk before the done one).
+        prompt_tokens: int | None = None
+        completion_tokens: int | None = None
         # Anthropic's `message_start` SSE event carries usage.output_tokens=1 as a
         # cursor/placeholder; the real value only arrives in `message_delta`.
-        # If a stream is cancelled before `message_delta` lands, the last-wins
-        # accumulator below leaves completion_tokens stuck at 1 — which then
-        # bypasses the `completion_tokens or token_counter(...)` fallback in
-        # calculate_usage() because 1 is truthy. Count the completion-bearing
+        # If a stream is cancelled before `message_delta` lands, the accumulator
+        # below leaves completion_tokens stuck at 1, a reported count that
+        # calculate_usage() would keep. Count the completion-bearing
         # usage events so `_reset_anthropic_cursor_completion_tokens` can tell a
         # legitimate single-token reply (Anthropic emits 1 in BOTH message_start
         # AND message_delta, so >=2 events is positive evidence message_delta
@@ -869,17 +895,22 @@ class ChunkProcessor:
 
             if usage_chunk is not None:
                 usage_chunk_dict = self._usage_chunk_calculation_helper(usage_chunk)
-                if usage_chunk_dict["prompt_tokens"] is not None and usage_chunk_dict["prompt_tokens"] > 0:
+                if usage_chunk_dict["prompt_tokens"] is not None and (
+                    usage_chunk_dict["prompt_tokens"] > 0 or prompt_tokens is None
+                ):
                     prompt_tokens = usage_chunk_dict["prompt_tokens"]
-                if usage_chunk_dict["completion_tokens"] is not None and usage_chunk_dict["completion_tokens"] > 0:
+                if usage_chunk_dict["completion_tokens"] is not None and (
+                    usage_chunk_dict["completion_tokens"] > 0 or completion_tokens is None
+                ):
                     completion_tokens = usage_chunk_dict["completion_tokens"]
+                if usage_chunk_dict["completion_tokens"] is not None and usage_chunk_dict["completion_tokens"] > 0:
                     completion_usage_updates += 1
                 if usage_chunk_dict["cache_creation_input_tokens"] is not None and (
-                    usage_chunk_dict["cache_creation_input_tokens"] > 0 or cache_creation_input_tokens is None
+                    _reports_prompt_side_usage(usage_chunk_dict) or cache_creation_input_tokens is None
                 ):
                     cache_creation_input_tokens = usage_chunk_dict["cache_creation_input_tokens"]
                 if usage_chunk_dict["cache_read_input_tokens"] is not None and (
-                    usage_chunk_dict["cache_read_input_tokens"] > 0 or cache_read_input_tokens is None
+                    _reports_prompt_side_usage(usage_chunk_dict) or cache_read_input_tokens is None
                 ):
                     cache_read_input_tokens = usage_chunk_dict["cache_read_input_tokens"]
                 if usage_chunk_dict["completion_tokens_details"] is not None:
@@ -989,10 +1020,10 @@ class ChunkProcessor:
     @staticmethod
     def _reset_anthropic_cursor_completion_tokens(
         chunks: Sequence["_UsageBearingChunk | ModelResponse"],
-        completion_tokens: int,
+        completion_tokens: int | None,
         completion_usage_updates: int,
-    ) -> int:
-        """Reset a stale Anthropic ``message_start`` cursor placeholder to 0.
+    ) -> int | None:
+        """Reset a stale Anthropic ``message_start`` cursor placeholder to unreported.
 
         See the ``completion_usage_updates`` comment in
         ``_calculate_usage_per_chunk``. The accumulated value is NOT a stale
@@ -1000,8 +1031,8 @@ class ChunkProcessor:
         carried a ``finish_reason`` (positive evidence ``message_delta``
         arrived). Otherwise the only completion update we ever saw was the
         Anthropic ``message_start`` cursor, a small placeholder whose magnitude
-        varies per request (1 and 8 both observed live), so reset to 0 and let
-        ``calculate_usage()``'s ``or token_counter(...)`` fallback estimate from
+        varies per request (1 and 8 both observed live), so reset to None and let
+        ``calculate_usage()``'s ``token_counter(...)`` fallback estimate from
         the actually-received text and reasoning instead. Gated on
         ``custom_llm_provider == "anthropic"`` so the heuristic (which encodes
         Anthropic's specific message_start SSE shape) does not silently affect
@@ -1022,7 +1053,7 @@ class ChunkProcessor:
                 custom_llm_provider = hp.get("custom_llm_provider")
 
         if custom_llm_provider == "anthropic":
-            return 0
+            return None
         return completion_tokens
 
     def calculate_usage(
@@ -1057,15 +1088,18 @@ class ChunkProcessor:
         cost: Final[float | None] = calculated_usage_per_chunk["cost"]
 
         try:
-            returned_usage.prompt_tokens = prompt_tokens or (
-                count_prompt_tokens() if count_prompt_tokens else token_counter(model=model, messages=messages)
+            returned_usage.prompt_tokens = (
+                prompt_tokens
+                if prompt_tokens is not None
+                else (count_prompt_tokens() if count_prompt_tokens else token_counter(model=model, messages=messages))
             )
         except Exception:  # don't allow this failing to block a complete streaming response from being returned
             print_verbose("token_counter failed, assuming prompt tokens is 0")
             returned_usage.prompt_tokens = 0
         returned_usage.completion_tokens = (
             completion_tokens
-            or (
+            if completion_tokens is not None
+            else (
                 token_counter(
                     model=model,
                     text=completion_output,
