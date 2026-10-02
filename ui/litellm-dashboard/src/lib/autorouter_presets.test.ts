@@ -859,23 +859,28 @@ describe("autorouter_presets", () => {
   });
 
   describe("buildPresetPrefill", () => {
-    it("preserves JEV settings and drops inactive classifier settings when prefilling", () => {
+    it("preserves Laya settings and drops inactive classifier settings when prefilling", () => {
       const config = {
         tiers: { SIMPLE: ["fast"], MEDIUM: [], COMPLEX: [], REASONING: [] },
-        classifier_type: "jev" as const,
+        classifier_type: "oss_classifier" as const,
         classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
         modality_routing: false,
         modality_pin_override: false,
-        jev_classifier_config: { model: "jev-test", timeout_ms: 4000, circuit_breaker_enabled: false },
+        opensource_classifier_config: {
+          provider: "laya" as const,
+          model: "english",
+          timeout_ms: 4000,
+          circuit_breaker_enabled: false,
+        },
         classifier_llm_config: { model: "stale-judge", timeout_ms: 6000 },
         classifier_context_window_size: 6,
       };
       const prefill = buildPresetPrefill(config, groupsOnly(["fast"]));
       const expectedJevConfig = {
         classifier_type: "jev",
-        jev_classifier_config: config.jev_classifier_config,
+        jev_classifier_config: config.opensource_classifier_config,
         classifier_context_window_size: 6,
         classifier_llm_config: undefined,
       };

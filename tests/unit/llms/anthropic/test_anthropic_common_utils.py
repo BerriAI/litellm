@@ -1984,7 +1984,6 @@ class TestClaudeOpus48AdaptiveThinking:
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
-
     @pytest.mark.parametrize(
         "model",
         [
@@ -2376,3 +2375,132 @@ def test_validate_environment_adds_mid_conversation_output_config_beta(
 
     assert headers.get("anthropic-beta", "").split(",").count(beta) == int(nested_output_config or explicit_beta)
     assert headers["x-api-key"] == FAKE_REGULAR_KEY
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("display", (None, "summarized", "omitted", "updates"))
+@pytest.mark.parametrize("explicit_beta", (False, True))
+def test_validate_environment_adds_thinking_display_updates_beta(display: str | None, explicit_beta: bool) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    from litellm.types.llms.anthropic import ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
+
+    beta: Final = ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
+    headers: Final = AnthropicModelInfo().validate_environment(
+        headers={"anthropic-beta": beta} if explicit_beta else {},
+        model="claude-opus-5",
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        optional_params={"thinking": {"type": "adaptive", "display": display}} if display else {},
+        litellm_params={},
+        api_key=FAKE_REGULAR_KEY,
+    )
+
+    assert headers.get("anthropic-beta", "").split(",").count(beta) == int(display == "updates" or explicit_beta)
+    assert headers["x-api-key"] == FAKE_REGULAR_KEY
+
+
+@pytest.mark.parametrize(
+    ("thinking", "expected"),
+    (
+        (None, False),
+        ({}, False),
+        ("updates", False),
+        ({"display": "updates"}, False),
+        ({"type": "disabled", "display": "updates"}, False),
+        ({"type": "enabled", "display": "updates", "budget_tokens": 1024}, True),
+    ),
+)
+def test_thinking_display_beta_requires_active_thinking(thinking: object, expected: bool) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    from litellm.types.llms.anthropic import ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
+
+    headers: Final = AnthropicModelInfo().validate_environment(
+        headers={},
+        model="claude-opus-5",
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        optional_params={"thinking": thinking},
+        litellm_params={},
+        api_key=FAKE_REGULAR_KEY,
+    )
+
+    assert (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in headers.get("anthropic-beta", "").split(",")) is expected
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("display", "expected_thinking"),
+    (
+        ("summarized", {"type": "adaptive", "display": "summarized"}),
+        ("omitted", {"type": "adaptive", "display": "omitted"}),
+        ("updates", {"type": "adaptive"}),
+    ),
+)
+def test_shared_legacy_thinking_translation_preserves_supported_display(
+    display: str, expected_thinking: dict[str, str]
+) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    optional_params: Final = {
+        "thinking": {"type": "enabled", "budget_tokens": 2048, "display": display},
+    }
+
+    AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+        model="claude-opus-5",
+        optional_params=optional_params,
+        custom_llm_provider="azure_ai",
+    )
+
+    assert optional_params["thinking"] == expected_thinking
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("action", (None, "tool_addition", "tool_removal"))
+@pytest.mark.parametrize("explicit_beta", (False, True))
+def test_validate_environment_adds_tool_changes_beta(action: str | None, explicit_beta: bool) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    from litellm.types.llms.anthropic import ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+
+    beta: Final = ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+    content: Final = (
+        [{"type": action, "tool": {"type": "tool_reference", "name": "mcp__test__ping"}}]
+        if action
+        else "Answer briefly"
+    )
+    headers: Final = AnthropicModelInfo().validate_environment(
+        headers={"anthropic-beta": beta} if explicit_beta else {},
+        model="claude-fable-5-1",
+        messages=[{"role": "user", "content": "Hello"}, {"role": "system", "content": content}],
+        optional_params={},
+        litellm_params={},
+        api_key=FAKE_REGULAR_KEY,
+    )
+
+    assert headers.get("anthropic-beta", "").split(",").count(beta) == int(action is not None or explicit_beta)
+    assert headers["x-api-key"] == FAKE_REGULAR_KEY
+
+
+@pytest.mark.parametrize(
+    ("role", "content"),
+    (
+        ("user", [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]),
+        ("assistant", [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]),
+        ("system", "tool_addition"),
+        ("system", None),
+        ("system", ["tool_addition"]),
+        ("system", [{"type": "tool_reference", "name": "ping"}]),
+        ("system", [{"type": "tool_addition", "tool": {"type": "tool_definition", "definition": {"name": "ping"}}}]),
+    ),
+)
+def test_tool_changes_beta_requires_system_tool_reference(role: str, content: object) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    from litellm.types.llms.anthropic import ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+
+    headers: Final = AnthropicModelInfo().validate_environment(
+        headers={},
+        model="claude-fable-5-1",
+        messages=[{"role": role, "content": content}],
+        optional_params={},
+        litellm_params={},
+        api_key=FAKE_REGULAR_KEY,
+    )
+
+    assert ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER not in headers.get("anthropic-beta", "").split(",")

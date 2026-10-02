@@ -21,6 +21,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
@@ -49,6 +50,9 @@ if TYPE_CHECKING:
 
 REASONING_OPEN_TAG: Final = "<reasoning>"
 REASONING_CLOSE_TAG: Final = "</reasoning>"
+
+_PARAMS_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_PARAMS_LIST_ADAPTER: Final = TypeAdapter(list[str])
 
 CHAT_COMPLETIONS_REFUSED_PARAMS_BY_FAMILY: Final = MappingProxyType(
     {
@@ -309,9 +313,12 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         aws_region_name: Final = self._aws_signer._get_aws_region_name(  # pyright: ignore[reportPrivateUsage]  # BaseAWSLLM has no public region resolver
             optional_params=self._params_with_region_from_path(optional_params, model), model=model
         )
+        configured_runtime_endpoint: Final = optional_params.get("aws_bedrock_runtime_endpoint")
         _, proxy_endpoint_url = self._aws_signer.get_runtime_endpoint(
             api_base=api_base,
-            aws_bedrock_runtime_endpoint=optional_params.get("aws_bedrock_runtime_endpoint"),
+            aws_bedrock_runtime_endpoint=(
+                configured_runtime_endpoint if isinstance(configured_runtime_endpoint, str) else None
+            ),
             aws_region_name=aws_region_name,
         )
         base: Final = proxy_endpoint_url.rstrip("/")
@@ -327,7 +334,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         region_from_path, _ = split_bedrock_region_path(model or "")
         if region_from_path is None or optional_params.get("aws_region_name") is not None:
             return optional_params
-        return {**optional_params, "aws_region_name": region_from_path}  # mutable-ok: BaseAWSLLM takes a plain dict
+        return {**optional_params, "aws_region_name": region_from_path}
 
     def sign_request(
         self,
@@ -360,20 +367,23 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = False,
     ) -> dict:  # mutable-ok: BaseConfig signature
-        mapped: Final = super().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=drop_params,
-            replace_max_completion_tokens_with_max_tokens=replace_max_completion_tokens_with_max_tokens,
+        mapped: Final = _PARAMS_DICT_ADAPTER.validate_python(
+            super().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params,
+                replace_max_completion_tokens_with_max_tokens=replace_max_completion_tokens_with_max_tokens,
+            )
         )
-        malformed_effort: Final = non_string_reasoning_effort(non_default_params)
-        refused_while_reasoning: Final = chat_completions_params_refused_while_reasoning(model, non_default_params)
+        raw_params: Final = _PARAMS_DICT_ADAPTER.validate_python(non_default_params)
+        malformed_effort: Final = non_string_reasoning_effort(raw_params)
+        refused_while_reasoning: Final = chat_completions_params_refused_while_reasoning(model, raw_params)
         if malformed_effort and not (litellm.drop_params or drop_params):
             raise litellm.utils.UnsupportedParamsError(
                 message=(
                     f"{model} takes reasoning_effort as a string on Bedrock's Chat Completions endpoint, not "
-                    f"{type(non_default_params['reasoning_effort']).__name__}. Send one of its named efforts, or "
+                    f"{type(raw_params['reasoning_effort']).__name__}. Send one of its named efforts, or "
                     "set `litellm.drop_params = True` to drop it"
                 ),
                 status_code=400,
@@ -387,7 +397,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
                 ),
                 status_code=400,
             )
-        return dict(  # mutable-ok: get_optional_params keeps filling this dict
+        return dict(
             without_refused_reasoning_effort(
                 model,
                 with_max_completion_tokens(_without_params(mapped, refused_while_reasoning | malformed_effort)),
@@ -397,7 +407,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
     def _inference_params(
         self, optional_params: Mapping[str, object]
     ) -> dict[str, object]:  # mutable-ok: BaseConfig signature of transform_request
-        return {  # mutable-ok: OpenAILikeChatConfig.transform_request takes a plain dict
+        return {
             key: value
             for key, value in optional_params.items()
             if key not in self._aws_signer.aws_authentication_params
@@ -411,10 +421,11 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         litellm_params: dict,  # mutable-ok: BaseConfig signature
         headers: dict,  # mutable-ok: BaseConfig signature
     ) -> dict:  # mutable-ok: BaseConfig signature
+        optional_params_view: Final = _PARAMS_DICT_ADAPTER.validate_python(optional_params)
         return super().transform_request(
             model=split_bedrock_region_path(model)[1],
             messages=inline_remote_media(messages, should_inline=inline_remote_image_urls),
-            optional_params=self._inference_params(optional_params),
+            optional_params=self._inference_params(optional_params_view),
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -427,10 +438,11 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         litellm_params: dict,  # mutable-ok: BaseConfig signature
         headers: dict,  # mutable-ok: BaseConfig signature
     ) -> dict:  # mutable-ok: BaseConfig signature
+        optional_params_view: Final = _PARAMS_DICT_ADAPTER.validate_python(optional_params)
         return await super().async_transform_request(
             model=split_bedrock_region_path(model)[1],
             messages=await async_inline_remote_media(messages, should_inline=inline_remote_image_urls),
-            optional_params=self._inference_params(optional_params),
+            optional_params=self._inference_params(optional_params_view),
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -477,7 +489,9 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseConfig signature
         refused: Final = frozenset(("n", *chat_completions_params_refused_for(model)))
         base_params: Final = tuple(
-            param for param in super().get_supported_openai_params(model) if param not in refused
+            param
+            for param in _PARAMS_LIST_ADAPTER.validate_python(super().get_supported_openai_params(model))
+            if param not in refused
         )
         reasoning_param: Final = (
             ("reasoning_effort",)
@@ -485,7 +499,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             and litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider)
             else ()
         )
-        return [*base_params, *reasoning_param]  # mutable-ok: BaseConfig signature returns a list
+        return [*base_params, *reasoning_param]
 
     def get_model_response_iterator(
         self,

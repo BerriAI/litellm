@@ -189,9 +189,7 @@ def _provider_hidden_params(
     hidden: Final[object] = getattr(chunk, "_hidden_params", None)
     parsed: Final = _parsed_provider_hidden_params(hidden)
     provider_specific_fields: Final[object | None] = (
-        dict(parsed.provider_specific_fields)  # mutable-ok: stream assembly merges provider metadata into this dict
-        if parsed is not None and parsed.provider_specific_fields
-        else None
+        dict(parsed.provider_specific_fields) if parsed is not None and parsed.provider_specific_fields else None
     )
     params: Final[Mapping[str, object]] = MappingProxyType(
         {
@@ -1106,7 +1104,7 @@ class CustomStreamWrapper:
         self,
         chunk: Any,
         model_response: ModelResponseStream,
-        completion_obj: dict[str, Any],
+        completion_obj: dict[str, object],
     ) -> _ProviderChunkResult:
         response_obj: dict[str, Any] = {}
         if (

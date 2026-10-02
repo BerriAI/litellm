@@ -9,6 +9,9 @@ import type { Span, TraceMessage, TraceSummary } from "./traceTypes";
 /*  Formatting                                                         */
 /* ------------------------------------------------------------------ */
 
+export const traceAgentNames = (trace: TraceSummary): readonly string[] =>
+  trace.agent_names ?? (trace.service ? [trace.service] : []);
+
 export const fmtMs = (ms: number): string => {
   if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}m`;
   if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`;
@@ -267,16 +270,44 @@ export const parseJson = (value: string): unknown => {
   }
 };
 
-const isMessage = (value: unknown): value is TraceMessage => {
-  const isObject = typeof value === "object" && value !== null;
-  return isObject && "role" in value && typeof (value as TraceMessage).role === "string";
+const blockText = (block: unknown): string | null => {
+  if (typeof block !== "object" || block === null) return null;
+  const text: unknown =
+    Reflect.get(block, "text") ?? (Reflect.get(block, "type") === "text" ? Reflect.get(block, "content") : undefined);
+  return typeof text === "string" ? text : null;
+};
+
+const NON_TEXT_BLOCKS: ReadonlySet<unknown> = new Set(["reasoning", "function_call", "tool_use", "tool_call"]);
+
+const blockType = (block: unknown): unknown =>
+  typeof block === "object" && block !== null ? Reflect.get(block, "type") : undefined;
+
+const isKnownBlock = (block: unknown): boolean => blockText(block) !== null || NON_TEXT_BLOCKS.has(blockType(block));
+
+/** Block-list content (reasoning / function_call / text blocks) as its text; unknown content unchanged. */
+export function messageText(content: string): string {
+  if (!content.startsWith("[")) return content;
+  const blocks = parseJson(content);
+  if (!Array.isArray(blocks) || blocks.length === 0 || !blocks.every(isKnownBlock)) return content;
+  return blocks
+    .map(blockText)
+    .filter((text): text is string => text !== null)
+    .join("\n\n");
+}
+
+const parseMessage = (value: unknown): TraceMessage | null => {
+  if (typeof value !== "object" || value === null) return null;
+  const role: unknown = Reflect.get(value, "role");
+  const content: unknown = Reflect.get(value, "content") ?? Reflect.get(value, "parts");
+  if (typeof role !== "string" || (typeof content !== "string" && !Array.isArray(content))) return null;
+  return { ...value, role, content: messageText(typeof content === "string" ? content : JSON.stringify(content)) };
 };
 
 /** An llm span's input (array of messages) or output (one message); null when it isn't one. */
 export function parseMessages(value: string): TraceMessage[] | null {
   const parsed = parseJson(value);
-  if (Array.isArray(parsed)) return parsed.every(isMessage) ? parsed : null;
-  return isMessage(parsed) ? [parsed] : null;
+  const messages = (Array.isArray(parsed) ? parsed : [parsed]).map(parseMessage);
+  return messages.every((message) => message !== null) ? messages : null;
 }
 
 /** Pretty JSON when the payload is JSON, else the raw string. */
@@ -297,18 +328,56 @@ const PREVIEW_USER_CONTENT =
  * Human text for an input preview. Previews are often a (possibly truncated) JSON
  * message array; show the last user/tool message's content when we can find it.
  */
+const decodeJsonString = (escaped: string): string => {
+  const complete = escaped.replace(/\\u[0-9a-fA-F]{0,3}$|\\$/, "");
+  const parsed = parseJson(`"${complete}"`);
+  return typeof parsed === "string" ? parsed : complete;
+};
+
 export function previewText(preview: string): string {
-  if (!preview) return "";
+  if (!preview || /^\s*\[\s*\]\s*$/.test(preview)) return "";
   const messages = parseMessages(preview);
   if (messages) {
     const last = [...messages].reverse().find((m) => m.role === "user" || m.role === "tool") ?? messages.at(-1);
-    return last?.content || preview;
+    return last?.content || "";
   }
   if (!/^\s*[[{]/.test(preview)) return preview;
   const match = PREVIEW_USER_CONTENT.exec(preview);
-  return match ? match[1].replace(/\\n/g, " ").replace(/\\"/g, '"') : preview;
+  return match ? decodeJsonString(match[1]).replace(/\s+/g, " ") : preview;
 }
 
 /** Trace display name; root spans without a name fall back to the service. */
 export const traceDisplayName = (summary: Pick<TraceSummary, "name" | "service">): string =>
   summary.name || summary.service || "(unnamed trace)";
+
+/* ------------------------------------------------------------------ */
+/*  Tree connector guides                                              */
+/* ------------------------------------------------------------------ */
+
+export interface TreeGuide {
+  /** Per ancestor level 1..depth-1: whether that ancestor has a later sibling, so its rail continues. */
+  rails: readonly boolean[];
+  /** Last child of its parent: the elbow ends here instead of continuing down. */
+  last: boolean;
+  /** The next row is this row's child, so a stem runs down from this row's tile. */
+  stem: boolean;
+}
+
+/** Rail / elbow / stem flags for each row from row depths alone, in one backward pass. */
+export function treeGuides(depths: readonly number[]): TreeGuide[] {
+  const levels: boolean[] = [];
+  return depths
+    .map((depth, i) => ({ depth, i }))
+    .reverse()
+    .map(({ depth, i }) => {
+      const guide: TreeGuide = {
+        rails: Array.from({ length: Math.max(0, depth - 1) }, (_, k) => levels[k + 1] === true),
+        last: levels[depth] !== true,
+        stem: (depths[i + 1] ?? -1) > depth,
+      };
+      levels.length = depth;
+      levels[depth] = true;
+      return guide;
+    })
+    .reverse();
+}

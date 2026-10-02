@@ -112,11 +112,13 @@ from litellm.litellm_core_utils.served_output_texts import (
     SERVED_OUTPUT_TEXTS_KEY,
     overlay_served_output_texts,
 )
+from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
+from litellm.types.integrations.s3_v2 import S3PartitionGranularity
 from litellm.types.interactions import (
     InteractionsAPIResponse,
     InteractionsAPIStreamingResponse,
@@ -174,7 +176,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.types.videos.main import VideoObject
-from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
+from litellm.utils import _get_base_model_from_metadata, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
@@ -696,7 +698,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.caching_details: CachingDetails | None = None
         # Timing for results that cannot carry ``_hidden_params`` (plain-dict /v1/messages
         # responses and the bridge stream wrappers); see ``update_response_metadata``.
-        self.response_timing_metrics: Mapping[str, float] = {}  # mutable-ok: kept deep-copyable
+        self.response_timing_metrics: Mapping[str, float] = {}
 
         # Passthrough endpoint guardrails config for field targeting
         self.passthrough_guardrails_config: dict[str, object] | None = None
@@ -720,7 +722,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
-        self.response_timing_metrics = dict(timing_metrics)  # mutable-ok: kept deep-copyable
+        self.response_timing_metrics = dict(timing_metrics)
 
     def add_dynamic_callback(self, callback: CustomLogger) -> None:
         self.dynamic_input_callbacks = self._with_dynamic_callback(self.dynamic_input_callbacks, callback)
@@ -3969,7 +3971,7 @@ class Logging(LiteLLMLoggingBaseClass):
         result: object,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
-        cache_hit: object | None = None,
+        cache_hit: bool | None = None,
     ) -> None:
         """
         Handles calling success callbacks for Async calls.
@@ -4143,7 +4145,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if result.status == "completed":
             return InteractionsAPIResponse.model_validate(
                 result.model_dump(
-                    exclude={  # mutable-ok: pydantic types exclude as set[str], which a frozenset does not satisfy
+                    exclude={
                         "event_type",
                         "delta",
                         "index",
@@ -5246,9 +5248,7 @@ def _has_operator_exporter(config: "OpenTelemetryV2Config") -> bool:
 
 
 def _only_the_gated_exporter(config: "OpenTelemetryV2Config") -> "OpenTelemetryV2Config":
-    return config.model_copy(
-        update={"exporters": [spec for spec in config.exporters if _is_gated(spec)]}  # mutable-ok: model_copy update
-    )
+    return config.model_copy(update={"exporters": [spec for spec in config.exporters if _is_gated(spec)]})
 
 
 def _is_gated(spec: "ExporterSpec") -> bool:
@@ -5720,7 +5720,7 @@ class StandardLoggingPayloadSetup:
                 if key not in user_metadata
             }
         )
-        return {**user_metadata, **model_metadata}  # mutable-ok: function contract returns a plain dict
+        return {**user_metadata, **model_metadata}
 
     @staticmethod
     def get_standard_logging_metadata(
@@ -6059,6 +6059,7 @@ class StandardLoggingPayloadSetup:
 
             # Get the actual s3_path from the configured cold storage logger instance
             s3_path = ""  # default value
+            partition_granularity: S3PartitionGranularity = "day"
 
             # Try to get the actual logger instance from the logger name
             try:
@@ -6067,6 +6068,8 @@ class StandardLoggingPayloadSetup:
                 )
                 if custom_logger and hasattr(custom_logger, "s3_path") and getattr(custom_logger, "s3_path"):
                     s3_path = getattr(custom_logger, "s3_path")
+                if isinstance(custom_logger, S3V2Logger):
+                    partition_granularity = custom_logger.resolve_partition_granularity()
             except Exception:
                 # If any error occurs in getting the logger instance, use default empty s3_path
                 pass
@@ -6076,6 +6079,7 @@ class StandardLoggingPayloadSetup:
                 prefix="",  # Don't split by team alias for cold storage
                 start_time=start_time,
                 s3_file_name=s3_file_name,
+                partition_granularity=partition_granularity,
             )
 
             return s3_object_key
@@ -6578,9 +6582,7 @@ def get_standard_logging_object_payload(
         if clean_hidden_params["litellm_overhead_time_ms"] is None and status == "success":
             # /v1/messages dict results and the bridge stream wrappers keep it on the logging object;
             # failure payloads stay None like every response type that carries its own _hidden_params
-            timing_metrics: Final = (
-                getattr(logging_obj, "response_timing_metrics", None) or {}  # mutable-ok: empty fallback
-            )
+            timing_metrics: Final = getattr(logging_obj, "response_timing_metrics", None) or {}
             clean_hidden_params["litellm_overhead_time_ms"] = timing_metrics.get("litellm_overhead_time_ms")
 
         model_cost_information: Final = StandardLoggingPayloadSetup.get_model_cost_information(
@@ -6695,14 +6697,14 @@ def get_standard_logging_object_payload(
             cost_breakdown=request_cost_breakdown,
             autorouter_savings=autorouter_savings,
             autorouter_savings_estimate=(
-                {  # mutable-ok: spend-log JSON serialization requires plain mappings
+                {
                     "version": 3,
                     "status": "unknown",
                     "reason": "pending_projection",
                 }
                 if captured_baseline is not None
                 else (
-                    {  # mutable-ok: spend-log JSON serialization requires plain mappings
+                    {
                         "version": 1,
                         "status": "estimated" if autorouter_savings is not None else "unknown",
                         "reason": "uncached_usage" if autorouter_savings is not None else "baseline_unavailable",

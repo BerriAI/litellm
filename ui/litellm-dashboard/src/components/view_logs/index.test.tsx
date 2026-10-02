@@ -65,13 +65,13 @@ describe("SpendLogsTable", () => {
     useOrganizationsMock.mockReturnValue({ data: [] });
   });
 
-  it("renders the log tabs, with Agent Traces marked new and Request Logs selected", () => {
+  it("keeps request and audit logs here while traces live in Lens", () => {
     renderAs("Admin");
 
     for (const label of ["Request Logs", "Audit Logs", "Deleted Keys", "Deleted Teams"]) {
       expect(screen.getByRole("tab", { name: label })).toBeInTheDocument();
     }
-    expect(screen.getByRole("tab", { name: /Agent Traces/ })).toHaveTextContent("New");
+    expect(screen.queryByRole("tab", { name: /Agent Traces/ })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Request Logs" })).toHaveAttribute("aria-selected", "true");
   });
 
@@ -117,7 +117,7 @@ describe("SpendLogsTable", () => {
     it("does not hand an org admin the Audit Logs tab, which the backend still refuses them", () => {
       renderAs("Internal User", ORG_ADMIN_MEMBERSHIPS);
 
-      expect(tabNames()).toEqual(["Request Logs", "Agent TracesNew", "Deleted Keys", "Deleted Teams"]);
+      expect(tabNames()).toEqual(["Request Logs", "Deleted Keys", "Deleted Teams"]);
       expect(screen.queryByTestId("audit-logs-panel")).not.toBeInTheDocument();
     });
 
@@ -126,7 +126,7 @@ describe("SpendLogsTable", () => {
         { organization_id: "org-1", members: [{ user_id: "user-1", user_role: "internal_user" }] },
       ]);
 
-      expect(tabNames()).toEqual(["Request Logs", "Agent TracesNew", "Deleted Keys"]);
+      expect(tabNames()).toEqual(["Request Logs", "Deleted Keys"]);
     });
 
     it("activates the org admin's selected tab rather than the one at the four-tab index", async () => {
