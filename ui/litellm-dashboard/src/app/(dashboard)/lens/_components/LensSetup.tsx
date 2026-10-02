@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -12,18 +13,25 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { ActivityScope, type ActivitySelection } from "./ActivityScope";
-import {
-  analysisModelOptions,
-  durationLabel,
-  normalizeFilters,
-  starterQuestions,
-  type AnalysisModelInfo,
-  type Settings,
-} from "./lensData";
-
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { DurationInput } from "./DurationInput";
+import { ActivityScope, type ActivitySelection } from "./ActivityScope";
+import { analysisModelOptions, normalizeFilters, type AnalysisModelInfo, type Settings } from "./lensData";
+
+function validateSample(selection: ActivitySelection) {
+  const hours = selection.lookback_hours ?? 24;
+  if (!Number.isInteger(hours) || hours < 1 || hours > 8760)
+    throw new Error("Choose a time range between 1 hour and 365 days");
+  const percent = selection.sample_percent ?? 100;
+  if (!Number.isFinite(percent) || percent <= 0 || percent > 100)
+    throw new Error("Choose a sampling percentage greater than 0 and up to 100");
+  if (selection.sample_size != null && (!Number.isInteger(selection.sample_size) || selection.sample_size < 1))
+    throw new Error("Choose a positive maximum or leave it blank for no limit");
+}
+
+function newCheck(instruction = ""): Settings["checks"][number] {
+  return { id: crypto.randomUUID(), instruction, enabled: true };
+}
 
 export function LensSetup({
   initial,
@@ -32,7 +40,10 @@ export function LensSetup({
   modelDetails = [],
   modelsLoading = false,
   modelsError,
+  defaultModel,
+  defaultSource = "traces",
   accessToken,
+  ready = true,
   onClose,
   onSave,
 }: {
@@ -42,300 +53,345 @@ export function LensSetup({
   modelDetails?: AnalysisModelInfo[];
   modelsLoading?: boolean;
   modelsError?: string;
+  defaultModel?: string;
+  defaultSource?: Settings["source"];
   accessToken: string;
+  ready?: boolean;
   onClose: () => void;
   onSave: (settings: Settings) => Promise<void>;
 }) {
   const [step, setStep] = useState(0);
+  const [previewReady, setPreviewReady] = useState(false);
+  const [manualSelection, setManualSelection] = useState(!!initial?.execution_ids?.length);
   const [name, setName] = useState(initial?.name ?? "");
-  const [source, setSource] = useState<Settings["source"]>(initial?.source ?? "traces");
-  const [lookback, setLookback] = useState(initial?.lookback_hours ?? 24);
-  const [service, setService] = useState(initial?.service ?? "");
-  const [filters, setFilters] = useState<NonNullable<Settings["filters"]>>(initial?.filters ?? []);
+  const initialSelection: Required<ActivitySelection> = {
+    source: initial?.source ?? defaultSource,
+    service: initial?.service ?? "",
+    agent_name: initial?.agent_name ?? "",
+    filters: initial?.filters ?? [],
+    lookback_hours: initial?.lookback_hours ?? 24,
+    sample_size: initial?.sample_size ?? null,
+    sample_percent: initial?.sample_percent ?? 100,
+    team_id: initial?.team_id ?? "",
+    execution_ids: initial?.execution_ids ?? [],
+  };
+  const [selection, setSelection] = useState(initialSelection);
   const [context, setContext] = useState(initial?.context ?? "");
-  const [questions, setQuestions] = useState(
-    initial?.checks?.map((c) => c.instruction).join("\n") ?? starterQuestions.join("\n"),
-  );
-  const [model, setModel] = useState(initial?.model ?? "");
-  const [enabled, setEnabled] = useState(initial?.enabled ?? false);
-  const [budget, setBudget] = useState(initial?.monthly_budget ?? 20);
-  const [sampleSize, setSampleSize] = useState<number | null>(initial?.sample_size ?? null);
-  const [samplePercent, setSamplePercent] = useState(initial?.sample_percent ?? 100);
-  const [concurrency, setConcurrency] = useState(initial?.concurrency ?? 8);
-  const [team, setTeam] = useState(initial?.team_id ?? "");
-  const [executionIds, setExecutionIds] = useState(initial?.execution_ids ?? []);
-  const [interval, setInterval] = useState(initial?.interval_minutes ?? 15);
+  const [questions, setQuestions] = useState(() => (initial?.checks?.length ? initial.checks : [newCheck()]));
+  const [selectedModel, setModel] = useState<string | null>(initial?.model ?? null);
+  const model = selectedModel ?? defaultModel ?? "";
+  const [budget, setBudget] = useState(initial?.monthly_budget ?? 100);
+  const [repeat, setRepeat] = useState(mode === "edit" && !!initial?.enabled);
+  const [interval, setInterval] = useState(initial?.interval_minutes ?? 30);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-
-  const reviewUnit = { traces: "runs", requests: "requests", both: "runs and requests" }[source];
-
-  const settings = (): Settings => ({
-    name: name.trim(),
-    source,
-    lookback_hours: lookback,
-    service: service.trim(),
-    context,
-    filters: normalizeFilters(filters),
-    model,
-    enabled,
-    monthly_budget: budget,
-    sample_size: sampleSize,
-    sample_percent: samplePercent,
-    concurrency,
-    team_id: team,
-    execution_ids: executionIds,
-    interval_minutes: interval,
-    checks: questions
-      .split("\n")
-      .filter((q) => q.trim())
-      .map((instruction) => {
-        const previous = initial?.checks?.find((c) => c.instruction === instruction.trim());
-        return previous ?? { id: crypto.randomUUID(), instruction: instruction.trim(), enabled: true };
-      }),
-  });
-  const execute = async (action: () => Promise<void>) => {
+  const filledChecks = questions.filter((check) => check.instruction.trim());
+  const suggestedName = filledChecks[0]?.instruction.trim() || context.trim().split("\n")[0] || "Investigation";
+  const title = name.trim() || suggestedName.slice(0, 100);
+  const changeSelection = (next: ActivitySelection) => {
+    const pool = (s: ActivitySelection) =>
+      JSON.stringify([s.source, s.service, s.agent_name, s.filters, s.lookback_hours, s.team_id]);
+    setSelection({
+      ...selection,
+      ...next,
+      execution_ids: pool(next) === pool(selection) ? next.execution_ids ?? [] : [],
+    });
+  };
+  const validate = () => {
+    normalizeFilters(selection.filters ?? []);
+    if (step >= 2 && manualSelection && !selection.execution_ids?.length)
+      throw new Error("Choose at least one run or turn off individual selection");
+    validateSample(selection);
+    if (step >= 1 && !context.trim() && !filledChecks.length)
+      throw new Error("Describe the expected behavior or what to look out for");
+    if (filledChecks.some((check) => check.instruction.trim().length < 3))
+      throw new Error("Use at least three characters for each check");
+  };
+  const next = () => {
+    try {
+      validate();
+      setError("");
+      setStep(step + 1);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Check your settings");
+    }
+  };
+  const save = async () => {
     setBusy(true);
     setError("");
     try {
-      await action();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong");
+      validate();
+      const settings: Settings = {
+        ...initial,
+        ...selection,
+        name: title,
+        context: context.trim(),
+        model,
+        monthly_budget: budget,
+        enabled: repeat,
+        interval_minutes: interval,
+        concurrency: initial?.concurrency ?? 8,
+        filters: normalizeFilters(selection.filters ?? []),
+        checks: filledChecks.map((check) => ({ ...check, instruction: check.instruction.trim() })),
+      };
+      await onSave(settings);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save investigation");
     } finally {
       setBusy(false);
     }
   };
-  const next = () => {
-    try {
-      normalizeFilters(filters);
-      if (!Number.isInteger(lookback) || lookback < 1 || lookback > 720)
-        throw new Error("Choose a history window between 1 and 720 hours");
-      if (!Number.isFinite(samplePercent) || samplePercent <= 0 || samplePercent > 100)
-        throw new Error("Choose a sampling percentage greater than 0 and up to 100");
-      if (sampleSize != null && (!Number.isInteger(sampleSize) || sampleSize < 1))
-        throw new Error("Choose a positive maximum or leave it blank for no limit");
-      if (!name.trim()) throw new Error("Give this lens a name");
-      if (step === 0 && !questions.trim() && !context.trim())
-        throw new Error("Describe expected behavior or add a check");
-      setError("");
-      setStep(step + 1);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Check your settings");
-    }
-  };
-
-  const changeSelection = (selection: ActivitySelection) => {
-    setSampleSize(selection.sample_size ?? null);
-    setSamplePercent(selection.sample_percent ?? 100);
-    setTeam(selection.team_id ?? "");
-    const previousPool = [source, service, lookback, team, filters];
-    const nextPool = [
-      selection.source,
-      selection.service ?? "",
-      selection.lookback_hours ?? 24,
-      selection.team_id ?? "",
-      selection.filters ?? [],
-    ];
-    const poolChanged = JSON.stringify(previousPool) !== JSON.stringify(nextPool);
-    setExecutionIds(poolChanged ? [] : selection.execution_ids ?? []);
-    setSource(selection.source);
-    setLookback(selection.lookback_hours ?? 24);
-    setService(selection.service ?? "");
-    setFilters(selection.filters ?? []);
-  };
-  const saveLabel = () => {
-    if (busy) return "Saving…";
-    if (mode === "edit") return "Save changes";
-    return enabled ? "Start monitoring" : "Run analysis";
-  };
-  const validConcurrency = Number.isInteger(concurrency) && concurrency >= 1;
-  const validInterval = Number.isInteger(interval) && interval >= 1 && interval <= 10080;
-  const validSchedule = !enabled || validInterval;
-  const validBudget = Number.isFinite(budget) && budget > 0;
-  const unsupportedModel = modelDetails.some((item) => item.model_group === model && item.mode && item.mode !== "chat");
-  const validAnalysis = validBudget && validConcurrency && !!model;
+  const unsupported = modelDetails.some((m) => m.model_group === model && m.mode && m.mode !== "chat");
+  const budgetValid = Number.isFinite(budget) && budget > 0 && budget <= 100000;
+  const canRun = ready || mode === "edit";
+  const modelsReady = !modelsLoading && !modelsError;
+  const unavailable = !!model && modelsReady && !models.includes(model);
+  const supported = !unsupported && !unavailable;
+  const preservingSavedModel = mode === "edit" && model === initial?.model;
+  const modelReady = modelsReady || preservingSavedModel;
+  const modelValid = !!model && supported && modelReady;
+  const intervalRangeValid = interval >= 1 && interval <= 10080;
+  const intervalValid = !repeat || (Number.isInteger(interval) && intervalRangeValid);
+  const configurationValid = modelValid && budgetValid && intervalValid;
+  const runReady = canRun && (mode === "edit" || previewReady);
+  const selectionValid = !manualSelection || !!selection.execution_ids?.length;
+  const validSettings = configurationValid && selectionValid;
+  const canSave = !busy && runReady && validSettings;
+  const createLabel = repeat ? "Run and monitor" : "Run investigation";
+  const saveLabel = mode === "edit" ? "Save changes" : createLabel;
+  const headings = [
+    "Which activity should we investigate?",
+    "What should Lens look for?",
+    mode === "edit" ? "Review changes" : "Ready to investigate",
+  ];
   return (
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (!open && !busy) onClose();
       }}
     >
-      <DialogContent className="sm:max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
+      <DialogContent
+        className={`flex max-h-[90dvh] flex-col gap-6 overflow-hidden ${step === 2 ? "sm:max-w-3xl" : "sm:max-w-xl"}`}
+      >
         <DialogHeader>
-          <DialogTitle>{{ edit: "Edit lens", duplicate: "Duplicate lens", new: "Set up a lens" }[mode]}</DialogTitle>
-          <DialogDescription>
+          <DialogTitle className="text-xl">{headings[step]}</DialogTitle>
+          <DialogDescription className="sr-only">
             {
               [
-                "Describe how your agent should work",
-                "Choose which activity to analyze",
-                "Review your selection and start analysis",
+                "Start with an agent, or use filters to investigate any recorded activity.",
+                "Describe the expected behavior, the questions you have, or both.",
+                "Review the selected activity, then start your investigation.",
               ][step]
             }
           </DialogDescription>
         </DialogHeader>
-        <div className="flex gap-2" aria-label={`Step ${step + 1} of 3`}>
-          {["Expectations", "Activity", "Review & run"].map((label, i) => (
-            <div
+        <nav aria-label="Investigation setup" className="flex gap-2 text-xs">
+          {["Activity", "Expectations", "Run"].map((label, index) => (
+            <button
               key={label}
-              className={`flex-1 border-t-2 pt-2 text-xs ${i <= step ? "border-foreground text-foreground" : "border-border text-muted-foreground"}`}
+              disabled={index > step || busy}
+              aria-current={index === step ? "step" : undefined}
+              onClick={() => {
+                setStep(index);
+                setError("");
+              }}
+              className={`flex-1 border-t-2 pt-2 text-left ${index === step ? "border-foreground font-medium" : "border-border text-muted-foreground"}`}
             >
-              {i + 1}. {label}
-            </div>
+              {index + 1}. {label}
+            </button>
           ))}
-        </div>
-        <div className="min-h-0 overflow-y-auto space-y-4 pr-1">
-          {step === 0 && (
-            <>
-              <label className="grid gap-2 text-sm">
-                Name
-                <Input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Research quality"
-                  maxLength={100}
-                />
-              </label>
-            </>
+        </nav>
+        <div className="min-h-0 overflow-y-auto pr-1 space-y-5">
+          {(step === 0 || step === 2) && (
+            <ActivityScope
+              key={step}
+              value={selection}
+              onChange={changeSelection}
+              accessToken={accessToken}
+              nameField={
+                step === 0 ? (
+                  <label className="grid gap-2 text-sm font-medium">
+                    Investigation name
+                    <Input
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="e.g. Support quality"
+                      maxLength={100}
+                    />
+                  </label>
+                ) : undefined
+              }
+              mode={step === 0 ? "scope" : "activity"}
+              onPreviewReady={setPreviewReady}
+              manualSelection={manualSelection}
+            />
           )}
-          {step === 0 && (
+          {step === 1 && (
             <>
-              <label className="grid gap-2 text-sm">
-                What does a good run look like?
+              <label className="grid gap-2 text-sm font-medium">
+                What should the agent be doing?
                 <Textarea
                   value={context}
                   onChange={(e) => setContext(e.target.value)}
-                  rows={3}
-                  placeholder="Our swarm researches a question and produces a cited report that incorporates the fact-checker's corrections."
+                  maxLength={6000}
+                  rows={4}
+                  placeholder="Answer the customer's question using verified sources and explain when information is missing."
                 />
               </label>
-              <label className="grid gap-2 text-sm">
-                Specific checks (optional)
-                <Textarea value={questions} onChange={(e) => setQuestions(e.target.value)} rows={7} />
-              </label>
-              <p className="text-xs text-muted-foreground">
-                One instruction per line. Ask about usage patterns, successful behavior, or a specific problem. Findings
-                include evidence from your runs.
-              </p>
+              <fieldset className="space-y-3">
+                <legend className="mb-2 text-sm font-medium">What should we look out for?</legend>
+                {questions.map((check, index) => (
+                  <div key={check.id} className="flex items-start gap-2">
+                    <Textarea
+                      aria-label={`Check ${index + 1}`}
+                      value={check.instruction}
+                      onChange={(event) =>
+                        setQuestions(
+                          questions.map((item) =>
+                            item.id === check.id ? { ...item, instruction: event.target.value } : item,
+                          ),
+                        )
+                      }
+                      rows={2}
+                      placeholder="e.g. Repeated searches that add no useful information"
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Remove check ${index + 1}`}
+                      onClick={() => setQuestions(questions.filter((item) => item.id !== check.id))}
+                    >
+                      <X className="size-4" />
+                    </Button>
+                  </div>
+                ))}
+                <Button variant="outline" size="sm" onClick={() => setQuestions([...questions, newCheck()])}>
+                  <Plus className="size-3.5" /> Add check
+                </Button>
+              </fieldset>
+              {(!context.trim() || !filledChecks.length) && (
+                <Button
+                  variant="link"
+                  className="h-auto px-0"
+                  onClick={() => {
+                    if (!context.trim())
+                      setContext(
+                        "Answer the user's question using verified sources. Explain when information is missing.",
+                      );
+                    if (!filledChecks.length)
+                      setQuestions([
+                        newCheck("Find repeated work that adds no useful information."),
+                        newCheck("Find claims that contradict the available evidence."),
+                      ]);
+                  }}
+                >
+                  Use an example
+                </Button>
+              )}
             </>
-          )}
-          {step === 1 && (
-            <ActivityScope
-              accessToken={accessToken}
-              value={{
-                source,
-                service,
-                filters,
-                lookback_hours: lookback,
-                sample_size: sampleSize,
-                sample_percent: samplePercent,
-                team_id: team,
-                execution_ids: executionIds,
-              }}
-              onChange={changeSelection}
-            />
           )}
           {step === 2 && (
             <>
-              <div className="rounded-lg border p-4 text-sm space-y-2">
-                <p className="font-medium">{name}</p>
-                <p>
-                  {source === "requests" ? "LLM requests" : "Agent runs"} · {service || "All activity"} ·{" "}
-                  {`Last ${durationLabel(lookback, "hours")}`}
-                </p>
-                {filters.map((f) => (
-                  <p key={f.key} className="text-muted-foreground">
-                    {f.key} is {f.value}
-                  </p>
-                ))}
-                <p className="text-muted-foreground">
-                  {samplePercent}% of matching {reviewUnit}
-                  {sampleSize ? `, up to ${sampleSize}` : ", no count limit"} ·{" "}
-                  {questions.split("\n").filter((q) => q.trim()).length} questions
-                </p>
-              </div>
-              <div className="space-y-2">
-                <p className="text-sm">Analysis model</p>
-                <SearchSelect
-                  aria-label="Analysis model"
-                  options={analysisModelOptions(models, modelDetails)}
-                  value={model}
-                  onValueChange={(value) => setModel(value ?? "")}
-                  placeholder={modelsLoading ? "Loading models…" : "Search models or providers"}
-                  disabled={modelsLoading}
-                  emptyText="No matching models configured on this gateway"
-                />
-                {modelsError && (
-                  <p role="alert" className="text-sm text-destructive">
-                    Could not load models: {modelsError}
-                  </p>
-                )}
-                {modelDetails.some((item) => item.model_group === model && item.mode && item.mode !== "chat") && (
-                  <p role="alert" className="text-sm text-destructive">
-                    Choose a chat model that supports JSON output.
-                  </p>
-                )}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Trace content is sent to this model through LiteLLM. Choose a model approved for your data.
-              </p>
-              <div className="grid grid-cols-2 gap-4">
-                <label className="grid gap-2 text-sm">
-                  Monthly limit (USD)
-                  <Input
-                    type="number"
-                    min="0.01"
-                    step="1"
-                    value={budget}
-                    onChange={(e) => setBudget(Number(e.target.value))}
-                  />
-                </label>
-                <label className="grid gap-2 text-sm">
-                  Runs analyzed at once
-                  <Input
-                    type="number"
-                    min="1"
-                    value={concurrency}
-                    onChange={(e) => setConcurrency(Number(e.target.value))}
-                  />
-                </label>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Parallelism controls speed, not how many runs are selected. Your budget applies to all analysis calls.
-              </p>
-              <fieldset className="space-y-3">
-                <legend className="mb-2 text-sm font-medium">When to run</legend>
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="radio" name="lens-schedule" checked={!enabled} onChange={() => setEnabled(false)} />
-                  Run once, then manually
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="radio" name="lens-schedule" checked={enabled} onChange={() => setEnabled(true)} />
-                  Run now and keep monitoring
-                </label>
-                {enabled && (
-                  <>
-                    <DurationInput
-                      label="Check every"
-                      value={interval}
-                      onChange={setInterval}
-                      base="minutes"
-                      max={10080}
+              <details open={!modelValid || undefined}>
+                <summary className="cursor-pointer text-sm font-medium">Advanced options</summary>
+                <div className="mt-4 space-y-5">
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Analysis model</p>
+                    <SearchSelect
+                      aria-label="Analysis model"
+                      options={analysisModelOptions(models, modelDetails)}
+                      value={model}
+                      onValueChange={(value) => setModel(value ?? "")}
+                      placeholder={modelsLoading ? "Loading models…" : "Choose a model"}
+                      disabled={modelsLoading}
+                      emptyText="No matching models configured on this gateway"
                     />
-                    <p className="text-xs text-muted-foreground">
-                      Each scan uses the selected lookback window, so windows can overlap. The next interval starts
-                      after completion.
-                    </p>
-                  </>
-                )}
-              </fieldset>
-              <div className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">
-                {mode === "edit"
-                  ? "Changes apply to future scans. You can recheck recent runs from the lens page."
-                  : "The first scan reviews your selected time window. New activity becomes eligible after two minutes. You can leave this page while it runs."}{" "}
-                Selection and completed coverage are shown with every scan.
-              </div>
+                    {modelsError && (
+                      <p role="alert" className="text-sm text-destructive">
+                        Could not load models: {modelsError}
+                      </p>
+                    )}
+                    {unavailable && (
+                      <p role="alert" className="text-sm text-destructive">
+                        {model} is no longer available. Choose another analysis model.
+                      </p>
+                    )}
+                    {unsupported && (
+                      <p role="alert" className="text-sm text-destructive">
+                        Choose a chat model that supports JSON output.
+                      </p>
+                    )}
+                  </div>
+                  <div className="grid gap-5 sm:grid-cols-2">
+                    <label className="grid content-start gap-2 text-sm font-medium">
+                      Maximum runs (optional)
+                      <Input
+                        type="number"
+                        min="1"
+                        placeholder="No limit"
+                        value={selection.sample_size ?? ""}
+                        onChange={(event) =>
+                          setSelection({
+                            ...selection,
+                            sample_size: event.target.value ? Number(event.target.value) : null,
+                          })
+                        }
+                      />
+                    </label>
+                    <label className="flex items-center gap-2 text-sm font-medium">
+                      <input
+                        type="checkbox"
+                        checked={manualSelection}
+                        onChange={(event) => {
+                          setManualSelection(event.target.checked);
+                          setSelection({ ...selection, execution_ids: [] });
+                        }}
+                      />
+                      Choose individual runs
+                    </label>
+                  </div>
+                  <div className="grid gap-5 sm:grid-cols-2">
+                    <label className="grid content-start gap-2 text-sm font-medium">
+                      Monthly limit (USD)
+                      <Input
+                        type="number"
+                        min="0.01"
+                        max="100000"
+                        step="1"
+                        value={budget}
+                        onChange={(e) => setBudget(Number(e.target.value))}
+                      />
+                    </label>
+                    <div className="space-y-3">
+                      <label className="flex items-center gap-2 text-sm font-medium">
+                        <input
+                          type="checkbox"
+                          checked={repeat}
+                          onChange={(e) => setRepeat(e.target.checked)}
+                          className="size-4 rounded border-input accent-foreground"
+                        />
+                        Repeat this investigation
+                      </label>
+                      {repeat && (
+                        <DurationInput
+                          label="Repeat every"
+                          value={interval}
+                          onChange={setInterval}
+                          base="minutes"
+                          max={10080}
+                        />
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </details>
             </>
+          )}
+          {!ready && mode !== "edit" && (
+            <p role="status" className="text-sm text-amber-700">
+              The worker or trace storage is unavailable. Your draft is safe; you can start when it reconnects.
+            </p>
           )}
           {error && (
             <p role="alert" className="text-sm text-destructive">
@@ -343,18 +399,15 @@ export function LensSetup({
             </p>
           )}
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => (step ? setStep(step - 1) : onClose())}>
+        <DialogFooter className="border-t pt-4">
+          <Button variant="outline" disabled={busy} onClick={() => (step ? setStep(step - 1) : onClose())}>
             {step ? "Back" : "Cancel"}
           </Button>
           {step < 2 ? (
             <Button onClick={next}>Continue</Button>
           ) : (
-            <Button
-              disabled={busy || unsupportedModel || !(validAnalysis && validSchedule)}
-              onClick={() => execute(() => onSave(settings()))}
-            >
-              {saveLabel()}
+            <Button disabled={!canSave} onClick={() => void save()}>
+              {busy ? "Saving…" : saveLabel}
             </Button>
           )}
         </DialogFooter>

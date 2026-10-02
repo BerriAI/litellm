@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   analysisElapsed,
+  workerConnected,
+  type LensList,
   analysisProgress,
   evidenceTarget,
   normalizeFilters,
@@ -40,6 +42,7 @@ const job: Job = {
     source: "traces",
     lookback_hours: 24,
     service: "",
+    agent_name: "",
     filters: [],
     enabled: false,
     interval_minutes: 15,
@@ -102,7 +105,7 @@ describe("Analysis progress", () => {
     expect(analysisProgress({ ...job, status: "queued" })).toMatchObject({
       step: -1,
       total: 0,
-      title: "Waiting for an analyzer",
+      title: "Queued for your worker",
     });
   });
 
@@ -147,5 +150,24 @@ describe("Lens selection and findings", () => {
     };
     const high: Finding = { ...base, id: "high", priority: "high", last_seen: "2026-09-30T11:00:00Z" };
     expect(sortedFindings([base, high]).map((f) => f.id)).toEqual(["high", "low"]);
+  });
+});
+
+describe("Worker readiness", () => {
+  const now = Date.parse("2026-10-01T12:00:00Z");
+  const worker: LensList["workers"][number] = {
+    id: "worker",
+    name: "Worker",
+    revoked: false,
+    analysis_key_id: "key",
+    last_seen: "2026-10-01T11:59:59Z",
+    scope: { all_teams: true, api_key_hash: "", team_id: "" },
+  };
+  it("requires a current heartbeat and assigned billing key", () => {
+    expect(workerConnected(worker, now)).toBe(true);
+    expect(workerConnected({ ...worker, last_seen: "" }, now)).toBe(false);
+    expect(workerConnected({ ...worker, last_seen: "2026-10-01T11:58:00Z" }, now)).toBe(false);
+    expect(workerConnected({ ...worker, analysis_key_id: "" }, now)).toBe(false);
+    expect(workerConnected({ ...worker, revoked: true }, now)).toBe(false);
   });
 });

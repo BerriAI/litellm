@@ -10,8 +10,8 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.lens import endpoints
 from litellm.proxy.lens.endpoints import Preview, claim, user_scope, validate_selection
-from litellm.proxy.lens.models import Check, Job, Lens, LensSettings, Scope, Worker
-from litellm.proxy.lens.sources import execution_id
+from litellm.proxy.lens.models import Check, Job, Lens, LensSettings, Sample, Scope, Worker
+from litellm.proxy.lens.sources import ActivityAvailability, execution_id
 from litellm.proxy.spend_tracking import spend_management_endpoints
 from litellm.proxy.spend_tracking.log_visibility import LogVisibility
 from tests.unit.proxy.lens.test_state import lens as sample_lens
@@ -63,6 +63,18 @@ class EvidenceStorageStub:
 
     async def lens_evidence(self, parameters: Mapping[str, object]) -> object:
         raise AssertionError("Evidence reads do not verify evidence")
+
+
+class PreviewStorageStub(EvidenceStorageStub):
+    async def lens_availability(self, parameters: Mapping[str, object]) -> object:
+        return ()
+
+    async def lens_agents(self, parameters: Mapping[str, object]) -> object:
+        return ()
+
+    async def lens_sample(self, parameters: Mapping[str, object]) -> object:
+        assert parameters["all_teams"] == 1
+        return ()
 
 
 def _lens(lens_scope: Scope) -> Lens:
@@ -126,6 +138,35 @@ def test_non_admin_cannot_start_analysis_spending(role: LitellmUserRoles) -> Non
 def test_only_proxy_admin_gets_write_scope() -> None:
     admin: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
     assert user_scope(admin).all_teams
+
+
+@pytest.mark.parametrize("role", (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY))
+@pytest.mark.asyncio
+async def test_agent_discovery_without_trace_storage_is_empty(role: LitellmUserRoles) -> None:
+    auth: Final = UserAPIKeyAuth(user_role=role)
+    assert await endpoints.list_agents(auth, None) == ()
+
+
+@pytest.mark.asyncio
+async def test_agent_discovery_without_trace_storage_denies_internal_user() -> None:
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+    with pytest.raises(HTTPException) as error:
+        await endpoints.list_agents(auth, None)
+    assert (error.value.status_code, error.value.detail) == (403, "Lens requires proxy administrator access")
+
+
+@pytest.mark.asyncio
+async def test_activity_availability_without_trace_storage_allows_view_only_admin() -> None:
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+    assert await endpoints.activity_available(auth, None) == ActivityAvailability()
+
+
+@pytest.mark.asyncio
+async def test_activity_availability_without_trace_storage_denies_internal_user() -> None:
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+    with pytest.raises(HTTPException) as error:
+        await endpoints.activity_available(auth, None)
+    assert (error.value.status_code, error.value.detail) == (403, "Lens requires proxy administrator access")
 
 
 @pytest.mark.asyncio
@@ -239,18 +280,23 @@ async def test_all_team_lens_is_visible_only_to_admin_viewers(monkeypatch: pytes
 async def test_preview_sample_is_admin_only() -> None:
     with pytest.raises(HTTPException) as error:
         await endpoints.preview_sample(
-            Preview(
-                settings=LensSettings(
-                    name="Research",
-                    model="analysis",
-                    checks=(Check(id="retries", instruction="Find unrecovered retries"),),
-                )
-            ),
+            Preview(settings=sample_lens().settings),
             UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, token="key-a"),
             None,
         )
 
-    assert (error.value.status_code, error.value.detail) == (403, "Only proxy admins can configure or run Lens")
+    assert (error.value.status_code, error.value.detail) == (403, "Lens requires proxy administrator access")
+
+
+@pytest.mark.asyncio
+async def test_preview_sample_allows_view_only_admin() -> None:
+    preview: Final = Preview(settings=sample_lens().settings)
+    sample: Final = await endpoints.preview_sample(
+        preview,
+        UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
+        PreviewStorageStub(),
+    )
+    assert sample == Sample(executions=(), eligible=0, selected=0)
 
 
 @pytest.mark.parametrize("identity", ("not-an-execution", "W10=", "WyJvdGhlciIsICIiLCAiaWQiXQ=="))
