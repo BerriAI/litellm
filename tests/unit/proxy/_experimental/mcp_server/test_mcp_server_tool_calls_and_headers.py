@@ -39,7 +39,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.mcp import MCPAuth
-from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
+from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer, PinnedMCPTool
 
 
 def test_mcp_available_on_sdk2():
@@ -8075,10 +8075,13 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
 
 
 @pytest.mark.asyncio
-async def test_execute_mcp_tool_hands_openapi_registered_tool_metadata_to_pre_call_hooks():
-    """OpenAPI-generated tools dispatch through the local registry, so the pre-call hooks must get the
-    registered description and input schema on that path too, even when no tools/list ran first."""
+async def test_execute_mcp_tool_hands_openapi_hooks_the_listed_entry_and_nothing_before_a_listing():
+    """A local-registry tools/call with no prior tools/list hands the pre-call hooks name and arguments
+    only, as before this metadata existed, so a pre_mcp_call policy never scans a description the caller was
+    not served. Once the caller has listed, the same call hands the entry that listing served."""
+    from litellm.caching.caching import DualCache
     from litellm.proxy._experimental.mcp_server import operations as mcp_module
+    from litellm.proxy.utils import ProxyLogging
 
     petstore = MCPServer(
         server_id="petstore-id",
@@ -8087,6 +8090,7 @@ async def test_execute_mcp_tool_hands_openapi_registered_tool_metadata_to_pre_ca
         transport=MCPTransport.http,
         url=None,
         spec_path="https://example.com/petstore.yaml",
+        tool_name_to_description={"list_pets": "ADMIN DESC"},
     )
     schema = {"type": "object", "properties": {"limit": {"type": "integer"}}}
     mcp_module.global_mcp_tool_registry.register_tool(
@@ -8094,71 +8098,42 @@ async def test_execute_mcp_tool_hands_openapi_registered_tool_metadata_to_pre_ca
     )
     manager = mcp_module.global_mcp_server_manager
     manager._listed_tools_by_server_id.pop(petstore.server_id, None)
-    pre_call_tool_check = AsyncMock(return_value={})
+    alice = UserAPIKeyAuth(api_key="sk-user", user_id="alice")
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging.pre_call_hook = AsyncMock(return_value={})
+    pre_call_tool_check = AsyncMock(wraps=manager.pre_call_tool_check)
+
+    async def call() -> tuple[MCPTool | None, dict]:
+        await mcp_module.execute_mcp_tool(
+            name="petstore-list_pets",
+            arguments={"limit": 10},
+            allowed_mcp_servers=[petstore],
+            start_time=datetime.now(),
+            user_api_key_auth=alice,
+        )
+        return pre_call_tool_check.call_args.kwargs["tool"], proxy_logging.pre_call_hook.call_args.kwargs["data"]
 
     try:
         with (
             patch.object(manager, "_get_mcp_server_from_tool_name", return_value=petstore),
             patch.object(manager, "pre_call_tool_check", new=pre_call_tool_check),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
         ):
-            await mcp_module.execute_mcp_tool(
-                name="petstore-list_pets",
-                arguments={"limit": 10},
-                allowed_mcp_servers=[petstore],
-                start_time=datetime.now(),
-                user_api_key_auth=UserAPIKeyAuth(api_key="sk-user", user_id="alice"),
+            never_listed_tool, never_listed_data = await call()
+            manager._record_listed_tools(
+                petstore,
+                [MCPTool(name="list_pets", description="ADMIN DESC", inputSchema=schema)],
+                ListedToolsCaller(user_api_key_auth=alice),
             )
+            listed_tool, listed_data = await call()
     finally:
         mcp_module.global_mcp_tool_registry.unregister_tools_with_prefix("petstore-")
+        manager._listed_tools_by_server_id.pop(petstore.server_id, None)
 
-    handed_tool = pre_call_tool_check.call_args.kwargs["tool"]
-    assert (handed_tool.name, handed_tool.description, handed_tool.input_schema) == (
-        "list_pets",
-        "List the pets",
-        schema,
-    )
-
-
-@pytest.mark.asyncio
-async def test_execute_mcp_tool_hands_openapi_hooks_the_admin_description_clients_saw():
-    """tools/list shows the admin's tool_name_to_description wording, so the local-registry call path
-    must hand the pre-call hooks that same wording rather than the generated one."""
-    from litellm.proxy._experimental.mcp_server import operations as mcp_module
-
-    petstore = MCPServer(
-        server_id="petstore-id",
-        name="petstore",
-        server_name="petstore",
-        transport=MCPTransport.http,
-        url=None,
-        spec_path="https://example.com/petstore.yaml",
-        tool_name_to_description={"getpetbyid": "ADMIN DESC"},
-    )
-    schema = {"type": "object", "properties": {"petId": {"type": "integer"}}}
-    mcp_module.global_mcp_tool_registry.register_tool(
-        name="petstore-getpetbyid", description="Find pet by ID", input_schema=schema, handler=lambda petId: "ok"
-    )
-    manager = mcp_module.global_mcp_server_manager
-    manager._listed_tools_by_server_id.pop(petstore.server_id, None)
-    pre_call_tool_check = AsyncMock(return_value={})
-
-    try:
-        with (
-            patch.object(manager, "_get_mcp_server_from_tool_name", return_value=petstore),
-            patch.object(manager, "pre_call_tool_check", new=pre_call_tool_check),
-        ):
-            await mcp_module.execute_mcp_tool(
-                name="petstore-getpetbyid",
-                arguments={"petId": 1},
-                allowed_mcp_servers=[petstore],
-                start_time=datetime.now(),
-                user_api_key_auth=UserAPIKeyAuth(api_key="sk-user", user_id="alice"),
-            )
-    finally:
-        mcp_module.global_mcp_tool_registry.unregister_tools_with_prefix("petstore-")
-
-    handed_tool = pre_call_tool_check.call_args.kwargs["tool"]
-    assert (handed_tool.description, handed_tool.input_schema) == ("ADMIN DESC", schema)
+    assert never_listed_tool is None
+    assert (never_listed_data.get("mcp_tool_description"), never_listed_data.get("mcp_input_schema")) == (None, None)
+    assert listed_tool is not None and (listed_tool.description, listed_tool.input_schema) == ("ADMIN DESC", schema)
+    assert (listed_data["mcp_tool_description"], listed_data["mcp_input_schema"]) == ("ADMIN DESC", schema)
 
 
 @pytest.mark.asyncio
@@ -8272,9 +8247,9 @@ async def test_execute_mcp_tool_hands_openapi_hooks_each_callers_own_listed_entr
 
 
 @pytest.mark.asyncio
-async def test_execute_mcp_tool_hands_hooks_the_metadata_of_the_operation_it_runs_when_names_collide():
-    """An OpenAPI operation whose name starts with its own server prefix must not be reported to the
-    pre-call hooks with the metadata of the shorter operation, since that is not the one that runs."""
+async def test_execute_mcp_tool_runs_the_longer_colliding_operation_and_hands_hooks_no_registry_metadata():
+    """An OpenAPI operation whose name starts with its own server prefix runs instead of the shorter one, and
+    with no prior listing the pre-call hooks get name and arguments only, never either registry entry."""
     from litellm.proxy._experimental.mcp_server import operations as mcp_module
 
     petstore = MCPServer(
@@ -8311,12 +8286,134 @@ async def test_execute_mcp_tool_hands_hooks_the_metadata_of_the_operation_it_run
     finally:
         registry.unregister_tools_with_prefix("petstore-")
 
-    handed_tool = pre_call_tool_check.call_args.kwargs["tool"]
-    assert (handed_tool.description, handed_tool.input_schema) == (
-        "long",
-        {"type": "object", "properties": {"petId": {"type": "integer"}}},
-    )
+    assert pre_call_tool_check.call_args.kwargs["tool"] is None
     assert result.content[0].text == "long"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_hands_hooks_nothing_for_a_never_listed_operation_named_after_a_listed_one():
+    """After the caller listed ``get_pet``, a call to the never-listed ``petstore-get_pet`` operation hands the
+    pre-call hooks name and arguments only, not the listed sibling's description and schema."""
+    from litellm.proxy._experimental.mcp_server import operations as mcp_module
+
+    petstore = MCPServer(
+        server_id="petstore-id",
+        name="petstore",
+        server_name="petstore",
+        transport=MCPTransport.http,
+        url=None,
+        spec_path="https://example.com/petstore.yaml",
+    )
+    registry = mcp_module.global_mcp_tool_registry
+    registry.register_tool(
+        name="petstore-petstore-get_pet", description="long", input_schema={}, handler=lambda: "long"
+    )
+    manager = mcp_module.global_mcp_server_manager
+    alice = UserAPIKeyAuth(api_key="sk-user", user_id="alice")
+    manager._record_listed_tools(
+        petstore,
+        [MCPTool(name="get_pet", description="Fetches pet records. FLAGWORD", inputSchema={"type": "object"})],
+        ListedToolsCaller(user_api_key_auth=alice),
+    )
+    pre_call_tool_check = AsyncMock(return_value={})
+
+    try:
+        with (
+            patch.object(manager, "_get_mcp_server_from_tool_name", return_value=petstore),
+            patch.object(manager, "pre_call_tool_check", new=pre_call_tool_check),
+        ):
+            result = await mcp_module.execute_mcp_tool(
+                name="petstore-petstore-get_pet",
+                arguments={},
+                allowed_mcp_servers=[petstore],
+                start_time=datetime.now(),
+                user_api_key_auth=alice,
+            )
+    finally:
+        registry.unregister_tools_with_prefix("petstore-")
+        manager._listed_tools_by_server_id.pop(petstore.server_id, None)
+
+    assert pre_call_tool_check.call_args.kwargs["tool"] is None
+    assert result.content[0].text == "long"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_implicit_listing_before_the_first_call_hands_hooks_no_description():
+    """The listing tools/call runs on its own when this worker does not yet expose the tool is never served
+    to the caller, so it leaves the caller's listed slot empty and the pre-call hooks still get name and
+    arguments only, as on main."""
+    manager = mcp_operations.global_mcp_server_manager
+    server = _never_listed_passthrough_server()
+    manager.registry[server.server_id] = server
+    manager._listed_tools_by_server_id.pop(server.server_id, None)
+    upstream = AsyncMock()
+    upstream.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+    proxy_logging = _mock_mcp_proxy_logging()
+    proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
+    proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
+    proxy_logging.pre_call_hook = AsyncMock(return_value={})
+    proxy_logging.during_call_hook = AsyncMock(return_value=None)
+    fetch_tools = AsyncMock(
+        return_value=[MCPTool(name="add", description="Adds. FLAGWORD", inputSchema={"type": "object"})]
+    )
+
+    with (
+        patch.object(manager, "_create_mcp_client", new=AsyncMock(return_value=upstream)),
+        patch.object(manager, "_fetch_tools_with_timeout", new=fetch_tools),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+    ):
+        result = await mcp_operations.execute_mcp_tool(
+            name="lazy_map-add",
+            arguments={"a": 1, "b": 2},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(),
+            mcp_auth_header="Bearer caller-token",
+            raw_headers={"authorization": "Bearer caller-token"},
+        )
+
+    assert fetch_tools.await_count == 1
+    assert upstream.call_tool.await_count == 1
+    assert result.content[0].text == "ok"
+    hook_kwargs = proxy_logging._create_mcp_request_object_from_kwargs.call_args.args[0]
+    assert (hook_kwargs["tool_description"], hook_kwargs["tool_input_schema"]) == (None, None)
+    assert server.server_id not in manager._listed_tools_by_server_id
+
+
+@pytest.mark.asyncio
+async def test_fetch_pinnable_tool_catalog_records_no_listed_catalog_for_the_admin():
+    """The pin snapshot lists the raw upstream catalog, without the catalog guard or the admin's description
+    overrides, so it must not become what the admin's own later tools/call is evaluated against."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import fetch_pinnable_tool_catalog
+    from litellm.proxy.utils import ProxyLogging
+
+    manager = mcp_operations.global_mcp_server_manager
+    server = MCPServer(
+        server_id="pin-srv",
+        name="pin_srv",
+        transport=MCPTransport.http,
+        url="https://up.example.com/mcp",
+        tool_name_to_description={"add": "Admin wording"},
+    )
+    manager._listed_tools_by_server_id.pop(server.server_id, None)
+    admin = UserAPIKeyAuth(api_key="sk-admin", user_id="admin")
+    request = MagicMock()
+    request.client.host = "10.1.2.3"
+    request.headers = {"x-litellm-api-key": "sk-admin"}
+    fetch_tools = AsyncMock(
+        return_value=[MCPTool(name="add", description="Upstream wording", inputSchema={"type": "object"})]
+    )
+
+    with (
+        patch.object(manager, "_create_mcp_client", new=AsyncMock(return_value=MagicMock())),
+        patch.object(manager, "_fetch_tools_with_timeout", new=fetch_tools),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())),
+    ):
+        snapshot = await fetch_pinnable_tool_catalog(server, request, admin)
+
+    assert snapshot == {"add": PinnedMCPTool(description="Upstream wording", input_schema={"type": "object"})}
+    assert server.server_id not in manager._listed_tools_by_server_id
+    assert manager.get_listed_tool(server, "add", ListedToolsCaller(user_api_key_auth=admin)) is None
 
 
 @pytest.mark.asyncio

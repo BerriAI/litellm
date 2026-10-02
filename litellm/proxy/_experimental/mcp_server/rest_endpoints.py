@@ -703,6 +703,8 @@ if MCP_AVAILABLE:
         extra_headers: dict[str, str] | None,
         client_ip: str | None,
         proxy_logging_obj: "ProxyLogging | None",
+        *,
+        record_listing: bool,
     ) -> list[MCPTool]:
         return await global_mcp_server_manager._get_tools_from_server(
             server=server,
@@ -713,6 +715,7 @@ if MCP_AVAILABLE:
             client_ip=client_ip,
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
+            record_listing=record_listing,
         )
 
     async def _get_tools_for_single_server(
@@ -734,7 +737,14 @@ if MCP_AVAILABLE:
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         tools = await _list_server_tools(
-            server, server_auth_header, raw_headers, user_api_key_auth, extra_headers, client_ip, proxy_logging_obj
+            server,
+            server_auth_header,
+            raw_headers,
+            user_api_key_auth,
+            extra_headers,
+            client_ip,
+            proxy_logging_obj,
+            record_listing=True,
         )
 
         if not apply_tool_filters:
@@ -776,6 +786,7 @@ if MCP_AVAILABLE:
             await _get_user_oauth_extra_headers(server, user_api_key_dict),
             IPAddressUtils.get_mcp_client_ip(request),
             None,
+            record_listing=False,
         )
         scan: Final = await scan_tool_descriptions(
             apply_description_overrides(upstream, server), server, proxy_logging_obj, user_api_key_dict, raw_headers
@@ -915,11 +926,9 @@ if MCP_AVAILABLE:
     ) -> UserAPIKeyAuth:
         """The one credential this tools request acts as.
 
-        A toolset name narrows the caller's own credential to that toolset; otherwise a dashboard
-        session is swapped for its admitted subject. The two are mutually exclusive by construction,
-        which is why they share an owner: the admitted subject resolves per grant source and a team
-        source deliberately carries none of the caller's ``object_permission``, so a toolset
-        narrowing layered on top would evaporate on every team-granted server."""
+        A toolset name pins the acting principal to that toolset through ``_apply_toolset_scope``,
+        which itself swaps a dashboard session for its admitted subject; otherwise the swap happens
+        here so both shapes resolve as the same identity."""
         if not toolset_name:
             return await acting_user_auth(user_api_key_dict)
 
@@ -1756,7 +1765,7 @@ if MCP_AVAILABLE:
                     "MCP tools/list preview timed out after %s seconds while paginating upstream tools",
                     listing_deadline,
                 )
-                return {  # mutable-ok: error response payload
+                return {
                     "status": "error",
                     "error": True,
                     "message": f"Timed out listing tools after {listing_deadline} seconds. "

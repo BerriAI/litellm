@@ -4,20 +4,26 @@ import sys
 import textwrap
 import types
 from typing import Any, Final, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-from mcp.types import CallToolResult, TextContent, Tool as MCPTool
+from mcp.types import CallToolResult, TextContent
+from mcp.types import Tool as MCPTool
 from openai.types.responses.tool_param import Mcp
 
+from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.responses import main as responses_main
 from litellm.responses.mcp import litellm_proxy_mcp_handler as mcp_handler_module
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.mcp import MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.responses.main import OutputFunctionToolCall
 from litellm.types.utils import ModelResponse
 
@@ -110,9 +116,7 @@ def test_extract_tool_calls_from_chat_response_handles_tool_calls():
         object="chat.completion",
     )
 
-    tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_chat_response(
-        response
-    )
+    tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_chat_response(response)
 
     assert len(tool_calls) == 1
     assert tool_calls[0]["function"]["name"] == "foo"
@@ -182,9 +186,7 @@ def test_transform_mcp_tools_to_openai_uses_chat_format(monkeypatch):
         fake_transform_responses,
     )
 
-    chat_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
-        ["tool"], target_format="chat"
-    )
+    chat_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(["tool"], target_format="chat")
     resp_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(["tool"])
 
     assert chat_tools == [{"chat": True}]
@@ -304,9 +306,7 @@ async def test_execute_tool_calls_strips_prefix_when_alias_differs_from_server_n
     )
     from litellm.proxy._experimental.mcp_server import mcp_server_manager as _msm
 
-    _msm.global_mcp_server_manager._get_mcp_server_from_tool_name = MagicMock(
-        return_value=fake_server
-    )
+    _msm.global_mcp_server_manager._get_mcp_server_from_tool_name = MagicMock(return_value=fake_server)
 
     tool_name = "my_deepwiki-read_wiki_structure"
     tool_calls = [
@@ -380,7 +380,7 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
 
     fake_manager = types.SimpleNamespace(
         get_registry=MagicMock(return_value={}),
-        call_tool=AsyncMock(side_effect=HTTPException(status_code=500, detail="boom"))
+        call_tool=AsyncMock(side_effect=HTTPException(status_code=500, detail="boom")),
     )
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
@@ -388,9 +388,7 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
     )
 
     tool_name = "deepwiki-read_wiki_structure"
-    tool_calls = [
-        {"id": "call-err", "function": {"name": tool_name, "arguments": "{}"}}
-    ]
+    tool_calls = [{"id": "call-err", "function": {"name": tool_name, "arguments": "{}"}}]
 
     user_auth = types.SimpleNamespace(api_key="test_key", user_id="test_user")
 
@@ -408,10 +406,7 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
 
     post_call_failure_hook.assert_awaited_once()
     assert post_call_failure_hook.await_args is not None
-    assert (
-        post_call_failure_hook.await_args.kwargs.get("route")
-        == "/responses/mcp/call_tool"
-    )
+    assert post_call_failure_hook.await_args.kwargs.get("route") == "/responses/mcp/call_tool"
 
 
 @pytest.mark.asyncio
@@ -434,9 +429,7 @@ async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_functio
     # NOTE: Don't patch via dotted string path here because `litellm.responses`
     # is a function attribute on the `litellm` package (shadowing the submodule),
     # which breaks monkeypatch's importpath resolution.
-    handler_module = importlib.import_module(
-        "litellm.responses.mcp.litellm_proxy_mcp_handler"
-    )
+    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
     monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
 
     tool_name = "deepwiki-read_wiki_structure"
@@ -516,7 +509,9 @@ async def test_execute_tool_calls_applies_post_call_hook_content(monkeypatch):
 
     logging_obj = MagicMock()
     logging_obj.model_call_details = {}
-    logging_obj.async_post_mcp_tool_call_hook = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="[REDACTED]")], is_error=True))
+    logging_obj.async_post_mcp_tool_call_hook = AsyncMock(
+        return_value=CallToolResult(content=[TextContent(type="text", text="[REDACTED]")], is_error=True)
+    )
     logging_obj.async_success_handler = AsyncMock()
     handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
     monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (logging_obj, None))
@@ -679,9 +674,7 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
     user_auth = types.SimpleNamespace(api_key="test_key", user_id="test_user")
     tools, _server_names = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
         user_api_key_auth=user_auth,
-        mcp_tools_with_litellm_proxy=[
-            {"type": "mcp", "server_url": "litellm_proxy/mcp/deepwiki"}
-        ],
+        mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/deepwiki"}],
     )
 
     forwarded: Final = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(tools)
@@ -700,9 +693,7 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
 
 
 def test_get_parent_request_tags_from_metadata():
-    tags = LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(
-        {"metadata": {"tags": ["team-a", "prod"]}}
-    )
+    tags = LiteLLM_Proxy_MCP_Handler._get_parent_request_tags({"metadata": {"tags": ["team-a", "prod"]}})
     assert tags == ["team-a", "prod"]
 
 
@@ -739,9 +730,7 @@ async def test_get_mcp_tools_from_manager_forwards_request_tags(monkeypatch):
 
     await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
         user_api_key_auth=types.SimpleNamespace(api_key="k", user_id="u"),
-        mcp_tools_with_litellm_proxy=[
-            {"type": "mcp", "server_url": "litellm_proxy/mcp/deepwiki"}
-        ],
+        mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/deepwiki"}],
         request_tags=["team-a"],
     )
 
@@ -761,9 +750,7 @@ async def test_execute_tool_calls_exposes_sanitized_client_headers_to_logging(mo
         captured.update(kwargs)
         return None, None
 
-    handler_module = importlib.import_module(
-        "litellm.responses.mcp.litellm_proxy_mcp_handler"
-    )
+    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
     monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
 
     tool_name = "deepwiki-read_wiki_structure"
@@ -789,9 +776,7 @@ async def test_execute_tool_calls_propagates_request_tags_to_function_setup(monk
         captured.update(kwargs)
         return None, None
 
-    handler_module = importlib.import_module(
-        "litellm.responses.mcp.litellm_proxy_mcp_handler"
-    )
+    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
     monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
 
     tool_name = "deepwiki-read_wiki_structure"
@@ -1171,7 +1156,9 @@ def test_create_follow_up_input_keeps_each_reasoning_item_before_its_function_ca
         "function_call_output",
         "function_call_output",
     ]
-    assert [cast(dict[str, Any], item).get("id") or cast(dict[str, Any], item).get("call_id") for item in follow_up[1:5]] == [
+    assert [
+        cast(dict[str, Any], item).get("id") or cast(dict[str, Any], item).get("call_id") for item in follow_up[1:5]
+    ] == [
         "rs_1",
         "call-1",
         "rs_2",
@@ -1229,16 +1216,20 @@ async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
 
     async def fake_aresponses(**kwargs: Any) -> ResponsesAPIResponse:
         captured_calls.append(kwargs)
-        return first_response if len(captured_calls) == 1 else ResponsesAPIResponse(
-            id="resp_follow_up",
-            created_at=1234567891,
-            model="gpt-5",
-            object="response",
-            status="completed",
-            output=[],
-            parallel_tool_calls=False,
-            tool_choice="auto",
-            tools=[],
+        return (
+            first_response
+            if len(captured_calls) == 1
+            else ResponsesAPIResponse(
+                id="resp_follow_up",
+                created_at=1234567891,
+                model="gpt-5",
+                object="response",
+                status="completed",
+                output=[],
+                parallel_tool_calls=False,
+                tool_choice="auto",
+                tools=[],
+            )
         )
 
     async def fake_process(**kwargs: Any) -> tuple[list[Any], dict[str, str]]:
@@ -1279,12 +1270,14 @@ async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
 
 @pytest.mark.asyncio
 async def test_responses_discovery_logs_sanitized_caller_headers(monkeypatch: pytest.MonkeyPatch):
-    from litellm.proxy._experimental.mcp_server import operations
-    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager, operations
 
     headers: Final = {
-        "x-app-id": "app-a", "x-nuid": "user-a", "x-user-id": "identity-a",
-        "x-mcp-deepwiki-authorization": "upstream-sentinel", "authorization": "proxy-sentinel",
+        "x-app-id": "app-a",
+        "x-nuid": "user-a",
+        "x-user-id": "identity-a",
+        "x-mcp-deepwiki-authorization": "upstream-sentinel",
+        "authorization": "proxy-sentinel",
     }
     manager: Final = types.SimpleNamespace(
         get_registry=MagicMock(return_value={}),
@@ -1298,12 +1291,21 @@ async def test_responses_discovery_logs_sanitized_caller_headers(monkeypatch: py
     monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[]))
     monkeypatch.setattr(operations, "function_setup", setup)
     response: Final = ResponsesAPIResponse(
-        id="resp_test", created_at=1234567891, model="test-model", object="response",
-        status="completed", output=[], parallel_tool_calls=False, tool_choice="auto", tools=[],
+        id="resp_test",
+        created_at=1234567891,
+        model="test-model",
+        object="response",
+        status="completed",
+        output=[],
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
     )
     monkeypatch.setattr(responses_main, "aresponses", AsyncMock(return_value=response))
     result: Final = await responses_main.aresponses_api_with_mcp(
-        input="hi", model="test-model", tools=[{"type": "mcp", "server_url": "litellm_proxy"}],
+        input="hi",
+        model="test-model",
+        tools=[{"type": "mcp", "server_url": "litellm_proxy"}],
         secret_fields={"raw_headers": headers},
     )
     assert result is response
@@ -1311,3 +1313,121 @@ async def test_responses_discovery_logs_sanitized_caller_headers(monkeypatch: py
     logged: Final = setup.call_args.kwargs["metadata"]["headers"]
     assert logged == {"x-app-id": "app-a", "x-nuid": "user-a", "x-user-id": "identity-a"}
     assert headers["x-mcp-deepwiki-authorization"] == "upstream-sentinel"
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_tools_from_manager_records_the_served_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Responses bridge serves the listing to the model and its own tools/call reads the slot, so
+    this listing records the caller's catalog."""
+    manager: Final = mcp_operations.global_mcp_server_manager
+    server: Final = MCPServer(server_id="responses-slot", name="responses-slot", transport=MCPTransport.http)
+    user: Final = UserAPIKeyAuth(api_key="sk-responses-slot", user_id="responder")
+    upstream: Final = [MCPTool(name="echo", description="Echo text back", inputSchema={"type": "object"})]
+    fake_manager: Final = types.SimpleNamespace(
+        get_registry=MagicMock(return_value={}),
+        get_allowed_mcp_servers=AsyncMock(return_value=[]),
+        get_mcp_servers_from_ids=MagicMock(return_value=[]),
+        get_mcp_server_by_name=MagicMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        fake_manager,
+    )
+    with (
+        patch.dict(manager.tool_name_to_mcp_server_name_mapping),
+        patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+        patch.object(manager, "_create_mcp_client", AsyncMock(return_value=object())),
+        patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
+    ):
+        try:
+            tools, _server_names = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
+                user_api_key_auth=user,
+                mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/responses-slot"}],
+            )
+            listed: Final = manager.get_listed_tool(server, "echo", ListedToolsCaller(user_api_key_auth=user))
+        finally:
+            manager._drop_listed_tools(server.server_id)
+
+    assert [tool.name for tool in tools] == ["responses-slot-echo"]
+    assert listed is not None and listed.description == "Echo text back"
+
+
+def _toolset_gateway_manager(toolset_id: str, server_id: str) -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        get_registry=MagicMock(return_value={}),
+        get_allowed_mcp_servers=AsyncMock(return_value=[]),
+        get_mcp_servers_from_ids=MagicMock(return_value=[]),
+        get_mcp_server_by_name=MagicMock(return_value=None),
+        get_toolset_by_name_cached=AsyncMock(return_value=types.SimpleNamespace(toolset_id=toolset_id)),
+        resolve_toolset_tool_permissions=AsyncMock(return_value={server_id: ["add"]}),
+    )
+
+
+async def _tools_listing_kwargs_for_toolset_url(monkeypatch, team_toolset_id: str) -> dict[str, object]:
+    from litellm.proxy._experimental.mcp_server.ui_session_utils import granted_toolset_ids
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LitellmUserRoles, UserAPIKeyAuth
+
+    mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
+    monkeypatch.setattr("litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers", mock_get_tools)
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        _toolset_gateway_manager("ts-granted", "srv-1"),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+
+    async def team_permission(context: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable:
+        return LiteLLM_ObjectPermissionTable(object_permission_id="op-team", mcp_toolsets=[team_toolset_id])
+
+    async def granted_through_team(context: UserAPIKeyAuth) -> frozenset[str]:
+        return await granted_toolset_ids(context, team_object_permission=team_permission, require_key_access=False)
+
+    team_key: Final = UserAPIKeyAuth(api_key="sk-team", team_id="team-1", user_role=LitellmUserRoles.INTERNAL_USER)
+    await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
+        user_api_key_auth=team_key,
+        mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/team-toolset"}],
+        granted_toolsets=granted_through_team,
+    )
+    assert mock_get_tools.await_args is not None
+    return mock_get_tools.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_toolset_gateway_url_scopes_a_team_granted_toolset_for_a_key_without_its_own_grant(monkeypatch):
+    kwargs: Final = await _tools_listing_kwargs_for_toolset_url(monkeypatch, team_toolset_id="ts-granted")
+    scoped = kwargs["user_api_key_auth"].object_permission
+    assert scoped is not None
+    assert scoped.mcp_servers == ["srv-1"]
+    assert scoped.mcp_tool_permissions == {"srv-1": ["add"]}
+    assert kwargs["mcp_servers"] is None
+
+
+@pytest.mark.asyncio
+async def test_toolset_gateway_url_skips_a_toolset_the_team_does_not_grant(monkeypatch):
+    kwargs: Final = await _tools_listing_kwargs_for_toolset_url(monkeypatch, team_toolset_id="ts-other")
+    assert kwargs["user_api_key_auth"].object_permission is None
+    assert kwargs["mcp_servers"] is None
+
+
+@pytest.mark.asyncio
+async def test_apply_toolset_permissions_pins_the_auth_to_explicit_grants_only(monkeypatch: pytest.MonkeyPatch):
+    """A toolset gateway URL must not widen to operator-open (allow_all_keys) servers."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    fake_manager = types.SimpleNamespace(
+        resolve_toolset_tool_permissions=AsyncMock(return_value={"srv-1": ["add"]}),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        fake_manager,
+    )
+
+    scoped = await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
+        resolved_toolset_ids=["ts-1"],
+        resolved_mcp_servers=[],
+        user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
+    )
+
+    assert scoped.mcp_explicit_grants_only is True
+    assert scoped.object_permission is not None
+    assert scoped.object_permission.mcp_servers == ["srv-1"]
+    assert scoped.object_permission.mcp_tool_permissions == {"srv-1": ["add"]}

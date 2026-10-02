@@ -92,7 +92,7 @@ def test_a_glob_names_only_what_it_matches_not_what_sits_below_it():
     glob = "tests/test_litellm/test_*.py"
     assert coverage._token_names(glob, "tests/test_litellm/test_router.py") is True
     assert coverage._token_names(glob, "tests/test_litellm/test_router.py/nested.py") is False
-    assert coverage._token_names(glob, "tests/test_litellm/proxy/test_router.py") is False
+    assert coverage._token_names(glob, "tests/test_litellm/nested/test_router.py") is False
 
 
 def test_a_glob_still_covers_the_subtree_for_the_census():
@@ -169,8 +169,42 @@ def test_every_sharded_root_named_in_the_script_exists_on_disk():
 
 
 def test_the_repo_as_it_stands_has_every_shard_child_assigned():
-    findings = coverage._unassigned_shard_children(coverage._invoked_test_tokens(coverage._all_scalars()))
+    findings = coverage._unassigned_shard_children(
+        coverage._shard_tokens(coverage._all_scalars(), coverage._unit_selection_arms())
+    )
     assert [f.subject for f in findings] == []
+
+
+def test_shard_tokens_credits_only_wired_unit_flags(tmp_path):
+    root = tmp_path / "tests" / "tree"
+    (root / "wired").mkdir(parents=True)
+    (root / "wired" / "test_a.py").write_text("def test_a(): assert True\n")
+    (root / "unwired").mkdir(parents=True)
+    (root / "unwired" / "test_b.py").write_text("def test_b(): assert True\n")
+    script = tmp_path / ".circleci" / "scripts" / "unit_selection.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text(
+        "legacy_paths() {\n"
+        "  case \"$1\" in\n"
+        "    wired-flag) echo tests/tree/wired ;;\n"
+        "    unwired-flag)\n"
+        "      echo tests/tree/unwired ;;\n"
+        "  esac\n"
+        "}\n"
+    )
+
+    scalars: Final = (coverage.Scalar(key="unit-flag", value="wired-flag"),)
+    findings = coverage._unassigned_shard_children(
+        coverage._shard_tokens(scalars, coverage._unit_selection_arms(tmp_path)),
+        roots=("tests/tree",),
+        repo_root=tmp_path,
+    )
+
+    assert tuple(f.subject for f in findings) == ("tests/tree/unwired",)
+
+
+def test_check_shards_passes_on_the_repo_as_it_stands(capsys):
+    assert coverage._check_shards() == 0
 
 
 # --------------------------------------------------------------------------- #
