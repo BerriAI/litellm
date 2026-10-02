@@ -51,6 +51,7 @@ from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools,
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
+    bedrock_reasoning_effort_disabled,
     bedrock_supports_openai_responses,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -147,6 +148,29 @@ def inline_remote_image_urls(
         return input
     items: Final = [_inline_item(item, inlined) for item in input]
     return items  # pyright: ignore[reportReturnType]  # items keep the caller's input union
+
+
+def _without_disabled_reasoning_effort(
+    params: Mapping[str, object], model: str, drop_params: bool
+) -> dict[str, object]:  # mutable-ok: becomes the map_openai_params return value
+    reasoning: Final = params.get("reasoning")
+    effort: Final = reasoning.get("effort") if isinstance(reasoning, Mapping) else None
+    if not isinstance(reasoning, Mapping) or not isinstance(effort, str):
+        return dict(params)
+    if not bedrock_reasoning_effort_disabled(model=model, effort=effort):
+        return dict(params)
+    if not (drop_params or litellm.drop_params):
+        raise litellm.UnsupportedParamsError(
+            message=(
+                f"{model} does not support reasoning.effort={effort}. "
+                "To drop unsupported params, set `litellm.drop_params = True`."
+            ),
+            status_code=400,
+        )
+    verbose_logger.debug("Dropping unsupported `reasoning.effort=%s` for Bedrock model=%s.", effort, model)
+    rest: Final = {key: value for key, value in reasoning.items() if key != "effort"}
+    without_reasoning: Final = {key: value for key, value in params.items() if key != "reasoning"}
+    return {**without_reasoning, "reasoning": rest} if rest else without_reasoning
 
 
 class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
@@ -261,7 +285,8 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
                 "Bedrock Runtime Responses API: dropping unsupported parameter(s) %s that the endpoint rejects.",
                 unsupported,
             )
-        params: Final = {key: value for key, value in mapped.items() if key not in unsupported}
+        supported: Final[dict[str, object]] = {key: value for key, value in mapped.items() if key not in unsupported}
+        params: Final = _without_disabled_reasoning_effort(supported, model, drop_params)
         tools: Final = params.get("tools")
         if not isinstance(tools, list):
             return params

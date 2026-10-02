@@ -818,6 +818,14 @@ def _mantle_api_base_from_env() -> str | None:
     return next((base[: -len(suffix)] for suffix in _MANTLE_OPENAI_BASE_SUFFIXES if base.endswith(suffix)), base)
 
 
+def bedrock_reasoning_effort_disabled(model: str, effort: str) -> bool:
+    from litellm.utils import is_explicitly_disabled_factory
+
+    return is_explicitly_disabled_factory(
+        model=model, custom_llm_provider="bedrock_converse", key=f"supports_{effort}_reasoning_effort"
+    )
+
+
 def bedrock_supports_openai_responses(model: str | None, model_cost: Mapping[str, object]) -> bool:
     """Whether a Bedrock model is served by bedrock-runtime's OpenAI Responses surface.
 
