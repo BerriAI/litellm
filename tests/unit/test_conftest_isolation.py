@@ -1,14 +1,9 @@
-from typing import Final
-
-import pytest
-
 import litellm
 from litellm import Router
 from litellm import router as litellm_router_module
 from litellm import utils as litellm_utils_module
 
 CANARY_MODEL = "conftest-isolation-canary-model"
-pytestmark: Final = pytest.mark.xdist_group("unit_global_cleanup")
 
 
 class _CanaryRouterHolder:

@@ -1,9 +1,6 @@
-from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-pytestmark: Final = pytest.mark.xdist_group("unit_prisma_cleanup")
 
 
 @pytest.fixture

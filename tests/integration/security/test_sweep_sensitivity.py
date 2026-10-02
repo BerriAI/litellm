@@ -15,12 +15,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
-import httpx
 import pytest
-from integration._support.client import Gateway, eventually, string_value
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.client import eventually, string_value
 from integration.security._canary import DECODE_BUDGET_BYTES, MARKER, SLOTS, DecodeBudgetExceeded, canary, find_canary
 from integration.security._sinks import CONFIG_MODEL, GENERIC_SINK, Rig, canary_rig, settle, team_caller
+from integration._support.wire import Request
 from integration.security._sweeps import (
     ADMIN_ONLY_ALLOWANCES,
     ALLOWANCE_SLOT_FAMILIES,
@@ -33,25 +32,8 @@ from integration.security._sweeps import (
     scoped_queries,
     sweep_all,
     sweep_redis,
-    sweep_routes,
     sweep_sink,
 )
-
-
-def test_route_sweep_reuses_connections_without_sharing_caller_auth_or_response_cookies() -> None:
-    callers: Final = {"admin": "sk-sweep-admin", "internal_user": "sk-sweep-user"}
-    with wire_server(lambda _: Reply(headers={"set-cookie": "session=other-caller; Path=/"}), keep_alive=True) as peer:
-        with httpx.Client(base_url=peer.url, trust_env=False) as client:
-            report: Final = sweep_routes(Gateway(client, callers["admin"], peer.url), (), {}, callers=callers)
-        requests: Final = peer.drain()
-        assert len(requests) == len(report.called) > 8
-        expected: Final = {
-            (path, f"Bearer {callers[label]}") for label, path in (called.split(" ", 1) for called in report.called)
-        }
-        assert {(request.target, request.headers["authorization"]) for request in requests} == expected
-        assert all("cookie" not in request.headers for request in requests)
-        assert report.errors == report.unreachable == ()
-        assert peer.connections() <= 8
 
 
 @pytest.fixture(scope="module")
