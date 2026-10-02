@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
 from collections.abc import Iterator, Mapping
@@ -13,16 +14,18 @@ import jwt
 import pytest
 import yaml
 from cryptography.hazmat.primitives.asymmetric import rsa
-from integration._support.client import Gateway, Scenario, gateway_from_environment, object_value
+from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from integration.authorization._guardrail_opt_out import upstream_observations
 from pydantic import JsonValue
+from redis import Redis
 
 CONFIG_STORE_ID: Final = "vs_integration_config_store"
 PROXY_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 REMOVE_OPENAI_API_BASE: Final = ("OPENAI_API_BASE",)
 JWT_KEY_ID: Final = "integration-vector-store-jwt-key"
+AUTH_CACHE_INVALIDATION_CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 JsonObject: TypeAlias = dict[str, JsonValue]
 
 
@@ -106,10 +109,19 @@ def no_registry_gateways(tmp_path_factory: pytest.TempPathFactory) -> Iterator[t
 
 
 class StrictGateway:
-    def __init__(self, gateway: Gateway, upstream: Gateway, signing_key: rsa.RSAPrivateKey) -> None:
+    def __init__(
+        self,
+        gateway: Gateway,
+        upstream: Gateway,
+        signing_key: rsa.RSAPrivateKey,
+        config: Path,
+        environment: Mapping[str, str],
+    ) -> None:
         self.gateway: Final = gateway
         self.upstream: Final = upstream
         self._signing_key: Final = signing_key
+        self.config: Final = config
+        self.environment: Final = environment
 
     def jwt(self, subject: str, groups: tuple[str, ...] = ()) -> str:
         claims: Final[JsonObject] = {
@@ -154,14 +166,16 @@ def strict_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[StrictG
 
     with gateway_from_environment() as upstream_gateway, wire_server(respond) as jwks:
         directory: Final = tmp_path_factory.mktemp("rag_query_deny_by_default")
+        config: Final = _strict_config(directory)
+        environment: Final = MappingProxyType({**_openai_environment(upstream_gateway), "JWT_PUBLIC_KEY_URL": jwks.url})
         with owned_proxy(
             upstream_gateway,
             directory,
-            {**_openai_environment(upstream_gateway), "JWT_PUBLIC_KEY_URL": jwks.url},
-            config=_strict_config(directory),
+            environment,
+            config=config,
             remove_environment=REMOVE_OPENAI_API_BASE,
         ) as gateway:
-            yield StrictGateway(gateway, upstream_gateway, signing_key)
+            yield StrictGateway(gateway, upstream_gateway, signing_key, config, environment)
 
 
 StrictCase: TypeAlias = Literal[
@@ -185,9 +199,7 @@ def _strict_denied_request(
         standalone_key: Final = scenario.key(models=models)
         return strict.gateway.request(
             "POST", "/v1/rag/query", _rag_query_body(model, marker, store_id), key=standalone_key
-        ), (
-            "key_vector_store_access_denied"
-        )
+        ), ("key_vector_store_access_denied")
     if case in ("team_key_empty_key_grants", "team_key_empty_team_grants"):
         key_grants_store: Final = case == "team_key_empty_team_grants"
         team: Final = scenario.team(models=models, object_permission=empty if key_grants_store else granted)
@@ -197,9 +209,7 @@ def _strict_denied_request(
         error_type: Final = "team_vector_store_access_denied" if key_grants_store else "key_vector_store_access_denied"
         return strict.gateway.request(
             "POST", "/v1/rag/query", _rag_query_body(model, marker, store_id), key=team_key
-        ), (
-            error_type
-        )
+        ), (error_type)
     if case == "multi_store_one_ungranted":
         partial_key: Final = scenario.key(models=models, object_permission=_permission_for_stores(store_id))
         body: Final[JsonObject] = {
@@ -539,3 +549,38 @@ def test_deny_by_default_without_registry_checks_search_route_and_file_search_to
             assert denied_observations == ()
             assert search_granted.status_code == 200, search_granted.text
             assert len(granted_searches) == 1, granted_searches
+
+
+def _auth_cache_subscribers() -> int:
+    with Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache:
+        return int(cache.pubsub_numsub(AUTH_CACHE_INVALIDATION_CHANNEL)[0][1])
+
+
+def test_revoked_user_grant_stops_working_on_another_proxy(strict_gateway: StrictGateway, tmp_path: Path) -> None:
+    subscribers_before_peer: Final = _auth_cache_subscribers()
+    with (
+        owned_proxy(
+            strict_gateway.upstream,
+            tmp_path,
+            strict_gateway.environment,
+            config=strict_gateway.config,
+            remove_environment=REMOVE_OPENAI_API_BASE,
+        ) as peer,
+        strict_gateway.gateway.scenario() as scenario,
+    ):
+        eventually(_auth_cache_subscribers, lambda count: count > subscribers_before_peer)
+        model: Final = scenario.model()
+        store_id: Final = f"vs_unregistered_{uuid.uuid4().hex}"
+        user: Final = scenario.user(user_role="internal_user", object_permission=_permission_for_stores(store_id))
+        token: Final = strict_gateway.jwt(user)
+
+        def peer_status() -> int:
+            marker: Final = f"lit6035 revoked user grant {uuid.uuid4().hex}"
+            return peer.request(
+                "POST", "/v1/rag/query", _rag_query_body(model, marker, store_id), key=token
+            ).status_code
+
+        assert eventually(peer_status, lambda status: status == 200, seconds=30, return_last_on_timeout=True) == 200
+        strict_gateway.gateway.post("/user/update", {"user_id": user, "object_permission": _permission_for_stores()})
+
+        assert eventually(peer_status, lambda status: status == 401, seconds=10, return_last_on_timeout=True) == 401
