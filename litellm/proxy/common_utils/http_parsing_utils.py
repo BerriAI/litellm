@@ -2,11 +2,12 @@ import json
 import re
 from collections.abc import Collection, Mapping
 from types import MappingProxyType, UnionType
-from typing import Annotated, Any, Final, Union, get_args, get_origin
+from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
-from typing_extensions import NotRequired, ReadOnly, Required
+from starlette._utils import get_route_path
+from typing_extensions import NotRequired, ReadOnly, Required, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -21,8 +22,45 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.types.router import Deployment
 
 _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
+# Binary bodies (e.g. OTLP trace exports on POST /v1/traces) are not JSON: arbitrary bytes used to
+# hit the JSON surrogate-repair path and fail auth with a 400. JSON under these types still parses.
+_BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobuf", "application/protobuf"})
 
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
+
+
+def resolve_inference_model(
+    body_model: object,
+    settings: Mapping[str, object],
+    cli_model: str | None,
+    endpoint_model: object = None,
+    *,
+    kind: Literal[
+        "completion", "image_generation", "image_edit", "moderation", "speech", "body", "path"
+    ] = "completion",
+) -> object:
+    match kind:
+        case "image_generation":
+            return cli_model or endpoint_model or settings.get("image_generation_model") or body_model
+        case "image_edit":
+            return (
+                settings.get("completion_model")
+                or cli_model
+                or endpoint_model
+                or settings.get("image_generation_model")
+                or body_model
+            )
+        case "moderation":
+            return cli_model or settings.get("moderation_model") or body_model
+        case "speech":
+            return cli_model or body_model
+        case "body":
+            return body_model
+        case "path":
+            return endpoint_model
+        case "completion":
+            return settings.get("completion_model") or cli_model or endpoint_model or body_model
+    return assert_never(kind)
 
 
 def _normalize_media_type(content_type: str) -> str:
@@ -119,6 +157,21 @@ def coerce_numeric_form_fields(
     }
 
 
+def _parse_binary_body(body: bytes) -> dict:
+    """JSON sent under a binary content type still parses; real binary (protobuf) carries no params -> {}."""
+    try:
+        parsed: Final = orjson.loads(body)
+        if isinstance(parsed, dict):
+            return parsed
+    except orjson.JSONDecodeError:
+        pass
+    return {}
+
+
+def is_otlp_trace_request(request: Request) -> bool:
+    return request.method == "POST" and get_route_path(request.scope) == "/v1/traces"
+
+
 async def _read_request_body(request: Request | None) -> dict:
     """
     Safely read the request body and parse it as JSON.
@@ -133,6 +186,9 @@ async def _read_request_body(request: Request | None) -> dict:
         if request is None:
             return {}
 
+        if is_otlp_trace_request(request):
+            return {}
+
         # Check if we already read and parsed the body
         _cached_request_body: Final[dict | None] = _safe_get_request_parsed_body(request=request)
         if _cached_request_body is not None:
@@ -141,7 +197,9 @@ async def _read_request_body(request: Request | None) -> dict:
         _request_headers: Final[dict] = _safe_get_request_headers(request=request)
         content_type: Final = _request_headers.get("content-type", "")
 
-        if _is_form_content_type(content_type):
+        if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES:
+            parsed_body = _parse_binary_body(await request.body())
+        elif _is_form_content_type(content_type):
             try:
                 form_data: Final = await request.form()
             except Exception as e:

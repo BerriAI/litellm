@@ -1,12 +1,12 @@
 use futures_util::future::BoxFuture;
 use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
-use litellm_host::lifecycle::ExecutionEvent;
-use litellm_host::observation::ObservationSender;
+use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
 use litellm_llms::base_llm::ocr::{
     error::Error,
     handler::{CallHooks, OcrClient},
-    transformation::{LiteLLMOcrResponse, PreparedOcrRequest},
+    transformation::PreparedOcrRequest,
 };
+use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 use serde_json::Value;
 
 use super::{arguments::is_secret_param, prepare::prepare_request, provider_config::OcrConfigKind};

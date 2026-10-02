@@ -22,12 +22,16 @@ def model_usage_task_type(request_tags: str) -> str:
         tags: Final = _TAGS.validate_json(request_tags)
     except ValidationError:
         return MODEL_INSIGHTS_DEFAULT_TASK
-    for tag in tags:
-        if isinstance(tag, str) and tag.startswith(MODEL_INSIGHTS_TASK_TAG_PREFIX):
-            task = tag.removeprefix(MODEL_INSIGHTS_TASK_TAG_PREFIX)
-            if task in load_model_insight_tasks():
-                return task
-    return MODEL_INSIGHTS_DEFAULT_TASK
+    return next(
+        (
+            task
+            for tag in tags
+            if isinstance(tag, str)
+            and tag.startswith(MODEL_INSIGHTS_TASK_TAG_PREFIX)
+            and (task := tag.removeprefix(MODEL_INSIGHTS_TASK_TAG_PREFIX)) in load_model_insight_tasks()
+        ),
+        MODEL_INSIGHTS_DEFAULT_TASK,
+    )
 
 
 def _is_internal_call(metadata: str) -> bool:

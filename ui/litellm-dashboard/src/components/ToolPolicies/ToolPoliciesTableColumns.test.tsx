@@ -1,9 +1,11 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { getToolPoliciesTableColumns } from "./ToolPoliciesTableColumns";
 import type { ToolRow } from "@/components/networking";
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 const row: ToolRow = {
   tool_name: "search_docs",
@@ -60,8 +62,36 @@ describe("getToolPoliciesTableColumns", () => {
       "team_id",
       "key_hash",
       "key_alias",
+      "user",
       "user_agent",
     ]);
+  });
+
+  it("shows the owning user's alias, linking to their detail page", () => {
+    renderTable({}, [{ ...row, user: { user_id: "user-1", user_email: "one@example.com", user_alias: "Team One" } }]);
+
+    const link = screen.getByRole("link", { name: "Team One" });
+    expect(link).toHaveAttribute("href", expect.stringContaining("user-1"));
+    expect(screen.queryByText("one@example.com")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the owning user's email, then id, when no alias is set", () => {
+    renderTable({}, [
+      { ...row, tool_name: "by_email", user: { user_id: "user-1", user_email: "one@example.com", user_alias: null } },
+      { ...row, tool_name: "by_id", user: { user_id: "user-2", user_email: null, user_alias: null } },
+    ]);
+
+    expect(screen.getByRole("link", { name: "one@example.com" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "user-2" })).toBeInTheDocument();
+  });
+
+  it("renders a dash without a link when the discovering key has no owner", () => {
+    renderTable({}, [{ ...row, user: null }]);
+
+    const userIndex = getToolPoliciesTableColumns(defaultDeps).findIndex((c) => c.id === "user");
+    const userCell = screen.getAllByRole("cell")[userIndex];
+    expect(userCell).toHaveTextContent("-");
+    expect(within(userCell).queryByRole("link")).not.toBeInTheDocument();
   });
 
   it("renders the row's identifying fields", () => {

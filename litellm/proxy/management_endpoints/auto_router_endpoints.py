@@ -39,9 +39,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     refresh_proxy_server_request_body_snapshot,
 )
-from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # shared owner of team-admin membership
-)
+from litellm.proxy.management.teams.access import is_team_admin
 from litellm.proxy.management_helpers.auto_router_permissions import (
     authorize_member_auto_router_dependencies,
     authorize_member_auto_router_team,
@@ -222,7 +220,7 @@ async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: 
     if team_id is None:
         raise HTTPException(
             status_code=403,
-            detail={  # mutable-ok: HTTPException detail must be a plain mapping to keep this route's {"error": ...} response shape
+            detail={
                 "error": f"User does not have permission to dry-run an auto router. Your role={user_api_key_dict.user_role}. Call as a PROXY_ADMIN, or as a team admin by specifying a team_id."
             },
         )
@@ -230,24 +228,20 @@ async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: 
     if prisma_client is None:
         raise HTTPException(
             status_code=500,
-            detail={  # mutable-ok: HTTPException detail must be a plain mapping
-                "error": CommonProxyErrors.db_not_connected_error.value
-            },
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
     team_row: Final = await _team_table(prisma_client).find_unique(
-        where={"team_id": team_id},  # mutable-ok: Prisma query filters are dict-shaped
+        where={"team_id": team_id},
     )
     if team_row is None:
         raise HTTPException(
             status_code=400,
-            detail={  # mutable-ok: HTTPException detail must be a plain mapping
-                "error": f"Team id={team_id} does not exist in db"
-            },
+            detail={"error": f"Team id={team_id} does not exist in db"},
         )
 
     team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
-    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team):
+    if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team):
         ModelManagementAuthChecks.can_user_make_team_model_call(
             team_id=team_id,
             user_api_key_dict=user_api_key_dict,
@@ -359,8 +353,8 @@ async def _authorize_models_this_test_can_call(
 
 @router.post(
     "/auto_router/validate_complexity_router_config",
-    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
     response_model=ComplexityRouterConfigValidationResponse,
     status_code=status.HTTP_200_OK,
 )
@@ -395,7 +389,7 @@ async def validate_complexity_router_config(
 
 @router.post(
     "/auto_router/availability",
-    tags=["model management"],  # mutable-ok: FastAPI requires a list
+    tags=["model management"],
     response_model=AutoRouterAvailabilityResponse,
 )
 async def get_auto_router_availability(
@@ -477,8 +471,8 @@ async def _resolve_saved_routing_test(
 
 @router.post(
     "/auto_router/test_routing",
-    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
     response_model=AutoRouterRoutingTestResponse,
     status_code=status.HTTP_200_OK,
 )
@@ -533,9 +527,7 @@ async def preview_auto_router_routing(
     if llm_router is None:
         raise HTTPException(
             status_code=500,
-            detail={  # mutable-ok: HTTPException detail must be a plain mapping
-                "error": CommonProxyErrors.no_llm_router.value
-            },
+            detail={"error": CommonProxyErrors.no_llm_router.value},
         )
     resolved: Final = await _resolve_saved_routing_test(data, user_api_key_dict, llm_router)
     actor: Final = (
@@ -550,8 +542,8 @@ async def preview_auto_router_routing(
     )
     request_data: Final[dict[str, object]] = {  # mutable-ok: auth and routing enrich this request in place
         **resolved.wire_body(),
-        "metadata": {},  # mutable-ok: centralized auth and identity stamping share this metadata bucket
-        "proxy_server_request": {"body": None},  # mutable-ok: the snapshot owner fills this body in place
+        "metadata": {},
+        "proxy_server_request": {"body": None},
     }
 
     if member_team is not None and _models_this_test_can_call(resolved.complexity_router_config):
@@ -597,17 +589,13 @@ async def preview_auto_router_routing(
         verbose_proxy_logger.exception("Auto router routing test failed. Due to error - %s", e)
         raise HTTPException(
             status_code=400,
-            detail={  # mutable-ok: HTTPException detail must be a plain mapping
-                "error": f"Could not route this prompt: {e}"
-            },
+            detail={"error": f"Could not route this prompt: {e}"},
         ) from e
 
     if hook_response is None or hook_response.routing_decision is None:
         raise HTTPException(
             status_code=400,
-            detail={  # mutable-ok: HTTPException detail must be a plain mapping
-                "error": "The router made no decision for this prompt. Check that at least one tier has a model."
-            },
+            detail={"error": "The router made no decision for this prompt. Check that at least one tier has a model."},
         )
 
     available_models: Final = await get_available_models_for_user(
@@ -651,6 +639,7 @@ class _SessionAggRow(BaseModel):
     saved_spend: float
     savings_estimated_turns: int = 0
     savings_estimated_actual_spend: float = 0.0
+    savings_estimated_classifier_cost: float | None = None
     savings_estimated_saved_spend: float = 0.0
     classifier_cost: float
     classifier_cost_recorded_turns: int
@@ -679,11 +668,28 @@ def _cache_bucket(turns: int, hits: int) -> AutoRouterCacheBucket:
 
 
 def _savings_cohort(
-    turns: int, estimated_turns: int, actual_spend: float, saved_spend: float
+    turns: int, estimated_turns: int, spend: float, saved_spend: float
 ) -> tuple[float | None, float | None]:
-    if turns > 0 and estimated_turns == 0:
+    if turns > 0 and estimated_turns == 0 and saved_spend == 0:
         return None, None
-    return saved_spend, actual_spend + saved_spend
+    return saved_spend, spend + saved_spend
+
+
+def _compared_row(row: _SessionAggRow) -> _SessionAggRow:
+    _, baseline_spend = _savings_cohort(row.turns, row.savings_estimated_turns, row.spend, row.saved_spend)
+    compared: Final = row.router_type == "complexity" and baseline_spend is not None
+    return row.model_copy(
+        update={
+            "savings_estimated_turns": row.turns if compared else 0,
+            "savings_estimated_actual_spend": row.spend if compared else 0.0,
+            "savings_estimated_classifier_cost": (
+                row.classifier_cost if row.classifier_cost_recorded_turns == row.turns else None
+            )
+            if compared
+            else 0.0,
+            "savings_estimated_saved_spend": row.saved_spend if compared else 0.0,
+        }
+    )
 
 
 def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
@@ -701,13 +707,12 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
         spend=row.spend,
         savings_estimated_turns=row.savings_estimated_turns,
         savings_estimated_actual_spend=row.savings_estimated_actual_spend,
+        savings_estimated_classifier_cost=row.savings_estimated_classifier_cost,
         saved_spend=saved_spend,
         classifier_cost=row.classifier_cost if row.classifier_cost_recorded_turns == row.turns else None,
         baseline_spend=baseline_spend,
         saved_pct=_pct(saved_spend, baseline_spend) if saved_spend is not None and baseline_spend is not None else None,
-        saved_per_session=(row.savings_estimated_saved_spend / sessions if sessions else 0.0)
-        if row.savings_estimated_turns == row.turns
-        else None,
+        saved_per_session=(saved_spend / sessions if sessions else 0.0) if saved_spend is not None else None,
         cache=AutoRouterCacheStats(
             coverage_pct=_pct(row.covered_turns, row.turns),
             hit_rate_pct=_pct(row.cache_hits, row.covered_turns),
@@ -739,6 +744,7 @@ def _benchmark_group(row: _SessionAggRow) -> AutoRouterBenchmarkGroup:
         saved_spend=totals.saved_spend,
         savings_estimated_turns=totals.savings_estimated_turns,
         savings_estimated_actual_spend=totals.savings_estimated_actual_spend,
+        savings_estimated_classifier_cost=totals.savings_estimated_classifier_cost,
         classifier_cost=totals.classifier_cost,
         baseline_spend=totals.baseline_spend,
         saved_pct=totals.saved_pct,
@@ -772,6 +778,11 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
         saved_spend=sum(row.saved_spend for row in rows),
         savings_estimated_turns=sum(row.savings_estimated_turns for row in rows),
         savings_estimated_actual_spend=sum(row.savings_estimated_actual_spend for row in rows),
+        savings_estimated_classifier_cost=(
+            sum(row.savings_estimated_classifier_cost or 0.0 for row in rows)
+            if all(row.savings_estimated_classifier_cost is not None for row in rows)
+            else None
+        ),
         savings_estimated_saved_spend=sum(row.savings_estimated_saved_spend for row in rows),
         classifier_cost=sum(row.classifier_cost for row in rows),
         classifier_cost_recorded_turns=sum(row.classifier_cost_recorded_turns for row in rows),
@@ -882,7 +893,7 @@ async def get_auto_router_benchmarks(
         api_key,
         user_id,
     )
-    rows: Final = _SESSION_AGG_ROWS.validate_python(raw_rows or ())
+    rows: Final = tuple(_compared_row(row) for row in _SESSION_AGG_ROWS.validate_python(raw_rows or ()))
     groups: Final = (
         *(_benchmark_group(row) for row in rows),
         *_idle_router_groups(llm_router, frozenset((row.router_name, row.router_type) for row in rows)),
@@ -927,7 +938,8 @@ async def get_auto_router_session(
         raise HTTPException(
             status_code=404, detail=f"No auto-routed turns recorded for session {session_id!r} under this key"
         )
-    saved_spend, baseline_spend = _savings_cohort(
+    saved_spend, baseline_spend = _savings_cohort(row.turns, row.savings_estimated_turns, row.spend, row.saved_spend)
+    _, estimated_baseline_spend = _savings_cohort(
         row.turns, row.savings_estimated_turns, row.savings_estimated_actual_spend, row.savings_estimated_saved_spend
     )
     return AutoRouterSessionResponse(
@@ -940,10 +952,10 @@ async def get_auto_router_session(
         savings_estimated_turns=row.savings_estimated_turns,
         savings_estimated_actual_spend=row.savings_estimated_actual_spend,
         saved_spend=saved_spend,
-        baseline_spend=baseline_spend if row.savings_estimated_turns == row.turns else None,
-        savings_estimated_baseline_spend=baseline_spend,
+        baseline_spend=baseline_spend,
+        savings_estimated_baseline_spend=estimated_baseline_spend,
         baseline_model=row.baseline_model,
-        baseline_models=row.savings_estimated_baseline_models,
+        baseline_models=row.baseline_models,
     )
 
 
@@ -1397,8 +1409,7 @@ async def _leg_attempt_counts(prisma_client: "PrismaClient", legs: Sequence[_Leg
     if not legs:
         return MappingProxyType({})
     rows: Final = _ATTEMPT_COUNT_ROWS.validate_python(
-        await _query_raw(prisma_client, _ATTEMPT_COUNTS_SQL, [leg.id for leg in legs])  # mutable-ok: query param
-        or ()
+        await _query_raw(prisma_client, _ATTEMPT_COUNTS_SQL, [leg.id for leg in legs]) or ()
     )
     return MappingProxyType({row.job_id: row for row in rows})
 
@@ -1484,33 +1495,21 @@ async def _with_target_labels(
     team_ids: Final = _target_ids_of(responses, "team")
     user_ids: Final = _target_ids_of(responses, "user")
     key_rows: Final = (
-        await _verification_tokens(prisma_client).find_many(
-            where={"token": {"in": list(tokens)}}  # mutable-ok: Prisma filter
-        )
-        if tokens
-        else ()
+        await _verification_tokens(prisma_client).find_many(where={"token": {"in": list(tokens)}}) if tokens else ()
     )
     team_rows: Final = (
-        await _team_rows(prisma_client).find_many(
-            where={"team_id": {"in": list(team_ids)}}  # mutable-ok: Prisma filter
-        )
-        if team_ids
-        else ()
+        await _team_rows(prisma_client).find_many(where={"team_id": {"in": list(team_ids)}}) if team_ids else ()
     )
     user_rows: Final = (
-        await _user_rows(prisma_client).find_many(
-            where={"user_id": {"in": list(user_ids)}}  # mutable-ok: Prisma filter
-        )
-        if user_ids
-        else ()
+        await _user_rows(prisma_client).find_many(where={"user_id": {"in": list(user_ids)}}) if user_ids else ()
     )
     labels: Final = _target_labels(key_rows or (), team_rows or (), user_rows or ())
     return tuple(
         response.model_copy(
-            update={  # mutable-ok: pydantic update payload
+            update={
                 "targets": tuple(
                     target.model_copy(
-                        update={  # mutable-ok: pydantic update payload
+                        update={
                             "target_alias": labels.get((target.target_type, target.target_id), _NO_TARGET_LABELS)[0],
                             "key_name": labels.get((target.target_type, target.target_id), _NO_TARGET_LABELS)[1],
                         }
@@ -1534,7 +1533,7 @@ async def _shadow_eval_results(
     turns the router sent to X, did X beat the baseline" in reverse; the per-target
     slices answer "which target's traffic does the router suit". Reads are bounded by
     the job's own attempts (<= the sum of its targets' max_turns) via the job_id index."""
-    leg_ids: Final = [leg.id for leg in legs]  # mutable-ok: query param
+    leg_ids: Final = [leg.id for leg in legs]
     by_tier: Final = _ATTEMPT_AGG_ROWS.validate_python(
         await _query_raw(prisma_client, _ATTEMPT_AGG_BY_TIER_SQL, leg_ids) or ()
     )
@@ -1549,9 +1548,7 @@ async def _shadow_eval_results(
     )
     verdicts_by_target: Final[Mapping[tuple[str, str], ShadowEvalSlice]] = MappingProxyType(
         {
-            target_by_leg[slice.group]: slice.model_copy(
-                update={"group": target_by_leg[slice.group][1]}  # mutable-ok: pydantic update payload
-            )
+            target_by_leg[slice.group]: slice.model_copy(update={"group": target_by_leg[slice.group][1]})
             for slice in _slices(by_leg)
         }
     )
@@ -1634,23 +1631,17 @@ async def start_shadow_eval(
             status_code=400, detail=f"Not a configured auto-router: {', '.join(repr(n) for n in unconfigured)}"
         )
     token_rows: Final = (
-        await _verification_tokens(prisma_client).find_many(
-            where={"token": {"in": list(data.api_key_ids)}}  # mutable-ok: Prisma filter
-        )
+        await _verification_tokens(prisma_client).find_many(where={"token": {"in": list(data.api_key_ids)}})
         if data.api_key_ids
         else ()
     )
     team_rows: Final = (
-        await _team_rows(prisma_client).find_many(
-            where={"team_id": {"in": list(data.team_ids)}}  # mutable-ok: Prisma filter
-        )
+        await _team_rows(prisma_client).find_many(where={"team_id": {"in": list(data.team_ids)}})
         if data.team_ids
         else ()
     )
     user_rows: Final = (
-        await _user_rows(prisma_client).find_many(
-            where={"user_id": {"in": list(data.user_ids)}}  # mutable-ok: Prisma filter
-        )
+        await _user_rows(prisma_client).find_many(where={"user_id": {"in": list(data.user_ids)}})
         if data.user_ids
         else ()
     )
@@ -1709,12 +1700,11 @@ async def start_shadow_eval(
     # deliberate. Sweep and claim filter on exact (target_type, id) pairs so a team id
     # that happens to equal a key hash never matches the other kind's slot.
     for target_type, ids in requested_by_type:
-        await prisma_client.db.execute_raw(_SWEEP_FINISHED_JOBS_SQL, list(ids), target_type)  # mutable-ok: query param
+        await prisma_client.db.execute_raw(_SWEEP_FINISHED_JOBS_SQL, list(ids), target_type)
     claimed: Final = await _shadow_eval_jobs(prisma_client).find_many(
-        where={  # mutable-ok: Prisma filter
-            "OR": [  # mutable-ok: Prisma filter
-                {"target_type": target_type, "target_id": {"in": list(ids)}}  # mutable-ok: Prisma filter
-                for target_type, ids in requested_by_type
+        where={
+            "OR": [
+                {"target_type": target_type, "target_id": {"in": list(ids)}} for target_type, ids in requested_by_type
             ],
             "direction": data.direction,
             "stopped_at": None,
@@ -1732,12 +1722,12 @@ async def start_shadow_eval(
     now: Final = datetime.now(timezone.utc)
     group_id: Final = str(uuid4())
     ends_at: Final = now + timedelta(days=data.duration_days)
-    shared_config: Final = {  # mutable-ok: Prisma payload
+    shared_config: Final = {
         "group_id": group_id,
         # a pre-router_names pod samples router_name alone, so it must be a real arm
         "router_name": data.router_names[0],
-        "router_names": list(data.router_names),  # mutable-ok: Prisma payload
-        "models": list(data.models),  # mutable-ok: Prisma payload
+        "router_names": list(data.router_names),
+        "models": list(data.models),
         "direction": data.direction,
         "baseline_model": data.baseline_model,
         "judge_model": data.judge_model,
@@ -1754,8 +1744,8 @@ async def start_shadow_eval(
         # (DATABASE_URL_READ_REPLICA) could otherwise return empty.
         leg_ids: Final = tuple(str(uuid4()) for _ in requested_targets)
         await _shadow_eval_jobs(prisma_client).create_many(
-            data=[  # mutable-ok: Prisma payload
-                {  # mutable-ok: Prisma payload
+            data=[
+                {
                     **shared_config,
                     "id": leg_id,
                     "target_type": target_type,
@@ -1779,7 +1769,7 @@ async def start_shadow_eval(
     # (null coverage). A failed seed degrades this job to exactly that, nothing worse.
     try:
         await _shadow_eval_funnel(prisma_client).create_many(
-            data=[{"job_id": leg_id} for leg_id in leg_ids],  # mutable-ok: Prisma payload
+            data=[{"job_id": leg_id} for leg_id in leg_ids],
             skip_duplicates=True,
         )
     except Exception as seed_err:  # noqa: BLE001  # coverage is advisory; the job must still start
@@ -1873,38 +1863,31 @@ async def get_shadow_eval_job(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     legs: Final = _LEG_ROWS.validate_python(
-        await _shadow_eval_jobs(prisma_client).find_many(
-            where={"group_id": job_id}  # mutable-ok: Prisma filter
-        )
-        or ()
+        await _shadow_eval_jobs(prisma_client).find_many(where={"group_id": job_id}) or ()
     )
     if not legs:
         raise HTTPException(status_code=404, detail=f"No shadow eval job {job_id}")
-    leg_ids: Final = [leg.id for leg in legs]  # mutable-ok: query param
+    leg_ids: Final = [leg.id for leg in legs]
     totals: Final = _ATTEMPT_TOTALS_ROWS.validate_python(
         await _query_raw(prisma_client, _ATTEMPT_TOTALS_SQL, leg_ids) or ()
     )
     latest_error: Final = await _shadow_eval_attempts(prisma_client).find_first(
-        where={"job_id": {"in": leg_ids}, "outcome": "error"},  # mutable-ok: Prisma filter
-        order={"created_at": "desc"},  # mutable-ok: Prisma order
+        where={"job_id": {"in": leg_ids}, "outcome": "error"},
+        order={"created_at": "desc"},
     )
     labeled: Final = await _with_target_labels(
         prisma_client, (_group_response(job_id, legs, await _leg_attempt_counts(prisma_client, legs)),)
     )
     results, verdicts_by_target = await _shadow_eval_results(prisma_client, legs)
     return labeled[0].model_copy(
-        update={  # mutable-ok: pydantic update payload
+        update={
             "judged_count": totals[0].judged_count if totals else 0,
             "error_count": totals[0].error_count if totals else 0,
             "judge_spend": round(totals[0].judge_spend, 6) if totals else 0.0,
             "last_error": latest_error.error if latest_error else None,
             "results": results,
             "targets": tuple(
-                target.model_copy(
-                    update={  # mutable-ok: pydantic update payload
-                        "verdicts": verdicts_by_target.get((target.target_type, target.target_id))
-                    }
-                )
+                target.model_copy(update={"verdicts": verdicts_by_target.get((target.target_type, target.target_id))})
                 for target in labeled[0].targets
             ),
         }
@@ -1938,10 +1921,7 @@ async def stop_shadow_eval_job(
         _STOP_JOB_SQL, job_id, operator, stamp.replace(tzinfo=None).isoformat()
     )
     legs: Final = _LEG_ROWS.validate_python(
-        await _shadow_eval_jobs(prisma_client).find_many(
-            where={"group_id": job_id}  # mutable-ok: Prisma filter
-        )
-        or ()
+        await _shadow_eval_jobs(prisma_client).find_many(where={"group_id": job_id}) or ()
     )
     if not legs:
         raise HTTPException(status_code=404, detail=f"No shadow eval job {job_id}")

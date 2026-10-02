@@ -42,10 +42,11 @@ from e2e_config import (
 )
 from e2e_db import RESET_OPT_IN_ENV, reset_spend_logs, run_spend_log_cleanup
 from e2e_http import unwrap
+from e2e_metadata import STEPS
 from fixture_mode import fixture_mode_collection_error, fixture_report_lines
 from fixture_mode import pytest_fixture_setup as pytest_fixture_setup
 from idp import Identity, Keycloak, keycloak_from_env
-from junit_properties import attach_result_properties
+from junit_properties import attach_result_properties, attach_step_properties
 from lifecycle import ProxyClientProvider, ResourceManager
 from memory_readings import RssCapture, read_rss_everywhere
 from models import TeamNewBody, UserNewBody, UserNewResponse
@@ -119,6 +120,11 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
         "covers(cell_id, *, exercised_on=()): coverage-registry cell(s) this test covers",
+    )
+    config.addinivalue_line(
+        "markers",
+        "meta(subject): typed e2e_metadata.Subject describing what this test drives"
+        " (domain/route/providers/models/capabilities/mode); attach it with @meta(Subject(...))",
     )
     config.addinivalue_line(
         "markers",
@@ -289,7 +295,14 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     """Hard-fail `e2e`-marked tests unless a proxy answers its liveness probe.
     Unmarked tests (unit coverage of the harness) don't touch the proxy, so they
     run even when none is up. Never skip for a missing proxy. Replay mode needs
-    the proxy too: only provider-bound traffic replays from the bundle."""
+    the proxy too: only provider-bound traffic replays from the bundle.
+
+    Also empties the step log, so the story a test tells is its own. It happens
+    here, first in the setup phase, rather than in a fixture: a fixture only runs
+    once every wider-scoped fixture ahead of it has been set up, so a step a
+    module-scoped finalizer recorded after the previous test would still be in
+    the log when this test's setup dies early, and would be reported as its own."""
+    STEPS.reset()
     LIVE_PROVIDER_REQUIRED.set(item.get_closest_marker("provider_live") is not None)
     if _uses_idle_rss(item):
         item.user_properties.extend(item.config.stash[_IDLE_RSS].junit_properties)
@@ -318,17 +331,37 @@ def pytest_runtest_makereport(
     item: pytest.Item, call: pytest.CallInfo[None]
 ) -> Generator[None, pytest.TestReport, pytest.TestReport]:
     """Stash the call-phase outcome so teardown can tell a passed test from a
-    failed one without re-deriving it."""
+    failed one without re-deriving it, and attach the runtime-recorded steps.
+
+    The steps cannot ride along with the other properties in
+    `pytest_collection_modifyitems`: that hook runs before any test body has, so
+    the recorder is empty there. They are attached after setup and again after
+    call, on every outcome -- a failing test's last step is where it died, which
+    is the whole reason the field exists. Setup has to attach too because a test
+    whose fixture raises never reaches the call phase, and setup is where an e2e
+    test most often dies (proxy not ready, key creation failing). The second
+    attach replaces the first, so nothing is doubled. JUnit writes properties
+    from the teardown report, which pytest builds from `item.user_properties`
+    after both of these have run. The setup and call reports carry them as well,
+    so a reader of a failed phase's own report sees where it died too.
+
+    Teardown deliberately does not attach. Steps recorded by fixture finalizers
+    are cleanup, and appending them would put "delete virtual key" after the step
+    a failing test died on, which breaks the one guarantee the field makes. A
+    finalizer that raises is still reported by JUnit with its own traceback.
+    """
     report = yield
+    if report.when in ("setup", "call"):
+        attach_step_properties(item)
     if item.get_closest_marker("mcp_oauth_live") is not None and call.excinfo is not None:
         # Publish code locations only, never exception messages, source text or locals.
         item.user_properties.append(("oauth_failure_phase", report.when))
         item.user_properties.append(("oauth_exception_type", call.excinfo.type.__name__))
         for entry in call.excinfo.traceback:
             item.user_properties.append(("oauth_frame", f"{Path(entry.path).name}:{entry.lineno + 1}:{entry.name}"))
-        report.user_properties = list(item.user_properties)
     if report.when == "call":
         item.stash[_CALL_PASSED] = report.passed
+    report.user_properties = list(item.user_properties)
     return report
 
 
