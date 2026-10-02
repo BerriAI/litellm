@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -401,7 +401,7 @@ def test_sync_guardrail_from_db_marks_source_db_when_unchanged():
 
 
 @pytest.fixture
-def rotation_handler():
+def rotation_handler() -> Iterator[InMemoryGuardrailHandler]:
     registry_module = _register_mode_following_initializer("rotation_test")
     lists = _all_callback_lists()
     snapshots = [list(cb_list) for cb_list in lists]
@@ -413,7 +413,7 @@ def rotation_handler():
             cb_list[:] = snapshot
 
 
-def _rotation_row(litellm_params) -> Guardrail:
+def _rotation_row(litellm_params: dict[str, object] | LitellmParams) -> Guardrail:
     return Guardrail(guardrail_id="rotated", guardrail_name="mode-following", litellm_params=litellm_params)
 
 
@@ -1185,7 +1185,6 @@ _ENCRYPTED_PREFIX = "litellm_enc::"
 
 
 class _Row(dict[str, object]):
-    """Prisma-row stand-in: dict(row) yields the columns and attributes read like a model."""
 
     def __getattr__(self, name: str) -> object:
         return self[name]

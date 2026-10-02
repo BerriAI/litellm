@@ -21101,7 +21101,6 @@ class TestTeamAdminMemberKeyBudgetUpdate:
 
 @pytest.mark.asyncio
 async def test_rotate_master_key_reencrypts_guardrail_params(monkeypatch):
-    """Master-key rotation re-encrypts the guardrails table's litellm_params under the new key."""
     import json
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock

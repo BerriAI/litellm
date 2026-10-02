@@ -2677,7 +2677,6 @@ async def test_test_custom_code_endpoint_reports_a_system_exit_as_an_execution_e
 
 @pytest.mark.asyncio
 async def test_team_guardrail_api_key_is_encrypted_at_rest_and_decrypted_on_review(mocker, monkeypatch):
-    """register stores the vendor api_key encrypted; submission detail masks the plaintext and approve loads it."""
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-guardrail-test")
     mock_prisma = mocker.Mock()
     mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
