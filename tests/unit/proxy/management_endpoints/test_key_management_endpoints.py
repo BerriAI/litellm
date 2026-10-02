@@ -45,7 +45,8 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
-from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
+from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_key_project_team,
@@ -82,6 +83,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     list_keys,
     prepare_key_update_data,
     reset_key_spend_fn,
+    update_key_fn,
     validate_key_list_check,
     validate_key_team_change,
 )
@@ -2963,7 +2965,10 @@ async def test_update_key_nonexistent_key_returns_404(monkeypatch):
 def _setup_update_key_mocks(monkeypatch, mock_prisma_client):
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", AsyncMock())
-    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     monkeypatch.setattr("litellm.store_audit_logs", False)
@@ -18797,7 +18802,9 @@ def _estimate_key_row(token: str, metadata: dict):
     return existing_key
 
 
-def _wire_update_key_fn(monkeypatch, existing_key):
+def _wire_update_key_fn(
+    monkeypatch: pytest.MonkeyPatch, existing_key: LiteLLM_VerificationToken | MagicMock
+) -> AsyncMock:
     mock_prisma_client = AsyncMock()
     updated_key = MagicMock()
     updated_key.token = existing_key.token
@@ -18826,6 +18833,7 @@ def _wire_update_key_fn(monkeypatch, existing_key):
         "litellm.proxy.management_endpoints.key_management_endpoints._enforce_unique_key_alias",
         _noop,
     )
+    return mock_prisma_client
 
 
 @pytest.mark.asyncio
@@ -20598,6 +20606,37 @@ async def test_key_generation_rejects_foreign_project_team(
     assert error.value.detail == expected_detail
 
 
+@pytest.mark.asyncio
+async def test_key_generation_budget_ceiling_precedes_project_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_api_key_cache: Final = await _cache_with_project(_OWNED_PROJECT, [], team_id=_OWNERSHIP_PROJECT_TEAM)
+    _configure_key_endpoints(monkeypatch, user_api_key_cache)
+    monkeypatch.setattr(litellm, "default_key_generate_params", None)
+
+    with pytest.raises(HTTPException) as error:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                project_id=_OWNED_PROJECT,
+                team_id=_OWNERSHIP_KEY_TEAM,
+                max_budget=10,
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="litellm_login_session",
+                user_id="session-user",
+                team_id=_OWNERSHIP_KEY_TEAM,
+                is_session_token=True,
+                max_budget=5,
+            ),
+            litellm_changed_by=None,
+            team_table=LiteLLM_TeamTableCachedObj(team_id=_OWNERSHIP_KEY_TEAM),
+        )
+
+    assert error.value.status_code == 400
+    assert error.value.detail == {"error": "max_budget (10.0) cannot exceed the caller's own max_budget (5.0)."}
+
+
 @pytest.mark.parametrize(
     ("key_team_id", "expected_status"),
     [(_OWNERSHIP_PROJECT_TEAM, 200), (_OWNERSHIP_KEY_TEAM, 400)],
@@ -20651,23 +20690,24 @@ async def test_key_generation_uses_database_project_team_when_cache_is_stale(
 
 
 @pytest.mark.asyncio
-async def test_key_generation_fails_when_writer_project_lookup_exceeds_deadline(
+async def test_key_generation_slow_writer_project_lookup_does_not_stall_db_tracker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     user_api_key_cache: Final = await _cache_with_project(_OWNED_PROJECT, [], team_id=_OWNERSHIP_PROJECT_TEAM)
     prisma_client: Final = _configure_key_endpoints(monkeypatch, user_api_key_cache)
-    stalled_lookup: Final = asyncio.Event()
     monkeypatch.setattr("litellm.proxy.db.db_lookup_gate.PROXY_DB_LOOKUP_DEADLINE_SECONDS", 0.05)
 
-    async def never_returns_project(*, where: Mapping[str, object]) -> None:
+    async def slow_project_lookup(*, where: Mapping[str, object]) -> LiteLLM_ProjectTable:
         assert where == {"project_id": _OWNED_PROJECT}
-        await stalled_lookup.wait()
+        await asyncio.sleep(0.2)
+        return LiteLLM_ProjectTable(project_id=_OWNED_PROJECT, team_id=_OWNERSHIP_PROJECT_TEAM)
 
-    prisma_client.writer_db.litellm_projecttable.find_unique = never_returns_project
+    prisma_client.writer_db.litellm_projecttable.find_unique = slow_project_lookup
     monkeypatch.setattr(litellm, "default_key_generate_params", None)
 
-    with pytest.raises(DBLookupDeadlineExceeded) as error:
-        await asyncio.wait_for(
+    db_lookup_stall_tracker.clear()
+    try:
+        response: Final = await asyncio.wait_for(
             _common_key_generation_helper(
                 data=GenerateKeyRequest(project_id=_OWNED_PROJECT, team_id=_OWNERSHIP_PROJECT_TEAM),
                 user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin"),
@@ -20676,8 +20716,10 @@ async def test_key_generation_fails_when_writer_project_lookup_exceeds_deadline(
             ),
             timeout=1.0,
         )
-
-    assert error.value.lookup == "project"
+        assert response.team_id == _OWNERSHIP_PROJECT_TEAM
+        assert db_lookup_stall_tracker.stalled_within(PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS) is False
+    finally:
+        db_lookup_stall_tracker.clear()
 
 
 @pytest.mark.parametrize("project_team_id", ["team-a", None])
@@ -20815,36 +20857,98 @@ async def test_key_update_allows_legacy_project_mismatch_when_team_is_unchanged(
 
 @pytest.mark.asyncio
 async def test_key_update_rejects_team_change_for_project_bound_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    user_api_key_cache: Final = await _cache_with_project(
-        _OWNED_PROJECT, [], team_id=_OWNERSHIP_PROJECT_TEAM
-    )
-    mock_prisma_client: Final = _configure_key_endpoints(monkeypatch, user_api_key_cache)
-    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
-        return_value=LiteLLM_TeamTable(team_id=_OWNERSHIP_DESTINATION_TEAM)
-    )
     existing_key_row: Final = LiteLLM_VerificationToken(
         token="hashed-key",
         team_id=_OWNERSHIP_KEY_TEAM,
         project_id=_OWNED_PROJECT,
     )
+    mock_prisma_client: Final = _wire_update_key_fn(monkeypatch, existing_key_row)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        AsyncMock(return_value=LiteLLM_TeamTable(team_id=_OWNERSHIP_DESTINATION_TEAM, team_members=[])),
+    )
+    mock_prisma_client.writer_db.litellm_projecttable.find_unique = AsyncMock(
+        return_value=LiteLLM_ProjectTable(project_id=_OWNED_PROJECT, team_id=_OWNERSHIP_PROJECT_TEAM)
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", MagicMock())
+    mock_request: Final = MagicMock()
+    mock_request.query_params = {}
 
-    with pytest.raises(HTTPException) as error:
-        await _validate_update_key_data(
+    with pytest.raises((HTTPException, ProxyException)) as error:
+        await update_key_fn(
+            request=mock_request,
             data=UpdateKeyRequest(key="sk-key", team_id=_OWNERSHIP_DESTINATION_TEAM),
-            existing_key_row=existing_key_row,
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin"),
-            llm_router=None,
-            premium_user=True,
-            prisma_client=mock_prisma_client,
-            user_api_key_cache=user_api_key_cache,
+            litellm_changed_by=None,
         )
 
-    assert error.value.status_code == 400
+    assert str(getattr(error.value, "status_code", None) or getattr(error.value, "code", None)) == "400"
     expected_detail: Final = (
         f"Project {_OWNED_PROJECT} belongs to team {_OWNERSHIP_PROJECT_TEAM}, "
         f"but the key belongs to {_OWNERSHIP_DESTINATION_TEAM}"
     )
-    assert expected_detail in str(error.value.detail)
+    assert expected_detail in str(getattr(error.value, "detail", None) or getattr(error.value, "message", None))
+    mock_prisma_client.update_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_key_update_organization_membership_error_precedes_project_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing_key_row: Final = LiteLLM_VerificationToken(
+        token="hashed-key",
+        user_id="key-owner",
+        created_by="key-owner",
+        team_id=_OWNERSHIP_PROJECT_TEAM,
+        project_id=_OWNED_PROJECT,
+    )
+    mock_prisma_client: Final = _wire_update_key_fn(monkeypatch, existing_key_row)
+    user_api_key_cache: Final = await _cache_with_project(_OWNED_PROJECT, [], team_id=_OWNERSHIP_PROJECT_TEAM)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache)
+    mock_prisma_client.db.litellm_usertable = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="key-owner", organization_memberships=[])
+    )
+    mock_prisma_client.writer_db.litellm_projecttable.find_unique = AsyncMock(
+        return_value=LiteLLM_ProjectTable(project_id=_OWNED_PROJECT, team_id=_OWNERSHIP_PROJECT_TEAM)
+    )
+    team_object: Final = LiteLLM_TeamTableCachedObj(
+        team_id=_OWNERSHIP_KEY_TEAM,
+        members_with_roles=[Member(user_id="key-owner", role="admin")],
+        team_member_permissions=["/key/update"],
+    )
+    team_lookup: Final = AsyncMock(return_value=team_object)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        team_lookup,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.team_member_permission_checks.get_team_object",
+        team_lookup,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", MagicMock())
+    mock_request: Final = MagicMock()
+    mock_request.query_params = {}
+
+    with pytest.raises(ProxyException) as error:
+        await update_key_fn(
+            request=mock_request,
+            data=UpdateKeyRequest(
+                key="sk-key",
+                team_id=_OWNERSHIP_KEY_TEAM,
+                organization_id="org-not-member",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-user",
+                user_id="key-owner",
+                team_id=_OWNERSHIP_PROJECT_TEAM,
+            ),
+            litellm_changed_by=None,
+        )
+
+    assert error.value.code == "403"
+    assert error.value.message == "Caller is not a member of organization_id=org-not-member"
 
 
 @pytest.mark.asyncio
@@ -21042,6 +21146,47 @@ async def test_regenerate_checks_project_team_ownership(
         await regenerate()
 
     assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == expected_updates
+
+
+@pytest.mark.asyncio
+async def test_regenerate_output_estimate_admin_error_precedes_project_ownership() -> None:
+    existing_key: Final = LiteLLM_VerificationToken(
+        token="abc123",
+        user_id="key-owner",
+        team_id=_OWNERSHIP_PROJECT_TEAM,
+        project_id=_OWNED_PROJECT,
+        metadata={},
+    )
+    mock_prisma_client: Final = _make_regenerate_mock_prisma()
+    mock_prisma_client.writer_db = MagicMock()
+    mock_prisma_client.writer_db.litellm_projecttable.find_unique = AsyncMock(
+        return_value=LiteLLM_ProjectTable(project_id=_OWNED_PROJECT, team_id=_OWNERSHIP_PROJECT_TEAM)
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=existing_key,
+            hashed_api_key="abc123",
+            key="abc123",
+            data=RegenerateKeyRequest(
+                project_id=_OWNED_PROJECT,
+                team_id=_OWNERSHIP_KEY_TEAM,
+                metadata={"default_estimated_output_tokens": 1},
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-user",
+                user_id="key-owner",
+            ),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert error.value.status_code == 403
+    assert "Only proxy admins can set" in str(error.value.detail)
+    mock_prisma_client.db.litellm_verificationtoken.update.assert_not_awaited()
 
 
 @pytest.mark.asyncio

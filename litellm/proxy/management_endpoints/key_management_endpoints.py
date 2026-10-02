@@ -84,7 +84,6 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.management.teams.access import TEAM_ADMIN_ONLY, TEAM_OR_ORG_ADMIN, is_team_admin
@@ -1265,13 +1264,6 @@ async def _common_key_generation_helper(
     # check if user set upperbound key/generate params on config.yaml
     _enforce_upperbound_key_params(data, fill_defaults=True)
 
-    if data.project_id is not None and prisma_client is not None:
-        await _check_key_project_team(
-            project_id=data.project_id,
-            key_team_id=data.team_id,
-            prisma_client=prisma_client,
-        )
-
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
     # cannot grant a key a higher budget than their own authority.
     # UI session personal keys are capped by user_max_budget when it is available.
@@ -1355,6 +1347,13 @@ async def _common_key_generation_helper(
             request=data,
         ),
     )
+
+    if data.project_id is not None and prisma_client is not None:
+        await _check_key_project_team(
+            project_id=data.project_id,
+            key_team_id=data.team_id,
+            prisma_client=prisma_client,
+        )
 
     # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
     _budget_id = data.budget_id
@@ -1818,9 +1817,8 @@ async def _check_key_project_team(
     key_team_id: str | None,
     prisma_client: PrismaClient,
 ) -> None:
-    project_record: Final = await bounded_db_lookup(
-        prisma_client.writer_db.litellm_projecttable.find_unique(where={"project_id": project_id}),
-        name="project",
+    project_record: Final = await prisma_client.writer_db.litellm_projecttable.find_unique(
+        where={"project_id": project_id}
     )
     project_obj: Final = (
         LiteLLM_ProjectTable.model_validate(record_to_dict(project_record)) if project_record is not None else None
@@ -2900,13 +2898,6 @@ async def _process_single_key_update(
             llm_router=llm_router,
         )
 
-    if prisma_client is not None:
-        await _check_key_project_team_on_mutation(
-            data=update_key_request,
-            existing_key_row=existing_key_row,
-            prisma_client=prisma_client,
-        )
-
     key_request: Final = await _with_validated_object_permission(
         update_key_request=update_key_request,
         team_obj=team_obj,
@@ -2937,6 +2928,12 @@ async def _process_single_key_update(
             status_code=500,
             detail={"error": "Database not connected"},
         )
+
+    await _check_key_project_team_on_mutation(
+        data=key_request,
+        existing_key_row=existing_key_row,
+        prisma_client=prisma_client,
+    )
 
     update_values: Final = await _handle_update_object_permission(
         data_json=non_default_values,
@@ -3364,12 +3361,6 @@ async def _validate_update_key_data(
             user_api_key_cache=user_api_key_cache,
         )
 
-    await _check_key_project_team_on_mutation(
-        data=data,
-        existing_key_row=existing_key_row,
-        prisma_client=checked_prisma_client,
-    )
-
     # When the caller asks to change the key's organization_id, require that
     # they are a member of (or a proxy admin over) the target organization.
     # Without this gate, any caller could assign their key to an arbitrary
@@ -3616,6 +3607,12 @@ async def update_key_fn(
 
         if prisma_client is None:
             raise Exception("Not connected to DB!")
+
+        await _check_key_project_team_on_mutation(
+            data=data,
+            existing_key_row=existing_key_row,
+            prisma_client=prisma_client,
+        )
 
         update_values: Final = await _handle_update_object_permission(
             data_json=non_default_values,
@@ -5662,11 +5659,6 @@ async def _execute_virtual_key_regeneration(
             )
 
     if data is not None:
-        await _check_key_project_team_on_mutation(
-            data=data,
-            existing_key_row=key_in_db,
-            prisma_client=prisma_client,
-        )
         _existing_key_metadata: Final = getattr(key_in_db, "metadata", None)
         enforce_output_token_estimates_are_admin_only(
             data=data,
@@ -5718,6 +5710,12 @@ async def _execute_virtual_key_regeneration(
             request=data if data is not None else RegenerateKeyRequest(),
         ),
     )
+    if data is not None:
+        await _check_key_project_team_on_mutation(
+            data=data,
+            existing_key_row=key_in_db,
+            prisma_client=prisma_client,
+        )
     update_values: Final = await _handle_update_object_permission(
         data_json=non_default_values,
         existing_key_row=key_in_db,

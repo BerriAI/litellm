@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 from hashlib import sha256
 from typing import Final
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -8,6 +9,9 @@ from integration._support.client import JSON_OBJECT, Gateway, gateway_from_envir
 from integration._support.database import read_rows, write_rows
 from integration._support.process import owned_proxy
 from pydantic import JsonValue
+
+from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
 
 def _project_rows(project_id: str) -> list[dict[str, JsonValue]]:
@@ -24,6 +28,22 @@ def _key_rows(key: str) -> list[dict[str, JsonValue]]:
     return read_rows(
         'SELECT token, key_alias, team_id, project_id FROM "LiteLLM_VerificationToken" WHERE token = %s',
         (sha256(key.encode()).hexdigest(),),
+    )
+
+
+def _cli_session_token(user_id: str, team_id: str, *, max_budget: float | None = None) -> str:
+    user: Final = LiteLLM_UserTable(
+        user_id=user_id,
+        user_role="internal_user",
+        teams=[team_id],
+        models=[],
+        max_budget=max_budget,
+    )
+    return ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        user_info=user,
+        team_id=team_id,
+        team_alias="ownership-team",
+        max_budget=max_budget,
     )
 
 
@@ -262,6 +282,135 @@ def test_key_regenerate_rejects_foreign_project_without_changing_key(ownership_g
         _discard_unexpected_key(ownership_gateway, response)
         assert response.status_code == 400, response.text
         assert _key_rows(key) == before
+
+
+def test_key_generation_rejects_missing_project_without_writing_key(ownership_gateway: Gateway) -> None:
+    with ownership_gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        team: Final = scenario.team(models=[model])
+        missing_project_id: Final = f"missing-{uuid4()}"
+        response: Final = ownership_gateway.request(
+            "POST",
+            "/key/service-account/generate",
+            {"team_id": team, "project_id": missing_project_id, "models": [model]},
+        )
+
+        assert response.status_code == 404, response.text
+        assert "Project not found" in response.text
+        assert (
+            read_rows(
+                'SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s',
+                (missing_project_id,),
+            )
+            == []
+        )
+
+
+def test_key_regenerate_routes_reject_missing_project_without_changing_key(ownership_gateway: Gateway) -> None:
+    with ownership_gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        team: Final = scenario.team(models=[model])
+        key: Final = scenario.key(team_id=team, models=[model])
+        missing_project_id: Final = f"missing-{uuid4()}"
+        before: Final = _key_rows(key)
+        responses: Final = (
+            ownership_gateway.request(
+                "POST",
+                "/key/regenerate",
+                {"key": key, "project_id": missing_project_id},
+            ),
+            ownership_gateway.request(
+                "POST",
+                f"/key/{key}/regenerate",
+                {"project_id": missing_project_id},
+            ),
+        )
+
+        for response in responses:
+            assert response.status_code == 404, response.text
+            assert "Project not found" in response.text
+            assert _key_rows(key) == before
+            assert (
+                read_rows(
+                    'SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s',
+                    (missing_project_id,),
+                )
+                == []
+            )
+
+        chat: Final = ownership_gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "rejected regeneration preserves key"}]},
+            key=key,
+        )
+        assert chat.status_code == 200, chat.text
+
+
+def test_key_generate_budget_ceiling_precedes_project_ownership(ownership_gateway: Gateway) -> None:
+    with ownership_gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        caller_team: Final = scenario.team(models=[model])
+        owner_team: Final = scenario.team(models=[model])
+        project: Final = scenario.project(owner_team, models=[model])
+        caller_id: Final = scenario.member(caller_team, role="admin")
+        caller_token: Final = _cli_session_token(caller_id, caller_team, max_budget=1)
+        response: Final = ownership_gateway.request(
+            "POST",
+            "/key/generate",
+            {
+                "team_id": caller_team,
+                "project_id": project,
+                "max_budget": 5,
+                "models": [model],
+            },
+            key=caller_token,
+        )
+
+        assert response.status_code == 400, response.text
+        assert "max_budget (5.0) cannot exceed the caller's own max_budget (1.0)" in response.text
+        assert (
+            read_rows(
+                'SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s',
+                (project,),
+            )
+            == []
+        )
+
+
+def test_key_regenerate_output_estimate_admin_error_precedes_project_ownership(
+    ownership_gateway: Gateway,
+) -> None:
+    with ownership_gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        project_team: Final = scenario.team(models=[model])
+        destination_team: Final = scenario.team(models=[model])
+        project: Final = scenario.project(project_team, models=[model])
+        caller_id: Final = scenario.member(project_team, role="admin")
+        key: Final = scenario.key(team_id=project_team, user_id=caller_id, models=[model])
+        caller_token: Final = _cli_session_token(caller_id, project_team)
+        before: Final = _key_rows(key)
+        response: Final = ownership_gateway.request(
+            "POST",
+            f"/key/{key}/regenerate",
+            {
+                "team_id": destination_team,
+                "project_id": project,
+                "metadata": {"default_estimated_output_tokens": 1},
+            },
+            key=caller_token,
+        )
+
+        assert response.status_code == 403, response.text
+        assert "Only proxy admins can set" in response.text
+        assert _key_rows(key) == before
+        chat: Final = ownership_gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "rejected regeneration keeps key valid"}]},
+            key=key,
+        )
+        assert chat.status_code == 200, chat.text
 
 
 def test_key_bulk_update_rejects_foreign_team_project_and_preserves_key(ownership_gateway: Gateway) -> None:

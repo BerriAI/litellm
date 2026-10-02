@@ -1,3 +1,4 @@
+import asyncio
 import os
 import traceback
 from collections.abc import Mapping
@@ -7,6 +8,9 @@ from unittest import mock
 
 from dotenv import load_dotenv
 from fastapi import HTTPException, Request
+
+from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
+from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 
 load_dotenv()
 import time
@@ -1332,6 +1336,75 @@ async def test_update_project_rejects_move_when_writer_team_differs_from_stale_r
     mock_prisma.writer_db.litellm_projecttable.find_unique.assert_awaited_once()
     mock_prisma.writer_db.litellm_verificationtoken.count.assert_awaited_once()
     mock_prisma.db.litellm_verificationtoken.count.assert_not_awaited()
+    mock_prisma.db.litellm_projecttable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_project_slow_writer_ownership_reads_do_not_stall_db_tracker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id: Final = "project-slow-writer"
+    source_team_id: Final = "team-source"
+    destination_team_id: Final = "team-destination"
+    mock_prisma: Final = _project_update_mocks(monkeypatch, {})
+    mock_prisma.db.litellm_projecttable.find_unique.return_value.team_id = source_team_id
+    mock_prisma.db.litellm_teamtable.find_unique = mock.AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id=destination_team_id, models=[])
+    )
+
+    async def slow_project_lookup(*, where: Mapping[str, object]) -> LiteLLM_ProjectTable:
+        assert where == {"project_id": project_id}
+        await asyncio.sleep(0.2)
+        return LiteLLM_ProjectTable(project_id=project_id, team_id=source_team_id)
+
+    async def slow_key_count(*, where: Mapping[str, object]) -> int:
+        assert where == {
+            "project_id": project_id,
+            "OR": [{"team_id": {"not": destination_team_id}}, {"team_id": None}],
+        }
+        await asyncio.sleep(0.2)
+        return 0
+
+    mock_prisma.writer_db.litellm_projecttable.find_unique = mock.AsyncMock(side_effect=slow_project_lookup)
+    mock_prisma.writer_db.litellm_verificationtoken.count = mock.AsyncMock(side_effect=slow_key_count)
+    monkeypatch.setattr("litellm.proxy.db.db_lookup_gate.PROXY_DB_LOOKUP_DEADLINE_SECONDS", 0.05)
+
+    db_lookup_stall_tracker.clear()
+    try:
+        await _run_project_update(project_id, team_id=destination_team_id)
+        assert mock_prisma.writer_db.litellm_projecttable.find_unique.await_count == 1
+        assert mock_prisma.writer_db.litellm_verificationtoken.count.await_count == 1
+        mock_prisma.db.litellm_projecttable.update.assert_awaited_once()
+        assert db_lookup_stall_tracker.stalled_within(PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS) is False
+    finally:
+        db_lookup_stall_tracker.clear()
+
+
+@pytest.mark.asyncio
+async def test_update_project_team_limit_error_precedes_mismatched_key_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id: Final = "project-team-limit-precedence"
+    source_team_id: Final = "team-source"
+    destination_team_id: Final = "team-destination"
+    mock_prisma: Final = _project_update_mocks(monkeypatch, {})
+    mock_prisma.db.litellm_projecttable.find_unique.return_value.team_id = source_team_id
+    mock_prisma.db.litellm_teamtable.find_unique = mock.AsyncMock(
+        return_value=LiteLLM_TeamTable(
+            team_id=destination_team_id,
+            models=["allowed-model"],
+        )
+    )
+    mock_prisma.writer_db.litellm_projecttable.find_unique = mock.AsyncMock(
+        return_value=LiteLLM_ProjectTable(project_id=project_id, team_id=source_team_id)
+    )
+    mock_prisma.writer_db.litellm_verificationtoken.count = mock.AsyncMock(return_value=1)
+
+    with pytest.raises(ProxyException, match="not in team's allowed models") as error:
+        await _run_project_update(project_id, team_id=destination_team_id, models=["disallowed-model"])
+
+    assert error.value.code == "400"
+    mock_prisma.writer_db.litellm_verificationtoken.count.assert_not_awaited()
     mock_prisma.db.litellm_projecttable.update.assert_not_awaited()
 
 

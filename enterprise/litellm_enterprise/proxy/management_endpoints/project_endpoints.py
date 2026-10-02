@@ -22,7 +22,6 @@ from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import delete_cached_project_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.management.teams.access import is_team_admin
 from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
 from litellm.proxy.management_endpoints.team_admin_field_permissions import team_admin_may_manage_projects
@@ -769,37 +768,6 @@ async def update_project(
                     detail={"error": "Cannot reassign project to a team you are not an admin of"},
                 )
 
-        if data.team_id is not None:
-            current_project_record: Final = await bounded_db_lookup(
-                prisma_client.writer_db.litellm_projecttable.find_unique(where={"project_id": data.project_id}),
-                name="project",
-            )
-            current_project: Final = (
-                LiteLLM_ProjectTable.model_validate(record_to_dict(current_project_record))
-                if current_project_record is not None
-                else None
-            )
-            if current_project is not None and data.team_id != current_project.team_id:
-                mismatched_key_count: Final = await bounded_db_lookup(
-                    prisma_client.writer_db.litellm_verificationtoken.count(
-                        where={
-                            "project_id": data.project_id,
-                            "OR": [{"team_id": {"not": data.team_id}}, {"team_id": None}],
-                        }
-                    ),
-                    name="project_key_ownership",
-                )
-                if mismatched_key_count > 0:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": (
-                                f"Project {data.project_id} has {mismatched_key_count} key(s) that do not belong to "
-                                f"team {data.team_id}. Detach or delete them before moving the project."
-                            )
-                        },
-                    )
-
         # Validate project limits against team limits
         if target_team_obj is not None:
             _check_team_project_limits(
@@ -823,6 +791,33 @@ async def update_project(
             **{k: v for k, v in update_data.items() if k in budget_fields},
             **({"max_budget": None} if "max_budget" in data.model_fields_set and data.max_budget is None else {}),
         }
+
+        if data.team_id is not None:
+            current_project_record: Final = await prisma_client.writer_db.litellm_projecttable.find_unique(
+                where={"project_id": data.project_id}
+            )
+            current_project: Final = (
+                LiteLLM_ProjectTable.model_validate(record_to_dict(current_project_record))
+                if current_project_record is not None
+                else None
+            )
+            if current_project is not None and data.team_id != current_project.team_id:
+                mismatched_key_count: Final = await prisma_client.writer_db.litellm_verificationtoken.count(
+                    where={
+                        "project_id": data.project_id,
+                        "OR": [{"team_id": {"not": data.team_id}}, {"team_id": None}],
+                    }
+                )
+                if mismatched_key_count > 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": (
+                                f"Project {data.project_id} has {mismatched_key_count} key(s) that do not belong to "
+                                f"team {data.team_id}. Detach or delete them before moving the project."
+                            )
+                        },
+                    )
 
         if budget_updates and existing_project.budget_id:
             # Update existing budget
