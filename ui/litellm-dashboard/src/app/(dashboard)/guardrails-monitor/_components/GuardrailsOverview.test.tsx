@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -96,7 +97,11 @@ const rowNamed = (name: string) => screen.getByRole("row", { name: new RegExp(na
 describe("GuardrailsOverview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useGuardrailsUsageOverviewMock.mockReturnValue({ data: overview, isLoading: false, error: null });
+    useGuardrailsUsageOverviewMock.mockReturnValue({
+      data: overview,
+      ...queryState(false),
+      error: null,
+    });
   });
 
   it("asks for the usage overview of the selected window", () => {
@@ -243,7 +248,7 @@ describe("GuardrailsOverview", () => {
   it("shows a dash for guardrail cost when nothing in the window was priced", async () => {
     useGuardrailsUsageOverviewMock.mockReturnValue({
       data: { ...overview, totalCost: null, totalUntrackedUsageUnits: {} },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
     renderOverview();
@@ -272,7 +277,11 @@ describe("GuardrailsOverview", () => {
   });
 
   it("marks the overview busy while the usage request is in flight", async () => {
-    useGuardrailsUsageOverviewMock.mockReturnValue({ data: undefined, isLoading: true, error: null });
+    useGuardrailsUsageOverviewMock.mockReturnValue({
+      data: undefined,
+      ...queryState(true),
+      error: null,
+    });
     renderOverview();
 
     await waitFor(() => expect(document.querySelector('[aria-busy="true"]')).toBeInTheDocument());
@@ -281,7 +290,7 @@ describe("GuardrailsOverview", () => {
   it("shows a failure message when the usage request rejects", async () => {
     useGuardrailsUsageOverviewMock.mockReturnValue({
       data: undefined,
-      isLoading: false,
+      ...queryState(false),
       error: new Error("network down"),
     });
     renderOverview();

@@ -1,7 +1,7 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import React from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/components/networking", () => ({
   dailyActivityAggregatedCall: vi.fn().mockResolvedValue({ results: [], metadata: {} }),
@@ -21,6 +21,21 @@ const createWrapper = () => {
 };
 
 describe("useDailyActivityRange", () => {
+  afterEach(() => onlineManager.setOnline(true));
+
+  it("keeps offline spend pending until the first response arrives", async () => {
+    onlineManager.setOnline(false);
+    const { result, unmount } = renderHook(() => useDailyActivityRange("test-token", "u1", "proxy_admin"), {
+      wrapper: createWrapper(),
+    });
+    expect(result.current.loading).toBe(true);
+    expect(mockAggregatedCall).not.toHaveBeenCalled();
+    act(() => onlineManager.setOnline(true));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(mockAggregatedCall).toHaveBeenCalled();
+    unmount();
+  });
+
   beforeEach(() => {
     mockAggregatedCall.mockClear();
   });

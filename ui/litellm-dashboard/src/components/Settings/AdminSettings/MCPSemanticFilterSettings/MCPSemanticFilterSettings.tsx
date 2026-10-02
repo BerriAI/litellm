@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useMCPSemanticFilterSettings } from "@/app/(dashboard)/hooks/mcpSemanticFilterSettings/useMCPSemanticFilterSettings";
 import { useUpdateMCPSemanticFilterSettings } from "@/app/(dashboard)/hooks/mcpSemanticFilterSettings/useUpdateMCPSemanticFilterSettings";
 import { toast } from "@/lib/toast";
@@ -101,7 +102,9 @@ const SaveSuccessAlert = () => {
 };
 
 export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFilterSettingsProps) {
-  const { data, isLoading, isError, error } = useMCPSemanticFilterSettings();
+  const isLoadingQuery = useMCPSemanticFilterSettings();
+  const { data, isError, error } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const {
     mutate: updateSettings,
     isPending: isUpdating,

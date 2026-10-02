@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
@@ -25,7 +26,7 @@ const mockTeamsResult = (
     fetchNextPage: vi.fn(),
     hasNextPage: false,
     isFetchingNextPage: false,
-    isLoading: false,
+    ...queryState(false),
     ...rest,
   };
 };

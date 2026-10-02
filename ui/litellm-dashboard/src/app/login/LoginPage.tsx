@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useLogin } from "@/app/(dashboard)/hooks/login/useLogin";
 import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
@@ -58,7 +59,9 @@ function SsoEnabledNotice() {
 
 function LoginPageContent() {
   const [isLoading, setIsLoading] = useState(true);
-  const { data: uiConfig, isLoading: isConfigLoading } = useUIConfig();
+  const isConfigLoadingQuery = useUIConfig();
+  const { data: uiConfig } = isConfigLoadingQuery;
+  const isConfigLoading = isQueryPending(isConfigLoadingQuery);
   const loginMutation = useLogin();
   const router = useRouter();
   const { workers, selectWorker } = useWorker();

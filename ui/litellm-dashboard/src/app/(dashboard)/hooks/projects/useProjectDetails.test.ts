@@ -114,7 +114,7 @@ describe("useProjectDetails", () => {
 
   it("should seed initialData from the projects list cache", async () => {
     (global.fetch as any).mockResolvedValue({ ok: true, json: async () => mockProject });
-    queryClient.setQueryData(projectKeys.list({}), mockProjects);
+    queryClient.setQueryData([...projectKeys.list({}), "test-token"], mockProjects);
     const { result } = renderHook(() => useProjectDetails("proj-1"), {
       wrapper: makeWrapper(queryClient),
     });
@@ -124,7 +124,7 @@ describe("useProjectDetails", () => {
   });
 
   it("should return undefined initialData when projectId is not in the cache", () => {
-    queryClient.setQueryData(projectKeys.list({}), mockProjects);
+    queryClient.setQueryData([...projectKeys.list({}), "test-token"], mockProjects);
     const { result } = renderHook(() => useProjectDetails("non-existent"), {
       wrapper: makeWrapper(queryClient),
     });

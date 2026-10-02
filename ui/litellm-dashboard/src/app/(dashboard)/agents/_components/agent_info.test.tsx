@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -14,7 +15,11 @@ vi.mock("@/components/networking", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
-  useKeys: () => ({ data: { keys: [] }, isLoading: false, refetch: vi.fn() }),
+  useKeys: () => ({
+    data: { keys: [] },
+    ...queryState(false),
+    refetch: vi.fn(),
+  }),
 }));
 
 vi.mock("./AgentIdentityDetails", () => ({
@@ -37,7 +42,7 @@ vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
   useAccessGroups: () => ({
     data: [{ access_group_id: "ag-1", access_group_name: "support-tools" }],
-    isLoading: false,
+    ...queryState(false),
     isError: false,
   }),
 }));

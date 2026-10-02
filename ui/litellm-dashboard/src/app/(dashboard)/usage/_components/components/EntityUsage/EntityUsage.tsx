@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { BarChart, DonutChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
@@ -138,7 +139,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const spendQuery = useAggregatedDailyActivity(entityType, canViewEntity ? request : null);
   const spendDataRaw = spendQuery.data ?? EMPTY_DAILY_ACTIVITY_RESPONSE;
-  const loading = spendQuery.isLoading;
+  const loading = isQueryPending(spendQuery);
   const failed = spendQuery.isError;
 
   const spendData = useMemo(
@@ -152,7 +153,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const agentQuery = useAggregatedDailyActivity("agent", canViewEntity && showAgentBreakdown ? agentRequest : null);
   const agentSpendDataRaw = agentQuery.data ?? EMPTY_DAILY_ACTIVITY_RESPONSE;
-  const agentLoading = agentQuery.isLoading;
+  const agentLoading = isQueryPending(agentQuery);
   const agentFailed = agentQuery.isError;
 
   const agentSpendData = useMemo(

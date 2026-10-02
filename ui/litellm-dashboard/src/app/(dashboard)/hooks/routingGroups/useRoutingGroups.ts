@@ -31,7 +31,7 @@ const fetchRoutingGroups = async (accessToken: string): Promise<RoutingGroupsQue
 export const useRoutingGroups = (): UseQueryResult<RoutingGroupsQueryData> => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<RoutingGroupsQueryData>({
-    queryKey: routingGroupsKeys.lists(),
+    queryKey: [...routingGroupsKeys.lists(), accessToken],
     queryFn: () => fetchRoutingGroups(accessToken!),
     enabled: Boolean(accessToken && userId && userRole),
   });

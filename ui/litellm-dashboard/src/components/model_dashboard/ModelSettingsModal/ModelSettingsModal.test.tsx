@@ -1,3 +1,4 @@
+import { queryState } from "../../../../tests/queryState";
 import { useProxyConfig } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConfig";
 import { useStoreModelInDB } from "@/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB";
 import { toast } from "@/lib/toast";
@@ -39,7 +40,7 @@ describe("ModelSettingsModal", () => {
     } as any);
     mockUseProxyConfig.mockReturnValue({
       data: [],
-      isLoading: false,
+      ...queryState(false),
       refetch: mockRefetch,
     } as any);
     mockParseErrorMessage.mockImplementation((error: any) => error?.message || String(error));
@@ -205,7 +206,7 @@ describe("ModelSettingsModal", () => {
   it("should disable cancel button when loading config", () => {
     mockUseProxyConfig.mockReturnValue({
       data: undefined,
-      isLoading: true,
+      ...queryState(true),
       refetch: mockRefetch,
     } as any);
 
@@ -251,7 +252,7 @@ describe("ModelSettingsModal", () => {
           field_default_value: false,
         },
       ],
-      isLoading: false,
+      ...queryState(false),
       refetch: mockRefetch,
     } as any);
 
@@ -264,7 +265,7 @@ describe("ModelSettingsModal", () => {
   it("should show skeleton loader when config is loading", () => {
     mockUseProxyConfig.mockReturnValue({
       data: undefined,
-      isLoading: true,
+      ...queryState(true),
       refetch: mockRefetch,
     } as any);
 

@@ -17,7 +17,7 @@ export const useMCPServerHealth = () => {
   const [recheckingServerIds, setRecheckingServerIds] = useState<Set<string>>(new Set());
 
   const query = useQuery<MCPServerHealth[]>({
-    queryKey: mcpServerHealthKeys.lists(),
+    queryKey: [...mcpServerHealthKeys.lists(), accessToken],
     queryFn: async () => await fetchMCPServerHealth(accessToken!),
     enabled: !!accessToken,
     // Refetch health status every 30 seconds to keep it up to date
@@ -33,13 +33,16 @@ export const useMCPServerHealth = () => {
       try {
         const result: MCPServerHealth[] = await fetchMCPServerHealth(accessToken, [serverId]);
 
-        queryClient.setQueriesData<MCPServerHealth[]>({ queryKey: mcpServerHealthKeys.lists() }, (oldData) => {
-          if (!oldData) return result;
-          return oldData.map((h) => {
-            const updated = result.find((r) => r.server_id === h.server_id);
-            return updated ?? h;
-          });
-        });
+        queryClient.setQueriesData<MCPServerHealth[]>(
+          { queryKey: [...mcpServerHealthKeys.lists(), accessToken] },
+          (oldData) => {
+            if (!oldData) return result;
+            return oldData.map((h) => {
+              const updated = result.find((r) => r.server_id === h.server_id);
+              return updated ?? h;
+            });
+          },
+        );
       } finally {
         setRecheckingServerIds((prev) => {
           const next = new Set(prev);
@@ -52,7 +55,7 @@ export const useMCPServerHealth = () => {
   );
 
   return {
-    ...query,
+    query,
     recheckServerHealth,
     recheckingServerIds,
   };

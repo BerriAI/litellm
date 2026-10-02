@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
@@ -42,16 +43,25 @@ vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
   default: (capability: string) => state.can[capability] ?? true,
 }));
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
-  useOrganizations: () => ({ data: state.organizations, isLoading: false }),
+  useOrganizations: () => ({
+    data: state.organizations,
+    ...queryState(false),
+  }),
 }));
 vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
-  useProjects: () => ({ data: state.projects, isLoading: false }),
+  useProjects: () => ({
+    data: state.projects,
+    ...queryState(false),
+  }),
 }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
   useUISettings: () => ({ data: { values: state.uiSettings } }),
 }));
 vi.mock("@/app/(dashboard)/hooks/tags/useTags", () => ({
-  useTags: () => ({ data: state.tags, isLoading: false }),
+  useTags: () => ({
+    data: state.tags,
+    ...queryState(false),
+  }),
 }));
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useInfiniteTeams: () => ({
@@ -59,20 +69,33 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
     fetchNextPage: vi.fn(),
     hasNextPage: false,
     isFetchingNextPage: false,
-    isLoading: false,
+    ...queryState(false),
   }),
 }));
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
-  useAccessGroups: () => ({ data: state.accessGroups, isLoading: false, isError: false }),
+  useAccessGroups: () => ({
+    data: state.accessGroups,
+    ...queryState(false),
+    isError: false,
+  }),
 }));
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
-  useMCPServers: () => ({ data: [], isLoading: false }),
+  useMCPServers: () => ({
+    data: [],
+    ...queryState(false),
+  }),
 }));
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPAccessGroups", () => ({
-  useMCPAccessGroups: () => ({ data: [], isLoading: false }),
+  useMCPAccessGroups: () => ({
+    data: [],
+    ...queryState(false),
+  }),
 }));
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPToolsets", () => ({
-  useMCPToolsets: () => ({ data: [], isLoading: false }),
+  useMCPToolsets: () => ({
+    data: [],
+    ...queryState(false),
+  }),
 }));
 
 vi.mock("../networking", async (importOriginal) => {

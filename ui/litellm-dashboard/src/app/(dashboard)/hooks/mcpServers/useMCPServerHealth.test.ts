@@ -51,11 +51,11 @@ describe("useMCPServerHealth", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.isSuccess).toBe(true);
+      expect(result.current.query.isSuccess).toBe(true);
     });
 
     expect(networking.fetchMCPServerHealth).toHaveBeenCalledWith("test-token-123");
-    expect(result.current.data).toEqual(mockHealthStatuses);
+    expect(result.current.query.data).toEqual(mockHealthStatuses);
   });
 
   it("should handle errors when fetching health status", async () => {
@@ -67,10 +67,10 @@ describe("useMCPServerHealth", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.isError).toBe(true);
+      expect(result.current.query.isError).toBe(true);
     });
 
-    expect(result.current.error).toEqual(mockError);
+    expect(result.current.query.error).toEqual(mockError);
   });
 
   it("should not fetch when accessToken is not available", async () => {
@@ -85,7 +85,7 @@ describe("useMCPServerHealth", () => {
     });
 
     // Should remain in idle state since query is not enabled
-    expect(result.current.status).toBe("pending");
+    expect(result.current.query.status).toBe("pending");
     expect(networking.fetchMCPServerHealth).not.toHaveBeenCalled();
   });
 

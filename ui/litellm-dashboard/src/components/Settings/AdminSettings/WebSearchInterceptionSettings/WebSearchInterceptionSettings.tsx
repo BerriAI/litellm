@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useWebSearchInterceptionSettings } from "@/app/(dashboard)/hooks/webSearchInterceptionSettings/useWebSearchInterceptionSettings";
 import { useUpdateWebSearchInterceptionSettings } from "@/app/(dashboard)/hooks/webSearchInterceptionSettings/useUpdateWebSearchInterceptionSettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -262,7 +263,9 @@ function WebSearchInterceptionForm({ accessToken, initial, schema }: WebSearchIn
 
 export default function WebSearchInterceptionSettings() {
   const { accessToken } = useAuthorized();
-  const { data, isLoading, isError, error } = useWebSearchInterceptionSettings();
+  const isLoadingQuery = useWebSearchInterceptionSettings();
+  const { data, isError, error } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   if (!accessToken) {
     return (

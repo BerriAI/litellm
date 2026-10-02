@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useMemo, useState } from "react";
 
 import {
@@ -86,7 +87,7 @@ export const useScopedDailyActivityRange = (
     onDateChange,
     results: toDailyData(data),
     metadata: data.metadata ?? EMPTY_DAILY_ACTIVITY_METADATA,
-    loading: query.isLoading,
+    loading: isQueryPending(query),
     failed: query.isError,
     scope: activityScope,
   };

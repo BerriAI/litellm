@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { ProxyModel, useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -130,10 +131,18 @@ export const ModelSelect = (props: ModelSelectProps) => {
   const anchor = useComboboxAnchor();
   const { id, teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
   const { showAllProxyModelsOverride, includeSpecialOptions } = options || {};
-  const { data: allProxyModels, isLoading: isLoadingAllProxyModels } = useAllProxyModels();
-  const { data: team, isLoading: isLoadingTeam, isFetching: isFetchingTeam } = useTeam(teamID);
-  const { data: organization, isLoading: isLoadingOrganization } = useOrganization(organizationID);
-  const { data: currentUser, isLoading: isCurrentUserLoading } = useCurrentUser();
+  const isLoadingAllProxyModelsQuery = useAllProxyModels();
+  const { data: allProxyModels } = isLoadingAllProxyModelsQuery;
+  const isLoadingAllProxyModels = isQueryPending(isLoadingAllProxyModelsQuery);
+  const isLoadingTeamQuery = useTeam(teamID);
+  const { data: team, isFetching: isFetchingTeam } = isLoadingTeamQuery;
+  const isLoadingTeam = isQueryPending(isLoadingTeamQuery);
+  const isLoadingOrganizationQuery = useOrganization(organizationID);
+  const { data: organization } = isLoadingOrganizationQuery;
+  const isLoadingOrganization = isQueryPending(isLoadingOrganizationQuery);
+  const isCurrentUserLoadingQuery = useCurrentUser();
+  const { data: currentUser } = isCurrentUserLoadingQuery;
+  const isCurrentUserLoading = isQueryPending(isCurrentUserLoadingQuery);
 
   const isSpecialOption = (value: string) => MODEL_SENTINEL_OPTIONS.some((sv) => sv.value === value);
   const hasSpecialOptionSelected = value.some(isSpecialOption);

@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fireEvent, renderWithProviders, screen, waitFor } from "@/../tests/test-utils";
@@ -25,7 +26,7 @@ const MAX_BUDGET_LABEL = "Max Budget (USD)";
 
 const mockSettings = (supported: readonly string[], enabled: readonly string[]) =>
   mockUseUISettings.mockReturnValue({
-    isLoading: false,
+    ...queryState(false),
     data: {
       field_schema: {
         properties: {

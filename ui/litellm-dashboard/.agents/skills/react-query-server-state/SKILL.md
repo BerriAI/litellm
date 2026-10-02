@@ -1,88 +1,48 @@
 ---
 name: react-query-server-state
-description: Fetch server state in the LiteLLM dashboard with TanStack React Query instead of hand-rolled useEffect/useState request tracking. Use when adding or reviewing any hook or component that calls a networking function, when you see request IDs, `cancelled` flags, `settled` state, serialized dependency keys, or separate `loading`/`failed` state next to a fetch, or when writing tests for components that call `useQuery`.
+description: Design, migrate, audit, and test TanStack Query server state in the LiteLLM dashboard. Use for query keys, initial readiness, filter changes, cached results, retries, cancellation, and replacing manual fetch lifecycle tracking
 ---
 
-# Server state with React Query
+# Dashboard server state
 
-The dashboard already ships `@tanstack/react-query` v5 and wraps every page in `src/contexts/ReactQueryProvider.tsx`. Any data that comes from the proxy is server state and belongs in a query. Reference docs: https://github.com/TanStack/query/tree/main/docs/framework/react (start with `guides/important-defaults.md`, `guides/query-keys.md`, `guides/queries.md`, `guides/disabling-queries.md`, `guides/testing.md`).
+Read the installed `@tanstack/react-query` version and the relevant [React Query guides](https://github.com/TanStack/query/tree/main/docs/framework/react) before deciding behavior. Start with queries, network mode, disabling queries, query keys, important defaults, and testing. Ask the user about unresolved product requirements after reading the docs
 
-## The anti-pattern
+Use the existing provider and query cache for reads. Mutations and deliberate imperative actions have different lifecycles. Request IDs, serialized dependency keys, cancellation flags, copied results, and separate settled/error state around a read usually duplicate query behavior. Remove them when migrating unless they encode a real product requirement
 
-If a hook or component contains any of the following, it is reimplementing React Query badly and should be migrated:
+`hooks/dailyActivity/dailyActivityQueries.ts` provides a local example of shared keys and options. Keep request identity with the fetcher, using an options factory when a parent supplies a query. A bare callback does not describe which data belongs to the current filters
 
-```ts
-const [settled, setSettled] = useState<{ key: string; data: T; failed: boolean } | null>(null);
-const requestIdRef = useRef(0);
-const depsKey = JSON.stringify(deps);
-useEffect(() => {
-  const requestId = ++requestIdRef.current;
-  fetchSomething().then((r) => { if (requestIdRef.current === requestId) setSettled(...) });
-  return () => { requestIdRef.current++; };
-}, [depsKey]);
-const loading = enabled && settled?.key !== depsKey;
-```
+## Review decisions
 
-Request IDs, `cancelled` flags, "settled for which key" bookkeeping, retry tokens, and parallel `loading`/`failed` booleans are exactly what the query cache does: one cache entry per key, stale responses for an old key never reach the new key, status is derived, retries and refetches are built in.
+Determine whether two requests can produce different responses. Include their varying inputs in the key, including authorization scope, entity, dates, filters, model, and pagination. Plain serializable objects work; object property order does not change identity. Do not serialize keys manually or use callback identity as request identity. Changes to authorization must not expose another session's cached results. Review key factories and invalidation prefixes together, since lint cannot infer dependencies hidden inside helpers
 
-## The pattern
+Separate initial readiness from network activity. `isQueryPending(query)` in `hooks/common/queryReadiness` checks `isEnabled && isPending`. An enabled offline query with no data is pending while its fetch is paused; `isLoading` and `isFetching` are both false. A disabled query without data is idle for the UI. Cached data remains available during a paused refresh. Use `isFetching` for an activity indicator, and `isPaused` when an explicit offline message helps the user
 
-Put keys and options in one place so every caller and every invalidation agrees on identity. The daily activity queries in `src/app/(dashboard)/hooks/dailyActivity/dailyActivityQueries.ts` are the reference implementation.
+Decide whether disabled means hidden, unavailable, or waiting for another input. The readiness helper does not make that product decision. It must not turn missing required inputs into a successful zero result
 
-```ts
-import { queryOptions, skipToken, useQuery } from "@tanstack/react-query";
+Decide whether previous data is valid under a new filter. Usage totals must not silently show another entity or date range. Avoid `keepPreviousData` there. Pagination can benefit from previous data if the UI makes `isPlaceholderData` clear. A cached result for the exact same key can render immediately, but freshness is a separate decision. Set `staleTime` according to how quickly that endpoint changes and the cost of refetching, rather than copying a value from another endpoint
 
-export const thingKeys = {
-  all: ["thing"] as const,
-  detail: (request: ThingRequest | null) => [...thingKeys.all, "detail", request] as const,
-};
+Preserve errors as errors. Query functions return data or reject; catching an error and returning an empty array makes failure look like success. Distinguish initial failure from background refresh failure when cached data exists. Retry uses `refetch`; decide whether an error retry should replace the error display with a loading indicator. `skipToken` disables safely but does not support an imperative refetch, so choose `enabled` when a manual retry of that disabled query is required
 
-export const thingQueryOptions = (request: ThingRequest) =>
-  queryOptions({
-    queryKey: thingKeys.detail(request),
-    queryFn: () => fetchThing(request),
-  });
+Prefer `select` for derived query data. Keep expensive selectors stable. Avoid rest destructuring query results because it subscribes to every tracked property. Dependency arrays should contain the fields used, not the entire query result
 
-export const useThing = (request: ThingRequest | null) =>
-  useQuery({
-    queryKey: thingKeys.detail(request),
-    queryFn: request ? () => fetchThing(request) : skipToken,
-  });
-```
+Pass the query function's `AbortSignal` through networking helpers that support it. Query keys isolate late responses even without transport cancellation. Cancellation saves work but does not replace correct identity. Invalidate relevant key prefixes after writes, including any authorization segment shared with readers
 
-Rules that matter:
+## Behavioral verification
 
-1. The query key contains every value the query function reads: access token, entity type, ids, date range, filters, model, page. If two calls can return different data, their keys must differ. Plain objects, arrays, strings, numbers, null, and `Date` (serialized via `toJSON`) are all fine in a key; object key order does not matter. Never put a function in a key and never compare callback identity to decide whether data is current. If a component receives "how to fetch" from its parent, pass a `queryOptions` factory (for example `(model: string) => QueryOptions`) rather than a bare `() => Promise<T>`, so the key travels with the fetcher.
-2. Do not hand-serialize keys with `JSON.stringify`; React Query hashes keys deterministically.
-3. Disable with `skipToken` (type safe) or `enabled: false` when inputs are missing. A disabled query with no cache is `isPending` but not fetching, so use `isLoading` (`isPending && isFetching`) for "show a spinner", not `isPending`.
-4. The query function must return data or throw. Networking helpers in `src/components/networking.tsx` already throw on non-2xx, so do not wrap them in `try/catch` that returns an empty value; that turns errors into successful empty data and hides them. Do not return `undefined`.
-5. Derive UI state from the result: `isLoading` for first load, `isError`/`error` for failure, `data ?? EMPTY` for rendering, `isFetching` only for a background refresh indicator. Do not copy query state into `useState`, and do not wrap the result in a custom `{ loading, failed }` object unless an existing public interface needs it, in which case map directly (`loading: query.isLoading, failed: query.isError`).
-6. Transform with `select` instead of `useEffect` + `setState`. Keep `select` referentially stable (module level function or `useCallback`), otherwise it reruns every render.
-7. Retry buttons call `query.refetch()`. While a refetch from the error state is running, `isError && isFetching` is true; render that as loading if the old UI did.
-8. Do not reach for `placeholderData: keepPreviousData` by default. Several dashboard views (usage, cost optimization) must never show numbers from the previous date range or entity under the new filter; a fresh key with no cache renders the empty or loading state, which is the correct behaviour there. Opt in only when showing stale data during a key change is explicitly desired, and then surface `isPlaceholderData`.
-9. Defaults: `staleTime` is 0, refetch on mount, window focus, and reconnect, three retries with exponential backoff, and inactive cache kept for five minutes. Expensive aggregate endpoints should set a `staleTime` (the daily activity queries use a shared constant) so tab switches do not re-run them.
-10. Cancellation: React Query passes an `AbortSignal` in the query function context (`queryFn: ({ signal }) => ...`). Thread it into `fetch` only if the networking helper accepts it. Even without it, a response for an obsolete key is stored under that key and never shown under the current one, so no manual stale check is needed.
-11. After a mutation that changes server state, invalidate by prefix: `queryClient.invalidateQueries({ queryKey: thingKeys.all })`.
+Mock the network boundary and use the real query hook for regressions. A hook mock cannot prove cache identity, offline behavior, or enabled logic. Existing presentation tests may mock hooks, but their pending and enabled fields must reflect the state they claim to simulate
 
-## Testing
+Use a fresh query client per test and disable retries for deterministic error tests. Clear the shared client when using `renderWithProviders`, whose defaults intentionally retain cached results. Restore global `onlineManager` state after offline tests
 
-React Query retries failures three times with backoff, so tests that exercise errors need `retry: false`, and a cache shared between tests leaks results across them.
+Exercise the failure mode rather than implementation structure. Cover an enabled offline request with no data, reconnection, disabled inputs, and a cached paused refresh when changing readiness behavior. For filter identity, resolve an old request after a newer request and assert the old data never replaces the current view. When clearing a filter restores cached data, use distinct filtered and unfiltered results and assert the restored result. A passing spinner assertion and an unchanged request count do not prove restoration
 
-Prefer a fresh client per test:
+React Query tracks accessed result properties. When testing a status transition with `renderHook`, access the property under assertion before triggering the transition, or deliberately subscribe with `notifyOnChangeProps` in the test. Otherwise an unobserved status change can leave the test's result stale
 
-```tsx
-const createWrapper = () => {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-  );
-};
+Run the affected tests and the dashboard lint commands. Use live browser QA for user-visible behavior when the proxy and dashboard are available. Unit tests establish regression behavior; report live QA and hosted CI separately, and never describe missing reviews as passing
 
-renderHook(() => useThing(request), { wrapper: createWrapper() });
-```
+## Enforcement
 
-When a file already uses `renderWithProviders` from `tests/test-utils.tsx`, its shared `testQueryClient` has `staleTime: Infinity` and `refetchOnMount: false`, so call `testQueryClient.clear()` in `beforeEach`, or a later test will read the earlier test's cached data and never call the mocked network.
+`eslint.config.mjs` loads the official [TanStack Query recommended flat config](https://tanstack.com/query/latest/docs/eslint/eslint-plugin-query). It checks visible key dependencies, stable clients, unstable hook dependencies, property ordering, rest destructuring, and void query functions
 
-Mock the networking function (`vi.mock("@/components/networking", ...)`), not the query hook, so the test exercises the real key and enabled logic. Assert on what the user sees (loading text, error text, rows) and on which network calls were made with which arguments. Use `findBy*`/`waitFor` for anything that resolves after a fetch. An out-of-order test is still useful after migrating: resolve the old key's promise after the new key's and assert the old data never renders.
+The local typed rule `local/no-query-is-loading` rejects native query fetch flags used as initial readiness across custom hooks and aliases. Keep this rule and the behavioral regressions: the official plugin does not enforce the dashboard's offline readiness contract. Existing CI runs ESLint and its budgets, so new errors fail there without a separate lint runner
 
-Run only the affected test files (`npx vitest run <paths>`), never the full suite without paths.
+Lint is evidence about supported syntax, not proof of product correctness. Review custom wrappers, helper-generated keys, stale placeholders, and failure/empty rendering paths explicitly. Keep deterministic checks in lint or tests and judgment guidance in this skill

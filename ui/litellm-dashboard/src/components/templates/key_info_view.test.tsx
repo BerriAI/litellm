@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -59,7 +60,10 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
-  useProjects: vi.fn().mockReturnValue({ data: [], isLoading: false }),
+  useProjects: vi.fn().mockReturnValue({
+    data: [],
+    ...queryState(false),
+  }),
 }));
 
 const MCP_CATALOG = [

@@ -8,7 +8,7 @@ const userKeys = createQueryKeys("users");
 export const useCurrentUser = (): UseQueryResult<UserInfoV2Response> => {
   const { accessToken, userId } = useAuthorized();
   return useQuery<UserInfoV2Response>({
-    queryKey: userKeys.detail(userId!),
+    queryKey: [...userKeys.detail(userId!), accessToken],
     queryFn: async () => {
       return await userGetInfoV2(accessToken!);
     },

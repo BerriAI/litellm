@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -74,14 +75,22 @@ describe("GuardrailDetail", () => {
   });
 
   it("should show a busy indicator while the detail request is in flight", () => {
-    mockUseGuardrailsUsageDetail.mockReturnValue({ data: undefined, isLoading: true, error: null });
+    mockUseGuardrailsUsageDetail.mockReturnValue({
+      data: undefined,
+      ...queryState(true),
+      error: null,
+    });
     renderDetail();
     expect(document.querySelector('[aria-busy="true"]')).toBeInTheDocument();
     expect(screen.queryByText("pii-detector")).not.toBeInTheDocument();
   });
 
   it("should show an error message and a way back when the detail request fails", async () => {
-    mockUseGuardrailsUsageDetail.mockReturnValue({ data: undefined, isLoading: false, error: new Error("boom") });
+    mockUseGuardrailsUsageDetail.mockReturnValue({
+      data: undefined,
+      ...queryState(false),
+      error: new Error("boom"),
+    });
     renderDetail();
     expect(await screen.findByText("Failed to load guardrail details.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /back to overview/i })).toBeInTheDocument();

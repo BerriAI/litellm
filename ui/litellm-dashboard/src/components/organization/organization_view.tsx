@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { organizationKeys, useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useQueryClient } from "@tanstack/react-query";
@@ -46,7 +47,9 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   userModels,
 }) => {
   const queryClient = useQueryClient();
-  const { data: orgData, isLoading: loading } = useOrganization(organizationId);
+  const loadingQuery = useOrganization(organizationId);
+  const { data: orgData } = loadingQuery;
+  const loading = isQueryPending(loadingQuery);
   const [isEditing, setIsEditing] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);

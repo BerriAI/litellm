@@ -1,4 +1,5 @@
 "use client";
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useState } from "react";
 import { PaginationState } from "@tanstack/react-table";
 import { Info } from "lucide-react";
@@ -11,7 +12,9 @@ export default function DeletedKeysPage() {
   const { premiumUser } = useAuthorized();
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
 
-  const { data: keysData, isLoading } = useDeletedKeys(pagination.pageIndex + 1, pagination.pageSize);
+  const isLoadingQuery = useDeletedKeys(pagination.pageIndex + 1, pagination.pageSize);
+  const { data: keysData } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   return (
     <div className="flex flex-col gap-4">

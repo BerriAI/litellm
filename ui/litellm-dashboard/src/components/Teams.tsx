@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import AvailableTeamsPanel from "@/components/team/AvailableTeamsPanel";
@@ -211,7 +212,9 @@ const getAdminOrganizations = (
 const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser = false }) => {
   const { data: organizationsData } = useOrganizations();
   const organizations = organizationsData ?? null;
-  const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
+  const isTeamMetadataSchemaLoadingQuery = useTeamMetadataSchema();
+  const { data: teamMetadataSchemaFields = [] } = isTeamMetadataSchemaLoadingQuery;
+  const isTeamMetadataSchemaLoading = isQueryPending(isTeamMetadataSchemaLoadingQuery);
   const queryClient = useQueryClient();
   const refreshTeams = () => queryClient.invalidateQueries({ queryKey: teamsTableKeys.all });
   const [currentOrg] = useState<Organization | null>(null);
@@ -277,7 +280,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
 
   const { data: defaultTeamSettings } = useQuery({
-    queryKey: ["defaultTeamSettings"],
+    queryKey: ["defaultTeamSettings", accessToken],
     queryFn: () => getDefaultTeamSettings(accessToken as string),
     enabled: isTeamModalVisible && accessToken != null,
     retry: false,

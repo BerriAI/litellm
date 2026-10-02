@@ -8,7 +8,7 @@ const mcpSemanticFilterSettingsKeys = createQueryKeys("mcpSemanticFilterSettings
 export const useMCPSemanticFilterSettings = () => {
   const { accessToken } = useAuthorized();
   return useQuery<Record<string, any>>({
-    queryKey: mcpSemanticFilterSettingsKeys.list({}),
+    queryKey: [...mcpSemanticFilterSettingsKeys.list({}), accessToken],
     queryFn: async () => await getMCPSemanticFilterSettings(accessToken),
     enabled: !!accessToken,
     staleTime: 60 * 60 * 1000, // 1 hour

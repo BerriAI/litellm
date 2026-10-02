@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "@/lib/toast";
@@ -134,12 +135,18 @@ vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
 
 // Mock useProjects hook
 vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
-  useProjects: vi.fn().mockReturnValue({ data: [], isLoading: false }),
+  useProjects: vi.fn().mockReturnValue({
+    data: [],
+    ...queryState(false),
+  }),
 }));
 
 // Mock useUISettings hook
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
-  useUISettings: vi.fn().mockReturnValue({ data: { values: {} }, isLoading: false }),
+  useUISettings: vi.fn().mockReturnValue({
+    data: { values: {} },
+    ...queryState(false),
+  }),
 }));
 
 // Mock useMCPServers hook (requires QueryClientProvider which is not available in this test)

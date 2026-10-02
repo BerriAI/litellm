@@ -45,7 +45,7 @@ export const useHealthReadinessDetails = (
   accessToken: string | null | undefined,
 ): UseQueryResult<HealthReadinessDetailsResponse> => {
   return useQuery<HealthReadinessDetailsResponse>({
-    queryKey: healthReadinessDetailsKeys.detail("readiness"),
+    queryKey: [...healthReadinessDetailsKeys.detail("readiness"), accessToken],
     queryFn: () => fetchHealthReadinessDetails(accessToken!),
     enabled: Boolean(accessToken),
     staleTime: 5 * 60 * 1000,

@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
@@ -45,7 +46,7 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useAllTeams: vi.fn(() => ({
     data: [{ team_id: "team-1", team_alias: "Test Team" }],
-    isLoading: false,
+    ...queryState(false),
   })),
 }));
 

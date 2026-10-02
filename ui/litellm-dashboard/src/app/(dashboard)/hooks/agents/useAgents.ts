@@ -10,7 +10,7 @@ const agentsKeys = createQueryKeys("agents");
 export const useAgents = () => {
   const { accessToken, userRole } = useAuthorized();
   return useQuery<AgentsResponse>({
-    queryKey: agentsKeys.list({}),
+    queryKey: [...agentsKeys.list({}), accessToken],
     queryFn: async () => await getAgentsList(accessToken!),
     enabled: Boolean(accessToken) && all_admin_roles.includes(userRole || ""),
   });

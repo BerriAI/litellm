@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import userEvent from "@testing-library/user-event";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
@@ -15,7 +16,7 @@ vi.mock("@/components/common_components/DefaultProxyAdminTag", () => ({
 
 const emptyKeysResponse = {
   data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 },
-  isLoading: false,
+  ...queryState(false),
 };
 
 describe("ProjectKeysSection", () => {
@@ -34,7 +35,7 @@ describe("ProjectKeysSection", () => {
   it("should display the total key count from the API response", () => {
     mockUseKeys.mockReturnValue({
       data: { keys: [], total_count: 42, current_page: 1, total_pages: 9 },
-      isLoading: false,
+      ...queryState(false),
     });
     renderWithProviders(<ProjectKeysSection projectId="proj-1" />);
     expect(screen.getByTestId("pagination-range")).toHaveTextContent("of 42");
@@ -76,7 +77,7 @@ describe("ProjectKeysSection", () => {
 describe("ProjectKeysSection URL state (keys_ prefix)", () => {
   const fortyTwoKeys = {
     data: { keys: [], total_count: 42, current_page: 1, total_pages: 9 },
-    isLoading: false,
+    ...queryState(false),
     isError: false,
   };
   const lastSearchParams = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
@@ -170,7 +171,11 @@ describe("ProjectKeysSection URL state (keys_ prefix)", () => {
   });
 
   it("should snap a ?keys_page= past the last page back to the last page once the keys load", async () => {
-    mockUseKeys.mockReturnValue({ data: undefined, isLoading: true, isError: false });
+    mockUseKeys.mockReturnValue({
+      data: undefined,
+      ...queryState(true),
+      isError: false,
+    });
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
     const { rerender } = renderWithProviders(<ProjectKeysSection projectId="proj-1" />, {
       searchParams: "?keys_page=9",
@@ -180,7 +185,7 @@ describe("ProjectKeysSection URL state (keys_ prefix)", () => {
 
     mockUseKeys.mockReturnValue({
       data: { keys: [], total_count: 6, current_page: 9, total_pages: 2 },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
     });
     rerender(<ProjectKeysSection projectId="proj-1" />);
@@ -190,14 +195,22 @@ describe("ProjectKeysSection URL state (keys_ prefix)", () => {
   });
 
   it("should keep a deep-linked ?keys_page= when the key fetch fails", async () => {
-    mockUseKeys.mockReturnValue({ data: undefined, isLoading: true, isError: false });
+    mockUseKeys.mockReturnValue({
+      data: undefined,
+      ...queryState(true),
+      isError: false,
+    });
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
     const { rerender } = renderWithProviders(<ProjectKeysSection projectId="proj-1" />, {
       searchParams: "?keys_page=3",
       onUrlUpdate,
     });
 
-    mockUseKeys.mockReturnValue({ data: undefined, isLoading: false, isError: true });
+    mockUseKeys.mockReturnValue({
+      data: undefined,
+      ...queryState(false),
+      isError: true,
+    });
     rerender(<ProjectKeysSection projectId="proj-1" />);
 
     await new Promise((resolve) => setTimeout(resolve, 100));

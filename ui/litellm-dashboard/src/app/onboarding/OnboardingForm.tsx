@@ -1,4 +1,5 @@
 "use client";
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React from "react";
 import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
@@ -18,11 +19,9 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
   const inviteId = searchParams.get("invitation_id");
   const [claimError, setClaimError] = React.useState<string | null>(null);
 
-  const {
-    data: credentialsData,
-    isLoading: isCredentialsLoading,
-    isError: isCredentialsError,
-  } = useOnboardingCredentials(inviteId);
+  const isCredentialsLoadingQuery = useOnboardingCredentials(inviteId);
+  const { data: credentialsData, isError: isCredentialsError } = isCredentialsLoadingQuery;
+  const isCredentialsLoading = isQueryPending(isCredentialsLoadingQuery);
 
   const { mutate: claimToken, isPending } = useClaimOnboardingToken();
 

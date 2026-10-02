@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
@@ -132,7 +133,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const { data: selectedKeyInfo } = useQuery(keyInfoQueryOptions);
 
   const urlLogQueryOptions: UseQueryOptions<LogEntry | null> = {
-    queryKey: ["logs", "byId", urlLogId, accessToken],
+    queryKey: ["logs", "byId", urlLogId, accessToken, startTime, endTime, isCustomDate],
     queryFn: async () => {
       if (urlLogId === null) return null;
       const window = formatLogsWindow(startTime, endTime, isCustomDate);
@@ -297,7 +298,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
       <RequestLogsTable
         data={rows}
         rowCount={rowCount}
-        isLoading={logsQuery.isLoading}
+        isLoading={isQueryPending(logsQuery)}
         isRefreshing={logsQuery.isFetching}
         pagination={pagination}
         onPaginationChange={handlePaginationChange}

@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { useAccessGroupDetails } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails";
 import { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { screen } from "@testing-library/react";
@@ -21,11 +22,10 @@ const mockUseAccessGroupDetails = vi.mocked(useAccessGroupDetails);
 
 const baseMockReturnValue = {
   data: undefined,
-  isLoading: false,
+  ...queryState(false),
   isError: false,
   error: null,
   isFetching: false,
-  isPending: false,
   isSuccess: true,
   status: "success" as const,
   dataUpdatedAt: 0,
@@ -99,7 +99,7 @@ describe("AccessGroupDetail", () => {
     mockUseAccessGroupDetails.mockReturnValue({
       ...baseMockReturnValue,
       data: undefined,
-      isLoading: true,
+      ...queryState(true),
     } as ReturnType<typeof useAccessGroupDetails>);
 
     renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
@@ -111,7 +111,7 @@ describe("AccessGroupDetail", () => {
     mockUseAccessGroupDetails.mockReturnValue({
       ...baseMockReturnValue,
       data: undefined,
-      isLoading: false,
+      ...queryState(false),
     } as ReturnType<typeof useAccessGroupDetails>);
 
     renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);

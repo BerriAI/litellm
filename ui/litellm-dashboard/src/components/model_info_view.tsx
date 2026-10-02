@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { useQueryClient } from "@tanstack/react-query";
@@ -90,7 +91,9 @@ export default function ModelInfoView({
   const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
 
   // Fetch model data using hook
-  const { data: rawModelDataResponse, isLoading: isLoadingModel } = useModelsInfo(1, 50, undefined, modelId);
+  const isLoadingModelQuery = useModelsInfo(1, 50, undefined, modelId);
+  const { data: rawModelDataResponse } = isLoadingModelQuery;
+  const isLoadingModel = isQueryPending(isLoadingModelQuery);
   const { data: modelCostMapData } = useModelCostMap();
   const { data: modelHubData } = useModelHub();
   const { data: teams } = useTeams();

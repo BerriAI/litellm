@@ -35,7 +35,7 @@ export const useAccessGroupDetails = (accessGroupId?: string) => {
   const queryClient = useQueryClient();
 
   return useQuery<AccessGroupResponse>({
-    queryKey: accessGroupKeys.detail(accessGroupId!),
+    queryKey: [...accessGroupKeys.detail(accessGroupId!), accessToken],
     queryFn: async () => fetchAccessGroupDetails(accessToken!, accessGroupId!),
     enabled: Boolean(accessToken && accessGroupId) && all_admin_roles.includes(userRole || ""),
 
@@ -43,7 +43,7 @@ export const useAccessGroupDetails = (accessGroupId?: string) => {
     initialData: () => {
       if (!accessGroupId) return undefined;
 
-      const groups = queryClient.getQueryData<AccessGroupResponse[]>(accessGroupKeys.list({}));
+      const groups = queryClient.getQueryData<AccessGroupResponse[]>([...accessGroupKeys.list({}), accessToken]);
 
       return groups?.find((g) => g.access_group_id === accessGroupId);
     },

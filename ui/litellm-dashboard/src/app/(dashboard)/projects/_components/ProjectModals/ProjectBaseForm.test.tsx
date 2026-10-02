@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../../tests/queryState";
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
@@ -31,7 +32,10 @@ function FormWrapper() {
 
 describe("ProjectBaseForm", () => {
   beforeEach(() => {
-    mockUseTeams.mockReturnValue({ data: [], isLoading: false });
+    mockUseTeams.mockReturnValue({
+      data: [],
+      ...queryState(false),
+    });
   });
 
   it("should render", () => {
@@ -72,7 +76,7 @@ describe("ProjectBaseForm", () => {
         { team_id: "team-1", team_alias: "Engineering", models: [] },
         { team_id: "team-2", team_alias: "Sales", models: [] },
       ],
-      isLoading: false,
+      ...queryState(false),
     });
     renderWithProviders(<FormWrapper />);
     // The form label "Team" is associated with the combobox input inside the Select

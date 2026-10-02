@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { canDetachKeyProject, KeyProjectField } from "./KeyProjectField";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
@@ -123,9 +124,7 @@ export function KeyEditView({
   const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>(
     Array.isArray(keyData.budget_limits) ? keyData.budget_limits : [],
   );
-  const [tagRateLimits, setTagRateLimits] = useState<TagRateLimitEntry[]>(
-    tagLimitsToRows(keyData.metadata?.tag_rpm_limit),
-  );
+  const [tagLimits, setTagLimits] = useState<TagRateLimitEntry[]>(tagLimitsToRows(keyData.metadata?.tag_rpm_limit));
   const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>(
     keyData.budget_fallbacks && typeof keyData.budget_fallbacks === "object" ? keyData.budget_fallbacks : {},
   );
@@ -135,12 +134,12 @@ export function KeyEditView({
   const routerSettingsRef = useRef<RouterSettingsAccordionRef>(null);
   const keyTypeFieldId = React.useId();
   const endUserBudgetFieldId = React.useId();
-  const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
+  const organizationsQuery = useOrganizations();
   const { data: uiSettingsData } = useUISettings();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const hasProject = Boolean(keyData.project_id);
   const detachProject = hasProject && form.watch("project_id") === null;
-  const canDetachProject = canDetachKeyProject(team, organizations, userID, userRole);
+  const canDetachProject = canDetachKeyProject(team, organizationsQuery.data, userID, userRole);
 
   const allowedRoutesValue = form.watch("allowed_routes");
   const selectedModels = (form.watch("models") as string[] | undefined) ?? [];
@@ -287,7 +286,7 @@ export function KeyEditView({
 
       // Always send the current per-tag limit map so removing every row
       // clears the stored limits ({} overwrites the metadata field).
-      const { tag_rpm_limit } = tagRowsToLimits(tagRateLimits);
+      const { tag_rpm_limit } = tagRowsToLimits(tagLimits);
       values.tag_rpm_limit = tag_rpm_limit;
 
       const hadExistingFallbacks = keyData.budget_fallbacks != null && Object.keys(keyData.budget_fallbacks).length > 0;
@@ -601,7 +600,7 @@ export function KeyEditView({
                 "Scope rate limits to a request tag so each tag (e.g. a cell or group) gets its own RPM counter. Requests without a matching tag fall back to the key-level limit.",
               )}
             </FieldLabel>
-            <TagRateLimitEditor value={tagRateLimits} onChange={setTagRateLimits} />
+            <TagRateLimitEditor value={tagLimits} onChange={setTagLimits} />
           </Field>
 
           <FormField control={form.control} name="guardrails" label="Guardrails">
@@ -634,7 +633,7 @@ export function KeyEditView({
             </FormField>
           )}
 
-          {canViewPolicies && (
+          {hasCapability(userRole, "viewPolicies") && (
             <FormField
               control={form.control}
               name="policies"
@@ -785,8 +784,8 @@ export function KeyEditView({
               <OrganizationDropdown
                 id={id}
                 value={value}
-                organizations={organizations}
-                loading={isOrganizationsLoading}
+                organizations={organizationsQuery.data}
+                loading={isQueryPending(organizationsQuery)}
                 disabled={userRole !== "Admin" || hasProject}
                 onChange={(orgId) => handleOrganizationChange(onChange, orgId)}
               />

@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
 import { useBlogPosts, type BlogPost } from "@/app/(dashboard)/hooks/blogPosts/useBlogPosts";
 import { NAV_PRODUCT_LINK_CLASS } from "@/components/Navbar/navProductLinkClass";
@@ -24,7 +25,9 @@ function formatDate(dateStr: string): string {
 export const BlogDropdown: React.FC = () => {
   const disableBlogPosts = useDisableBlogPosts();
 
-  const { data, isLoading, isError, refetch } = useBlogPosts();
+  const isLoadingQuery = useBlogPosts();
+  const { data, isError, refetch } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   if (disableBlogPosts) {
     return null;

@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { AccessGroupResponse, useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { useDeleteAccessGroup } from "@/app/(dashboard)/hooks/accessGroups/useDeleteAccessGroup";
 import { Boxes, Plus, SearchIcon, X } from "lucide-react";
@@ -34,7 +35,9 @@ export function AccessGroupsPage() {
   const { userRole } = useAuthorized();
   // Admin Viewer follows the read-parity rule: see access groups, no writes.
   const canModify = isProxyAdminRole(userRole ?? "");
-  const { data: groupsData, isLoading } = useAccessGroups();
+  const isLoadingQuery = useAccessGroups();
+  const { data: groupsData } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const groups = useMemo(() => (groupsData ?? []).map(mapResponseToAccessGroup), [groupsData]);
 
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);

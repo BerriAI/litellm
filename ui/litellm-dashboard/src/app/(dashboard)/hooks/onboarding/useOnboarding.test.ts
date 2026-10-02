@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { getOnboardingCredentials, claimOnboardingToken } from "@/components/networking";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor, act } from "@testing-library/react";
@@ -28,7 +29,9 @@ describe("useOnboardingCredentials", () => {
       },
     });
     vi.clearAllMocks();
-    mockUseUIConfig.mockReturnValue({ isLoading: false });
+    mockUseUIConfig.mockReturnValue({
+      ...queryState(false),
+    });
   });
 
   const wrapper = ({ children }: { children: ReactNode }) =>
@@ -57,7 +60,9 @@ describe("useOnboardingCredentials", () => {
   });
 
   it("does not fetch while UIConfig is loading", async () => {
-    mockUseUIConfig.mockReturnValue({ isLoading: true });
+    mockUseUIConfig.mockReturnValue({
+      ...queryState(true),
+    });
 
     const { result } = renderHook(() => useOnboardingCredentials("invite-123"), { wrapper });
 
@@ -89,7 +94,9 @@ describe("useClaimOnboardingToken", () => {
       },
     });
     vi.clearAllMocks();
-    mockUseUIConfig.mockReturnValue({ isLoading: false });
+    mockUseUIConfig.mockReturnValue({
+      ...queryState(false),
+    });
   });
 
   const wrapper = ({ children }: { children: ReactNode }) =>

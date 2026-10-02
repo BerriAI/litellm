@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import React from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
@@ -25,7 +26,7 @@ const setup = () => userEvent.setup({ pointerEventsCheck: PointerEventsCheckLeve
 const renderTab = (toolsets: MCPToolset[] = []) => {
   vi.mocked(useMCPToolsets).mockReturnValue({
     data: toolsets,
-    isLoading: false,
+    ...queryState(false),
   } as unknown as ReturnType<typeof useMCPToolsets>);
   vi.mocked(useMCPServers).mockReturnValue({ data: [] } as unknown as ReturnType<typeof useMCPServers>);
   render(

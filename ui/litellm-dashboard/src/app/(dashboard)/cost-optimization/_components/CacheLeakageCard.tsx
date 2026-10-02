@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Info } from "lucide-react";
 
@@ -104,7 +105,7 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
     [dimension, keyRows, leakageRate, results],
   );
   const rows = useMemo(() => [...unsortedRows].sort((a, b) => compareRows(a, b, sort)), [unsortedRows, sort]);
-  const rowsLoading = dimension === "key" ? keyLeakage.isLoading : loading;
+  const rowsLoading = dimension === "key" ? isQueryPending(keyLeakage) : loading;
 
   const onSort = (column: SortColumn) =>
     setSort((prev) =>

@@ -8,7 +8,7 @@ const credentialsKeys = createQueryKeys("credentials");
 export const useCredentials = () => {
   const { accessToken } = useAuthorized();
   return useQuery<CredentialsResponse>({
-    queryKey: credentialsKeys.list({}),
+    queryKey: [...credentialsKeys.list({}), accessToken],
     queryFn: async () => await credentialListCall(accessToken!),
     enabled: Boolean(accessToken),
   });

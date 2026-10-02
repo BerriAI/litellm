@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -106,7 +107,7 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
       },
       { organization_id: "org-2", organization_alias: "Sales" },
     ],
-    isLoading: false,
+    ...queryState(false),
   }),
 }));
 
@@ -116,7 +117,7 @@ vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
       { access_group_id: "ag-1", access_group_name: "Group 1" },
       { access_group_id: "ag-2", access_group_name: "Group 2" },
     ],
-    isLoading: false,
+    ...queryState(false),
     isError: false,
   }),
 }));

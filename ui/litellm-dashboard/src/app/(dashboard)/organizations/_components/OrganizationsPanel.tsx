@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useUserModels } from "@/app/(dashboard)/hooks/models/useModels";
 import OrganizationFilters, { FilterState } from "@/app/(dashboard)/organizations/OrganizationFilters";
@@ -42,10 +43,12 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
   const [showFilters, setShowFilters] = useState(() => filters.org_id !== "");
 
   const queryClient = useQueryClient();
-  const { data: organizations = [], isLoading } = useOrganizations({
+  const isLoadingQuery = useOrganizations({
     org_id: filters.org_id,
     org_alias: filters.org_alias,
   });
+  const { data: organizations = [] } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const { data: userModels = [] } = useUserModels();
 
   const searchActive = Boolean(filters.org_id || filters.org_alias);

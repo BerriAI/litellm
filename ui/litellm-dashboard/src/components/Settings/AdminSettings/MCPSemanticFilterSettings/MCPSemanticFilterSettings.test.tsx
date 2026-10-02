@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
@@ -106,7 +107,7 @@ describe("MCPSemanticFilterSettings", () => {
     vi.clearAllMocks();
     vi.mocked(useMCPSemanticFilterSettings).mockReturnValue({
       data: defaultSettingsData,
-      isLoading: false,
+      ...queryState(false),
       isError: false,
       error: null,
     } as any);
@@ -135,7 +136,7 @@ describe("MCPSemanticFilterSettings", () => {
   it("should not show the settings content while loading", async () => {
     vi.mocked(useMCPSemanticFilterSettings).mockReturnValue({
       data: undefined,
-      isLoading: true,
+      ...queryState(true),
       isError: false,
       error: null,
     } as any);
@@ -146,7 +147,7 @@ describe("MCPSemanticFilterSettings", () => {
   it("should show an error alert when data fails to load", async () => {
     vi.mocked(useMCPSemanticFilterSettings).mockReturnValue({
       data: undefined,
-      isLoading: false,
+      ...queryState(false),
       isError: true,
       error: new Error("Network error"),
     } as any);
@@ -158,7 +159,7 @@ describe("MCPSemanticFilterSettings", () => {
   it("should show the error message from the error object when loading fails", async () => {
     vi.mocked(useMCPSemanticFilterSettings).mockReturnValue({
       data: undefined,
-      isLoading: false,
+      ...queryState(false),
       isError: true,
       error: new Error("Connection refused"),
     } as any);
@@ -219,7 +220,7 @@ describe("MCPSemanticFilterSettings", () => {
   it("should fall back to the hardcoded defaults when the backend returns no values", async () => {
     vi.mocked(useMCPSemanticFilterSettings).mockReturnValue({
       data: { field_schema: defaultSettingsData.field_schema, values: {} },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
       error: null,
     } as any);

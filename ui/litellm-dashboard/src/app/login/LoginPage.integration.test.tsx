@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -86,7 +87,7 @@ describe("LoginPage submit payload", () => {
         proxy_base_url: null,
         sso_configured: false,
       },
-      isLoading: false,
+      ...queryState(false),
     });
   });
 
@@ -146,7 +147,7 @@ describe("LoginPage submit payload", () => {
         sso_configured: false,
         is_control_plane: true,
       },
-      isLoading: false,
+      ...queryState(false),
     });
 
     renderLoginPage();
@@ -175,7 +176,7 @@ describe("LoginPage submit payload", () => {
         sso_configured: false,
         is_control_plane: true,
       },
-      isLoading: false,
+      ...queryState(false),
     });
 
     renderLoginPage();

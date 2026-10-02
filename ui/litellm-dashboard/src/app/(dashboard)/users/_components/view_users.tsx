@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -179,11 +180,14 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         await userDeleteCall(accessToken, [userToDelete.user_id]);
 
         // Update the user list after deletion
-        queryClient.setQueriesData<UserListResponse>({ queryKey: ["userList"] }, (previousData) => {
-          if (previousData === undefined) return previousData;
-          const updatedUsers = previousData.users.filter((user) => user.user_id !== userToDelete.user_id);
-          return { ...previousData, users: updatedUsers };
-        });
+        queryClient.setQueriesData<UserListResponse>(
+          { queryKey: ["userList"], predicate: (query) => query.queryKey.at(-1) === accessToken },
+          (previousData) => {
+            if (previousData === undefined) return previousData;
+            const updatedUsers = previousData.users.filter((user) => user.user_id !== userToDelete.user_id);
+            return { ...previousData, users: updatedUsers };
+          },
+        );
 
         toast.success("User deleted successfully");
       } catch (error) {
@@ -238,23 +242,23 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   };
 
   const userListQuery = useQuery({
-    queryKey: ["userList", userListQueryFilters],
+    queryKey: ["userList", userListQueryFilters, accessToken],
     queryFn: async () => {
       if (!accessToken) throw new Error("Access token required");
 
       return await userListCall(
         accessToken,
-        userIdFilter ? [userIdFilter] : null,
-        pagination.pageIndex + 1,
-        pagination.pageSize,
+        userListQueryFilters.userId ? [userListQueryFilters.userId] : null,
+        userListQueryFilters.page,
+        userListQueryFilters.pageSize,
         null,
-        userRoleFilter ?? null,
-        teamFilter ?? null,
-        ssoUserIdFilter ?? null,
-        sortBy,
-        sortOrder,
-        orgAdminOrgIds ? orgAdminOrgIds.map((o) => o.organization_id) : null,
-        searchFilter,
+        userListQueryFilters.role ?? null,
+        userListQueryFilters.team ?? null,
+        userListQueryFilters.ssoUserId ?? null,
+        userListQueryFilters.sortBy,
+        userListQueryFilters.sortOrder,
+        userListQueryFilters.orgAdminOrgIds?.map((o) => o.organization_id) ?? null,
+        userListQueryFilters.search,
       );
     },
     enabled: Boolean(accessToken && token && userRole && userID),
@@ -262,7 +266,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   });
 
   const userRolesQuery = useQuery<Record<string, Record<string, string>>>({
-    queryKey: ["userRoles"],
+    queryKey: ["userRoles", accessToken],
     initialData: () => ({}),
     queryFn: async () => {
       if (!accessToken) throw new Error("Access token required");
@@ -295,7 +299,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     <UsersTable
       data={users}
       rowCount={totalUserCount}
-      isLoading={userListQuery.isLoading || userListQuery.isPlaceholderData}
+      isLoading={isQueryPending(userListQuery) || userListQuery.isPlaceholderData}
       possibleUIRoles={possibleUIRoles}
       teams={teams}
       sorting={sorting}
@@ -319,14 +323,14 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     <div className="w-full overflow-hidden p-8">
       <div className="mb-4 flex items-center justify-between">
         <div className="flex space-x-3">
-          {userListQuery.isLoading && (
+          {isQueryPending(userListQuery) && (
             <>
               <Skeleton className="h-9 w-28" />
               <Skeleton className="h-9 w-36" />
               <Skeleton className="h-9 w-28" />
             </>
           )}
-          {!userListQuery.isLoading && userID && accessToken && (
+          {!isQueryPending(userListQuery) && userID && accessToken && (
             <>
               {isProxyAdmin && (
                 <CreateUserButton userID={userID} accessToken={accessToken} possibleUIRoles={possibleUIRoles} />

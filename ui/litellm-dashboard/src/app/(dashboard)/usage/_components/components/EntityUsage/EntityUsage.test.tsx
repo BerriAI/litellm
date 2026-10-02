@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../../../tests/queryState";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -189,7 +190,7 @@ describe("EntityUsage", () => {
       fetchNextPage: vi.fn(),
       hasNextPage: false,
       isFetchingNextPage: false,
-      isLoading: false,
+      ...queryState(false),
     }) as unknown as ReturnType<typeof useInfiniteUsers>;
 
   const mockSpendData = {
@@ -1397,7 +1398,12 @@ describe("EntityUsage", () => {
 
     it("refetches daily activity for the picked user and drops the filter when cleared", async () => {
       const user = userEvent.setup();
+      mockUserDailyActivityCall.mockResolvedValueOnce(mockSpendData).mockResolvedValueOnce({
+        ...mockSpendData,
+        metadata: { ...mockSpendData.metadata, total_spend: 42.25 },
+      });
       await renderUserUsage();
+      expect(await screen.findAllByText("$100.50")).not.toHaveLength(0);
 
       expect(mockUserDailyActivityCall).toHaveBeenCalledWith(
         expect.objectContaining({ accessToken: "test-token", entityIds: null }),
@@ -1412,11 +1418,12 @@ describe("EntityUsage", () => {
         );
       });
 
+      expect(await screen.findAllByText("$42.25")).not.toHaveLength(0);
       mockUserDailyActivityCall.mockClear();
       await user.click(userDropdown().querySelector('[data-slot="combobox-clear"]') as HTMLElement);
 
-      // the unfiltered request was already fetched, so its cached data returns with no new call
-      expect(await screen.findByPlaceholderText("Search users by email…")).toBeInTheDocument();
+      expect(await screen.findAllByText("$100.50")).not.toHaveLength(0);
+      expect(screen.queryByText("$42.25")).not.toBeInTheDocument();
       expect(mockUserDailyActivityCall).not.toHaveBeenCalled();
     });
   });

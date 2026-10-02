@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -33,7 +34,7 @@ const makeModel = (overrides: Partial<ModelData> = {}): ModelData =>
 const baseProps = {
   data: [makeModel()],
   rowCount: 1,
-  isLoading: false,
+  ...queryState(false),
   isRefreshing: false,
   onRefresh: vi.fn(),
   sorting: [],

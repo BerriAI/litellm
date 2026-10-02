@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import React from "react";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
@@ -23,7 +24,11 @@ vi.mock("@/components/mcp_server_management/MCPServerSelector", () => ({ default
 vi.mock("@/components/mcp_server_management/MCPToolPermissions", () => ({ default: () => <div /> }));
 vi.mock("@/components/guardrails/GuardrailSelector", () => ({ default: () => <div /> }));
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
-  useAccessGroups: () => ({ data: [], isLoading: false, isError: false }),
+  useAccessGroups: () => ({
+    data: [],
+    ...queryState(false),
+    isError: false,
+  }),
 }));
 vi.mock("@/components/common_components/team_dropdown", () => ({ default: () => <div /> }));
 

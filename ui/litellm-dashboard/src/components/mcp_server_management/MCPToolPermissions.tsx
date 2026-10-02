@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { listMCPTools } from "../networking";
 import { MCPTool } from "../mcp_tools/types";
@@ -58,14 +59,13 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   onChange,
   disabled = false,
 }) => {
-  const {
-    data: allServers = [],
-    isError: serversFailed,
-    isLoading: serversLoading,
-    isSuccess: serversLoaded,
-  } = useMCPServers();
+  const serversLoadingQuery = useMCPServers();
+  const { data: allServers = [], isError: serversFailed, isSuccess: serversLoaded } = serversLoadingQuery;
+  const serversLoading = isQueryPending(serversLoadingQuery);
   const { data: populatedAccessGroups = [], isSuccess: accessGroupsLoaded } = useMCPAccessGroups();
-  const { data: toolsets = [], isError: toolsetsFailed, isLoading: toolsetsLoading } = useMCPToolsets();
+  const toolsetsLoadingQuery = useMCPToolsets();
+  const { data: toolsets = [], isError: toolsetsFailed } = toolsetsLoadingQuery;
+  const toolsetsLoading = isQueryPending(toolsetsLoadingQuery);
   const [serverTools, setServerTools] = useState<Record<string, MCPTool[]>>({});
   const [loadingTools, setLoadingTools] = useState<Record<string, boolean>>({});
   const [toolErrors, setToolErrors] = useState<Record<string, string>>({});

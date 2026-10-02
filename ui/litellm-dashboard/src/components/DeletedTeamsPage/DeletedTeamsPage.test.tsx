@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, it, expect, beforeEach, MockedFunction } from "vitest";
@@ -35,7 +36,7 @@ beforeEach(() => {
 
   mockUseDeletedTeams.mockReturnValue({
     data: { teams: [mockDeletedTeam], total: 1 },
-    isLoading: false,
+    ...queryState(false),
   } as unknown as ReturnType<typeof useDeletedTeams>);
 });
 
@@ -48,7 +49,7 @@ it("should render DeletedTeamsPage component", () => {
 it("requests the first page of 25 deleted teams and shows the server total in the footer", () => {
   mockUseDeletedTeams.mockReturnValue({
     data: { teams: [mockDeletedTeam], total: 137 },
-    isLoading: false,
+    ...queryState(false),
   } as unknown as ReturnType<typeof useDeletedTeams>);
 
   renderWithProviders(<DeletedTeamsPage />);
@@ -61,7 +62,7 @@ it("requests the first page of 25 deleted teams and shows the server total in th
 it("requests the next page from the server when Next is clicked", () => {
   mockUseDeletedTeams.mockReturnValue({
     data: { teams: [mockDeletedTeam], total: 137 },
-    isLoading: false,
+    ...queryState(false),
   } as unknown as ReturnType<typeof useDeletedTeams>);
 
   renderWithProviders(<DeletedTeamsPage />);
@@ -74,7 +75,7 @@ it("offers the shared page sizes and refetches with the selected one", async () 
   const user = userEvent.setup();
   mockUseDeletedTeams.mockReturnValue({
     data: { teams: [mockDeletedTeam], total: 137 },
-    isLoading: false,
+    ...queryState(false),
   } as unknown as ReturnType<typeof useDeletedTeams>);
 
   renderWithProviders(<DeletedTeamsPage />);
@@ -100,7 +101,7 @@ it("should show the enterprise notice for a non-premium user", () => {
 it("should show skeleton rows while the initial load is pending", () => {
   mockUseDeletedTeams.mockReturnValue({
     data: undefined,
-    isLoading: true,
+    ...queryState(true),
   } as unknown as ReturnType<typeof useDeletedTeams>);
 
   renderWithProviders(<DeletedTeamsPage />);

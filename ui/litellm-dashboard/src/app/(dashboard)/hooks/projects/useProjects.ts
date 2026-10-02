@@ -74,7 +74,7 @@ export const useProjects = () => {
   const { accessToken, userRole } = useAuthorized();
 
   return useQuery<ProjectResponse[]>({
-    queryKey: projectKeys.list({}),
+    queryKey: [...projectKeys.list({}), accessToken],
     queryFn: async () => fetchProjects(accessToken!),
     enabled: Boolean(accessToken) && projectReaderRoles.includes(userRole!),
   });

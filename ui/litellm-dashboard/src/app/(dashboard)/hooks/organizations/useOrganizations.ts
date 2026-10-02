@@ -16,11 +16,14 @@ export const useOrganizations = (filters?: OrganizationListFilters): UseQueryRes
   const orgAlias = filters?.org_alias || null;
   const hasSession = Boolean(accessToken && userId && userRole);
   return useQuery<Organization[]>({
-    queryKey: organizationKeys.list(
-      orgId || orgAlias
-        ? { filters: { ...(orgId && { org_id: orgId }), ...(orgAlias && { org_alias: orgAlias }) } }
-        : {},
-    ),
+    queryKey: [
+      ...organizationKeys.list(
+        orgId || orgAlias
+          ? { filters: { ...(orgId && { org_id: orgId }), ...(orgAlias && { org_alias: orgAlias }) } }
+          : {},
+      ),
+      accessToken,
+    ],
     queryFn: async () => await organizationListCall(accessToken!, orgId, orgAlias),
     enabled: hasSession && premiumUser === true,
   });
@@ -30,7 +33,7 @@ export const useOrganization = (organizationID?: string) => {
   const queryClient = useQueryClient();
   const { accessToken, premiumUser } = useAuthorized();
   return useQuery<Organization>({
-    queryKey: organizationKeys.detail(organizationID!),
+    queryKey: [...organizationKeys.detail(organizationID!), accessToken],
     enabled: Boolean(accessToken && organizationID) && premiumUser === true,
 
     queryFn: async () => {
@@ -45,7 +48,10 @@ export const useOrganization = (organizationID?: string) => {
       if (!organizationID) return undefined;
 
       return queryClient
-        .getQueriesData<Organization[]>({ queryKey: organizationKeys.lists() })
+        .getQueriesData<Organization[]>({
+          queryKey: organizationKeys.lists(),
+          predicate: (query) => query.queryKey.at(-1) === accessToken,
+        })
         .flatMap(([, organizations]) => organizations ?? [])
         .find((organization) => organization.organization_id === organizationID);
     },

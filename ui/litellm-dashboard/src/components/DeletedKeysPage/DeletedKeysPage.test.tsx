@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, it, expect, beforeEach, MockedFunction } from "vitest";
@@ -85,7 +86,7 @@ beforeEach(() => {
       current_page: 1,
       total_pages: 1,
     },
-    isLoading: false,
+    ...queryState(false),
   } as unknown as ReturnType<typeof useDeletedKeys>);
 });
 
@@ -107,7 +108,7 @@ it("should show the enterprise notice for a non-premium user", () => {
 it("should show skeleton rows while the initial load is pending", () => {
   mockUseDeletedKeys.mockReturnValue({
     data: undefined,
-    isLoading: true,
+    ...queryState(true),
   } as unknown as ReturnType<typeof useDeletedKeys>);
 
   renderWithProviders(<DeletedKeysPage />);
@@ -124,7 +125,7 @@ it("should request the next page from the hook when the pagination next button i
       current_page: 1,
       total_pages: 3,
     },
-    isLoading: false,
+    ...queryState(false),
   } as unknown as ReturnType<typeof useDeletedKeys>);
 
   renderWithProviders(<DeletedKeysPage />);

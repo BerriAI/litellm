@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useMemo, useState } from "react";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import type { SearchSelectOption } from "@/components/shared/SearchSelect";
@@ -21,10 +22,9 @@ export const userOptionLabel = (user: Pick<UserInfo, "user_id" | "user_alias" | 
 const UserDropdown: React.FC<UserDropdownProps> = ({ value, onChange, disabled, pageSize = 50, id }) => {
   const [search, setSearch] = useState("");
 
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteUsers(
-    pageSize,
-    search || undefined,
-  );
+  const isLoadingQuery = useInfiniteUsers(pageSize, search || undefined);
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const loadedOptions = useMemo<SearchSelectOption[]>(() => {
     const byId = new Map<string, SearchSelectOption>();

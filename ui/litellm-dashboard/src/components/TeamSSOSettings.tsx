@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { Edit, Save } from "lucide-react";
 import React, { useEffect, useState } from "react";
 
@@ -118,7 +119,9 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
   const [editedValues, setEditedValues] = useState<SettingsValues>(DEFAULT_VALUES);
   const [saving, setSaving] = useState<boolean>(false);
   const [fetchError, setFetchError] = useState<boolean>(false);
-  const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
+  const isOrganizationsLoadingQuery = useOrganizations();
+  const { data: organizations } = isOrganizationsLoadingQuery;
+  const isOrganizationsLoading = isQueryPending(isOrganizationsLoadingQuery);
 
   useEffect(() => {
     const fetchSettings = async () => {

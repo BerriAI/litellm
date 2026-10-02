@@ -8,7 +8,7 @@ const webSearchInterceptionSettingsKeys = createQueryKeys("webSearchInterception
 export const useWebSearchInterceptionSettings = () => {
   const { accessToken } = useAuthorized();
   return useQuery<WebSearchInterceptionSettingsResponse>({
-    queryKey: webSearchInterceptionSettingsKeys.list({}),
+    queryKey: [...webSearchInterceptionSettingsKeys.list({}), accessToken],
     queryFn: async () => await getWebSearchInterceptionSettings(accessToken),
     enabled: !!accessToken,
     staleTime: 60 * 60 * 1000,

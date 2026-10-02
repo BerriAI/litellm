@@ -152,11 +152,14 @@ export const deleteProxyConfigFieldCall = async (
 export const useProxyConfig = (configType: ConfigType) => {
   const { accessToken } = useAuthorized();
   return useQuery<ProxyConfigResponse>({
-    queryKey: proxyConfigKeys.list({
-      filters: {
-        configType,
-      },
-    }),
+    queryKey: [
+      ...proxyConfigKeys.list({
+        filters: {
+          configType,
+        },
+      }),
+      accessToken,
+    ],
     queryFn: async () => await getProxyConfigCall(accessToken!, configType),
     enabled: Boolean(accessToken),
   });

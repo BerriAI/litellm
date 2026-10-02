@@ -6,6 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { ChevronDown, ChevronRight, Download, Info, Sparkles, X } from "lucide-react";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -193,7 +194,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   );
   const aggregatedQuery = useAggregatedDailyActivity("user", dailyActivityRequest);
   const aggregatedRaw = aggregatedQuery.data ?? EMPTY_DAILY_ACTIVITY_RESPONSE;
-  const aggregatedLoading = aggregatedQuery.isLoading;
+  const aggregatedLoading = isQueryPending(aggregatedQuery);
   const aggregatedFailed = aggregatedQuery.isError;
 
   // Gateway request counts (SGR). Admin-only: the source table is

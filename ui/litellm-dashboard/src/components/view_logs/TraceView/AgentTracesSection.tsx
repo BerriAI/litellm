@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import moment from "moment";
 import { useMemo, useState } from "react";
 
@@ -66,7 +67,7 @@ interface AgentTracesSectionProps {
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
   const [setupResult, setSetupResult] = useState<{ detail: string | null } | null>(null);
   const waitingForFirstTrace = traces.traces.length === 0 && !rangeChanged;
-  const settledResponse = isActive && !traces.isFetching && !traces.error;
+  const settledResponse = isActive && !traces.isLoading && !traces.isFetching && !traces.error;
   const rememberSetup = waitingForFirstTrace || setupResult !== null;
   if (settledResponse && rememberSetup && setupResult?.detail !== traces.notEnabledDetail) {
     setSetupResult({ detail: traces.notEnabledDetail });
@@ -157,7 +158,7 @@ export function AgentTracesSection({
     canMintTracingKey,
     onOpenTrace: openSentTrace,
     onCheck: checkTraces,
-    checking: traces.isFetching,
+    checking: traces.isLoading || traces.isFetching,
   };
 
   if (setup.disabledDetail != null) return <TracingSetupCard detail={setup.disabledDetail} {...setupProps} />;
@@ -219,7 +220,7 @@ export function AgentTracesSection({
       <TracesTimeline runs={filtered} range={range} selection={zoom} onSelect={setZoom} />
       <AgentTracesTable
         traces={runs}
-        isLoading={traces.isLoading || (checkHistory && history.isLoading)}
+        isLoading={traces.isLoading || (checkHistory && isQueryPending(history))}
         error={traces.error}
         hasMore={traces.hasMore}
         onLoadMore={traces.loadMore}

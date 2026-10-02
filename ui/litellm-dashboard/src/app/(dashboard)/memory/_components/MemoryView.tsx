@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { PaginationState } from "@tanstack/react-table";
@@ -39,8 +40,8 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   // currently-visible page without us needing a manual refetch().
   const MEMORY_LIST_KEY = "memoryList" as const;
 
-  const { data, isLoading, isFetching } = useQuery({
-    queryKey: [MEMORY_LIST_KEY, debouncedSearch, pagination.pageIndex, pagination.pageSize],
+  const isLoadingQuery = useQuery({
+    queryKey: [MEMORY_LIST_KEY, debouncedSearch, pagination.pageIndex, pagination.pageSize, accessToken],
     queryFn: () => {
       if (!accessToken) throw new Error("Access token required");
       return fetchMemoryList(accessToken, {
@@ -51,6 +52,8 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
     },
     enabled: !!accessToken,
   });
+  const { data, isFetching } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const rows = useMemo(() => data?.memories ?? [], [data]);
   const total = data?.total ?? 0;

@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Download } from "lucide-react";
@@ -64,12 +65,14 @@ const columns: ColumnDef<TeamUserSpendRow>[] = [
 
 const TeamUserSpendCard: React.FC<TeamUserSpendCardProps> = ({ accessToken, startTime, endTime, teamIds }) => {
   const hasTeams = teamIds.length > 0;
-  const { data, isLoading } = useQuery({
-    queryKey: ["teamSpendByUser", startTime?.toISOString(), endTime?.toISOString(), teamIds],
+  const isLoadingQuery = useQuery({
+    queryKey: ["teamSpendByUser", startTime?.toISOString(), endTime?.toISOString(), teamIds, accessToken],
     queryFn: () =>
       accessToken && startTime && endTime ? teamSpendByUserCall(accessToken, startTime, endTime, teamIds) : null,
     enabled: Boolean(accessToken && startTime && endTime) && hasTeams,
   });
+  const { data } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const rows = useMemo(() => sortBySpendDesc(data?.results ?? []), [data]);
 
   return (

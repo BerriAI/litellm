@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Search, ArrowLeft, ChevronRight, Wrench, CheckCircle, Loader2 } from "lucide-react";
@@ -314,11 +315,13 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
     return null;
   };
 
-  const { data: detailToolsResult, isLoading: loadingTools } = useQuery({
-    queryKey: ["mcp-apps-panel-detail-tools", detailServer?.server_id],
+  const loadingToolsQuery = useQuery({
+    queryKey: ["mcp-apps-panel-detail-tools", detailServer?.server_id, accessToken],
     queryFn: () => listMCPTools(accessToken, detailServer!.server_id),
     enabled: !!detailServer,
   });
+  const { data: detailToolsResult } = loadingToolsQuery;
+  const loadingTools = isQueryPending(loadingToolsQuery);
   const detailTools: MCPTool[] = Array.isArray(detailToolsResult?.tools) ? detailToolsResult.tools : [];
 
   const filtered = servers.filter((s) => {

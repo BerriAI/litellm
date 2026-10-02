@@ -155,6 +155,10 @@ export function useLogFilterLogic({
       sortOrder,
       excludeInternalHealthChecks,
       sessionCursor,
+      accessToken,
+      token,
+      userRole,
+      userID,
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {

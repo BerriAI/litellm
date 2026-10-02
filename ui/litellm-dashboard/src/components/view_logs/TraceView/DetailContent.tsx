@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { useState } from "react";
 import { AlertTriangle } from "lucide-react";
@@ -215,7 +216,7 @@ export function DetailContent({ accessToken, traceId, traceRef, span }: DetailCo
           span={span}
         />
       )}
-      {detailQuery.isLoading && <div className={STATUS_TEXT}>Loading span…</div>}
+      {isQueryPending(detailQuery) && <div className={STATUS_TEXT}>Loading span…</div>}
       {detailQuery.isError && <div className={STATUS_TEXT}>Could not load span: {detailQuery.error.message}</div>}
       {detail?.input ? (
         <Section title="Input">

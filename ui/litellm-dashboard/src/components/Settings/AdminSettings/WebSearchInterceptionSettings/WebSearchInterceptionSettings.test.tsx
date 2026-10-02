@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
@@ -60,7 +61,7 @@ describe("WebSearchInterceptionSettings", () => {
     vi.mocked(useAuthorized).mockReturnValue({ accessToken: "test-token" } as any);
     vi.mocked(useWebSearchInterceptionSettings).mockReturnValue({
       data: storedSettings,
-      isLoading: false,
+      ...queryState(false),
       isError: false,
       error: null,
     } as any);
@@ -85,7 +86,7 @@ describe("WebSearchInterceptionSettings", () => {
   it("hides the settings while loading", async () => {
     vi.mocked(useWebSearchInterceptionSettings).mockReturnValue({
       data: undefined,
-      isLoading: true,
+      ...queryState(true),
       isError: false,
       error: null,
     } as any);
@@ -96,7 +97,7 @@ describe("WebSearchInterceptionSettings", () => {
   it("surfaces a load failure", async () => {
     vi.mocked(useWebSearchInterceptionSettings).mockReturnValue({
       data: undefined,
-      isLoading: false,
+      ...queryState(false),
       isError: true,
       error: new Error("boom"),
     } as any);
@@ -130,7 +131,7 @@ describe("WebSearchInterceptionSettings", () => {
   it("warns when the cluster has it on but the serving pod has not applied it", async () => {
     vi.mocked(useWebSearchInterceptionSettings).mockReturnValue({
       data: { ...storedSettings, values: { ...storedSettings.values, enabled: true }, active_on_this_pod: false },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
       error: null,
     } as any);
@@ -143,7 +144,7 @@ describe("WebSearchInterceptionSettings", () => {
   it("stays quiet when the serving pod has applied the cluster setting", async () => {
     vi.mocked(useWebSearchInterceptionSettings).mockReturnValue({
       data: { ...storedSettings, values: { ...storedSettings.values, enabled: true }, active_on_this_pod: true },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
       error: null,
     } as any);
@@ -164,7 +165,7 @@ describe("WebSearchInterceptionSettings", () => {
           max_agentic_loops: "3",
         },
       },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
       error: null,
     } as any);
@@ -179,7 +180,7 @@ describe("WebSearchInterceptionSettings", () => {
   it("reseeds the form when the stored settings change underneath it", async () => {
     vi.mocked(useWebSearchInterceptionSettings).mockReturnValue({
       data: { ...storedSettings, values: { ...storedSettings.values, max_agentic_loops: 3 } },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
       error: null,
     } as any);
@@ -188,7 +189,7 @@ describe("WebSearchInterceptionSettings", () => {
 
     vi.mocked(useWebSearchInterceptionSettings).mockReturnValue({
       data: { ...storedSettings, values: { ...storedSettings.values, max_agentic_loops: 9 } },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
       error: null,
     } as any);
@@ -203,7 +204,7 @@ describe("WebSearchInterceptionSettings", () => {
     const user = userEvent.setup();
     vi.mocked(useWebSearchInterceptionSettings).mockReturnValue({
       data: { ...storedSettings, values: { ...storedSettings.values, max_agentic_loops: 5 } },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
       error: null,
     } as any);

@@ -45,25 +45,28 @@ export const useModelsInfo = (
 ) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<PaginatedModelInfoResponse>({
-    queryKey: modelKeys.list({
-      filters: {
-        ...(userId && { userId }),
-        ...(userRole && { userRole }),
-        page,
-        size,
-        ...(search && { search }),
-        ...(modelName && { modelName }),
-        ...(modelId && { modelId }),
-        ...(teamId && { teamId }),
-        ...(sortBy && { sortBy }),
-        ...(sortOrder && { sortOrder }),
-        // Part of the key: callers that exclude auto-routers must not share a cache entry
-        // with callers that keep them.
-        ...(excludeAutoRouters && { excludeAutoRouters: "true" }),
-        ...(accessGroup && { accessGroup }),
-        ...(wildcardOnly && { wildcardOnly: "true" }),
-      },
-    }),
+    queryKey: [
+      ...modelKeys.list({
+        filters: {
+          ...(userId && { userId }),
+          ...(userRole && { userRole }),
+          page,
+          size,
+          ...(search && { search }),
+          ...(modelName && { modelName }),
+          ...(modelId && { modelId }),
+          ...(teamId && { teamId }),
+          ...(sortBy && { sortBy }),
+          ...(sortOrder && { sortOrder }),
+          // Part of the key: callers that exclude auto-routers must not share a cache entry
+          // with callers that keep them.
+          ...(excludeAutoRouters && { excludeAutoRouters: "true" }),
+          ...(accessGroup && { accessGroup }),
+          ...(wildcardOnly && { wildcardOnly: "true" }),
+        },
+      }),
+      accessToken,
+    ],
     queryFn: async () =>
       await modelInfoCall(
         accessToken!,
@@ -206,7 +209,7 @@ const useDeployments = <TSelected>(
 ): UseQueryResult<TSelected, Error> => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<AutoRouterDeployment[], Error, TSelected>({
-    queryKey: autoRouterListKey(userId, userRole),
+    queryKey: [...autoRouterListKey(userId, userRole), accessToken],
     queryFn: async () => await fetchAllModelDeployments(accessToken!, userId!, userRole!),
     enabled: Boolean(accessToken && userId && userRole),
     select,
@@ -238,7 +241,7 @@ export const useInvalidateAutoRouters = (): (() => Promise<void>) => {
 export const useModelHub = () => {
   const { accessToken } = useAuthorized();
   return useQuery({
-    queryKey: modelHubKeys.list({}),
+    queryKey: [...modelHubKeys.list({}), accessToken],
     queryFn: async () => await modelHubCall(accessToken!),
     enabled: Boolean(accessToken),
   });
@@ -247,7 +250,7 @@ export const useModelHub = () => {
 export const useAllProxyModels = () => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<AllProxyModelsResponse>({
-    queryKey: allProxyModelsKeys.list({}),
+    queryKey: [...allProxyModelsKeys.list({}), accessToken, userId, userRole],
     queryFn: async () => await modelAvailableCall(accessToken!, userId!, userRole!, true, null, true, false, "expand"),
     enabled: Boolean(accessToken && userId && userRole),
   });
@@ -256,7 +259,7 @@ export const useAllProxyModels = () => {
 export const useUserModels = (): UseQueryResult<string[]> => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<string[]>({
-    queryKey: userModelsKeys.list({}),
+    queryKey: [...userModelsKeys.list({}), accessToken, userId, userRole],
     queryFn: async () => {
       const response = await modelAvailableCall(accessToken!, userId!, userRole!);
       return response["data"].map((model: { id: string }) => model.id);
@@ -268,7 +271,7 @@ export const useUserModels = (): UseQueryResult<string[]> => {
 export const useSelectedTeamModels = (teamID: string | null) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<AllProxyModelsResponse>({
-    queryKey: selectedTeamModelsKeys.list({}),
+    queryKey: [...selectedTeamModelsKeys.list({}), accessToken, userId, userRole, teamID],
     queryFn: async () => await modelAvailableCall(accessToken!, userId!, userRole!, true, teamID!),
     enabled: Boolean(accessToken && userId && userRole && teamID),
   });
@@ -277,14 +280,17 @@ export const useSelectedTeamModels = (teamID: string | null) => {
 export const useInfiniteModelInfo = (size: number = 50, search?: string) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useInfiniteQuery<PaginatedModelInfoResponse>({
-    queryKey: infiniteModelKeys.list({
-      filters: {
-        ...(userId && { userId }),
-        ...(userRole && { userRole }),
-        size,
-        ...(search && { search }),
-      },
-    }),
+    queryKey: [
+      ...infiniteModelKeys.list({
+        filters: {
+          ...(userId && { userId }),
+          ...(userRole && { userRole }),
+          size,
+          ...(search && { search }),
+        },
+      }),
+      accessToken,
+    ],
     queryFn: async ({ pageParam }) => {
       return await modelInfoCall(accessToken!, userId!, userRole!, pageParam as number, size, search);
     },

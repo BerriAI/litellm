@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../../tests/queryState";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { fireEvent, renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
@@ -19,7 +20,7 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
       { team_id: "team-1", team_alias: "Engineering", models: ["gpt-4"] },
       { team_id: "team-2", team_alias: "Sales", models: [] },
     ],
-    isLoading: false,
+    ...queryState(false),
   }),
 }));
 

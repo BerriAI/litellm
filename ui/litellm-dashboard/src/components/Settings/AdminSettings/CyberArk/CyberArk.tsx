@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { Edit, ExternalLink, Info, KeyRound, PlugZap, Trash2 } from "lucide-react";
 import { useState } from "react";
 
@@ -36,7 +37,9 @@ function DetailRow({ children, label }: { children: React.ReactNode; label: stri
 
 export default function CyberArk() {
   const { accessToken } = useAuthorized();
-  const { data, isLoading, isError, error } = useCyberArkConfig();
+  const isLoadingQuery = useCyberArkConfig();
+  const { data, isError, error } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const { mutate: deleteConfig, isPending: isDeleting } = useDeleteCyberArkConfig(accessToken);
   const { mutate: updateConfig, isPending: isClearingField } = useUpdateCyberArkConfig(accessToken);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);

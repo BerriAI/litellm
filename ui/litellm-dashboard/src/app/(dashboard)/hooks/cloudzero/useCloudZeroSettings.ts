@@ -51,7 +51,7 @@ const getCloudZeroSettings = async (accessToken: string): Promise<CloudZeroSetti
 
 export const useCloudZeroSettings = (accessToken: string) => {
   return useQuery<CloudZeroSettings | null>({
-    queryKey: cloudZeroSettingsKeys.list({}),
+    queryKey: [...cloudZeroSettingsKeys.list({}), accessToken],
     queryFn: async () => await getCloudZeroSettings(accessToken),
     enabled: !!accessToken,
     staleTime: 60 * 60 * 1000, // 1 hour - data rarely changes

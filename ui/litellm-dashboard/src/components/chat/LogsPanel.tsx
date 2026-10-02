@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
+import React, { useMemo, useState } from "react";
 import moment from "moment";
 import { AlertCircle, ScrollText } from "lucide-react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -246,8 +247,13 @@ const LogsPanel: React.FC<Props> = ({ accessToken, userId }) => {
   const [page, setPage] = useState(1);
   const [selectedLog, setSelectedLog] = useState<LogRow | null>(null);
 
-  const startDate = getStartMoment(timeRange).utc().format("YYYY-MM-DD HH:mm:ss");
-  const endDate = moment().utc().format("YYYY-MM-DD HH:mm:ss");
+  const { startDate, endDate } = useMemo(
+    () => ({
+      startDate: getStartMoment(timeRange).utc().format("YYYY-MM-DD HH:mm:ss"),
+      endDate: moment().utc().format("YYYY-MM-DD HH:mm:ss"),
+    }),
+    [timeRange],
+  );
 
   const logsCallOptions = {
     accessToken,
@@ -258,12 +264,14 @@ const LogsPanel: React.FC<Props> = ({ accessToken, userId }) => {
     params: { user_id: userId, sort_by: "startTime", sort_order: "desc" as const },
   };
   const logsQueryOptions = {
-    queryKey: [LOGS_QUERY_KEY, accessToken, userId, timeRange, page],
+    queryKey: [LOGS_QUERY_KEY, accessToken, userId, timeRange, page, logsCallOptions],
     queryFn: () => uiSpendLogsCall(logsCallOptions),
     enabled: !!accessToken && !!userId,
     placeholderData: keepPreviousData,
   };
-  const { data, isLoading, isError, refetch } = useQuery(logsQueryOptions);
+  const isLoadingQuery = useQuery(logsQueryOptions);
+  const { data, isError, refetch } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const logs = data as PaginatedLogs | undefined;
   const rows = logs?.data ?? [];
@@ -271,11 +279,13 @@ const LogsPanel: React.FC<Props> = ({ accessToken, userId }) => {
   const total = logs?.total ?? 0;
 
   const detailStartDate = selectedLog ? moment(selectedLog.startTime).utc().format("YYYY-MM-DD HH:mm:ss") : "";
-  const { data: detailData, isLoading: isDetailLoading } = useQuery({
-    queryKey: [LOGS_QUERY_KEY, "detail", accessToken, selectedLog?.request_id, selectedLog?.startTime],
+  const isDetailLoadingQuery = useQuery({
+    queryKey: [LOGS_QUERY_KEY, "detail", accessToken, selectedLog?.request_id, selectedLog?.startTime, detailStartDate],
     queryFn: () => uiSpendLogDetailsCall(accessToken, selectedLog!.request_id, detailStartDate),
     enabled: !!accessToken && !!selectedLog,
   });
+  const { data: detailData } = isDetailLoadingQuery;
+  const isDetailLoading = isQueryPending(isDetailLoadingQuery);
   const details = detailData as LogDetails | undefined;
 
   const renderBody = () => {

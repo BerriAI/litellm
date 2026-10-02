@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
@@ -86,7 +87,9 @@ export function useResourceList<TRow>(options: UseResourceListOptions<TRow>): Re
     enabled,
     placeholderData: (previous) => previous,
   };
-  const { data, isLoading, isPlaceholderData, isFetching, error, refetch: refetchQuery } = useQuery(queryOptions);
+  const isLoadingQuery = useQuery(queryOptions);
+  const { data, isPlaceholderData, isFetching, error, refetch: refetchQuery } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const toFirstPage = useCallback(() => setPagination((previous) => ({ ...previous, pageIndex: 0 })), []);
 

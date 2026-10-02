@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 /* @vitest-environment jsdom */
 import { render } from "@testing-library/react";
 import { withNuqsTestingAdapter } from "nuqs/adapters/testing";
@@ -36,7 +37,7 @@ describe("HealthStatusPanel", () => {
         ],
         total_count: 2,
       },
-      isLoading: false,
+      ...queryState(false),
     });
 
     render(<HealthStatusPanel />, { wrapper: withNuqsTestingAdapter() });

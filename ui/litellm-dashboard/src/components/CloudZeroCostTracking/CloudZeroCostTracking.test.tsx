@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -34,7 +35,7 @@ describe("CloudZeroCostTracking", () => {
     vi.clearAllMocks();
     mockUseCloudZeroSettings.mockReturnValue({
       data: null,
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
   });

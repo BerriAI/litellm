@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { AgentHubData, getAgentHubTableColumns } from "@/components/AIHub/AgentHubTableColumns";
 import MakeAgentPublicForm from "@/components/AIHub/forms/MakeAgentPublicForm";
 import MakeMCPPublicForm from "@/components/AIHub/forms/MakeMCPPublicForm";
@@ -95,7 +96,9 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const [skillHubData, setSkillHubData] = useState<Plugin[]>([]);
   const [skillLoading, setSkillLoading] = useState<boolean>(false);
   const [isMakeSkillPublicModalVisible, setIsMakeSkillPublicModalVisible] = useState(false);
-  const { data: uiSettings, isLoading: isUISettingsLoading } = useUISettings();
+  const isUISettingsLoadingQuery = useUISettings();
+  const { data: uiSettings } = isUISettingsLoadingQuery;
+  const isUISettingsLoading = isQueryPending(isUISettingsLoadingQuery);
 
   // Check authentication requirement for public AI Hub
   useEffect(() => {

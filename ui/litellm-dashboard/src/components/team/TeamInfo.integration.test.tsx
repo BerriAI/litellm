@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import * as networking from "@/components/networking";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
@@ -66,7 +67,10 @@ vi.mock("@/components/utils/dataUtils", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeamMetadataSchema", () => ({
-  useTeamMetadataSchema: vi.fn(() => ({ data: [], isLoading: false })),
+  useTeamMetadataSchema: vi.fn(() => ({
+    data: [],
+    ...queryState(false),
+  })),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
@@ -85,7 +89,10 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", async (importOriginal) => ({
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   organizationKeys: { all: ["organizations"] },
   useOrganization: vi.fn(),
-  useOrganizations: vi.fn().mockReturnValue({ data: [], isLoading: false }),
+  useOrganizations: vi.fn().mockReturnValue({
+    data: [],
+    ...queryState(false),
+  }),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
@@ -193,7 +200,7 @@ vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
       { access_group_id: "ag-1", access_group_name: "Group 1", access_mcp_server_ids: [] },
       { access_group_id: "ag-2", access_group_name: "Group 2", access_mcp_server_ids: [] },
     ],
-    isLoading: false,
+    ...queryState(false),
     isError: false,
   }),
 }));
@@ -289,37 +296,41 @@ const createMockTeamData = (overrides = {}) => ({
 const seedDefaultMocks = () => {
   mockUseAllProxyModels.mockReturnValue({
     data: { data: [] },
-    isLoading: false,
+    ...queryState(false),
   } as unknown as ReturnType<typeof useAllProxyModels>);
   mockUseTeam.mockReturnValue({
     data: undefined,
-    isLoading: false,
+    ...queryState(false),
   } as unknown as ReturnType<typeof useTeam>);
   mockUseOrganization.mockReturnValue({
     data: undefined,
-    isLoading: false,
+    ...queryState(false),
   } as unknown as ReturnType<typeof useOrganization>);
   mockUseCurrentUser.mockReturnValue({
     data: { models: [] },
-    isLoading: false,
+    ...queryState(false),
   } as unknown as ReturnType<typeof useCurrentUser>);
-  mockUseMCPServers.mockReturnValue({ data: [], isLoading: false, isError: false } as unknown as ReturnType<
-    typeof useMCPServers
-  >);
-  mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false, isError: false } as unknown as ReturnType<
-    typeof useMCPToolsets
-  >);
+  mockUseMCPServers.mockReturnValue({
+    data: [],
+    ...queryState(false),
+    isError: false,
+  } as unknown as ReturnType<typeof useMCPServers>);
+  mockUseMCPToolsets.mockReturnValue({
+    data: [],
+    ...queryState(false),
+    isError: false,
+  } as unknown as ReturnType<typeof useMCPToolsets>);
   mockUseAccessGroups.mockReturnValue({
     data: [
       { access_group_id: "ag-1", access_group_name: "Group 1", access_mcp_server_ids: [] },
       { access_group_id: "ag-2", access_group_name: "Group 2", access_mcp_server_ids: [] },
     ],
-    isLoading: false,
+    ...queryState(false),
     isError: false,
   } as unknown as ReturnType<typeof useAccessGroups>);
   mockUseUISettings.mockReturnValue({
     data: { values: {} },
-    isLoading: false,
+    ...queryState(false),
   } as unknown as ReturnType<typeof useUISettings>);
   mockUseKeys.mockReturnValue({
     data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 },
@@ -329,7 +340,7 @@ const seedDefaultMocks = () => {
   } as unknown as ReturnType<typeof useKeys>);
   vi.mocked(useTeamMetadataSchema).mockReturnValue({
     data: [],
-    isLoading: false,
+    ...queryState(false),
   } as unknown as ReturnType<typeof useTeamMetadataSchema>);
 
   can.mockReturnValue(true);

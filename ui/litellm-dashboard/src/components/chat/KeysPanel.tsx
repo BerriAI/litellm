@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useState } from "react";
 import { Loader2, RefreshCw, KeyRound, Copy, Check } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -83,7 +84,7 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
   });
   const [formErrors, setFormErrors] = useState<Partial<Record<keyof FormState, string>>>({});
 
-  const { data, isLoading } = useQuery({
+  const isLoadingQuery = useQuery({
     queryKey: [KEYS_QUERY_KEY, accessToken, userId],
     queryFn: async () => {
       const resp = await keyListCall(accessToken, null, null, null, userId, null, 1, 100, null, null, null, null);
@@ -91,6 +92,8 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
     },
     enabled: !!accessToken,
   });
+  const { data } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const keys = data ?? [];
 

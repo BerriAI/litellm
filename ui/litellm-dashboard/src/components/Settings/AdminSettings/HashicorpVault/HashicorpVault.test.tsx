@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,7 +38,7 @@ describe("HashicorpVault", () => {
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token" });
     mockUseHashicorpVaultConfig.mockReturnValue({
       data: { values: {} },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
       error: null,
     });
@@ -61,7 +62,7 @@ describe("HashicorpVault", () => {
   it("should display configured values and management actions", () => {
     mockUseHashicorpVaultConfig.mockReturnValue({
       data: { values: { vault_addr: "https://vault.example.com", vault_token: "secret" } },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
       error: null,
     });

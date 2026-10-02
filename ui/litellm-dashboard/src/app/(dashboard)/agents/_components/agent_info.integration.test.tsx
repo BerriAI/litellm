@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -21,13 +22,21 @@ vi.mock("@/components/networking", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
-  useKeys: () => ({ data: { keys: [] }, isLoading: false, refetch: vi.fn() }),
+  useKeys: () => ({
+    data: { keys: [] },
+    ...queryState(false),
+    refetch: vi.fn(),
+  }),
 }));
 
 vi.mock("./agent_card_discovery", () => ({ default: () => <div data-testid="agent-card-discovery" /> }));
 
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
-  useAccessGroups: () => ({ data: [], isLoading: false, isError: false }),
+  useAccessGroups: () => ({
+    data: [],
+    ...queryState(false),
+    isError: false,
+  }),
 }));
 
 const A2A_AGENT = {

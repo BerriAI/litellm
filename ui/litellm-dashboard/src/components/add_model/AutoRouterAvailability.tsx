@@ -19,18 +19,19 @@ type AvailabilityState = {
 export const AutoRouterAvailabilityContext = createContext<AvailabilityState>({ isPending: true, isError: false });
 
 export const useAutoRouterAvailability = (accessToken: string, body: Request, enabled = true) => {
-  const serialized = JSON.stringify(body.complexity_router_config ?? null);
+  const { complexity_router_config, ...requestScope } = body;
+  const serialized = JSON.stringify(complexity_router_config ?? null);
   const [debounced, setDebounced] = useState(serialized);
   useEffect(() => {
     const timeout = setTimeout(() => setDebounced(serialized), 300);
     return () => clearTimeout(timeout);
   }, [serialized]);
   const options: UseQueryOptions<Availability> = {
-    queryKey: ["autoRouterAvailability", accessToken, body.team_id, body.saved_model_id, debounced],
+    queryKey: ["autoRouterAvailability", accessToken, body.team_id, body.saved_model_id, debounced, requestScope],
     queryFn: ({ signal }) =>
       apiClient.post<Availability>("/auto_router/availability", {
         accessToken,
-        body: { ...body, complexity_router_config: JSON.parse(debounced) },
+        body: { ...requestScope, complexity_router_config: JSON.parse(debounced) },
         signal,
       }),
     enabled: enabled && Boolean(accessToken),
@@ -53,7 +54,9 @@ export const useAutoRouterAvailability = (accessToken: string, body: Request, en
     return query.data.error ?? null;
   };
   return {
-    ...query,
+    data: query.data,
+    isError: query.isError,
+    refetch: query.refetch,
     isPending: query.isPending || (query.isFetching && !query.isFetchedAfterMount),
     isChecking,
     saveBlockedReason: saveBlockedReason(),

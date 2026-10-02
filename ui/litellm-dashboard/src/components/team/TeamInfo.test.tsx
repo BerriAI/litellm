@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import * as networking from "@/components/networking";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
@@ -72,7 +73,10 @@ vi.mock("@/components/utils/dataUtils", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeamMetadataSchema", () => ({
-  useTeamMetadataSchema: vi.fn(() => ({ data: [], isLoading: false })),
+  useTeamMetadataSchema: vi.fn(() => ({
+    data: [],
+    ...queryState(false),
+  })),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
@@ -91,7 +95,10 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", async (importOriginal) => ({
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   organizationKeys: { all: ["organizations"] },
   useOrganization: vi.fn(),
-  useOrganizations: vi.fn().mockReturnValue({ data: [], isLoading: false }),
+  useOrganizations: vi.fn().mockReturnValue({
+    data: [],
+    ...queryState(false),
+  }),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
@@ -199,7 +206,7 @@ vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
       { access_group_id: "ag-1", access_group_name: "Group 1", access_mcp_server_ids: [] },
       { access_group_id: "ag-2", access_group_name: "Group 2", access_mcp_server_ids: [] },
     ],
-    isLoading: false,
+    ...queryState(false),
     isError: false,
   }),
 }));
@@ -294,33 +301,41 @@ const createMockTeamData = (overrides = {}) => ({
 const seedDefaultMocks = () => {
   mockUseAllProxyModels.mockReturnValue({
     data: { data: [] },
-    isLoading: false,
+    ...queryState(false),
   } as any);
   mockUseTeam.mockReturnValue({
     data: undefined,
-    isLoading: false,
+    ...queryState(false),
   } as any);
   mockUseOrganization.mockReturnValue({
     data: undefined,
-    isLoading: false,
+    ...queryState(false),
   } as any);
   mockUseCurrentUser.mockReturnValue({
     data: { models: [] },
-    isLoading: false,
+    ...queryState(false),
   } as any);
-  mockUseMCPServers.mockReturnValue({ data: [], isLoading: false, isError: false } as any);
-  mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false, isError: false } as any);
+  mockUseMCPServers.mockReturnValue({
+    data: [],
+    ...queryState(false),
+    isError: false,
+  } as any);
+  mockUseMCPToolsets.mockReturnValue({
+    data: [],
+    ...queryState(false),
+    isError: false,
+  } as any);
   mockUseAccessGroups.mockReturnValue({
     data: [
       { access_group_id: "ag-1", access_group_name: "Group 1", access_mcp_server_ids: [] },
       { access_group_id: "ag-2", access_group_name: "Group 2", access_mcp_server_ids: [] },
     ],
-    isLoading: false,
+    ...queryState(false),
     isError: false,
   } as any);
   mockUseUISettings.mockReturnValue({
     data: { values: {} },
-    isLoading: false,
+    ...queryState(false),
   } as any);
   mockUseKeys.mockReturnValue({
     data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 },
@@ -328,7 +343,10 @@ const seedDefaultMocks = () => {
     isFetching: false,
     refetch: vi.fn(),
   } as any);
-  vi.mocked(useTeamMetadataSchema).mockReturnValue({ data: [], isLoading: false } as any);
+  vi.mocked(useTeamMetadataSchema).mockReturnValue({
+    data: [],
+    ...queryState(false),
+  } as any);
 
   can.mockReturnValue(true);
   vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
@@ -1414,7 +1432,7 @@ describe("TeamInfoView", () => {
           { key: "cost_center", label: "Cost Center" },
           { key: "app_name", label: "Application Name" },
         ],
-        isLoading: false,
+        ...queryState(false),
       } as any);
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
         createMockTeamData({
@@ -2708,9 +2726,21 @@ describe("TeamInfo MCP permission retention", () => {
       accessGroups?: typeof UNIFIED_GROUPS;
     } = {},
   ) => {
-    mockUseMCPServers.mockReturnValue({ data: [UNIFIED_SERVER], isLoading: false, isError: false } as any);
-    mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false, isError: false } as any);
-    mockUseAccessGroups.mockReturnValue({ data: accessGroups, isLoading: false, isError: false } as any);
+    mockUseMCPServers.mockReturnValue({
+      data: [UNIFIED_SERVER],
+      ...queryState(false),
+      isError: false,
+    } as any);
+    mockUseMCPToolsets.mockReturnValue({
+      data: [],
+      ...queryState(false),
+      isError: false,
+    } as any);
+    mockUseAccessGroups.mockReturnValue({
+      data: accessGroups,
+      ...queryState(false),
+      isError: false,
+    } as any);
     vi.mocked(networking.teamInfoCall).mockResolvedValueOnce(initialTeam).mockResolvedValue(freshTeam);
     vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
 
@@ -2990,11 +3020,19 @@ describe("TeamInfo MCP permission retention", () => {
   it("retains an indirectly granted server on an unrelated team save", async () => {
     const user = userEvent.setup({ delay: null });
     const catalog = [server("direct-server", "deploy_tracker"), server("perm-only-server", "issue_tracker")];
-    mockUseMCPServers.mockReturnValue({ data: catalog, isLoading: false, isError: false } as any);
-    mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false, isError: false } as any);
+    mockUseMCPServers.mockReturnValue({
+      data: catalog,
+      ...queryState(false),
+      isError: false,
+    } as any);
+    mockUseMCPToolsets.mockReturnValue({
+      data: [],
+      ...queryState(false),
+      isError: false,
+    } as any);
     mockUseAccessGroups.mockReturnValue({
       data: [],
-      isLoading: false,
+      ...queryState(false),
       isError: false,
     } as any);
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
@@ -3043,7 +3081,11 @@ describe("TeamInfo MCP permission retention", () => {
 
   it("refuses a save with MCP permissions while the server inventory is unavailable", async () => {
     const user = userEvent.setup({ delay: null });
-    mockUseMCPServers.mockReturnValue({ data: [], isLoading: false, isError: true } as any);
+    mockUseMCPServers.mockReturnValue({
+      data: [],
+      ...queryState(false),
+      isError: true,
+    } as any);
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({
         models: ["gpt-4"],

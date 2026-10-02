@@ -1,3 +1,4 @@
+import { queryState } from "../../tests/queryState";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -107,13 +108,17 @@ describe("ModelInfoView", () => {
     });
     vi.clearAllMocks();
     mockUsePtuCostAttributionEnabled.mockReturnValue(false);
-    mockUseTeams.mockReturnValue({ data: undefined, isLoading: false, error: null });
+    mockUseTeams.mockReturnValue({
+      data: undefined,
+      ...queryState(false),
+      error: null,
+    });
 
     mockUseModelsInfo.mockReturnValue({
       data: {
         data: [defaultModelData],
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
 
@@ -121,13 +126,13 @@ describe("ModelInfoView", () => {
       data: {
         data: [],
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
 
     mockUseModelCostMap.mockReturnValue({
       data: {},
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
 
@@ -199,7 +204,7 @@ describe("ModelInfoView", () => {
   it("should display loading state when model data is loading", () => {
     mockUseModelsInfo.mockReturnValue({
       data: null,
-      isLoading: true,
+      ...queryState(true),
       error: null,
     });
 
@@ -212,7 +217,7 @@ describe("ModelInfoView", () => {
       data: {
         data: [],
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
 
@@ -358,7 +363,7 @@ describe("ModelInfoView", () => {
       data: {
         data: [nonDbModelData],
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
 
@@ -382,7 +387,7 @@ describe("ModelInfoView", () => {
       data: {
         data: [nonCreatedByUserModelData],
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
 
@@ -451,7 +456,7 @@ describe("ModelInfoView", () => {
           },
         ],
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
 
@@ -483,7 +488,7 @@ describe("ModelInfoView", () => {
       data: {
         data: [nonDbModelData],
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
 
@@ -705,7 +710,11 @@ describe("ModelInfoView", () => {
     };
 
     const renderWithPtuModel = () => {
-      mockUseModelsInfo.mockReturnValue({ data: { data: [ptuModelData] }, isLoading: false, error: null });
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [ptuModelData] },
+        ...queryState(false),
+        error: null,
+      });
       mockModelInfoV1Call.mockResolvedValue({ data: [ptuModelData] });
       return render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     };
@@ -803,7 +812,11 @@ describe("ModelInfoView", () => {
         ...defaultModelData,
         model_info: { ...defaultModelData.model_info, team_id: "team-1", input_cost_per_token: 0.0000003 },
       };
-      mockUseModelsInfo.mockReturnValue({ data: { data: [seededModel] }, isLoading: false, error: null });
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [seededModel] },
+        ...queryState(false),
+        error: null,
+      });
       mockModelInfoV1Call.mockResolvedValue({ data: [seededModel] });
       const user = userEvent.setup();
       render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
@@ -844,7 +857,11 @@ describe("ModelInfoView", () => {
         ...ptuModelData,
         model_info: { ...ptuModelData.model_info, cost_per_ptu_per_hour: null, ptu_effective_from: null },
       };
-      mockUseModelsInfo.mockReturnValue({ data: { data: [halfSetPtuModel] }, isLoading: false, error: null });
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [halfSetPtuModel] },
+        ...queryState(false),
+        error: null,
+      });
       mockModelInfoV1Call.mockResolvedValue({ data: [halfSetPtuModel] });
       const user = userEvent.setup();
       render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
@@ -893,7 +910,11 @@ describe("ModelInfoView", () => {
         ...ptuModelData,
         model_info: { ...ptuModelData.model_info, ptu_effective_from: null, ptu_effective_to: null },
       };
-      mockUseModelsInfo.mockReturnValue({ data: { data: [undatedPtuModel] }, isLoading: false, error: null });
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [undatedPtuModel] },
+        ...queryState(false),
+        error: null,
+      });
       mockModelInfoV1Call.mockResolvedValue({ data: [undatedPtuModel] });
       const user = userEvent.setup();
       render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
@@ -1040,7 +1061,7 @@ describe("ModelInfoView", () => {
     };
     mockUseModelsInfo.mockReturnValue({
       data: { data: [maskedModelData] },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
     mockModelInfoV1Call.mockResolvedValue({ data: [maskedModelData] });
@@ -1081,7 +1102,7 @@ describe("ModelInfoView", () => {
       data: {
         data: [wildcardModelData],
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
 
@@ -1112,7 +1133,7 @@ describe("ModelInfoView", () => {
       data: {
         data: [autoRouterModelData],
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
 
@@ -1135,7 +1156,7 @@ describe("ModelInfoView", () => {
       data: {
         data: [semanticAutoRouterModelData],
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
 
@@ -1162,7 +1183,7 @@ describe("ModelInfoView", () => {
       data: {
         data: [complexityRouterModelData],
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
     mockTestModelGroupConnection.mockResolvedValue({ status: "success" });
@@ -1195,7 +1216,7 @@ describe("ModelInfoView", () => {
       data: {
         data: [complexityRouterModelData],
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
     mockTestModelGroupConnection.mockResolvedValue({ status: "success" });
@@ -1227,7 +1248,7 @@ describe("ModelInfoView", () => {
       data: {
         data: [complexityRouterModelData],
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
     mockTestModelGroupConnection.mockResolvedValue({ status: "success" });
@@ -1258,7 +1279,7 @@ describe("ModelInfoView", () => {
       data: {
         data: [complexityRouterModelData],
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
 
@@ -1296,7 +1317,7 @@ describe("ModelInfoView", () => {
       data: {
         data: [complexityRouterModelData],
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
     mockTestModelGroupConnection.mockResolvedValue({ status: "success" });
@@ -1349,7 +1370,11 @@ describe("ModelInfoView", () => {
     };
 
     beforeEach(() => {
-      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [teamModel] },
+        ...queryState(false),
+        error: null,
+      });
       mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
     });
 
@@ -1365,7 +1390,7 @@ describe("ModelInfoView", () => {
           { team_id: "team-0", team_alias: "other" },
           { team_id: "team-1", team_alias: "alpha" },
         ],
-        isLoading: false,
+        ...queryState(false),
         error: null,
       });
       const user = userEvent.setup();
@@ -1382,7 +1407,7 @@ describe("ModelInfoView", () => {
     it("falls back to the bare team id when the team is not in the caller's team list", async () => {
       mockUseTeams.mockReturnValue({
         data: [{ team_id: "team-0", team_alias: "other" }],
-        isLoading: false,
+        ...queryState(false),
         error: null,
       });
       const user = userEvent.setup();
@@ -1396,11 +1421,15 @@ describe("ModelInfoView", () => {
     });
 
     it("shows Not Set and no team_alias for a model without a team", async () => {
-      mockUseModelsInfo.mockReturnValue({ data: { data: [defaultModelData] }, isLoading: false, error: null });
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [defaultModelData] },
+        ...queryState(false),
+        error: null,
+      });
       mockModelInfoV1Call.mockResolvedValue({ data: [defaultModelData] });
       mockUseTeams.mockReturnValue({
         data: [{ team_id: "team-1", team_alias: "alpha" }],
-        isLoading: false,
+        ...queryState(false),
         error: null,
       });
       const user = userEvent.setup();
@@ -1434,7 +1463,7 @@ describe("ModelInfoView", () => {
           },
         ],
       },
-      isLoading: false,
+      ...queryState(false),
       error: null,
     });
 
@@ -1455,7 +1484,7 @@ describe("ModelInfoView", () => {
     const withRouter = (litellmParams: Record<string, unknown>) => {
       mockUseModelsInfo.mockReturnValue({
         data: { data: [{ ...defaultModelData, litellm_params: { ...litellmParams } }] },
-        isLoading: false,
+        ...queryState(false),
         error: null,
       });
     };
@@ -1485,7 +1514,7 @@ describe("ModelInfoView", () => {
     const withParams = (litellmParams: Record<string, unknown>) => {
       mockUseModelsInfo.mockReturnValue({
         data: { data: [{ ...defaultModelData, litellm_params: { ...litellmParams } }] },
-        isLoading: false,
+        ...queryState(false),
         error: null,
       });
     };
@@ -1695,14 +1724,18 @@ describe("ModelInfoView", () => {
           { team_id: "team-1", team_alias: "alpha" },
           { team_id: "team-2", team_alias: "beta" },
         ],
-        isLoading: false,
+        ...queryState(false),
         error: null,
       });
       const teamModel = {
         ...defaultModelData,
         model_info: { ...defaultModelData.model_info, team_id: "team-1" },
       };
-      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [teamModel] },
+        ...queryState(false),
+        error: null,
+      });
       mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
       const user = userEvent.setup();
       await enterEditMode(user);
@@ -1721,14 +1754,18 @@ describe("ModelInfoView", () => {
           { team_id: "team-1", team_alias: "alpha" },
           { team_id: "team-2", team_alias: "beta" },
         ],
-        isLoading: false,
+        ...queryState(false),
         error: null,
       });
       const teamModel = {
         ...defaultModelData,
         model_info: { ...defaultModelData.model_info, team_id: "team-1" },
       };
-      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [teamModel] },
+        ...queryState(false),
+        error: null,
+      });
       mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
       const user = userEvent.setup();
       await enterEditMode(user);
@@ -1745,7 +1782,7 @@ describe("ModelInfoView", () => {
     it("shows the Team ID placeholder for a model with no team", async () => {
       mockUseTeams.mockReturnValue({
         data: [{ team_id: "team-1", team_alias: "alpha" }],
-        isLoading: false,
+        ...queryState(false),
         error: null,
       });
       const user = userEvent.setup();
@@ -1761,14 +1798,18 @@ describe("ModelInfoView", () => {
           { team_id: "team-2", team_alias: "beta", members_with_roles: [{ user_id: "123", role: "user" }] },
           { team_id: "team-3", team_alias: "gamma", members_with_roles: [{ user_id: "123", role: "admin" }] },
         ],
-        isLoading: false,
+        ...queryState(false),
         error: null,
       });
       const teamModel = {
         ...defaultModelData,
         model_info: { ...defaultModelData.model_info, team_id: "team-1" },
       };
-      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [teamModel] },
+        ...queryState(false),
+        error: null,
+      });
       mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
       const user = userEvent.setup();
       render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole={userRole} />, { wrapper });
@@ -1850,7 +1891,11 @@ describe("ModelInfoView", () => {
         ...defaultModelData,
         litellm_params: litellmParamsWithoutCredential,
       };
-      mockUseModelsInfo.mockReturnValue({ data: { data: [modelWithoutCredential] }, isLoading: false, error: null });
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [modelWithoutCredential] },
+        ...queryState(false),
+        error: null,
+      });
       mockModelInfoV1Call.mockResolvedValue({ data: [modelWithoutCredential] });
       const user = userEvent.setup();
       await enterEditMode(user);
@@ -1932,11 +1977,15 @@ describe("ModelInfoView", () => {
         ...defaultModelData,
         litellm_params: { ...defaultModelData.litellm_params, model: "openai/gpt-4*" },
       };
-      mockUseModelsInfo.mockReturnValue({ data: { data: [wildcard] }, isLoading: false, error: null });
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [wildcard] },
+        ...queryState(false),
+        error: null,
+      });
       mockModelInfoV1Call.mockResolvedValue({ data: [wildcard] });
       mockUseModelHub.mockReturnValue({
         data: { data: [{ model_group: "openai/gpt-4o", providers: ["openai"] }] },
-        isLoading: false,
+        ...queryState(false),
         error: null,
       });
       const user = userEvent.setup();
@@ -1989,7 +2038,11 @@ describe("ModelInfoView", () => {
           ...defaultModelData,
           litellm_params: { ...defaultModelData.litellm_params, cache_control_injection_points: points },
         };
-        mockUseModelsInfo.mockReturnValue({ data: { data: [data] }, isLoading: false, error: null });
+        mockUseModelsInfo.mockReturnValue({
+          data: { data: [data] },
+          ...queryState(false),
+          error: null,
+        });
         mockModelInfoV1Call.mockResolvedValue({ data: [data] });
       };
 
@@ -2081,7 +2134,11 @@ describe("ModelInfoView", () => {
           supports_function_calling: true,
         },
       };
-      mockUseModelsInfo.mockReturnValue({ data: { data: [resolved] }, isLoading: false, error: null });
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [resolved] },
+        ...queryState(false),
+        error: null,
+      });
       mockModelInfoV1Call.mockResolvedValue({ data: [resolved] });
       const user = userEvent.setup();
       await enterEditMode(user);

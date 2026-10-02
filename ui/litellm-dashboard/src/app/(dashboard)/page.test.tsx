@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import CreateKeyPage from "./page";
@@ -19,7 +20,7 @@ const { mockReplace, mockUseKeys, mockUiHref, state } = vi.hoisted(() => {
     mockUiHref: vi.fn((segment: string) => `/mocked-ui/${segment}`),
     mockUseKeys: vi.fn(() => ({
       data: { keys: state.keys, total_count: state.keys.length },
-      isLoading: false,
+      ...queryState(false),
     })),
   };
 });

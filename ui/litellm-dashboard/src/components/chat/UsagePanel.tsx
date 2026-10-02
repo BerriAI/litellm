@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useState } from "react";
 import { BarChart3 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -93,8 +94,8 @@ const UsagePanel: React.FC<Props> = ({ accessToken, userId }) => {
   const [timeRange, setTimeRange] = useState<TimeRange>("30d");
   const { start, end } = getDateRange(timeRange);
 
-  const { data, isLoading } = useQuery({
-    queryKey: [USAGE_QUERY_KEY, accessToken, userId, timeRange],
+  const isLoadingQuery = useQuery({
+    queryKey: [USAGE_QUERY_KEY, accessToken, userId, timeRange, start, end],
     queryFn: () => {
       const request = {
         accessToken,
@@ -106,6 +107,8 @@ const UsagePanel: React.FC<Props> = ({ accessToken, userId }) => {
     },
     enabled: !!accessToken,
   });
+  const { data } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const usage = data as UsageResponse | undefined;
   const meta = usage?.metadata;

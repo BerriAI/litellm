@@ -7,7 +7,7 @@ const mcpAccessGroupsKeys = createQueryKeys("mcpAccessGroups");
 export const useMCPAccessGroups = () => {
   const { accessToken } = useAuthorized();
   return useQuery<string[]>({
-    queryKey: mcpAccessGroupsKeys.list({}),
+    queryKey: [...mcpAccessGroupsKeys.list({}), accessToken],
     queryFn: async () => await fetchMCPAccessGroups(accessToken!),
     enabled: Boolean(accessToken),
   });

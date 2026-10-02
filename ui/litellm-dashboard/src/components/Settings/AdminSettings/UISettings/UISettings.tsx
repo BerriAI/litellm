@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useUpdateUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUpdateUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -47,7 +48,9 @@ function SettingRow({
 
 export default function UISettings() {
   const { accessToken } = useAuthorized();
-  const { data, isLoading, isError, error } = useUISettings();
+  const isLoadingQuery = useUISettings();
+  const { data, isError, error } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const { mutate: updateSettings, isPending: isUpdating, error: updateError } = useUpdateUISettings(accessToken);
 
   const schema = data?.field_schema;

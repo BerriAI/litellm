@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { SortingState } from "@tanstack/react-table";
 import { Inbox } from "lucide-react";
 import React, { useMemo, useState } from "react";
@@ -36,7 +37,9 @@ function EmptyState() {
 
 export default function AccessGroupBudgetsPanel() {
   const { userRole } = useAuthorized();
-  const { data: accessGroups, isLoading } = useModelAccessGroups();
+  const isLoadingQuery = useModelAccessGroups();
+  const { data: accessGroups } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const setBudget = useSetModelAccessGroupBudget();
   const clearBudget = useDeleteModelAccessGroupBudget();
 

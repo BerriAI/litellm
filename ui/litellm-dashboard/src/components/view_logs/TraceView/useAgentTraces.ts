@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useInfiniteQuery, useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import moment from "moment";
 import { useMemo } from "react";
@@ -95,7 +96,7 @@ export function useAgentTraces({
 
   return {
     traces,
-    isLoading: query.isLoading,
+    isLoading: isQueryPending(query),
     isFetching: query.isFetching,
     notEnabledDetail: notEnabled ? query.error?.message || "Agent tracing is not enabled" : null,
     error: notEnabled ? null : displayError(query.error),

@@ -58,7 +58,7 @@ const fetchMyTeamMember = async (accessToken: string, teamId: string): Promise<T
 export const useMyTeamMember = (teamId: string | null | undefined): UseQueryResult<TeamMemberInfo | null> => {
   const { accessToken } = useAuthorized();
   return useQuery<TeamMemberInfo | null>({
-    queryKey: ["team", teamId, "members", "me"],
+    queryKey: ["team", teamId, "members", "me", accessToken],
     queryFn: () => fetchMyTeamMember(accessToken!, teamId!),
     enabled: Boolean(accessToken && teamId),
   });

@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { z } from "zod";
@@ -58,7 +59,7 @@ export function AnalysisKey({
   const keyPages = useInfiniteQuery(queryOptions);
   const keys = keyPages.data?.pages.flatMap((page) => page.keys) ?? [];
   const choice = keys.find((key) => key.token === value) ?? selected;
-  const loading = keyPages.isFetching;
+  const loading = isQueryPending(keyPages) || keyPages.isFetching;
 
   const changeKey = (key: Key | null, details: { cancel: () => void }) => {
     if (key?.token === "load-more") {
@@ -141,7 +142,7 @@ export function AnalysisAccessFields({
           options={(models.data?.data ?? []).map(({ id }) => ({ label: id, value: id }))}
           value={value.model}
           onValueChange={(model) => onChange({ ...value, model })}
-          placeholder={models.isLoading ? "Loading models…" : "Select a model"}
+          placeholder={isQueryPending(models) ? "Loading models…" : "Select a model"}
         />
       </div>
       <div className="space-y-2">

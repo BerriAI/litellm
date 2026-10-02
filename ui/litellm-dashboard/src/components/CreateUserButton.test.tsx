@@ -1,3 +1,4 @@
+import { queryState } from "../../tests/queryState";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -22,7 +23,10 @@ vi.mock("./networking", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
-  useOrganizations: vi.fn().mockReturnValue({ data: [], isLoading: false }),
+  useOrganizations: vi.fn().mockReturnValue({
+    data: [],
+    ...queryState(false),
+  }),
 }));
 
 const mockUserCreateCall = vi.mocked(networking.userCreateCall);
@@ -314,7 +318,7 @@ describe("CreateUserButton", () => {
       const { useOrganizations } = await import("@/app/(dashboard)/hooks/organizations/useOrganizations");
       vi.mocked(useOrganizations).mockReturnValue({
         data: [{ organization_id: "org-1", organization_alias: "My Org" }],
-        isLoading: false,
+        ...queryState(false),
       } as any);
 
       const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
@@ -361,7 +365,7 @@ describe("CreateUserButton", () => {
       const { useOrganizations } = await import("@/app/(dashboard)/hooks/organizations/useOrganizations");
       vi.mocked(useOrganizations).mockReturnValue({
         data: [{ organization_id: "org-1", organization_alias: "My Org" }],
-        isLoading: false,
+        ...queryState(false),
       } as any);
 
       const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
@@ -649,7 +653,7 @@ describe("CreateUserButton", () => {
       const { useOrganizations } = await import("@/app/(dashboard)/hooks/organizations/useOrganizations");
       vi.mocked(useOrganizations).mockReturnValue({
         data: [{ organization_id: "org-1", organization_alias: "My Org" }],
-        isLoading: false,
+        ...queryState(false),
       } as any);
 
       const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });

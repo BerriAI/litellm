@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import React, { useEffect, useMemo, useState } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import { Button } from "@/components/ui/button";
@@ -26,7 +27,9 @@ const CoordinationRedisSettings: React.FC = () => {
   const form = useForm<CoordinationFormValues>({ defaultValues: buildInitialValues({}) });
   const [selectedRedisType, setSelectedRedisType] = useState<CoordinationRedisType | null>(null);
 
-  const { data, isLoading, isError } = useCoordinationRedisSettings();
+  const isLoadingQuery = useCoordinationRedisSettings();
+  const { data, isError } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const updateSettings = useUpdateCoordinationRedisSettings();
   const testConnection = useTestCoordinationRedisConnection();
 

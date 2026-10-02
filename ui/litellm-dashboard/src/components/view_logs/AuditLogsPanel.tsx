@@ -1,3 +1,4 @@
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useCallback, useState } from "react";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
@@ -56,7 +57,7 @@ export default function AuditLogsPanel({
   const canQueryAuditLogs = !!accessToken && !!token && !!userRole && !!userID && isActive && premiumUser;
 
   const query = useQuery<AuditLogsResponse>({
-    queryKey: ["audit_logs", pagination.pageIndex, pagination.pageSize, columnFilters, searchTerm],
+    queryKey: ["audit_logs", pagination.pageIndex, pagination.pageSize, columnFilters, searchTerm, accessToken],
     queryFn: async () => {
       if (!accessToken) {
         return { audit_logs: [], total: 0, page: 1, page_size: pagination.pageSize, total_pages: 0 };
@@ -134,7 +135,7 @@ export default function AuditLogsPanel({
       <AuditLogsTable
         data={query.data?.audit_logs ?? []}
         rowCount={query.data?.total ?? 0}
-        isLoading={query.isLoading}
+        isLoading={isQueryPending(query)}
         isRefreshing={query.isFetching}
         pagination={pagination}
         onPaginationChange={setPagination}

@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { useFieldArray, type Control } from "react-hook-form";
@@ -72,10 +73,9 @@ type SettingsControl = Control<DefaultUserSettingsFormValues, unknown, DefaultUs
 
 const TeamPickerField = ({ control, index }: { control: SettingsControl; index: number }) => {
   const [search, setSearch] = React.useState("");
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteTeams(
-    TEAMS_PAGE_SIZE,
-    search === "" ? undefined : search,
-  );
+  const isLoadingQuery = useInfiniteTeams(TEAMS_PAGE_SIZE, search === "" ? undefined : search);
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
 
   const options = React.useMemo<SearchSelectOption[]>(
     () =>

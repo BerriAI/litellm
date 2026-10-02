@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import ChatLayout from "./layout";
@@ -20,7 +21,7 @@ const { mockUseAuthorized, mockUseUISettings, mockReplace, mockUiHref, state } =
     })),
     mockUseUISettings: vi.fn(() => ({
       data: { values: { enable_chat_ui: state.enableChatUI } },
-      isLoading: state.isUISettingsLoading,
+      ...queryState(state.isUISettingsLoading),
     })),
   };
 });

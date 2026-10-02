@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { Edit, ExternalLink, Info, KeyRound, PlugZap, Trash2 } from "lucide-react";
 import { useState } from "react";
 
@@ -37,7 +38,9 @@ function DetailRow({ children, label }: { children: React.ReactNode; label: stri
 
 export default function HashicorpVault() {
   const { accessToken } = useAuthorized();
-  const { data, isLoading, isError, error } = useHashicorpVaultConfig();
+  const isLoadingQuery = useHashicorpVaultConfig();
+  const { data, isError, error } = isLoadingQuery;
+  const isLoading = isQueryPending(isLoadingQuery);
   const { mutate: deleteConfig, isPending: isDeleting } = useDeleteHashicorpVaultConfig(accessToken);
   const { mutate: updateConfig, isPending: isClearingField } = useUpdateHashicorpVaultConfig(accessToken);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);

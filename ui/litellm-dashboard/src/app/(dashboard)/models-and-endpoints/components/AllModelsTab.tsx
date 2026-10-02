@@ -1,5 +1,6 @@
 "use client";
 
+import { isQueryPending } from "@/app/(dashboard)/hooks/common/queryReadiness";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -77,9 +78,13 @@ const AllModelsTab = ({
   setSelectedModelId,
   setSelectedTeamId,
 }: AllModelsTabProps) => {
-  const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
+  const isLoadingModelCostMapQuery = useModelCostMap();
+  const { data: modelCostMapData } = isLoadingModelCostMapQuery;
+  const isLoadingModelCostMap = isQueryPending(isLoadingModelCostMapQuery);
   const { accessToken, userId, userRole, isViewOnly } = useAuthorized();
-  const { data: teams, isLoading: isLoadingTeams } = useTeams();
+  const isLoadingTeamsQuery = useTeams();
+  const { data: teams } = isLoadingTeamsQuery;
+  const isLoadingTeams = isQueryPending(isLoadingTeamsQuery);
   const queryClient = useQueryClient();
 
   const [tableState, setTableState] = useQueryStates(TABLE_STATE);
@@ -123,12 +128,7 @@ const AllModelsTab = ({
     return sorting[0].desc ? "desc" : "asc";
   }, [sorting]);
 
-  const {
-    data: rawModelData,
-    isLoading: isLoadingModelsInfo,
-    isFetching: isFetchingModelsInfo,
-    refetch: refetchModels,
-  } = useModelsInfo(
+  const isLoadingModelsInfoQuery = useModelsInfo(
     pagination.pageIndex + 1,
     pagination.pageSize,
     debouncedSearch || undefined,
@@ -143,6 +143,8 @@ const AllModelsTab = ({
     accessGroupForQuery,
     wildcardOnlyForQuery,
   );
+  const { data: rawModelData, isFetching: isFetchingModelsInfo, refetch: refetchModels } = isLoadingModelsInfoQuery;
+  const isLoadingModelsInfo = isQueryPending(isLoadingModelsInfoQuery);
   const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 
   const getProviderFromModel = useCallback(

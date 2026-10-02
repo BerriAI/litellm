@@ -43,7 +43,7 @@ export const useAccessGroups = () => {
   const { accessToken, userRole } = useAuthorized();
 
   return useQuery<AccessGroupResponse[]>({
-    queryKey: accessGroupKeys.list({}),
+    queryKey: [...accessGroupKeys.list({}), accessToken],
     queryFn: async () => fetchAccessGroups(accessToken!),
     enabled: Boolean(accessToken) && all_admin_roles.includes(userRole || ""),
   });

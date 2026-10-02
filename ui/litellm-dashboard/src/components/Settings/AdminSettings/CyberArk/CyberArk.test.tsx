@@ -1,3 +1,4 @@
+import { queryState } from "../../../../../tests/queryState";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,7 +38,7 @@ describe("CyberArk", () => {
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token" });
     const emptyConfigResult = {
       data: { values: {} },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
       error: null,
     };
@@ -62,7 +63,7 @@ describe("CyberArk", () => {
   it("should display configured values and management actions", () => {
     const configuredResult = {
       data: { values: { cyberark_api_base: "https://conjur.example.com", cyberark_api_key: "secret" } },
-      isLoading: false,
+      ...queryState(false),
       isError: false,
       error: null,
     };

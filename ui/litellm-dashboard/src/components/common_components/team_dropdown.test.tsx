@@ -1,3 +1,4 @@
+import { queryState } from "../../../tests/queryState";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,7 +19,7 @@ const teamQuery = {
   fetchNextPage: vi.fn(),
   hasNextPage: false,
   isFetchingNextPage: false,
-  isLoading: false,
+  ...queryState(false),
 };
 
 describe("TeamDropdown", () => {
