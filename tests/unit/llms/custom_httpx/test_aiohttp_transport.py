@@ -47,7 +47,7 @@ async def test_owns_session_defaults_to_true():
     transport = AiohttpTransport(client=session)
     assert transport._owns_session is True
     await transport.aclose()
-    assert session.closed, "owned session was not closed by transport finalization within the 5s deadline"
+    assert session.closed, "owned session was not closed by aclose()"
 
 
 class MockAiohttpResponse:
@@ -1216,4 +1216,6 @@ async def test_transport_del_closes_owned_session():
     deadline = time.monotonic() + 5
     while not session.closed and time.monotonic() < deadline:
         await asyncio.sleep(0.01)
+
+    assert session.closed, "owned session was not closed by transport finalization within the 5s deadline"
 
