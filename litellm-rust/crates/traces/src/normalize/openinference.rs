@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::{NormalizedSpan, ObservationType, SpanNormalizer, attr, tokens, usage_tokens};
-use crate::DecodeError;
+use crate::{DecodeError, otlp::DecodedEvent};
 
 pub(super) struct OpenInferenceNormalizer;
 
@@ -19,6 +19,7 @@ impl SpanNormalizer for OpenInferenceNormalizer {
         _name: &str,
         parent_span_id: &str,
         attributes: &BTreeMap<String, String>,
+        _events: &[DecodedEvent],
     ) -> Result<NormalizedSpan, DecodeError> {
         let (usage_input, usage_output) = usage_tokens(attributes)?;
         let observation_type = match attr(attributes, "openinference.span.kind")
@@ -34,6 +35,7 @@ impl SpanNormalizer for OpenInferenceNormalizer {
         Ok(NormalizedSpan {
             observation_type,
             agent_name: attr(attributes, "agent.name").to_owned(),
+            framework: String::new(),
             litellm_request_id: String::new(),
             model: attr(attributes, "llm.model_name").to_owned(),
             input_tokens: if attributes.contains_key("llm.token_count.prompt") {
