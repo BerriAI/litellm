@@ -46,7 +46,17 @@ async def lens_database() -> AsyncIterator[PrismaClient]:
                     "input_cost_per_token": 0.000001,
                     "output_cost_per_token": 0.000002,
                 },
-            }
+            },
+            {
+                "model_name": "lens-team-route",
+                "model_info": {"team_id": "lens-test-team-a", "team_public_model_name": "private/*"},
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "test-only",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                },
+            },
         ]
     )
     try:
@@ -56,6 +66,54 @@ async def lens_database() -> AsyncIterator[PrismaClient]:
         proxy_server.prisma_client = original_db
         proxy_server.llm_router = original_router
         await client.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_team_route_requires_a_worker_with_matching_model_access(lens_database: PrismaClient) -> None:
+    admin: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, team_id="lens-test-team-a")
+    name: Final = f"Team route regression {uuid4()}"
+    settings: Final = LensSettings(name=name, model="private/analysis", context="Answer questions", enabled=False)
+    lens: Final = await endpoints.create_lens(settings, admin)
+    key_a: Final = hashlib.sha256(uuid4().bytes).hexdigest()
+    key_b: Final = hashlib.sha256(uuid4().bytes).hexdigest()
+    await lens_database.db.litellm_verificationtoken.create(
+        data={"token": key_a, "team_id": "lens-test-team-a", "models": ["private/*"]}
+    )
+    await lens_database.db.litellm_verificationtoken.create(
+        data={"token": key_b, "team_id": "lens-test-team-b", "models": ["private/*"]}
+    )
+    try:
+        wrong_team: Final = await endpoints.register_worker(endpoints.WorkerName(analysis_key_id=key_b), admin)
+        assert await endpoints.claim_candidate(lens, wrong_team.worker, datetime.now(timezone.utc)) is None
+        for operation in (
+            endpoints.create_lens(settings, admin),
+            endpoints.run_lens(lens.id, RunRequest(), admin),
+        ):
+            with pytest.raises(HTTPException) as error:
+                await operation
+            assert error.value.status_code == 400
+            assert "worker" in error.value.detail
+        edited: Final = await endpoints.update_lens(
+            lens.id, settings.model_copy(update={"context": "Use sources"}), admin
+        )
+        assert edited.settings.context == "Use sources"
+        right_team: Final = await endpoints.register_worker(endpoints.WorkerName(analysis_key_id=key_a), admin)
+        await endpoints.validate_workers(settings, lens.scope)
+        claim: Final = await endpoints.claim_candidate(lens, right_team.worker, datetime.now(timezone.utc))
+        assert claim is not None and claim.job.worker_id == right_team.worker.id
+    finally:
+        await lens_database.db.execute_raw(
+            """DELETE FROM "LiteLLM_LensRun" WHERE lens_id IN
+            (SELECT id FROM "LiteLLM_Lens" WHERE data->'settings'->>'name'=$1)""",
+            name,
+        )
+        await lens_database.db.execute_raw("DELETE FROM \"LiteLLM_Lens\" WHERE data->'settings'->>'name'=$1", name)
+        await lens_database.db.execute_raw(
+            "DELETE FROM \"LiteLLM_LensWorker\" WHERE data->>'analysis_key_id' IN ($1, $2)", key_a, key_b
+        )
+        await lens_database.db.execute_raw(
+            'DELETE FROM "LiteLLM_VerificationToken" WHERE token IN ($1, $2)', key_a, key_b
+        )
 
 
 @pytest.mark.asyncio
@@ -186,14 +244,19 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         assert finished.jobs[0].coverage.screened == 2
         assert finished.last_scan_at == claimed.job.end
         assert finished.next_run_at > finished.jobs[0].finished_at
-        assert await endpoints.result(lens.id, claimed.job.id, Result(coverage=Coverage()), worker, storage=None) == finished
+        assert (
+            await endpoints.result(lens.id, claimed.job.id, Result(coverage=Coverage()), worker, storage=None)
+            == finished
+        )
         with pytest.raises(HTTPException) as stale:
             await endpoints.heartbeat(lens.id, claimed.job.id, worker)
         assert stale.value.status_code == 409
-        edited: Final = await endpoints.update_lens(
-            lens.id, settings.model_copy(update={"interval_minutes": 7}), admin
-        )
+        edited: Final = await endpoints.update_lens(lens.id, settings.model_copy(update={"interval_minutes": 7}), admin)
         assert edited.revision == lens.revision + 1
+        with pytest.raises(HTTPException) as unavailable_worker:
+            await endpoints.run_lens(lens.id, RunRequest(lookback_hours=3), admin)
+        assert unavailable_worker.value.status_code == 400
+        await endpoints.set_worker_billing(worker.id, endpoints.WorkerBilling(analysis_key_id=key_id), admin)
         rerun: Final = await endpoints.run_lens(lens.id, RunRequest(lookback_hours=3), admin)
         assert rerun.jobs[0].settings.interval_minutes == 7
         assert rerun.jobs[0].created_at - rerun.jobs[0].start == timedelta(hours=3)
