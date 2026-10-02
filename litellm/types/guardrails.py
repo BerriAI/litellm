@@ -226,6 +226,7 @@ class PiiEntityCategory(str, Enum):
     NIGERIA = "Nigeria"
     PHILIPPINES = "Philippines"
     SOUTH_AFRICA = "South Africa"
+    TAIWAN = "Taiwan"
 
 
 class PiiEntityType(str, Enum):
@@ -327,6 +328,11 @@ class PiiEntityType(str, Enum):
     PH_PASSPORT = "PH_PASSPORT"
     # South Africa
     ZA_ID_NUMBER = "ZA_ID_NUMBER"
+    # Taiwan
+    TW_NATIONAL_ID = "TW_NATIONAL_ID"
+    TW_UBN = "TW_UBN"
+    TW_PHONE_NUMBER = "TW_PHONE_NUMBER"
+    TW_ROC_DATE = "TW_ROC_DATE"
 
 
 # Define mappings of PII entity types by category
@@ -420,6 +426,12 @@ PII_ENTITY_CATEGORIES_MAP: Final = {
     PiiEntityCategory.NIGERIA: (PiiEntityType.NG_NIN, PiiEntityType.NG_VEHICLE_REGISTRATION),
     PiiEntityCategory.PHILIPPINES: (PiiEntityType.PH_TIN, PiiEntityType.PH_UMID, PiiEntityType.PH_PASSPORT),
     PiiEntityCategory.SOUTH_AFRICA: (PiiEntityType.ZA_ID_NUMBER,),
+    PiiEntityCategory.TAIWAN: (
+        PiiEntityType.TW_NATIONAL_ID,
+        PiiEntityType.TW_UBN,
+        PiiEntityType.TW_PHONE_NUMBER,
+        PiiEntityType.TW_ROC_DATE,
+    ),
 }
 
 

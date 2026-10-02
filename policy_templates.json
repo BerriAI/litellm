@@ -2708,5 +2708,93 @@
       "FIPPA"
     ],
     "estimated_latency_ms": 1
+  },
+  {
+    "id": "advanced-tw-pii-protection",
+    "title": "Advanced PII Protection (Taiwan)",
+    "description": "Selects TW_NATIONAL_ID, TW_PHONE_NUMBER, TW_ROC_DATE, and CREDIT_CARD on Presidio language zh-TW.",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-indigo-500",
+    "iconBg": "bg-indigo-50",
+    "guardrails": [
+      "tw-national-id",
+      "tw-phone-number",
+      "tw-roc-date",
+      "tw-credit-card"
+    ],
+    "complexity": "Medium",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "tw-national-id",
+        "litellm_params": {
+          "guardrail": "presidio",
+          "mode": "pre_call",
+          "presidio_language": "zh-TW",
+          "pii_entities_config": {
+            "TW_NATIONAL_ID": "MASK"
+          }
+        },
+        "guardrail_info": {
+          "description": "Masks TW_NATIONAL_ID"
+        }
+      },
+      {
+        "guardrail_name": "tw-phone-number",
+        "litellm_params": {
+          "guardrail": "presidio",
+          "mode": "pre_call",
+          "presidio_language": "zh-TW",
+          "pii_entities_config": {
+            "TW_PHONE_NUMBER": "MASK"
+          }
+        },
+        "guardrail_info": {
+          "description": "Masks TW_PHONE_NUMBER"
+        }
+      },
+      {
+        "guardrail_name": "tw-roc-date",
+        "litellm_params": {
+          "guardrail": "presidio",
+          "mode": "pre_call",
+          "presidio_language": "zh-TW",
+          "pii_entities_config": {
+            "TW_ROC_DATE": "MASK"
+          }
+        },
+        "guardrail_info": {
+          "description": "Masks TW_ROC_DATE"
+        }
+      },
+      {
+        "guardrail_name": "tw-credit-card",
+        "litellm_params": {
+          "guardrail": "presidio",
+          "mode": "pre_call",
+          "presidio_language": "zh-TW",
+          "pii_entities_config": {
+            "CREDIT_CARD": "MASK"
+          }
+        },
+        "guardrail_info": {
+          "description": "Masks CREDIT_CARD"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "advanced-pii-protection-taiwan",
+      "description": "Selects TW_NATIONAL_ID, TW_PHONE_NUMBER, TW_ROC_DATE, and CREDIT_CARD on Presidio language zh-TW.",
+      "guardrails_add": [
+        "tw-national-id",
+        "tw-phone-number",
+        "tw-roc-date",
+        "tw-credit-card"
+      ],
+      "guardrails_remove": []
+    },
+    "tags": [
+      "PII Protection",
+      "Taiwan"
+    ]
   }
 ]

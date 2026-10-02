@@ -82,6 +82,7 @@ EXPECTED_CATEGORY_ENTITIES: Final[dict[PiiEntityCategory, frozenset[str]]] = {
     PiiEntityCategory.NIGERIA: frozenset({"NG_NIN", "NG_VEHICLE_REGISTRATION"}),
     PiiEntityCategory.PHILIPPINES: frozenset({"PH_TIN", "PH_UMID", "PH_PASSPORT"}),
     PiiEntityCategory.SOUTH_AFRICA: frozenset({"ZA_ID_NUMBER"}),
+    PiiEntityCategory.TAIWAN: frozenset({"TW_NATIONAL_ID", "TW_UBN", "TW_PHONE_NUMBER", "TW_ROC_DATE"}),
 }
 
 

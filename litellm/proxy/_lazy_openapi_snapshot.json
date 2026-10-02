@@ -14907,7 +14907,11 @@
             "PH_TIN",
             "PH_UMID",
             "PH_PASSPORT",
-            "ZA_ID_NUMBER"
+            "ZA_ID_NUMBER",
+            "TW_NATIONAL_ID",
+            "TW_UBN",
+            "TW_PHONE_NUMBER",
+            "TW_ROC_DATE"
           ],
           "title": "PiiEntityType",
           "type": "string"
