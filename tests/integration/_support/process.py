@@ -194,6 +194,9 @@ def owned_proxy_process(
         "LITELLM_MASTER_KEY": gateway.key,
         "LITELLM_SALT_KEY": os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"),
         "STORE_MODEL_IN_DB": "True",
+        **(
+            {} if "LITELLM_ENABLE_STDIO_MCP" in remove_environment else {"LITELLM_ENABLE_STDIO_MCP": "true"}
+        ),  # The suite intentionally exercises stdio transport
         **overrides,
     }
     output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))

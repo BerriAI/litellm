@@ -84,6 +84,11 @@ on:
         required: false
         type: boolean
         default: false
+      stdio_mcp:
+        description: "Enable stdio MCP for the proxy MCP test shard"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -97,6 +102,8 @@ jobs:
     name: Run tests
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job-timeout-minutes }}
+    env:
+      LITELLM_ENABLE_STDIO_MCP: ${{ inputs.stdio_mcp && 'true' || 'false' }}
     permissions:
       contents: read
       pull-requests: read

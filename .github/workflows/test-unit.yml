@@ -295,6 +295,7 @@ jobs:
     with:
       test-path: ${{ matrix.test-path }}
       unit-flag: ${{ matrix.unit-flag || '' }}
+      stdio_mcp: ${{ matrix.shard == 'mcp-integration' }}
       workers: ${{ matrix.workers }}
       reruns: ${{ matrix.reruns }}
       timeout-minutes: ${{ matrix.timeout-minutes }}

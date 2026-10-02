@@ -253,11 +253,33 @@ def test_invalid_registrations_are_rejected(gateway: Gateway) -> None:
             {"server_name": alias + "c", "transport": "stdio", "command": "/bin/sh", "args": ["-c", "true"]},
         )
         assert bad_command.status_code in (400, 422), bad_command.text
+        assert "not in the allowed commands list" in bad_command.text, bad_command.text
         hyphenless: Final = gateway.request(
             "POST", "/v1/mcp/server", {"server_name": "bad name!", **peer.registration()}
         )
         assert hyphenless.status_code in (400, 422), hyphenless.text
         assert len([s for s in _servers(gateway).values() if str(s["server_name"]).startswith(alias)]) == 1
+
+
+def test_stdio_registration_requires_process_opt_in(gateway: Gateway, tmp_path: Path) -> None:
+    with owned_proxy(
+        gateway,
+        tmp_path,
+        {},
+        remove_environment=("LITELLM_ENABLE_STDIO_MCP",),
+    ) as isolated:
+        response: Final = isolated.request(
+            "POST",
+            "/v1/mcp/server",
+            {
+                "server_name": "stdio_default_off",
+                "transport": "stdio",
+                "command": "/bin/sh",
+                "args": ["-c", "true"],
+            },
+        )
+        assert response.status_code in (400, 422), response.text
+        assert "LITELLM_ENABLE_STDIO_MCP" in response.text, response.text
 
 
 def test_access_group_membership_follows_edits(gateway: Gateway) -> None:

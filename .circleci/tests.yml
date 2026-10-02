@@ -186,6 +186,9 @@ jobs:
       legacy_mcp_peer:
         type: boolean
         default: false
+      stdio_mcp:
+        type: boolean
+        default: false
       reruns:
         type: integer
         default: 0
@@ -227,6 +230,7 @@ jobs:
             rerun_args=(-p no:rerunfailures)
             if [ "<< parameters.reruns >>" -gt 0 ]; then rerun_args=(--reruns << parameters.reruns >> --reruns-delay 1 --rerun-except "from pytest-timeout"); fi
             test_env=(PATH="$PATH" HOME="$HOME" CI=true COVERAGE_CORE="$COVERAGE_CORE" LITELLM_LOCAL_MODEL_COST_MAP="$LITELLM_LOCAL_MODEL_COST_MAP")
+            if [ "<< parameters.stdio_mcp >>" = "true" ]; then test_env+=(LITELLM_ENABLE_STDIO_MCP=true); fi
             if [ -n "${MCP_TEST_PEER_PYTHON:-}" ]; then test_env+=(MCP_TEST_PEER_PYTHON="$MCP_TEST_PEER_PYTHON"); fi
             set +e
             env -i "${test_env[@]}" \
@@ -330,6 +334,7 @@ workflows:
           shards: 1
           workers: 2
           legacy_mcp_peer: true
+          stdio_mcp: true
           base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
           pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
       - unit:

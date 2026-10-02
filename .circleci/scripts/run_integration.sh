@@ -147,6 +147,7 @@ start_proxy() {
   local port="$1"
   local log_name="$2"
   local -a cost_map_env
+  local -a stdio_env=()
   if [ "$suite" = cost ]; then
     cost_map_env=(
       "LITELLM_MODEL_COST_MAP_URL=$INTEGRATION_UPSTREAM_URL/_cost_map"
@@ -160,12 +161,15 @@ start_proxy() {
   else
     cost_map_env=("LITELLM_LOCAL_MODEL_COST_MAP=True")
   fi
+  if [ "$suite" = mcp ]; then
+    stdio_env=("LITELLM_ENABLE_STDIO_MCP=true")
+  fi
   local -a database_env=("DATABASE_URL=${INTEGRATION_PROXY_DATABASE_URL:-$DATABASE_URL}")
   if [ -n "$INTEGRATION_PROXY_READ_REPLICA_URL" ]; then
     database_env+=("DATABASE_URL_READ_REPLICA=$INTEGRATION_PROXY_READ_REPLICA_URL")
   fi
   setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN_ID="$integration_identity" \
-    "${database_env[@]}" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
+    "${database_env[@]}" "${stdio_env[@]}" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
     INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
     LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" LITELLM_SALT_KEY="$LITELLM_SALT_KEY" LITELLM_UI_PATH="$LITELLM_UI_PATH" PROXY_BASE_URL="http://127.0.0.1:$port" \
     LITELLM_LICENSE="${LITELLM_LICENSE:-}" \
