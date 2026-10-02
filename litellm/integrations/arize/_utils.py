@@ -891,11 +891,17 @@ def _set_response_cost_attr(span: "Span", standard_logging_payload) -> None:
     single total in `StandardLoggingPayload.response_cost`, so we cannot
     split it into prompt/completion. We also keep the legacy
     `llm.response.cost` key for back-compat with any consumer querying it.
+    When the price lookup failed, `response_cost` is a placeholder 0.0 and
+    no cost is emitted, so the backend does not record the call as free.
     """
     if not isinstance(standard_logging_payload, dict):
         return
     cost: Final = standard_logging_payload.get("response_cost")
-    if cost is None:
+    cost_lookup_failed: Final = (
+        standard_logging_payload.get("response_cost_failure_debug_info") is not None
+        and standard_logging_payload.get("cache_hit") is not True
+    )
+    if cost is None or cost_lookup_failed:
         return
     try:
         cost_value: Final = float(cost)
