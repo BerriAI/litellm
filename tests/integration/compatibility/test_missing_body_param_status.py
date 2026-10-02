@@ -8,7 +8,7 @@ import socket
 import subprocess
 import sys
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import partial
@@ -107,7 +107,7 @@ _ROUTES: Final[dict[str, _Route]] = {
         "anthropic_messages",
         ("messages", "max_tokens"),
         {"messages": [{"role": "user", "content": "message"}], "max_tokens": 8},
-        "anthropic/claude-3-5-haiku-20241022",
+        "anthropic/claude-haiku-4-5",
     ),
     "agenerate_content": (
         "/v1beta/models/{model}:generateContent",
@@ -312,7 +312,7 @@ _BODIES: Final[dict[str, dict[str, JsonValue]]] = {
         "id": "msg-$UNIQUE_ID",
         "type": "message",
         "role": "assistant",
-        "model": "claude-3-5-haiku-20241022",
+        "model": "claude-haiku-4-5",
         "content": [{"type": "text", "text": "scripted"}],
         "stop_reason": "end_turn",
         "stop_sequence": None,
@@ -522,6 +522,39 @@ _STREAM_RESPONSES: Final[dict[str, SseResponse]] = {
                 '"role":"assistant","content":[{"type":"output_text","text":"streamed response",'
                 '"annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":2}}}'
             ),
+        ),
+    ),
+    "anthropic_messages": SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            (
+                "event: message_start\n"
+                'data: {"type":"message_start","message":{"id":"msg_$REQUEST_ID","type":"message",'
+                '"role":"assistant","model":"claude-haiku-4-5","content":[],"stop_reason":null,'
+                '"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":0}}}'
+            ),
+            (
+                "event: content_block_start\n"
+                'data: {"type":"content_block_start","index":0,'
+                '"content_block":{"type":"text","text":""}}'
+            ),
+            (
+                "event: content_block_delta\n"
+                'data: {"type":"content_block_delta","index":0,'
+                '"delta":{"type":"text_delta","text":"streamed "}}'
+            ),
+            (
+                "event: content_block_delta\n"
+                'data: {"type":"content_block_delta","index":0,'
+                '"delta":{"type":"text_delta","text":"response"}}'
+            ),
+            ('event: content_block_stop\ndata: {"type":"content_block_stop","index":0}'),
+            (
+                "event: message_delta\n"
+                'data: {"type":"message_delta","delta":{"stop_reason":"end_turn",'
+                '"stop_sequence":null},"usage":{"output_tokens":2}}'
+            ),
+            'event: message_stop\ndata: {"type":"message_stop"}',
         ),
     ),
 }
@@ -796,6 +829,10 @@ def _stream_event_payloads(lines: tuple[str, ...]) -> tuple[dict[str, JsonValue]
     return tuple(JSON_OBJECT.validate_json(line.removeprefix("data: ")) for line in lines if line.startswith("data: {"))
 
 
+def _stream_event_names(lines: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(line.removeprefix("event: ") for line in lines if line.startswith("event: "))
+
+
 def _stream_event_text(route: str, event: dict[str, JsonValue]) -> str:
     if route == "acompletion":
         choices: Final = event.get("choices")
@@ -807,6 +844,12 @@ def _stream_event_text(route: str, event: dict[str, JsonValue]) -> str:
     if route == "aresponses" and event.get("type") == "response.output_text.delta":
         delta: Final = event.get("delta")
         return delta if isinstance(delta, str) else ""
+    if route == "anthropic_messages" and event.get("type") == "content_block_delta":
+        delta: Final = object_value(event.get("delta"))
+        if delta.get("type") != "text_delta":
+            return ""
+        text: Final = delta.get("text")
+        return text if isinstance(text, str) else ""
     return ""
 
 
@@ -1028,6 +1071,7 @@ def test_valid_container_file_upload_reaches_upstream(gateway: Gateway) -> None:
     ("route", "expected_text"),
     (
         pytest.param("acompletion", "streamed response", id="chat-completions"),
+        pytest.param("anthropic_messages", "streamed response", id="anthropic-messages"),
         pytest.param("aresponses", "streamed response", id="responses"),
     ),
 )
@@ -1041,6 +1085,11 @@ def test_valid_streaming_required_fields_reach_upstream(
         model, identity, _handle = _register(scenario, route, streaming=True)
         request_body: Final = {
             **body,
+            **(
+                {"messages": [{"role": "user", "content": f"stream-{identity}"}]}
+                if route in {"acompletion", "anthropic_messages"}
+                else {}
+            ),
             **({"input": f"response-{identity}"} if route == "aresponses" else {}),
             "model": model,
             "stream": True,
@@ -1050,6 +1099,11 @@ def test_valid_streaming_required_fields_reach_upstream(
             assert response.status_code == 200, response.read().decode()
             lines: Final = tuple(response.iter_lines())
         assert _assembled_stream_text(route, lines) == expected_text, lines
+        if route == "anthropic_messages":
+            events: Final = _stream_event_names(lines)
+            payloads: Final = _stream_event_payloads(lines)
+            assert events[-1:] == ("message_stop",), lines
+            assert payloads and payloads[-1].get("type") == "message_stop", lines
         matches: Final = _observed(_Observations(gateway.upstream_url), identity)
         outbound: Final = object_value(matches[0]["body"])
         assert outbound.get("stream") is True, matches
