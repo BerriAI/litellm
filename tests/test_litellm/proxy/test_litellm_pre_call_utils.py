@@ -908,8 +908,9 @@ async def test_add_litellm_data_to_request_strips_string_encoded_admin_injection
     assert "_pipeline_managed_guardrails" not in other
 
 
+@pytest.mark.parametrize("admin_ssl_verify", [True, False])
 @pytest.mark.asyncio
-async def test_add_litellm_data_to_request_strips_user_control_fields():
+async def test_add_litellm_data_to_request_strips_user_control_fields(admin_ssl_verify: bool):
     """Strip untrusted proxy-control fields before guardrails, logging, and headers read metadata."""
     request_mock = MagicMock(spec=Request)
     request_mock.url.path = "/v1/chat/completions"
@@ -945,6 +946,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "model": "gpt-3.5-turbo",
         "messages": [{"role": "user", "content": "hello"}],
         "mock_response": "free response",
+        "ssl_verify": False,
         "mock_tool_calls": [{"id": "call_1"}],
         "disable_global_guardrails": True,
         "enable_prompt_caching": True,
@@ -963,6 +965,15 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         version="test-version",
     )
 
+    router = litellm.Router(model_list=[{
+        "model_name": "tls-test",
+        "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "sk-test", "ssl_verify": admin_ssl_verify},
+    }])
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=litellm.ModelResponse()) as completion:
+        await router.acompletion(model="tls-test", messages=updated["messages"])
+        assert completion.call_args.kwargs["ssl_verify"] is admin_ssl_verify
+
+    assert "ssl_verify" not in updated
     assert "mock_response" not in updated
     assert "mock_tool_calls" not in updated
     assert "disable_global_guardrails" not in updated

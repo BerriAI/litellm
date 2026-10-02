@@ -1,50 +1,52 @@
-import pytest
-from unittest.mock import patch, MagicMock
-import litellm
+import json
+import ssl
+from typing import Final
+from unittest.mock import patch
+
+import certifi
 import httpx
+import pytest
+
+import litellm
+
 
 @pytest.mark.asyncio
-async def test_ssl_verify_false():
-    with patch("httpx.AsyncClient") as mock_client:
-        mock_client.return_value.post.return_value = MagicMock(status_code=200, json=lambda: {"choices": [{"message": {"content": "hello"}}]})
-        
-        response = await litellm.acompletion(
-            model="openai/gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "hi"}],
-            ssl_verify=False,
-            api_key="sk-123"
+@pytest.mark.parametrize("verify", [False, certifi.where(), None], ids=["disabled", "custom-ca", "default"])
+async def test_ssl_verify_http_client(verify: bool | str | None):
+    def respond(request: httpx.Request) -> httpx.Response:
+        payload: Final = json.loads(request.content)
+        assert "ssl_verify" not in payload
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-3.5-turbo",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}
+                ],
+            },
         )
-        # Check that AsyncClient was initialized with verify=False
-        called_kwargs = mock_client.call_args[1]
-        assert called_kwargs.get("verify") is False
 
-@pytest.mark.asyncio
-async def test_ssl_verify_custom_ca():
-    with patch("httpx.AsyncClient") as mock_client:
-        mock_client.return_value.post.return_value = MagicMock(status_code=200, json=lambda: {"choices": [{"message": {"content": "hello"}}]})
-        
-        custom_ca_path = "/path/to/custom-ca.pem"
-        response = await litellm.acompletion(
+    transport: Final = httpx.MockTransport(respond)
+    with patch("litellm.llms.openai.common_utils.AsyncHTTPHandler") as handler:
+        handler._create_async_transport.return_value = transport
+        handler._create_httpx_proxy_mounts.return_value = {}
+        response: Final = await litellm.acompletion(
             model="openai/gpt-3.5-turbo",
             messages=[{"role": "user", "content": "hi"}],
-            ssl_verify=custom_ca_path,
-            api_key="sk-123"
+            ssl_verify=verify,
+            api_key=f"sk-test-{verify}",
+            max_retries=0,
         )
-        # Check that AsyncClient was initialized with verify=custom_ca_path
-        called_kwargs = mock_client.call_args[1]
-        assert called_kwargs.get("verify") == custom_ca_path
-
-@pytest.mark.asyncio
-async def test_ssl_verify_default():
-    with patch("httpx.AsyncClient") as mock_client:
-        mock_client.return_value.post.return_value = MagicMock(status_code=200, json=lambda: {"choices": [{"message": {"content": "hello"}}]})
-        
-        response = await litellm.acompletion(
-            model="openai/gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "hi"}],
-            api_key="sk-123"
-        )
-        # By default, should not pass verify=False (usually defaults to True or SSLContext depending on get_ssl_configuration)
-        called_kwargs = mock_client.call_args[1]
-        verify_arg = called_kwargs.get("verify")
-        assert verify_arg is not False and verify_arg is not None
+        assert response.choices[0].message.content == "hello"
+        transport_kwargs: Final = handler._create_async_transport.call_args.kwargs
+        if verify is False:
+            assert transport_kwargs["ssl_verify"] is False
+            assert transport_kwargs["ssl_context"] is None
+        else:
+            context: Final = transport_kwargs["ssl_context"]
+            assert isinstance(context, ssl.SSLContext)
+            assert context.verify_mode == ssl.CERT_REQUIRED
+            assert context.check_hostname

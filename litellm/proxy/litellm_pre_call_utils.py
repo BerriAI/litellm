@@ -216,6 +216,7 @@ LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(
 )
 
 _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
+    "ssl_verify",
     "proxy_server_request",
     "standard_logging_object",
     "secret_fields",
