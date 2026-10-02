@@ -202,14 +202,33 @@ class TestDashScopeVideoMapOpenAIParams:
         assert mapped["ratio"] == "4:3"
         assert mapped["resolution"] == "1080P"
 
-    def test_openai_only_fields_are_dropped(self):
+    def test_request_metadata_is_never_sent_as_a_body_field(self):
         mapped = DashScopeVideoConfig().map_openai_params(
-            video_create_optional_params={"user": "u1", "characters": [{"id": "c"}], "prompt": "p"},
+            video_create_optional_params={
+                "user": "u1",
+                "prompt": "p",
+                "model": "wan3.0-video",
+                "extra_body": {"seed": 1},
+            },
             model="wan3.0-video",
             drop_params=False,
         )
 
         assert mapped == {}
+
+    @pytest.mark.parametrize("params", [{"characters": [{"id": "c"}]}, {"image": {"gcsUri": "gs://b/i.png"}}])
+    def test_fields_dashscope_cannot_express_raise_unless_dropped(self, params):
+        with pytest.raises(UnsupportedParamsError, match="drop_params=True"):
+            DashScopeVideoConfig().map_openai_params(
+                video_create_optional_params=params, model="wan3.0-video", drop_params=False
+            )
+
+        assert (
+            DashScopeVideoConfig().map_openai_params(
+                video_create_optional_params=params, model="wan3.0-video", drop_params=True
+            )
+            == {}
+        )
 
     def test_parameters_block_is_merged(self):
         mapped = DashScopeVideoConfig().map_openai_params(
@@ -300,7 +319,7 @@ class TestDashScopeVideoCreateResponse:
     def test_in_body_error_on_a_200_is_raised(self):
         """DashScope reports create failures as a 200 with top-level code and no
         output; without this the caller gets a queued video with an empty id."""
-        with pytest.raises(DashScopeVideoError, match="No API-key provided"):
+        with pytest.raises(DashScopeVideoError, match="No API-key provided") as raised:
             DashScopeVideoConfig().transform_video_create_response(
                 model="wan3.0-video",
                 raw_response=_mock_response(
@@ -310,6 +329,9 @@ class TestDashScopeVideoCreateResponse:
                 custom_llm_provider="dashscope",
                 request_data={},
             )
+
+        # the 200 it arrived on would have the proxy retry a call the provider already rejected
+        assert raised.value.status_code == 400
 
 
 class TestDashScopeVideoStatus:
@@ -473,6 +495,51 @@ class TestDashScopeVideoStatus:
                 custom_llm_provider="dashscope",
             )
 
+    def test_a_body_with_no_output_and_no_message_still_raises(self):
+        with pytest.raises(DashScopeVideoError, match="DashScope video request failed"):
+            DashScopeVideoConfig().transform_video_status_retrieve_response(
+                raw_response=_mock_response({"request_id": "r1"}),
+                logging_obj=None,
+                custom_llm_provider="dashscope",
+            )
+
+    def test_undocumented_task_status_raises_rather_than_defaulting_to_queued(self):
+        """Defaulting it left the caller polling a job that would never resolve."""
+        with pytest.raises(DashScopeVideoError, match="Unknown DashScope task status: SCHEDULING") as raised:
+            DashScopeVideoConfig().transform_video_status_retrieve_response(
+                raw_response=_mock_response({"output": {"task_id": "t1", "task_status": "SCHEDULING"}}),
+                logging_obj=None,
+                custom_llm_provider="dashscope",
+            )
+
+        assert raised.value.status_code == 502
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"output": {"video_url": "https://oss/video.mp4"}},  # no task_id or task_status
+            {"output": {"task_id": "t1"}},
+        ],
+    )
+    def test_an_output_block_missing_task_id_or_status_is_rejected(self, payload):
+        """They are read straight into the returned video, so a body without them
+        is rejected at the boundary instead of producing an empty id."""
+        with pytest.raises(DashScopeVideoError, match="Unexpected DashScope video response") as raised:
+            _parse_task_response(_mock_response(payload))
+
+        assert raised.value.status_code == 502
+
+    def test_unparseable_body_raises_the_provider_error_not_a_parse_error(self):
+        """A gateway returning html used to escape as a JSONDecodeError, which the
+        proxy maps to a generic connection error."""
+        response = _mock_response({}, status_code=502)
+        response.json.side_effect = json.JSONDecodeError("Expecting value", "<html>502 Bad Gateway</html>", 0)
+
+        with pytest.raises(DashScopeVideoError, match="Unexpected DashScope video response") as raised:
+            _parse_task_response(response)
+
+        assert raised.value.status_code == 502
+
     def test_request_decodes_task_id_from_wrapped_video_id(self):
         encoded = encode_video_id_with_provider("17ed7e50", "dashscope", "wan3.0-video")
         url, params = DashScopeVideoConfig().transform_video_status_retrieve_request(
@@ -494,38 +561,42 @@ class TestDashScopeVideoContent:
         assert params == {}
 
     def test_url_is_extracted_from_a_succeeded_task(self):
-        task = _parse_task_response(
-            _mock_response(
-                {"output": {"task_id": "t1", "task_status": "SUCCEEDED", "video_url": "https://oss/video.mp4"}}
-            )
+        response = _mock_response(
+            {"output": {"task_id": "t1", "task_status": "SUCCEEDED", "video_url": "https://oss/video.mp4"}}
         )
 
-        assert _video_url_from_task(task) == "https://oss/video.mp4"
+        assert _video_url_from_task(_parse_task_response(response), response) == "https://oss/video.mp4"
 
     @pytest.mark.parametrize("task_status", ["PENDING", "RUNNING"])
     def test_pending_task_raises_still_processing(self, task_status):
-        task = _parse_task_response(_mock_response({"output": {"task_id": "t1", "task_status": task_status}}))
+        """A 4xx, so the proxy reports the caller's timing mistake instead of
+        retrying a job that is simply not finished."""
+        response = _mock_response({"output": {"task_id": "t1", "task_status": task_status}})
 
-        with pytest.raises(ValueError, match="still processing"):
-            _video_url_from_task(task)
+        with pytest.raises(DashScopeVideoError, match="still processing") as raised:
+            _video_url_from_task(_parse_task_response(response), response)
+
+        assert raised.value.status_code == 409
 
     def test_failed_task_surfaces_the_upstream_message(self):
-        task = _parse_task_response(
-            _mock_response(
-                {"output": {"task_id": "t1", "task_status": "FAILED", "message": "content policy violation"}}
-            )
+        response = _mock_response(
+            {"output": {"task_id": "t1", "task_status": "FAILED", "message": "content policy violation"}}
         )
 
-        with pytest.raises(ValueError, match="content policy violation"):
-            _video_url_from_task(task)
+        with pytest.raises(DashScopeVideoError, match="content policy violation") as raised:
+            _video_url_from_task(_parse_task_response(response), response)
+
+        assert raised.value.status_code == 400
 
     def test_expired_task_explains_the_24h_window(self):
         """A task id older than 24h comes back UNKNOWN with no error, which is
         otherwise indistinguishable from a bad id."""
-        task = _parse_task_response(_mock_response({"output": {"task_id": "t1", "task_status": "UNKNOWN"}}))
+        response = _mock_response({"output": {"task_id": "t1", "task_status": "UNKNOWN"}})
 
-        with pytest.raises(ValueError, match="24 hours"):
-            _video_url_from_task(task)
+        with pytest.raises(DashScopeVideoError, match="24 hours") as raised:
+            _video_url_from_task(_parse_task_response(response), response)
+
+        assert raised.value.status_code == 404
 
 
 class TestDashScopeVideoEnvironment:

@@ -4,6 +4,7 @@ delete or remix endpoint, so those raise.
 """
 
 import base64
+import json
 from collections.abc import Mapping
 from datetime import datetime
 from io import BufferedReader, BytesIO
@@ -45,8 +46,8 @@ class DashScopeVideoError(BaseLLMException):
 
 
 class _TaskOutput(BaseModel, frozen=True):
-    task_id: str = ""
-    task_status: str = ""
+    task_id: str
+    task_status: str
     submit_time: str | None = None
     scheduled_time: str | None = None
     end_time: str | None = None
@@ -123,18 +124,12 @@ _PARAMETER_KEYS: Final = (
     "watermark",
 )
 
-_DROP_FROM_REQUEST: Final = frozenset(
-    {
-        "model",
-        "prompt",
-        "user",
-        "characters",
-        "image",
-        "extra_headers",
-        "extra_query",
-        "extra_body",
-    }
-)
+# Rebuilt into the body by transform_video_create_request, consumed by the http handler, or stamped by the
+# proxy from the caller's end-user header, so none of them is a DashScope field.
+_REQUEST_METADATA: Final = frozenset({"model", "prompt", "user", "extra_headers", "extra_query", "extra_body"})
+
+# DashScope has no counterpart for these, so they are only dropped when the caller opted in.
+_UNSUPPORTED_BY_DASHSCOPE: Final = frozenset({"characters", "image"})
 
 _RESOLUTION_TIERS: Final = MappingProxyType({480: "480p", 720: "720p", 1080: "1080p"})
 
@@ -144,8 +139,24 @@ _RESOLUTION_HEIGHT_TIERS: Final[tuple[tuple[int, str], ...]] = (
 )
 
 
+def _video_error(raw_response: httpx.Response, status_code: int, message: str) -> DashScopeVideoError:
+    """The provider's own status wins when it reported one. DashScope otherwise answers 200 even for
+    failures, and a 200 has the proxy retry a call the provider already rejected, so the caller's
+    status is used as the floor."""
+    return DashScopeVideoError(
+        status_code=raw_response.status_code if raw_response.status_code >= 400 else status_code,
+        message=message,
+        headers=raw_response.headers,
+        response=raw_response,
+    )
+
+
 def _parse_task_response(raw_response: httpx.Response) -> _TaskResponse:
-    return _TASK_RESPONSE_ADAPTER.validate_python(raw_response.json())
+    """A body that is not the documented task shape is a provider-side failure, not a parse error."""
+    try:
+        return _TASK_RESPONSE_ADAPTER.validate_python(raw_response.json())
+    except (json.JSONDecodeError, ValidationError) as e:
+        raise _video_error(raw_response, 502, f"Unexpected DashScope video response: {e}") from e
 
 
 def _normalized_api_base(api_base: str) -> str:
@@ -309,13 +320,24 @@ def _size_from_usage(usage: _TaskUsage | None) -> str | None:
     return f"{usage.SR * ratio_width // shortest_ratio_side}x{usage.SR * ratio_height // shortest_ratio_side}"
 
 
+def _task_output(task: _TaskResponse, raw_response: httpx.Response) -> _TaskOutput:
+    """Create and lookup both report failures as code and message with no output, so a missing output
+    raises instead of defaulting into a queued video with an empty id."""
+    if task.output is not None:
+        return task.output
+    raise _video_error(raw_response, 400, task.message or task.code or "DashScope video request failed")
+
+
 def _video_object_from_task(
     task: _TaskResponse,
+    raw_response: httpx.Response,
     model: str | None = None,
     requested: Mapping[str, object] | None = None,
 ) -> VideoObject:
-    output: Final = task.output or _TaskOutput()
-    status: Final = _STATUS_MAP.get(output.task_status, "queued")
+    output: Final = _task_output(task, raw_response)
+    status: Final = _STATUS_MAP.get(output.task_status)
+    if status is None:  # defaulting it would hand back a job the caller polls forever
+        raise _video_error(raw_response, 502, f"Unknown DashScope task status: {output.task_status}")
     usage: Final = _video_usage(task.usage, requested or _EMPTY_PARAMS)
     seconds: Final = usage.get("duration_seconds")
     error_block: Final = _error_block(output)
@@ -333,18 +355,24 @@ def _video_object_from_task(
     )
 
 
-def _video_url_from_task(task: _TaskResponse) -> str:
-    output: Final = task.output or _TaskOutput()
+def _video_url_from_task(task: _TaskResponse, raw_response: httpx.Response) -> str:
+    """A download that cannot be served yet raises inside the 4xx range: a 5xx would have the proxy
+    retry a job that is simply not finished."""
+    output: Final = _task_output(task, raw_response)
     if output.video_url:
         return output.video_url
 
     if output.task_status in _PENDING_STATUSES:
-        raise ValueError(f"Video is still processing (status: {output.task_status}). Please wait and try again.")
+        raise _video_error(
+            raw_response,
+            409,
+            f"Video is still processing (status: {output.task_status}). Please wait and try again.",
+        )
     if output.code or output.message:
-        raise ValueError(f"Video generation failed: {output.message or output.code}")
+        raise _video_error(raw_response, 400, f"Video generation failed: {output.message or output.code}")
     if output.task_status == "UNKNOWN":
-        raise ValueError("Task not found. DashScope task ids expire 24 hours after creation.")
-    raise ValueError("Video URL not found in task response. The task may not have succeeded yet.")
+        raise _video_error(raw_response, 404, "Task not found. DashScope task ids expire 24 hours after creation.")
+    raise _video_error(raw_response, 502, "Video URL not found in task response. The task may not have succeeded yet.")
 
 
 def _polled_model_id(logging_obj: object) -> str | None:
@@ -389,8 +417,16 @@ class DashScopeVideoConfig(BaseVideoConfig):
     ) -> dict[str, object]:  # mutable-ok: BaseVideoConfig contract
         mapped_params: Final[dict[str, object]] = {}  # mutable-ok: BaseVideoConfig contract; extra_body merges into it
         for key, value in video_create_optional_params.items():
-            if value is None or key in _DROP_FROM_REQUEST:
+            if value is None or key in _REQUEST_METADATA:
                 continue
+            if key in _UNSUPPORTED_BY_DASHSCOPE:
+                if drop_params:
+                    continue
+                raise UnsupportedParamsError(
+                    message=f"'{key}' is not supported by DashScope video generation, set drop_params=True to ignore it",
+                    model=model,
+                    llm_provider="dashscope",
+                )
             if key == "seconds":
                 duration = _duration_param(value)
                 if duration is not None:
@@ -525,9 +561,8 @@ class DashScopeVideoConfig(BaseVideoConfig):
         request_data: dict[str, object] | None = None,  # mutable-ok: BaseVideoConfig contract
     ) -> VideoObject:
         task: Final = _parse_task_response(raw_response)
-        self._raise_for_task_error(task, raw_response)
         requested: Final = self._requested_parameters(request_data)
-        video_obj: Final = _video_object_from_task(task, model=model, requested=requested)
+        video_obj: Final = _video_object_from_task(task, raw_response, model=model, requested=requested)
         if custom_llm_provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
         return video_obj
@@ -547,19 +582,6 @@ class DashScopeVideoConfig(BaseVideoConfig):
                 "resolution": DASHSCOPE_DEFAULT_RESOLUTION,
                 **requested,
             }
-        )
-
-    def _raise_for_task_error(self, task: _TaskResponse, raw_response: httpx.Response) -> None:
-        """
-        Create and lookup both report failures as a 200 with top-level code and message and no output.
-        """
-        if task.output is not None or not (task.code or task.message):
-            return
-        raise DashScopeVideoError(
-            status_code=raw_response.status_code,
-            message=task.message or task.code or "DashScope video request failed",
-            headers=raw_response.headers,
-            response=raw_response,
         )
 
     def transform_video_status_retrieve_request(
@@ -585,9 +607,8 @@ class DashScopeVideoConfig(BaseVideoConfig):
         client: "HTTPHandler | None" = None,
     ) -> VideoObject:
         task: Final = _parse_task_response(raw_response)
-        self._raise_for_task_error(task, raw_response)
         model: Final = _polled_model_id(logging_obj)
-        video_obj: Final = _video_object_from_task(task, model=model)
+        video_obj: Final = _video_object_from_task(task, raw_response, model=model)
         if custom_llm_provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
         return video_obj
@@ -607,7 +628,7 @@ class DashScopeVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: "Logging",
     ) -> bytes:
-        video_url: Final = _video_url_from_task(_parse_task_response(raw_response))
+        video_url: Final = _video_url_from_task(_parse_task_response(raw_response), raw_response)
 
         httpx_client: Final = _get_httpx_client()
         video_response: Final = httpx_client.get(video_url)  # pyright: ignore[reportUnknownMemberType]  # HTTPHandler.get stub leaves params/headers untyped
@@ -620,7 +641,7 @@ class DashScopeVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: "Logging",
     ) -> bytes:
-        video_url: Final = _video_url_from_task(_parse_task_response(raw_response))
+        video_url: Final = _video_url_from_task(_parse_task_response(raw_response), raw_response)
 
         async_httpx_client: Final = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.DASHSCOPE,
