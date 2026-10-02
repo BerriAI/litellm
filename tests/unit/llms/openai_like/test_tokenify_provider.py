@@ -44,11 +44,17 @@ def test_tokenify_provider_keeps_explicit_credentials(monkeypatch: pytest.Monkey
     assert api_base == "https://tokenify.internal.example/v1"
 
 
-TOKENIFY_MODELS = tuple(sorted(name for name in litellm.model_cost if name.startswith("tokenify/")))
+TOKENIFY_MODELS: Final = (
+    "tokenify/deepseek/deepseek-v4-flash",
+    "tokenify/deepseek/deepseek-v4-pro",
+    "tokenify/deepseek/deepseek-v4.1-flash",
+    "tokenify/z-ai/glm-5.2",
+    "tokenify/z-ai/glm-5.3-flash",
+)
 
 
 def test_tokenify_models_are_priced():
-    assert TOKENIFY_MODELS
+    assert tuple(sorted(name for name in litellm.model_cost if name.startswith("tokenify/"))) == TOKENIFY_MODELS
     for model in TOKENIFY_MODELS:
         entry = litellm.model_cost[model]
         assert 0 < entry["input_cost_per_token"] <= entry["output_cost_per_token"]
