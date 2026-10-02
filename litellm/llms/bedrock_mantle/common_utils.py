@@ -13,8 +13,8 @@ global state.
 """
 
 import re
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Mapping, Sequence
+from typing import Final, cast
 
 from botocore.exceptions import (
     CredentialRetrievalError,
@@ -165,16 +165,16 @@ _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS: Final = frozenset({"search_content_types"})
 
 
 def _strip_one_web_search_tool(tool: object) -> object:
-    # Mirror drop_unsupported_tools: isinstance(dict) is enough for .get/.items.
     if not isinstance(tool, dict):
         return tool
-    tool_type: Final = tool.get("type")
+    typed_tool: Final = cast(dict[str, object], tool)  # cast-ok: OpenAI tool JSON; isinstance(dict) does not bind key/value types
+    tool_type: Final = typed_tool.get("type")
     if not isinstance(tool_type, str) or not tool_type.startswith(_WEB_SEARCH_TOOL_TYPE_PREFIX):
         return tool
-    if not _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS.intersection(tool):
+    if not _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS.intersection(typed_tool):
         return tool
     return {  # mutable-ok: OpenAI tool JSON object after dropping Mantle-rejected keys
-        key: value for key, value in tool.items() if key not in _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS
+        key: value for key, value in typed_tool.items() if key not in _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS
     }
 
 
@@ -189,7 +189,8 @@ def strip_unsupported_web_search_tool_fields(tools: object) -> object:
     """
     if not isinstance(tools, (list, tuple)):
         return tools
-    rewritten: Final = tuple(_strip_one_web_search_tool(tool) for tool in tools)
-    if all(new is old for new, old in zip(rewritten, tools, strict=True)):
+    tools_seq: Final = cast(Sequence[object], tools)  # cast-ok: isinstance(list|tuple) does not bind element types for basedpyright
+    rewritten: Final = tuple(_strip_one_web_search_tool(tool) for tool in tools_seq)
+    if all(new is old for new, old in zip(rewritten, tools_seq, strict=True)):
         return tools
     return list(rewritten)  # mutable-ok: chat/Responses tools param is a JSON list

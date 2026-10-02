@@ -11,7 +11,7 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
 """
 
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import httpx
 
@@ -145,9 +145,12 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         tools: Final = mapped_params.get("tools")
         if tools is None:
             return mapped_params
+        stripped_tools: Final = strip_unsupported_web_search_tool_fields(
+            cast(object, tools),  # cast-ok: bare dict .get is Unknown to basedpyright
+        )
         return {  # mutable-ok: map_openai_params contract returns a plain dict
             **mapped_params,
-            "tools": strip_unsupported_web_search_tool_fields(tools),
+            "tools": stripped_tools,
         }
 
     def get_model_response_iterator(
