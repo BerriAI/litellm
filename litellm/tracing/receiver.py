@@ -13,21 +13,15 @@ The proxy endpoints are thin wrappers: auth -> build tenant/scope -> call one me
 """
 
 import asyncio
-import os
 from collections.abc import AsyncIterable, Callable, Mapping
 from io import BytesIO
 from threading import BoundedSemaphore
 from types import MappingProxyType
 from typing import Final
 
-from litellm.constants import (
-    AGENT_TRACING_RETENTION_DAYS,
-    AGENT_TRACING_SPEND_LOG_RETENTION_DAYS,
-    OTLP_MAX_BODY_BYTES,
-    OTLP_MAX_CONCURRENT_INGESTS,
-)
-from litellm.integrations.clickhouse.schema import ensure_schema
+from litellm.constants import OTLP_MAX_BODY_BYTES, OTLP_MAX_CONCURRENT_INGESTS
 from litellm.rust_bridge.traces import ClickHouseStorage
+from litellm.tracing.config import trace_storage_config
 from litellm.tracing.decode import OTLPPayloadTooLargeError, decode_otlp
 from litellm.tracing.store import TraceStore
 from litellm.tracing.types import (
@@ -103,22 +97,14 @@ class TraceReceiver:
 
     @classmethod
     def from_env(cls) -> "TraceReceiver":
-        return cls(
-            store=TraceStore(
-                ClickHouseStorage(
-                    database=os.getenv("CLICKHOUSE_DATABASE", "litellm"),
-                    url=os.environ["CLICKHOUSE_URL"],
-                    reader_url=os.getenv("CLICKHOUSE_READER_URL", os.environ["CLICKHOUSE_URL"]),
-                )
-            )
-        )
+        return cls.from_settings({})
+
+    @classmethod
+    def from_settings(cls, settings: Mapping[str, object]) -> "TraceReceiver":
+        return cls(store=TraceStore(ClickHouseStorage(trace_storage_config(settings))))
 
     async def start(self) -> None:
-        await ensure_schema(
-            self.store.storage,
-            trace_retention_days=AGENT_TRACING_RETENTION_DAYS,
-            spend_log_retention_days=AGENT_TRACING_SPEND_LOG_RETENTION_DAYS,
-        )
+        await self.store.storage.ensure_schema()
 
     async def ingest(
         self,

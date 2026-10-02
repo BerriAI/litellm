@@ -1,4 +1,5 @@
 from collections.abc import Awaitable, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, TypedDict, cast
 
@@ -77,9 +78,9 @@ QueryScope = AdminQueryScope | TeamQueryScope | KeyQueryScope
 
 
 class NativeStore(Protocol):
-    def __init__(self, database: str, url: str, reader_url: str | None = None) -> None: ...
+    def __init__(self, config: "NativeConfig") -> None: ...
 
-    def ensure_schema(self, trace_retention_days: int, spend_log_retention_days: int) -> Awaitable[None]: ...
+    def ensure_schema(self) -> Awaitable[None]: ...
 
     def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> Awaitable[None]: ...
 
@@ -93,6 +94,7 @@ class NativeStore(Protocol):
 
 
 class NativeTraces(Protocol):
+    NativeTraceConfig: type["NativeConfig"]
     NativeTraceStorage: type[NativeStore]
 
     def trace_decode_otlp(
@@ -113,6 +115,17 @@ class QueryResponse(BaseModel):
 
 QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | list[str]])
 _FIELD_DEFINITIONS_ADAPTER: Final = TypeAdapter(tuple[NormalizedFieldDefinition, ...])
+
+
+class NativeConfig(Protocol):
+    def __init__(self, database: str, url: str, retention_days: int) -> None: ...
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class TraceStorageConfig:
+    url: str
+    database: str = "litellm"
+    retention_days: int = 14
 
 
 def _native() -> NativeTraces:
@@ -143,11 +156,17 @@ def encode_error(message: str) -> bytes:
 
 
 class ClickHouseStorage:
-    def __init__(self, database: str, url: str, reader_url: str | None = None) -> None:
-        self._native: Final = _native().NativeTraceStorage(database, url, reader_url)
+    def __init__(self, config: TraceStorageConfig) -> None:
+        native: Final = _native()
+        validated: Final = native.NativeTraceConfig(
+            config.database,
+            config.url,
+            config.retention_days,
+        )
+        self._native: Final = native.NativeTraceStorage(validated)
 
-    async def ensure_schema(self, trace_retention_days: int, spend_log_retention_days: int) -> None:
-        await self._native.ensure_schema(trace_retention_days, spend_log_retention_days)
+    async def ensure_schema(self) -> None:
+        await self._native.ensure_schema()
 
     async def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> None:
         await self._native.insert_rows(table, rows)
