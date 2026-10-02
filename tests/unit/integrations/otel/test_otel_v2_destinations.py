@@ -1116,6 +1116,18 @@ class TestProviderWiring:
 
         assert self._fan_out_of(preset)._excluded_db_systems == frozenset({"redis"})
 
+    @pytest.mark.parametrize("otel", [None, True, "on", "", []], ids=["null", "true", "on", "empty_string", "empty_list"])
+    def test_a_non_mapping_otel_block_falls_back_to_the_published_logger_config(self, monkeypatch, otel):
+        monkeypatch.setattr(litellm, "callback_settings", {"otel": otel}, raising=False)
+        preset = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")], excluded_services=["redis"]),
+            callback_name="langfuse_otel",
+        )
+
+        publish_global_otel_v2_provider([], lambda _p: None, registered=preset)
+
+        assert self._fan_out_of(preset)._excluded_db_systems == frozenset({"redis"})
+
     def test_otel_after_a_preset_reuses_it_and_still_takes_callback_settings_exclusions(self, monkeypatch):
         """``callbacks: [langfuse_otel, otel]`` keeps one v2 logger, exactly as
         before ``excluded_services`` existed, and the exclusion still comes from

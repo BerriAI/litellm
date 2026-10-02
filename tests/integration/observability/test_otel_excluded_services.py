@@ -124,6 +124,20 @@ def _trace_spans(sink_url: str, trace_id: str, seconds: float = 30) -> tuple[Spa
     return group
 
 
+def _trace_spans_when(
+    sink_url: str,
+    trace_id: str,
+    ready: Callable[[tuple[Span, ...]], bool],
+    seconds: float = 30,
+) -> tuple[Span, ...]:
+    spans: Final = eventually(
+        lambda: spans_for_trace(recorded_spans(sink_url)[1], trace_id),
+        ready,
+        seconds=seconds,
+    )
+    return spans
+
+
 def _await_db_span(sink_url: str, trace_id: str | None, needle: str, seconds: float = 40, since: int = 0) -> None:
     def seen() -> bool:
         _, spans = recorded_spans(sink_url, since)
@@ -240,6 +254,196 @@ def test_without_excluded_services_the_tenant_still_gets_redis_and_postgres_span
         _, all_tenant = recorded_spans(audit_sinks.tenant, tenant_start)
         systems: Final = _db_systems(all_tenant)
         assert {"redis", "postgresql"} <= systems, f"datastore spans missing at tenant: {systems}"
+
+
+@pytest.mark.parametrize("otel", [None, True, "on", "", []], ids=["null", "true", "on", "empty_string", "empty_list"])
+@pytest.mark.timeout(180)
+def test_a_non_mapping_otel_block_still_publishes_the_tenant_fan_out(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    langfuse_vars: dict[str, JsonValue],
+    tmp_path: Path,
+    otel: JsonValue,
+) -> None:
+    def with_callback_settings(config: dict) -> None:
+        config["litellm_settings"]["callbacks"] = ["langfuse_otel"]
+        config["callback_settings"]["otel"] = otel
+
+    config: Final = _config_with(tmp_path, otel_audit_config, extra=with_callback_settings)
+    overrides: Final = {"LITELLM_OTEL_V2": "1", **_operator_langfuse(audit_sinks)}
+    with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+        traffic: Final = _drive(candidate, langfuse_vars)
+        tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
+        _await_db_span(audit_sinks.tenant, tenant_trace, "redis")
+        tenant_spans: Final = _trace_spans_when(
+            audit_sinks.tenant,
+            tenant_trace,
+            lambda spans: any(span["kind"] == 2 for span in spans) and "redis" in _db_systems(spans),
+            seconds=15,
+        )
+        assert any(span["kind"] == 2 for span in tenant_spans), "tenant SERVER root span missing"
+        assert "redis" in _db_systems(tenant_spans), f"tenant redis span missing: {_db_systems(tenant_spans)}"
+        operator_trace: Final = _trace_id(audit_sinks.operator, traffic)
+        operator_spans: Final = _trace_spans_when(
+            audit_sinks.operator,
+            operator_trace,
+            lambda spans: any(span["kind"] == 2 for span in spans),
+            seconds=15,
+        )
+        assert any(span["kind"] == 2 for span in operator_spans), "operator SERVER root span missing"
+
+
+@pytest.mark.parametrize("name", ["EXCLUDED_SERVICES", "excluded_services"])
+@pytest.mark.timeout(180)
+def test_a_bare_excluded_services_env_var_is_ignored(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    langfuse_vars: dict[str, JsonValue],
+    tmp_path: Path,
+    name: str,
+) -> None:
+    config: Final = _config_with(tmp_path, otel_audit_config)
+    overrides: Final = {"LITELLM_OTEL_V2": "1", name: "redis,postgres"}
+    with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+        tenant_start, _ = recorded_spans(audit_sinks.tenant)
+        traffic: Final = _drive(candidate, langfuse_vars)
+        tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
+        _await_db_span(audit_sinks.tenant, tenant_trace, "redis")
+        tenant_spans: Final = _trace_spans_when(
+            audit_sinks.tenant,
+            tenant_trace,
+            lambda spans: "redis" in _db_systems(spans),
+            seconds=15,
+        )
+        assert "redis" in _db_systems(tenant_spans), f"redis span missing at tenant: {_db_systems(tenant_spans)}"
+        _await_db_span(audit_sinks.tenant, None, "postgresql", since=tenant_start)
+        _, all_tenant = recorded_spans(audit_sinks.tenant, tenant_start)
+        systems: Final = _db_systems(all_tenant)
+        assert {"redis", "postgresql"} <= systems, f"datastore spans missing at tenant: {systems}"
+
+
+@pytest.mark.timeout(180)
+def test_the_documented_env_var_wins_over_a_bare_excluded_services(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    langfuse_vars: dict[str, JsonValue],
+    tmp_path: Path,
+) -> None:
+    config: Final = _config_with(tmp_path, otel_audit_config)
+    overrides: Final = {
+        "LITELLM_OTEL_V2": "1",
+        "LITELLM_OTEL_EXCLUDED_SERVICES": "redis",
+        "EXCLUDED_SERVICES": "postgres",
+    }
+    with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+        tenant_start, _ = recorded_spans(audit_sinks.tenant)
+        traffic: Final = _drive(candidate, langfuse_vars)
+        tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
+        _trace_spans(audit_sinks.tenant, tenant_trace, seconds=15)
+        _await_db_span(audit_sinks.tenant, None, "postgresql", since=tenant_start)
+        _, tenant_spans = recorded_spans(audit_sinks.tenant, tenant_start)
+        systems: Final = _db_systems(tenant_spans)
+        assert "postgresql" in systems, f"postgresql spans missing at tenant: {systems}"
+        assert "redis" not in systems, f"redis spans reached tenant: {systems}"
+
+
+@pytest.mark.parametrize(
+    ("env_name", "redis_reaches_tenant"),
+    [
+        pytest.param("LITELLM_OTEL_EXCLUDED_SERVICES", False, id="exact-case"),
+        pytest.param("litellm_otel_excluded_services", True, id="wrong-case"),
+    ],
+)
+@pytest.mark.timeout(180)
+def test_case_sensitive_otel_settings_read_only_the_exact_env_name(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    langfuse_vars: Mapping[str, JsonValue],
+    tmp_path: Path,
+    env_name: str,
+    redis_reaches_tenant: bool,
+) -> None:
+    config: Final = _config_with(tmp_path, otel_audit_config, otel={"_case_sensitive": True})
+    overrides: Final = {"LITELLM_OTEL_V2": "1", env_name: "redis"}
+    with owned_proxy(
+        gateway,
+        tmp_path,
+        overrides,
+        config=config,
+        remove_environment=("LITELLM_OTEL_EXCLUDED_SERVICES", "litellm_otel_excluded_services"),
+        workers=2,
+    ) as candidate:
+        tenant_start, _ = recorded_spans(audit_sinks.tenant)
+        traffic: Final = _drive(candidate, langfuse_vars)
+        tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
+        if redis_reaches_tenant:
+            _await_db_span(audit_sinks.tenant, tenant_trace, "redis")
+            _trace_spans_when(
+                audit_sinks.tenant,
+                tenant_trace,
+                lambda spans: "redis" in _db_systems(spans),
+                seconds=15,
+            )
+        else:
+            _trace_spans(audit_sinks.tenant, tenant_trace, seconds=15)
+        _await_db_span(audit_sinks.tenant, None, "postgresql", seconds=60, since=tenant_start)
+        _, tenant_spans = recorded_spans(audit_sinks.tenant, tenant_start)
+        systems: Final = _db_systems(tenant_spans)
+        assert "postgresql" in systems, f"postgresql spans missing at tenant: {systems}"
+        assert ("redis" in systems) is redis_reaches_tenant, (
+            f"tenant redis presence={('redis' in systems)}; expected={redis_reaches_tenant}; systems={systems}"
+        )
+
+
+@pytest.mark.timeout(180)
+def test_env_ignore_empty_keeps_the_default_service_name(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    langfuse_vars: Mapping[str, JsonValue],
+    tmp_path: Path,
+) -> None:
+    config: Final = _config_with(tmp_path, otel_audit_config, otel={"_env_ignore_empty": True})
+    overrides: Final = {"LITELLM_OTEL_V2": "1", "OTEL_SERVICE_NAME": ""}
+    with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+        traffic: Final = _drive(candidate, langfuse_vars)
+        operator_trace: Final = _trace_id(audit_sinks.operator, traffic)
+        operator_spans: Final = _trace_spans_when(
+            audit_sinks.operator,
+            operator_trace,
+            lambda spans: any(span["kind"] == 2 for span in spans),
+            seconds=15,
+        )
+        service_names: Final = tuple(span["resource"].get("service.name") for span in operator_spans)
+        assert service_names and all(name == "litellm" for name in service_names), (
+            f"operator service.name values={service_names}"
+        )
+
+
+@pytest.mark.timeout(180)
+def test_env_parse_none_str_reads_a_null_traces_endpoint_as_unset(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    langfuse_vars: Mapping[str, JsonValue],
+    tmp_path: Path,
+) -> None:
+    config: Final = _config_with(tmp_path, otel_audit_config, otel={"_env_parse_none_str": "null"})
+    overrides: Final = {"LITELLM_OTEL_V2": "1", "OTEL_TRACES_ENDPOINT": "null"}
+    with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+        traffic: Final = _drive(candidate, langfuse_vars)
+        operator_trace: Final = _trace_id(audit_sinks.operator, traffic)
+        operator_spans: Final = _trace_spans_when(
+            audit_sinks.operator,
+            operator_trace,
+            lambda spans: any(span["kind"] == 2 for span in spans),
+            seconds=15,
+        )
+        assert any(span["kind"] == 2 for span in operator_spans), "operator SERVER root span missing"
 
 
 def test_env_excluded_services_drops_only_redis(

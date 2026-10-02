@@ -915,7 +915,8 @@ def _excluded_db_systems(logger: "OpenTelemetryV2") -> frozenset[str]:
     logger got published: with ``callbacks: [langfuse_otel, otel]`` the ``otel``
     callback folds into the preset, whose config is env-only.
     """
-    configured: Final = litellm.callback_settings.get("otel", {}).get("excluded_services")
+    otel_settings: Final = (litellm.callback_settings or {}).get("otel")
+    configured: Final = otel_settings.get("excluded_services") if isinstance(otel_settings, dict) else None
     if configured is None:
         return logger.config.excluded_services
     return excluded_db_systems_from(configured)

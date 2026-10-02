@@ -9,7 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal
+from types import MappingProxyType
+from typing import Final, Literal, Protocol, cast
 
 import anthropic
 import httpx
@@ -26,6 +27,9 @@ from pydantic import JsonValue, TypeAdapter
 MARKER: Final = re.compile(rb"excl-[0-9a-f]{32}")
 FAILING: Final = re.compile(rb"excl-fail-[0-9a-f]{32}")
 JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+UNCONFIGURED_VARIANT: Final[TypeAdapter[Literal["null_block", "bare_env"]]] = TypeAdapter(
+    Literal["null_block", "bare_env"]
+)
 REPLY_TEXT: Final = "excluded ok"
 SERVER: Final = 2
 INVALID_NAME_LOG: Final = "is not a datastore service"
@@ -35,6 +39,11 @@ Client = Literal["raw", "sdk", "async_sdk"]
 ENDPOINTS: Final[tuple[Endpoint, ...]] = ("chat", "responses", "messages")
 CLIENTS: Final[tuple[Client, ...]] = ("raw", "sdk", "async_sdk")
 AuditConfigWriter = Callable[[Path, Mapping[str, JsonValue]], Path]
+
+
+class _FixtureRequestParam(Protocol):
+    @property
+    def param(self) -> object: ...
 
 
 def _marker() -> str:
@@ -339,6 +348,11 @@ def _db_systems(spans: tuple[Span, ...]) -> set[str]:
     }
 
 
+def _post_auth_datastore_spans(spans: tuple[Span, ...]) -> tuple[Span, ...]:
+    auth_ids: Final = frozenset(span["span_id"] for span in spans if span["name"].startswith("auth "))
+    return tuple(span for span in spans if _db_systems((span,)) and span["parent_span_id"] not in auth_ids)
+
+
 def _names(spans: tuple[Span, ...]) -> list[str]:
     return sorted(span["name"] for span in spans)
 
@@ -408,6 +422,29 @@ def _config(directory: Path, otel_audit_config: AuditConfigWriter, otel: Mapping
     return path
 
 
+def _null_otel_config(directory: Path, otel_audit_config: AuditConfigWriter, name: str) -> Path:
+    written: Final = otel_audit_config(directory, {})
+    loaded: Final = object_value(JSON.validate_python(yaml.safe_load(written.read_text())))
+    config: Final = {
+        **loaded,
+        "litellm_settings": {**object_value(loaded["litellm_settings"]), "callbacks": ["langfuse_otel"]},
+        "callback_settings": {**object_value(loaded["callback_settings"]), "otel": None},
+    }
+    path: Final = directory / f"{name}.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+def _operator_langfuse(sinks: SpanSinks) -> dict[str, str]:
+    return {
+        "LANGFUSE_HOST": sinks.operator,
+        "LANGFUSE_PUBLIC_KEY": "pk-lf-operator",
+        "LANGFUSE_SECRET_KEY": "sk-lf-operator",
+        "OTEL_EXPORTER": "http/json",
+        "OTEL_ENDPOINT": sinks.operator,
+    }
+
+
 @contextmanager
 def _started(
     provider: Wire,
@@ -416,13 +453,14 @@ def _started(
     directory: Path,
     langfuse_vars: Mapping[str, JsonValue],
     workers: int,
+    environment: Mapping[str, str] = MappingProxyType({}),
 ) -> Generator[Rig]:
     with (
         gateway_from_environment() as gateway,
         owned_proxy_process(
             gateway,
             directory,
-            {"LITELLM_OTEL_V2": "1", "OTEL_BSP_SCHEDULE_DELAY": "300"},
+            {"LITELLM_OTEL_V2": "1", "OTEL_BSP_SCHEDULE_DELAY": "300", **environment},
             config=config,
             remove_environment=("LITELLM_OTEL_EXCLUDED_SERVICES",),
             workers=workers,
@@ -455,6 +493,32 @@ def rig(
     directory: Final = tmp_path_factory.mktemp("excluded-matrix")
     config: Final = _config(directory, otel_audit_config, {"excluded_services": ["redis", "postgres"]}, "matrix")
     with _started(provider, audit_sinks, config, directory, langfuse_vars, workers=2) as started:
+        yield started
+
+
+@pytest.fixture(scope="module", params=["null_block", "bare_env"], ids=["null_block", "bare_env"])
+def unconfigured_rig(
+    request: pytest.FixtureRequest,
+    provider: Wire,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    langfuse_vars: dict[str, JsonValue],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[Rig]:
+    parameter: Final = cast(_FixtureRequestParam, request).param
+    variant: Final = UNCONFIGURED_VARIANT.validate_python(parameter)
+    directory: Final = tmp_path_factory.mktemp(f"excluded-{variant}")
+    config: Final = (
+        _null_otel_config(directory, otel_audit_config, variant)
+        if variant == "null_block"
+        else _config(directory, otel_audit_config, {}, variant)
+    )
+    environment: Final = (
+        _operator_langfuse(audit_sinks) if variant == "null_block" else {"EXCLUDED_SERVICES": "redis,postgres"}
+    )
+    with _started(
+        provider, audit_sinks, config, directory, langfuse_vars, workers=2, environment=environment
+    ) as started:
         yield started
 
 
@@ -652,6 +716,237 @@ def test_killing_one_of_two_workers_mid_burst_keeps_the_filter_on_the_survivor(r
     _assert_tenant_never_saw_datastore_spans(rig, cursors, traces)
     after: Final = rig.cursors()
     _assert_withheld(rig, rig.raw("chat", _marker(), stream=False), after)
+
+
+def _assert_tenant_kept(
+    rig: Rig, trace_id: str, cursors: Cursors, *, needs_model_span: bool = False
+) -> tuple[Span, ...]:
+    def ready(spans: tuple[Span, ...]) -> bool:
+        return (
+            sum(1 for span in spans if span["kind"] == SERVER) == 1
+            and "redis" in _db_systems(spans)
+            and (not needs_model_span or any("gen_ai.operation.name" in span["attributes"] for span in spans))
+        )
+
+    tenant: Final = eventually(
+        lambda: spans_for_trace(recorded_spans(rig.sinks.tenant, cursors.tenant)[1], trace_id),
+        ready,
+        seconds=40,
+        return_last_on_timeout=True,
+    )
+    assert sum(1 for span in tenant if span["kind"] == SERVER) == 1, _names(tenant)
+    assert "redis" in _db_systems(tenant), f"redis spans missing at the tenant: {_names(tenant)}"
+    assert not needs_model_span or any("gen_ai.operation.name" in span["attributes"] for span in tenant), _names(tenant)
+    return tenant
+
+
+def _assert_kept(rig: Rig, sent: Sent, cursors: Cursors) -> tuple[Span, ...]:
+    operator: Final = _operator_trace(rig, sent, cursors)
+    return _assert_tenant_kept(rig, operator[0]["trace_id"], cursors, needs_model_span=True)
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("stream", [False, True], ids=["unary", "stream"])
+@pytest.mark.parametrize("client", CLIENTS)
+@pytest.mark.parametrize("endpoint", ENDPOINTS)
+def test_unconfigured_tenant_trace_keeps_datastore_spans(
+    unconfigured_rig: Rig, endpoint: Endpoint, client: Client, stream: bool
+) -> None:
+    cursors: Final = unconfigured_rig.cursors()
+    marker: Final = _marker()
+    sent: Final = unconfigured_rig.send(endpoint, client, marker, stream)
+    assert sent.text == REPLY_TEXT, sent
+    assert unconfigured_rig.upstream_hits(marker) == 1
+    _assert_kept(unconfigured_rig, sent, cursors)
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("endpoint", ["chat", "messages"])
+def test_unconfigured_cache_hit_twin_keeps_datastore_spans(unconfigured_rig: Rig, endpoint: Endpoint) -> None:
+    cursors: Final = unconfigured_rig.cursors()
+    marker: Final = _marker()
+    first_result: Final = _traced_raw(unconfigured_rig, endpoint, marker)
+    first: Final = first_result[1]
+    assert first.text == REPLY_TEXT, first
+    assert unconfigured_rig.upstream_hits(marker) == 1
+    _assert_kept(unconfigured_rig, first, cursors)
+    hit_cursors: Final = unconfigured_rig.cursors()
+
+    def read_hit() -> tuple[str, Sent, tuple[Span, ...]]:
+        trace_id, sent = _traced_raw(unconfigured_rig, endpoint, marker)
+        return trace_id, sent, _operator_trace_by_id(unconfigured_rig, trace_id, hit_cursors)
+
+    trace_id, hit, operator = eventually(
+        read_hit,
+        lambda result: (
+            unconfigured_rig.upstream_hits(marker) == 0
+            and "redis" in _db_systems(_post_auth_datastore_spans(result[2]))
+        ),
+        seconds=60,
+    )
+    assert hit.text == REPLY_TEXT, hit
+    post_auth_datastore: Final = _post_auth_datastore_spans(operator)
+    post_auth_span_ids: Final = frozenset(span["span_id"] for span in post_auth_datastore)
+    non_datastore_names: Final = frozenset(span["name"] for span in operator if not _db_systems((span,)))
+    tenant: Final = eventually(
+        lambda: spans_for_trace(recorded_spans(unconfigured_rig.sinks.tenant, hit_cursors.tenant)[1], trace_id),
+        lambda spans: (
+            non_datastore_names <= frozenset(span["name"] for span in spans)
+            and post_auth_span_ids <= frozenset(span["span_id"] for span in spans)
+        ),
+        seconds=40,
+        return_last_on_timeout=True,
+    )
+    tenant_span_ids: Final = frozenset(span["span_id"] for span in tenant)
+    missing_post_auth_names: Final = tuple(
+        span["name"] for span in post_auth_datastore if span["span_id"] not in tenant_span_ids
+    )
+    assert sum(1 for span in tenant if span["kind"] == SERVER) == 1, _names(tenant)
+    assert "redis" in _db_systems(tenant), (
+        f"operator datastore systems={sorted(_db_systems(post_auth_datastore))}; "
+        f"tenant datastore systems={sorted(_db_systems(tenant))}; tenant spans={_names(tenant)}"
+    )
+    assert not missing_post_auth_names, (
+        f"missing post-auth datastore span names={missing_post_auth_names}; "
+        f"operator={_names(post_auth_datastore)}; tenant={_names(tenant)}"
+    )
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("endpoint", ENDPOINTS)
+def test_unconfigured_failed_upstream_keeps_datastore_spans(unconfigured_rig: Rig, endpoint: Endpoint) -> None:
+    cursors: Final = unconfigured_rig.cursors()
+    marker: Final = "excl-fail-" + uuid.uuid4().hex
+    trace_id: Final = uuid.uuid4().hex
+    path, body = _body(unconfigured_rig.model, endpoint, marker, stream=False)
+    failed: Final = unconfigured_rig.proxy.client.post(
+        path,
+        json=body,
+        headers={
+            "Authorization": f"Bearer {unconfigured_rig.key}",
+            "traceparent": f"00-{trace_id}-{uuid.uuid4().hex[:16]}-01",
+        },
+    )
+    assert failed.status_code == 500, failed.text
+    assert unconfigured_rig.upstream_hits(marker) >= 1
+    operator: Final = eventually(
+        lambda: spans_for_trace(recorded_spans(unconfigured_rig.sinks.operator, cursors.operator)[1], trace_id),
+        lambda spans: _has_root(spans) and "redis" in _db_systems(spans),
+        seconds=40,
+    )
+    assert "redis" in _db_systems(operator), _names(operator)
+    _assert_tenant_kept(unconfigured_rig, trace_id, cursors)
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("status", [403, 404])
+def test_unconfigured_rejecting_tenant_destination_recovers(unconfigured_rig: Rig, status: int) -> None:
+    configure_sink(unconfigured_rig.sinks.tenant, status=status)
+    try:
+        cursors: Final = unconfigured_rig.cursors()
+        marker: Final = _marker()
+        sent: Final = unconfigured_rig.raw("chat", marker, stream=True)
+        assert sent.text == REPLY_TEXT, sent
+        assert unconfigured_rig.upstream_hits(marker) == 1
+        _operator_trace(unconfigured_rig, sent, cursors)
+    finally:
+        configure_sink(unconfigured_rig.sinks.tenant, status=200)
+    after: Final = unconfigured_rig.cursors()
+    recovered: Final = unconfigured_rig.raw("responses", _marker(), stream=False)
+    assert recovered.text == REPLY_TEXT, recovered
+    _assert_kept(unconfigured_rig, recovered, after)
+
+
+@pytest.mark.timeout(120)
+def test_unconfigured_key_level_destination_keeps_datastore_spans(
+    unconfigured_rig: Rig, langfuse_vars: dict[str, JsonValue]
+) -> None:
+    key: Final = unconfigured_rig.scenario.key(
+        metadata={
+            "logging": [
+                {"callback_name": "langfuse_otel", "callback_type": "success", "callback_vars": dict(langfuse_vars)}
+            ]
+        }
+    )
+    cursors: Final = unconfigured_rig.cursors()
+    marker: Final = _marker()
+    sent: Final = unconfigured_rig.raw("chat", marker, stream=False, key=key)
+    assert sent.text == REPLY_TEXT, sent
+    assert unconfigured_rig.upstream_hits(marker) == 1
+    _assert_kept(unconfigured_rig, sent, cursors)
+
+
+def _assert_tenant_kept_the_burst(rig: Rig, cursors: Cursors, traces: set[str]) -> None:
+    def ready(spans: tuple[Span, ...]) -> bool:
+        def trace_kept(trace: str) -> bool:
+            trace_spans: Final = spans_for_trace(spans, trace)
+            return any(span["kind"] == SERVER for span in trace_spans) and "redis" in _db_systems(trace_spans)
+
+        return all(trace_kept(trace) for trace in traces)
+
+    tenant: Final = eventually(
+        lambda: recorded_spans(rig.sinks.tenant, cursors.tenant)[1],
+        ready,
+        seconds=90,
+        return_last_on_timeout=True,
+    )
+    burst: Final = tuple(span for span in tenant if span["trace_id"] in traces)
+    missing_roots: Final = tuple(
+        trace for trace in traces if not any(span["kind"] == SERVER for span in spans_for_trace(burst, trace))
+    )
+    missing_redis: Final = tuple(trace for trace in traces if "redis" not in _db_systems(spans_for_trace(burst, trace)))
+    assert not missing_roots, f"SERVER root missing from tenant burst traces: {missing_roots}, {_names(burst)}"
+    assert not missing_redis, f"redis spans missing from tenant burst traces: {missing_redis}, {_names(burst)}"
+
+
+@pytest.mark.timeout(300)
+def test_unconfigured_tenant_outage_during_a_mixed_burst(unconfigured_rig: Rig) -> None:
+    cursors: Final = unconfigured_rig.cursors()
+    configure_sink(unconfigured_rig.sinks.tenant, status=503)
+    try:
+        results: Final = _burst(unconfigured_rig, 30)
+    finally:
+        configure_sink(unconfigured_rig.sinks.tenant, status=200)
+    served: Final = _served(results)
+    assert len(served) == 30, [result for result in results if isinstance(result, str)]
+    assert all(sent.text == REPLY_TEXT for sent in served), served
+    traces: Final = _assert_operator_exactly_once(unconfigured_rig, served, cursors)
+    _assert_tenant_kept_the_burst(unconfigured_rig, cursors, traces)
+    after: Final = unconfigured_rig.cursors()
+    _assert_kept(unconfigured_rig, unconfigured_rig.raw("messages", _marker(), stream=True), after)
+
+
+@pytest.mark.timeout(300)
+def test_unconfigured_killing_one_of_two_workers_keeps_the_fan_out(unconfigured_rig: Rig) -> None:
+    root: Final = psutil.Process(unconfigured_rig.owned.process.pid)
+    workers: Final = eventually(
+        lambda: tuple(child for child in root.children() if "resource_tracker" not in " ".join(child.cmdline())),
+        lambda found: len(found) == 2,
+        seconds=30,
+    )
+    cursors: Final = unconfigured_rig.cursors()
+
+    def one(index: int) -> Sent | str:
+        if index == 6:
+            os.kill(workers[0].pid, signal.SIGKILL)
+        try:
+            return unconfigured_rig.raw("chat", _marker(), stream=index % 2 == 0)
+        except (httpx.HTTPError, AssertionError) as error:
+            return repr(error)
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results: Final = tuple(pool.map(one, range(18)))
+    assert unconfigured_rig.owned.process.poll() is None, "Proxy root exited after a worker was killed"
+    failures: Final = tuple(result for result in results if isinstance(result, str))
+    assert all(failure.startswith(("ReadError(", "RemoteProtocolError(", "ConnectError(")) for failure in failures), (
+        failures
+    )
+    assert len(failures) <= 6, failures
+    settled: Final = tuple(result for index, result in enumerate(results) if index > 12 and isinstance(result, Sent))
+    traces: Final = _assert_operator_exactly_once(unconfigured_rig, settled, cursors)
+    _assert_tenant_kept_the_burst(unconfigured_rig, cursors, traces)
+    after: Final = unconfigured_rig.cursors()
+    _assert_kept(unconfigured_rig, unconfigured_rig.raw("chat", _marker(), stream=False), after)
 
 
 @dataclass(frozen=True, slots=True)
