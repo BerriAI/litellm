@@ -34,6 +34,13 @@ def test_encoded_thinking_blocks_decode_back_to_the_verifiable_blocks_only():
     assert decode_thinking_blocks(json.dumps([{"type": "text", "text": "not thinking"}])) is None
 
 
+def test_decoding_keeps_the_verifiable_blocks_of_a_mixed_array_and_skips_the_rest():
+    mixed = json.dumps([SIGNED_BLOCK, "a stray string", 7, None, UNSIGNED_BLOCK, {"type": "thinking"}, REDACTED_BLOCK])
+    assert decode_thinking_blocks(mixed) == (SIGNED_BLOCK, REDACTED_BLOCK)
+    assert decode_thinking_blocks(json.dumps(["only", "strings", 3])) is None
+    assert decode_thinking_blocks(json.dumps([UNSIGNED_BLOCK])) is None
+
+
 def test_a_reasoning_item_is_litellm_minted_by_its_id_or_by_its_encoded_thinking_blocks():
     assert is_litellm_minted_reasoning_item({"type": "reasoning", "id": mint_reasoning_item_id(), "summary": []})
     assert is_litellm_minted_reasoning_item(

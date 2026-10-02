@@ -1498,29 +1498,13 @@ class LiteLLMCompletionResponsesConfig:
         decoded: Final = decode_thinking_blocks(input_item.get("encrypted_content"))
         if decoded is None:
             return None
-        blocks: Final = tuple(
-            cast(  # cast-ok: shape validated by _is_replayable_thinking_block
+        return tuple(
+            cast(  # cast-ok: decode_thinking_blocks keeps verifiable thinking blocks only
                 ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
                 block,
             )
             for block in decoded
-            if LiteLLMCompletionResponsesConfig._is_replayable_thinking_block(block)
         )
-        return blocks or None
-
-    @staticmethod
-    def _is_replayable_thinking_block(block: Mapping[str, object]) -> bool:
-        """
-        A thinking block is only worth replaying when the provider can verify
-        it: a ``thinking`` block needs its signature, a ``redacted_thinking``
-        block needs its opaque data.
-        """
-        block_type: Final[object] = block.get("type")
-        if block_type == "thinking":
-            return bool(block.get("signature"))
-        if block_type == "redacted_thinking":
-            return bool(block.get("data"))
-        return False
 
     @staticmethod
     def _is_input_item_tool_call_output(input_item: Mapping[str, object]) -> bool:
