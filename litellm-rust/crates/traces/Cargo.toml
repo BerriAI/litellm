@@ -12,6 +12,7 @@ opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "tra
 prost.workspace = true
 time = { workspace = true, features = ["formatting"] }
 litellm-http.workspace = true
+litellm-migrate.workspace = true
 litellm-storage-clickhouse.workspace = true
 sha2.workspace = true
 serde = { workspace = true, features = ["rc"] }

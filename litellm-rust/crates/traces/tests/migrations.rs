@@ -985,6 +985,16 @@ async fn duplicate_span_preview_matches_diagnostic(
 }
 
 #[rstest]
+fn schema_includes_every_migration_file() -> TestResult {
+    let files = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations"))?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "sql"))
+        .count();
+    assert_eq!(schema_statements("trace_test", 7, 14)?.len(), 1 + files);
+    Ok(())
+}
+
+#[rstest]
 #[tokio::test]
 async fn lens_agent_discovery_and_selection_preserve_scope(
     #[future] database: TestResult<ClickHouseDatabase>,
