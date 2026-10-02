@@ -1,17 +1,19 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/http/client";
 
-import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import traceList from "./__fixtures__/trace_list.json";
 import AgentTracesPage from "./AgentTracesPage";
 import { AgentTracesSection, filterRuns } from "./AgentTracesSection";
 import type { TracePage, TraceSummary } from "./traceTypes";
 
 vi.mock("../../networking", () => ({
-  apiClient: { get: vi.fn() },
+  apiClient: { get: vi.fn(), post: vi.fn() },
   agentTraceListCall: vi.fn(),
+  sendOtlpTraceCall: vi.fn(),
   agentTraceCall: vi.fn(),
   agentTraceSpanCall: vi.fn(),
   getProxyBaseUrl: () => "http://localhost:4000",
@@ -60,6 +62,7 @@ const bucketRunCounts = () =>
 
 describe("AgentTracesSection", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -78,6 +81,31 @@ describe("AgentTracesSection", () => {
     testQueryClient.clear();
     vi.mocked(agentTraceListCall).mockReset();
     vi.mocked(apiClient.get).mockResolvedValue({ data: [] });
+  });
+
+  it.each([
+    [401, "Your session is no longer valid. Sign out and sign in again."],
+    [403, "Your account does not have access to these traces."],
+  ])("stops live polling after HTTP %s and explains how to recover", async (status, message) => {
+    vi.useFakeTimers();
+    vi.mocked(agentTraceListCall).mockRejectedValue(new ApiError("Private token details", Number(status), {}));
+    renderWithProviders(
+      <AgentTracesSection
+        accessToken="sk-test"
+        isActive
+        startTime="2026-09-29T00:00"
+        endTime="2026-09-30T00:00"
+        isCustomDate={false}
+        isLiveTail
+      />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(screen.getByText(`Could not load runs: ${message}`)).toBeVisible();
+    expect(screen.queryByText(/Private token details/)).not.toBeInTheDocument();
+    expect(agentTraceListCall).toHaveBeenCalledOnce();
+    expect(screen.getByTestId("runs-footer")).toHaveTextContent("Update failed");
   });
 
   it("renders the setup snippet when the proxy answers 501", async () => {
@@ -240,6 +268,28 @@ describe("AgentTracesSection", () => {
     const rows = screen.getAllByTestId("agent-trace-row");
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent("Should we store OTEL agent spans");
+  });
+
+  it("labels the OTEL service as the agent and filters runs by it", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue({
+      ...(traceList as TracePage),
+      data: [...runs.slice(1), { ...runs[0], service: "billing-agent" }],
+    });
+    const user = userEvent.setup();
+    renderSection();
+    await screen.findAllByTestId("agent-trace-row");
+
+    expect(screen.getByRole("columnheader", { name: "Agent" })).toBeInTheDocument();
+    const agentFilter = screen.getByRole("combobox", { name: "Filter by agent" });
+    expect(agentFilter).toHaveTextContent("All agents");
+
+    await chooseSelectOption(user, agentFilter, "billing-agent");
+    const rows = screen.getAllByTestId("agent-trace-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("billing-agent");
+
+    await chooseSelectOption(user, agentFilter, "All agents");
+    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
   });
 
   it("status filter 'Failed' keeps only runs with errors", () => {

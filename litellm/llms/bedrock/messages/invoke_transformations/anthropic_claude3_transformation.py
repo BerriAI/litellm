@@ -549,6 +549,9 @@ class AmazonAnthropicClaudeMessagesConfig(
             is_thinking_display_updates_used=anthropic_model_info.is_thinking_display_updates_used(
                 anthropic_messages_request.get("thinking")
             ),
+            is_mid_conversation_tool_change_used=anthropic_model_info.is_mid_conversation_tool_change_used(
+                outgoing_messages_typed
+            ),
         )
         beta_set.update(auto_betas)
 
