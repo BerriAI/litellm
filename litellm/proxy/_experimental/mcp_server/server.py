@@ -1625,21 +1625,19 @@ if MCP_AVAILABLE:
             registry_pick = operations.global_mcp_server_manager.get_mcp_server_answering_to(
                 server_name, client_ip=client_ip
             )
-            obo_without_subject = (
-                registry_pick is not None
-                and registry_pick.auth_type == MCPAuth.oauth2_token_exchange
-                and not oauth2_headers
-            )
             allowed_single = (
                 await operations._get_allowed_mcp_servers(
                     user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
                 )
-                if registry_pick and not obo_without_subject and mcp_servers is not None and len(mcp_servers) == 1
+                if registry_pick and mcp_servers is not None and len(mcp_servers) == 1
                 else ()
             )
             granted = next(iter(allowed_single), None)
             server = granted if granted is not None else registry_pick
             granted_single = granted is not None
+            obo_without_subject = (
+                server is not None and server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers
+            )
             if server is not None and allowed_server_ids is not None and server.server_id not in allowed_server_ids:
                 # Caller's narrowed scope excludes this server — skip the
                 # preemptive challenge and let downstream authorization
