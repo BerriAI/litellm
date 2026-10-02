@@ -280,7 +280,7 @@ class PassThroughStreamingHandler:
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        request_body: dict[str, object],
+        request_body: dict,
         endpoint_type: EndpointType,
         start_time: datetime,
         raw_bytes: Sequence[bytes],
@@ -320,7 +320,7 @@ class PassThroughStreamingHandler:
             await PassThroughStreamingHandler.schedule_stream_failure_logging(
                 litellm_logging_obj=litellm_logging_obj,
                 endpoint_type=endpoint_type,
-                request_body=request_body,
+                request_body=request_body,  # pyright: ignore[reportUnknownArgumentType]  # request_body is an untyped dict in this signature
                 raw_bytes=raw_bytes,
                 exception=AnthropicError(status_code=error_status_code, message=error_message),
                 stream_context=PassThroughStreamContext(
