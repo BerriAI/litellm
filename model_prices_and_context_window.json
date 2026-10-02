@@ -79628,5 +79628,14 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "api_route/deepseek-v4.1-flash": {
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 6e-07,
+        "cache_read_input_token_cost": 3e-09,
+        "litellm_provider": "api_route",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "source": "https://www.api-route.com/pricing/deepseek-v4.1-flash"
     }
 }
