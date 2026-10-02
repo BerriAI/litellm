@@ -2952,11 +2952,14 @@ class TestMCPServerManager:
                 server=server,
                 oauth2_headers={"Authorization": "Bearer rejected-subject"},
                 user_api_key_auth=None,
-                connected_as=server.server_id,
+                resource_metadata=f"http://gw.test/.well-known/oauth-protected-resource/mcp/{server.server_id}",
             )
         headers = exc_info.value.headers or {}
         www_authenticate = headers.get("WWW-Authenticate") or headers.get("www-authenticate") or ""
-        assert f"/.well-known/oauth-protected-resource/mcp/{server.server_id}" in www_authenticate, www_authenticate
+        assert (
+            f'resource_metadata="http://gw.test/.well-known/oauth-protected-resource/mcp/{server.server_id}"'
+            in www_authenticate
+        ), www_authenticate
 
     @pytest.mark.asyncio
     async def test_preflight_token_exchange_maps_gateway_fault_to_public_status(self):

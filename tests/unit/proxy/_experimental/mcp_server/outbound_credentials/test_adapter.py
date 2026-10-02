@@ -615,6 +615,21 @@ def test_raise_token_exchange_challenge_is_rfc9728_invalid_token():
     assert "error_description=" in www
 
 
+def test_raise_token_exchange_challenge_advertises_the_connected_route_metadata_url():
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+        raise_token_exchange_challenge,
+    )
+
+    connected: Final = "https://gw.example/.well-known/oauth-protected-resource/obo-srv/mcp"
+    with pytest.raises(HTTPException) as exc_info:
+        raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="/", resource_metadata=connected)
+    assert exc_info.value.headers["WWW-Authenticate"] == (
+        f'Bearer resource_metadata="{connected}", '
+        'error="invalid_token", '
+        'error_description="Missing or invalid subject token; authenticate with the IdP and retry"'
+    )
+
+
 def test_raise_token_exchange_challenge_includes_server_root_path(monkeypatch):
     from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
         raise_token_exchange_challenge,

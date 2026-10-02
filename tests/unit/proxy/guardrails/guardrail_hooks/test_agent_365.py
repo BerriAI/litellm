@@ -3,6 +3,7 @@ import time
 import uuid
 from types import SimpleNamespace
 from typing import Any, Final
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -23,6 +24,10 @@ from litellm.proxy._experimental.mcp_server.caller_sign_in import (
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok, Result
+from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_provider import (
+    _post_exchange_endpoint,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import OboTokenExchanger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     CredError,
     ServerSpec,
@@ -60,6 +65,25 @@ def _response(status_code: int, payload: Any = None, text: str | None = None) ->
     if payload is not None:
         return httpx.Response(status_code=status_code, json=payload, request=request)
     return httpx.Response(status_code=status_code, text=text or "", request=request)
+
+
+_HTTP_CLIENT: Final = "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
+
+
+def _entra_rejecting_with(body: dict[str, object]) -> object:
+    """An httpx client whose token POST raises the HTTPStatusError the real exchanger classifies."""
+    request: Final = httpx.Request("POST", TOKEN_URL)
+    response: Final = httpx.Response(401, json=body, request=request)
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            raise httpx.HTTPStatusError("unauthorized", request=request, response=response)
+
+    class _Client:
+        async def post(self, *args: object, **kwargs: object) -> _Resp:
+            return _Resp()
+
+    return _Client()
 
 
 class StubTokenExchanger:
@@ -765,6 +789,37 @@ class TestUnreachableFallback:
         assert "On-Behalf-Of token exchange was rejected" in exc_info.value.detail["message"]
 
     @pytest.mark.asyncio
+    async def test_malformed_assertion_reported_as_invalid_client_blocks_even_fail_open(self):
+        """Entra answers a garbled or unverifiable caller assertion with invalid_client AADSTS5002723, the
+        same top-level code as a wrong gateway secret. The sub-code makes it the caller's 401 challenge,
+        never the fail-open Unscanned pass and never a 503 that blames the gateway credentials."""
+        exchanger: Final = OboTokenExchanger(_post_exchange_endpoint)
+        handler: Final = FakeHandler([])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger, unreachable_fallback="fail_open")
+        data: Final = _mcp_data()
+        with (
+            patch(
+                _HTTP_CLIENT,
+                return_value=_entra_rejecting_with(
+                    {
+                        "error": "invalid_client",
+                        "error_description": "AADSTS5002723: Invalid JWT token. Token is not well formed.",
+                        "error_codes": [5002723],
+                    }
+                ),
+            ),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await _run(guardrail, data)
+        assert exc_info.value.status_code == 401
+        assert "On-Behalf-Of token exchange was rejected" in exc_info.value.detail["message"]
+        info: Final = _guardrail_info(data)
+        assert info["guardrail_status"] == "guardrail_intervened"
+        assert info["guardrail_response"]["verdict"] == "Rejected"
+        assert "client_secret" not in info["guardrail_response"]["reason"]
+        assert handler.calls == []
+
+    @pytest.mark.asyncio
     async def test_evaluate_4xx_blocks_even_fail_open(self):
         handler: Final = FakeHandler([_response(403, text="obo token lacks the scope")])
         guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
@@ -1218,6 +1273,19 @@ class TestCallerSignIn:
             scopes=("api://client-xyz/access_as_user",),
         )
 
+    def test_configured_server_scopes_replace_the_gateway_scope(self):
+        guardrail: Final = _make_guardrail(FakeHandler([]))
+        server: Final = _server(scopes=["https://example/mcp/scoped/access_as_user", "offline_access"])
+        sign_in: Final = guardrail.caller_sign_in(server, None)
+        assert sign_in == CallerSignIn(
+            issuers=("https://login.microsoftonline.com/tenant-abc/v2.0",),
+            scopes=("https://example/mcp/scoped/access_as_user", "offline_access"),
+        )
+        assert guardrail.caller_sign_in(_server(scopes=[]), None) == CallerSignIn(
+            issuers=("https://login.microsoftonline.com/tenant-abc/v2.0",),
+            scopes=("api://client-xyz/access_as_user",),
+        )
+
     def test_default_off_guardrail_does_not_gate(self):
         guardrail: Final = _make_guardrail(FakeHandler([]), default_on=False)
         assert guardrail.caller_sign_in(_server(), None) is None
@@ -1240,7 +1308,7 @@ class TestCallerSignIn:
         assert guardrail.caller_sign_in(_server(), UserAPIKeyAuth(api_key="k", user_id="u-1")) is not None
         assert guardrail.caller_sign_in(_server(), None) is not None
 
-    def test_obo_server_with_provider_advertises_both_issuers_and_scopes(self, monkeypatch):
+    def test_obo_server_with_provider_advertises_both_issuers_and_the_server_scopes(self, monkeypatch):
         monkeypatch.setenv("JWT_ISSUER", "https://jwt-idp.test")
         guardrail: Final = _make_guardrail(FakeHandler([]))
         litellm.logging_callback_manager.add_litellm_callback(guardrail)
@@ -1256,7 +1324,7 @@ class TestCallerSignIn:
             "https://jwt-idp.test",
             "https://login.microsoftonline.com/tenant-abc/v2.0",
         )
-        assert sign_in.scopes == ("read", "api://client-xyz/access_as_user")
+        assert sign_in.scopes == ("read",)
 
 
 class TestPreflightCallerSignIn:
@@ -1283,6 +1351,20 @@ class TestPreflightCallerSignIn:
         verdict: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), FAKE_ASSERTION)
 
         assert verdict == Rejected(detail="the provided assertion has expired", claims="step-up")
+
+    @pytest.mark.asyncio
+    async def test_malformed_assertion_is_rejected_at_connect_even_fail_open(self):
+        exchanger: Final = OboTokenExchanger(_post_exchange_endpoint)
+        guardrail: Final = _make_guardrail(FakeHandler([]), exchanger=exchanger, unreachable_fallback="fail_open")
+
+        with patch(
+            _HTTP_CLIENT,
+            return_value=_entra_rejecting_with({"error": "invalid_client", "error_codes": [5002723]}),
+        ):
+            verdict: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), FAKE_ASSERTION)
+
+        assert isinstance(verdict, Rejected)
+        assert "client_secret" not in verdict.detail
 
     @pytest.mark.asyncio
     async def test_misconfigured_fail_closed_is_unavailable(self):

@@ -63,6 +63,7 @@ from litellm.proxy._experimental.mcp_server.mcp_debug import (
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
+    get_passthrough_resource_metadata_url,
     get_passthrough_www_authenticate,
     get_route_relative_request_path,
     well_known_root_suffix,
@@ -1739,9 +1740,7 @@ if MCP_AVAILABLE:
             # key without access gets the grant's 403 instead of a sign-in it could not use. The one
             # admission lookup above serves the challenge, the sign-in preflight and the exchange.
             sign_in = caller_sign_in_for(server, user_api_key_auth) if server is not None else None
-            challenge_route: str | None = (
-                None if server is not None and server.auth_type == MCPAuth.oauth2_token_exchange else server_name
-            )
+            resource_metadata = get_passthrough_resource_metadata_url(scope, server_name)
             subject_token = (
                 operations.global_mcp_server_manager._extract_subject_token(  # pyright: ignore[reportPrivateUsage]  # the manager owns the subject/admission filter shared with the preflight
                     oauth2_headers, raw_headers, user_api_key_auth
@@ -1757,7 +1756,9 @@ if MCP_AVAILABLE:
                     get_request_root_path,
                 )
 
-                raise_token_exchange_challenge(server, root_path=get_request_root_path(), connected_as=challenge_route)
+                raise_token_exchange_challenge(
+                    server, root_path=get_request_root_path(), resource_metadata=resource_metadata
+                )
             if server and sign_in is not None and subject_token is not None and granted_single:
                 from litellm.proxy._experimental.mcp_server.caller_sign_in import (  # noqa: PLC0415  # lazy: provider discovery pulls the guardrail registry
                     preflight_caller_sign_in,
@@ -1771,7 +1772,7 @@ if MCP_AVAILABLE:
                     user_api_key_auth,
                     subject_token,
                     root_path=get_request_root_path(),
-                    connected_as=challenge_route,
+                    resource_metadata=resource_metadata,
                 )
 
             # Exchange-backed modes (token_exchange's OBO mint, id_jag's stored-assertion mint): run
@@ -1787,7 +1788,7 @@ if MCP_AVAILABLE:
                     oauth2_headers=oauth2_headers,
                     user_api_key_auth=user_api_key_auth,
                     raw_headers=raw_headers,
-                    connected_as=challenge_route,
+                    resource_metadata=resource_metadata,
                 )
 
             # Pass-through OAuth: when the admin has opted a server into

@@ -90,6 +90,34 @@ async def test_post_maps_gateway_fault_4xx_to_client_error(code):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("aadsts_code", [5002723, "5002710"], ids=["invalid_jwt", "no_kid_as_string"])
+async def test_post_maps_invalid_client_with_an_aadsts_50027xx_code_to_subject_rejected(aadsts_code):
+    # Entra reports a malformed or unverifiable caller assertion as invalid_client with an AADSTS50027xx
+    # sub-code (the same top-level error it uses for a bad gateway secret); that one is the caller's 401.
+    body = {
+        "error": "invalid_client",
+        "error_description": f"AADSTS{aadsts_code}: Invalid JWT token.",
+        "error_codes": [aadsts_code],
+    }
+    with patch(_HTTP_CLIENT, return_value=_client_raising_status(401, body)):
+        with pytest.raises(SubjectTokenRejected):
+            await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_codes",
+    [[7000215], [5002723.0], "5002723", None],
+    ids=["bad_secret_code", "float_code", "codes_not_a_list", "no_codes"],
+)
+async def test_post_keeps_invalid_client_without_an_assertion_code_as_client_error(error_codes):
+    body = {"error": "invalid_client", **({} if error_codes is None else {"error_codes": error_codes})}
+    with patch(_HTTP_CLIENT, return_value=_client_raising_status(401, body)):
+        with pytest.raises(TokenExchangeClientError):
+            await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "body",
     [{"error": "invalid_grant"}, {"error": "invalid_request"}, {}, {"error": 123}, "not-json-object"],

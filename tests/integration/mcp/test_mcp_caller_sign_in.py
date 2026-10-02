@@ -2,6 +2,7 @@ import json
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -52,9 +53,16 @@ def _advertised(gateway: Gateway, segment: str) -> tuple[int, tuple[str, ...], o
     return response.status_code, issuers, document.get("scopes_supported")
 
 
-def _sign_in_config(guardrail_params: dict[str, object], path: Path) -> Path:
+def _origin(gateway: Gateway) -> str:
+    return str(gateway.client.base_url).rstrip("/")
+
+
+def _sign_in_config(
+    guardrail_params: dict[str, object], path: Path, general_settings: Mapping[str, object] = MappingProxyType({})
+) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["guardrails"] = [{"guardrail_name": "signin" + uuid.uuid4().hex, "litellm_params": guardrail_params}]
+    config["general_settings"] = {**config.get("general_settings", {}), **general_settings}
     path.write_text(yaml.safe_dump(config))
     return path
 
@@ -185,8 +193,9 @@ def test_exact_name_wins_over_a_case_folded_config_alias_for_connect_discovery_a
 
             challenged: Final = _rpc(candidate, f"/mcp/{stem}", scenario.key(), {})
             assert challenged.status_code == 401, challenged.text
-            assert f'resource_metadata="/.well-known/oauth-protected-resource/mcp/{stem}"' in challenged.headers.get(
-                "www-authenticate", ""
+            assert (
+                f'resource_metadata="{_origin(candidate)}/.well-known/oauth-protected-resource/mcp/{stem}"'
+                in challenged.headers.get("www-authenticate", "")
             )
             assert _advertised(candidate, stem) == _advertised(candidate, stem + "_obo")
             assert _advertised(candidate, stem) != _advertised(candidate, cased)
@@ -323,13 +332,16 @@ def test_agent_365_gated_server_challenges_at_connect_and_advertises_entra(gatew
         challenged: Final = _rpc(candidate, f"/mcp/{alias}", granted, {})
         assert challenged.status_code == 401, challenged.text
         authenticate: Final = challenged.headers.get("www-authenticate", "")
-        assert f'resource_metadata="/.well-known/oauth-protected-resource/mcp/{alias}"' in authenticate
+        assert (
+            f'resource_metadata="{_origin(candidate)}/.well-known/oauth-protected-resource/mcp/{alias}"' in authenticate
+        )
         assert 'error="invalid_token"' in authenticate
 
         opaque: Final = _rpc(candidate, f"/mcp/{alias}", granted, {"Authorization": "Bearer not-a-jws"})
         assert opaque.status_code == 401, opaque.text
-        assert f'resource_metadata="/.well-known/oauth-protected-resource/mcp/{alias}"' in opaque.headers.get(
-            "www-authenticate", ""
+        assert (
+            f'resource_metadata="{_origin(candidate)}/.well-known/oauth-protected-resource/mcp/{alias}"'
+            in opaque.headers.get("www-authenticate", "")
         )
 
         discovery: Final = candidate.client.get(f"/.well-known/oauth-protected-resource/mcp/{alias}")
@@ -342,6 +354,79 @@ def test_agent_365_gated_server_challenges_at_connect_and_advertises_entra(gatew
         assert refused.status_code == 403, refused.text
         assert "www-authenticate" not in refused.headers
         assert tool_calls(peer.drain()) == ()
+
+
+def test_agent_365_prm_advertises_the_servers_configured_scopes(gateway: Gateway, tmp_path: Path) -> None:
+    config: Final = _sign_in_config(dict(AGENT_365_PARAMS), tmp_path / "agent365-scopes.yaml")
+    with (
+        owned_proxy(gateway, tmp_path, {}, config=config) as candidate,
+        mcp_peer() as peer,
+        candidate.scenario() as scenario,
+    ):
+        scoped: Final = "a365" + uuid.uuid4().hex[:8]
+        register_mcp(scenario, peer, scoped, scopes=["https://example/mcp/scoped/access_as_user", "offline_access"])
+        unscoped: Final = "a365" + uuid.uuid4().hex[:8]
+        register_mcp(scenario, peer, unscoped)
+
+        assert _advertised(candidate, scoped) == (
+            200,
+            (ENTRA_ISSUER,),
+            ["https://example/mcp/scoped/access_as_user", "offline_access"],
+        )
+        assert _advertised(candidate, unscoped) == (200, (ENTRA_ISSUER,), [GATEWAY_SCOPE])
+
+
+def test_challenge_names_the_server_first_route_the_client_connected_on(gateway: Gateway, tmp_path: Path) -> None:
+    config: Final = _sign_in_config(dict(AGENT_365_PARAMS), tmp_path / "agent365-route.yaml")
+    with (
+        owned_proxy(gateway, tmp_path, {}, config=config) as candidate,
+        mcp_peer() as peer,
+        candidate.scenario() as scenario,
+    ):
+        alias: Final = "a365" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias)
+        granted: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        metadata_url: Final = f"{_origin(candidate)}/.well-known/oauth-protected-resource/{alias}/mcp"
+
+        challenged: Final = _rpc(candidate, f"/{alias}/mcp", granted, {})
+        assert challenged.status_code == 401, challenged.text
+        assert f'resource_metadata="{metadata_url}"' in challenged.headers.get("www-authenticate", "")
+
+        document: Final = httpx.get(metadata_url, timeout=15).json()
+        assert document["resource"] == f"{_origin(candidate)}/{alias}/mcp", document
+        assert document["authorization_servers"] == [ENTRA_ISSUER]
+        assert tool_calls(peer.drain()) == ()
+
+
+def test_challenge_names_the_forwarded_origin_only_from_a_trusted_proxy(gateway: Gateway, tmp_path: Path) -> None:
+    config: Final = _sign_in_config(
+        dict(AGENT_365_PARAMS),
+        tmp_path / "agent365-forwarded.yaml",
+        {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["127.0.0.0/8"]},
+    )
+    with (
+        owned_proxy(gateway, tmp_path, {}, config=config) as candidate,
+        mcp_peer() as peer,
+        candidate.scenario() as scenario,
+    ):
+        alias: Final = "a365" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias)
+        granted: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        forwarded: Final = {"X-Forwarded-Proto": "https", "X-Forwarded-Host": "public.example"}
+
+        challenged: Final = _rpc(candidate, f"/mcp/{alias}", granted, forwarded)
+        assert challenged.status_code == 401, challenged.text
+        assert (
+            f'resource_metadata="https://public.example/.well-known/oauth-protected-resource/mcp/{alias}"'
+            in challenged.headers.get("www-authenticate", "")
+        )
+
+        plain: Final = _rpc(candidate, f"/mcp/{alias}", granted, {})
+        assert plain.status_code == 401, plain.text
+        assert (
+            f'resource_metadata="{_origin(candidate)}/.well-known/oauth-protected-resource/mcp/{alias}"'
+            in plain.headers.get("www-authenticate", "")
+        )
 
 
 def test_challenge_and_prm_resolve_the_connected_case_variant(gateway: Gateway, tmp_path: Path) -> None:
@@ -359,7 +444,10 @@ def test_challenge_and_prm_resolve_the_connected_case_variant(gateway: Gateway, 
         challenged: Final = _rpc(candidate, f"/mcp/{connected_as}", granted, {})
         assert challenged.status_code == 401, challenged.text
         authenticate: Final = challenged.headers.get("www-authenticate", "")
-        assert f'resource_metadata="/.well-known/oauth-protected-resource/mcp/{connected_as}"' in authenticate
+        assert (
+            f'resource_metadata="{_origin(candidate)}/.well-known/oauth-protected-resource/mcp/{connected_as}"'
+            in authenticate
+        )
         assert 'error="invalid_token"' in authenticate
 
         discovery: Final = candidate.client.get(f"/.well-known/oauth-protected-resource/mcp/{connected_as}")

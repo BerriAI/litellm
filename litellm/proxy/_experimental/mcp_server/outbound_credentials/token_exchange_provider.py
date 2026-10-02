@@ -9,6 +9,7 @@ call), so it needs no lazy wrapper.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Final
 
 import httpx
@@ -34,11 +35,29 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger
 _GATEWAY_FAULT_OAUTH_ERRORS: Final = frozenset(
     {"invalid_client", "unauthorized_client", "unsupported_grant_type", "invalid_target", "invalid_scope"}
 )
+# Entra reports a forged or garbled assertion as ``invalid_client`` with an AADSTS50027xx sub-code,
+# the same top-level code as a bad gateway secret; the sub-code is what says the caller has to fix it.
+_INVALID_ASSERTION_AADSTS_PREFIX: Final = "50027"
 
 
-def _oauth_error_fields(response: httpx.Response) -> tuple[str | None, str | None]:
-    """Read the RFC 6749 5.2 ``error`` code and the IdP's step-up ``claims`` blob from a
-    token-endpoint error body, as ``(error, claims)`` with None for whatever is absent.
+@dataclass(frozen=True, slots=True)
+class _OAuthErrorBody:
+    error: str | None
+    claims: str | None
+    error_codes: tuple[str, ...]
+
+    @property
+    def gateway_fault(self) -> str | None:
+        if self.error is None or self.error not in _GATEWAY_FAULT_OAUTH_ERRORS:
+            return None
+        if any(code.startswith(_INVALID_ASSERTION_AADSTS_PREFIX) for code in self.error_codes):
+            return None
+        return self.error
+
+
+def _oauth_error_fields(response: httpx.Response) -> _OAuthErrorBody:
+    """Read the RFC 6749 5.2 ``error`` code, the IdP's step-up ``claims`` blob and Entra's
+    ``error_codes`` sub-codes from a token-endpoint error body, None or empty for whatever is absent.
 
     ``claims`` is the Entra Conditional Access / CAE challenge (a JSON string the client must
     replay to the IdP to satisfy the step-up); it is the caller's own requirement, not an IdP
@@ -48,14 +67,18 @@ def _oauth_error_fields(response: httpx.Response) -> tuple[str | None, str | Non
     try:
         body: Final[object] = response.json()
     except Exception:  # noqa: BLE001
-        return None, None
+        return _OAuthErrorBody(error=None, claims=None, error_codes=())
     if not isinstance(body, dict):
-        return None, None
+        return _OAuthErrorBody(error=None, claims=None, error_codes=())
     code: Final = body.get("error")
     claims: Final = body.get("claims")
-    return (
-        code if isinstance(code, str) else None,
-        claims if isinstance(claims, str) and claims else None,
+    raw_codes: Final = body.get("error_codes")
+    return _OAuthErrorBody(
+        error=code if isinstance(code, str) else None,
+        claims=claims if isinstance(claims, str) and claims else None,
+        error_codes=tuple(str(c) for c in raw_codes if isinstance(c, (int, str)))
+        if isinstance(raw_codes, list)
+        else (),
     )
 
 
@@ -85,18 +108,19 @@ async def _post_exchange_endpoint(
             verbose_logger.warning("MCP token exchange throttled or timed out (HTTP %d)", status_code)
             return None
         if 400 <= status_code < 500:
-            oauth_error, claims = _oauth_error_fields(status_err.response)
-            if oauth_error in _GATEWAY_FAULT_OAUTH_ERRORS:
+            oauth_error: Final = _oauth_error_fields(status_err.response)
+            gateway_fault: Final = oauth_error.gateway_fault
+            if gateway_fault is not None:
                 verbose_logger.warning(
                     "MCP token exchange rejected as %s (HTTP %d); check the gateway client credentials, "
                     "audience, and scope for this server",
-                    oauth_error,
+                    gateway_fault,
                     status_code,
                 )
-                raise TokenExchangeClientError(oauth_error) from status_err
+                raise TokenExchangeClientError(gateway_fault) from status_err
             raise SubjectTokenRejected(
                 f"IdP rejected the subject token (HTTP {status_code})",
-                claims=claims,
+                claims=oauth_error.claims,
             ) from status_err
         verbose_logger.warning("MCP token exchange request failed: %s", status_err)
         return None

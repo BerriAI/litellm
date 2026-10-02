@@ -161,7 +161,7 @@ async def preflight_caller_sign_in(
     subject_token: str,
     *,
     root_path: str,
-    connected_as: str | None,
+    resource_metadata: str | None,
 ) -> None:
     """Run every provider's connect-time check against the subject token, so a bearer the IdP will
     reject surfaces as a challenge here rather than a JSON-RPC error at the first tool call."""
@@ -178,7 +178,9 @@ async def preflight_caller_sign_in(
             case SignedIn():
                 continue
             case Rejected(detail=_, claims=claims):
-                raise_token_exchange_challenge(server, root_path=root_path, claims=claims, connected_as=connected_as)
+                raise_token_exchange_challenge(
+                    server, root_path=root_path, claims=claims, resource_metadata=resource_metadata
+                )
             case Unavailable(detail=detail, fail_open=True):
                 continue
             case Unavailable(detail=detail, fail_open=False):

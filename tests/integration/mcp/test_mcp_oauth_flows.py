@@ -233,6 +233,41 @@ def test_a_throttled_token_exchange_is_an_outage_not_a_sign_in_challenge(gateway
         assert tool_calls(peer.drain()) == ()
 
 
+def test_a_malformed_caller_assertion_is_a_sign_in_challenge_not_an_outage(gateway: Gateway) -> None:
+    def entra_like_idp(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == "/token", request
+        body: Final = {"error": "invalid_client", "error_codes": [5002723], "error_description": "Invalid JWT token"}
+        return Reply(status=401, body=json.dumps(body).encode())
+
+    with mcp_peer() as peer, wire_server(entra_like_idp) as idp, gateway.scenario() as scenario:
+        alias: Final = "te" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(
+            scenario,
+            peer,
+            alias,
+            auth_type="oauth2_token_exchange",
+            token_exchange_endpoint=idp.url + "/token",
+            credentials={"client_id": "te-client", "client_secret": "te-secret"},
+        )
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        caller: Final = McpCaller(
+            gateway,
+            key,
+            "server_mcp",
+            alias,
+            headers={"Authorization": "Bearer eyJhbGciOiJSUzI1NiJ9.eyJhdWQiOiJ3cm9uZyJ9.c2ln"},
+        )
+        peer.drain()
+        response: Final = caller.rpc("tools/call", {"name": f"{alias}-add", "arguments": ADD})
+        assert response.status_code == 401, (response.status_code, response.text, dict(response.headers))
+        challenge: Final = response.headers["www-authenticate"]
+        origin: Final = str(gateway.client.base_url).rstrip("/")
+        assert f'resource_metadata="{origin}/.well-known/oauth-protected-resource/{alias}/mcp"' in challenge, challenge
+        assert 'error="invalid_token"' in challenge, challenge
+        assert len(idp.drain()) == 1
+        assert tool_calls(peer.drain()) == ()
+
+
 def _assert_subject_token_challenge(response: httpx.Response, alias: str) -> None:
     assert response.status_code == 401, response.text
     challenge: Final = response.headers["www-authenticate"]

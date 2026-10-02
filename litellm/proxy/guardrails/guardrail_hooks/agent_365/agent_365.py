@@ -471,7 +471,9 @@ class Agent365Guardrail(CustomGuardrail):
                 return None
         return CallerSignIn(
             issuers=(ENTRA_ISSUER_TEMPLATE.format(tenant_id=self.tenant_id),),
-            scopes=(GATEWAY_SCOPE_TEMPLATE.format(client_id=self.client_id),),
+            scopes=tuple(server.scopes)
+            if server.scopes
+            else (GATEWAY_SCOPE_TEMPLATE.format(client_id=self.client_id),),
         )
 
     async def _exchange_caller_assertion(self, assertion: str) -> Result[OAuthToken, CredError]:

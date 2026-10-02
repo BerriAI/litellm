@@ -8941,7 +8941,7 @@ class TestConnectPreflightRoutesLikeTheScopedRouter:
 
         async def refuse_exchange(server, **kwargs):
             raise HTTPException(
-                status_code=401, detail=f"exchange refused for {server.server_id} as {kwargs['connected_as']}"
+                status_code=401, detail=f"exchange refused for {server.server_id} at {kwargs['resource_metadata']}"
             )
 
         with (
@@ -8956,7 +8956,7 @@ class TestConnectPreflightRoutesLikeTheScopedRouter:
             await self._connect_to_docs()
 
         assert exc.value.status_code == 401
-        assert exc.value.detail == "exchange refused for d-id as docs"
+        assert exc.value.detail == "exchange refused for d-id at /.well-known/oauth-protected-resource/mcp/docs"
 
     @pytest.mark.asyncio
     async def test_sign_in_challenge_names_the_granted_server_not_the_alias_holder(self, monkeypatch):
@@ -9030,7 +9030,7 @@ class TestConnectPreflightRoutesLikeTheScopedRouter:
 
         async def report_exchange(server, **kwargs):
             raise HTTPException(
-                status_code=401, detail=f"exchange ran for {server.server_id} as {kwargs['connected_as']}"
+                status_code=401, detail=f"exchange ran for {server.server_id} at {kwargs['resource_metadata']}"
             )
 
         with (
@@ -9045,7 +9045,7 @@ class TestConnectPreflightRoutesLikeTheScopedRouter:
             await self._connect_to(route_name)
 
         assert exc.value.status_code == 401
-        assert exc.value.detail == f"exchange ran for p-id as {route_name}"
+        assert exc.value.detail == f"exchange ran for p-id at /.well-known/oauth-protected-resource/mcp/{route_name}"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("route_name", ["obo", "obo_server"], ids=["alias", "server_name"])
@@ -9062,7 +9062,7 @@ class TestConnectPreflightRoutesLikeTheScopedRouter:
 
         assert exc.value.status_code == 401
         assert ((exc.value.headers or {}).get("WWW-Authenticate") or "").startswith(
-            'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/obo"'
+            f'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/{route_name}"'
         )
 
     @pytest.mark.asyncio
@@ -10763,7 +10763,7 @@ class TestOboPreflightScopedToAllowedServers:
                 "x-litellm-api-key": key.api_key,
                 "authorization": self.SUBJECT_HEADERS["Authorization"],
             },
-            connected_as=None,
+            resource_metadata=f"/.well-known/oauth-protected-resource/mcp/{requested.alias}",
         )
 
 
@@ -11546,6 +11546,22 @@ async def test_discovery_adapter_preserves_authenticated_context(_mcp_request_ct
     assert context.mcp_servers == ("allowed",)
 
 
+def _connect_scope(
+    path: str, *, headers: list[tuple[bytes, bytes]] | None = None, client_ip: str = "10.0.0.7"
+) -> dict[str, object]:
+    return {
+        "type": "http",
+        "method": "POST",
+        "scheme": "http",
+        "path": path,
+        "root_path": "",
+        "query_string": b"",
+        "server": ("gw.example", 4000),
+        "client": (client_ip, 51000),
+        "headers": [(b"host", b"gw.example:4000"), *(headers or [])],
+    }
+
+
 def _catalog_server() -> MCPServer:
     return MCPServer(
         server_id="catalog-server-id-001",
@@ -11673,14 +11689,33 @@ class TestConnectChallengeResolver:
         assert exc.value.status_code == 401
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("route_name", ["obo", "obo_server"], ids=["alias_route", "server_name_route"])
-    async def test_obo_challenge_www_authenticate_matches_main_byte_for_byte(self, monkeypatch, route_name):
-        """The provider redesign must not change what an OBO server challenges with: the relative
-        RFC 9728 resource_metadata path naming the configured alias whichever route the client used,
-        plus the RFC 6750 invalid_token triple, exactly as main."""
+    @pytest.mark.parametrize(
+        ("path", "route_name", "metadata_url"),
+        [
+            ("/mcp/obo", "obo", "http://gw.example:4000/.well-known/oauth-protected-resource/mcp/obo"),
+            (
+                "/mcp/obo_server",
+                "obo_server",
+                "http://gw.example:4000/.well-known/oauth-protected-resource/mcp/obo_server",
+            ),
+            (
+                "/obo_server/mcp",
+                "obo_server",
+                "http://gw.example:4000/.well-known/oauth-protected-resource/obo_server/mcp",
+            ),
+        ],
+        ids=["alias_route", "server_name_route", "server_first_route"],
+    )
+    async def test_obo_challenge_names_the_absolute_metadata_url_of_the_connected_route(
+        self, monkeypatch, path, route_name, metadata_url
+    ):
+        """RFC 9728 5.1 makes resource_metadata a URL and the MCP SDK fetches it verbatim, then refuses a
+        document whose ``resource`` does not prefix-match the URL it connected to. The OBO challenge must
+        therefore advertise the absolute metadata URL of the route the client used, not the alias's path."""
         from litellm.proxy._experimental.mcp_server import server as server_module
 
         monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
         obo = _make_obo_server("obo").model_copy(update={"name": "obo_server", "server_name": "obo_server"})
         with (
             patch.object(
@@ -11691,7 +11726,7 @@ class TestConnectChallengeResolver:
             pytest.raises(HTTPException) as exc,
         ):
             await server_module._raise_preemptive_401_for_unauthenticated_servers(
-                scope={"type": "http", "method": "POST", "path": f"/mcp/{route_name}", "headers": []},
+                scope=_connect_scope(path),
                 mcp_servers=[route_name],
                 oauth2_headers=None,
                 mcp_server_auth_headers=None,
@@ -11701,9 +11736,80 @@ class TestConnectChallengeResolver:
 
         assert exc.value.status_code == 401
         assert (exc.value.headers or {}).get("WWW-Authenticate") == (
-            'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/obo", '
+            f'Bearer resource_metadata="{metadata_url}", '
             'error="invalid_token", '
             'error_description="Missing or invalid subject token; authenticate with the IdP and retry"'
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("path", "general_settings", "client_ip", "metadata_url"),
+        [
+            ("/mcp/catalog", {}, "10.0.0.7", "http://gw.example:4000/.well-known/oauth-protected-resource/mcp/catalog"),
+            (
+                "/catalog/mcp",
+                {},
+                "10.0.0.7",
+                "http://gw.example:4000/.well-known/oauth-protected-resource/catalog/mcp",
+            ),
+            (
+                "/catalog/mcp",
+                {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["10.0.0.0/8"]},
+                "10.0.0.7",
+                "https://public.example/.well-known/oauth-protected-resource/catalog/mcp",
+            ),
+            (
+                "/catalog/mcp",
+                {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["10.0.0.0/8"]},
+                "203.0.113.9",
+                "http://gw.example:4000/.well-known/oauth-protected-resource/catalog/mcp",
+            ),
+        ],
+        ids=["mcp_first", "server_first", "forwarded_from_trusted_proxy", "forwarded_from_untrusted_client"],
+    )
+    async def test_provider_challenge_names_the_absolute_metadata_url_of_the_connected_route(
+        self, monkeypatch, path, general_settings, client_ip, metadata_url
+    ):
+        """The sign-in challenge must point at the metadata document of the route the client used
+        (``/catalog/mcp`` and ``/mcp/catalog`` are distinct documents with distinct ``resource`` values),
+        built on the public origin only when the forwarded headers come from a configured trusted proxy."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        forwarded = [(b"x-forwarded-proto", b"https"), (b"x-forwarded-host", b"public.example")]
+        try:
+            with (
+                patch("litellm.proxy.proxy_server.general_settings", general_settings, create=True),
+                patch.object(
+                    mcp_operations.global_mcp_server_manager,
+                    "get_filtered_registry",
+                    return_value={server.server_id: server},
+                ),
+                patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+                pytest.raises(HTTPException) as exc,
+            ):
+                await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                    scope=_connect_scope(path, headers=forwarded, client_ip=client_ip),
+                    mcp_servers=["catalog"],
+                    oauth2_headers=None,
+                    mcp_server_auth_headers=None,
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                    client_ip=client_ip,
+                )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert exc.value.status_code == 401
+        assert (
+            (exc.value.headers or {})
+            .get("WWW-Authenticate", "")
+            .startswith(f'Bearer resource_metadata="{metadata_url}"')
         )
 
     @pytest.mark.asyncio
