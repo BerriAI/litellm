@@ -1,9 +1,9 @@
 """Streamed /chat/completions bills the deployment's priced model whatever the model_name alias looks like.
 
 The proxy restamps every streamed chunk with the client's alias, so end-of-stream cost calculation can see
-"claude-opus-4.8" before the deployment's model. That name is no cost-map key but matches the claude capability
-generalization rules, whose model info carries no prices, so the dotted alias must still bill exactly what the
-exact-key alias "claude-opus-4-8" bills for the same usage (LIT-9065)
+"claude-opus-4.8-<digits>" before the deployment's model. That name is no cost-map key but matches the claude
+capability generalization rules, whose model info carries no prices, so the dotted alias must bill exactly what
+the plain alias "integration-<hex>" bills at the same deployment rates (LIT-9065)
 """
 
 import json
@@ -17,9 +17,6 @@ from integration._support.client import Gateway, Scenario, eventually, object_va
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
-
-CAPABILITY_RULE_ALIAS: Final = "claude-opus-4.8"
-EXACT_KEY_ALIAS: Final = "claude-opus-4-8"
 
 
 def _sse_event(name: str, payload: dict[str, JsonValue]) -> bytes:
@@ -135,14 +132,16 @@ def test_streamed_alias_matching_a_capability_rule_bills_the_deployment_price(
 ) -> None:
     with wire_server(_anthropic_stream) as wire, gateway.scenario() as scenario:
         content: Final = f"alias billing {uuid4().hex}"
+        plain_alias: Final = f"integration-{uuid4().hex}"
+        rule_alias: Final = f"claude-opus-4.8-{uuid4().int % 10**8:08d}"
         exact_row: Final = _streamed_spend(
-            gateway, scenario, _deployment(scenario, EXACT_KEY_ALIAS, litellm_params(wire.url)), content
+            gateway, scenario, _deployment(scenario, plain_alias, litellm_params(wire.url)), content
         )
         alias_row: Final = _streamed_spend(
-            gateway, scenario, _deployment(scenario, CAPABILITY_RULE_ALIAS, litellm_params(wire.url)), content
+            gateway, scenario, _deployment(scenario, rule_alias, litellm_params(wire.url)), content
         )
 
-        for model_name, row in ((EXACT_KEY_ALIAS, exact_row), (CAPABILITY_RULE_ALIAS, alias_row)):
+        for model_name, row in ((plain_alias, exact_row), (rule_alias, alias_row)):
             pricing: Final = _deployment_pricing(gateway, model_name)
             input_rate: Final = float(str(pricing["input_cost_per_token"]))
             output_rate: Final = float(str(pricing["output_cost_per_token"]))
