@@ -442,14 +442,11 @@ class AnthropicResponsesStreamWrapper:
         )
         self._chunk_queue.append(_anthropic_error_chunk(status_code, message))
 
-    async def _pop_chunk(self) -> dict[str, object]:
-        if self._unreported_failure is not None:
-            failure: Final = self._unreported_failure
-            self._unreported_failure = None
-            await self._report_failure(failure)
-        return self._chunk_queue.popleft()
-
-    async def _report_failure(self, failure: Exception) -> None:
+    async def _report_failure_once_the_error_event_was_consumed(self) -> None:
+        failure: Final = self._unreported_failure
+        if failure is None:
+            return
+        self._unreported_failure = None
         on_failure: Final[Callable[[Exception], Awaitable[None]] | None] = getattr(
             self.litellm_logging_obj, "_on_detached_stream_failure", None
         )
@@ -469,21 +466,22 @@ class AnthropicResponsesStreamWrapper:
 
     async def __anext__(self) -> dict[str, object]:
         if self._chunk_queue:
-            return await self._pop_chunk()
+            return self._chunk_queue.popleft()
         if self._stream_failed:
+            await self._report_failure_once_the_error_event_was_consumed()
             raise StopAsyncIteration
 
         if not self._sent_message_start:
             self._sent_message_start = True
             self._chunk_queue.append(self._make_message_start())
-            return await self._pop_chunk()
+            return self._chunk_queue.popleft()
 
         try:
             if hasattr(self.responses_stream, "__aiter__"):
                 async for event in self.responses_stream:
                     self._process_event(event)
                     if self._chunk_queue:
-                        return await self._pop_chunk()
+                        return self._chunk_queue.popleft()
             else:
                 if self._sync_responses_iterator is None:
                     self._sync_responses_iterator = iter(self.responses_stream)
@@ -492,7 +490,7 @@ class AnthropicResponsesStreamWrapper:
                 while (event := await asyncio.to_thread(next, sync_iterator, missing)) is not missing:
                     self._process_event(event)
                     if self._chunk_queue:
-                        return await self._pop_chunk()
+                        return self._chunk_queue.popleft()
         except StopAsyncIteration:
             pass
         except Exception as e:  # noqa: BLE001  # every upstream failure becomes a client error event
@@ -509,7 +507,7 @@ class AnthropicResponsesStreamWrapper:
             self._fail_stream(500, INCOMPLETE_STREAM_ERROR_MESSAGE)
 
         if self._chunk_queue:
-            return await self._pop_chunk()
+            return self._chunk_queue.popleft()
 
         raise StopAsyncIteration
 
