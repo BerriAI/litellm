@@ -72,9 +72,9 @@ When referencing or running models (coding, QA'ing, writing docs, writing tests,
 
 Always pull before starting any work. The checkout or worktree may be sitting on a stale branch
 
-If you're an internal contributor, when creating a new PR, the typical flow is to branch off the repository's current default branch and create a branch prefixed with litellm_. Do not create a branch prefixed with claude/ and generally do not have / in your branch names
+When creating a new PR, branch off the repository's current default branch and follow the Conventional Branches format documented in CONTRIBUTING.md: `<type>/<description>`, where `<type>` is one of `feature`, `bugfix`, `hotfix`, `release`, or `chore`. For example, `chore/align-branch-naming-guidance`. This applies to internal and external contributors
 
-Do not add `Co-Authored-By: Claude` or any Claude attribution to commit messages. Never use a `claude/` prefix or put a `/` in a branch name. Do not add "Generated with Claude Code" (or any similar attribution) to PR descriptions or comments. Do not create a new PR/branch off the existing PR to fix/add something that is related and could've just been committed directly to the existing PR's branch
+Do not add `Co-Authored-By: Claude` or any Claude attribution to commit messages. Never use a `claude/` branch prefix. Do not add "Generated with Claude Code" (or any similar attribution) to PR descriptions or comments. Do not create a new PR/branch off the existing PR to fix/add something that is related and could've just been committed directly to the existing PR's branch
 
 When working on a PR, keep the PR description in sync with new commits being made
 
