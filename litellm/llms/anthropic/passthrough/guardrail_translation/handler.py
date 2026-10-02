@@ -55,9 +55,9 @@ def _event_payload(block: bytes) -> tuple[str | None, Mapping[str, JsonValue] | 
         text: Final = block.decode("utf-8")
     except UnicodeDecodeError:
         return None, None
-    lines: Final = tuple(reversed(text.splitlines()))
-    event_type: Final = next((line[6:].strip() for line in lines if line.startswith("event:")), None)
-    data_line: Final = next((line[5:].strip() for line in lines if line.startswith("data:")), None)
+    lines: Final = tuple(text.splitlines())
+    event_type: Final = next((line[6:].strip() for line in reversed(lines) if line.startswith("event:")), None)
+    data_line: Final = "\n".join(line[5:].removeprefix(" ") for line in lines if line.startswith("data:"))
     if not data_line:
         return event_type, None
     try:

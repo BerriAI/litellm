@@ -123,6 +123,35 @@ class TestDeAnonymizeEventStream:
         return proxy_logging_obj
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("line_end", [b"\n", b"\r\n", b"\r"])
+    async def test_multiline_data_reaches_guardrail(self, line_end: bytes):
+        frame = line_end.join(
+            (
+                b"event: content_block_delta",
+                b'data: {"type":"content_block_delta","index":3,',
+                b'data: "delta":{"type":"text_delta","text":"<PERSON_1>"}}',
+                b"",
+                b"",
+            )
+        )
+        stop = _message_stop_frame(sep=line_end * 2)
+
+        async def hook(data, user_api_key_dict, response):
+            assert response["content"] == [{"type": "text", "text": "<PERSON_1>"}]
+            return {**response, "content": [{"type": "text", "text": "Alice"}]}
+
+        result = await AnthropicPassthroughGuardrailHandler.de_anonymize_event_stream(
+            body_bytes=frame + stop,
+            proxy_logging_obj=self._proxy(hook),
+            user_api_key_dict=MagicMock(),
+            data={},
+        )
+
+        assert _text_delta(_parse_sse_blocks(result)[0]) == (3, "Alice")
+        assert b"<PERSON_1>" not in result
+        assert result.endswith(stop)
+
+    @pytest.mark.asyncio
     async def test_crlf_framed_stream_still_invokes_guardrail(self):
         """P1: CRLF frames must not merge so message_stop wins and deltas skip rewriting."""
         sse = _text_delta_frame(0, "<PERSON_1>", sep=b"\r\n\r\n") + _message_stop_frame(sep=b"\r\n\r\n")
