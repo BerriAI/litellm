@@ -1919,8 +1919,12 @@ def test_sse_read_failure_is_preserved() -> None:
     async def run() -> None:
         client: Final = MCPClient(server_url="https://example.com/sse", transport_type=MCPTransport.sse, timeout=0.2)
         with pytest.raises(httpx2.ReadError, match="secret-read-error"):
-            await client._execute_session_operation(
-                _diagnostic_transport(MCPTransport.sse, "io-error", "tools/list"), lambda session: session.list_tools()
+            await asyncio.wait_for(
+                client._execute_session_operation(
+                    _diagnostic_transport(MCPTransport.sse, "io-error", "tools/list"),
+                    lambda session: session.list_tools(),
+                ),
+                timeout=3,
             )
 
     try:
@@ -2722,8 +2726,9 @@ async def test_outer_deadline_delivers_session_termination(
                 await pending
 
     before: Final = anyio.current_time()
-    with pytest.raises(TimeoutError):
-        await invoke()
+    with anyio.fail_after(6.5):
+        with pytest.raises(TimeoutError):
+            await invoke()
     assert started.is_set()
     assert deleted.is_set(), "Cancellation must deliver DELETE before returning to the caller"
 
