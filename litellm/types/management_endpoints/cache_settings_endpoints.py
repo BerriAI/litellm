@@ -187,6 +187,19 @@ CACHE_SETTINGS_FIELDS: Final[list[CacheSettingsField]] = [
         ui_field_name="Embedding Model",
         redis_type="semantic",
     ),
+    CacheSettingsField(
+        field_name="semantic_cache_scope",
+        field_type="String",
+        field_value=None,
+        field_description=(
+            "Isolation granularity for semantic cache hits. 'key' shares hits between all end users of a key/team/org."
+            " 'end_user' also isolates per end user; requests without an end user fall back to the key scope."
+        ),
+        field_default="key",
+        options=["key", "end_user"],
+        ui_field_name="Semantic Cache Scope",
+        redis_type="semantic",
+    ),
     # GCP IAM authentication fields
     CacheSettingsField(
         field_name="gcp_service_account",
