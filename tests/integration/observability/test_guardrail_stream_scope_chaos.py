@@ -13,7 +13,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
-from threading import Event
+from threading import Barrier, Event
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, cast
 
@@ -683,7 +683,12 @@ def test_h3_worker_kill_mid_burst_keeps_remaining_worker_serving(rig: ChaosRig, 
             )
 
 
-def _create_stored_rail(gateway: Gateway, name: str, sink_url: str) -> str:
+def _create_stored_rail(
+    gateway: Gateway,
+    name: str,
+    sink_url: str,
+    stream_scope: Literal["streaming"] | None = "streaming",
+) -> str:
     response: Final = gateway.request(
         "POST",
         "/guardrails",
@@ -694,9 +699,9 @@ def _create_stored_rail(gateway: Gateway, name: str, sink_url: str) -> str:
                     "guardrail": "generic_guardrail_api",
                     "mode": "pre_call",
                     "default_on": False,
-                    "stream_scope": "streaming",
                     "api_base": f"{sink_url}/{name}",
                     "api_key": "synthetic-chaos-key",
+                    **({"stream_scope": stream_scope} if stream_scope is not None else {}),
                 },
             }
         },
@@ -966,3 +971,109 @@ def test_h5_stored_scope_survives_owned_postgres_outage_and_recovers_once(
                     restarted: Final = _start_postgres(database)
                     assert restarted.returncode == 0, restarted.stderr
                     assert eventually(lambda: _postgres_is_ready(database), bool, seconds=70)
+
+
+@pytest.mark.timeout(360)
+def test_h6_spend_rows_for_requests_served_during_postgres_restart_land_once(
+    rig: ChaosRig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.skip("BUG: LIT-9050 spend rows for requests served during a Postgres restart are dropped")
+    postgres_directory: Final = Path(os.environ["INTEGRATION_RESULTS_DIR"]) / f"owned-postgres-{uuid.uuid4().hex}"
+    with _owned_postgres(postgres_directory) as database, wire_server(_sink) as sink:
+        monkeypatch.setenv("INTEGRATION_PROXY_DATABASE_URL", database.database_url)
+        name: Final = f"h6-stored-{uuid.uuid4().hex}"
+        plans: Final = _plans("h6-postgres-restart", 20)
+        outage_markers: Final = frozenset(plan.marker for plan in plans[:10])
+        arrivals: Final = Barrier(len(plans) + 1)
+        during_outage: Final = Event()
+        after_restart: Final = Event()
+
+        def _gated_provider(request: Request) -> Reply:
+            if request.method == "GET" and request.target.partition("?")[0] == "/v1/models":
+                return _provider(request)
+            body: Final = JSON_OBJECT.validate_json(request.body)
+            marker: Final = _marker(body)
+            arrivals.wait(timeout=70)
+            gate: Final = during_outage if marker in outage_markers else after_restart
+            assert gate.wait(timeout=70), marker
+            return _provider(request)
+
+        with wire_server(_gated_provider) as provider:
+            h6_rig: Final = ChaosRig(rig.gateway, provider, rig.directory)
+            with _owned_proxy(h6_rig, tmp_path, ()) as registrar:
+                _create_stored_rail(registrar.gateway, name, sink.url, stream_scope=None)
+            with _owned_proxy(h6_rig, tmp_path, ()) as owned, ThreadPoolExecutor(max_workers=len(plans)) as pool:
+                futures: Final = tuple(
+                    pool.submit(_request, owned.gateway, plan, (name,)) for plan in plans
+                )
+                try:
+                    arrivals.wait(timeout=70)
+                    stopped: Final = subprocess.run(
+                        [database.docker, "stop", database.container_name],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    assert stopped.returncode == 0, stopped.stderr
+                    during_outage.set()
+                    outage_responses: Final = tuple(future.result(timeout=70) for future in futures[:10])
+                    for plan, response in zip(plans[:10], outage_responses):
+                        assert response.status_code == 200 and plan.marker in response.text, (
+                            plan,
+                            response.status_code,
+                            response.text,
+                        )
+
+                    restarted: Final = _start_postgres(database)
+                    assert restarted.returncode == 0, restarted.stderr
+                    postgres_ready: Final = eventually(lambda: _postgres_is_ready(database), bool, seconds=70)
+                    assert postgres_ready
+                    readiness: Final = eventually(
+                        lambda: owned.gateway.client.get("/health/readiness"),
+                        lambda response: response.status_code == 200
+                        and JSON_OBJECT.validate_python(cast(object, response.json())).get("db") == "connected",
+                        seconds=70,
+                    )
+                    readiness_body: Final = JSON_OBJECT.validate_python(cast(object, readiness.json()))
+                    assert readiness_body.get("db") == "connected", readiness.text
+                    after_restart.set()
+                    responses: Final = tuple(future.result(timeout=70) for future in futures)
+                finally:
+                    during_outage.set()
+                    after_restart.set()
+                    if not _postgres_is_running(database):
+                        recovered: Final = _start_postgres(database)
+                        assert recovered.returncode == 0, recovered.stderr
+                        assert eventually(lambda: _postgres_is_ready(database), bool, seconds=70)
+
+                provider_rows: Final = provider.drain()
+                sink_rows: Final = sink.drain()
+                for plan, response in zip(plans, responses):
+                    assert response.status_code == 200 and plan.marker in response.text, (
+                        plan,
+                        response.status_code,
+                        response.text,
+                    )
+                    assert len(_rows_for_marker(provider_rows, plan.marker)) == 1, (plan, provider_rows)
+                    assert len(_rail_scans(sink_rows, name, plan.marker)) == 1, (plan, sink_rows)
+
+                spend_rows: Final = eventually(
+                    lambda: tuple(_spend_rows(plan.call_id, database.database_url) for plan in plans),
+                    lambda values: all(len(rows) == 1 for rows in values),
+                    seconds=70,
+                    return_last_on_timeout=True,
+                )
+                counts: Final = tuple(len(rows) for rows in spend_rows)
+                missing_ids: Final = tuple(
+                    plan.call_id for plan, rows in zip(plans, spend_rows) if not rows
+                )
+                duplicate_ids: Final = tuple(
+                    plan.call_id for plan, rows in zip(plans, spend_rows) if len(rows) > 1
+                )
+                assert counts == (1,) * len(plans), {
+                    "missing_ids": missing_ids,
+                    "duplicate_ids": duplicate_ids,
+                    "counts": counts,
+                }

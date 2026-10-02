@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from asyncio import run
+from asyncio import run, wait_for
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
@@ -12,6 +12,8 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, cast
 
 import anthropic
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 import httpx
 import openai
 import pytest
@@ -1795,3 +1797,115 @@ def test_g3_provider_errors_reach_caller_and_proxy_remains_usable(rig: MatrixRig
     healthy: Final = _raw_chat(rig.candidate, healthy_marker, False, rig.models["chat"], key=rig.key)
     assert healthy.status_code == 200 and healthy_marker in healthy.text, healthy.text
     assert len(_matching_requests(rig.provider, healthy_marker)) == 1
+
+
+def test_ej_websocket_passthrough_runs_only_streaming_scoped_rails(rig: MatrixRig, tmp_path: Path) -> None:
+    vertex_project: Final = f"matrix-ej-{uuid.uuid4().hex}"
+    vertex_location: Final = "us-central1"
+    streaming_name: Final = f"ej-streaming-{uuid.uuid4().hex}"
+    non_streaming_name: Final = f"ej-non-streaming-{uuid.uuid4().hex}"
+
+    def _token_response(_request: Request) -> Reply:
+        return Reply(
+            body=_json(
+                {
+                    "access_token": "synthetic-vertex-access-token",
+                    "expires_in": 3600,
+                    "token_type": "Bearer",
+                }
+            )
+        )
+
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_key_pem: Final = private_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode("utf-8")
+    credentials_path: Final = tmp_path / "vertex-service-account.json"
+
+    async def _wait_for_server_close(url: str, key: str) -> None:
+        websocket_url: Final = (
+            f"{url.replace('http://', 'ws://', 1).rstrip('/')}/vertex_ai/live"
+            f"?vertex_project={vertex_project}&vertex_location={vertex_location}"
+        )
+        async with websockets.connect(
+            websocket_url,
+            additional_headers={"Authorization": f"Bearer {key}"},
+        ) as websocket:
+            try:
+                await wait_for(websocket.wait_closed(), timeout=30)
+            except TimeoutError:
+                pass
+
+    with wire_server(_token_response) as token_double, wire_server(
+        lambda _request: Reply(body=_json({"action": "NONE"}))
+    ) as sink:
+        credentials_path.write_text(
+            json.dumps(
+                {
+                    "type": "service_account",
+                    "project_id": vertex_project,
+                    "private_key_id": uuid.uuid4().hex,
+                    "private_key": private_key_pem,
+                    "client_email": f"integration-test@{vertex_project}.iam.gserviceaccount.com",
+                    "client_id": "123456789012345678901",
+                    "token_uri": f"{token_double.url}/token",
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/integration-test",
+                }
+            )
+        )
+        rails: Final = (
+            _rail(streaming_name, sink, mode="pre_call", scope="streaming", default_on=True),
+            _rail(non_streaming_name, sink, mode="pre_call", scope="non_streaming", default_on=True),
+        )
+        config_data: Final = cast(object, yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+        config_base: Final = JSON_OBJECT.validate_python(config_data)
+        config: Final = cast(dict[str, JsonValue], {**config_base, "guardrails": list(rails)})
+        config_path: Final = tmp_path / "ej-vertex-live-stream-scope.yaml"
+        config_path.write_text(yaml.safe_dump(config))
+        with owned_proxy_process(
+            rig.candidate,
+            tmp_path,
+            {
+                "DEFAULT_VERTEXAI_PROJECT": vertex_project,
+                "DEFAULT_VERTEXAI_LOCATION": vertex_location,
+                "DEFAULT_GOOGLE_APPLICATION_CREDENTIALS": str(credentials_path),
+            },
+            config=config_path,
+            workers=1,
+        ) as owned:
+            with owned.gateway.scenario() as scenario:
+                key: Final = scenario.key()
+                run(_wait_for_server_close(str(owned.gateway.client.base_url), key))
+            proxy_log: Final = owned.log
+
+    token_requests: Final = token_double.drain()
+    sink_rows: Final = sink.drain()
+    streaming_rows: Final = tuple(row for row in sink_rows if row.target.startswith(f"/{streaming_name}/"))
+    non_streaming_rows: Final = tuple(row for row in sink_rows if row.target.startswith(f"/{non_streaming_name}/"))
+    token_request_count: Final = len(token_requests)
+    streaming_count: Final = len(streaming_rows)
+    non_streaming_count: Final = len(non_streaming_rows)
+    total_scan_count: Final = streaming_count + non_streaming_count
+    assert token_request_count == 1, (token_request_count, proxy_log)
+    assert total_scan_count > 0, (
+        token_request_count,
+        streaming_count,
+        non_streaming_count,
+        proxy_log,
+    )
+    assert streaming_count == 1, (
+        token_request_count,
+        streaming_count,
+        non_streaming_count,
+        proxy_log,
+    )
+    assert non_streaming_count == 0, (
+        token_request_count,
+        streaming_count,
+        non_streaming_count,
+        proxy_log,
+    )
