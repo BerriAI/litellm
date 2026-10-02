@@ -957,8 +957,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "vispark":
-            # cast: model keys are strings; avoids adding a reportUnknownArgumentType error
-            vispark_models.add(cast(str, key))
+            # cast keeps the basedpyright reportUnknownArgumentType budget flat (keys are model-name strings)
+            vispark_models.add(cast(str, key))  # cast-ok: model keys are strings
         elif value.get("litellm_provider") == "morph":
             morph_models.add(key)
         elif value.get("litellm_provider") == "lambda_ai":
