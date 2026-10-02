@@ -224,17 +224,6 @@ async def _apply_team_member_budget_update(
     shared_ids: Final = await _shared_budget_ids(
         tx, frozenset(member.budget_id for member in eligible if member.budget_id is not None)
     )
-    for member in eligible:
-        await _upsert_budget_and_membership(
-            tx,
-            team_id=data.team_id,
-            user_id=member.user_id,
-            existing_budget_id=member.budget_id,
-            user_api_key_dict=user_api_key_dict,
-            budget_patch={"max_budget": None},
-            team_default_budget_id=saved_budget.budget_id,
-            shared_budget_ids=shared_ids,
-        )
     existing_ids: Final = frozenset(member.user_id for member in current_members)
     roster_ids: Final = tuple(
         member.user_id for member in (team.members_with_roles or ()) if member.user_id is not None
@@ -247,9 +236,20 @@ async def _apply_team_member_budget_update(
     if missing:
         await memberships.create_many(data=missing, skip_duplicates=True)
     await memberships.update_many(
-        where={"team_id": data.team_id, "budget_id": None, "user_id": {"not_in": [m.user_id for m in eligible]}},
+        where={"team_id": data.team_id, "budget_id": None},
         data={"budget_id": saved_budget.budget_id},
     )
+    for member in eligible:
+        await _upsert_budget_and_membership(
+            tx,
+            team_id=data.team_id,
+            user_id=member.user_id,
+            existing_budget_id=member.budget_id,
+            user_api_key_dict=user_api_key_dict,
+            budget_patch={"max_budget": None},
+            team_default_budget_id=saved_budget.budget_id,
+            shared_budget_ids=shared_ids,
+        )
     written: Final = await teams.update_many(
         where=team_where,
         data={

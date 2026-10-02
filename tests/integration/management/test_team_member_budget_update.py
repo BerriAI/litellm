@@ -75,6 +75,19 @@ def test_default_and_selected_amounts_update_together_without_changing_other_lim
         }
 
 
+def test_resetting_an_amount_only_override_leaves_the_member_inheriting_the_default(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team(team_member_budget=75)
+        user: Final = _member(scenario, team, 50, None)
+        response: Final = gateway.post(
+            "/team/update", {"team_id": team, "team_member_budget": 100, "team_member_budget_update_mode": "raise"}
+        )
+        assert response["member_budgets_updated"] == 1
+        assert read_rows(
+            'SELECT budget_id FROM "LiteLLM_TeamMembership" WHERE team_id=%s AND user_id=%s', (team, user)
+        ) == [{"budget_id": None}]
+
+
 def test_a_failed_member_write_rolls_back_the_new_default(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         team: Final = scenario.team(team_member_budget=75, team_member_budget_duration="30d")

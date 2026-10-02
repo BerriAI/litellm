@@ -127,8 +127,9 @@ import {
   teamMemberBudgetAlertSummary,
 } from "./teamMemberBudgetAlertEmails";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
-import MemberBudgetUpdateSelect from "./MemberBudgetUpdateSelect";
-import { isMemberBudgetChanging, memberBudgetUpdateMessage } from "./memberBudgetReset";
+import ResetMemberBudgetsDialog from "./ResetMemberBudgetsDialog";
+import { customBudgetMemberUserIds, isMemberBudgetChanging } from "./memberBudgetReset";
+import { useMemberBudgetReset } from "./useMemberBudgetReset";
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "logging",
@@ -358,7 +359,6 @@ const teamUpdateFieldsSchema = z.object({
   soft_budget_alerting_emails: z.union([z.string(), z.array(z.string())]).optional(),
   default_team_member_models: z.array(z.string()).optional(),
   team_member_budget: numericInputSchema,
-  team_member_budget_update_mode: z.enum(["keep", "raise", "lower", "both"]).optional(),
   team_member_budget_duration: z.string().nullish(),
   team_member_key_duration: z.string().optional(),
   team_member_tpm_limit: numericInputSchema,
@@ -590,7 +590,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [loading, setLoading] = useState(true);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const form = useZodForm(teamUpdateSchema, { defaultValues: EMPTY_TEAM_UPDATE_VALUES });
-  const nextMemberBudget = form.watch("team_member_budget");
   const {
     fields: modelLimitRows,
     append: appendModelLimit,
@@ -915,12 +914,27 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   };
 
   const persistTeamUpdate = async (token: string, updateData: Record<string, unknown>) => {
-    const result = await teamUpdateCall(token, updateData);
+    await teamUpdateCall(token, updateData);
     void queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     void invalidateTeamQueries(queryClient);
     setIsEditing(false);
-    return result;
   };
+
+  const memberBudgetReset = useMemberBudgetReset({
+    saveTeam: (updateData) => teamUpdateCall(accessToken ?? "", updateData),
+    refreshTeamData: async () => {
+      void queryClient.invalidateQueries({ queryKey: organizationKeys.all });
+      void invalidateTeamQueries(queryClient);
+      setIsEditing(false);
+      await refreshTeamData();
+    },
+  });
+
+  const { dismiss: dismissMemberBudgetReset } = memberBudgetReset;
+  useEffect(() => {
+    dismissMemberBudgetReset();
+    return dismissMemberBudgetReset;
+  }, [teamId, dismissMemberBudgetReset]);
 
   const saveTeamAdminSettings = async (changes: TeamAdminSettingsChanges) => {
     if (!accessToken) return;
@@ -1197,15 +1211,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
 
       if (isMemberBudgetChanging(newTeamMemberBudget, info.team_member_budget_table?.max_budget)) {
-        updateData.team_member_budget_update_mode = values.team_member_budget_update_mode ?? "keep";
+        updateData.team_member_budget_update_mode = "keep";
+        const customBudgetUserIds = customBudgetMemberUserIds(teamData?.team_memberships ?? []);
+        if (customBudgetUserIds.length > 0 && newTeamMemberBudget !== undefined) {
+          memberBudgetReset.prompt({
+            teamId,
+            updateData,
+            memberCount: customBudgetUserIds.length,
+            newBudget: newTeamMemberBudget,
+          });
+          return;
+        }
       }
 
-      const result = await persistTeamUpdate(accessToken, updateData);
-      toast.success(
-        updateData.team_member_budget_update_mode && updateData.team_member_budget_update_mode !== "keep"
-          ? memberBudgetUpdateMessage(result.member_budgets_updated ?? 0)
-          : "Team settings updated successfully",
-      );
+      await persistTeamUpdate(accessToken, updateData);
+      toast.success("Team settings updated successfully");
       await fetchTeamInfo();
     } catch (error) {
       console.error("Error updating team:", error);
@@ -1576,22 +1596,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                             <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
                           )}
                         </FormField>
-                        {isMemberBudgetChanging(nextMemberBudget, info.team_member_budget_table?.max_budget) && (
-                          <FormField
-                            control={form.control}
-                            name="team_member_budget_update_mode"
-                            label="Existing member budgets"
-                          >
-                            {({ id, value, onChange }) => (
-                              <MemberBudgetUpdateSelect
-                                id={id}
-                                value={value ?? "keep"}
-                                onChange={onChange}
-                                disabled={isTeamSaving}
-                              />
-                            )}
-                          </FormField>
-                        )}
                         <FormField
                           control={form.control}
                           name="team_member_budget_duration"
@@ -2562,6 +2566,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         onOk={handleDeleteConfirm}
         confirmLoading={isDeleting}
       />
+
+      {memberBudgetReset.state.phase !== "idle" && (
+        <ResetMemberBudgetsDialog
+          pending={memberBudgetReset.state.pending}
+          busy={memberBudgetReset.state.phase === "saving"}
+          onSave={memberBudgetReset.save}
+          onDismiss={memberBudgetReset.dismiss}
+        />
+      )}
     </div>
   );
 };

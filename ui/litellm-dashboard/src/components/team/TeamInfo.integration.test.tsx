@@ -1,5 +1,5 @@
 import * as networking from "@/components/networking";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
@@ -176,12 +176,16 @@ describe("TeamInfoView - atomic member budget updates", () => {
     testQueryClient.clear();
   });
 
-  it("keeps overrides by default and saves without another dialog", async () => {
+  it("holds the save behind the existing modal and keeps overrides by default", async () => {
     const user = userEvent.setup({ delay: null });
     const input = await openEditorWithCustomMembers(user);
     fireEvent.change(input, { target: { value: "20" } });
-    expect(screen.getByLabelText("Existing member budgets")).toHaveTextContent("Keep custom budgets");
+    expect(screen.queryByLabelText("Existing member budgets")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /save changes/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Reset member budgets?" });
+    expect(networking.teamUpdateCall).not.toHaveBeenCalled();
+    expect(within(dialog).getByLabelText("Existing member budgets")).toHaveTextContent("Keep custom budgets");
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(1));
     expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1]).toEqual(
       expect.objectContaining({
@@ -204,9 +208,11 @@ describe("TeamInfoView - atomic member budget updates", () => {
       member_budgets_updated: 7,
     });
     fireEvent.change(input, { target: { value: "20" } });
-    await user.click(screen.getByLabelText("Existing member budgets"));
-    await user.click(await screen.findByRole("option", { name: label }));
     await user.click(screen.getByRole("button", { name: /save changes/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Reset member budgets?" });
+    await user.click(within(dialog).getByLabelText("Existing member budgets"));
+    await user.click(await screen.findByRole("option", { name: label }));
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(1));
     expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1]).toEqual(
       expect.objectContaining({
@@ -225,8 +231,6 @@ describe("TeamInfoView - atomic member budget updates", () => {
     const user = userEvent.setup({ delay: null });
     const input = await openEditorWithCustomMembers(user);
     fireEvent.change(input, { target: { value: "20" } });
-    await user.click(screen.getByLabelText("Existing member budgets"));
-    await user.click(await screen.findByRole("option", { name: "Raise and lower" }));
     fireEvent.change(input, { target: { value: amount } });
     expect(screen.queryByLabelText("Existing member budgets")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -239,14 +243,41 @@ describe("TeamInfoView - atomic member budget updates", () => {
     const input = await openEditorWithCustomMembers(user);
     vi.mocked(networking.teamUpdateCall).mockRejectedValueOnce(new Error("transaction rolled back"));
     fireEvent.change(input, { target: { value: "20" } });
-    await user.click(screen.getByLabelText("Existing member budgets"));
-    await user.click(await screen.findByRole("option", { name: "Lower larger budgets" }));
     await user.click(screen.getByRole("button", { name: /save changes/i }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled());
+    const dialog = await screen.findByRole("dialog", { name: "Reset member budgets?" });
+    await user.click(within(dialog).getByLabelText("Existing member budgets"));
+    await user.click(await screen.findByRole("option", { name: "Lower larger budgets" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "Save changes" })).toBeEnabled());
     expect(screen.getByLabelText("Existing member budgets")).toHaveTextContent("Lower larger budgets");
     expect(toast.success).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(2));
     expect(vi.mocked(networking.teamUpdateCall).mock.calls[1][1].team_member_budget_update_mode).toBe("lower");
+  });
+
+  it("cancels without saving and keeps the edited amount", async () => {
+    const user = userEvent.setup({ delay: null });
+    const input = await openEditorWithCustomMembers(user);
+    fireEvent.change(input, { target: { value: "20" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Reset member budgets?" });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(networking.teamUpdateCall).not.toHaveBeenCalled();
+    expect(input).toHaveValue(20);
+  });
+
+  it.each([
+    { userIds: [], maxBudget: 50 },
+    { userIds: ["limits-only"], maxBudget: null },
+  ])("saves directly when there are no custom amounts: %j", async ({ userIds, maxBudget }) => {
+    const user = userEvent.setup({ delay: null });
+    const input = await openEditorWithCustomMembers(user, userIds, maxBudget);
+    fireEvent.change(input, { target: { value: "20" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].team_member_budget).toBe(20);
   });
 });
