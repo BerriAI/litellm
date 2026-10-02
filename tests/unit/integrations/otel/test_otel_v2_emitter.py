@@ -90,6 +90,22 @@ def test_llm_call_span_cost_breakdown():
     assert f"{LiteLLM.COST_PREFIX}margin_total_amount" not in a
 
 
+def test_llm_call_span_pricing_failure_reports_unknown_cost():
+    """A 0 response_cost alongside pricing-failure debug info means LiteLLM
+    could not price the call — report unknown (None), not a fake 0 that cost
+    backends cannot distinguish from a free model (issue #44186)."""
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _payload(response_cost=0.0, response_cost_failure_debug_info={"error_str": "model not in cost map"})
+    )
+    assert data.response_cost is None
+
+
+def test_llm_call_span_zero_cost_without_failure_info_is_kept():
+    """A genuine 0 (free model) without pricing-failure info stays 0."""
+    data = LLMCallSpanData.from_standard_logging_payload(_payload(response_cost=0.0))
+    assert data.response_cost == 0.0
+
+
 def test_tracer_scope_carries_litellm_version():
     from litellm._version import version as litellm_version
 
