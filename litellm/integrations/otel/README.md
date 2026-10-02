@@ -59,13 +59,18 @@ traceable units of work:
   the trace. `auth` is also excluded here because it gets a **live phase span**
   instead (see below).
 
-Spans are named `"{service}.{verb} {target}"` (e.g. `"redis.get llm_response"`,
-`"redis.mget auth_objects"`) when the producer declared what the call was for by
-running it inside `litellm._internal_context.service_target(...)`, the
-`{db.operation.name} {target}` shape of the OTel database conventions; the
-target is a key family (`llm_response`, `auth_objects`, `router_cooldowns`,
-`prompt_cache_pins`, `spend_counters`), never a key. Calls with no declared
-target keep the `"{service} {call_type}"` name (e.g. `"redis set"`). Either way
+Redis spans are named `"{service}.{verb} {target}"` (e.g. `"redis.get llm_response"`,
+`"redis.mget auth_objects"`), the `{db.operation.name} {target}` shape of the OTel
+database conventions: the verb comes from the cache method
+(`spans._SERVICE_VERB_BY_CALL_TYPE`), the target from the producer running the
+call inside `litellm._internal_context.service_target(...)` and is a key family
+(`llm_response`, `auth_objects`, `router_cooldowns`, `prompt_cache_pins`,
+`spend_counters`), never a key. The whole `auth` phase runs under `auth_objects`,
+so every cache read it triggers is `redis.get auth_objects` / `redis.mget auth_objects`.
+A call with no declared target is just `"redis.get"`; a per-request pipeline that
+carries several owners' ops is `"redis.pipeline"` with its op count on
+`litellm.metadata.op_count`. Postgres helpers keep the `"{service} {call_type}"`
+name (`"postgres get_data"`) until they get `db.select {table}` names. Either way
 the raw method name stays on `litellm.service.call_type` and `db.operation.name`
 (and the bare `call_type` the metrics are keyed by), the target lands on
 `litellm.service.target`, and the litellm call chain that issued the call

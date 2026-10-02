@@ -1672,13 +1672,13 @@ async def _redis_get_through_service_logger(logger):
 
 
 def test_redis_service_span_is_named_by_operation_and_keeps_the_caller_chain_as_an_attribute():
-    """``redis async_get_cache``, not ``redis async_get_cache <- caller <- caller``: the stack
-    walk that used to be spliced into the span name rides on ``litellm.service.caller`` instead,
-    so one operation is one span name and ``db.operation.name`` is the bare operation."""
+    """``redis.get``, not ``redis async_get_cache <- caller <- caller``: the stack walk that
+    used to be spliced into the span name rides on ``litellm.service.caller`` instead, and the
+    method name on ``db.operation.name``, so one operation is one span name."""
     logger, exporter = _logger()
     asyncio.run(_redis_get_through_service_logger(logger))
     (span,) = [s for s in exporter.get_finished_spans() if s.name.startswith("redis")]
-    assert span.name == "redis async_get_cache"
+    assert span.name == "redis.get"
     assert span.attributes[LiteLLM.SERVICE_CALL_TYPE] == "async_get_cache"
     assert span.attributes["db.operation.name"] == "async_get_cache"
     assert span.attributes[LiteLLM.SERVICE_CALLER] == "_redis_get_through_service_logger"
@@ -1716,23 +1716,38 @@ def test_service_span_is_named_by_purpose_when_the_producer_declares_a_target():
 
 
 @pytest.mark.parametrize(
-    ("call_type", "expected"),
+    ("call_type", "targeted", "untargeted"),
     [
-        ("async_batch_get_cache", "redis.mget auth_objects"),
-        ("async_set_cache_pipeline_with_ttls", "redis.set auth_objects"),
-        ("async_increment_pipeline", "redis.incr auth_objects"),
-        ("async_delete_cache", "redis.delete auth_objects"),
-        ("async_scan_iter", "redis.scan auth_objects"),
-        ("async_frobnicate", "redis.frobnicate auth_objects"),
+        ("async_get_cache", "redis.get auth_objects", "redis.get"),
+        ("async_batch_get_cache", "redis.mget auth_objects", "redis.mget"),
+        ("async_set_cache_pipeline_with_ttls", "redis.set auth_objects", "redis.set"),
+        ("async_increment_pipeline", "redis.incr auth_objects", "redis.incr"),
+        ("async_delete_cache", "redis.delete auth_objects", "redis.delete"),
+        ("async_scan_iter", "redis.scan auth_objects", "redis.scan"),
+        ("request_redis_batch", "redis.pipeline auth_objects", "redis.pipeline"),
+        ("async_frobnicate", "redis async_frobnicate", "redis async_frobnicate"),
     ],
 )
-def test_service_span_verb_follows_the_cache_method_behind_the_call(call_type, expected):
+def test_service_span_verb_follows_the_cache_method_behind_the_call(call_type, targeted, untargeted):
+    """Every known Redis method renders as ``redis.{verb}``, with the key family appended when
+    the producer declared one, so one trace never mixes ``redis.get llm_response`` with
+    ``redis async_get_cache``; an unknown method keeps the raw ``{service} {call_type}`` name."""
     from litellm.integrations.otel.model.payloads import ServiceSpanData
     from litellm.integrations.otel.model.spans import service_span_name
 
-    data = ServiceSpanData(service_name="redis", call_type=call_type, target="auth_objects")
-    assert service_span_name(data) == expected
-    assert service_span_name(ServiceSpanData(service_name="redis", call_type=call_type)) == f"redis {call_type}"
+    assert service_span_name(ServiceSpanData(service_name="redis", call_type=call_type, target="auth_objects")) == targeted
+    assert service_span_name(ServiceSpanData(service_name="redis", call_type=call_type)) == untargeted
+
+
+def test_postgres_service_span_keeps_its_function_name_inside_a_targeted_phase():
+    """A DB helper that runs inside ``service_target("auth_objects")`` (the whole auth phase
+    does) is still ``postgres get_data``: the verb scheme is for cache methods, the Postgres
+    rename to ``db.select {table}`` is a separate change."""
+    from litellm.integrations.otel.model.payloads import ServiceSpanData
+    from litellm.integrations.otel.model.spans import service_span_name
+
+    data = ServiceSpanData(service_name="postgres", call_type="get_data", target="auth_objects")
+    assert service_span_name(data) == "postgres get_data"
 
 
 def test_service_target_declared_by_the_producer_rides_the_service_logger_payload():
@@ -2153,7 +2168,7 @@ def test_service_call_from_the_post_response_phase_detaches_before_the_server_sp
         )
     finally:
         server.end(end_time=to_ns(_REQUEST_END))
-    span = {s.name: s for s in exporter.get_finished_spans()}["redis async_set_cache"]
+    span = {s.name: s for s in exporter.get_finished_spans()}["redis.set"]
     request_ctx = server.get_span_context()
     assert span.end_time < server.end_time
     assert span.parent is None
@@ -2240,7 +2255,7 @@ def test_redis_write_from_a_success_callback_detaches_while_the_server_span_is_s
             asyncio.run(_request())
     finally:
         server.end(end_time=to_ns(_REQUEST_END))
-    span = {s.name: s for s in exporter.get_finished_spans()}["redis async_increment"]
+    span = {s.name: s for s in exporter.get_finished_spans()}["redis.incr"]
     request_ctx = server.get_span_context()
     assert span.end_time < server.end_time
     assert span.parent is None

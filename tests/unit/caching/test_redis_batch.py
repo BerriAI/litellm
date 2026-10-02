@@ -152,6 +152,30 @@ async def run_alone_script(keys: Sequence[str], args: Sequence[Any]) -> object:
 
 
 @pytest.mark.asyncio
+async def test_pipeline_flush_reports_its_name_as_the_call_type_and_the_op_count_as_metadata() -> None:
+    """The service event is ``request_redis_batch`` with ``op_count`` on the metadata, not
+    ``request_redis_batch[3]``: the span renders as ``redis.pipeline`` and the metrics label
+    stays one value per batch name instead of one per batch size."""
+    cache, _client = make()
+    events: list[dict[str, Any]] = []
+
+    async def record(**kwargs: Any) -> None:
+        events.append(kwargs)
+
+    cache.service_logger_obj.async_service_success_hook = record  # pyright: ignore[reportAttributeAccessIssue]  # fake, records the hook call
+    batch = RedisBatch(cache, name="request_redis_batch")
+    got = batch.mget(["a:hit"])
+    incr = batch.increment("cnt", 1)
+    await got
+    await incr
+    await asyncio.gather(*(t for t in asyncio.all_tasks() if t is not asyncio.current_task()))
+
+    (event,) = events
+    assert event["call_type"] == "request_redis_batch"
+    assert event["event_metadata"] == {"op_count": 2}
+
+
+@pytest.mark.asyncio
 async def test_one_pipeline_carries_every_declared_operation_and_awaiting_one_flushes_all() -> None:
     cache, client = make(namespace="ns")
     batch = RedisBatch(cache)

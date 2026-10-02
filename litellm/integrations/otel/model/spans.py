@@ -216,26 +216,40 @@ _SERVICE_VERB_BY_CALL_TYPE: Final[dict[str, str]] = {
     "async_rpush": "rpush",
     "async_lpop": "lpop",
     "async_scan_iter": "scan",
+    "async_lpop_pipeline": "lpop",
+    "async_rpush_pipeline": "rpush",
+    "async_rpush_and_trim": "rpush",
+    "increment_cache_ttl": "incr",
+    "increment_cache_expire": "incr",
+    "async_ping": "ping",
+    "sync_ping": "ping",
+    "redis_async_ping": "ping",
+    "redis_sync_ping": "ping",
+    "request_redis_batch": "pipeline",
+    "post_call_redis_batch": "pipeline",
 }
 
 
 def service_operation(data: "ServiceSpanData") -> str | None:
-    """``"redis.get"`` for a call whose producer named its target, else ``None``."""
-    if not data.target or not data.call_type:
+    """``"redis.get"`` when the call type is a known datastore verb, else ``None``
+    (Postgres helpers stay function-named until they get ``db.select {table}`` names)."""
+    if not data.call_type:
         return None
-    verb: Final = _SERVICE_VERB_BY_CALL_TYPE.get(data.call_type, data.call_type.removeprefix("async_"))
+    verb: Final = _SERVICE_VERB_BY_CALL_TYPE.get(data.call_type)
+    if verb is None:
+        return None
     return f"{data.service_name}.{verb}"
 
 
 def service_span_name(data: "ServiceSpanData") -> str:
-    """``"{service}.{verb} {target}"`` (``"redis.get llm_response"``) when the producer
-    said what the call was for, else ``"{service} {call_type}"`` (``"redis set"``) —
-    service name alone when no call type is known, so identically-named calls stay
-    distinguishable."""
+    """``"{service}.{verb} {target}"`` (``"redis.get llm_response"``) for a known datastore
+    verb, ``"{service}.{verb}"`` (``"redis.pipeline"``) when the producer declared no
+    target, else ``"{service} {call_type}"`` (``"postgres get_data"``) — service name alone
+    when no call type is known, so identically-named calls stay distinguishable."""
     operation: Final = service_operation(data)
-    if operation is not None:
-        return f"{operation} {data.target}"
-    return f"{data.service_name} {data.call_type or ''}".strip()
+    if operation is None:
+        return f"{data.service_name} {data.call_type or ''}".strip()
+    return f"{operation} {data.target}" if data.target else operation
 
 
 def root_roles() -> list[SpanRole]:

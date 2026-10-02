@@ -220,13 +220,13 @@ def _set_in_memory(memory: _InMemoryCache, cache_key: str, value: object, ttl: f
         memory.set_cache(key=cache_key, value=value, ttl=ttl)
 
 
-_AUTH_OBJECTS_TARGET: Final = "auth_objects"
+AUTH_OBJECTS_TARGET: Final = "auth_objects"
 
 
 async def _read_redis_rows(keys: list[str], redis_cache: RedisCache) -> Mapping[str, object]:
     """On the request pipeline when one is open; a failed pipeline reads as a miss, like ``async_batch_get_cache``."""
     batch: Final = active_request_redis_batch(redis_cache)
-    with service_target(_AUTH_OBJECTS_TARGET):
+    with service_target(AUTH_OBJECTS_TARGET):
         if batch is None:
             return await redis_cache.async_batch_get_cache(key_list=keys)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped cache API
         try:
@@ -288,7 +288,7 @@ async def _write_back(entries: Sequence[tuple[_CacheEntry, BaseModel]], cache: U
     if cache.redis_cache is None:
         return
     batch: Final = active_request_redis_batch(cache.redis_cache)
-    with service_target(_AUTH_OBJECTS_TARGET):
+    with service_target(AUTH_OBJECTS_TARGET):
         if batch is None:
             await cache.redis_cache.async_set_cache_pipeline_with_ttls(payloads)
             return

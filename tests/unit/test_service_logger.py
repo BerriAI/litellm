@@ -200,8 +200,8 @@ async def test_service_span_emitted_for_v2_logger_in_service_callback(monkeypatc
     parent.end()
 
     names = [s.name for s in exporter.get_finished_spans()]
-    # Span name is "{service} {call_type}" so repeated calls stay distinguishable.
-    assert "redis async_set_cache" in names
+    # Span name is "{service}.{verb}" (the method rides on db.operation.name) so repeated calls stay distinguishable.
+    assert "redis.set" in names
 
 
 @pytest.mark.asyncio

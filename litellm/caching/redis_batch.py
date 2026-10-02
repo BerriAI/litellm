@@ -380,9 +380,10 @@ class RedisBatch:
                         service=ServiceTypes.REDIS,
                         duration=time.time() - start_time,
                         error=e,
-                        call_type=f"{self.name}[{len(ops)}]",
+                        call_type=self.name,
                         start_time=start_time,
                         end_time=time.time(),
+                        event_metadata={"op_count": len(ops)},
                     )
                 )
             for op in ops:
@@ -393,9 +394,10 @@ class RedisBatch:
                 self.redis_cache.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=time.time() - start_time,
-                    call_type=f"{self.name}[{len(ops)}]",
+                    call_type=self.name,
                     start_time=start_time,
                     end_time=time.time(),
+                    event_metadata={"op_count": len(ops)},
                 )
             )
         retries: list[Awaitable[None]] = []  # mutable-ok: collected while slicing replies
