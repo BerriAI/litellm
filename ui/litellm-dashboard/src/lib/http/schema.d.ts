@@ -33265,6 +33265,11 @@ export interface components {
              * @enum {string}
              */
             status: "queued" | "running" | "completed" | "failed" | "cancelled";
+            /**
+             * Timeline
+             * @default []
+             */
+            timeline: components["schemas"]["StageMark"][];
             /** Worker Id */
             worker_id?: string | null;
         };
@@ -45132,6 +45137,16 @@ export interface components {
              * @default 0
              */
             total_tokens: number;
+        };
+        /** StageMark */
+        StageMark: {
+            /** Stage */
+            stage: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
         };
         /** StandardLoggingHeuristicV2Forecast */
         StandardLoggingHeuristicV2Forecast: {

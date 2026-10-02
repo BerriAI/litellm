@@ -38,6 +38,7 @@ from litellm.proxy.lens.models import (
 from litellm.proxy.lens.repository import LensRepository, WriterDatabase
 from litellm.proxy.lens.sources import ActivityAvailability, SourceReader, Storage, parse_execution
 from litellm.proxy.lens.state import (
+    advance_timeline,
     can_access,
     claim_job,
     current_job,
@@ -375,7 +376,12 @@ async def progress(lens_id: str, job_id: str, body: Progress, worker: WorkerAuth
             e,
             job.model_copy(
                 update=MappingProxyType(
-                    {"stage": body.stage, "coverage": body.coverage, "lease_until": now + timedelta(minutes=5)}
+                    {
+                        "stage": body.stage,
+                        "timeline": advance_timeline(job.timeline, body.stage, now),
+                        "coverage": body.coverage,
+                        "lease_until": now + timedelta(minutes=5),
+                    }
                 )
             ),
         )

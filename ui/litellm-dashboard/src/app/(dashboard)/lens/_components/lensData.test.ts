@@ -5,6 +5,8 @@ import {
   type LensList,
   analysisProgress,
   normalizeFilters,
+  stageRemaining,
+  stageTimings,
   sortedFindings,
   type Finding,
   type Job,
@@ -32,6 +34,7 @@ const job: Job = {
   id: "scan",
   status: "running",
   stage: "Reading executions",
+  timeline: [],
   created_at: "2026-09-30T12:00:00Z",
   start: "2026-09-29T12:00:00Z",
   end: "2026-09-30T12:00:00Z",
@@ -59,14 +62,14 @@ const job: Job = {
 
 describe("Analysis progress", () => {
   it("measures review progress against the sample, not all eligible runs", () => {
-    const expected = { step: 0, done: 7, total: 20, detail: "7 of 20 selected runs reviewed" };
+    const expected = { step: 1, done: 7, total: 20, detail: "7 of 20 selected runs reviewed" };
     expect(
       analysisProgress({ ...job, coverage: { ...coverage, eligible: 1000, selected: 20, screened: 7 } }),
     ).toMatchObject(expected);
   });
 
   it("shows actual grouping progress instead of treating reviewed runs as a finished scan", () => {
-    const expected = { step: 1, done: 2, total: 4, detail: "2 of 4 observation batches compared" };
+    const expected = { step: 2, done: 2, total: 4, detail: "2 of 4 observation batches compared" };
     expect(
       analysisProgress({
         ...job,
@@ -80,7 +83,7 @@ describe("Analysis progress", () => {
     expect(
       analysisProgress({ ...job, stage: "Grouping observations", coverage: { ...coverage, screened: 21 } }),
     ).toMatchObject({
-      step: 1,
+      step: 2,
       total: 0,
       detail: "Comparing observations across 21 reviewed runs",
     });
@@ -94,7 +97,7 @@ describe("Analysis progress", () => {
         coverage: { ...coverage, screened: 21, investigated: 2, candidates: 5 },
       }),
     ).toMatchObject({
-      step: 2,
+      step: 3,
       done: 2,
       total: 5,
     });
@@ -106,6 +109,26 @@ describe("Analysis progress", () => {
       total: 0,
       title: "Queued for your worker",
     });
+  });
+
+  it("treats run collection as its own indeterminate step instead of 0 of 0 runs reviewed", () => {
+    expect(analysisProgress({ ...job, stage: "Collecting executions" })).toMatchObject({ step: 0, total: 0 });
+  });
+
+  it("times each stage from its start to the next stage, and the current stage up to now", () => {
+    const timeline = [
+      { stage: "Collecting executions", started_at: "2026-09-30T12:00:00Z" },
+      { stage: "Reading executions", started_at: "2026-09-30T12:00:05Z" },
+      { stage: "Grouping observations", started_at: "2026-09-30T12:01:05Z" },
+    ];
+    expect(stageTimings({ ...job, timeline }, Date.parse("2026-09-30T12:01:35Z"))).toEqual([5, 60, 30, undefined]);
+  });
+
+  it("projects time left from the current stage's own pace", () => {
+    expect(stageRemaining(5, 20, 60)).toBe(180);
+    expect(stageRemaining(0, 20, 60)).toBeUndefined();
+    expect(stageRemaining(20, 20, 60)).toBeUndefined();
+    expect(stageRemaining(5, 20, undefined)).toBeUndefined();
   });
 
   it("shows elapsed time and clamps future timestamps during clock skew", () => {

@@ -81,6 +81,7 @@ const lens: Lens = {
   jobs: [
     {
       id: "scan",
+      timeline: [],
       findings: [pattern, issue],
       assessments: [],
       attempts: 0,
