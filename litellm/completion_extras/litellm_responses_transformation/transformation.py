@@ -617,7 +617,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         client: object | None = None,
     ) -> dict:
         converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(messages)
-        supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model)
+        base_model: Final = litellm_params.get("base_model")
+        supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model) or (
+            isinstance(base_model, str) and bool(base_model) and supports_openai_prompt_cache_breakpoint(base_model)
+        )
         input_items_without_unsupported_markers: Final = (
             converted_input_items
             if supports_prompt_cache_breakpoint

@@ -4291,6 +4291,42 @@ def test_prompt_cache_breakpoints_are_dropped_for_unsupported_models() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("litellm_params", "keep_marker"),
+    (({"base_model": "gpt-5.6"}, True), ({}, False)),
+    ids=("supported-base-model", "missing-base-model"),
+)
+def test_prompt_cache_breakpoint_supports_model_alias_with_base_model(
+    litellm_params: dict[str, object],
+    keep_marker: bool,
+) -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    marked_content: Final = {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": cache_breakpoint}
+
+    request: Final = handler.transform_request(
+        model="mydeployment",
+        messages=[{"role": "user", "content": [marked_content]}],
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    expected_content: Final = {
+        "type": "input_text",
+        "text": "Stable prefix",
+        **({"prompt_cache_breakpoint": cache_breakpoint} if keep_marker else {}),
+    }
+    assert request["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [expected_content],
+        }
+    ]
+
+
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
     handler: Final = LiteLLMResponsesTransformationHandler()
 
