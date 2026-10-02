@@ -182,7 +182,9 @@ class ExaAISearchConfig(BaseSearchConfig):
         # Transform results to SearchResult objects
         results: Final = []
         for result in response_json.get("results", []):
-            snippet = result.get("text") or "\n\n".join(result.get("highlights") or []) or result.get("summary") or ""
+            snippet: Final = (
+                result.get("text") or "\n\n".join(result.get("highlights") or []) or result.get("summary") or ""
+            )
             search_result = SearchResult(
                 title=result.get("title", ""),
                 url=result.get("url", ""),
