@@ -7396,7 +7396,7 @@ async def test_execute_mcp_tool_rest_server_id_authoritative_for_unprefixed_tool
     with (
         patch.dict(
             mcp_operations.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
-            {"echo": oauth_server.name},
+            {"echo": oauth_server.name, "echo_api_key-echo": api_key_server.name},
         ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
@@ -7796,6 +7796,10 @@ async def test_execute_mcp_tool_rest_prefixed_tool_still_validates_server_id():
     )
 
     with (
+        patch.dict(
+            mcp_operations.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
+            {"echo_oauth_m2m-echo": oauth_server.name},
+        ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
             "get_registry",
@@ -7858,6 +7862,10 @@ async def test_execute_mcp_tool_rest_unauthorized_prefix_still_mismatches():
     )
 
     with (
+        patch.dict(
+            mcp_operations.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
+            {"restricted_server-echo": restricted_server.name},
+        ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
             "get_registry",
@@ -7922,6 +7930,10 @@ async def test_execute_mcp_tool_rest_hyphenated_upstream_tool_name_routes_to_req
         )
 
     with (
+        patch.dict(
+            mcp_operations.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
+            {"echo_api_key-text-to-speech": api_key_server.name},
+        ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
             "get_registry",
@@ -8084,6 +8096,13 @@ async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requeste
         )
 
     with (
+        patch.dict(
+            mcp_operations.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
+            {
+                "rest_target-known_prefix-list_things": requested_server.name,
+                "known_prefix-list_things": requested_server.name,
+            },
+        ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
             "get_registry",
@@ -8098,8 +8117,10 @@ async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requeste
             return_value=None,
         ),
         patch.object(
-            mcp_operations, "_handle_managed_mcp_tool",
-            new=fake_handle_managed_mcp_tool,
+            mcp_operations, "_list_tools_before_first_call", new=AsyncMock()
+        ),
+        patch.object(
+            mcp_operations, "_handle_managed_mcp_tool", new=fake_handle_managed_mcp_tool
         ),
         patch.object(
             mcp_module.MCPRequestHandler,
@@ -8122,7 +8143,6 @@ async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requeste
 
     assert captured["server_name"] == "rest_target"
     assert captured["name"] == "known_prefix-list_things"
-
     routed_server = {
         requested_server.name: requested_server,
         prefix_owner.name: prefix_owner,
@@ -8163,6 +8183,10 @@ async def test_execute_mcp_tool_rest_prefix_retry_resolution_still_enforces_serv
         return prefix_owner
 
     with (
+        patch.dict(
+            mcp_operations.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
+            {"echo_api_key-known_prefix-echo": requested_server.name},
+        ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
             "get_registry",
@@ -9155,9 +9179,10 @@ async def test_call_tool_with_legacy_db_m2m_server_resolves_oauth2_flow():
             "litellm.proxy._experimental.mcp_server.operations.execute_mcp_tool",
             side_effect=capture_execute,
         ),
-        patch(
-            "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers_from_mcp_server_names",
-            new=AsyncMock(side_effect=lambda mcp_servers, allowed_mcp_servers: allowed_mcp_servers),
+        patch.object(
+            mock_manager,
+            "filter_server_ids_by_ip_with_info",
+            return_value=(["legacy-m2m-id"], 0),
         ),
     ):
         mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["legacy-m2m-id"])

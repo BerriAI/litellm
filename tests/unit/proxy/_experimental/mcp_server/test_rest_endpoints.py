@@ -2,8 +2,10 @@ import asyncio
 import inspect
 import json
 import sys
+from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Any, Dict, Final, Optional
+from types import TracebackType
+from typing import Any, Dict, Final, Optional, TypeAlias
 from unittest.mock import AsyncMock, MagicMock
 
 from litellm.proxy._experimental.mcp_server import operations as mcp_operations
@@ -13,8 +15,8 @@ if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
 
 import httpx
 import pytest
-from fastapi import HTTPException
-from mcp.types import CallToolResult, TextContent
+from fastapi import FastAPI, HTTPException
+from mcp.types import CallToolResult, TextContent, Tool
 from starlette.requests import Request
 
 from litellm.constants import MCP_TOOL_LISTING_TIMEOUT
@@ -22,7 +24,9 @@ from litellm.proxy._experimental.mcp_server import rest_endpoints
 from litellm.proxy._experimental.mcp_server.auth import (
     user_api_key_auth_mcp as auth_mcp,
 )
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.proxy._types import (
+    LiteLLM_ObjectPermissionTable,
     NewMCPServerRequest,
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
@@ -4729,3 +4733,169 @@ async def test_saved_preview_protocol_omission_and_explicit_edits(
     assert result == {"protocol_version": expected}
     assert saved.protocol_version == "2025-11-25"
     assert payload.mcp_info == metadata
+
+
+class CataloguePeer:
+    def __init__(self) -> None:
+        self.tools: list[Tool] = [Tool(name="known", input_schema={"type": "object"})]
+        self.failure: Exception | None = None
+        self.calls: list[tuple[str, dict[str, object]]] = []
+        self.list_count = 0
+
+    async def __aenter__(self) -> "CataloguePeer":
+        return self
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+    ) -> None:
+        return None
+
+    async def list_tools(self, *, raise_on_error: bool = True) -> list[Tool]:
+        self.list_count += 1
+        if self.failure is not None:
+            raise self.failure
+        return self.tools
+
+    async def call_tool(self, params: object, **kwargs: object) -> CallToolResult:
+        self.calls.append((params.name, params.arguments))
+        return _OK_TOOL_RESULT
+
+
+CatalogueGateway: TypeAlias = tuple[httpx.AsyncClient, MCPServerManager, CataloguePeer, UserAPIKeyAuth]
+
+
+@pytest.fixture
+async def catalogue_gateway(
+    monkeypatch: pytest.MonkeyPatch, config_only_mcp_manager_factory: type[MCPServerManager]
+) -> AsyncIterator[CatalogueGateway]:
+    manager: Final = config_only_mcp_manager_factory()
+    await manager.load_servers_from_config({
+        "catalogue": {
+            "url": "https://catalogue.example.invalid/mcp",
+            "transport": "http",
+            "auth_type": "none",
+        }
+    })
+    peer: Final = CataloguePeer()
+
+    async def create_client(*args: object, **kwargs: object) -> CataloguePeer:
+        return peer
+
+    monkeypatch.setattr(manager, "_create_mcp_client", create_client)
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+    auth: Final = UserAPIKeyAuth(api_key="synthetic-admission", user_role="proxy_admin")
+    app: Final = FastAPI()
+    app.include_router(rest_endpoints.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: auth
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway") as client:
+        yield client, manager, peer, auth
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty", [False, True])
+@pytest.mark.parametrize("name", ["missing", "catalogue-missing"])
+async def test_successfully_discovered_unknown_tool_returns_404(
+    catalogue_gateway: CatalogueGateway, empty: bool, name: str
+) -> None:
+    client, _, peer, _ = catalogue_gateway
+    if empty:
+        peer.tools = []
+    response: Final = await client.post(
+        "/mcp-rest/tools/call", json={"server_id": "catalogue", "name": name, "arguments": {}}
+    )
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"]["error"] == "tool_not_found"
+    assert peer.calls == []
+
+
+@pytest.mark.asyncio
+async def test_successfully_discovered_known_tool_executes(catalogue_gateway: CatalogueGateway) -> None:
+    client, _, peer, _ = catalogue_gateway
+    response: Final = await client.post(
+        "/mcp-rest/tools/call", json={"server_id": "catalogue", "name": "known", "arguments": {"q": "value"}}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["content"][0]["text"] == '{"result": "ok"}'
+    assert peer.calls == [("known", {"q": "value"})]
+
+
+def catalogue_http_error(status: int) -> httpx.HTTPStatusError:
+    response: Final = httpx.Response(
+        status,
+        headers={"www-authenticate": 'Bearer realm="catalogue"'} if status == 401 else {},
+        request=httpx.Request("POST", "https://catalogue.example.invalid/mcp"),
+    )
+    return httpx.HTTPStatusError("Discovery failed", request=response.request, response=response)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "status", "category"),
+    [
+        (catalogue_http_error(401), 401, None),
+        (catalogue_http_error(403), 403, None),
+        (TimeoutError("catalogue timed out"), 504, "timeout"),
+        (ConnectionError("catalogue unreachable"), 502, "unreachable"),
+        (ValueError("invalid catalogue schema"), 500, "internal"),
+    ],
+)
+async def test_failed_discovery_keeps_its_status_not_tool_not_found(
+    catalogue_gateway: CatalogueGateway, failure: Exception, status: int, category: str | None
+) -> None:
+    client, _, peer, _ = catalogue_gateway
+    peer.failure = failure
+    response: Final = await client.post(
+        "/mcp-rest/tools/call", json={"server_id": "catalogue", "name": "missing", "arguments": {}}
+    )
+    assert response.status_code == status, response.text
+    if status == 401:
+        assert response.headers["www-authenticate"] == 'Bearer realm="catalogue"'
+    if category is not None:
+        assert response.json()["detail"]["error"] == category
+    assert peer.calls == []
+
+
+@pytest.mark.asyncio
+async def test_known_forbidden_tool_still_returns_403(catalogue_gateway: CatalogueGateway) -> None:
+    client, manager, peer, _ = catalogue_gateway
+    server: Final = manager.get_mcp_server_by_name("catalogue")
+    assert server is not None
+    server.allowed_tools = []
+    server.mcp_info = {**(server.mcp_info or {}), "tool_allowlist_enforced": True}
+    response: Final = await client.post(
+        "/mcp-rest/tools/call", json={"server_id": "catalogue", "name": "known", "arguments": {}}
+    )
+    assert response.status_code == 403, response.text
+    assert peer.calls == []
+
+
+@pytest.mark.asyncio
+async def test_denied_server_does_not_discover_its_catalogue(catalogue_gateway: CatalogueGateway) -> None:
+    client, _, peer, auth = catalogue_gateway
+    auth.object_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="synthetic-denial", mcp_servers=["no-mcp-servers"]
+    )
+    response: Final = await client.post(
+        "/mcp-rest/tools/call", json={"server_id": "catalogue", "name": "missing", "arguments": {}}
+    )
+    assert response.status_code == 403, response.text
+    assert peer.calls == []
+    assert peer.list_count == 0
+
+
+@pytest.mark.asyncio
+async def test_key_tool_ceiling_still_denies_a_known_tool(catalogue_gateway: CatalogueGateway) -> None:
+    client, manager, peer, auth = catalogue_gateway
+    server: Final = manager.get_mcp_server_by_name("catalogue")
+    assert server is not None
+    auth.object_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="synthetic-tool-ceiling",
+        mcp_servers=[server.server_id],
+        mcp_tool_permissions={server.server_id: ["different_tool"]},
+    )
+    response: Final = await client.post(
+        "/mcp-rest/tools/call", json={"server_id": "catalogue", "name": "known", "arguments": {}}
+    )
+    assert response.status_code == 403, response.text
+    assert peer.calls == []
