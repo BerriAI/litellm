@@ -32771,6 +32771,7 @@
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "gpt-4o-mini-tts": {
+        "deprecation_date": "2027-01-06",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "openai",
         "mode": "audio_speech",
@@ -32790,6 +32791,7 @@
         ]
     },
     "gpt-4o-mini-tts-2025-03-20": {
+        "deprecation_date": "2027-01-06",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "openai",
         "mode": "audio_speech",
@@ -46844,6 +46846,7 @@
         "supports_vision": true
     },
     "tts-1": {
+        "deprecation_date": "2027-01-06",
         "input_cost_per_character": 1.5e-05,
         "litellm_provider": "openai",
         "mode": "audio_speech",
@@ -46853,6 +46856,7 @@
         ]
     },
     "tts-1-hd": {
+        "deprecation_date": "2027-01-06",
         "input_cost_per_character": 3e-05,
         "litellm_provider": "openai",
         "mode": "audio_speech",
@@ -56719,6 +56723,7 @@
         "supports_reasoning": true
     },
     "tts-1-1106": {
+        "deprecation_date": "2027-01-06",
         "input_cost_per_character": 1.5e-05,
         "litellm_provider": "openai",
         "mode": "audio_speech",
@@ -56727,6 +56732,7 @@
         ]
     },
     "tts-1-hd-1106": {
+        "deprecation_date": "2027-01-06",
         "input_cost_per_character": 3e-05,
         "litellm_provider": "openai",
         "mode": "audio_speech",
@@ -56735,6 +56741,7 @@
         ]
     },
     "gpt-4o-mini-tts-2025-12-15": {
+        "deprecation_date": "2027-01-06",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "openai",
         "mode": "audio_speech",
