@@ -1,9 +1,15 @@
+import base64
+import io
 import json
+import random
+import struct
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from PIL import Image
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -15,6 +21,7 @@ from litellm.types.utils import EmbeddingResponse, ImageResponse, LlmProviders, 
 from litellm.utils import ProviderConfigManager
 
 FOUNDRY_BASE = "https://my-resource.services.ai.azure.com"
+MEGAPIXEL = 1024 * 1024
 RESPONSES_COMPLETED_EVENT = {
     "type": "response.completed",
     "sequence_number": 2,
@@ -369,6 +376,7 @@ def _relay_logging_result(
     body,
     api_base: str = FOUNDRY_BASE,
     status_code: int = 200,
+    request_data: dict | None = None,
 ):
     relayed_url = f"{FOUNDRY_BASE}/{native_path}?api-version=2024-05-01-preview"
     logging_obj = _relay_logging_obj(model, api_base)
@@ -382,7 +390,7 @@ def _relay_logging_result(
         model=model,
         custom_llm_provider="azure_ai",
         httpx_response=response,
-        request_data={"model": model},
+        request_data={"model": model} if request_data is None else request_data,
         logging_obj=logging_obj,
         endpoint=f"{model}/{native_path}",
     )
@@ -523,23 +531,157 @@ def test_image_generation_relay_is_costed_per_image():
     result, logging_obj = _relay_logging_result(
         AzureAIPassthroughConfig(), "FLUX.2-pro", "openai/deployments/FLUX.2-pro/images/generations", IMAGE_BODY
     )
-    per_image = litellm.get_model_info("azure_ai/FLUX.2-pro")["output_cost_per_image"]
+    row = litellm.get_model_info("azure_ai/FLUX.2-pro")
+    expected_cost = row["output_cost_per_image_first_megapixel"]
 
     assert isinstance(result, ImageResponse)
     assert logging_obj.call_type == "aimage_generation"
-    assert per_image > 0
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(per_image)
+    assert row["output_cost_per_image_first_megapixel"] > 0
+    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(expected_cost)
 
 
 def test_flux_2_relay_through_the_provider_route_is_costed_per_image():
     result, logging_obj = _relay_logging_result(
         AzureAIPassthroughConfig(), "FLUX.2-pro", "providers/blackforestlabs/v1/flux-2-pro", IMAGE_BODY
     )
-    per_image = litellm.get_model_info("azure_ai/FLUX.2-pro")["output_cost_per_image"]
+    row = litellm.get_model_info("azure_ai/FLUX.2-pro")
+    expected_cost = row["output_cost_per_image_first_megapixel"]
 
     assert isinstance(result, ImageResponse)
     assert logging_obj.call_type == "aimage_generation"
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(per_image)
+    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize("leading_spaces", range(4))
+@pytest.mark.parametrize("data_url", (False, True), ids=("base64", "data-url"))
+def test_flux2_wrapped_base64_references_bill_like_the_same_unwrapped_image(
+    leading_spaces: int, data_url: bool
+) -> None:
+    buffer: Final = io.BytesIO()
+    Image.frombytes("RGB", (512, 512), random.Random(0).randbytes(512 * 512 * 3)).save(buffer, format="PNG")
+    plain: Final = base64.b64encode(buffer.getvalue()).decode()
+    wrapped: Final = " " * leading_spaces + "\r\n".join(plain[index : index + 76] for index in range(0, len(plain), 76))
+    prefix: Final = "data:image/png;base64," if data_url else ""
+
+    def cost(encoded: str) -> float:
+        result, logger = _relay_logging_result(
+            AzureAIPassthroughConfig(),
+            "FLUX.2-pro",
+            "providers/blackforestlabs/v1/flux-2-pro",
+            IMAGE_BODY,
+            request_data={"model": "FLUX.2-pro", "prompt": "Make it blue", "input_image": prefix + encoded},
+        )
+        return logger._response_cost_calculator(result=result)
+
+    row: Final = litellm.model_cost["azure_ai/flux.2-pro"]
+    assert (
+        cost(wrapped)
+        == cost(plain)
+        == pytest.approx(row["output_cost_per_image_first_megapixel"] + row["input_cost_per_megapixel"])
+    )
+
+
+def test_flux_2_flex_relay_through_the_provider_route_records_the_references_like_pro():
+    request_data = {
+        "prompt": "make it blue",
+        "input_image": _jpeg_b64(4032, 3024),
+        "input_image_2": _jpeg_b64(1024, 1024),
+    }
+    flex_result, flex_logging_obj = _relay_logging_result(
+        AzureAIPassthroughConfig(),
+        "FLUX.2-flex",
+        "providers/blackforestlabs/v1/flux-2-flex",
+        IMAGE_BODY,
+        request_data={"model": "FLUX.2-flex", **request_data},
+    )
+    pro_result, _ = _relay_logging_result(
+        AzureAIPassthroughConfig(),
+        "FLUX.2-pro",
+        "providers/blackforestlabs/v1/flux-2-pro",
+        IMAGE_BODY,
+        request_data={"model": "FLUX.2-pro", **request_data},
+    )
+
+    assert isinstance(flex_result, ImageResponse)
+    assert isinstance(pro_result, ImageResponse)
+    assert flex_logging_obj.call_type == "aimage_generation"
+    assert flex_result._hidden_params["reference_image_pixels"] == (4032 * 3024, 1024 * 1024)
+    assert flex_result._hidden_params["reference_image_pixels"] == pro_result._hidden_params["reference_image_pixels"]
+
+
+def _jpeg_b64(width: int, height: int, metadata_segments: int = 0) -> str:
+    metadata = b"".join(b"\xff\xe2" + struct.pack(">H", 65_535) + b"\x00" * 65_533 for _ in range(metadata_segments))
+    frame = b"\xff\xc0\x00\x11\x08" + struct.pack(">HH", height, width) + b"\x03\x01\x22\x00"
+    return base64.b64encode(b"\xff\xd8" + metadata + frame).decode()
+
+
+@pytest.mark.parametrize(
+    ("references", "billed_reference_megapixels"),
+    (
+        pytest.param({"input_image": _jpeg_b64(4032, 3024)}, 4, id="lone-photo-capped-at-four-megapixels"),
+        pytest.param(
+            {"input_image": _jpeg_b64(4032, 3024, metadata_segments=8)},
+            4,
+            id="lone-photo-with-its-frame-header-past-the-scan-limit-at-the-lone-reference-maximum",
+        ),
+        pytest.param(
+            {"input_image": "data:image/jpeg;base64," + _jpeg_b64(4032, 3024)}, 4, id="lone-photo-as-a-data-url"
+        ),
+        pytest.param(
+            {"input_image": _jpeg_b64(1024, 1024), "input_image_2": _jpeg_b64(4032, 3024)},
+            2,
+            id="each-of-several-references-as-one-megapixel",
+        ),
+        pytest.param(
+            {"input_image": "https://example.com/reference.png"}, 4, id="unmeasurable-url-at-the-lone-reference-maximum"
+        ),
+        pytest.param(
+            {"input_image": {"url": "https://example.com/reference.png"}},
+            4,
+            id="non-string-reference-at-the-lone-reference-maximum",
+        ),
+        pytest.param(
+            {"input_image": "https://example.com/café.png"}, 4, id="non-ascii-url-at-the-lone-reference-maximum"
+        ),
+        pytest.param({}, 0, id="generation-without-references"),
+        pytest.param({"input_image": None}, 0, id="null-reference-field-is-not-a-reference"),
+        pytest.param({"input_image": ""}, 0, id="empty-reference-field-is-not-a-reference"),
+        pytest.param(
+            {"input_image": _jpeg_b64(1024, 1024), **{f"input_image_{index}": None for index in range(2, 9)}},
+            1,
+            id="unused-reference-slots-are-not-references",
+        ),
+        pytest.param(
+            {"input_image": _jpeg_b64(1024, 1024), "input_image_1": _jpeg_b64(1024, 1024), "input_image_11": "x"},
+            1,
+            id="fields-flux-2-does-not-define-are-not-references",
+        ),
+        pytest.param(
+            {"input_image": _jpeg_b64(1024, 1024), "input_image_10": _jpeg_b64(1024, 1024)},
+            2,
+            id="tenth-reference-field-is-a-reference",
+        ),
+    ),
+)
+@pytest.mark.parametrize("model", ("FLUX.2-pro", "media-deployment"))
+def test_flux_2_relay_through_the_provider_route_bills_the_references_in_the_request(
+    references: dict, billed_reference_megapixels: int, model: str
+):
+    result, logging_obj = _relay_logging_result(
+        AzureAIPassthroughConfig(),
+        model,
+        "providers/blackforestlabs/v1/flux-2-pro",
+        IMAGE_BODY,
+        request_data={"model": "FLUX.2-pro", "prompt": "make it blue", **references},
+    )
+    pro_row = litellm.model_cost["azure_ai/flux.2-pro"]
+    logging_obj.litellm_params["base_model"] = "azure_ai/flux.2-pro"
+    reference_megapixel_rate = pro_row["input_cost_per_megapixel"]
+
+    assert isinstance(result, ImageResponse)
+    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(
+        pro_row["output_cost_per_image_first_megapixel"] + reference_megapixel_rate * billed_reference_megapixels
+    )
 
 
 def test_rejected_rerank_relay_keeps_the_passthrough_object_and_call_type():

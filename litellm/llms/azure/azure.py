@@ -1152,6 +1152,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         timeout=None,
         model: str | None = None,
     ) -> ImageResponse:
+        from litellm.llms.azure_ai.image_generation.cost_calculator import record_request_reference_pixels
+
         response: dict | None = None
         try:
             # response = await azure_client.images.generate(**data, timeout=timeout)
@@ -1188,7 +1190,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
             provider_config: Final = get_azure_image_generation_config(data.get("model", "dall-e-2"))
             if provider_config is not None:
-                return provider_config.transform_image_generation_response(
+                transformed_response: Final = provider_config.transform_image_generation_response(
                     model=data.get("model", "dall-e-2"),
                     raw_response=httpx_response,
                     model_response=model_response or ImageResponse(),
@@ -1197,6 +1199,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     optional_params=data,
                     litellm_params=data,
                     encoding=litellm.encoding,
+                )
+                request_model: Final[object] = data.get("model")
+                return record_request_reference_pixels(
+                    transformed_response, request_model if isinstance(request_model, str) else model or "", data
                 )
 
             else:
@@ -1345,10 +1351,16 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 original_response=response,
             )
             # return response
-            return convert_to_model_response_object(
+            image_response: Final = convert_to_model_response_object(
                 response_object=response,
                 model_response_object=model_response,
                 response_type="image_generation",
+            )
+            from litellm.llms.azure_ai.image_generation.cost_calculator import record_request_reference_pixels
+
+            request_model: Final[object] = data.get("model")
+            return record_request_reference_pixels(
+                image_response, request_model if isinstance(request_model, str) else model or "", data
             )
         except AzureOpenAIError as e:
             raise e

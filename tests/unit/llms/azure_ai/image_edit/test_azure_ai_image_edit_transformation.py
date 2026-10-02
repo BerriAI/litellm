@@ -1,6 +1,15 @@
+import asyncio
 import base64
+import contextlib
+import io
+import itertools
 import json
-from collections.abc import Mapping
+import os
+import pathlib
+import struct
+import tempfile
+from collections.abc import Callable, Iterator, Mapping
+from datetime import datetime
 from typing import Final
 
 import httpx
@@ -8,13 +17,17 @@ import pytest
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
-from litellm.llms.azure_ai.image_edit.flux2_transformation import (
-    AzureFoundryFlux2ImageEditConfig,
-)
+from litellm.llms.azure_ai.image_edit.flux2_transformation import AzureFoundryFlux2ImageEditConfig
 from litellm.llms.azure_ai.image_edit.transformation import (
     AzureFoundryFluxImageEditConfig,
 )
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.azure_ai.image_generation.cost_calculator import (
+    JPEG_HEADER_BASE64_PREFIX_CHARS,
+    MAX_LONE_REFERENCE_MEGAPIXELS,
+)
+from litellm.llms.custom_httpx import llm_http_handler as llm_http_handler_module
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.utils import ImageResponse
 
 
 def test_azure_ai_validate_environment():
@@ -144,7 +157,9 @@ def test_flux2_image_edit_rejects_too_many_references(model: str, reference_imag
         )
 
 
-@pytest.mark.parametrize("dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}, {"width": "2048", "height": "1024"}))
+@pytest.mark.parametrize(
+    "dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}, {"width": "2048", "height": "1024"})
+)
 @pytest.mark.usefixtures("local_model_cost_map")
 def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[str, int | str]):
     def respond(request: httpx.Request) -> httpx.Response:
@@ -152,7 +167,7 @@ def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[
         assert body == {
             "model": "FLUX.2-flex",
             "prompt": "Add a hat",
-            "input_image": base64.b64encode(b"image").decode(),
+            "input_image": base64.b64encode(_png(512, 512)).decode(),
             "num_images": 2,
             "width": 2048,
             "height": 1024,
@@ -164,7 +179,7 @@ def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[
     client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
     response: Final = litellm.image_edit(
         model="azure_ai/FLUX.2-flex",
-        image=b"image",
+        image=_png(512, 512),
         prompt="Add a hat",
         api_key="test-key",
         api_base="https://example.services.ai.azure.com",
@@ -174,8 +189,10 @@ def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[
         steps="32",
         **dimensions,
     )
+    output_rate: Final = _flex_output_megapixel_rate()
+    reference_rate: Final = _flex_reference_megapixel_rate()
 
-    assert response._hidden_params["response_cost"] == pytest.approx(5e-08 * 2048 * 1024 * 2)
+    assert response._hidden_params["response_cost"] == pytest.approx(output_rate * 4 + reference_rate)
 
 
 def test_flux2_image_edit_accepts_and_drops_openai_only_parameters():
@@ -187,3 +204,703 @@ def test_flux2_image_edit_accepts_and_drops_openai_only_parameters():
     )
 
     assert optional_params == {"num_images": 1}
+
+
+def _png(width: int, height: int) -> bytes:
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + (13).to_bytes(4, "big")
+        + b"IHDR"
+        + struct.pack(">II", width, height)
+        + b"\x08\x02\x00\x00\x00"
+    )
+
+
+def _jpeg(width: int, height: int) -> bytes:
+    return (
+        b"\xff\xd8\xff\xc0" + struct.pack(">HBHHB", 17, 8, height, width, 3) + b"\x01\x22\x00\x02\x11\x01\x03\x11\x01"
+    )
+
+
+def _webp(width: int, height: int) -> bytes:
+    payload: Final = b"\x00\x00\x00\x9d\x01\x2a" + struct.pack("<HH", width, height)
+    return (
+        b"RIFF" + struct.pack("<I", 12 + len(payload)) + b"WEBP" + b"VP8 " + struct.pack("<I", len(payload)) + payload
+    )
+
+
+MEGAPIXEL = 1024 * 1024
+
+
+def _flex_output_megapixel_rate() -> float:
+    return litellm.model_cost["azure_ai/FLUX.2-flex"]["output_cost_per_pixel"] * MEGAPIXEL
+
+
+def _flex_reference_megapixel_rate() -> float:
+    return litellm.model_cost["azure_ai/FLUX.2-flex"]["input_cost_per_megapixel"]
+
+
+def _edit_ok(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json={"data": [{"b64_json": "aW1n"}]})
+
+
+def test_flux2_image_edit_measures_every_reference_but_bills_each_of_several_as_one_megapixel():
+    sent: Final[dict[str, object]] = {}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.update(json.loads(request.content))
+        return _edit_ok(request)
+
+    references: Final = (_png(1024, 1024), _jpeg(800, 600), _webp(640, 480))
+    response: Final = litellm.image_edit(
+        model="azure_ai/FLUX.2-flex",
+        image=list(references),
+        prompt="Blend every reference",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        size="1024x1024",
+    )
+    reference_rate: Final = _flex_reference_megapixel_rate()
+
+    assert sent["input_image"] == base64.b64encode(references[0]).decode()
+    assert sent["input_image_3"] == base64.b64encode(references[2]).decode()
+    assert response._hidden_params["reference_image_pixels"] == (1024 * 1024, 800 * 600, 640 * 480)
+    assert response._hidden_params["response_cost"] == pytest.approx(_flex_output_megapixel_rate() + reference_rate * 3)
+
+
+class _ReadOnlyUpload:
+    def __init__(self, data: bytes) -> None:
+        self._data: Final = data
+
+    def read(self) -> bytes:
+        return self._data
+
+
+class _BytesLikeUpload:
+    def __init__(self, data: bytearray | memoryview) -> None:
+        self._data: Final = data
+
+    def read(self) -> bytearray | memoryview:
+        return self._data
+
+
+class _SeekableUploadWithoutSeekable:
+    def __init__(self, data: bytes) -> None:
+        self._stream: Final = io.BytesIO(data)
+        self._stream.read()
+
+    def read(self) -> bytes:
+        return self._stream.read()
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        return self._stream.seek(offset, whence)
+
+
+class _UploadWithBrokenSeek:
+    def __init__(self, data: bytes) -> None:
+        self._data: Final = data
+
+    def read(self) -> bytes:
+        return self._data
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        raise io.UnsupportedOperation("seek")
+
+
+class _NonSeekableUpload:
+    def __init__(self, data: bytes) -> None:
+        self._data: Final = data
+
+    def read(self) -> bytes:
+        return self._data
+
+    def seekable(self) -> bool:
+        return False
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        raise AssertionError("a non-seekable upload must not be seeked")
+
+
+def _written_temporary_file(stack: contextlib.ExitStack, data: bytes, spooled: bool) -> object:
+    upload: Final = stack.enter_context(tempfile.SpooledTemporaryFile() if spooled else tempfile.NamedTemporaryFile())
+    upload.write(data)
+    upload.flush()
+    return upload
+
+
+UPLOADS: Final[Mapping[str, Callable[[contextlib.ExitStack, pathlib.Path, bytes], object]]] = {
+    "bytesio": lambda _stack, _path, data: io.BytesIO(data),
+    "buffered-reader": lambda stack, path, _data: stack.enter_context(path.open("rb")),
+    "named-temporary-file-at-eof": lambda stack, _path, data: _written_temporary_file(stack, data, spooled=False),
+    "spooled-temporary-file-at-eof": lambda stack, _path, data: _written_temporary_file(stack, data, spooled=True),
+    "duck-typed-read-only": lambda _stack, _path, data: _ReadOnlyUpload(data),
+    "duck-typed-seek-without-seekable-at-eof": lambda _stack, _path, data: _SeekableUploadWithoutSeekable(data),
+    "duck-typed-seek-raises": lambda _stack, _path, data: _UploadWithBrokenSeek(data),
+    "non-seekable-stream": lambda _stack, _path, data: _NonSeekableUpload(data),
+    "duck-typed-bytearray-read": lambda _stack, _path, data: _BytesLikeUpload(bytearray(data)),
+    "duck-typed-memoryview-read": lambda _stack, _path, data: _BytesLikeUpload(memoryview(data)),
+}
+
+
+@pytest.fixture
+def exit_stack() -> Iterator[contextlib.ExitStack]:
+    with contextlib.ExitStack() as stack:
+        yield stack
+
+
+@pytest.mark.parametrize("upload_kind", tuple(UPLOADS))
+def test_flux2_image_edit_sends_and_bills_every_readable_upload(
+    upload_kind: str, tmp_path: pathlib.Path, exit_stack: contextlib.ExitStack
+):
+    reference: Final = _png(2048, 1024)
+    path: Final = tmp_path / "reference.png"
+    path.write_bytes(reference)
+    sent_images: Final[list[str]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent_images.append(json.loads(request.content)["input_image"])
+        return _edit_ok(request)
+
+    response: Final = litellm.image_edit(
+        model="azure_ai/FLUX.2-flex",
+        image=UPLOADS[upload_kind](exit_stack, path, reference),
+        prompt="Make it a watercolor",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        size="1024x1024",
+    )
+    output_rate: Final = _flex_output_megapixel_rate()
+    reference_rate: Final = _flex_reference_megapixel_rate()
+
+    assert sent_images == [base64.b64encode(reference).decode()]
+    assert response._hidden_params["response_cost"] == pytest.approx(output_rate + reference_rate * 2)
+
+
+@pytest.mark.parametrize("upload_kind", ("bytesio", "buffered-reader", "named-temporary-file-at-eof"))
+def test_flux2_image_edit_leaves_a_seekable_upload_rewound_for_reuse(
+    upload_kind: str, tmp_path: pathlib.Path, exit_stack: contextlib.ExitStack
+):
+    path: Final = tmp_path / "reference.png"
+    path.write_bytes(_png(1024, 1024))
+    upload: Final = UPLOADS[upload_kind](exit_stack, path, _png(1024, 1024))
+
+    litellm.image_edit(
+        model="azure_ai/FLUX.2-flex",
+        image=upload,
+        prompt="Make it a watercolor",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_edit_ok))),
+        size="1024x1024",
+    )
+
+    assert upload.tell() == 0
+
+
+def test_flux2_image_edit_rejects_a_text_mode_upload_with_a_clear_error(tmp_path: pathlib.Path):
+    path: Final = tmp_path / "reference.png"
+    path.write_bytes(_png(1024, 1024))
+
+    with (
+        path.open("r", encoding="latin-1") as text_upload,
+        pytest.raises(litellm.BadRequestError, match=r"TextIOWrapper\.read\(\) returned str"),
+    ):
+        AzureFoundryFlux2ImageEditConfig().transform_image_edit_request(
+            model="FLUX.2-flex",
+            prompt="Make it a watercolor",
+            image=text_upload,
+            image_edit_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_flux2_image_edit_rejects_a_reference_it_cannot_read():
+    with pytest.raises(ValueError, match="Unsupported image type"):
+        AzureFoundryFlux2ImageEditConfig().transform_image_edit_request(
+            model="FLUX.2-flex",
+            prompt="Make it a watercolor",
+            image="reference.png",
+            image_edit_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_flux2_image_edit_measures_a_stream_reference():
+    uploaded: Final = io.BytesIO(_png(2048, 2048))
+    response: Final = litellm.image_edit(
+        model="azure_ai/FLUX.2-flex",
+        image=uploaded,
+        prompt="Make it a watercolor",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_edit_ok))),
+        size="1024x1024",
+    )
+    output_rate: Final = _flex_output_megapixel_rate()
+    reference_rate: Final = _flex_reference_megapixel_rate()
+
+    assert response._hidden_params["reference_image_pixels"] == (2048 * 2048,)
+    assert response._hidden_params["response_cost"] == pytest.approx(output_rate + reference_rate * 4)
+
+
+# Billable megapixels for a lone reference follow Azure's FLUX.2-pro request_meta as reported on 2026-09-25
+@pytest.mark.parametrize(
+    ("reference", "billed_megapixels"),
+    (
+        pytest.param(_png(640, 640), 1, id="small-reference-rounds-up"),
+        pytest.param(_png(1024, 1280), 2, id="fractional-reference-rounds-up"),
+        pytest.param(_png(2048, 1024), 2, id="landscape-reference-is-measured-by-area"),
+        pytest.param(_jpeg(4032, 3024), 4, id="photo-reference-caps-at-four-megapixels"),
+    ),
+)
+def test_flux2_image_edit_bills_a_lone_reference_in_whole_megapixels(reference: bytes, billed_megapixels: int):
+    response: Final = litellm.image_edit(
+        model="azure_ai/FLUX.2-flex",
+        image=reference,
+        prompt="Make it a watercolor",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_edit_ok))),
+        size="1024x1024",
+    )
+    output_rate: Final = _flex_output_megapixel_rate()
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        output_rate + _flex_reference_megapixel_rate() * billed_megapixels
+    )
+
+
+@pytest.mark.parametrize(
+    "reference",
+    (
+        pytest.param(b"BM not a parseable header", id="unsupported-format"),
+        pytest.param(b"\x89PNG\r\n\x1a\n\x00\x00", id="truncated-header"),
+        pytest.param(_png(0, 640), id="zero-width-header"),
+    ),
+)
+def test_flux2_image_edit_bills_a_lone_unmeasurable_reference_at_the_lone_reference_maximum(
+    reference: bytes, litellm_warnings: pytest.LogCaptureFixture
+):
+    response: Final = litellm.image_edit(
+        model="azure_ai/FLUX.2-flex",
+        image=[reference],
+        prompt="Make it a watercolor",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_edit_ok))),
+        size="1024x1024",
+    )
+    output_rate: Final = _flex_output_megapixel_rate()
+    reference_rate: Final = _flex_reference_megapixel_rate()
+
+    assert response._hidden_params["reference_image_pixels"] == (None,)
+    assert response._hidden_params["response_cost"] == pytest.approx(output_rate + reference_rate * 4)
+    assert "Could not read the dimensions of the azure_ai/FLUX.2-flex reference image" in litellm_warnings.text
+
+
+def test_flux2_image_edit_still_bills_every_reference_when_one_header_reports_zero_pixels():
+    response: Final = litellm.image_edit(
+        model="azure_ai/FLUX.2-flex",
+        image=[_png(1024, 1024), _jpeg(640, 0)],
+        prompt="Blend both references",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_edit_ok))),
+        size="1024x1024",
+    )
+    output_rate: Final = _flex_output_megapixel_rate()
+    reference_rate: Final = _flex_reference_megapixel_rate()
+
+    assert response._hidden_params["response_cost"] == pytest.approx(output_rate + reference_rate * 2)
+
+
+@pytest.mark.parametrize("stream_position", ("start", "end"))
+def test_flux2_image_edit_resends_and_rebills_a_reused_stream(stream_position: str):
+    sent_images: Final[list[str]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent_images.append(json.loads(request.content)["input_image"])
+        return _edit_ok(request)
+
+    reference: Final = _png(2048, 1024)
+    uploaded: Final = io.BytesIO(reference)
+    if stream_position == "end":
+        uploaded.read()
+    responses: Final = tuple(
+        litellm.image_edit(
+            model="azure_ai/FLUX.2-flex",
+            image=[uploaded],
+            prompt="Make it a watercolor",
+            api_key="test-key",
+            api_base="https://example.services.ai.azure.com",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+            size="1024x1024",
+        )
+        for _attempt in range(2)
+    )
+
+    assert sent_images == [base64.b64encode(reference).decode()] * 2
+    assert [response._hidden_params["reference_image_pixels"] for response in responses] == [(2048 * 1024,)] * 2
+
+
+def test_flux2_image_edit_refuses_to_resend_a_consumed_stream_that_cannot_seek(tmp_path: pathlib.Path):
+    sent_images: Final[list[str]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent_images.append(json.loads(request.content)["input_image"])
+        return _edit_ok(request)
+
+    reference: Final = _png(2048, 1024)
+    read_end, write_end = os.pipe()
+    os.write(write_end, reference)
+    os.close(write_end)
+
+    def edit(pipe: io.BufferedReader) -> ImageResponse:
+        return litellm.image_edit(
+            model="azure_ai/FLUX.2-flex",
+            image=[pipe],
+            prompt="Make it a watercolor",
+            api_key="test-key",
+            api_base="https://example.services.ai.azure.com",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+            size="1024x1024",
+        )
+
+    with os.fdopen(read_end, "rb") as pipe:
+        edit(pipe)
+        with pytest.raises(litellm.BadRequestError, match="is empty"):
+            edit(pipe)
+
+    assert sent_images == [base64.b64encode(reference).decode()]
+
+
+class _CountingReads(io.BytesIO):
+    reads: int = 0
+
+    def read(self, size: int | None = -1) -> bytes:
+        self.reads += 1
+        return super().read(size)
+
+
+async def test_flux2_router_does_not_retry_an_edit_whose_reference_image_is_empty(monkeypatch: pytest.MonkeyPatch):
+    sent_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent_requests.append(request)
+        return _edit_ok(request)
+
+    mock_client: Final = AsyncHTTPHandler()
+    mock_client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    monkeypatch.setattr(llm_http_handler_module, "get_async_httpx_client", lambda **_kwargs: mock_client)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "flux2-flex-deployment",
+                "litellm_params": {
+                    "model": "azure_ai/FLUX.2-flex",
+                    "api_base": "https://example.services.ai.azure.com",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        num_retries=2,
+        retry_after=0,
+    )
+    empty_upload: Final = _CountingReads(b"")
+
+    with pytest.raises(litellm.BadRequestError, match="is empty") as raised:
+        await router.aimage_edit(model="flux2-flex-deployment", prompt="Make it a watercolor", image=[empty_upload])
+
+    assert raised.value.status_code == 400
+    assert empty_upload.reads == 1
+    assert sent_requests == []
+
+
+@pytest.mark.parametrize("image", (b"", [b""], [_png(64, 64), b""]), ids=("bare", "listed", "after-a-real-one"))
+def test_flux2_image_edit_rejects_empty_reference_bytes_before_calling_azure(image: bytes | list[bytes]):
+    sent_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent_requests.append(request)
+        return _edit_ok(request)
+
+    with pytest.raises(litellm.BadRequestError, match="is empty") as raised:
+        litellm.image_edit(
+            model="azure_ai/FLUX.2-pro",
+            image=image,
+            prompt="Make it a watercolor",
+            api_key="test-key",
+            api_base="https://example.services.ai.azure.com",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        )
+
+    assert raised.value.status_code == 400
+    assert sent_requests == []
+
+
+def test_flux2_pro_image_edit_bills_references_at_the_pro_megapixel_rate():
+    pro_row: Final = litellm.model_cost["azure_ai/flux.2-pro"]
+    response: Final = litellm.image_edit(
+        model="azure_ai/flux.2-pro",
+        image=[_png(1024, 1024), _jpeg(4032, 3024)],
+        prompt="Blend both references",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_edit_ok))),
+        size="1024x1024",
+    )
+
+    assert pro_row["input_cost_per_megapixel"] > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        pro_row["output_cost_per_image_first_megapixel"] + pro_row["input_cost_per_megapixel"] * 2
+    )
+
+
+async def test_flux2_router_image_edit_bills_the_deployment_rates(monkeypatch: pytest.MonkeyPatch):
+    mock_client: Final = AsyncHTTPHandler()
+    mock_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_edit_ok))
+    monkeypatch.setattr(llm_http_handler_module, "get_async_httpx_client", lambda **_kwargs: mock_client)
+    megapixel_rate: Final = 1e-07
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "flux2-flex-deployment",
+                "litellm_params": {
+                    "model": "azure_ai/FLUX.2-flex",
+                    "api_base": "https://example.services.ai.azure.com",
+                    "api_key": "test-key",
+                    "input_cost_per_pixel": megapixel_rate,
+                },
+            }
+        ]
+    )
+
+    response: Final = await router.aimage_edit(
+        model="flux2-flex-deployment",
+        prompt="Make it a watercolor",
+        image=[_png(1024, 1280)],
+        size="1024x1280",
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(megapixel_rate * 1024 * 1280)
+
+
+@pytest.mark.parametrize(
+    ("deployment_prices", "expected_cost"),
+    (
+        ({"output_cost_per_image": 0.5}, 0.5),
+        ({"input_cost_per_image": 0.5}, "legacy-pro"),
+        (
+            {"input_cost_per_pixel": 1e-07},
+            "legacy-pro",
+        ),
+        (
+            {"output_cost_per_image": 0.5, "input_cost_per_pixel": 1e-07},
+            0.5,
+        ),
+        ({"output_cost_per_image": 0.5, "output_cost_per_pixel": 1e-07}, 0.5),
+        (
+            {
+                "output_cost_per_image_first_megapixel": 0.5,
+                "output_cost_per_pixel": 0.1 / MEGAPIXEL,
+                "input_cost_per_megapixel": 0.2,
+            },
+            1.0,
+        ),
+        (
+            {
+                "output_cost_per_image_first_megapixel": 0.0,
+                "output_cost_per_pixel": 0.1 / MEGAPIXEL,
+                "input_cost_per_megapixel": 0.2,
+            },
+            0.5,
+        ),
+        ({"output_cost_per_pixel": 0.1 / MEGAPIXEL, "input_cost_per_megapixel": 0.2}, 0.6),
+        ({"output_cost_per_image": 0.0, "input_cost_per_megapixel": 0.2}, 0.4),
+        ({"output_cost_per_pixel": 0.0, "input_cost_per_megapixel": 0.0}, 0.0),
+        ({"input_cost_per_second": 0.001}, None),
+    ),
+    ids=(
+        "flat",
+        "flat-input-image-price",
+        "per-pixel",
+        "image-price-and-pixel-rate",
+        "image-price-and-output-pixel-rate",
+        "custom-first-and-additional-megapixels",
+        "free-first-megapixel",
+        "distinct-output-and-reference-megapixels",
+        "free-flat-output-with-paid-references",
+        "free-output-and-references",
+        "non-image-price-keeps-catalog",
+    ),
+)
+async def test_flux2_router_image_edit_bills_the_deployment_rates_with_a_logger_built_before_routing(
+    monkeypatch: pytest.MonkeyPatch, deployment_prices: Mapping[str, float], expected_cost: float | str | None
+):
+    mock_client: Final = AsyncHTTPHandler()
+    mock_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_edit_ok))
+    monkeypatch.setattr(llm_http_handler_module, "get_async_httpx_client", lambda **_kwargs: mock_client)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "flux2-pro-deployment",
+                "litellm_params": {
+                    "model": "azure_ai/flux.2-pro",
+                    "api_base": "https://example.services.ai.azure.com",
+                    "api_key": "test-key",
+                    **deployment_prices,
+                },
+            }
+        ]
+    )
+    request: Final = {
+        "model": "flux2-pro-deployment",
+        "prompt": "Make it a watercolor",
+        "image": [_png(1024, 1280)],
+        "size": "1024x1280",
+        "litellm_call_id": "proxy-call-id",
+    }
+    logging_obj, routed_request = litellm.utils.function_setup(
+        original_function="aimage_edit", rules_obj=litellm.utils.Rules(), start_time=datetime(2026, 1, 1), **request
+    )
+
+    response: Final = await router.aimage_edit(**routed_request, litellm_logging_obj=logging_obj)
+    pro_row: Final = litellm.model_cost["azure_ai/flux.2-pro"]
+    catalog_cost: Final = (
+        pro_row["output_cost_per_image_first_megapixel"]
+        + pro_row["output_cost_per_pixel"] * MEGAPIXEL
+        + pro_row["input_cost_per_megapixel"] * 2
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        catalog_cost
+        if expected_cost is None
+        else pro_row["output_cost_per_image"]
+        if expected_cost == "legacy-pro"
+        else expected_cost
+    )
+
+
+def test_flux2_image_edit_surfaces_a_response_that_is_not_json():
+    with pytest.raises(litellm.APIError, match="gateway timeout page"):
+        litellm.image_edit(
+            model="azure_ai/flux.2-pro",
+            image=_png(1024, 1024),
+            prompt="Make it a watercolor",
+            api_key="test-key",
+            api_base="https://example.services.ai.azure.com",
+            client=HTTPHandler(
+                client=httpx.Client(
+                    transport=httpx.MockTransport(lambda _request: httpx.Response(200, text="gateway timeout page"))
+                )
+            ),
+            size="1024x1024",
+        )
+
+
+def _edit_returning(image: bytes) -> Callable[[httpx.Request], httpx.Response]:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(image).decode()}]})
+
+    return respond
+
+
+@pytest.mark.parametrize("size", (None, "1024x1024"), ids=("no-size", "size-azure-did-not-use"))
+def test_flux2_image_edit_bills_the_generated_image_azure_returned(size: str | None):
+    response: Final = litellm.image_edit(
+        model="azure_ai/flux.2-pro",
+        image=_png(1024, 1280),
+        prompt="Make it a watercolor",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_edit_returning(_png(1024, 1280))))),
+        **({} if size is None else {"size": size}),
+    )
+    pro_row: Final = litellm.model_cost["azure_ai/flux.2-pro"]
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        pro_row["output_cost_per_image_first_megapixel"]
+        + pro_row["output_cost_per_pixel"] * MEGAPIXEL
+        + pro_row["input_cost_per_megapixel"] * 2
+    )
+
+
+async def test_flux2_aimage_edit_bills_references_like_image_edit():
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(_edit_ok))
+    response: Final = await litellm.aimage_edit(
+        model="azure_ai/FLUX.2-flex",
+        image=[_png(1024, 1024), _png(1024, 1024)],
+        prompt="Blend both references",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=client,
+        size="1024x1024",
+    )
+    output_rate: Final = _flex_output_megapixel_rate()
+    reference_rate: Final = _flex_reference_megapixel_rate()
+
+    assert response._hidden_params["reference_image_pixels"] == (1024 * 1024, 1024 * 1024)
+    assert response._hidden_params["response_cost"] == pytest.approx(output_rate + reference_rate * 2)
+
+
+async def test_concurrent_flux2_image_edits_each_bill_their_own_references():
+    requests_sent: Final = itertools.count(1)
+    both_requests_sent: Final = asyncio.Event()
+
+    async def respond_once_both_are_in_flight(request: httpx.Request) -> httpx.Response:
+        if next(requests_sent) == 2:
+            both_requests_sent.set()
+        await both_requests_sent.wait()
+        return _edit_ok(request)
+
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond_once_both_are_in_flight))
+
+    async def edit_with(reference: bytes) -> ImageResponse:
+        return await litellm.aimage_edit(
+            model="azure_ai/FLUX.2-flex",
+            image=[reference],
+            prompt="Make it a watercolor",
+            api_key="test-key",
+            api_base="https://example.services.ai.azure.com",
+            client=client,
+            size="1024x1024",
+        )
+
+    one_megapixel, four_megapixels = await asyncio.gather(edit_with(_png(1024, 1024)), edit_with(_png(2048, 2048)))
+
+    assert one_megapixel._hidden_params["reference_image_pixels"] == (1024 * 1024,)
+    assert four_megapixels._hidden_params["reference_image_pixels"] == (2048 * 2048,)
+
+
+@pytest.mark.parametrize("exceeds_header_budget", (False, True))
+def test_flux2_edit_limits_reference_header_work_without_truncating_uploads(exceeds_header_budget: bool):
+    header_bytes: Final = JPEG_HEADER_BASE64_PREFIX_CHARS // 4 * 3
+    segments: Final = header_bytes // 4 if exceeds_header_budget else 1024
+    reference: Final = b"\xff\xd8" + b"\xff\xfe\x00\x02" * segments + b"\xff\xc0\x00\x08\x08\x04\x00\x04\x00\x00"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert base64.b64decode(json.loads(request.content)["input_image"]) == reference
+        return httpx.Response(200, json={"data": [{"b64_json": base64.b64encode(_png(1024, 1024)).decode()}]})
+
+    response: Final = litellm.image_edit(
+        model="azure_ai/flux.2-pro",
+        image=reference,
+        prompt="Make it a watercolor",
+        api_key="test-key",
+        api_base="https://example.services.ai.azure.com",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        size="1024x1024",
+    )
+    prices: Final = litellm.model_cost["azure_ai/flux.2-pro"]
+    reference_megapixels: Final = MAX_LONE_REFERENCE_MEGAPIXELS if exceeds_header_budget else 1
+
+    assert response._hidden_params["reference_image_pixels"] == ((None,) if exceeds_header_budget else (MEGAPIXEL,))
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        prices["output_cost_per_image_first_megapixel"] + prices["input_cost_per_megapixel"] * reference_megapixels
+    )

@@ -3405,7 +3405,11 @@ def register_model(
                 existing_model.pop(_cost_field, None)
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
-        litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
+        from litellm.llms.azure_ai.image_generation.cost_calculator import registered_image_prices
+
+        litellm.model_cost.setdefault(model_cost_key, {}).update(
+            registered_image_prices(model_cost_key, updated_dictionary, value)
+        )
 
         # Invalidate case-insensitive lookup map since model_cost was modified
         _invalidate_model_cost_lowercase_map()
@@ -6276,6 +6280,8 @@ def _get_model_info_helper(
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
                 output_cost_per_pixel=_model_info.get("output_cost_per_pixel", None),
+                output_cost_per_image_first_megapixel=_model_info.get("output_cost_per_image_first_megapixel", None),
+                input_cost_per_megapixel=_model_info.get("input_cost_per_megapixel", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_video_token=_model_info.get("output_cost_per_video_token", None),
                 output_vector_size=_model_info.get("output_vector_size", None),

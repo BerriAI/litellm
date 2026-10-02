@@ -3,6 +3,7 @@ import contextvars
 import importlib
 from collections.abc import Coroutine
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast, overload
 
 if TYPE_CHECKING:
@@ -58,6 +59,25 @@ from litellm.utils import (
     ProviderConfigManager,
     get_llm_provider,
     get_optional_params_image_gen,
+)
+
+_IMAGE_PRICING_FIELDS: Final = MappingProxyType(
+    dict.fromkeys(
+        (
+            "input_cost_per_image",
+            "output_cost_per_image",
+            "output_cost_per_image_512",
+            "output_cost_per_image_1024",
+            "output_cost_per_image_1536",
+            "input_cost_per_pixel",
+            "output_cost_per_pixel",
+            "output_cost_per_image_first_megapixel",
+            "input_cost_per_megapixel",
+            "input_cost_per_image_token",
+            "output_cost_per_image_token",
+        ),
+        True,
+    )
 )
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
@@ -773,7 +793,7 @@ def image_edit(
             extra_headers = dict(merged_extra_headers)
 
         # get llm provider logic
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
         model, custom_llm_provider, _, _ = get_llm_provider(
             model=model or DEFAULT_IMAGE_ENDPOINT_MODEL,
             custom_llm_provider=custom_llm_provider,
@@ -874,6 +894,7 @@ def image_edit(
             optional_params=dict(image_edit_request_params),
             litellm_params={
                 **image_edit_request_params,
+                **litellm_params.model_dump(include=_IMAGE_PRICING_FIELDS, exclude_none=True),
                 "litellm_call_id": litellm_call_id,
                 "model_info": model_info,
             },

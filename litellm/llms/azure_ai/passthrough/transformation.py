@@ -13,6 +13,7 @@ from litellm.llms.azure_ai.common_utils import (
     api_key_header_for_base,
     get_azure_ai_auth_headers,
 )
+from litellm.llms.azure_ai.image_generation.cost_calculator import record_request_reference_pixels
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.passthrough.transformation import (
     BasePassthroughConfig,
@@ -88,6 +89,7 @@ def relay_query_params(
 FOUNDRY_RELAY_SHAPES: Final = (
     RelayShape("/rerank", CallTypes.arerank, RerankResponse.model_validate),
     RelayShape("/providers/blackforestlabs/v1/flux-2-pro", CallTypes.aimage_generation, ImageResponse.model_validate),
+    RelayShape("/providers/blackforestlabs/v1/flux-2-flex", CallTypes.aimage_generation, ImageResponse.model_validate),
 )
 
 
@@ -161,6 +163,8 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
         if ocr_result is not None:
             return ocr_result
         foundry_result: Final = logged_relay_shape(FOUNDRY_RELAY_SHAPES, httpx_response, logging_obj, endpoint)
+        if isinstance(foundry_result, ImageResponse):
+            return record_request_reference_pixels(foundry_result, endpoint, request_data)
         if foundry_result is not None:
             return foundry_result
         return StandardPassThroughResponseObject(response=relayed_body(httpx_response))
