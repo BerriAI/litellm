@@ -253,6 +253,52 @@ async def test_build_responses_plan_produces_responses_input():
 
 
 @pytest.mark.asyncio
+async def test_build_responses_plan_keeps_the_provider_on_a_sub_path_model():
+    """#38829 on the Responses surface: a provider-stripped model whose remainder still holds a
+    slash was left unqualified, so the follow-up could not resolve a provider."""
+    logger = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.BEDROCK])
+
+    tools_dict = {
+        "tool_calls": [
+            {
+                "id": "fc_1",
+                "call_id": "fc_1",
+                "type": "function_call",
+                "name": "litellm_web_search",
+                "arguments": '{"query": "latest ai news"}',
+                "input": {"query": "latest ai news"},
+            }
+        ],
+        "tool_type": "websearch",
+        "provider": "bedrock",
+        "response_format": "responses",
+    }
+
+    with patch.object(
+        logger,
+        "_execute_search",
+        new=AsyncMock(return_value=("a search result", None)),
+    ):
+        plan = await logger.async_build_responses_agentic_loop_plan(
+            tools=tools_dict,
+            model="mantle/anthropic.claude-sonnet-5",
+            messages=[{"role": "user", "content": "What's the latest AI news?"}],
+            response=_responses_output_with_web_search(),
+            optional_params={"tools": [{"type": "function", "name": "litellm_web_search"}]},
+            logging_obj=MagicMock(),
+            stream=False,
+            kwargs={
+                "custom_llm_provider": "bedrock",
+                "_agentic_loop_api_surface": RESPONSES_AGENTIC_SURFACE,
+            },
+        )
+
+    patch_obj = plan.request_patch
+    assert patch_obj is not None
+    assert patch_obj.model == "bedrock/mantle/anthropic.claude-sonnet-5"
+
+
+@pytest.mark.asyncio
 async def test_deployment_hook_converts_native_responses_web_search_tool():
     """async_pre_call_deployment_hook converts a native Responses web_search tool
     into the flat litellm_web_search function tool (Responses shape, not the
