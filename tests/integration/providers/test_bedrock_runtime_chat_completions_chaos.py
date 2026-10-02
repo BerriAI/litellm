@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import binascii
+import itertools
 import multiprocessing
 import os
 import re
@@ -200,6 +201,19 @@ async def _burst(
     return tuple(result for result in results if isinstance(result, _Served))
 
 
+async def _burst_killing_the_peer_once_it_answered(
+    base_url: str, key: str, model: str, calls: tuple[_Call, ...], peer: _ChildPeer, answered: int
+) -> tuple[_Served, ...]:
+    async with httpx.AsyncClient(base_url=base_url, timeout=60, trust_env=False) as client:
+        tasks: Final = tuple(asyncio.create_task(_send(client, key, model, call)) for call in calls)
+        await asyncio.to_thread(eventually, lambda: peer.received.value, lambda count: count == len(calls), 60)
+        first: Final = [await finished for finished in itertools.islice(asyncio.as_completed(tasks), answered)]
+        assert all(item.status == 200 for item in first), [(item.call.marker, item.status) for item in first]
+        peer.process.kill()
+        peer.process.join(timeout=10)
+        return tuple(await asyncio.gather(*tasks))
+
+
 def _calls(count: int, endpoints: tuple[Endpoint, ...], stream: Callable[[int], bool]) -> tuple[_Call, ...]:
     return tuple(
         _Call(endpoint=endpoints[index % len(endpoints)], stream=stream(index), marker=uuid.uuid4().hex)
@@ -223,10 +237,9 @@ def _accepts_connections(port: int) -> bool:
 
 @contextmanager
 def _child_peer(port: int, answer_first: int) -> Iterator[_ChildPeer]:
-    received: Final = multiprocessing.Value("i", 0)
-    process: Final = multiprocessing.get_context("spawn").Process(
-        target=serve_peer, args=(port, received, answer_first), daemon=True
-    )
+    context: Final = multiprocessing.get_context("spawn")
+    received: Final = context.Value("i", 0)
+    process: Final = context.Process(target=serve_peer, args=(port, received, answer_first), daemon=True)
     process.start()
     try:
         eventually(lambda: _accepts_connections(port), bool, seconds=30)
@@ -263,11 +276,9 @@ async def test_peer_killed_mid_burst_fails_only_the_held_calls_and_a_restarted_p
     with gateway.scenario() as scenario:
         model: Final = _deployment(scenario, f"http://127.0.0.1:{port}")
         with _child_peer(port, answer_first=6) as peer:
-            burst: Final = asyncio.create_task(_burst(str(gateway.client.base_url), gateway.key, model, calls))
-            await asyncio.to_thread(eventually, lambda: peer.received.value, lambda count: count == 12, 60)
-            peer.process.kill()
-            peer.process.join(timeout=10)
-            served: Final = await burst
+            served: Final = await _burst_killing_the_peer_once_it_answered(
+                str(gateway.client.base_url), gateway.key, model, calls, peer, answered=6
+            )
         succeeded: Final = tuple(item for item in served if item.status == 200)
         failed: Final = tuple(item for item in served if item.status != 200)
         assert (len(succeeded), len(failed)) == (6, 6), [(item.call.marker, item.status) for item in served]
