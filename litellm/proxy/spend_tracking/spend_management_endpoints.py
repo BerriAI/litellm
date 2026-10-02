@@ -37,11 +37,12 @@ from litellm.constants import (
 from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, classifier_input_snapshot
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
+from litellm.proxy.auth.authorization import AnyOf
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.log_visibility import (
     AllLogs,
-    AnyOf,
+    LogGrant,
     LogReadScope,
     TeamLogs,
     UserLogs,
@@ -4907,7 +4908,7 @@ def _read_scope_sql(scope: LogReadScope, next_param: int) -> tuple[str, tuple[ob
         case TeamLogs(team_id=team_id):
             return (f"team_id = ${next_param}", (team_id,))
         case _:
-            combined: Final[AnyOf] = scope
+            combined: Final[AnyOf[LogGrant]] = scope
             user_ids: Final = tuple(grant.user_id for grant in combined.grants if isinstance(grant, UserLogs))
             team_ids: Final = tuple(grant.team_id for grant in combined.grants if isinstance(grant, TeamLogs))
             user_conditions: Final = tuple(f'"user" = ${next_param + index}' for index, _ in enumerate(user_ids))
@@ -4927,7 +4928,7 @@ def _read_scope_where(scope: LogReadScope) -> Mapping[str, object]:
         case TeamLogs(team_id=team_id):
             return {"team_id": team_id}
         case _:
-            combined: Final[AnyOf] = scope
+            combined: Final[AnyOf[LogGrant]] = scope
             user_conditions: Final = tuple(
                 {"user": grant.user_id} for grant in combined.grants if isinstance(grant, UserLogs)
             )

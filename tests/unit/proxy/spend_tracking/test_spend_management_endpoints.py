@@ -16,7 +16,8 @@ from pydantic import BaseModel, Field
 
 import litellm
 import litellm.proxy.proxy_server as ps
-from litellm.proxy.spend_tracking.log_visibility import AllLogs, LogReadScope, TeamLogs, UserLogs, any_of
+from litellm.proxy.auth.authorization import any_of
+from litellm.proxy.spend_tracking.log_visibility import AllLogs, LogReadScope, TeamLogs, UserLogs
 from litellm.proxy.spend_tracking.log_visibility_dependencies import get_log_team_lookup
 
 

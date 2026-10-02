@@ -5,6 +5,7 @@ from typing import Final, TypeAlias
 from fastapi import HTTPException
 
 from litellm.proxy._types import KeyManagementRoutes, LiteLLM_TeamTable, UserAPIKeyAuth
+from litellm.proxy.auth.authorization import AnyOf, any_of
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,22 +26,13 @@ class TeamLogs:
 LogGrant: TypeAlias = UserLogs | TeamLogs
 
 
-@dataclass(frozen=True, slots=True)
-class AnyOf:
-    grants: tuple[LogGrant, ...]
-
-
-LogReadScope: TypeAlias = AllLogs | LogGrant | AnyOf
-
-
-def any_of(*grants: LogGrant) -> AnyOf:
-    return AnyOf(grants)
+LogReadScope: TypeAlias = AllLogs | LogGrant | AnyOf[LogGrant]
 
 
 async def resolve_log_read_scope(
     user_id: str | None,
     permitted_team_lookup: Callable[[], Awaitable[Sequence[str]]],
-) -> UserLogs | AnyOf:
+) -> UserLogs | AnyOf[LogGrant]:
     """Resolve own-user and permitted-team reads, falling back to own-user on lookup failure."""
     try:
         team_ids: Final = tuple(await permitted_team_lookup())
