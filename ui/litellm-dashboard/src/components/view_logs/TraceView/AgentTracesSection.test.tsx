@@ -61,6 +61,7 @@ const bucketRunCounts = () =>
 
 describe("AgentTracesSection", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -79,6 +80,31 @@ describe("AgentTracesSection", () => {
     testQueryClient.clear();
     vi.mocked(agentTraceListCall).mockReset();
     vi.mocked(apiClient.get).mockResolvedValue({ data: [] });
+  });
+
+  it.each([
+    [401, "Your session is no longer valid. Sign out and sign in again."],
+    [403, "Your account does not have access to these traces."],
+  ])("stops live polling after HTTP %s and explains how to recover", async (status, message) => {
+    vi.useFakeTimers();
+    vi.mocked(agentTraceListCall).mockRejectedValue(new ApiError("Private token details", Number(status), {}));
+    renderWithProviders(
+      <AgentTracesSection
+        accessToken="sk-test"
+        isActive
+        startTime="2026-09-29T00:00"
+        endTime="2026-09-30T00:00"
+        isCustomDate={false}
+        isLiveTail
+      />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(screen.getByText(`Could not load runs: ${message}`)).toBeVisible();
+    expect(screen.queryByText(/Private token details/)).not.toBeInTheDocument();
+    expect(agentTraceListCall).toHaveBeenCalledOnce();
+    expect(screen.getByTestId("runs-footer")).toHaveTextContent("Update failed");
   });
 
   it("renders the setup snippet when the proxy answers 501", async () => {

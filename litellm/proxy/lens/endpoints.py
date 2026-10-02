@@ -2,6 +2,7 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 from functools import reduce
+from itertools import chain
 from types import MappingProxyType
 from typing import Annotated, Final, TypeAlias
 from uuid import uuid4
@@ -35,7 +36,7 @@ from litellm.proxy.lens.models import (
     WorkerCreated,
 )
 from litellm.proxy.lens.repository import LensRepository, WriterDatabase
-from litellm.proxy.lens.sources import SourceReader, Storage, parse_execution
+from litellm.proxy.lens.sources import ActivityAvailability, SourceReader, Storage, parse_execution
 from litellm.proxy.lens.state import (
     can_access,
     claim_job,
@@ -168,6 +169,18 @@ async def create_lens(settings: LensSettings, auth: Auth) -> Lens:
     return await repository().create(queue_job(lens, now, str(uuid4())))
 
 
+@router.get("/activity/available", response_model=ActivityAvailability)
+async def activity_available(auth: Auth, storage: StorageDep) -> ActivityAvailability:
+    scope: Final = user_scope(auth)
+    return await source_reader(storage).availability(scope) if storage is not None else ActivityAvailability()
+
+
+@router.get("/agents", response_model=tuple[str, ...])
+async def list_agents(auth: Auth, storage: StorageDep) -> tuple[str, ...]:
+    scope: Final = user_scope(auth)
+    return await source_reader(storage).agents(scope) if storage is not None else ()
+
+
 @router.put("/{lens_id}", response_model=Lens)
 async def update_lens(lens_id: str, settings: LensSettings, auth: Auth) -> Lens:
     await get_lens(lens_id, user_scope(auth, write=True))
@@ -264,7 +277,7 @@ class Preview(BaseModel):
     as_of: AwareDatetime | None = None
     offset: int = Field(default=0, ge=0)
     settings: LensSettings
-    lookback_hours: int = Field(default=24, ge=1, le=720)
+    lookback_hours: int = Field(default=24, ge=1, le=8760)
 
 
 @router.post("/preview/sample", response_model=Sample)
@@ -326,6 +339,9 @@ async def revoke_worker(worker_id: str, auth: Auth) -> bool:
     worker: Final = next((w for w in await repository().workers() if w.id == worker_id), None)
     if worker is None or not can_access(scope, worker.scope):
         raise HTTPException(404, "Worker not found")
+    jobs: Final = chain.from_iterable(lens.jobs for lens in await repository().lenses())
+    if any(job.status == "running" and job.worker_id == worker.id for job in jobs):
+        raise HTTPException(409, "Wait for this worker's investigation to finish or cancel it before revoking access")
     await repository().revoke_worker(worker.id)
     return True
 

@@ -86,7 +86,7 @@ def test_behavior_description_is_sufficient_without_separate_checks() -> None:
 
 
 @pytest.mark.parametrize(
-    "field,value", (("sample_percent", 0), ("sample_percent", 101), ("sample_size", 0), ("concurrency", 0))
+    "field,value", (("sample_percent", 0), ("sample_percent", 101), ("sample_size", 0), ("concurrency", 0), ("lookback_hours", 0), ("lookback_hours", 8761))
 )
 def test_invalid_selection_and_parallelism_are_rejected(field: str, value: int) -> None:
     from pydantic import ValidationError
@@ -145,11 +145,11 @@ def test_monthly_budget_renews_without_erasing_job_costs() -> None:
     assert renew_budget(spent, NOW) is spent
 
 
-@pytest.mark.parametrize("hours", (24, 168, 720))
+@pytest.mark.parametrize("hours", (24, 168, 720, 4800, 8760))
 def test_every_scan_uses_the_configured_lookback_window(hours: int) -> None:
     original: Final = lens()
     configured: Final = original.model_copy(
-        update={"settings": original.settings.model_copy(update={"lookback_hours": hours})}
+        update={"settings": LensSettings.model_validate({**original.settings.model_dump(), "lookback_hours": hours})}
     )
     first: Final = queue_job(configured, NOW, "first")
     assert first.jobs[0].start == NOW - timedelta(hours=hours)

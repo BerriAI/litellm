@@ -58,7 +58,7 @@ export function LensProgress({ job, onCancel }: { job: Job; onCancel?: () => voi
         </div>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span>You can leave this page. Analysis continues in the background.</span>
+        {job.status === "running" && <span>You can leave this page while the investigation runs.</span>}
         {onCancel && (
           <Button variant="ghost" size="sm" onClick={onCancel}>
             Cancel analysis

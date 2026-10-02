@@ -8865,6 +8865,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/activity/available": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Activity Available */
+        get: operations["activity_available_lens_activity_available_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Agents */
+        get: operations["list_agents_lens_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/preview/sample": {
         parameters: {
             query?: never;
@@ -25201,6 +25235,19 @@ export interface components {
             /** Results */
             results: components["schemas"]["TagActiveUsersResponse"][];
         };
+        /** ActivityAvailability */
+        ActivityAvailability: {
+            /**
+             * Requests
+             * @default false
+             */
+            requests: boolean;
+            /**
+             * Traces
+             * @default false
+             */
+            traces: boolean;
+        };
         /** AdaptiveRouterWeights */
         AdaptiveRouterWeights: {
             /**
@@ -33512,6 +33559,11 @@ export interface components {
         /** LensSettings */
         LensSettings: {
             /**
+             * Agent Name
+             * @default
+             */
+            agent_name: string;
+            /**
              * Checks
              * @default []
              */
@@ -33555,7 +33607,7 @@ export interface components {
             model: string;
             /**
              * Monthly Budget
-             * @default 20
+             * @default 100
              */
             monthly_budget: number;
             /** Name */
@@ -61430,6 +61482,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    activity_available_lens_activity_available_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityAvailability"];
+                };
+            };
+        };
+    };
+    list_agents_lens_agents_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
                 };
             };
         };

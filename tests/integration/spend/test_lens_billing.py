@@ -124,6 +124,9 @@ def test_lens_bills_selected_key_and_rechecks_its_permissions(gateway: Gateway, 
             seconds=70,
         )
         assert second_rows[0]["spend"] == pytest.approx(expected)
+        active_revoke: Final = gateway.request("DELETE", f"/lens/workers/{worker_id}")
+        assert active_revoke.status_code == 409, active_revoke.text
+        gateway.post(f"/lens/{lens_id}/cancel", {})
         revoked: Final = gateway.request("DELETE", f"/lens/workers/{worker_id}")
         assert revoked.status_code == 200, revoked.text
         denied_worker: Final = gateway.request(
@@ -134,7 +137,6 @@ def test_lens_bills_selected_key_and_rechecks_its_permissions(gateway: Gateway, 
             "PUT", f"/lens/workers/{worker_id}/billing-key", {"analysis_key_id": replacement_id}
         )
         assert forbidden_change.status_code == 409, forbidden_change.text
-        gateway.post(f"/lens/{lens_id}/cancel", {})
 
 
 @pytest.mark.parametrize("cancel_on_disconnect", (False, True))

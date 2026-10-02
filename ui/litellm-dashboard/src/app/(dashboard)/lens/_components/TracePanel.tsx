@@ -25,7 +25,7 @@ export function TracePanel({
     >
       <SheetContent className="w-full overflow-y-auto data-[side=right]:sm:max-w-[90vw]">
         <SheetHeader>
-          <SheetTitle>Original run</SheetTitle>
+          <SheetTitle className="text-xl">Original run</SheetTitle>
           <SheetDescription>Recorded agent steps and evidence</SheetDescription>
         </SheetHeader>
         {open && (

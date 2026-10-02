@@ -37,6 +37,8 @@ impl ReadQuery {
 
 #[derive(Clone, Copy)]
 pub enum LensQuery {
+    Availability,
+    Agents,
     Sample,
     Content,
     Evidence,
@@ -45,6 +47,8 @@ pub enum LensQuery {
 impl LensQuery {
     pub fn parse(name: &str) -> Result<Self, Error> {
         match name {
+            "availability" => Ok(Self::Availability),
+            "agents" => Ok(Self::Agents),
             "sample" => Ok(Self::Sample),
             "content" => Ok(Self::Content),
             "evidence" => Ok(Self::Evidence),
@@ -53,6 +57,8 @@ impl LensQuery {
     }
     pub fn sql(self) -> &'static str {
         match self {
+            Self::Availability => include_str!("../query/lens_availability.sql"),
+            Self::Agents => include_str!("../query/lens_agents.sql"),
             Self::Sample => include_str!("../query/lens_sample.sql"),
             Self::Content => include_str!("../query/lens_content.sql"),
             Self::Evidence => include_str!("../query/lens_evidence.sql"),

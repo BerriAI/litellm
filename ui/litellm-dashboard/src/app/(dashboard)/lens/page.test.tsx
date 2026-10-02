@@ -18,11 +18,12 @@ vi.mock("./_components/LensView", () => ({
 describe("Lens navigation", () => {
   beforeEach(() => auth.mockReturnValue({ accessToken: "test-token", userRole: "Admin", isViewOnly: false }));
 
-  it("opens traces and pauses trace polling when navigating to investigations", async () => {
+  it("opens investigations and pauses trace polling when returning from traces", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();
     renderWithProviders(<LensPage />, { onUrlUpdate });
-    expect(screen.getByRole("tab", { name: "Traces" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Investigations" })).toHaveAttribute("aria-selected", "true");
+    await user.click(screen.getByRole("tab", { name: "Traces" }));
     expect(screen.getByText("Trace polling active")).toBeVisible();
     await user.click(screen.getByRole("tab", { name: "Investigations" }));
     expect(screen.getByText("Manage investigations")).toBeVisible();

@@ -28,6 +28,7 @@ SELECT *, selection_key FROM (
     GROUP BY TeamId,ApiKeyHash,TraceId
     HAVING max(EngineReceivedMs) < {end:UInt64}
        AND max(toUnixTimestamp64Milli(Timestamp)+toInt64(intDiv(Duration,1000000))) < {end:UInt64}
+       AND ({agent_name:String}='' OR countIf(AgentName={agent_name:String}) > 0)
        AND countIf(arrayAll((k,v) -> ResourceAttributes[k]=v OR SpanAttributes[k]=v,
            {filter_keys:Array(String)},{filter_values:Array(String)})
            AND ({service:String}='' OR ServiceName={service:String})) > 0
@@ -48,6 +49,7 @@ SELECT *, selection_key FROM (
           OR JSONExtractString(metadata,'requester_metadata',k)=v OR (k='tag' AND has(request_tags,v)),
           {filter_keys:Array(String)},{filter_values:Array(String)})
       AND ({service:String}='' OR model_group={service:String})
+      AND {agent_name:String}=''
       AND NOT JSONExtractBool(metadata,'litellm_lens_internal')
       AND ({source:String}!='both' OR (team_id,api_key,response_id) NOT IN (
           SELECT TeamId,ApiKeyHash,LiteLLMRequestId FROM otel_traces
