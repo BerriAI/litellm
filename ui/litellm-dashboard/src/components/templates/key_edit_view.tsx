@@ -31,7 +31,7 @@ import {
   parseAllowedRoutes,
 } from "./keyEditFieldNormalizers";
 import {
-  KeyAgentAndSkillFields,
+  KeyObjectPermissionFields,
   KeyBudgetNumberField,
   KeyMetadataField,
   KeyRateLimitFields,
@@ -770,7 +770,7 @@ export function KeyEditView({
             />
           </div>
 
-          <KeyAgentAndSkillFields control={form.control} accessToken={accessToken || ""} />
+          <KeyObjectPermissionFields control={form.control} accessToken={accessToken || ""} />
 
           <FormField
             control={form.control}

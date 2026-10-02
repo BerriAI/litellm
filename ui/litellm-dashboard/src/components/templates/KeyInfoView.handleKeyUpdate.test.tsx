@@ -385,6 +385,27 @@ describe("KeyInfoView handleKeyUpdate cache sync", () => {
   });
 });
 
+describe("KeyInfoView handleKeyUpdate MCP data boundaries", () => {
+  it("should forward the MCP data boundaries into object_permission and drop the form key", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      mcp_data_boundaries: ["eu"],
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.object_permission.mcp_data_boundaries).toEqual(["eu"]);
+    expect(sentPayload).not.toHaveProperty("mcp_data_boundaries");
+  });
+});
+
 describe("KeyInfoView handleKeyUpdate skills", () => {
   it("should forward the skills the edit form supplies into object_permission and drop the form key", async () => {
     renderView(true);

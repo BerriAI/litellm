@@ -6,6 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { CircleHelp } from "lucide-react";
 import { FormField } from "@/components/shared/form/FormField";
 import { toast } from "@/lib/toast";
+import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import AgentSelector from "../agent_management/AgentSelector";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import NumericalInput from "../shared/numerical_input";
@@ -107,7 +108,7 @@ export const KeyRateLimitFields = ({ control }: { control: Control<KeyEditFormVa
   </>
 );
 
-export const KeyAgentAndSkillFields = ({
+export const KeyObjectPermissionFields = ({
   control,
   accessToken,
 }: {
@@ -115,6 +116,25 @@ export const KeyAgentAndSkillFields = ({
   accessToken: string;
 }) => (
   <>
+    <FormField
+      control={control}
+      name="mcp_data_boundaries"
+      label={labelWithHint(
+        "Allowed MCP Data Boundaries",
+        "Only MCP servers whose data boundary is in this list can be called. Leave empty to allow every boundary.",
+      )}
+    >
+      {({ value, onChange, id }) => (
+        <TagsInput
+          id={id}
+          value={(value as string[] | undefined) ?? []}
+          onValueChange={onChange}
+          placeholder="e.g. eu (optional, empty = all boundaries)"
+          tokenSeparators={[","]}
+        />
+      )}
+    </FormField>
+
     <FormField control={control} name="agents_and_groups" label="Agents / Access Groups">
       {({ value, onChange }) => (
         <AgentSelector

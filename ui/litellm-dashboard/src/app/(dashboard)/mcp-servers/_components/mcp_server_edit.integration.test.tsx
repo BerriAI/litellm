@@ -71,6 +71,7 @@ const EXPECTED_BASE: Readonly<Record<string, unknown>> = {
   allow_all_keys: false,
   auth_type: "none",
   available_on_public_internet: true,
+  data_boundary: undefined,
   dcr_bridge: false,
   delegate_auth_to_upstream: false,
   description: "a server",
@@ -292,6 +293,11 @@ const CASES: readonly Case[] = [
       allowed_tools: ["alpha"],
       mcp_info: { ...(EXPECTED_BASE.mcp_info as object), tool_allowlist_enforced: true },
     },
+  },
+  {
+    label: "a stored data_boundary round-trips",
+    server: { ...BASE, data_boundary: "eu" },
+    expected: { ...EXPECTED_BASE, data_boundary: "eu" },
   },
   {
     label: "no allowed_tools key when the allowlist is not enforced",

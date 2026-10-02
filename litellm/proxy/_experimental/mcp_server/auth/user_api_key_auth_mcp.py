@@ -2109,6 +2109,47 @@ class MCPRequestHandler:
         return await MCPRequestHandler._key_object_permission_hydrated(user_api_key_auth)
 
     @staticmethod
+    async def key_object_permission_for_policy(
+        user_api_key_auth: UserAPIKeyAuth,
+    ) -> LiteLLM_ObjectPermissionTable | None:
+        from litellm.proxy.proxy_server import prisma_client
+
+        loaded: Final = MCPRequestHandler._get_key_object_permission(user_api_key_auth)
+        if loaded is not None or not user_api_key_auth.object_permission_id or prisma_client is None:
+            return loaded
+        return await MCPRequestHandler._load_named_object_permission(
+            "key", user_api_key_auth.object_permission_id, prisma_client, user_api_key_auth
+        )
+
+    @staticmethod
+    async def team_object_permission_for_policy(
+        user_api_key_auth: UserAPIKeyAuth,
+    ) -> LiteLLM_ObjectPermissionTable | None:
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        team_id: Final = user_api_key_auth.team_id
+        if not team_id or team_id == UI_TEAM_ID or prisma_client is None:
+            return None
+        team_obj: Final[LiteLLM_TeamTable | None] = await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=user_api_key_auth.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            check_db_only=user_api_key_auth.requires_fresh_policy,
+        )
+        if team_obj is None or team_obj.object_permission is not None or not team_obj.object_permission_id:
+            return team_obj.object_permission if team_obj is not None else None
+        return await MCPRequestHandler._load_named_object_permission(
+            f"team {team_id}", team_obj.object_permission_id, prisma_client, user_api_key_auth
+        )
+
+    @staticmethod
     async def _get_team_object_permission(
         user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> LiteLLM_ObjectPermissionTable | None:

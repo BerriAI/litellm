@@ -1578,6 +1578,30 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             control={form.control}
                             setValue={form.setValue}
                           />
+
+                          <MountedFormField
+                            label={
+                              <span>
+                                Allowed MCP Data Boundaries{" "}
+                                <SimpleTooltip content="Only MCP servers whose data boundary is in this list can be called. Leave empty to allow every boundary.">
+                                  <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                                </SimpleTooltip>
+                              </span>
+                            }
+                            name="mcp_data_boundaries"
+                            className="mt-4"
+                            help="Restrict this key to MCP servers in these data boundaries"
+                          >
+                            {(control) => (
+                              <TagsInput
+                                id={control.id}
+                                value={(control.value as string[] | undefined) ?? []}
+                                onValueChange={control.onChange}
+                                placeholder="e.g. eu (optional, empty = all boundaries)"
+                                tokenSeparators={[","]}
+                              />
+                            )}
+                          </MountedFormField>
                         </CollapsibleContent>
                       </Collapsible>
 

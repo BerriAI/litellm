@@ -281,6 +281,16 @@ describe("object_permission", () => {
     );
   });
 
+  it("nests configured MCP data boundaries into object_permission", () => {
+    expect(payloadOf(build({ key_alias: "my-key", mcp_data_boundaries: ["eu", "us"] }))).toStrictEqual(
+      aliasOnly({ object_permission: { mcp_data_boundaries: ["eu", "us"] } }),
+    );
+  });
+
+  it("drops an empty MCP data boundary list instead of sending it top level", () => {
+    expect(payloadOf(build({ key_alias: "my-key", mcp_data_boundaries: [] }))).toStrictEqual(aliasOnly());
+  });
+
   it("always strips mcp_tool_permissions from the top level, even when empty", () => {
     expect(payloadOf(build({ key_alias: "my-key", mcp_tool_permissions: {} }))).toStrictEqual(aliasOnly());
   });

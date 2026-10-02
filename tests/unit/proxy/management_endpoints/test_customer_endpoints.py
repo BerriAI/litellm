@@ -826,6 +826,7 @@ _EXPECTED_CUSTOMER = {
         "search_tools": [],
         "mcp_tool_search_enabled": None,
         "skills": None,
+        "mcp_data_boundaries": None,
     },
 }
 
