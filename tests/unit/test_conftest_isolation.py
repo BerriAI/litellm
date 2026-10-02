@@ -1,6 +1,9 @@
+import asyncio
 import sys
 from collections.abc import Iterator
-from typing import Final
+from dataclasses import dataclass
+from threading import Thread
+from typing import Final, Literal
 
 import pytest
 
@@ -10,9 +13,51 @@ from litellm import router as litellm_router_module
 from litellm import utils as litellm_utils_module
 from litellm.caching.caching import DualCache
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from tests.unit import conftest as unit_harness
 
 CANARY_MODEL = "conftest-isolation-canary-model"
+
+
+@dataclass(slots=True)
+class _LoggingOwner:
+    current: str = "original-test"
+    delivered: tuple[str, ...] = ()
+
+    async def deliver(self) -> None:
+        self.delivered = (*self.delivered, self.current)
+
+
+@pytest.mark.parametrize("loop_state", ("stopped", "running", "closed"))
+def test_queued_logging_finishes_under_its_original_owner(loop_state: Literal["stopped", "running", "closed"]) -> None:
+    owner: Final = _LoggingOwner()
+    loop: Final = asyncio.new_event_loop()
+
+    async def enqueue() -> None:
+        GLOBAL_LOGGING_WORKER._ensure_queue()
+        GLOBAL_LOGGING_WORKER.enqueue(owner.deliver())
+
+    thread: Final = Thread(target=loop.run_forever) if loop_state == "running" else None
+    if thread is not None:
+        thread.start()
+        asyncio.run_coroutine_threadsafe(enqueue(), loop).result()
+    else:
+        loop.run_until_complete(enqueue())
+    if loop_state == "closed":
+        loop.close()
+    try:
+        unit_harness._flush_completed_test_logging()
+        owner.current = "next-test"
+        assert owner.delivered == ("original-test",)
+    finally:
+        if thread is not None:
+            asyncio.run_coroutine_threadsafe(GLOBAL_LOGGING_WORKER.stop(), loop).result()
+            loop.call_soon_threadsafe(loop.stop)
+            thread.join()
+        elif not loop.is_closed():
+            loop.run_until_complete(GLOBAL_LOGGING_WORKER.stop())
+        if not loop.is_closed():
+            loop.close()
 
 
 class _CanaryRouterHolder:
