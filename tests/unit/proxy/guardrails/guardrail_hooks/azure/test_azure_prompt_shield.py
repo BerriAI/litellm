@@ -1,15 +1,21 @@
-from typing import Final
+from typing import Final, cast
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
+from pydantic import JsonValue, TypeAdapter
 
+from litellm import DualCache
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.azure.prompt_shield import (
     AzureContentSafetyPromptShieldGuardrail,
 )
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.types.guardrails import LitellmParams
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import CallTypesLiteral
 
 
 @pytest.mark.asyncio
@@ -274,11 +280,18 @@ def _shield_response(attack_detected):
     return response
 
 
-def _shield_guardrail():
+def _shield_guardrail(api_base: str = "azure_prompt_shield_api_base"):
     return AzureContentSafetyPromptShieldGuardrail(
         guardrail_name="azure_prompt_shield",
         api_key="azure_prompt_shield_api_key",
-        api_base="azure_prompt_shield_api_base",
+        api_base=api_base,
+    )
+
+
+def _shield_http_response(attack_detected: bool) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={"userPromptAnalysis": {"attackDetected": attack_detected}, "documentsAnalysis": []},
     )
 
 
@@ -357,6 +370,139 @@ def _recorded_guardrail_info(container):
     entries = container["metadata"]["standard_logging_guardrail_information"]
     assert len(entries) == 1
     return entries[0]
+
+
+@pytest.mark.asyncio
+async def test_prompt_shield_scans_tuple_messages() -> None:
+    guardrail: Final = _shield_guardrail("https://azure-content-safety.example")
+    prompt: Final = "synthetic tuple prompt"
+    data: Final[dict[str, object]] = {"messages": ({"role": "user", "content": prompt},)}
+    azure_response: Final = _shield_http_response(False)
+    azure_http_handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(lambda _request: azure_response))
+    guardrail.async_handler = azure_http_handler
+
+    try:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
+        request_body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(azure_response.request.read())
+    finally:
+        await azure_http_handler.close()
+
+    assert request_body["userPrompt"] == prompt
+
+
+@pytest.mark.asyncio
+async def test_prompt_shield_dispatches_to_subclass_get_user_prompt_override() -> None:
+    class AllTurnsPromptShield(AzureContentSafetyPromptShieldGuardrail):
+        def get_user_prompt(self, messages: list[AllMessageValues]) -> str:
+            return "\n".join(
+                message["content"]
+                for message in messages
+                if isinstance(message, dict)
+                and message.get("role") == "user"
+                and isinstance(message.get("content"), str)
+            )
+
+    guardrail: Final = AllTurnsPromptShield(
+        guardrail_name="azure_prompt_shield",
+        api_key="azure_prompt_shield_api_key",
+        api_base="https://azure-content-safety.example",
+    )
+    first_prompt: Final = "synthetic first user turn"
+    expected_prompt: Final = first_prompt + "\nbenign final user turn"
+    data: Final[dict[str, object]] = {
+        "messages": [
+            {"role": "user", "content": first_prompt},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "benign final user turn"},
+        ]
+    }
+    azure_response: Final = _shield_http_response(False)
+    azure_http_handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(lambda _request: azure_response))
+    guardrail.async_handler = azure_http_handler
+
+    try:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
+        request_body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(azure_response.request.read())
+    finally:
+        await azure_http_handler.close()
+
+    assert request_body["userPrompt"] == expected_prompt
+
+
+@pytest.mark.asyncio
+async def test_prompt_shield_subclass_can_call_get_user_prompt() -> None:
+    class RequiringPromptShield(AzureContentSafetyPromptShieldGuardrail):
+        async def async_pre_call_hook(
+            self,
+            user_api_key_dict: UserAPIKeyAuth,
+            cache: DualCache,
+            data: dict[str, object],
+            call_type: CallTypesLiteral,
+        ) -> dict[str, object] | None:
+            messages: Final = cast(list[AllMessageValues], data["messages"])  # cast-ok: chat input
+            user_prompt: Final = self.get_user_prompt(messages)
+            assert user_prompt
+            return await super().async_pre_call_hook(user_api_key_dict, cache, data, call_type)
+
+    guardrail: Final = RequiringPromptShield(
+        guardrail_name="azure_prompt_shield",
+        api_key="azure_prompt_shield_api_key",
+        api_base="https://azure-content-safety.example",
+    )
+    prompt: Final = "synthetic direct method prompt"
+    data: Final[dict[str, object]] = {"messages": [{"role": "user", "content": prompt}]}
+    azure_response: Final = _shield_http_response(False)
+    azure_http_handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(lambda _request: azure_response))
+    guardrail.async_handler = azure_http_handler
+
+    try:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
+        request_body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(azure_response.request.read())
+    finally:
+        await azure_http_handler.close()
+
+    assert request_body["userPrompt"] == prompt
+
+
+@pytest.mark.asyncio
+async def test_prompt_shield_messages_less_embeddings_return_data_and_log_allow() -> None:
+    guardrail: Final = _shield_guardrail()
+    data: Final[dict[str, object]] = {"input": "synthetic embedding input", "metadata": {}}
+
+    def fail_on_azure_request(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("unexpected Azure request")
+
+    azure_http_handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(fail_on_azure_request))
+    guardrail.async_handler = azure_http_handler
+
+    try:
+        result: Final = await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            cache=DualCache(),
+            data=data,
+            call_type="embedding",
+        )
+    finally:
+        await azure_http_handler.close()
+
+    entry: Final = _recorded_guardrail_info(data)
+    assert entry["guardrail_response"] == "allow"
+    assert result is data
 
 
 @pytest.mark.parametrize(
