@@ -13,3 +13,6 @@ For custom megapixel pricing, set `output_cost_per_pixel` and `input_cost_per_me
 Set `output_cost_per_image_first_megapixel` when the first output megapixel has a different price.
 An explicit zero is a free rate. A flat `output_cost_per_image` remains the complete output price unless
 an explicit first-megapixel price replaces it
+
+When combining legacy and megapixel overrides, omitted megapixel rates are zero rather than inherited
+from the catalog

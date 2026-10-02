@@ -40,9 +40,11 @@ def registered_image_prices(
         return merged
     legacy_fields: Final = ("output_cost_per_image", "input_cost_per_image", "input_cost_per_pixel")
     legacy_override: Final = any(overrides.get(key) is not None for key in legacy_fields)
-    megapixel_override: Final = any(overrides.get(key) is not None for key in _MEGAPIXEL_PRICE_KEYS)
-    if legacy_override and not megapixel_override:
-        return MappingProxyType({**merged, **dict.fromkeys(_MEGAPIXEL_PRICE_KEYS)})
+    if legacy_override:
+        explicit_megapixel_prices: Final = MappingProxyType(
+            {key: merged.get(key) if overrides.get(key) is not None else None for key in _MEGAPIXEL_PRICE_KEYS}
+        )
+        return MappingProxyType({**merged, **explicit_megapixel_prices})
     return merged
 
 
