@@ -256,9 +256,10 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
   const filteredMetrics = useMemo(() => ({ ...searchMetrics, ...localFiltered }), [searchMetrics, localFiltered]);
   const shownKeys = Object.keys(filteredMetrics).length;
   const isFiltering = trimmedQuery.length > 0;
+  const searchSettled = isFiltering && !searching;
   const visibleDetails = detailState?.scope === fetchKeyPage ? detailState.details : {};
   const keyCountLabel =
-    isFiltering && searchFailed && !searching && shownKeys === 0
+    searchSettled && searchFailed && shownKeys === 0
       ? "Search failed"
       : keyCountText(searching, isFiltering, shownKeys, total);
 
@@ -331,9 +332,10 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
   const firstPageFailed = failed && pageRows.length === 0;
   const showNextPageRetry = failed && !firstPageFailed && !isFiltering;
   const localOnly = searchTerm === null;
-  const pageUnavailable = localOnly && pageRows.length === 0 && (loading || firstPageFailed);
+  const noLocalRows = localOnly && pageRows.length === 0;
+  const pageUnavailable = noLocalRows && (loading || firstPageFailed);
   const listBody = pageUnavailable || (!isFiltering && pageRows.length === 0) ? emptyListBody : keyList;
-  const noMatches = isFiltering && !searching && !pageUnavailable && shownKeys === 0;
+  const noMatches = searchSettled && !pageUnavailable && shownKeys === 0;
   const showSearchErrorNote = !noMatches && searchFailed && !searching;
   const searchRetryButton = (
     <button type="button" className="font-medium text-foreground underline" onClick={retrySearch}>

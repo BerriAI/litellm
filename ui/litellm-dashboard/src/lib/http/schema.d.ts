@@ -22357,6 +22357,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/traces/query": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Query Agent Traces */
+        post: operations["query_agent_traces_v1_traces_query_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/traces/query/help": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Help Agent Trace Queries */
+        get: operations["help_agent_trace_queries_v1_traces_query_help_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/traces/{trace_id}": {
         parameters: {
             query?: never;
@@ -25602,6 +25636,26 @@ export interface components {
             public_agent_groups: string[];
             /** Updated By */
             updated_by: string;
+        };
+        /**
+         * AgentNode
+         * @description One distinct agent in a trace. 200 invocations of `researcher` = one node.
+         */
+        AgentNode: {
+            /** Duration Ms */
+            duration_ms: number;
+            /** Invocations */
+            invocations: number;
+            /** Llm Calls */
+            llm_calls: number;
+            /** Name */
+            name: string;
+            /** Parent Agent */
+            parent_agent: string | null;
+            /** Spend */
+            spend: number | null;
+            /** Tool Calls */
+            tool_calls: number;
         };
         /** AgentObjectPermission */
         AgentObjectPermission: {
@@ -44876,6 +44930,64 @@ export interface components {
             /** Version */
             version?: string;
         };
+        /** Span */
+        Span: {
+            /** Agent */
+            agent: string;
+            /** Duration Ms */
+            duration_ms: number;
+            /** Error */
+            error: string | null;
+            /** Error Truncated */
+            error_truncated: boolean;
+            /** Input Preview */
+            input_preview: string;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Litellm Request Id */
+            litellm_request_id: string | null;
+            /** Model */
+            model: string | null;
+            /** Name */
+            name: string;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Parent Span Id */
+            parent_span_id: string | null;
+            /** Span Id */
+            span_id: string;
+            /** Spend */
+            spend: number | null;
+            /** Start Offset Ms */
+            start_offset_ms: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "error" | "unset";
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "agent" | "llm" | "tool" | "chain" | "framework";
+        };
+        /** SpanDetail */
+        SpanDetail: {
+            /** Attributes */
+            attributes: {
+                [key: string]: string;
+            };
+            /** Input */
+            input: string;
+            /** Input Ui */
+            input_ui: components["schemas"]["UIMessages"] | components["schemas"]["UIFields"] | components["schemas"]["UIText"];
+            /** Output */
+            output: string;
+            /** Output Ui */
+            output_ui: components["schemas"]["UIMessages"] | components["schemas"]["UIFields"] | components["schemas"]["UIText"];
+            /** Span Id */
+            span_id: string;
+        };
         /** SpanErrorPage */
         SpanErrorPage: {
             /** Message */
@@ -46688,6 +46800,21 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** Trace */
+        Trace: {
+            /** Agents */
+            agents: components["schemas"]["AgentNode"][];
+            /** Spans */
+            spans: components["schemas"]["Span"][];
+            summary: components["schemas"]["TraceSummary"];
+        };
+        /** TracePage */
+        TracePage: {
+            /** Data */
+            data: components["schemas"]["TraceSummary"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
         /** TracePart */
         TracePart: {
             /** Content */
@@ -46710,6 +46837,53 @@ export interface components {
              * @default false
              */
             truncated: boolean;
+        };
+        /** TraceQueryRequest */
+        TraceQueryRequest: {
+            /** Sql */
+            sql: string;
+        };
+        /** TraceSummary */
+        TraceSummary: {
+            /** Agent Count */
+            agent_count: number;
+            /** Agent Invocations */
+            agent_invocations: number;
+            /** Duration Ms */
+            duration_ms: number;
+            /** Error Count */
+            error_count: number;
+            /** Input Preview */
+            input_preview: string;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Llm Calls */
+            llm_calls: number;
+            /** Models */
+            models: string[];
+            /** Name */
+            name: string;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Service */
+            service: string;
+            /** Span Count */
+            span_count: number;
+            /** Spend */
+            spend: number | null;
+            /** Start Time */
+            start_time: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "error" | "unset";
+            /** Tool Calls */
+            tool_calls: number;
+            /** Trace Id */
+            trace_id: string;
+            /** Trace Ref */
+            trace_ref?: string;
         };
         /** TrainedTierArtifact */
         TrainedTierArtifact: {
@@ -46785,6 +46959,47 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** UIField */
+        UIField: {
+            /** Key */
+            key: string;
+            /** Value */
+            value: string;
+        };
+        /** UIFields */
+        UIFields: {
+            /** Fields */
+            fields: components["schemas"]["UIField"][];
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "fields";
+        };
+        /** UIMessage */
+        UIMessage: {
+            /** Content */
+            content: string;
+            /** Name */
+            name?: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "system" | "user" | "assistant" | "tool";
+            /** Tool Calls */
+            tool_calls?: components["schemas"]["UIToolCall"][];
+        };
+        /** UIMessages */
+        UIMessages: {
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "messages";
+            /** Messages */
+            messages: components["schemas"]["UIMessage"][];
+        };
         /**
          * UISettingsResponse
          * @description Response model for UI settings
@@ -46802,6 +47017,16 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
+        };
+        /** UIText */
+        UIText: {
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "text";
+            /** Text */
+            text: string;
         };
         /**
          * UIThemeConfig
@@ -46837,6 +47062,13 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
+        };
+        /** UIToolCall */
+        UIToolCall: {
+            /** Arguments */
+            arguments: string;
+            /** Name */
+            name: string;
         };
         /** UiDiscoveryEndpoints */
         UiDiscoveryEndpoints: {
@@ -79412,7 +79644,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TracePage"];
                 };
             };
             /** @description Validation Error */
@@ -79427,6 +79659,59 @@ export interface operations {
         };
     };
     ingest_otlp_traces_v1_traces_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    query_agent_traces_v1_traces_query_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TraceQueryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    help_agent_trace_queries_v1_traces_query_help_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -79465,7 +79750,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["Trace"];
                 };
             };
             /** @description Validation Error */
@@ -79499,7 +79784,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SpanDetail"];
                 };
             };
             /** @description Validation Error */
