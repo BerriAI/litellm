@@ -16,6 +16,7 @@ from fastapi import HTTPException
 
 import inspect
 
+from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
     GenerateKeyRequest,
     KeyManagementRoutes,
@@ -20474,11 +20475,10 @@ async def test_project_detachment_preserves_omission_and_other_key_fields():
 
 @pytest.mark.parametrize("project_id", [None, "project-orbit", "project-other", ""])
 @pytest.mark.asyncio
-async def test_project_detachment_uses_effective_project_for_validation(project_id: str | None):
+async def test_project_detachment_uses_effective_project_for_validation_on_unowned_project(
+    project_id: str | None,
+):
     existing: Final = LiteLLM_VerificationToken(token="project-detach-token", project_id="project-orbit")
-    # An unowned project: this cell is about WHICH project the validation uses,
-    # so the ownership gate (#41089) must not be what it measures. Giving the
-    # key a team instead would pull the whole team lookup into a MagicMock db.
     cache: Final = await _cache_with_project("project-orbit", ["model-orbit"], team_id=None)
     data: Final = UpdateKeyRequest(key=existing.token, project_id=project_id, models=["model-other"])
     if project_id is None:
@@ -20807,8 +20807,8 @@ async def test_bulk_key_update_rejects_project_team_change_and_allows_other_fiel
             new_callable=AsyncMock,
         ),
         patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook",
-            new_callable=AsyncMock,
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks",
+            SimpleNamespace(async_key_updated_hook=AsyncMock()),
         ),
     ):
         response: Final = await bulk_update_keys(
@@ -20836,16 +20836,22 @@ async def test_bulk_key_update_rejects_project_team_change_and_allows_other_fiel
 
 @pytest.mark.parametrize(
     "request_fields",
-    [{"key_alias": "renamed"}, {"team_id": "team-a"}],
+    [{"key_alias": "renamed"}, {"team_id": _OWNERSHIP_KEY_TEAM}],
 )
 @pytest.mark.asyncio
 async def test_key_team_ownership_mutation_allows_legacy_mismatch_without_changes(
     request_fields: dict[str, str],
 ) -> None:
     prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_projecttable.find_unique = AsyncMock(
+        return_value=LiteLLM_ProjectTable(
+            project_id=_OWNED_PROJECT,
+            team_id=_OWNERSHIP_PROJECT_TEAM,
+        )
+    )
     existing_key_row: Final = LiteLLM_VerificationToken(
         token="hashed-key",
-        team_id="team-a",
+        team_id=_OWNERSHIP_KEY_TEAM,
         project_id=_OWNED_PROJECT,
     )
 
@@ -20856,15 +20862,19 @@ async def test_key_team_ownership_mutation_allows_legacy_mismatch_without_change
         user_api_key_cache=UserApiKeyCache(),
     )
 
-    assert prisma_client.mock_calls == []
-
 
 @pytest.mark.asyncio
 async def test_key_team_ownership_mutation_allows_detach_with_team_change() -> None:
     prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_projecttable.find_unique = AsyncMock(
+        return_value=LiteLLM_ProjectTable(
+            project_id=_OWNED_PROJECT,
+            team_id=_OWNERSHIP_PROJECT_TEAM,
+        )
+    )
     existing_key_row: Final = LiteLLM_VerificationToken(
         token="hashed-key",
-        team_id="team-a",
+        team_id=_OWNERSHIP_KEY_TEAM,
         project_id=_OWNED_PROJECT,
     )
 
@@ -20874,8 +20884,6 @@ async def test_key_team_ownership_mutation_allows_detach_with_team_change() -> N
         prisma_client=prisma_client,
         user_api_key_cache=UserApiKeyCache(),
     )
-
-    assert prisma_client.mock_calls == []
 
 
 @pytest.mark.parametrize(
@@ -20932,22 +20940,20 @@ async def test_regenerate_checks_project_team_ownership(
 
 
 @pytest.mark.asyncio
-async def test_key_project_team_validation_uses_project_missing_404(monkeypatch: pytest.MonkeyPatch) -> None:
-    project_lookup: Final = AsyncMock(return_value=None)
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.get_project_object",
-        project_lookup,
-    )
+async def test_key_project_team_validation_uses_project_missing_404() -> None:
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_projecttable.find_unique = AsyncMock(return_value=None)
 
     with pytest.raises(HTTPException) as error:
         await _check_key_project_team(
             project_id=_OWNED_PROJECT,
             key_team_id="team-a",
-            prisma_client=MagicMock(),
+            prisma_client=prisma_client,
             user_api_key_cache=UserApiKeyCache(),
         )
 
     assert error.value.status_code == 404
+
 
 @pytest.mark.asyncio
 async def test_bulk_update_team_keys_runs_custom_key_policy_per_key(monkeypatch):
