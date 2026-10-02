@@ -1749,7 +1749,9 @@ async def test_permitted_team_scope_falls_back_to_own_user_when_lookup_fails():
     with sqlite3.connect(":memory:") as connection:
         connection.execute('CREATE TABLE logs ("user" TEXT, team_id TEXT)')
         connection.executemany("INSERT INTO logs VALUES (?, ?)", (("caller", None), ("foreign", "team")))
-        assert connection.execute(f'SELECT "user" FROM logs WHERE {sql}', params).fetchall() == [("caller",)]
+        assert connection.execute(
+            f'SELECT "user" FROM logs WHERE {sql}', {str(i): p for i, p in enumerate(params, 1)}
+        ).fetchall() == [("caller",)]
 
 
 @pytest.mark.asyncio
