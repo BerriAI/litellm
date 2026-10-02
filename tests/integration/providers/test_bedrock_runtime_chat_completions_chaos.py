@@ -10,7 +10,7 @@ import socket
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from multiprocessing.process import BaseProcess
 from multiprocessing.sharedctypes import Synchronized
@@ -25,10 +25,10 @@ import psutil
 import pytest
 import yaml
 from integration._support.bedrock_runtime_peer import MARKER, marker_of, respond, serve_peer
-from integration._support.client import Gateway, Scenario, eventually, object_value
+from integration._support.client import Gateway, eventually, gateway_from_environment, object_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 BEDROCK_MODEL: Final = "us.openai.gpt-5.6-sol"
@@ -63,6 +63,20 @@ class _ChildPeer:
     url: str
 
 
+@dataclass(frozen=True, slots=True)
+class _Deployment:
+    model: str
+    peer_port: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ChaosProxy:
+    gateway: Gateway
+    burst: _Deployment
+    peer_killed: _Deployment
+    slow_peer: _Deployment
+
+
 def _path(endpoint: Endpoint) -> str:
     match endpoint:
         case "chat":
@@ -93,16 +107,6 @@ def _body(model: str, call: _Call) -> dict[str, JsonValue]:
             return {**common, "max_tokens": 64, "messages": [{"role": "user", "content": question}]}
         case "responses":
             return {**common, "input": question}
-
-
-def _deployment(scenario: Scenario, endpoint: str) -> str:
-    return scenario.model(
-        model=f"bedrock/{BEDROCK_MODEL}",
-        api_key=TOKEN,
-        api_base=None,
-        aws_region_name="us-east-1",
-        aws_bedrock_runtime_endpoint=endpoint,
-    )
 
 
 def _frames(text: str) -> tuple[dict[str, JsonValue], ...]:
@@ -221,10 +225,12 @@ def _calls(count: int, endpoints: tuple[Endpoint, ...], stream: Callable[[int], 
     )
 
 
-def _free_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return reserve.getsockname()[1]
+def _free_ports(count: int) -> tuple[int, ...]:
+    with ExitStack() as reserved:
+        sockets: Final = tuple(reserved.enter_context(socket.socket()) for _ in range(count))
+        for reserve in sockets:
+            reserve.bind(("127.0.0.1", 0))
+        return tuple(reserve.getsockname()[1] for reserve in sockets)
 
 
 def _accepts_connections(port: int) -> bool:
@@ -250,88 +256,110 @@ def _child_peer(port: int, answer_first: int) -> Iterator[_ChildPeer]:
         assert not process.is_alive(), "Owned peer survived cleanup"
 
 
-async def test_burst_across_every_endpoint_lands_each_response_id_once(gateway: Gateway) -> None:
+def _chaos_config(endpoints: Mapping[str, str], directory: Path) -> Path:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["model_list"] = [
+        {
+            "model_name": name,
+            "litellm_params": {
+                "model": f"bedrock/{BEDROCK_MODEL}",
+                "api_key": TOKEN,
+                "aws_region_name": "us-east-1",
+                "aws_bedrock_runtime_endpoint": endpoint,
+                "num_retries": 0,
+            },
+        }
+        for name, endpoint in endpoints.items()
+    ]
+    path: Final = directory / "bedrock-gpt-chat-completions-chaos.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+@pytest.fixture(scope="module")
+def chaos_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_ChaosProxy]:
+    directory: Final = tmp_path_factory.mktemp("bedrock-gpt-chat-completions-chaos")
+    burst, peer_killed, slow_peer = (
+        _Deployment(f"bedrock-gpt-chat-completions-chaos-{uuid.uuid4().hex}", port) for port in _free_ports(3)
+    )
+    endpoints: Final = {
+        deployment.model: f"http://127.0.0.1:{deployment.peer_port}" for deployment in (burst, peer_killed, slow_peer)
+    }
+    overrides: Final = {"DATABASE_URL": _pooled_database_url()}
+    with (
+        gateway_from_environment() as shared,
+        owned_proxy_process(
+            shared, directory, overrides, config=_chaos_config(endpoints, directory), workers=2
+        ) as owned,
+    ):
+        yield _ChaosProxy(owned.gateway, burst, peer_killed, slow_peer)
+
+
+async def test_burst_across_every_endpoint_lands_each_response_id_once(chaos_proxy: _ChaosProxy) -> None:
     calls: Final = _calls(36, _ENDPOINTS, lambda index: index % 2 == 0)
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, wire.url)
-        served: Final = await _burst(str(gateway.client.base_url), gateway.key, model, calls)
+    gateway: Final = chaos_proxy.gateway
+    deployment: Final = chaos_proxy.burst
+    with wire_server(respond, port=deployment.peer_port) as wire:
+        served: Final = await _burst(str(gateway.client.base_url), gateway.key, deployment.model, calls)
         assert len(served) == 36
         for item in served:
             _assert_answered_with_its_own_marker(item)
         ids: Final = sorted(_response_id(item) for item in served)
         assert len(set(ids)) == 36, ids
         assert sorted(marker_of(request) for request in wire.drain()) == sorted(call.marker for call in calls)
-        rows: Final = _spend_rows(model, 36)
+        rows: Final = _spend_rows(deployment.model, 36)
         _assert_each_success_landed_once(rows, served)
         assert len(rows) == 36, rows
 
 
 @pytest.mark.timeout(180)
 async def test_peer_killed_mid_burst_fails_only_the_held_calls_and_a_restarted_peer_serves_again(
-    gateway: Gateway,
+    chaos_proxy: _ChaosProxy,
 ) -> None:
     calls: Final = _calls(12, _ENDPOINTS, lambda index: index % 2 == 0)
     recovery: Final = _calls(6, _ENDPOINTS, lambda index: index % 2 == 1)
-    port: Final = _free_port()
-    with gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, f"http://127.0.0.1:{port}")
-        with _child_peer(port, answer_first=6) as peer:
-            served: Final = await _burst_killing_the_peer_once_it_answered(
-                str(gateway.client.base_url), gateway.key, model, calls, peer, answered=6
-            )
-        succeeded: Final = tuple(item for item in served if item.status == 200)
-        failed: Final = tuple(item for item in served if item.status != 200)
-        assert (len(succeeded), len(failed)) == (6, 6), [(item.call.marker, item.status) for item in served]
-        for item in succeeded:
-            _assert_answered_with_its_own_marker(item)
-        assert {item.status for item in failed} == {503}, [
-            (item.call.endpoint, item.call.stream, item.status, item.text) for item in failed
-        ]
-        for item in failed:
-            assert "ServiceUnavailableError: BedrockException - Server disconnected" in item.text, item.text
-            assert "marker-" not in item.text and item.call_id is not None, item.text
-        with _child_peer(port, answer_first=10**6) as revived:
-            recovered: Final = await _burst(str(gateway.client.base_url), gateway.key, model, recovery)
-            assert revived.received.value == 6, revived.received.value
-        for item in recovered:
-            _assert_answered_with_its_own_marker(item)
-        rows: Final = _spend_rows(model, 18)
-        _assert_each_success_landed_once(rows, (*succeeded, *recovered))
-        assert _rows_by_status(rows, "failure") == sorted(str(item.call_id) for item in failed), rows
-        assert len(rows) == 18, rows
+    gateway: Final = chaos_proxy.gateway
+    deployment: Final = chaos_proxy.peer_killed
+    with _child_peer(deployment.peer_port, answer_first=6) as peer:
+        served: Final = await _burst_killing_the_peer_once_it_answered(
+            str(gateway.client.base_url), gateway.key, deployment.model, calls, peer, answered=6
+        )
+    succeeded: Final = tuple(item for item in served if item.status == 200)
+    failed: Final = tuple(item for item in served if item.status != 200)
+    assert (len(succeeded), len(failed)) == (6, 6), [(item.call.marker, item.status) for item in served]
+    for item in succeeded:
+        _assert_answered_with_its_own_marker(item)
+    assert {item.status for item in failed} == {503}, [
+        (item.call.endpoint, item.call.stream, item.status, item.text) for item in failed
+    ]
+    for item in failed:
+        assert "ServiceUnavailableError: BedrockException - Server disconnected" in item.text, item.text
+        assert "marker-" not in item.text and item.call_id is not None, item.text
+    with _child_peer(deployment.peer_port, answer_first=10**6) as revived:
+        recovered: Final = await _burst(str(gateway.client.base_url), gateway.key, deployment.model, recovery)
+        assert revived.received.value == 6, revived.received.value
+    for item in recovered:
+        _assert_answered_with_its_own_marker(item)
+    rows: Final = _spend_rows(deployment.model, 18)
+    _assert_each_success_landed_once(rows, (*succeeded, *recovered))
+    assert _rows_by_status(rows, "failure") == sorted(str(item.call_id) for item in failed), rows
+    assert len(rows) == 18, rows
 
 
-async def test_slow_peer_streams_are_forwarded_once_and_terminated(gateway: Gateway) -> None:
+async def test_slow_peer_streams_are_forwarded_once_and_terminated(chaos_proxy: _ChaosProxy) -> None:
     calls: Final = _calls(10, ("chat",), lambda _: True)
-    with wire_server(lambda request: respond(request, pause=0.3)) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, wire.url)
-        served: Final = await _burst(str(gateway.client.base_url), gateway.key, model, calls)
+    gateway: Final = chaos_proxy.gateway
+    deployment: Final = chaos_proxy.slow_peer
+    with wire_server(lambda request: respond(request, pause=0.3), port=deployment.peer_port) as wire:
+        served: Final = await _burst(str(gateway.client.base_url), gateway.key, deployment.model, calls)
         assert len(served) == 10
         for item in served:
             _assert_answered_with_its_own_marker(item)
         assert sorted(marker_of(request) for request in wire.drain()) == sorted(call.marker for call in calls)
         ids: Final = sorted(_response_id(item) for item in served)
-        rows: Final = _spend_rows(model, 10)
+        rows: Final = _spend_rows(deployment.model, 10)
         assert _rows_by_status(rows, "success") == ids, rows
         assert len(rows) == 10, rows
-
-
-def _chaos_config(wire: Wire, tmp_path: Path) -> Path:
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["model_list"] = [
-        {
-            "model_name": _CONFIG_MODEL,
-            "litellm_params": {
-                "model": f"bedrock/{BEDROCK_MODEL}",
-                "api_key": TOKEN,
-                "aws_region_name": "us-east-1",
-                "aws_bedrock_runtime_endpoint": wire.url,
-            },
-        }
-    ]
-    path: Final = tmp_path / "bedrock-gpt-chat-completions-chaos.yaml"
-    path.write_text(yaml.safe_dump(config))
-    return path
 
 
 def _pooled_database_url() -> str:
@@ -372,7 +400,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving(gateway: Gate
         return respond(request)
 
     with wire_server(held) as wire:
-        path: Final = _chaos_config(wire, tmp_path)
+        path: Final = _chaos_config({_CONFIG_MODEL: wire.url}, tmp_path)
         overrides: Final = {"DATABASE_URL": _pooled_database_url()}
         with owned_proxy_process(gateway, tmp_path, overrides, config=path, workers=2) as owned:
             candidate: Final = owned.gateway

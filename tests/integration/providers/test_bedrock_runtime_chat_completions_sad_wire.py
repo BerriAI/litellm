@@ -388,7 +388,7 @@ def test_peer_error_status_reaches_the_caller_and_unrelated_deployments_keep_ser
     marker: Final = uuid.uuid4().hex
     control_marker: Final = uuid.uuid4().hex
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, wire)
+        model: Final = _deployment(scenario, wire, num_retries=0)
         unrelated: Final = scenario.model()
         response: Final = gateway.request(
             "POST",
