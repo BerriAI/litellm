@@ -8,7 +8,8 @@ import sys
 import threading
 import time
 import weakref
-from collections.abc import AsyncIterable, Callable, Iterable, Mapping
+from collections.abc import AsyncIterable, Callable, Generator, Iterable, Mapping
+from contextlib import contextmanager
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from io import BytesIO
 from types import MappingProxyType
@@ -20,6 +21,7 @@ from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import CertTypes, RequestFiles
 from httpx._utils import get_environment_proxies
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -42,6 +44,11 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.litellm_core_utils.upstream_response_capture import upstream_attempt
+from litellm.llms.custom_httpx.upstream_response import (
+    install_capture_hook,
+    with_capture_hooks,
+)
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -54,6 +61,26 @@ else:
     LlmProviders = Any
     LiteLLMLoggingObject = Any
     LiteLLMAiohttpTransport = Any
+
+
+@contextmanager
+def _logging_attempt(logging_obj: LiteLLMLoggingObject | None) -> Generator[None, None, None]:
+    if logging_obj is None:
+        yield
+        return
+    with upstream_attempt(logging_obj.upstream_response_capture, logging_obj.litellm_call_id):
+        yield
+
+
+_HTTP_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
+
+
+def _httpx_request_headers(headers: object | None) -> httpx.Headers:
+    if headers is None:
+        return httpx.Headers()
+    validated_headers: Final = _HTTP_HEADERS_ADAPTER.validate_python(headers)
+    return httpx.Headers(validated_headers)
+
 
 try:
     from litellm._version import version
@@ -645,6 +672,7 @@ class AsyncHTTPHandler:
 
     @client.setter
     def client(self, client: httpx.AsyncClient) -> None:
+        install_capture_hook(client)
         self._client = client
         self._owns_client = False
 
@@ -658,7 +686,7 @@ class AsyncHTTPHandler:
         if self.transport is not None:
             return httpx.AsyncClient(
                 transport=self.transport,
-                event_hooks=event_hooks,
+                event_hooks=with_capture_hooks(event_hooks, is_async=True),
                 timeout=timeout if timeout is not None else _DEFAULT_TIMEOUT,
                 headers=get_default_headers(),
                 cookies=blocked_cookie_jar(),
@@ -688,7 +716,7 @@ class AsyncHTTPHandler:
         return httpx.AsyncClient(
             transport=transport,
             mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport, verify=ssl_config, cert=cert),
-            event_hooks=event_hooks,
+            event_hooks=with_capture_hooks(event_hooks, is_async=True),
             timeout=timeout,
             verify=ssl_config,
             cert=cert,
@@ -718,27 +746,52 @@ class AsyncHTTPHandler:
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
         max_response_bytes: int | None = None,
+        logging_obj: LiteLLMLoggingObject | None = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
 
         params = params or {}
         params.update(HTTPHandler.extract_query_params(url))
+        request_params: Final = httpx.QueryParams(params)
+        request_headers: Final = _httpx_request_headers(headers)
 
         if max_response_bytes is not None:
-            return await self._get_with_response_limit(
+            if logging_obj is None:
+                return await self._get_with_response_limit(
+                    url,
+                    params=request_params,
+                    headers=request_headers,
+                    max_bytes=max_response_bytes,
+                    follow_redirects=self.client.follow_redirects if follow_redirects is None else follow_redirects,
+                    timeout=self.client.timeout if timeout is None else httpx.Timeout(timeout),
+                )
+            with upstream_attempt(logging_obj.upstream_response_capture, logging_obj.litellm_call_id):
+                return await self._get_with_response_limit(
+                    url,
+                    params=request_params,
+                    headers=request_headers,
+                    max_bytes=max_response_bytes,
+                    follow_redirects=self.client.follow_redirects if follow_redirects is None else follow_redirects,
+                    timeout=self.client.timeout if timeout is None else httpx.Timeout(timeout),
+                    logging_obj=logging_obj,
+                )
+
+        if logging_obj is not None:
+            request: Final = self.client.build_request(
+                "GET",
                 url,
-                params=httpx.QueryParams(params),
-                headers=httpx.Headers(headers),
-                max_bytes=max_response_bytes,
-                follow_redirects=self.client.follow_redirects if follow_redirects is None else follow_redirects,
-                timeout=self.client.timeout if timeout is None else httpx.Timeout(timeout),
+                params=request_params,
+                headers=request_headers,
+                timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
             )
+            with upstream_attempt(logging_obj.upstream_response_capture, logging_obj.litellm_call_id):
+                return await self.client.send(request, follow_redirects=_follow_redirects)
 
         response: Final = await self.client.get(
             url,
-            params=params,
-            headers=headers,
+            params=request_params,
+            headers=request_headers,
             follow_redirects=_follow_redirects,
             timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
@@ -753,6 +806,7 @@ class AsyncHTTPHandler:
         timeout: httpx.Timeout,
         max_bytes: int,
         follow_redirects: bool,
+        logging_obj: LiteLLMLoggingObject | None = None,
     ) -> httpx.Response:
         request: Final = self.client.build_request(
             "GET",
@@ -762,10 +816,21 @@ class AsyncHTTPHandler:
             timeout=timeout,
         )
         response: Final = await self.client.send(request, stream=True, follow_redirects=False)
-        return await self._read_with_response_limit(response, max_bytes=max_bytes, follow_redirects=follow_redirects)
+        return await self._read_with_response_limit(
+            response,
+            max_bytes=max_bytes,
+            follow_redirects=follow_redirects,
+            logging_obj=logging_obj,
+        )
 
     async def _read_with_response_limit(
-        self, response: httpx.Response, *, max_bytes: int, follow_redirects: bool, redirects_remaining: int = 10
+        self,
+        response: httpx.Response,
+        *,
+        max_bytes: int,
+        follow_redirects: bool,
+        redirects_remaining: int = 10,
+        logging_obj: LiteLLMLoggingObject | None = None,
     ) -> httpx.Response:
         try:
             if response.next_request is not None and follow_redirects:
@@ -773,10 +838,17 @@ class AsyncHTTPHandler:
                     raise ValueError("Too many redirects")
                 await response.aclose()
                 following: Final = await self.client.send(
-                    response.next_request, auth=None, stream=True, follow_redirects=False
+                    response.next_request,
+                    stream=True,
+                    auth=None,
+                    follow_redirects=False,
                 )
                 return await self._read_with_response_limit(
-                    following, max_bytes=max_bytes, follow_redirects=True, redirects_remaining=redirects_remaining - 1
+                    following,
+                    max_bytes=max_bytes,
+                    follow_redirects=True,
+                    redirects_remaining=redirects_remaining - 1,
+                    logging_obj=logging_obj,
                 )
             if response.is_redirect or response.is_error:
                 return httpx.Response(response.status_code, headers=response.headers, request=response.request)
@@ -828,7 +900,8 @@ class AsyncHTTPHandler:
                 files=files,
                 content=request_content,
             )
-            response: Final = await self.client.send(req, stream=stream)
+            with _logging_attempt(logging_obj):
+                response: Final = await self.client.send(req, stream=stream)
             if stream:
                 _anchor_handler_to(response, self)
             response.raise_for_status()
@@ -846,6 +919,7 @@ class AsyncHTTPHandler:
                     headers=headers,
                     stream=stream,
                     content=content,
+                    logging_obj=logging_obj,
                 )
             finally:
                 await new_client.aclose()
@@ -880,6 +954,7 @@ class AsyncHTTPHandler:
         stream: bool = False,
         content: _RequestContent | None = None,
         follow_redirects: bool | None = None,
+        logging_obj: LiteLLMLoggingObject | None = None,
     ):
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
         try:
@@ -899,7 +974,8 @@ class AsyncHTTPHandler:
                 timeout=timeout,
                 content=request_content,
             )
-            response: Final = await self.client.send(req, follow_redirects=_follow_redirects)
+            with _logging_attempt(logging_obj):
+                response: Final = await self.client.send(req, follow_redirects=_follow_redirects)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
@@ -917,7 +993,12 @@ class AsyncHTTPHandler:
                     timeout=timeout,
                     content=retry_content,
                 )
-                retried: Final = await new_client.send(retry, stream=stream, follow_redirects=_follow_redirects)
+                with _logging_attempt(logging_obj):
+                    retried: Final = await new_client.send(
+                        retry,
+                        stream=stream,
+                        follow_redirects=_follow_redirects,
+                    )
                 try:
                     retried.raise_for_status()
                 except httpx.HTTPStatusError as retried_error:
@@ -953,6 +1034,7 @@ class AsyncHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
+        logging_obj: LiteLLMLoggingObject | None = None,
     ):
         try:
             if timeout is None:
@@ -971,7 +1053,8 @@ class AsyncHTTPHandler:
                 timeout=timeout,
                 content=request_content,
             )
-            response: Final = await self.client.send(req)
+            with _logging_attempt(logging_obj):
+                response: Final = await self.client.send(req)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
@@ -987,6 +1070,7 @@ class AsyncHTTPHandler:
                     headers=headers,
                     stream=stream,
                     content=content,
+                    logging_obj=logging_obj,
                 )
             finally:
                 await new_client.aclose()
@@ -1018,6 +1102,7 @@ class AsyncHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
+        logging_obj: LiteLLMLoggingObject | None = None,
     ):
         try:
             if timeout is None:
@@ -1036,7 +1121,8 @@ class AsyncHTTPHandler:
                 timeout=timeout,
                 content=request_content,
             )
-            response: Final = await self.client.send(req, stream=stream)
+            with _logging_attempt(logging_obj):
+                response: Final = await self.client.send(req, stream=stream)
             if stream:
                 _anchor_handler_to(response, self)
             response.raise_for_status()
@@ -1054,6 +1140,7 @@ class AsyncHTTPHandler:
                     headers=headers,
                     stream=stream,
                     content=content,
+                    logging_obj=logging_obj,
                 )
             finally:
                 await new_client.aclose()
@@ -1072,6 +1159,7 @@ class AsyncHTTPHandler:
         headers: dict | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
+        logging_obj: LiteLLMLoggingObject | None = None,
     ):
         """
         Making POST request for a single connection client.
@@ -1090,7 +1178,8 @@ class AsyncHTTPHandler:
             headers=headers,
             content=request_content,
         )
-        response: Final = await client.send(req, stream=stream)
+        with _logging_attempt(logging_obj):
+            response: Final = await client.send(req, stream=stream)
         response.raise_for_status()
         return response
 
@@ -1388,7 +1477,11 @@ class HTTPHandler:
         self.disable_default_headers = disable_default_headers
         self._owns_client = client is None
         self._heal_lock = threading.Lock()
-        self._client = self.create_client() if client is None else client
+        if client is None:
+            self._client = self.create_client()
+        else:
+            install_capture_hook(client)
+            self._client = client
 
     def create_client(self) -> httpx.Client:
         # Get unified SSL configuration
@@ -1412,6 +1505,7 @@ class HTTPHandler:
             cookies=blocked_cookie_jar(),
             follow_redirects=True,
             http2=http2_enabled(),
+            event_hooks=with_capture_hooks(None, is_async=False),
         )
 
     @property
@@ -1424,6 +1518,7 @@ class HTTPHandler:
 
     @client.setter
     def client(self, client: httpx.Client) -> None:
+        install_capture_hook(client)
         self._client = client
         self._owns_client = False
 
@@ -1439,16 +1534,30 @@ class HTTPHandler:
         headers: dict | None = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
+        logging_obj: LiteLLMLoggingObject | None = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
         params = params or {}
         params.update(self.extract_query_params(url))
+        request_params: Final = httpx.QueryParams(params)
+        request_headers: Final = _httpx_request_headers(headers)
+
+        if logging_obj is not None:
+            request: Final = self.client.build_request(
+                "GET",
+                url,
+                params=request_params,
+                headers=request_headers,
+                timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
+            )
+            with upstream_attempt(logging_obj.upstream_response_capture, logging_obj.litellm_call_id):
+                return self.client.send(request, follow_redirects=_follow_redirects)
 
         response: Final = self.client.get(
             url,
-            params=params,
-            headers=headers,
+            params=request_params,
+            headers=request_headers,
             follow_redirects=_follow_redirects,
             timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
@@ -1508,7 +1617,8 @@ class HTTPHandler:
                     files=files,
                     content=request_content,
                 )
-            response: Final = self.client.send(req, stream=stream)
+            with _logging_attempt(logging_obj):
+                response: Final = self.client.send(req, stream=stream)
             if stream:
                 _anchor_handler_to(response, self)
             response.raise_for_status()
@@ -1534,6 +1644,7 @@ class HTTPHandler:
         stream: bool = False,
         timeout: float | httpx.Timeout | None = None,
         content: _RequestContent | None = None,
+        logging_obj: LiteLLMLoggingObject | None = None,
     ):
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
@@ -1560,7 +1671,8 @@ class HTTPHandler:
                     headers=headers,
                     content=request_content,
                 )
-            response: Final = self.client.send(req, stream=stream)
+            with _logging_attempt(logging_obj):
+                response: Final = self.client.send(req, stream=stream)
             if stream:
                 _anchor_handler_to(response, self)
             response.raise_for_status()
@@ -1586,6 +1698,7 @@ class HTTPHandler:
         stream: bool = False,
         timeout: float | httpx.Timeout | None = None,
         content: _RequestContent | None = None,
+        logging_obj: LiteLLMLoggingObject | None = None,
     ):
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
@@ -1612,7 +1725,8 @@ class HTTPHandler:
                     headers=headers,
                     content=request_content,
                 )
-            response: Final = self.client.send(req, stream=stream)
+            with _logging_attempt(logging_obj):
+                response: Final = self.client.send(req, stream=stream)
             if stream:
                 _anchor_handler_to(response, self)
             return response
@@ -1637,6 +1751,7 @@ class HTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
+        logging_obj: LiteLLMLoggingObject | None = None,
     ):
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
@@ -1663,7 +1778,8 @@ class HTTPHandler:
                     headers=headers,
                     content=request_content,
                 )
-            response: Final = self.client.send(req, stream=stream)
+            with _logging_attempt(logging_obj):
+                response: Final = self.client.send(req, stream=stream)
             if stream:
                 _anchor_handler_to(response, self)
             response.raise_for_status()

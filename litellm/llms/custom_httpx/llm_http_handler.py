@@ -1756,6 +1756,7 @@ class BaseLLMHTTPHandler:
                 response = client.get(
                     url=complete_url,
                     headers=signed_headers,
+                    logging_obj=logging_obj,
                 )
                 response.raise_for_status()
             else:
@@ -1766,6 +1767,7 @@ class BaseLLMHTTPHandler:
                     data=signed_json_body,
                     json=data if signed_json_body is None else None,
                     timeout=timeout,
+                    logging_obj=logging_obj,
                 )
         except httpx.HTTPStatusError as e:
             raise provider_config.get_http_error_class(e)
@@ -1860,6 +1862,7 @@ class BaseLLMHTTPHandler:
                 response = await async_httpx_client.get(
                     url=complete_url,
                     headers=signed_headers,
+                    logging_obj=logging_obj,
                 )
                 response.raise_for_status()
             else:
@@ -1870,6 +1873,7 @@ class BaseLLMHTTPHandler:
                     data=signed_json_body,
                     json=data if signed_json_body is None else None,
                     timeout=timeout,
+                    logging_obj=logging_obj,
                 )
         except httpx.HTTPStatusError as e:
             raise provider_config.get_http_error_class(e)

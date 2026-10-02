@@ -6,6 +6,7 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from openai.types.fine_tuning import FineTuningJob
 
 from litellm._logging import verbose_logger
+from litellm.llms.custom_httpx.upstream_response import install_openai_capture_hook
 from litellm.types.utils import LiteLLMFineTuningJob
 
 _AZURE_STATUS_MAP: Final[Mapping[object, str]] = {
@@ -90,6 +91,7 @@ class OpenAIFineTuningAPI:
         else:
             openai_client = client
 
+        install_openai_capture_hook(openai_client)
         return openai_client
 
     async def acreate_fine_tuning_job(

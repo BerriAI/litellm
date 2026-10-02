@@ -20,6 +20,7 @@ from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import anthropic_system_messages
+from litellm.litellm_core_utils.upstream_response_capture import suppress_upstream_capture
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.files import get_file_extension_from_mime_type
@@ -3409,14 +3410,15 @@ class BedrockImageProcessor:
         return base64_bytes, content_type
 
     @staticmethod
-    async def get_image_details_async(image_url) -> tuple[str, str]:
+    async def get_image_details_async(image_url: str) -> tuple[str, str]:
         try:
             client: Final = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.PromptFactory,
                 params={"concurrent_limit": 1},
             )
             # Send a GET request to the image URL
-            response: Final[httpx.Response] = await async_safe_get(client, image_url)
+            with suppress_upstream_capture():
+                response: Final[httpx.Response] = await async_safe_get(client, image_url)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
             return BedrockImageProcessor._post_call_image_processing(response, image_url)
@@ -3425,11 +3427,12 @@ class BedrockImageProcessor:
             raise e
 
     @staticmethod
-    def get_image_details(image_url) -> tuple[str, str]:
+    def get_image_details(image_url: str) -> tuple[str, str]:
         try:
             client: Final = HTTPHandler(concurrent_limit=1)
             # Send a GET request to the image URL
-            response: Final[httpx.Response] = safe_get(client, image_url)
+            with suppress_upstream_capture():
+                response: Final[httpx.Response] = safe_get(client, image_url)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
             return BedrockImageProcessor._post_call_image_processing(response, image_url)

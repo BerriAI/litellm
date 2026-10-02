@@ -853,11 +853,13 @@ def test_init_held_sync_handler_recreates_closed_client():
     handler.close()
 
 
-def test_caller_supplied_sync_client_is_not_replaced_when_closed():
+def test_caller_supplied_sync_client_keeps_identity_and_is_not_closed():
     supplied = httpx.Client()
     handler = HTTPHandler(client=supplied)
-    supplied.close()
     assert handler.client is supplied
+    handler.close()
+    assert not supplied.is_closed
+    supplied.close()
 
 
 @pytest.mark.asyncio
@@ -1393,6 +1395,7 @@ async def test_finalizer_on_live_loop_disposes_foreign_loop_session_without_sche
         session = pool.submit(_mint_session_on_dead_loop, handler).result()
     assert not session.closed
 
+    gc.collect()
     baseline_tasks = set(AsyncHTTPHandler._finalizer_close_tasks)
     del handler
     gc.collect()

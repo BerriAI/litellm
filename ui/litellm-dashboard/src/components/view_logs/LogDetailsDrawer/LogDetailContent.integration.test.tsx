@@ -710,3 +710,62 @@ describe("GuardrailJumpLink", () => {
     expect(pill).not.toHaveTextContent("\u2713");
   });
 });
+
+it.each([{}, { response: "", messages: "" }])(
+  "shows upstream headers independently of body logging: %j",
+  (overrides) => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          ...overrides,
+          metadata: {
+            status: "success",
+            upstream_responses: [
+              {
+                attempt_id: "attempt",
+                status_code: 200,
+                truncated: false,
+                headers: [
+                  ["x-request-id", "upstream-only-marker"],
+                  ["x-debug", "first"],
+                  ["x-debug", "second"],
+                ],
+              },
+            ],
+          },
+        })}
+      />,
+    );
+    const response = screen.getByRole("region", { name: "Upstream response 1" });
+    expect(within(response).getByText("upstream-only-marker")).toBeInTheDocument();
+    expect(within(response).getAllByText("x-debug")).toHaveLength(2);
+    expect(within(response).getByText("first")).toBeInTheDocument();
+    expect(within(response).getByText("second")).toBeInTheDocument();
+  },
+);
+
+it("shows failed and successful upstream responses with truncation and redaction", () => {
+  render(
+    <LogDetailContent
+      logEntry={createLogEntry({
+        metadata: {
+          upstream_responses: [
+            { attempt_id: "attempt", status_code: 429, truncated: true, headers: [["x-request-id", "failed-attempt"]] },
+            { attempt_id: "attempt", status_code: 200, truncated: false, headers: [["set-cookie", "[REDACTED]"]] },
+          ],
+        },
+      })}
+    />,
+  );
+  expect(within(screen.getByRole("region", { name: "Upstream response 1" })).getByText(/HTTP 429/)).toBeInTheDocument();
+  expect(
+    within(screen.getByRole("region", { name: "Upstream response 2" })).getByText("[REDACTED]"),
+  ).toBeInTheDocument();
+  expect(screen.getByText(/earlier responses were omitted/)).toBeInTheDocument();
+});
+
+it.each([undefined, [], [{ headers: "invalid" }]])("handles old or malformed upstream metadata: %j", (data) => {
+  render(<LogDetailContent logEntry={createLogEntry({ metadata: { upstream_responses: data } })} />);
+  expect(screen.queryByText("Upstream Response Headers")).not.toBeInTheDocument();
+  expect(screen.getByText("Request Details")).toBeInTheDocument();
+});

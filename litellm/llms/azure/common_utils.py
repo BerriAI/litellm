@@ -16,6 +16,7 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx.upstream_response import install_openai_capture_hook
 from litellm.llms.openai.common_utils import BaseOpenAILLM
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
@@ -521,6 +522,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 client_type="azure",
                 litellm_owned_client=False,
             )
+            install_openai_capture_hook(client)
             return client
 
         cached_client: Final = self.get_cached_openai_client(
@@ -528,8 +530,8 @@ class BaseAzureLLM(BaseOpenAILLM):
             client_type="azure",
         )
         if cached_client:
-            if isinstance(cached_client, (AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI)):
-                return cached_client
+            install_openai_capture_hook(cached_client)
+            return cached_client
 
         azure_client_params: Final = self.initialize_azure_sdk_client(
             litellm_params=litellm_params or {},
@@ -590,6 +592,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             else:
                 openai_client = AzureOpenAI(**azure_client_params)
 
+        install_openai_capture_hook(openai_client)
         # save client in-memory cache
         self.set_cached_openai_client(
             openai_client=openai_client,
@@ -747,6 +750,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 client = AsyncAzureOpenAI(**azure_client_params)
             else:
                 client = AzureOpenAI(**azure_client_params)
+        install_openai_capture_hook(client)
         return client
 
     @staticmethod

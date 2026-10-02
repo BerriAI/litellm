@@ -4,15 +4,19 @@ import json
 import logging
 import threading
 import time
+from collections.abc import AsyncIterator, Iterator, Sequence
+from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
+from hypothesis import given, strategies as st
 from botocore.credentials import RefreshableCredentials
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
@@ -42,6 +46,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
 )
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
+from litellm.llms.tavily.search.transformation import TavilySearchConfig
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageObject, ImageResponse, ModelResponse, TranscriptionResponse
@@ -49,6 +54,108 @@ from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 
 _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", (False, True), ids=("sync", "async"))
+@pytest.mark.parametrize("provider", ("brave", "tavily"), ids=("GET", "POST"))
+@given(outcomes=st.permutations(("success", "http_error", "body_error")))
+async def test_search_capture_survives_failures_on_reused_client(
+    use_async: bool, provider: str, outcomes: Sequence[str]
+) -> None:
+    class SearchBody(httpx.SyncByteStream, httpx.AsyncByteStream):
+        def __init__(self, fail: bool) -> None:
+            self.fail: Final = fail
+            self.closed = False
+
+        def __iter__(self) -> Iterator[bytes]:
+            yield b'{"results":[{"title":"visible","url":"https://example.test","content":"probe"}],'
+            if self.fail:
+                raise httpx.ReadError("body interrupted")
+            yield b'"web":{"results":[{"title":"visible","url":"https://example.test"}]}}'
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            for chunk in self:
+                yield chunk
+
+        def close(self) -> None:
+            self.closed = True
+
+        async def aclose(self) -> None:
+            self.close()
+
+    bodies: Final = tuple(SearchBody(outcome == "body_error") for outcome in outcomes)
+    logs: Final = tuple(
+        Logging(
+            model="header-probe",
+            messages=[],
+            stream=False,
+            call_type="asearch" if use_async else "search",
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            litellm_call_id=str(index),
+            function_id=str(index),
+        )
+        for index in range(len(outcomes))
+    )
+    attempts: Final = iter(enumerate(outcomes))
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        index, outcome = next(attempts)
+        assert request.method == ("GET" if provider == "brave" else "POST")
+        assert (request.url.params["q"] if provider == "brave" else json.loads(request.content)["query"]) == "probe"
+        return httpx.Response(
+            429 if outcome == "http_error" else 200,
+            headers={"x-request-id": str(index)},
+            stream=bodies[index],
+        )
+
+    transport: Final = httpx.MockTransport(upstream)
+    handler: Final = (
+        AsyncHTTPHandler(transport=transport) if use_async else HTTPHandler(client=httpx.Client(transport=transport))
+    )
+    original_client: Final = handler.client
+
+    async def invoke(logging_obj: Logging) -> SearchResponse:
+        result: Final = BaseLLMHTTPHandler().search(
+            query="probe",
+            optional_params={},
+            timeout=5,
+            logging_obj=logging_obj,
+            api_key="synthetic",
+            api_base="https://search.example.test/",
+            custom_llm_provider=provider,
+            client=handler,
+            asearch=use_async,
+            provider_config=BraveSearchConfig() if provider == "brave" else TavilySearchConfig(),
+        )
+        return result if isinstance(result, SearchResponse) else await result
+
+    try:
+        for index, outcome in enumerate(outcomes):
+            if outcome == "success":
+                response: Final = await invoke(logs[index])
+                assert response.results[0].title == "visible"
+            else:
+                with pytest.raises(BaseLLMException) as failure:
+                    await invoke(logs[index])
+                assert failure.value.status_code == (429 if outcome == "http_error" else 500)
+            assert bodies[index].closed
+            assert handler.client is original_client
+            assert not original_client.is_closed
+            for completed in range(index + 1):
+                assert logs[completed].upstream_response_capture.snapshot() == (
+                    {
+                        "attempt_id": str(completed),
+                        "status_code": 429 if outcomes[completed] == "http_error" else 200,
+                        "headers": (("x-request-id", str(completed)),),
+                        "truncated": False,
+                    },
+                )
+    finally:
+        if isinstance(handler, AsyncHTTPHandler):
+            await handler.close()
+        else:
+            handler.client.close()
 
 
 async def _get_search_with_client(

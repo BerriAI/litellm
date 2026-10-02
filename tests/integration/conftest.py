@@ -84,13 +84,25 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         return
     collected: Final = session.config.stash.get(COLLECTED, ())
     reports: Final = tuple(report for report in session.config.stash[REPORTS] if report.nodeid in collected)
-    passed: Final = tuple(report.nodeid for report in reports if report.when == "call" and report.passed)
-    skipped: Final = tuple(report.nodeid for report in reports if report.skipped)
+    passed: Final = tuple(
+        report.nodeid
+        for report in reports
+        if report.when == "call" and report.passed and not hasattr(report, "wasxfail")
+    )
+    skipped: Final = tuple(report.nodeid for report in reports if report.skipped and not hasattr(report, "wasxfail"))
+    xfailed: Final = {
+        report.nodeid: str(report.wasxfail) for report in reports if report.skipped and hasattr(report, "wasxfail")
+    }
+    xpassed: Final = tuple(report.nodeid for report in reports if report.passed and hasattr(report, "wasxfail"))
+    failures: Final = tuple(report.nodeid for report in reports if report.failed)
+    executed: Final = frozenset(passed + skipped + tuple(xfailed) + xpassed + failures)
+    unexecuted: Final = tuple(nodeid for nodeid in collected if nodeid not in executed)
     complete: Final = (
         exitstatus == 0
         and bool(collected)
-        and sorted(collected) == sorted(passed + skipped)
-        and not any(report.failed for report in reports)
+        and sorted(collected) == sorted(passed + skipped + tuple(xfailed))
+        and not failures
+        and not xpassed
     )
     output: Final = Path(destination)
     output.mkdir(parents=True, exist_ok=True)
@@ -100,8 +112,15 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
                 "collected": collected,
                 "passed": passed,
                 "skipped": skipped,
+                "xfailed": xfailed,
+                "xpassed": xpassed,
+                "failures": failures,
+                "unexecuted": unexecuted,
                 "complete": complete,
+                "all_passed": complete and not skipped and not xfailed,
                 "exitstatus": exitstatus,
+                "pytest_args": session.config.invocation_params.args,
+                "runxfail": session.config.getoption("runxfail"),
                 "hypothesis_version": version("hypothesis"),
                 "hypothesis_seed": session.config.getoption("hypothesis_seed"),
                 "order_seed": session.config.getoption("integration_order_seed"),

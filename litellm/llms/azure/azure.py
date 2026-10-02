@@ -24,6 +24,10 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
+from litellm.llms.custom_httpx.upstream_response import (
+    install_capture_hook,
+    with_capture_hooks,
+)
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -142,6 +146,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_client: AzureOpenAI | OpenAI,
         data: dict,
         timeout: float | httpx.Timeout,
+        logging_obj: LiteLLMLoggingObj,
     ):
         """
         Helper to:
@@ -347,7 +352,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     )
 
                 headers, response = self.make_sync_azure_openai_chat_completion_request(
-                    azure_client=azure_client, data=data, timeout=timeout
+                    azure_client=azure_client, data=data, timeout=timeout, logging_obj=logging_obj
                 )
                 if isinstance(response, str):
                     raise AzureOpenAIError(
@@ -561,7 +566,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             },
         )
         headers, response = self.make_sync_azure_openai_chat_completion_request(
-            azure_client=azure_client, data=data, timeout=timeout
+            azure_client=azure_client, data=data, timeout=timeout, logging_obj=logging_obj
         )
         logging_obj.model_call_details["response_headers"] = headers
         streamwrapper: Final = CustomStreamWrapper(
@@ -1482,7 +1487,14 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         input: list | None = None,
         prompt: str | None = None,
     ) -> dict:
-        client_session: Final = litellm.client_session or httpx.Client()
+        shared_client: Final = litellm.client_session
+        client_session: Final = (
+            shared_client
+            if shared_client is not None
+            else httpx.Client(event_hooks=with_capture_hooks(None, is_async=False))
+        )
+        if shared_client is not None:
+            install_capture_hook(shared_client)
         if api_base is not None and "gateway.ai.cloudflare.com" in api_base:
             ## build base url - assume api base includes resource name
             if not api_base.endswith("/"):

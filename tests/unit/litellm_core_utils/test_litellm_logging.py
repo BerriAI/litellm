@@ -9153,3 +9153,37 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
+
+
+@pytest.mark.parametrize("cache_hit", (False, True))
+def test_standard_logging_captures_headers_without_response_private_fields(
+    logging_obj: LitellmLogging, cache_hit: bool
+) -> None:
+    import httpx
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    logging_obj.upstream_response_capture.record(
+        "attempt", httpx.Response(200, headers={"x-request-id": "transport-only", "set-cookie": "secret"})
+    )
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={"model": "header-probe", "messages": [], "cache_hit": cache_hit},
+        init_response_obj={"choices": []},
+        start_time=logging_obj.start_time,
+        end_time=logging_obj.start_time,
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["upstream_responses"] == (
+        ()
+        if cache_hit
+        else (
+            {
+                "attempt_id": "attempt",
+                "status_code": 200,
+                "headers": (("x-request-id", "transport-only"), ("set-cookie", "[REDACTED]")),
+                "truncated": False,
+            },
+        )
+    )

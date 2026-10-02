@@ -112,6 +112,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     SERVED_OUTPUT_TEXTS_KEY,
     overlay_served_output_texts,
 )
+from litellm.litellm_core_utils.upstream_response_capture import UpstreamResponseCapture
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
@@ -697,7 +698,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self.caching_details: CachingDetails | None = None
         # Timing for results that cannot carry ``_hidden_params`` (plain-dict /v1/messages
         # responses and the bridge stream wrappers); see ``update_response_metadata``.
-        self.response_timing_metrics: Mapping[str, float] = {}
+        self.upstream_response_capture: Final = UpstreamResponseCapture()
+        self.response_timing_metrics: Mapping[str, float] = {}  # mutable-ok: kept deep-copyable
 
         # Passthrough endpoint guardrails config for field targeting
         self.passthrough_guardrails_config: dict[str, object] | None = None
@@ -6691,6 +6693,7 @@ def get_standard_logging_object_payload(
             response_time=response_time,
             model=model_name,
             metadata=clean_metadata,
+            upstream_responses=() if cache_hit else logging_obj.upstream_response_capture.snapshot(),
             cache_key=clean_hidden_params["cache_key"],
             response_cost=response_cost,
             cost_breakdown=request_cost_breakdown,

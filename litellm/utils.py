@@ -29,6 +29,7 @@ import textwrap
 import threading
 import time
 import traceback
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from functools import lru_cache, wraps
 from importlib import resources
@@ -90,6 +91,10 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 )
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, strip_special_tokens
+from litellm.litellm_core_utils.upstream_response_capture import (
+    suppress_upstream_capture,
+    upstream_attempt,
+)
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge.catalog import decision
 from litellm.rust_bridge.configuration import Decision
@@ -564,6 +569,20 @@ def _print_verbose_is_active() -> bool:
     litellm._logging.set_verbose, while print_verbose's print reads litellm.set_verbose, and
     assigning the documented litellm.set_verbose = True rebinds only the latter."""
     return litellm.set_verbose is True or verbose_logger.isEnabledFor(logging.DEBUG)
+
+
+def _model_call_attempt(
+    call_type: str,
+    fallbacks: object,
+    logging_obj: LiteLLMLoggingObject,
+) -> AbstractContextManager[object]:
+    is_fallback_orchestrator: Final = call_type in (
+        CallTypes.completion.value,
+        CallTypes.acompletion.value,
+    ) and (fallbacks or litellm.model_fallbacks) is not None
+    if is_fallback_orchestrator:
+        return suppress_upstream_capture()
+    return upstream_attempt(logging_obj.upstream_response_capture, logging_obj.litellm_call_id)
 
 
 ####### CLIENT ###################
@@ -1669,6 +1688,7 @@ def client(original_function):
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         call_type = original_function.__name__
+        capture_call_type: Final[str] = str(call_type)
         if _is_async_request(kwargs):
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
             if max_retries_per_request_hit(kwargs, litellm.num_retries_per_request):
@@ -1804,7 +1824,13 @@ def client(original_function):
                 except Exception as e:
                     print_verbose(f"Error while checking max token limit: {e}")
             # MODEL CALL
-            result = original_function(*args, **kwargs)
+            fallbacks: Final[object] = kwargs.get("fallbacks")
+            with _model_call_attempt(
+                capture_call_type,
+                fallbacks,
+                logging_obj,
+            ):
+                result = original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
             if _is_streaming_request(
                 kwargs=kwargs,
@@ -1923,7 +1949,15 @@ def client(original_function):
                         args[0] = context_window_fallback_dict[model]
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
-                    return original_function(*args, **kwargs)
+                    if logging_obj is None:
+                        return original_function(*args, **kwargs)
+                    retry_fallbacks: Final[object] = kwargs.get("fallbacks")
+                    with _model_call_attempt(
+                        capture_call_type,
+                        retry_fallbacks,
+                        logging_obj,
+                    ):
+                        return original_function(*args, **kwargs)
             elif call_type == CallTypes.responses.value:
                 num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
                 if kwargs.get("retry_policy", None):
@@ -1974,6 +2008,7 @@ def client(original_function):
         )
         # only set litellm_call_id if its not in kwargs
         call_type = original_function.__name__
+        capture_call_type: Final[str] = str(call_type)
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
 
@@ -2086,7 +2121,13 @@ def client(original_function):
                 else kwargs
             )
             try:
-                result = await original_function(*args, **call_kwargs)
+                async_fallbacks: Final[object] = kwargs.get("fallbacks")
+                with _model_call_attempt(
+                    capture_call_type,
+                    async_fallbacks,
+                    logging_obj,
+                ):
+                    result = await original_function(*args, **call_kwargs)
             except Exception as deployment_error:
                 _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
                 try:
@@ -2245,8 +2286,15 @@ def client(original_function):
                         args[0] = context_window_fallback_dict[model]
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
-                    result = await original_function(*args, **kwargs)
-                    return result
+                    if logging_obj is None:
+                        return await original_function(*args, **kwargs)
+                    async_retry_fallbacks: Final[object] = kwargs.get("fallbacks")
+                    with _model_call_attempt(
+                        capture_call_type,
+                        async_retry_fallbacks,
+                        logging_obj,
+                    ):
+                        return await original_function(*args, **kwargs)
             elif call_type == CallTypes.aresponses.value:
                 _is_litellm_router_call = "model_group" in (
                     kwargs.get("metadata") or {}

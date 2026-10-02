@@ -9,7 +9,7 @@ from functools import reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.litellm_core_utils.upstream_response_capture import UpstreamResponseMetadata, response_metadata
 from litellm.llms.anthropic.common_utils import resolve_used_client_oauth_token
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsRouterMetadata
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
@@ -158,8 +159,32 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "autorouter_savings_estimate",
         "autorouter_baseline_observation",
         "used_client_oauth_token",
+        "upstream_responses",
     )
 )
+
+
+_HEADER_MAPPING: Final = TypeAdapter(Mapping[str, object])
+
+
+def _upstream_responses_for_spend_log(
+    payload: StandardLoggingPayload | None,
+) -> tuple[UpstreamResponseMetadata, ...]:
+    if payload is None or payload.get("cache_hit"):
+        return ()
+    captured: Final = payload.get("upstream_responses")
+    if captured:
+        return captured
+    hidden: Final = payload.get("hidden_params")
+    headers: Final = _HEADER_MAPPING.validate_python(
+        (hidden.get("additional_headers") if hidden else None) or MappingProxyType({})
+    )
+    provider_headers: Final = tuple(
+        (name.removeprefix("llm_provider-"), value)
+        for name, value in headers.items()
+        if name.startswith("llm_provider-") and isinstance(value, str)
+    )
+    return (response_metadata(payload.get("id", ""), None, provider_headers),) if provider_headers else ()
 
 
 def _get_spend_logs_metadata(
@@ -183,6 +208,7 @@ def _get_spend_logs_metadata(
     router_metadata: SpendLogsRouterMetadata | None = None,
     azure_spillover: AzureSpillover | None = None,
     used_client_oauth_token: bool | None = None,
+    upstream_responses: tuple[UpstreamResponseMetadata, ...] = (),
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -228,6 +254,7 @@ def _get_spend_logs_metadata(
             router_metadata=router_metadata,
             azure_spillover=azure_spillover,
             used_client_oauth_token=used_client_oauth_token,
+            upstream_responses=upstream_responses,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: " + str(list(metadata.keys()))
@@ -244,6 +271,7 @@ def _get_spend_logs_metadata(
         router_metadata=router_metadata,
         azure_spillover=azure_spillover,
         used_client_oauth_token=used_client_oauth_token,
+        upstream_responses=upstream_responses,
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")
@@ -648,6 +676,7 @@ def get_logging_payload(
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         persisted_metadata,
+        upstream_responses=_upstream_responses_for_spend_log(standard_logging_payload),
         applied_guardrails=(
             standard_logging_payload["metadata"].get("applied_guardrails", None)
             if standard_logging_payload is not None

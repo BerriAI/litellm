@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from typing_extensions import ReadOnly, TypedDict
 
@@ -472,6 +473,69 @@ def _make_standard_logging_payload_with_usage_object(usage_object: dict) -> Stan
             litellm_model_name=None,
             usage_object=None,
         ),
+    )
+
+
+@pytest.mark.parametrize("store_prompts", (False, True))
+def test_spend_log_preserves_upstream_request_id_alongside_tool_call_response(
+    monkeypatch: pytest.MonkeyPatch, store_prompts: bool
+) -> None:
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", str(store_prompts).lower())
+    upstream_request_id: Final = "upstream-only-header-reproduction"
+    upstream_headers: Final = httpx.Headers({"x-request-id": upstream_request_id})
+    response: Final = litellm.ModelResponse(
+        id="chatcmpl-header-reproduction",
+        model="header-reproduction-model",
+        choices=[
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call-header-reproduction",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": '{"query":"probe"}'},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+        usage=litellm.Usage(prompt_tokens=1000, completion_tokens=10, total_tokens=1010),
+    )
+    response.set_provider_response_headers(upstream_headers)
+    callback_payload: Final[StandardLoggingPayload] = {
+        **_make_standard_logging_payload_with_usage_object({}),
+        "id": response.id,
+        "call_type": "acompletion",
+        "model": response.model,
+        "response": response.model_dump(),
+        "hidden_params": StandardLoggingPayloadSetup.get_hidden_params(response._hidden_params),
+    }
+    callback_headers: Final = callback_payload["hidden_params"]["additional_headers"]
+    assert callback_headers is not None
+    assert callback_headers["llm_provider-x-request-id"] == upstream_request_id
+
+    spend_row: Final = get_logging_payload(
+        kwargs={
+            "model": response.model,
+            "call_type": "acompletion",
+            "custom_llm_provider": "openai",
+            "response_headers": upstream_headers,
+            "litellm_params": {"metadata": {"user_api_key": "synthetic-key-hash"}},
+            "standard_logging_object": callback_payload,
+        },
+        response_obj=response,
+        start_time=datetime.datetime.fromtimestamp(callback_payload["startTime"], tz=timezone.utc),
+        end_time=datetime.datetime.fromtimestamp(callback_payload["endTime"], tz=timezone.utc),
+    )
+    assert isinstance(spend_row["response"], str)
+    assert json.loads(spend_row["response"]) == (response.model_dump() if store_prompts else {})
+    assert upstream_request_id in safe_dumps(spend_row), (
+        "Upstream x-request-id is available to the callback, "
+        "but missing from the spend-log row containing the response body"
     )
 
 
@@ -5474,3 +5538,12 @@ def test_untrusted_agent_label_cannot_replace_verified_billing_identity(billing_
     )
     assert payload["agent_id"] == "header-selected-agent"
     assert payload["billing_agent_id"] == billing_agent
+
+
+def test_request_metadata_cannot_forge_upstream_response_headers() -> None:
+    metadata: Final = _get_spend_logs_metadata(
+        {
+            "upstream_responses": ({"headers": (("x-request-id", "forged"),)},),
+        }
+    )
+    assert metadata["upstream_responses"] == ()

@@ -60,6 +60,7 @@ from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.upstream_response_capture import upstream_attempt
 from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
 )
@@ -1382,14 +1383,15 @@ async def pass_through_request(
             logging_obj.model_call_details["stream"] = True
 
             if is_multipart:
-                response = await HttpPassThroughEndpointHelpers.make_multipart_http_request(
-                    request=request,
-                    async_client=async_client,
-                    url=url,
-                    headers=upstream_headers,
-                    requested_query_params=requested_query_params,
-                    stream=True,
-                )
+                with upstream_attempt(logging_obj.upstream_response_capture, logging_obj.litellm_call_id):
+                    response = await HttpPassThroughEndpointHelpers.make_multipart_http_request(
+                        request=request,
+                        async_client=async_client,
+                        url=url,
+                        headers=upstream_headers,
+                        requested_query_params=requested_query_params,
+                        stream=True,
+                    )
             else:
                 # SigV4-signed callers (Bedrock) supply the exact pre-signed bytes;
                 # otherwise httpx encodes the parsed JSON dict as before.
@@ -1411,7 +1413,8 @@ async def pass_through_request(
                     )
                 )
 
-                response = await async_client.send(req, stream=stream)
+                with upstream_attempt(logging_obj.upstream_response_capture, logging_obj.litellm_call_id):
+                    response = await async_client.send(req, stream=stream)
 
             upstream_usage = apply_upstream_reported_usage(
                 logging_obj=logging_obj,
@@ -1488,17 +1491,19 @@ async def pass_through_request(
                 params=requested_query_params,
                 content=state_raw_body,
             )
-            response = await async_client.send(raw_body_request, stream=True)
+            with upstream_attempt(logging_obj.upstream_response_capture, logging_obj.litellm_call_id):
+                response = await async_client.send(raw_body_request, stream=True)
         else:
-            response = await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
-                request=request,
-                async_client=async_client,
-                url=url,
-                headers=upstream_headers,
-                requested_query_params=requested_query_params,
-                _parsed_body=_parsed_body,
-                forward_multipart=is_multipart,
-            )
+            with upstream_attempt(logging_obj.upstream_response_capture, logging_obj.litellm_call_id):
+                response = await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
+                    request=request,
+                    async_client=async_client,
+                    url=url,
+                    headers=upstream_headers,
+                    requested_query_params=requested_query_params,
+                    _parsed_body=_parsed_body,
+                    forward_multipart=is_multipart,
+                )
         verbose_proxy_logger.debug("response.headers= %s", response.headers)
 
         upstream_usage = apply_upstream_reported_usage(

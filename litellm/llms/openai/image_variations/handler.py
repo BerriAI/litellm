@@ -9,6 +9,9 @@ import httpx
 from openai import AsyncOpenAI, OpenAI
 
 import litellm
+from litellm.llms.custom_httpx.upstream_response import (
+    install_openai_capture_hook,
+)
 from litellm.types.utils import FileTypes, ImageResponse, LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -29,6 +32,7 @@ class OpenAIImageVariationsHandler:
             )
         else:
             openai_client = client
+        install_openai_capture_hook(openai_client)
         return openai_client
 
     def get_async_client(self, client: AsyncOpenAI | None, init_client_params: dict) -> AsyncOpenAI:
@@ -38,6 +42,7 @@ class OpenAIImageVariationsHandler:
             )
         else:
             openai_client = client
+        install_openai_capture_hook(openai_client)
         return openai_client
 
     async def async_image_variations(
