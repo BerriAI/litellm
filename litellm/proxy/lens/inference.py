@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Final
+from typing import Annotated, Final
 
 from fastapi import HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 import litellm
 from litellm.integrations.clickhouse.context import lens_analysis
@@ -50,14 +50,21 @@ _SYSTEM: Final = (
 )
 
 
+def _unpriced_tier(value: float | None) -> float:
+    return 0 if value is None else value
+
+
+TierPrice = Annotated[float, BeforeValidator(_unpriced_tier)]
+
+
 class Prices(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
     input_cost_per_token: float = Field(ge=0)
     output_cost_per_token: float = Field(ge=0)
-    input_cost_per_token_above_200k_tokens: float = 0
-    output_cost_per_token_above_200k_tokens: float = 0
-    input_cost_per_token_above_128k_tokens: float = 0
-    output_cost_per_token_above_128k_tokens: float = 0
+    input_cost_per_token_above_200k_tokens: TierPrice = 0
+    output_cost_per_token_above_200k_tokens: TierPrice = 0
+    input_cost_per_token_above_128k_tokens: TierPrice = 0
+    output_cost_per_token_above_128k_tokens: TierPrice = 0
 
 
 def deployment_prices(deployment: Deployment) -> Prices:
