@@ -79635,5 +79635,45 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "sokkan/openai/gpt-oss-20b": {
+        "input_cost_per_token": 4e-08,
+        "litellm_provider": "sokkan",
+        "max_input_tokens": 65536,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-07,
+        "source": "https://api.sokkan.ch/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "sokkan/qwen/qwen3-coder-30b-a3b-instruct": {
+        "input_cost_per_token": 7e-08,
+        "litellm_provider": "sokkan",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 2.7e-07,
+        "source": "https://api.sokkan.ch/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_reasoning": false,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
     }
 }
