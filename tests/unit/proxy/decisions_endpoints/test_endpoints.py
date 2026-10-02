@@ -83,6 +83,44 @@ def test_proxy_decisions_route_returns_answers_and_cost(
     assert upstream.calls[0].request.headers["authorization"] == "Bearer test-key"
 
 
+def test_proxy_decisions_dispatches_typesafe_deployment(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "jev",
+                "litellm_params": {
+                    "model": "typesafe/jev-latest",
+                    "api_key": "k",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    upstream: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "jev",
+            "state": {"source": "proxy-test"},
+            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == _RESPONSE["answers"]
+    assert upstream.called
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "jev-latest",
+        "state": {"source": "proxy-test"},
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
 def test_proxy_decisions_unknown_model_is_a_client_error(
     client: TestClient,
     respx_mock: respx.MockRouter,

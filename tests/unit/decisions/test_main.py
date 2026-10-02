@@ -142,6 +142,58 @@ async def test_adecisions_sends_the_provider_wire_contract(
     assert response._hidden_params["custom_llm_provider"] == provider
 
 
+@pytest.mark.asyncio
+async def test_router_dispatches_typesafe_decisions_without_api_base(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.delenv("TYPESAFE_API_BASE", raising=False)
+    provider_resolution: Final = litellm.get_llm_provider("typesafe/jev-latest")
+
+    assert provider_resolution[:2] == ("jev-latest", "typesafe")
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "jev",
+                "litellm_params": {
+                    "model": "typesafe/jev-latest",
+                    "api_key": "k",
+                },
+            }
+        ]
+    )
+    upstream: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await router.adecisions(
+        model="jev",
+        state="router-test",
+        questions={
+            "sentiment": {
+                "type": "choice",
+                "criteria": {"positive": None, "negative": "unhappy"},
+            }
+        },
+    )
+
+    assert upstream.called
+    assert len(respx_mock.calls) == 1
+    assert json.loads(respx_mock.calls[0].request.content) == {
+        "model": "jev-latest",
+        "state": "router-test",
+        "questions": {
+            "sentiment": {
+                "type": "choice",
+                "criteria": {"positive": None, "negative": "unhappy"},
+            }
+        },
+    }
+    assert respx_mock.calls[0].request.headers["authorization"] == "Bearer k"
+    assert isinstance(response.answers["sentiment"], ChoiceAnswer)
+    assert response.answers["sentiment"].choice == "positive"
+
+
 def test_decisions_uses_the_same_wire_contract_for_sync_calls(respx_mock: respx.MockRouter) -> None:
     route = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
 

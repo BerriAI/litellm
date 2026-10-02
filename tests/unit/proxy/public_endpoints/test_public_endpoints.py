@@ -440,6 +440,7 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "tensormesh",
         "text-completion-inception",
         "transcribe",
+        "typesafe",
         "valkey",
         "xiaomi_mimo",
         "zai",

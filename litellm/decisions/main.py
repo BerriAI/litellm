@@ -115,13 +115,10 @@ def _resolve_api_key(
         for base in (endpoint.default_api_base, get_secret_str(endpoint.api_base_env))
         if base
     )
-    if (
-        api_base is not None
-        and (
-            destination.scheme.lower() != "https"
-            or not destination.netloc
-            or destination.netloc.lower() not in trusted_hosts
-        )
+    if api_base is not None and (
+        destination.scheme.lower() != "https"
+        or not destination.netloc
+        or destination.netloc.lower() not in trusted_hosts
     ):
         raise litellm.BadRequestError(
             message=(
