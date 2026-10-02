@@ -350,6 +350,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
     prompt_cache_min_tokens: int | None
+    min_billed_input_tokens: ReadOnly[int | None]
     off_peak_pricing: ReadOnly[OffPeakPricing | None]  # time-windowed off-peak rates
     input_cost_per_character: float | None  # only for vertex ai models
     input_cost_per_audio_token: float | None
@@ -4093,7 +4094,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
         return {k: v for k, v in model_info.items() if k not in cls.model_fields}
 
 
-DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
+DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing", "min_billed_input_tokens"})
 
 DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
     {
@@ -4349,6 +4350,7 @@ class LlmProviders(str, Enum):
     MOONSHOT = "moonshot"
     PUBLICAI = "publicai"
     V0 = "v0"
+    VISPARK = "vispark"
     MORPH = "morph"
     LAMBDA_AI = "lambda_ai"
     INCEPTION = "inception"

@@ -3,6 +3,7 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 """
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -17,9 +18,9 @@ class SimpleProviderConfig:
         self.base_url = data["base_url"]
         self.api_key_env = data["api_key_env"]
         self.api_base_env = data.get("api_base_env")
-        self.base_class = data.get("base_class", "openai_gpt")
-        self.param_mappings = data.get("param_mappings", {})
-        self.constraints = data.get("constraints", {})
+        self.base_class: str = data.get("base_class", "openai_gpt")
+        self.param_mappings: Mapping[str, str] = data.get("param_mappings", {})
+        self.constraints: Mapping[str, float] = data.get("constraints", {})
         self.special_handling = data.get("special_handling", {})
         self.supported_endpoints = data.get("supported_endpoints", [])
 

@@ -35,7 +35,7 @@ from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankResponse
-from litellm.types.utils import CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import CallTypes, Choices, CompletionTokensDetailsWrapper, CostPerToken, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
 from litellm.utils import supports_prompt_caching
 import os
@@ -10268,6 +10268,88 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     assert entry is not None
     assert entry[1]["input_cost_per_token_above_300k_tokens"] == 0.03
     assert entry[1][tier_field] == (tier_override if tier_override is not None else 0.007)
+
+
+@pytest.mark.parametrize(
+    ("model", "chat_url", "usage_cost", "stated_cost"),
+    [
+        (
+            "perplexity/sonar",
+            "https://api.perplexity.ai/chat/completions",
+            {"request_cost": 0.0025, "total_cost": 0.00266},
+            0.00266,
+        ),
+        ("openrouter/openai/gpt-5.4-nano", "https://openrouter.ai/api/v1/chat/completions", 0.00721, 0.00721),
+    ],
+    ids=["perplexity", "openrouter"],
+)
+def test_a_deployment_that_only_sets_a_billing_minimum_bills_the_provider_stated_cost(
+    _local_model_cost_map, model: str, chat_url: str, usage_cost: object, stated_cost: float
+):
+    from litellm import Router
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "deployment-with-minimum",
+                "litellm_params": {"model": model, "api_key": "provider-test-key"},
+                "model_info": {"min_billed_input_tokens": 1000},
+            }
+        ]
+    )
+    with respx.mock() as upstream:
+        upstream.post(chat_url).respond(
+            200,
+            json={
+                "id": "chatcmpl_minimum",
+                "object": "chat.completion",
+                "created": 1_790_000_000,
+                "model": "sonar",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Paris"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8, "cost": usage_cost},
+            },
+        )
+        response: Final = router.completion(
+            model="deployment-with-minimum", messages=[{"role": "user", "content": "Capital of France?"}]
+        )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(stated_cost)
+
+
+@pytest.mark.parametrize("minimum", ["600", 600.0, " 600 "], ids=["numeric_string", "whole_float", "padded_string"])
+@pytest.mark.parametrize(
+    "custom_cost_per_token",
+    [None, CostPerToken(input_cost_per_token=2e-6, output_cost_per_token=5e-6)],
+    ids=["cost_map_rates", "custom_rates"],
+)
+def test_a_billing_minimum_written_the_way_the_cost_map_guard_accepts_bills_the_minimum(
+    _local_model_cost_map,
+    monkeypatch: pytest.MonkeyPatch,
+    minimum: object,
+    custom_cost_per_token: CostPerToken | None,
+) -> None:
+    model: Final = "minimum-spelling-fixture"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 2e-6,
+            "output_cost_per_token": 5e-6,
+            "min_billed_input_tokens": minimum,
+        },
+    )
+
+    prompt_cost, _ = litellm.cost_per_token(
+        model=model,
+        custom_llm_provider="openai",
+        prompt_tokens=10,
+        completion_tokens=1,
+        custom_cost_per_token=custom_cost_per_token,
+    )
+
+    assert prompt_cost == pytest.approx(600 * 2e-6)
 
 
 @pytest.mark.parametrize(

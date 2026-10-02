@@ -1141,6 +1141,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_parallel_tool_use_config": {"type": "boolean"},
                 "supports_pdf_input": {"type": "boolean"},
                 "prompt_cache_min_tokens": {"type": "number"},
+                "min_billed_input_tokens": {"type": "number"},
                 "supports_prompt_cache_breakpoint": {"type": "boolean"},
                 "supports_thinking_cache_preservation": {"type": "boolean"},
                 "supports_prompt_caching": {"type": "boolean"},

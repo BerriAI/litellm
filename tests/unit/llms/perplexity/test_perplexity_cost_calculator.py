@@ -140,6 +140,26 @@ class TestPerplexityCostCalculator:
         assert prompt_cost == 0.0
         assert completion_cost == 0.008
 
+    @pytest.mark.parametrize(("prompt_tokens", "billed_prompt_tokens"), [(10, 600), (900, 900)])
+    def test_manual_pricing_bills_at_least_the_minimum_input_tokens(
+        self, prompt_tokens: int, billed_prompt_tokens: int
+    ):
+        litellm.model_cost["perplexity/sonar-minimum-test"] = {
+            "litellm_provider": "perplexity",
+            "mode": "chat",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 2e-06,
+            "min_billed_input_tokens": 600,
+        }
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(
+            model="sonar-minimum-test",
+            usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=7, total_tokens=prompt_tokens + 7),
+        )
+
+        assert math.isclose(prompt_cost, billed_prompt_tokens * 1e-06, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 7 * 2e-06, rel_tol=1e-10)
+
     OFF_PEAK_MODEL = "sonar-off-peak-test"
     OFF_PEAK_WINDOW = "14:00-00:00"
     INSIDE_WINDOW = datetime(2026, 9, 3, 17, 25, tzinfo=timezone.utc)
