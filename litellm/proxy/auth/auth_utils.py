@@ -1259,7 +1259,7 @@ def enforce_batch_enqueued_token_limit_is_admin_only(
         return
     raise HTTPException(
         status_code=403,
-        detail={  # mutable-ok: HTTPException.detail has no immutable form
+        detail={
             "error": f"Only proxy admins can set {BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY} on a {entity}. "
             "It replaces the standard rate limit checks for batch submissions."
         },
@@ -1410,7 +1410,7 @@ def log_once_if_budget_reservation_disabled(
         "Set disable_budget_reservation to False or remove it to restore "
         "hard per-request budget enforcement."
     )
-    constants.budget_reservation_disabled_info_emitted = True  # rebind-ok: process-wide one-shot sentinel
+    constants.budget_reservation_disabled_info_emitted = True
 
 
 def is_pass_through_provider_route(route: str) -> bool:
@@ -1883,6 +1883,15 @@ def _extract_model_candidates_from_request(
     llm_router: Router | None = None,
     team_id: str | None = None,
 ) -> list[str]:
+    if route.rstrip("/") == "/laya/v1/systemone":
+        from litellm.llms.laya.common_utils import validate_laya_model
+
+        try:
+            laya_request: Final = TypeAdapter(Mapping[str, object]).validate_python(request_data)
+            laya_model: Final = validate_laya_model(laya_request.get("model"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _dedupe_model_candidates((f"laya/{laya_model}",))
     if route == "/cost/predict-cache":
         prediction_models: Final = _cache_prediction_model_candidates(request_data, llm_router, team_id)  # pyright: ignore[reportUnknownArgumentType]  # the typed reader validates each deployment ID from this legacy payload
         return _dedupe_model_candidates(prediction_models)

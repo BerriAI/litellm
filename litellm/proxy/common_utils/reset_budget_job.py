@@ -225,7 +225,7 @@ def _enduser_invalidation_where(budget_ids: Sequence[str]) -> dict[str, object]:
     default_budget_id: Final = litellm.max_end_user_budget_id
     if default_budget_id is None or default_budget_id not in budget_ids:
         return linked
-    return {"OR": [linked, {"budget_id": None}]}  # mutable-ok: prisma where filter must be a dict
+    return {"OR": [linked, {"budget_id": None}]}
 
 
 def _queue_budget_linked_resets(
@@ -240,12 +240,8 @@ def _queue_budget_linked_resets(
     one transaction, so the reverse order lets the zero re-match a row the
     decrement just moved into the (0, cap] range and erase its carried spend."""
     for budget_id, cap in cascade.rollover_caps.items():
-        writes.queue_spend_zero(
-            where={"budget_id": budget_id, **extra, "spend": {"gt": 0, "lte": cap}}
-        )  # mutable-ok: prisma where filter must be a dict
-        writes.queue_spend_decrement(
-            where={"budget_id": budget_id, **extra, "spend": {"gt": cap}}, amount=cap
-        )  # mutable-ok: prisma where filter must be a dict
+        writes.queue_spend_zero(where={"budget_id": budget_id, **extra, "spend": {"gt": 0, "lte": cap}})
+        writes.queue_spend_decrement(where={"budget_id": budget_id, **extra, "spend": {"gt": cap}}, amount=cap)
     plain_ids: Final = tuple(bid for bid in cascade.budget_ids if bid not in cascade.rollover_caps)
     if plain_ids:
         writes.queue_spend_zero(where=_budget_link_where(plain_ids, extra))
@@ -267,16 +263,10 @@ def _queue_enduser_resets(writes: LinkedSpendResetWrites, cascade: "_BudgetCasca
         return
     cap: Final = cascade.rollover_caps.get(default_budget_id)
     if cap is None:
-        writes.queue_spend_zero(
-            where={"budget_id": None, **_SPENT_ROWS_WHERE}
-        )  # mutable-ok: prisma where filter must be a dict
+        writes.queue_spend_zero(where={"budget_id": None, **_SPENT_ROWS_WHERE})
         return
-    writes.queue_spend_zero(
-        where={"budget_id": None, "spend": {"gt": 0, "lte": cap}}
-    )  # mutable-ok: prisma where filter must be a dict
-    writes.queue_spend_decrement(
-        where={"budget_id": None, "spend": {"gt": cap}}, amount=cap
-    )  # mutable-ok: prisma where filter must be a dict
+    writes.queue_spend_zero(where={"budget_id": None, "spend": {"gt": 0, "lte": cap}})
+    writes.queue_spend_decrement(where={"budget_id": None, "spend": {"gt": cap}}, amount=cap)
 
 
 @dataclass(frozen=True, slots=True)
@@ -731,8 +721,8 @@ class ResetBudgetJob:
         return tuple(
             await self._with_db_retry(
                 lambda: EndUserRepository(self.prisma_client).table.find_many(
-                    where={**where, "user_id": {"gt": cursor}},  # mutable-ok: prisma where filter must be a dict
-                    order={"user_id": "asc"},  # mutable-ok: prisma order filter must be a dict
+                    where={**where, "user_id": {"gt": cursor}},
+                    order={"user_id": "asc"},
                     take=RESET_BUDGET_JOB_BATCH_SIZE,
                 ),
                 reason="reset_budget_read_endusers_failure",
@@ -781,13 +771,13 @@ class ResetBudgetJob:
             log_subject="projects",
         )
         rollover_caps: Final[Mapping[str, float]] = MappingProxyType(
-            {  # mutable-ok: MappingProxyType wraps a one-shot dict comprehension
+            {
                 b.budget_id: cap
                 for b in budgets_to_reset
                 if b.budget_id is not None and (cap := _rollover_cap(b.max_budget)) is not None
             }
             if _rollover_enabled()
-            else {}  # mutable-ok: empty sentinel immediately frozen by MappingProxyType
+            else {}
         )
         return _BudgetCascade(
             budgets=tuple(budgets_to_reset),

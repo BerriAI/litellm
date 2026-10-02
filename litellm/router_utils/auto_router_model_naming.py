@@ -19,6 +19,7 @@ from litellm.router_strategy.complexity_router.config import (
     COMPLEXITY_ROUTER_CONFIG_KEYS,
     DEFAULT_JEV_INSTRUCTIONS,
     LLM_CLASSIFIER_TYPES,
+    normalize_classifier_config_aliases,
 )
 
 AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
@@ -151,8 +152,11 @@ def strategy_router_dependencies(
                 )
             )
         )
-    complexity: Final = _mapping(litellm_params.get("complexity_router_config"))
+    complexity: Final = normalize_classifier_config_aliases(_mapping(litellm_params.get("complexity_router_config")))
     classifier: Final = _mapping(complexity.get("classifier_llm_config"))
+    decision_classifier: Final = _mapping(complexity.get("opensource_classifier_config"))
+    decision_provider: Final = decision_classifier.get("provider", "jev")
+    accounting_provider: Final = "typesafe" if decision_provider == "jev" else decision_provider
     return tuple(
         dict.fromkeys(
             tuple(dep for tier in _mapping(complexity.get("tiers")).values() for dep in _pool(tier, "tier"))
@@ -165,10 +169,10 @@ def strategy_router_dependencies(
             )
             + (
                 _named(
-                    f"typesafe/{_mapping(complexity.get('jev_classifier_config')).get('model', 'jev-latest')}",
+                    f"{accounting_provider}/{decision_classifier.get('model', 'jev-latest')}",
                     "evaluation",
                 )
-                if complexity.get("classifier_type") == "jev"
+                if complexity.get("classifier_type") == "oss_classifier"
                 else ()
             )
             + (
@@ -206,9 +210,9 @@ def defines_custom_classifier_prompt(complexity_router_config: object) -> bool:
     Scoped to the classifier types that actually call an LLM, which is also where the config validator
     accepts these fields: the heuristic scorers never read them.
     """
-    config: Final = _mapping(complexity_router_config)
-    if config.get("classifier_type") == "jev":
-        instructions: Final = _mapping(config.get("jev_classifier_config")).get("instructions")
+    config: Final = normalize_classifier_config_aliases(_mapping(complexity_router_config))
+    if config.get("classifier_type") == "oss_classifier":
+        instructions: Final = _mapping(config.get("opensource_classifier_config")).get("instructions")
         return isinstance(instructions, str) and instructions != DEFAULT_JEV_INSTRUCTIONS
     if config.get("classifier_type") not in LLM_CLASSIFIER_TYPES:
         return False
@@ -272,6 +276,9 @@ _OPERATOR_PROMPT_FIELDS_SQL: Final = " OR ".join(
     f"{{config}} ->> '{field}' IS NOT NULL" for field in OPERATOR_CLASSIFIER_PROMPT_FIELDS
 )
 _DEFAULT_JEV_INSTRUCTIONS_SQL: Final = DEFAULT_JEV_INSTRUCTIONS.replace("'", "''")
+_OPENSOURCE_CLASSIFIER_CONFIG_SQL: Final = (
+    "COALESCE({config} -> 'opensource_classifier_config', {config} -> 'jev_classifier_config')"
+)
 
 CUSTOMIZATION_CAPABILITY: Final = GatedAutoRouterCapability(
     key="tier_or_classifier_prompt",
@@ -286,9 +293,9 @@ CUSTOMIZATION_CAPABILITY: Final = GatedAutoRouterCapability(
         f"({{config}} ->> 'classifier_type' IN ({_LLM_CLASSIFIER_TYPES_SQL}) AND ("
         "{config} -> 'classifier_llm_config' ->> 'system_prompt' IS NOT NULL OR "
         f"{_OPERATOR_PROMPT_FIELDS_SQL})) OR "
-        "({config} ->> 'classifier_type' = 'jev' AND "
-        "jsonb_typeof({config} -> 'jev_classifier_config' -> 'instructions') = 'string' AND "
-        f"{{config}} -> 'jev_classifier_config' ->> 'instructions' <> '{_DEFAULT_JEV_INSTRUCTIONS_SQL}')"
+        "({config} ->> 'classifier_type' IN ('oss_classifier', 'jev') AND "
+        f"jsonb_typeof({_OPENSOURCE_CLASSIFIER_CONFIG_SQL} -> 'instructions') = 'string' AND "
+        f"{_OPENSOURCE_CLASSIFIER_CONFIG_SQL} ->> 'instructions' <> '{_DEFAULT_JEV_INSTRUCTIONS_SQL}')"
     ),
 )
 

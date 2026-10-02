@@ -1,0 +1,20 @@
+[package]
+name = "litellm-storage-clickhouse"
+version = "0.1.0"
+description = "Shared ClickHouse connection and HTTP storage for LiteLLM features"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+flate2.workspace = true
+litellm-http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
+rstest.workspace = true
+tokio.workspace = true
