@@ -2663,9 +2663,6 @@ async def test_acompletion_streaming_iterator():
 
 
 def _make_midstream_source(error, chunks=None):
-    """A minimal stand-in for the CustomStreamWrapper: yields one content chunk,
-    then raises ``error`` on the next pull. Carries the attributes
-    _acompletion_streaming_iterator reads."""
     from unittest.mock import MagicMock
 
     first_chunk = MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))])
@@ -2754,6 +2751,52 @@ async def test_acompletion_streaming_iterator_continues_after_content_when_eligi
     assert passed_kwargs[MID_STREAM_CONTINUATION_KWARG] is MID_STREAM_CONTINUATION_MARKER
     assert passed_kwargs["messages"][-1] == {"role": "assistant", "content": "Hello", "prefix": True}
     assert fallback_chunk in collected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "continuation_text,joined_output_trips_rule",
+    [("6789", True), ("6788", False)],
+    ids=["rule_trips_only_on_the_joined_text", "clean_continuation_streams"],
+)
+async def test_acompletion_streaming_iterator_continuation_runs_post_call_rules_on_the_joined_text(
+    monkeypatch, continuation_text, joined_output_trips_rule
+):
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    monkeypatch.setattr(litellm, "post_call_rules", [lambda output: "123-45-6789" not in output])
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "k1"}},
+            {"model_name": "backup", "litellm_params": {"model": "anthropic/claude-3-opus-20240229", "api_key": "k2"}},
+        ],
+        fallbacks=[{"gpt-4": ["backup"]}],
+        enable_mid_stream_fallback_continuation=True,
+    )
+    error = MidStreamFallbackError(
+        message="Connection lost", model="gpt-4", llm_provider="openai", generated_content="123-45-",
+        is_pre_first_chunk=False, emitted_disqualifying_content=False,
+    )
+    fallback_chunk = litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": continuation_text}}])
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=_FakeFallbackStream(fallback_chunk)),
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=_make_midstream_source(error),
+            messages=[{"role": "user", "content": "Hi"}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        if joined_output_trips_rule:
+            with pytest.raises(litellm.APIResponseValidationError):
+                async for _ in result:
+                    pass
+        else:
+            assert fallback_chunk in [chunk async for chunk in result]
 
 
 @pytest.mark.asyncio

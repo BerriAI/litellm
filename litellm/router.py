@@ -2983,12 +2983,16 @@ class Router:
                         "content_policy_fallbacks", self.content_policy_fallbacks
                     )
                     initial_kwargs["original_function"] = self._acompletion
-                    if continue_after_content:
-                        from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
-                            MID_STREAM_CONTINUATION_KWARG,
-                            MID_STREAM_CONTINUATION_MARKER,
-                        )
+                    from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
+                        MID_STREAM_CONTINUATION_KWARG,
+                        MID_STREAM_CONTINUATION_MARKER,
+                        ContinuationOutputRules,
+                    )
 
+                    continuation_rules: Final = (
+                        ContinuationOutputRules(e.generated_content, model_group) if continue_after_content else None
+                    )
+                    if continue_after_content:
                         emitted_tokens: Final = int(
                             getattr(complete_response_object_usage, "completion_tokens", 0) or 0
                         )
@@ -3035,6 +3039,8 @@ class Router:
                                 and hasattr(fallback_item, "usage")
                             ):
                                 self._combine_fallback_usage(fallback_item, complete_response_object_usage)
+                            if continuation_rules is not None and isinstance(fallback_item, ModelResponseStream):
+                                continuation_rules.observe(fallback_item)
                             yield fallback_item
                     else:
                         # If fallback returns a non-streaming response, yield None

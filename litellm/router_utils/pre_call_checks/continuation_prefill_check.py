@@ -5,8 +5,11 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
 from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.litellm_core_utils.rules import Rules
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponseStream
 from litellm.utils import supports_assistant_prefill
 
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
@@ -55,3 +58,26 @@ class ContinuationPrefillDeploymentCheck(CustomLogger):
             return healthy_deployments
         eligible: Final = (deployment for deployment in healthy_deployments if _deployment_supports_prefill(deployment))
         return list(eligible)
+
+
+def _delta_text(chunk: ModelResponseStream) -> str:
+    if not chunk.choices:
+        return ""
+    delta: Final = chunk.choices[0].delta
+    content: Final = delta.content if delta is not None else None
+    return content if isinstance(content, str) else ""
+
+
+class ContinuationOutputRules:
+    """Runs litellm.post_call_rules over the primary's text plus the continuation's, since each stream wrapper only sees its own fragment."""
+
+    def __init__(self, emitted_text: str, model: str) -> None:
+        self._text = emitted_text
+        self._model: Final = model
+        self._rules: Final = Rules()
+
+    def observe(self, chunk: ModelResponseStream) -> None:
+        if not litellm.post_call_rules:
+            return
+        self._text += _delta_text(chunk)
+        self._rules.post_call_rules(input=self._text, model=self._model)
