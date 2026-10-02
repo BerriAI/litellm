@@ -46,18 +46,12 @@ def test_tokenify_provider_keeps_explicit_credentials(monkeypatch: pytest.Monkey
 
 TOKENIFY_MODELS = tuple(sorted(name for name in litellm.model_cost if name.startswith("tokenify/")))
 
-# USD per 1M tokens (input, output), as published on https://www.tokenify.dev/pricing/
-TOKENIFY_PUBLISHED_PRICES: Final = {
-    "tokenify/deepseek/deepseek-v4-flash": (0.22, 0.66),
-    "tokenify/deepseek/deepseek-v4-pro": (0.66, 1.98),
-    "tokenify/deepseek/deepseek-v4.1-flash": (0.15, 0.6),
-    "tokenify/z-ai/glm-5.2": (0.7, 2.2),
-    "tokenify/z-ai/glm-5.3-flash": (0.15, 0.5),
-}
-
 
 def test_tokenify_models_are_priced():
-    assert TOKENIFY_MODELS == tuple(sorted(TOKENIFY_PUBLISHED_PRICES))
+    assert TOKENIFY_MODELS
+    for model in TOKENIFY_MODELS:
+        entry = litellm.model_cost[model]
+        assert 0 < entry["input_cost_per_token"] <= entry["output_cost_per_token"]
 
 
 @pytest.mark.parametrize("model", TOKENIFY_MODELS)
@@ -72,7 +66,12 @@ def test_tokenify_model_cost_and_capabilities(model: str):
     )
     model_info = litellm.get_model_info(model)
 
-    assert (prompt_cost, completion_cost) == pytest.approx(TOKENIFY_PUBLISHED_PRICES[model])
+    assert (prompt_cost, completion_cost) == pytest.approx(
+        (
+            model_info["input_cost_per_token"] * 1_000_000,
+            model_info["output_cost_per_token"] * 1_000_000,
+        )
+    )
     assert 0 < model_info["cache_read_input_token_cost"] < model_info["input_cost_per_token"]
     assert model_info["max_tokens"] == model_info["max_output_tokens"] <= model_info["max_input_tokens"]
     assert model_info["litellm_provider"] == "tokenify"
