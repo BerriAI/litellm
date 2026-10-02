@@ -12816,7 +12816,8 @@ class Router:
 
         Returns None when no deployment limits its context window, and when counting fails. The
         caller pairs this with ``skip_inline_token_count`` so neither case puts the count back on
-        the loop: a failed count leaves the deployments unfiltered, exactly as before.
+        the loop: a failed count only skips the context-window check - RPM, region and
+        invalid-params checks still run for every deployment.
         """
         if messages is None and input is None:
             return None
@@ -12831,6 +12832,43 @@ class Router:
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.error(
                 "litellm.router.py::_acount_pre_call_check_tokens: failed to count tokens. Got - %s", e
+            )
+            return None
+
+    def _resolve_pre_call_check_input_tokens(
+        self,
+        model: str,
+        healthy_deployments: Sequence[Mapping[str, object]],
+        messages: Sequence[Mapping[str, str]] | None,
+        input: str | Sequence[object] | None,
+        request_kwargs: Mapping[str, object] | None,
+        input_token_count: int | None,
+        skip_inline_token_count: bool,
+        has_countable_input: bool,
+    ) -> int | None:
+        """Best-effort input token count for the context-window check below.
+
+        None means the count is unavailable, whether because it was never needed, the
+        caller already gave up on an off-loop count, or counting raised - every case
+        just skips the context-window check; RPM, region and invalid-params checks
+        still run for every deployment regardless.
+        """
+        if input_token_count is not None:
+            return input_token_count
+        if not has_countable_input or skip_inline_token_count:
+            return None
+        if not self._pre_call_checks_need_token_count(model, healthy_deployments):
+            return None
+        try:
+            return self._count_pre_call_check_tokens(
+                messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
+                input=cast(str | list | None, input),  # cast-ok: forwarded to the sync counter
+                request_kwargs=request_kwargs,
+            )
+        except Exception as e:
+            verbose_router_logger.error(
+                "litellm.router.py::_pre_call_checks: failed to count tokens. Skipping the context-window check only; RPM/region/param checks still apply. Got - %s",
+                e,
             )
             return None
 
@@ -12861,13 +12899,6 @@ class Router:
 
         invalid_model_indices: Final = set()  # Use set for O(1) membership checks
 
-        # Token counting (tiktoken) is the dominant on-loop cost for large prompts.
-        # Only count when a deployment actually declares max_input_tokens, and count
-        # at most once; for model groups with no context-window limit it is skipped.
-        # Async callers pass the count in, already computed off the event loop, and set
-        # skip_inline_token_count so a failed off-loop count is not retried back on the loop.
-        input_tokens: int | None = input_token_count
-
         _context_window_error = False
         _potential_error_str = ""
         _rate_limit_error = False
@@ -12875,6 +12906,16 @@ class Router:
 
         has_countable_input: Final = (messages is not None or input is not None) and not compaction_pending(
             request_kwargs
+        )
+        input_tokens: Final = self._resolve_pre_call_check_input_tokens(
+            model=model,
+            healthy_deployments=_returned_deployments,
+            messages=messages,
+            input=input,
+            request_kwargs=request_kwargs,
+            input_token_count=input_token_count,
+            skip_inline_token_count=skip_inline_token_count,
+            has_countable_input=has_countable_input,
         )
 
         ## get model group RPM ##
@@ -12899,27 +12940,18 @@ class Router:
                 model_info = self.get_router_model_info(deployment=deployment, received_model_name=model)
 
                 max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
-                if isinstance(max_input_tokens, int) and has_countable_input:
-                    if input_tokens is None:
-                        if skip_inline_token_count:
-                            return _returned_deployments
-                        try:
-                            input_tokens = self._count_pre_call_check_tokens(
-                                messages=messages, input=input, request_kwargs=request_kwargs
-                            )
-                        except Exception as e:
-                            verbose_router_logger.error(
-                                "litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - %s",
-                                e,
-                            )
-                            return _returned_deployments
-                    if input_tokens > max_input_tokens:
-                        invalid_model_indices.add(idx)
-                        _context_window_error = True
-                        _potential_error_str += (
-                            f"Model={_deployment_model}, Max Input Tokens={max_input_tokens}, Got={input_tokens}"
-                        )
-                        continue
+                if (
+                    isinstance(max_input_tokens, int)
+                    and has_countable_input
+                    and input_tokens is not None
+                    and input_tokens > max_input_tokens
+                ):
+                    invalid_model_indices.add(idx)
+                    _context_window_error = True
+                    _potential_error_str += (
+                        f"Model={_deployment_model}, Max Input Tokens={max_input_tokens}, Got={input_tokens}"
+                    )
+                    continue
             except Exception as e:
                 verbose_router_logger.exception("An error occurs - %s", e)
 
