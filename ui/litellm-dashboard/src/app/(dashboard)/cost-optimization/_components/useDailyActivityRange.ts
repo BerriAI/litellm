@@ -69,6 +69,7 @@ export const useScopedDailyActivityRange = (
             entityIds: userId ? [userId] : null,
             apiKey,
             includeCurrentUtcDay: true,
+            apiKeyLimit: 1,
           }
         : null,
     [accessToken, startTime, endTime, userId, apiKey],

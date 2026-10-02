@@ -37,5 +37,6 @@ describe("useScopedDailyActivityRange wiring", () => {
     expect(url).toContain("api_key=hash-abc");
     expect(url).toContain("start_date=2026-08-01");
     expect(url).toContain("end_date=2026-08-10");
+    expect(new URL(url, "http://dashboard.test").searchParams.get("api_key_limit")).toBe("1");
   });
 });
