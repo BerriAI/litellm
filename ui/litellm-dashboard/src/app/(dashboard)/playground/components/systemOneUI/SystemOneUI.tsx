@@ -153,15 +153,9 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
           <AlertTitle>Beta: TypeSafe Jev only for now</AlertTitle>
           <AlertDescription>
             Sends System One requests (choice, noul, score) through /typesafe/v1/systemone and requires TYPESAFE_API_KEY
-            on the proxy. Support for more System One-compatible models is in progress. Give us feedback on what you
-            want for decision models:{" "}
-            <a
-              href={DECISION_MODELS_DISCUSSION_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline wrap-anywhere"
-            >
-              {DECISION_MODELS_DISCUSSION_URL}
+            on the proxy. Support for more System One-compatible models is in progress.{" "}
+            <a href={DECISION_MODELS_DISCUSSION_URL} target="_blank" rel="noopener noreferrer" className="underline">
+              Give us feedback on what you want for decision models
             </a>
           </AlertDescription>
         </Alert>

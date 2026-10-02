@@ -69,11 +69,10 @@ describe("SystemOneUI integration", () => {
     expect(screen.getByRole("note", { name: "System One beta notice" })).toHaveTextContent(
       "Support for more System One-compatible models is in progress.",
     );
-    const discussionUrl = "https://github.com/BerriAI/litellm/discussions/44231";
-    expect(screen.getByRole("note", { name: "System One beta notice" })).toHaveTextContent(
-      `Give us feedback on what you want for decision models: ${discussionUrl}`,
+    expect(screen.getByRole("link", { name: "Give us feedback on what you want for decision models" })).toHaveAttribute(
+      "href",
+      "https://github.com/BerriAI/litellm/discussions/44231",
     );
-    expect(screen.getByRole("link", { name: discussionUrl })).toHaveAttribute("href", discussionUrl);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
