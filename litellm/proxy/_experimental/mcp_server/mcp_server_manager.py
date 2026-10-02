@@ -4638,8 +4638,9 @@ class MCPServerManager:
                 # through _create_prefixed_tools — that would add the prefix a second
                 # time producing "test_petstore-test_petstore-getinventory".
                 unprefixed_tools: Final = guarded_openapi
-                if record_listing:
-                    self._record_listed_tools(server, unprefixed_tools, listed_caller, listed_generation)
+                self._record_listed_tools(
+                    server, unprefixed_tools, listed_caller, listed_generation, record_listing=record_listing
+                )
                 if not add_prefix:
                     return unprefixed_tools
                 return [t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi]
@@ -4657,8 +4658,9 @@ class MCPServerManager:
             prefixed_or_original_tools: Final = self._create_prefixed_tools(
                 guarded_tools, server, add_prefix=add_prefix
             )
-            if record_listing:
-                self._record_listed_tools(server, guarded_tools, listed_caller, listed_generation)
+            self._record_listed_tools(
+                server, guarded_tools, listed_caller, listed_generation, record_listing=record_listing
+            )
 
             return prefixed_or_original_tools
 
@@ -4765,9 +4767,13 @@ class MCPServerManager:
         tools: Sequence[MCPTool],
         caller: ListedToolsCaller | None,
         generation: int | None = None,
+        *,
+        record_listing: bool = True,
     ) -> None:
         """Store the catalog served to ``caller``. ``generation`` is the server's listed-tools generation
         read before the listing's upstream fetch; the record is skipped when it no longer matches."""
+        if not record_listing:
+            return
         if generation is not None and generation != self._listed_tools_generations.get(server.server_id, 0):
             return
         identity: Final = self._listed_tools_identity(server, caller)
