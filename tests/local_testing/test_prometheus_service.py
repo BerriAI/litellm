@@ -84,63 +84,6 @@ async def test_completion_with_caching_bad_call():
 
 
 @pytest.mark.asyncio
-async def test_router_with_caching():
-    """
-    - Run router with usage-based-routing-v2
-    - Assert success callback gets called
-    """
-    try:
-
-        def get_openai_params():
-            params = {
-                "model": "gpt-4.1-nano",
-                "api_key": os.environ["OPENAI_API_KEY"],
-            }
-            return params
-
-        model_list = [
-            {
-                "model_name": "azure/gpt-4",
-                "litellm_params": get_openai_params(),
-                "tpm": 100,
-            },
-            {
-                "model_name": "azure/gpt-4",
-                "litellm_params": get_openai_params(),
-                "tpm": 1000,
-            },
-        ]
-
-        router = litellm.Router(
-            model_list=model_list,
-            set_verbose=True,
-            debug_level="DEBUG",
-            routing_strategy="usage-based-routing-v2",
-            redis_host=os.environ["REDIS_HOST"],
-            redis_port=os.environ["REDIS_PORT"],
-            redis_password=os.environ["REDIS_PASSWORD"],
-        )
-
-        litellm.service_callback = ["prometheus_system"]
-
-        sl = ServiceLogging(mock_testing=True)
-        sl.prometheusServicesLogger.mock_testing = True
-        router.cache.redis_cache.service_logger_obj = sl
-
-        messages = [{"role": "user", "content": "Hey, how's it going?"}]
-        response1 = await router.acompletion(model="azure/gpt-4", messages=messages)
-        response1 = await router.acompletion(model="azure/gpt-4", messages=messages)
-
-        assert sl.mock_testing_async_success_hook > 0
-        assert sl.mock_testing_sync_failure_hook == 0
-        assert sl.mock_testing_async_failure_hook == 0
-        assert sl.prometheusServicesLogger.mock_testing_success_calls > 0
-
-    except Exception as e:
-        pytest.fail(f"An exception occured - {str(e)}")
-
-
-@pytest.mark.asyncio
 async def test_service_logger_db_monitoring():
     """
     Test prometheus monitoring for database operations

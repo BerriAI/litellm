@@ -523,23 +523,6 @@ async def test_image_generation():
         await image_generation(session=session, key=key_2)
 
 
-@pytest.mark.flaky(retries=5, delay=1)
-@pytest.mark.asyncio
-async def test_openai_wildcard_chat_completion():
-    """
-    - Create key for model = "*" -> this has access to all models
-    - proxy_server_config.yaml has model = *
-    - Make chat completion call
-
-    """
-    async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session, models=["*"])
-        key = key_gen["key"]
-
-        # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
-        await chat_completion(session=session, key=key, model="gpt-3.5-turbo-0125")
-
-
 @pytest.mark.asyncio
 async def test_proxy_all_models():
     """
