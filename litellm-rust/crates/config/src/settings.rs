@@ -18,7 +18,7 @@ pub struct ClickHouseStoreSettings {
     pub kind: TracingStoreKind,
     pub url: Option<SecretValue>,
     pub database: Option<String>,
-    pub retention_days: Option<u32>,
+    pub retention_days: Option<NumberOrString>,
 }
 
 impl fmt::Debug for ClickHouseStoreSettings {

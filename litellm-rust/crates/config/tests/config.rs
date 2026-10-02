@@ -128,8 +128,32 @@ fn tracing_settings_are_typed_and_redact_the_url() {
         "https://writer:password@example.com"
     );
     assert_eq!(store.database.as_deref(), Some("analytics"));
-    assert_eq!(store.retention_days, Some(7));
+    assert_eq!(store.retention_days, Some(NumberOrString::Number(7.0)));
     assert!(!format!("{config:?}").contains("password"));
+}
+
+#[test]
+fn tracing_settings_accept_environment_references() {
+    let config = Config::from_yaml(
+        "general_settings:\n  tracing:\n    store:\n      type: clickhouse\n      url: os.environ/CLICKHOUSE_URL\n      retention_days: os.environ/RETENTION_DAYS\n",
+    )
+    .unwrap();
+    let Some(TracingStoreSettings::ClickHouse(store)) =
+        config.general_settings.tracing.unwrap().store
+    else {
+        panic!("expected ClickHouse tracing store")
+    };
+    assert_eq!(
+        store.retention_days,
+        Some(NumberOrString::String(
+            "os.environ/RETENTION_DAYS".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn tracing_settings_reject_string_store() {
+    assert!(Config::from_yaml("general_settings:\n  tracing:\n    store: clickhouse\n").is_err());
 }
 
 #[test]
