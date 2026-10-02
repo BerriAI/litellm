@@ -7,11 +7,11 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.exceptions import BadRequestError
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.types.decisions import DecisionsRequest
+from litellm.types.decisions import DecisionsRequestBody
 
 router: Final = APIRouter()
 _REQUEST_DATA_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
-_DECISIONS_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequest]] = TypeAdapter(DecisionsRequest)
+_DECISIONS_REQUEST_BODY_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _GENERAL_SETTINGS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 _OPTIONAL_FLOAT_ADAPTER: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
@@ -62,7 +62,7 @@ async def decisions(
     user_temperature: Final = _OPTIONAL_FLOAT_ADAPTER.validate_python(proxy_user_temperature)
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        _DECISIONS_REQUEST_ADAPTER.validate_python(data)
+        _DECISIONS_REQUEST_BODY_ADAPTER.validate_python(data)
         return await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,

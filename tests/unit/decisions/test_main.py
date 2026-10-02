@@ -118,7 +118,7 @@ async def test_adecisions_sends_the_provider_wire_contract(
     upstream_model: str,
     respx_mock: respx.MockRouter,
 ) -> None:
-    route = respx_mock.post(url).respond(json=_RESPONSE)
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
 
     response: Final = await litellm.adecisions(
         model=model,
@@ -211,7 +211,7 @@ async def test_router_dispatches_typesafe_decisions_without_api_base(
 
 
 def test_decisions_uses_the_same_wire_contract_for_sync_calls(respx_mock: respx.MockRouter) -> None:
-    route = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+    route: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
 
     response: Final = litellm.decisions(
         model="perplexity/pplx-decider-v1-27b",

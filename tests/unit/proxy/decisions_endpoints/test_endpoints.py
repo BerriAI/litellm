@@ -220,3 +220,19 @@ def test_proxy_decisions_dispatches_unpriced_strands_decider(
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
     assert "authorization" not in upstream.calls[0].request.headers
+
+
+def test_proxy_decisions_without_model_uses_the_proxy_default_model(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_model", "decider")
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post("/v1/decisions", json={key: value for key, value in _REQUEST.items() if key != "model"})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == _RESPONSE["answers"]
+    assert upstream.called
+    assert json.loads(upstream.calls[0].request.content)["model"] == "pplx-decider-v1-27b"

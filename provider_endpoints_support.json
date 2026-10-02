@@ -82,8 +82,7 @@
         "batches": false,
         "rerank": false,
         "a2a": true,
-        "interactions": true,
-        "systemone": true
+        "interactions": true
       }
     },
     "ai21": {

@@ -1,7 +1,8 @@
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import ConfigDict, Field, PrivateAttr, model_validator, with_config
+from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -50,12 +51,25 @@ DecisionQuestionMap: TypeAlias = Annotated[
 ]
 
 
-class DecisionsRequest(LiteLLMPydanticObjectBase):
-    model: str
+class DecisionsRequestBody(LiteLLMPydanticObjectBase):
     state: DecisionsJSON
     questions: DecisionQuestionMap
 
     model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class DecisionsRequest(DecisionsRequestBody):
+    model: str
+
+
+@with_config(ConfigDict(extra="allow"))
+class DecisionsCallParams(TypedDict, total=False):
+    model: Required[ReadOnly[str]]
+    api_key: ReadOnly[str | None]
+    api_base: ReadOnly[str | None]
+    timeout: ReadOnly[float | None]
+    custom_llm_provider: ReadOnly[str | None]
+    extra_headers: ReadOnly[Mapping[str, str] | None]
 
 
 class NoulAnswer(LiteLLMPydanticObjectBase):
