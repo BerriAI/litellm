@@ -13,6 +13,8 @@ from pydantic import JsonValue
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
+_OWNED_PROXY_SALT_KEY: Final = "sk-integration-salt"
+
 
 def _project_rows(project_id: str) -> list[dict[str, JsonValue]]:
     return read_rows(
@@ -31,7 +33,14 @@ def _key_rows(key: str) -> list[dict[str, JsonValue]]:
     )
 
 
-def _cli_session_token(user_id: str, team_id: str, *, max_budget: float | None = None) -> str:
+def _cli_session_token(
+    user_id: str,
+    team_id: str,
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    max_budget: float | None = None,
+) -> str:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _OWNED_PROXY_SALT_KEY)
     user: Final = LiteLLM_UserTable(
         user_id=user_id,
         user_role="internal_user",
@@ -57,7 +66,12 @@ def _discard_unexpected_key(candidate: Gateway, response: httpx.Response) -> Non
 @pytest.fixture(scope="module")
 def ownership_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
     with gateway_from_environment() as gateway:
-        with owned_proxy(gateway, tmp_path_factory.mktemp("project-team-ownership"), {}, workers=2) as candidate:
+        with owned_proxy(
+            gateway,
+            tmp_path_factory.mktemp("project-team-ownership"),
+            {"LITELLM_SALT_KEY": _OWNED_PROXY_SALT_KEY},
+            workers=2,
+        ) as candidate:
             yield candidate
 
 
@@ -347,14 +361,18 @@ def test_key_regenerate_routes_reject_missing_project_without_changing_key(owner
         assert chat.status_code == 200, chat.text
 
 
-def test_key_generate_budget_ceiling_precedes_project_ownership(ownership_gateway: Gateway) -> None:
+def test_key_generate_budget_ceiling_precedes_project_ownership(
+    ownership_gateway: Gateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with ownership_gateway.scenario() as scenario:
         model: Final = scenario.model()
         caller_team: Final = scenario.team(models=[model])
         owner_team: Final = scenario.team(models=[model])
         project: Final = scenario.project(owner_team, models=[model])
         caller_id: Final = scenario.member(caller_team, role="admin")
-        caller_token: Final = _cli_session_token(caller_id, caller_team, max_budget=1)
+        caller_token: Final = _cli_session_token(
+            caller_id, caller_team, monkeypatch=monkeypatch, max_budget=1
+        )
         response: Final = ownership_gateway.request(
             "POST",
             "/key/generate",
@@ -379,7 +397,7 @@ def test_key_generate_budget_ceiling_precedes_project_ownership(ownership_gatewa
 
 
 def test_key_regenerate_output_estimate_admin_error_precedes_project_ownership(
-    ownership_gateway: Gateway,
+    ownership_gateway: Gateway, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with ownership_gateway.scenario() as scenario:
         model: Final = scenario.model()
@@ -388,7 +406,7 @@ def test_key_regenerate_output_estimate_admin_error_precedes_project_ownership(
         project: Final = scenario.project(project_team, models=[model])
         caller_id: Final = scenario.member(project_team, role="admin")
         key: Final = scenario.key(team_id=project_team, user_id=caller_id, models=[model])
-        caller_token: Final = _cli_session_token(caller_id, project_team)
+        caller_token: Final = _cli_session_token(caller_id, project_team, monkeypatch=monkeypatch)
         before: Final = _key_rows(key)
         response: Final = ownership_gateway.request(
             "POST",

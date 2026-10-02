@@ -20695,11 +20695,12 @@ async def test_key_generation_slow_writer_project_lookup_does_not_stall_db_track
 ) -> None:
     user_api_key_cache: Final = await _cache_with_project(_OWNED_PROJECT, [], team_id=_OWNERSHIP_PROJECT_TEAM)
     prisma_client: Final = _configure_key_endpoints(monkeypatch, user_api_key_cache)
-    monkeypatch.setattr("litellm.proxy.db.db_lookup_gate.PROXY_DB_LOOKUP_DEADLINE_SECONDS", 0.05)
+    monkeypatch.setattr("litellm.proxy.db.db_lookup_gate.PROXY_DB_LOOKUP_DEADLINE_SECONDS", 0.0)
 
     async def slow_project_lookup(*, where: Mapping[str, object]) -> LiteLLM_ProjectTable:
         assert where == {"project_id": _OWNED_PROJECT}
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
         return LiteLLM_ProjectTable(project_id=_OWNED_PROJECT, team_id=_OWNERSHIP_PROJECT_TEAM)
 
     prisma_client.writer_db.litellm_projecttable.find_unique = slow_project_lookup

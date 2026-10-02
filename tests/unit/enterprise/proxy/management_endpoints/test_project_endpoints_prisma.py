@@ -1354,7 +1354,8 @@ async def test_update_project_slow_writer_ownership_reads_do_not_stall_db_tracke
 
     async def slow_project_lookup(*, where: Mapping[str, object]) -> LiteLLM_ProjectTable:
         assert where == {"project_id": project_id}
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
         return LiteLLM_ProjectTable(project_id=project_id, team_id=source_team_id)
 
     async def slow_key_count(*, where: Mapping[str, object]) -> int:
@@ -1362,12 +1363,13 @@ async def test_update_project_slow_writer_ownership_reads_do_not_stall_db_tracke
             "project_id": project_id,
             "OR": [{"team_id": {"not": destination_team_id}}, {"team_id": None}],
         }
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
         return 0
 
     mock_prisma.writer_db.litellm_projecttable.find_unique = mock.AsyncMock(side_effect=slow_project_lookup)
     mock_prisma.writer_db.litellm_verificationtoken.count = mock.AsyncMock(side_effect=slow_key_count)
-    monkeypatch.setattr("litellm.proxy.db.db_lookup_gate.PROXY_DB_LOOKUP_DEADLINE_SECONDS", 0.05)
+    monkeypatch.setattr("litellm.proxy.db.db_lookup_gate.PROXY_DB_LOOKUP_DEADLINE_SECONDS", 0.0)
 
     db_lookup_stall_tracker.clear()
     try:
