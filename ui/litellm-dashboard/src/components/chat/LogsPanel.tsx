@@ -255,7 +255,7 @@ const LogsPanel: React.FC<Props> = ({ accessToken, userId }) => {
         end_date: moment().utc().format("YYYY-MM-DD HH:mm:ss"),
         page,
         page_size: PAGE_SIZE,
-        params: { user_id: userId, sort_by: "startTime", sort_order: "desc" },
+        params: { user_id: userId, sort_by: "startTime", sort_order: "desc" as const },
       };
       return uiSpendLogsCall(logsCallOptions);
     },
