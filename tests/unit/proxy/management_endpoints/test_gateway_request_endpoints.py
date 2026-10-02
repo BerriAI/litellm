@@ -54,7 +54,6 @@ def frozen_clock():
         yield
 
 
-# Evening on 2023-03-15 for a viewer at UTC-7, after UTC has rolled into 2023-03-16
 _WEST_OF_UTC_EVENING = datetime(2023, 3, 16, 3, 0, tzinfo=timezone.utc)
 
 
