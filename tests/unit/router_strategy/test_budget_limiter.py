@@ -209,7 +209,7 @@ async def _routable_ids(limiter: RouterBudgetLimiting, deployments: list[dict[st
     ],
 )
 async def test_zero_cap_blocks_and_only_an_unset_cap_is_unlimited(
-    disable_budget_sync,
+    disable_budget_sync: None,
     monkeypatch: pytest.MonkeyPatch,
     scope: str,
     cap: float | None,
@@ -233,7 +233,7 @@ async def test_zero_cap_blocks_and_only_an_unset_cap_is_unlimited(
 
 
 @pytest.mark.asyncio
-async def test_router_rejects_requests_to_a_provider_capped_at_zero(disable_budget_sync) -> None:
+async def test_router_rejects_requests_to_a_provider_capped_at_zero(disable_budget_sync: None) -> None:
     router: Final = Router(
         model_list=[_OPENAI_DEPLOYMENT],
         provider_budget_config={"openai": {"budget_limit": 0, "time_period": "1d"}},
@@ -244,7 +244,7 @@ async def test_router_rejects_requests_to_a_provider_capped_at_zero(disable_budg
 
 
 @pytest.mark.asyncio
-async def test_router_serves_a_provider_with_a_period_but_no_cap(disable_budget_sync) -> None:
+async def test_router_serves_a_provider_with_a_period_but_no_cap(disable_budget_sync: None) -> None:
     router: Final = Router(
         model_list=[_OPENAI_DEPLOYMENT],
         provider_budget_config={"openai": {"time_period": "1d"}},
