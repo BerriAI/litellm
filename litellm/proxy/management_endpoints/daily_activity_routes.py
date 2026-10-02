@@ -3,7 +3,7 @@ import io
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import asdict, fields, replace
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,6 +19,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     ScopeDenied,
     daily_activity_repository,
     get_daily_activity_aggregated,
+    parse_canonical_date_range,
     raise_public,
     spend_logs_window,
 )
@@ -69,9 +70,8 @@ def get_daily_activity_repository() -> DailyActivityRepository:
 
 def _date_range_error(query: EntityQuery, *, user_aggregated: bool) -> InvalidDateRange | None:
     if user_aggregated:
-        if query.start_date is None or query.end_date is None:
-            return InvalidDateRange(reason="Please provide start_date and end_date")
-        return None
+        date_range: Final = parse_canonical_date_range(query.start_date, query.end_date)
+        return date_range if isinstance(date_range, InvalidDateRange) else None
 
     range_error: Final[str | None] = aggregated_date_range_error(query.start_date, query.end_date)
     return None if range_error is None else InvalidDateRange(reason=range_error)
@@ -164,19 +164,19 @@ async def _key_activity_rows(
 
 def _export_filename(
     entity: str,
-    start_date: str,
-    end_date: str,
+    start_date: date,
+    end_date: date,
     export_type: ExportType,
     file_format: Literal["csv", "json"],
 ) -> str:
     extension: Final[str] = "csv" if file_format == "csv" else "json"
-    return f"{entity}-usage-{start_date}-{end_date}-{export_type.value}.{extension}"
+    return f"{entity}-usage-{start_date.isoformat()}-{end_date.isoformat()}-{export_type.value}.{extension}"
 
 
 def _content_disposition(
     entity: str,
-    start_date: str,
-    end_date: str,
+    start_date: date,
+    end_date: date,
     export_type: ExportType,
     file_format: Literal["csv", "json"],
 ) -> str:
@@ -479,8 +479,8 @@ def _register_export_route(router: APIRouter, resolver: EntityScopeResolver, pre
                     "Cache-Control": "no-store",
                     "Content-Disposition": _content_disposition(
                         resolver.entity,
-                        resolved.scope.start_date,
-                        resolved.scope.end_date,
+                        date.fromisoformat(resolved.scope.start_date),
+                        date.fromisoformat(resolved.scope.end_date),
                         export_type,
                         file_format,
                     ),
