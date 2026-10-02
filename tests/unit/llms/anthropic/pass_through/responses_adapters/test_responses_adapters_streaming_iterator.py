@@ -8,7 +8,7 @@ import datetime
 import json
 import os
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from types import SimpleNamespace
 
 import pytest
@@ -649,8 +649,10 @@ def _logging_obj_with_failure_hook(on_failure: Callable[[Exception], Awaitable[N
     return logging_obj
 
 
-def _collect_with_logging(stream, logging_obj: LitellmLogging) -> list:
-    async def _run() -> list:
+def _collect_with_logging(
+    stream: AsyncIterator[dict[str, object]], logging_obj: LitellmLogging
+) -> list[dict[str, object]]:
+    async def _run() -> list[dict[str, object]]:
         wrapper = AnthropicResponsesStreamWrapper(responses_stream=stream, model="m", litellm_logging_obj=logging_obj)
         return [chunk async for chunk in wrapper]
 
@@ -659,7 +661,7 @@ def _collect_with_logging(stream, logging_obj: LitellmLogging) -> list:
 
 class _DeliveryCountingConsumer:
     def __init__(self) -> None:
-        self.delivered: tuple[dict, ...] = ()
+        self.delivered: tuple[dict[str, object], ...] = ()
         self.delivered_when_hook_fired: tuple[int, ...] = ()
 
     async def hook(self, failure: Exception) -> None:
@@ -670,8 +672,8 @@ class _DeliveryCountingConsumer:
             self.delivered = (*self.delivered, chunk)
 
 
-def _failing_after_one_delta():
-    async def _gen():
+def _failing_after_one_delta() -> AsyncIterator[dict[str, object]]:
+    async def _gen() -> AsyncIterator[dict[str, object]]:
         yield {"type": "response.created"}
         yield {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}}
         yield {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hi"}
@@ -692,7 +694,7 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
         )
         recorder = _FailureHookRecorder()
 
-        async def _gen():
+        async def _gen() -> AsyncIterator[dict[str, object]]:
             yield {"type": "response.created"}
             yield {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}}
             yield {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hi"}
@@ -716,7 +718,7 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
             error={"code": "rate_limit_exceeded", "message": "Rate limit reached for gpt-5.5, try again in 20s."},
         )
 
-        async def _gen():
+        async def _gen() -> AsyncIterator[dict[str, object]]:
             yield {"type": "response.created"}
             yield {"type": "response.failed", "response": failed}
 
@@ -732,7 +734,7 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
 
         logging_obj = _logging_obj_with_failure_hook(_exploding_hook)
 
-        async def _gen():
+        async def _gen() -> AsyncIterator[dict[str, object]]:
             yield {"type": "response.created"}
             raise ConnectionResetError("Response payload is not completed")
 

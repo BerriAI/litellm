@@ -9,6 +9,8 @@ crashed with exit 139 whenever any CustomLogger was registered).
 import asyncio
 import json
 import time
+from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import cast
 
 import httpx
@@ -21,7 +23,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses import streaming_iterator as responses_streaming_iterator_module
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamingResponse
+from litellm.types.utils import StandardLoggingPayload
 
 
 class RecordingCustomLogger(CustomLogger):
@@ -162,21 +165,25 @@ async def test_sync_callbacks_run_only_after_async_handler_completes(recording_e
 
 
 class FailureRecorder(CustomLogger):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.failure_payloads: tuple = ()
-        self.success_payloads: tuple = ()
+        self.failure_payloads: tuple[StandardLoggingPayload, ...] = ()
+        self.success_payloads: tuple[StandardLoggingPayload, ...] = ()
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        self.failure_payloads = (*self.failure_payloads, kwargs["standard_logging_object"])
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.failure_payloads = (*self.failure_payloads, cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self.success_payloads = (*self.success_payloads, kwargs["standard_logging_object"])
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.success_payloads = (*self.success_payloads, cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
 
 
 class _ChunkRecorder:
     def __init__(self) -> None:
-        self.chunks: tuple = ()
+        self.chunks: tuple[ResponsesAPIStreamingResponse, ...] = ()
 
     async def drain(self, iterator: ResponsesAPIStreamingIterator) -> None:
         async for chunk in iterator:
@@ -185,7 +192,7 @@ class _ChunkRecorder:
 
 _SEA_DELTAS = ("The sea ", "is wide ", "and deep.")
 _SEA_PROMPT = "Write a 300 word story about the sea."
-_UNREACHABLE_IMAGE_INPUT = [
+_UNREACHABLE_IMAGE_INPUT: list[dict[str, object]] = [
     {
         "role": "user",
         "content": [
@@ -197,9 +204,9 @@ _UNREACHABLE_IMAGE_INPUT = [
 
 
 class _UpstreamThatTimesOutAfterThreeDeltas:
-    headers: dict = {}
+    headers: dict[str, str] = {}
 
-    async def aiter_bytes(self):
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
         for sequence_number, delta in enumerate(_SEA_DELTAS):
             event = {
                 "type": "response.output_text.delta",
@@ -213,7 +220,9 @@ class _UpstreamThatTimesOutAfterThreeDeltas:
         raise httpx.ReadTimeout("Timeout on reading data from socket")
 
 
-async def _failure_payload_after_mid_stream_timeout(monkeypatch, request_input) -> tuple[FailureRecorder, dict]:
+async def _failure_payload_after_mid_stream_timeout(
+    monkeypatch: pytest.MonkeyPatch, request_input: str | list[dict[str, object]]
+) -> tuple[FailureRecorder, StandardLoggingPayload]:
     recorder = FailureRecorder()
     monkeypatch.setattr(litellm, "failure_callback", [recorder])
     monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
@@ -237,7 +246,7 @@ async def _failure_payload_after_mid_stream_timeout(monkeypatch, request_input) 
 
     with pytest.raises(httpx.ReadTimeout, match="Timeout on reading data from socket"):
         await received.drain(iterator)
-    assert [chunk.delta for chunk in received.chunks] == list(_SEA_DELTAS)
+    assert [getattr(chunk, "delta", None) for chunk in received.chunks] == list(_SEA_DELTAS)
 
     await iterator._await_pending_logging()
     (payload,) = recorder.failure_payloads
@@ -245,7 +254,9 @@ async def _failure_payload_after_mid_stream_timeout(monkeypatch, request_input) 
 
 
 @pytest.mark.asyncio
-async def test_mid_stream_read_timeout_logs_failure_with_partial_usage_and_no_success(monkeypatch):
+async def test_mid_stream_read_timeout_logs_failure_with_partial_usage_and_no_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     recorder, payload = await _failure_payload_after_mid_stream_timeout(monkeypatch, _SEA_PROMPT)
 
     assert payload["status"] == "failure"
@@ -260,7 +271,9 @@ async def test_mid_stream_read_timeout_logs_failure_with_partial_usage_and_no_su
 
 
 @pytest.mark.asyncio
-async def test_mid_stream_failure_usage_estimate_never_fetches_image_dimensions(monkeypatch):
+async def test_mid_stream_failure_usage_estimate_never_fetches_image_dimensions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _, payload = await _failure_payload_after_mid_stream_timeout(monkeypatch, _UNREACHABLE_IMAGE_INPUT)
 
     assert payload["status"] == "failure"
