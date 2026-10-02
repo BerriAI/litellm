@@ -522,7 +522,7 @@ class _UpstreamStreamBoundary(Generic[_T]):
 
 
 class _StreamIteratorHook(Protocol[_T]):
-    def __call__(self, *, response: AsyncIterator[_T]) -> AsyncGenerator[_T, None]: ...
+    def __call__(self, *, response: AsyncIterator[_T]) -> AsyncIterator[_T]: ...
 
 
 def _is_client_error_exception(exc: Exception) -> bool:
@@ -2760,9 +2760,13 @@ class ProxyLogging:
     ) -> AsyncGenerator[_T, None]:
         upstream: Final = _UpstreamStreamBoundary(response)
         try:
-            async with contextlib.aclosing(hook(response=upstream)) as guarded:
+            guarded: Final = hook(response=upstream)
+            try:
                 async for chunk in guarded:
                     yield chunk
+            finally:
+                if isinstance(guarded, AsyncGenerator):
+                    await guarded.aclose()
         except Exception as e:
             if e is not upstream.failure:
                 enrich_http_exception_with_guardrail_context(e, callback)

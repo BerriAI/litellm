@@ -260,3 +260,45 @@ async def test_closing_the_stream_still_cleans_up_inner_callbacks_when_an_outer_
     ProxyLogging._callback_capabilities_cache.clear()
 
     assert inner.cleaned_up is True
+
+
+class _PlainAsyncIterator:
+    def __init__(self, response: AsyncGenerator[Any, None]) -> None:
+        self._response = response
+
+    def __aiter__(self) -> "_PlainAsyncIterator":
+        return self
+
+    async def __anext__(self) -> Any:
+        return await self._response.__anext__()
+
+
+class PlainIteratorCallback(CustomLogger):
+    """Iterator hook that returns an async iterator with no aclose."""
+
+    def async_post_call_streaming_iterator_hook(  # pyright: ignore[reportIncompatibleMethodOverride]  # a plain async iterator worked before aclose handling
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: AsyncGenerator[Any, None],
+        request_data: dict[str, object],
+    ) -> _PlainAsyncIterator:
+        return _PlainAsyncIterator(response)
+
+
+@pytest.mark.asyncio
+async def test_a_hook_returning_a_plain_async_iterator_streams_every_chunk():
+    proxy_logging = ProxyLogging(user_api_key_cache=MagicMock())
+
+    with patch.object(litellm, "callbacks", [PlainIteratorCallback()]):
+        ProxyLogging._callback_capabilities_cache.clear()
+        received = [
+            chunk
+            async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+                response=mock_streaming_response(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                request_data={"model": "gpt-4", "messages": []},
+            )
+        ]
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    assert [chunk async for chunk in mock_streaming_response()] == received

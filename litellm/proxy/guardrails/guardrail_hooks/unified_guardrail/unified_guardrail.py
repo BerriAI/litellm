@@ -623,6 +623,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         finish_reason_per_choice: dict[int, str | None],
         held_chars_per_choice: dict[int, int],
         is_final: bool,
+        terminated: asyncio.Event,
     ) -> AsyncGenerator[object, None]:
         """Run one guardrail processing round and emit the resulting diff chunk.
 
@@ -654,6 +655,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 is_final=is_final,
             )
         except ModifyResponseException as e:
+            terminated.set()
             if e.original_response is None:
                 e.original_response = responses_so_far
             async for block_chunk in self.handle_streaming_block(
@@ -665,6 +667,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 yield block_chunk
             raise _StreamTerminated()
         except HTTPException as e:
+            terminated.set()
             async for error_item in self.emit_streaming_http_error(
                 e,
                 call_type,
@@ -709,6 +712,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         held_chars_per_choice: Final[dict[int, int]] = {}
         chunk_counter = 0
         last_chunk: object | None = None
+        terminated: Final = asyncio.Event()
 
         def _round(reference_chunk: object, is_final: bool) -> AsyncGenerator[object, None]:
             return self._emit_transform_round(
@@ -724,6 +728,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 finish_reason_per_choice=finish_reason_per_choice,
                 held_chars_per_choice=held_chars_per_choice,
                 is_final=is_final,
+                terminated=terminated,
             )
 
         saw_tool_calls = False
@@ -829,9 +834,9 @@ class UnifiedLLMGuardrails(CustomLogger):
             return
         except (GeneratorExit, asyncio.CancelledError):
             await self._scan_uninspected_tool_calls_after_disconnect(
-                uninspected=tool_calls_released and not end_of_stream_inspection_started,
+                uninspected=tool_calls_released and not end_of_stream_inspection_started and not terminated.is_set(),
                 endpoint_translation=endpoint_translation,
-                responses_so_far=responses_so_far,
+                responses_released=responses_yielded,
                 guardrail_to_apply=guardrail_to_apply,
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
@@ -843,7 +848,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         *,
         uninspected: bool,
         endpoint_translation: _EndpointTranslation,
-        responses_so_far: Sequence[object],
+        responses_released: Sequence[object],
         guardrail_to_apply: CustomGuardrail,
         user_api_key_dict: UserAPIKeyAuth,
         request_data: _RequestData,
@@ -852,7 +857,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             return
         await UnifiedLLMGuardrails._scan_released_stream_after_disconnect(
             endpoint_translation=endpoint_translation,
-            responses_so_far=copy.deepcopy(responses_so_far),
+            responses_released=responses_released,
             last_scan_key=None,
             guardrail_to_apply=guardrail_to_apply,
             user_api_key_dict=user_api_key_dict,
@@ -1030,13 +1035,13 @@ class UnifiedLLMGuardrails(CustomLogger):
     async def _scan_released_stream_after_disconnect(
         *,
         endpoint_translation: _EndpointTranslation,
-        responses_so_far: Sequence[object],
+        responses_released: Sequence[object],
         last_scan_key: "StreamingScanKey | None",
         guardrail_to_apply: CustomGuardrail,
         user_api_key_dict: UserAPIKeyAuth,
         request_data: _RequestData,
     ) -> None:
-        scanned: Final = endpoint_translation.released_stream_as_ended(responses_so_far)
+        scanned: Final = endpoint_translation.released_stream_as_ended(copy.deepcopy(tuple(responses_released)))
         if _is_redundant_scan(endpoint_translation.get_streaming_scan_key(scanned), last_scan_key):
             return
         recorded_before: Final = len(_recorded_guardrail_information(request_data))
@@ -1194,7 +1199,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         chunks_yielded = False
         last_scan_key: StreamingScanKey | None = None  # rebind-ok: replaced after every scan round
         tool_calls_in_flight = False  # rebind-ok: tracks the latest scan key's unscanned tool calls
-        end_of_stream_scan_started = False  # rebind-ok: set once the end-of-stream scan owns the verdict
+        verdict_settled = False  # rebind-ok: set once the end-of-stream scan or a block owns the verdict
 
         try:
             async for item in response:
@@ -1286,6 +1291,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                             request_data=request_data,
                         )
                     except ModifyResponseException as e:
+                        verdict_settled = True
                         if e.original_response is None:
                             e.original_response = responses_so_far
                         # Guardrail blocked the response mid-stream. Emit a clean
@@ -1306,6 +1312,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                             yield block_chunk
                         return
                     except HTTPException as e:
+                        verdict_settled = True
                         # Response already started (we already yielded chunks); cannot send 400.
                         async for error_item in self.emit_streaming_http_error(
                             e,
@@ -1357,7 +1364,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                     else None
                 )
                 end_scan_key: Final = endpoint_translation.get_streaming_scan_key(responses_so_far)
-                end_of_stream_scan_started = True
+                verdict_settled = True
                 if _is_redundant_scan(end_scan_key, last_scan_key):
                     verbose_proxy_logger.debug(
                         "Skipping end-of-stream scan for guardrail %s: the last sampled round already scanned it all",
@@ -1416,13 +1423,13 @@ class UnifiedLLMGuardrails(CustomLogger):
             translation_class: Final = None if call_type is None else mappings.get(CallTypes(call_type))
             if (
                 chunks_yielded
-                and not end_of_stream_scan_started
+                and not verdict_settled
                 and translation_class is not None
                 and isinstance(guardrail_to_apply, CustomGuardrail)
             ):
                 await self._scan_released_stream_after_disconnect(
                     endpoint_translation=translation_class(),
-                    responses_so_far=responses_so_far,
+                    responses_released=responses_yielded,
                     last_scan_key=last_scan_key,
                     guardrail_to_apply=guardrail_to_apply,
                     user_api_key_dict=user_api_key_dict,
