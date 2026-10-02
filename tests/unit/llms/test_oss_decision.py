@@ -2,7 +2,7 @@ from typing import Final
 
 import pytest
 
-from litellm.llms.oss_decision import OssDecisionProvider, oss_connection
+from litellm.llms.oss_decision import OssDecisionProvider, oss_connection, validate_oss_request
 
 pytestmark: Final = pytest.mark.parametrize("provider", ["laya", "bespoke"])
 
@@ -49,3 +49,12 @@ def test_oss_missing_server_does_not_fall_back_to_typesafe(
     monkeypatch.setenv("NIMBLE_API_BASE", "https://nimble-search.test")
     with pytest.raises(ValueError, match=f"{provider.upper()}_API_BASE"):
         oss_connection(provider)
+
+
+def test_oss_request_accepts_the_name_ollama_serves_nimble_under_only_for_bespoke(provider: OssDecisionProvider) -> None:
+    body: Final = {"model": "nimble"}
+    if provider == "bespoke":
+        assert validate_oss_request(provider, body) == "nimble"
+        return
+    with pytest.raises(ValueError, match=f"{provider} model must be one of"):
+        validate_oss_request(provider, body)

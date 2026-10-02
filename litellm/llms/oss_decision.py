@@ -11,7 +11,7 @@ OssDecisionProvider: TypeAlias = Literal["laya", "bespoke"]
 OSS_DECISION_MODELS: Final = MappingProxyType(
     {
         "laya": ("english", "multilingual", "typed-decisions"),
-        "bespoke": ("nimble-latest", "bespokelabs/Bespoke-Nimble-9B"),
+        "bespoke": ("nimble-latest", "nimble", "bespokelabs/Bespoke-Nimble-9B"),
     }
 )
 

@@ -3,7 +3,7 @@ import type { ClassifierType } from "./classifier_types";
 
 export const OSS_CLASSIFIER_MODELS = {
   laya: ["english", "multilingual", "typed-decisions"],
-  bespoke: ["nimble-latest", "bespokelabs/Bespoke-Nimble-9B"],
+  bespoke: ["nimble-latest", "nimble", "bespokelabs/Bespoke-Nimble-9B"],
 } as const;
 
 const jevClassifierConfigFields = {

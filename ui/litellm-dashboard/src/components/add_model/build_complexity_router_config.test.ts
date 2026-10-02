@@ -82,6 +82,7 @@ describe("buildComplexityRouterConfig", () => {
 
   it.each([
     ["bespoke", "nimble-latest"],
+    ["bespoke", "nimble"],
     ["bespoke", "bespokelabs/Bespoke-Nimble-9B"],
     ["jev", "custom-jev-model"],
     [undefined, "custom-jev-model"],
