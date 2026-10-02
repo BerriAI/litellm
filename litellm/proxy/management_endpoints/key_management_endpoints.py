@@ -232,6 +232,10 @@ class _BudgetRowSoftBudgetCreate(TypedDict):
     updated_by: ReadOnly[str]
 
 
+class _KeyRowDumpable(Protocol):
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
 class _KeyUpdateTx(Protocol):
     @property
     def litellm_verificationtoken(self) -> "TableActions[prisma_models.LiteLLM_VerificationToken]": ...
@@ -2468,10 +2472,10 @@ async def _apply_soft_budget_update(
 
 
 async def _write_guarded_project_assignment(
-    table: "TableActions[prisma_models.LiteLLM_VerificationToken]",
+    table: "TableActions[_KeyRowDumpable]",
     hashed_token: str,
     data: Mapping[str, object],
-) -> "prisma_models.LiteLLM_VerificationToken | None":
+) -> "_KeyRowDumpable | None":
     updated_count: Final = await table.update_many(
         where={"token": hashed_token, "project_id": None},
         data=data,
@@ -3621,7 +3625,7 @@ async def update_key_fn(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        update_values: Final = await _handle_update_object_permission(
+        update_values: Final[Mapping[str, object]] = await _handle_update_object_permission(
             data_json=non_default_values,
             existing_key_row=existing_key_row,
             prisma_client=prisma_client,
@@ -3642,7 +3646,9 @@ async def update_key_fn(
             else await _update_key_row_assigning_project(
                 prisma_client=prisma_client,
                 key=key,
-                update_values=update_values,
+                update_values=cast(  # cast-ok: _handle_update_object_permission returns a bare dict
+                    "Mapping[str, object]", update_values
+                ),
             )
             if is_project_assignment
             else await prisma_client.update_data(token=key, data=MappingProxyType({**update_values, "token": key}))
