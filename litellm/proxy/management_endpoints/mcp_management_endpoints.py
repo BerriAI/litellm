@@ -137,6 +137,7 @@ if MCP_AVAILABLE:
         def validate_tool_name(name: str) -> _ToolNameValidationResult:
             return _ToolNameValidationResult()
 
+    from litellm.proxy._experimental.mcp_server.contracts import TargetCatalog
     from litellm.proxy._experimental.mcp_server.db import (
         McpIdentifierConflict,
         approve_mcp_server,
@@ -178,6 +179,7 @@ if MCP_AVAILABLE:
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.server_resolution import (
+        MCPServerTargetCatalog,
         authorize_mcp_server,
         resolve_mcp_server,
     )
@@ -2185,18 +2187,16 @@ if MCP_AVAILABLE:
         from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
         client_ip: Final = IPAddressUtils.get_mcp_client_ip(request) if request is not None else None
-        resolved: Final = await resolve_mcp_server(
-            server_id,
+        catalog: Final[TargetCatalog] = MCPServerTargetCatalog(
             manager=global_mcp_server_manager,
             temp_lookup=get_cached_temporary_mcp_server,
             id_client_ip=None,
             name_client_ip=client_ip,
             match_name=True,
         )
-        authorized: Final = await authorize_mcp_server(
-            resolved,
+        authorized: Final = await catalog.resolve(
+            server_id,
             user_api_key_dict,
-            manager=global_mcp_server_manager,
             is_admin_view=_user_has_admin_view(user_api_key_dict),
             not_found_detail={"error": f"MCP server {server_id} not found"},
             forbidden_detail={"error": f"Access denied to MCP server {server_id}"},
@@ -2739,15 +2739,13 @@ if MCP_AVAILABLE:
         404, so server ids can't be enumerated), using the same allowed-server
         resolution the MCP gateway enforces on tool calls.
         """
-        resolved: Final = await resolve_mcp_server(
-            server_id,
+        catalog: Final[TargetCatalog] = MCPServerTargetCatalog(
             manager=global_mcp_server_manager,
             db_lookup=lambda sid: get_mcp_server(prisma_client, sid),
         )
-        authorized: Final = await authorize_mcp_server(
-            resolved,
+        authorized: Final = await catalog.resolve(
+            server_id,
             user_api_key_dict,
-            manager=global_mcp_server_manager,
             is_admin_view=_user_has_admin_view(user_api_key_dict),
             not_found_detail={"error": f"MCP Server {server_id} not found"},
             forbidden_detail={

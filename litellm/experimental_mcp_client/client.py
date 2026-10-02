@@ -36,6 +36,7 @@ from mcp.types import (
     METHOD_NOT_FOUND,
     REQUEST_TIMEOUT,
     ClientCapabilities,
+    DiscoverResult,
     ElicitationCapability,
     FormElicitationCapability,
     GetPromptRequestParams,
@@ -402,6 +403,8 @@ class MCPClient:
         protocol_version: MCPUpstreamProtocol = "auto",
     ):
         self.protocol_version: MCPUpstreamProtocol = TypeAdapter(MCPUpstreamProtocol).validate_python(protocol_version)
+        if self.protocol_version == "2026-07-28" and transport_type == MCPTransport.sse:
+            raise ValueError("Modern MCP requires HTTP or stdio transport")
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
         self.auth_type: MCPAuthType = auth_type
@@ -540,6 +543,17 @@ class MCPClient:
 
         return safe_env
 
+    async def _prepare_session(self, session: ClientSession) -> InitializeResult | DiscoverResult:
+        if self.protocol_version != "2026-07-28":
+            return await self._initialize_session(session)
+        discovery: Final = DiscoverResult.model_validate(await session.send_discover(self.protocol_version))
+        if self.protocol_version not in discovery.supported_versions:
+            raise MCPError(code=-32022, message="Upstream did not accept the configured MCP protocol version")
+        session.adopt(discovery)
+        if session.protocol_version != self.protocol_version:
+            raise MCPError(code=-32022, message="Upstream selected an unsupported MCP protocol version")
+        return discovery
+
     async def _initialize_session(self, session: ClientSession) -> InitializeResult:
         if self.protocol_version == "auto":
             automatic: Final = await session.initialize()
@@ -623,7 +637,7 @@ class MCPClient:
                     )
                     session: Final = await session_ctx.__aenter__()
                     try:
-                        init_result: Final = await self._initialize_session(session)
+                        init_result: Final = await self._prepare_session(session)
                         instructions: Final = getattr(init_result, "instructions", None)
                         self._last_initialize_instructions = (
                             instructions.strip() or None if isinstance(instructions, str) else None
