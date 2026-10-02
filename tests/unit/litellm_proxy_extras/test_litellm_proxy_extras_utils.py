@@ -1,10 +1,12 @@
 import glob
+import logging
 import os
 import re
+import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Final
+from typing import Final, Optional
 
 import pytest
 
@@ -18,6 +20,8 @@ sys.path.insert(
 from litellm_proxy_extras.utils import (
     PARTITIONED_SPEND_LOGS_PUSH_ERROR,
     ProxyExtrasDBManager,
+    _redact_command_error,
+    _redact_credentials,
     filter_partitioned_spend_logs_diff,
 )
 
@@ -1166,3 +1170,271 @@ class TestMigrationJobOwnedDrift:
         assert 'PRIMARY KEY ("request_id")' not in filtered
         assert "LiteLLM_SpendLogs_legacy" not in filtered
         assert 'ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN     "updated_by" TEXT;' in filtered
+
+
+_P3018_UNCLASSIFIED_STDERR: Final = (
+    "Error: P3018\n\n"
+    "A migration failed to apply. New migrations cannot be applied before the error is "
+    "recovered from.\n\n"
+    "Migration name: 20260921190000_agent_identity\n\n"
+    "Database error code: 23505\n\n"
+    "Database error:\n"
+    'ERROR: could not create unique index "agent_identity_key"\n'
+    "DETAIL: Key (agent_id)=(agent-1) is duplicated.\n"
+)
+
+
+_FAKE_PRISMA_PID: Final = 424242
+
+
+class TestV1MigrationFailuresLogAtError:
+    @staticmethod
+    def _run_v1_migrations(
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        *,
+        deploy_stderr: Optional[str] = None,
+        deploy_timeout: bool = False,
+        diff_stderr: Optional[str] = None,
+        database_url: Optional[str] = None,
+    ) -> tuple[bool, list[list[str]], list[int]]:
+        import litellm_proxy_extras.utils as utils_module
+
+        calls: Final[list[list[str]]] = []
+        killed_pids: Final[list[int]] = []
+
+        class _FakePrismaPopen:
+            def __init__(
+                self,
+                argv: tuple[str, ...],
+                *,
+                env: Optional[dict[str, str]] = None,
+                stdout: object = None,
+                stderr: object = None,
+                text: object = None,
+                start_new_session: object = None,
+            ) -> None:
+                self.args: Final = argv
+                self.argv: Final = argv
+                self.pid: Final = _FAKE_PRISMA_PID
+                self.returncode: Optional[int] = None
+                calls.append(list(argv))
+
+            def __enter__(self) -> "_FakePrismaPopen":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def _subcommand(self) -> tuple[str, str]:
+                known: Final = (
+                    ("migrate", "deploy"),
+                    ("migrate", "diff"),
+                    ("migrate", "resolve"),
+                    ("db", "execute"),
+                )
+                for index in range(len(self.argv) - 1):
+                    pair: Final = tuple(self.argv[index : index + 2])
+                    if pair in known:
+                        return pair
+                return ("", "")
+
+            def communicate(self, timeout: Optional[float] = None) -> tuple[str, str]:
+                subcommand: Final = self._subcommand()
+                if subcommand == ("migrate", "deploy"):
+                    if deploy_timeout:
+                        raise subprocess.TimeoutExpired(self.argv, timeout)
+                    if deploy_stderr is not None:
+                        self.returncode = 1
+                        return "", deploy_stderr
+                    self.returncode = 0
+                    return "No pending migrations to apply", ""
+                if subcommand == ("migrate", "diff") and diff_stderr is not None:
+                    self.returncode = 1
+                    return "", diff_stderr
+                self.returncode = 0
+                return "", ""
+
+        migration_dir: Final = tmp_path / "migration_dir"
+        migration_dir.mkdir()
+        if database_url is None:
+            monkeypatch.delenv("DATABASE_URL", raising=False)
+        else:
+            monkeypatch.setenv("DATABASE_URL", database_url)
+        monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(migration_dir))
+        monkeypatch.setattr(
+            utils_module.prisma_toolchain.subprocess, "Popen", _FakePrismaPopen
+        )
+        monkeypatch.setattr(
+            utils_module.prisma_toolchain.os, "killpg", lambda pid, sig: killed_pids.append(pid)
+        )
+        monkeypatch.setattr(utils_module.time, "sleep", lambda seconds: None)
+
+        succeeded: Final = ProxyExtrasDBManager._run_migrations(use_migrate=True, use_v2_resolver=False)
+        return succeeded, calls, killed_pids
+
+    @staticmethod
+    def _deploy_call_count(calls: list[list[str]]) -> int:
+        return sum(1 for call in calls if tuple(call[-2:]) == ("migrate", "deploy"))
+
+    @staticmethod
+    def _error_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
+        return [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno >= logging.ERROR and record.name.startswith("litellm_proxy_extras")
+        ]
+
+    def test_an_unrecognized_prisma_error_logs_its_stderr_at_error(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        stderr: Final = "Error: P1001: Can't reach database server at db:5432"
+        with caplog.at_level(logging.ERROR, logger="litellm_proxy_extras"):
+            succeeded, calls, _ = self._run_v1_migrations(
+                monkeypatch, tmp_path, deploy_stderr=stderr
+            )
+
+        assert succeeded is False
+        assert self._deploy_call_count(calls) == 4
+        assert any(stderr in message for message in self._error_messages(caplog))
+
+    def test_an_unclassified_p3018_logs_its_stderr_and_retry_failure_at_error(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.ERROR, logger="litellm_proxy_extras"):
+            succeeded, calls, _ = self._run_v1_migrations(
+                monkeypatch, tmp_path, deploy_stderr=_P3018_UNCLASSIFIED_STDERR
+            )
+
+        assert succeeded is False
+        assert self._deploy_call_count(calls) == 4
+        messages: Final = self._error_messages(caplog)
+        assert any(
+            "20260921190000_agent_identity" in message and "is duplicated" in message
+            for message in messages
+        )
+        assert any(
+            "The process failed to execute" in message and "Retrying... (3 attempts left)" in message
+            for message in messages
+        )
+
+    def test_a_timeout_logs_at_error_naming_the_migrate_deploy_timeout_env_var(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from litellm_proxy_extras.prisma_toolchain import PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR
+
+        with caplog.at_level(logging.ERROR, logger="litellm_proxy_extras"):
+            succeeded, calls, killed_pids = self._run_v1_migrations(
+                monkeypatch, tmp_path, deploy_timeout=True
+            )
+
+        assert succeeded is False
+        assert self._deploy_call_count(calls) == 4
+        assert killed_pids == [_FAKE_PRISMA_PID] * 4
+        assert any(
+            "timed out" in message and PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR in message
+            for message in self._error_messages(caplog)
+        )
+
+    def test_a_recovered_baseline_logs_nothing_at_error(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.ERROR, logger="litellm_proxy_extras"):
+            succeeded, calls, _ = self._run_v1_migrations(
+                monkeypatch,
+                tmp_path,
+                deploy_stderr=_P3005_STDERR,
+                database_url="postgresql://user:pass@db:5432/litellm",
+            )
+
+        assert succeeded is True
+        assert tuple(calls[0][-2:]) == ("migrate", "deploy")
+        assert self._error_messages(caplog) == []
+
+    def test_a_failed_baseline_recovery_logs_its_stderr_at_error(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG, logger="litellm_proxy_extras"):
+            succeeded, calls, _ = self._run_v1_migrations(
+                monkeypatch,
+                tmp_path,
+                deploy_stderr=_P3005_STDERR,
+                diff_stderr="baseline diff failed: XYZ-7731",
+                database_url="postgresql://llmproxy:s3cr3t 'p\"w@db:5432/litellm",
+            )
+
+        assert succeeded is False
+        assert self._deploy_call_count(calls) == 4
+        assert [
+            record.getMessage()
+            for record in caplog.records
+            if "s3cr3t" in record.getMessage() or 'p"w' in record.getMessage()
+        ] == []
+        messages: Final = self._error_messages(caplog)
+        assert any(
+            "postgresql://llmproxy:****@db:5432/litellm" in message for message in messages
+        )
+        assert any("XYZ-7731" in message for message in messages)
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    (
+        (
+            "postgresql://u:pw@db:5432/litellm",
+            "postgresql://u:****@db:5432/litellm",
+        ),
+        (
+            "postgresql://u:p@ss@db:5432/litellm",
+            "postgresql://u:****@db:5432/litellm",
+        ),
+        (
+            "postgresql://db/litellm?password=x&sslmode=require",
+            "postgresql://db/litellm?password=****&sslmode=require",
+        ),
+        (
+            "postgresql://db/litellm?sslpassword=t0ps3cr3t",
+            "postgresql://db/litellm?sslpassword=****",
+        ),
+        (
+            "postgresql://u@db:5432/litellm",
+            "postgresql://u@db:5432/litellm",
+        ),
+        (
+            "plain text with no URL",
+            "plain text with no URL",
+        ),
+        (
+            "postgresql://u:pa'ss@db/litellm",
+            "postgresql://u:****@db/litellm",
+        ),
+        (
+            'postgresql://u:pa"ss@db/litellm',
+            "postgresql://u:****@db/litellm",
+        ),
+        (
+            "postgresql://db/litellm?password=a'b&sslmode=require",
+            "postgresql://db/litellm?password=****&sslmode=require",
+        ),
+        (
+            "['prisma', '--to-url', 'postgresql://u:p@h/db']",
+            "['prisma', '--to-url', 'postgresql://u:****@h/db']",
+        ),
+    ),
+)
+def test_redact_credentials_masks_passwords_in_embedded_urls(raw: str, expected: str) -> None:
+    assert _redact_credentials(raw) == expected
+
+
+@pytest.mark.parametrize("password", ("zq'7x", 'zq"7x', 'zq\'"7x', "zq 7x", "zq@7x"))
+def test_redact_command_error_masks_url_arguments(password: str) -> None:
+    error: Final = subprocess.CalledProcessError(
+        1, ["prisma", "migrate", "diff", "--to-url", f"postgresql://u:{password}@db:5432/litellm"]
+    )
+
+    message: Final = _redact_command_error(error)
+
+    assert "zq" not in message
+    assert "7x" not in message
+    assert "postgresql://u:****@db:5432/litellm" in message
+    assert "returned non-zero exit status 1" in message

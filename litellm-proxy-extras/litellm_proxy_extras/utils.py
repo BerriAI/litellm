@@ -11,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
@@ -185,6 +186,36 @@ def _max_migration_timestamp(names) -> int:
     return max(_migration_timestamp(n) for n in names)
 
 
+_URL_USERINFO_PASSWORD: Final = re.compile(r"(?P<prefix>[A-Za-z][A-Za-z0-9+.\-]*://[^:/@\s'\"]*):[^\s]*@")
+_QUERY_PASSWORD: Final = re.compile(r"(?P<key>\b(?:ssl)?password=)[^&\s]*", re.IGNORECASE)
+
+
+def _redact_credentials(text: str) -> str:
+    """Mask passwords in any connection URL embedded in text before it is logged."""
+    without_userinfo: Final = _URL_USERINFO_PASSWORD.sub(r"\g<prefix>:****@", text)
+    return _QUERY_PASSWORD.sub(r"\g<key>****", without_userinfo)
+
+
+def _redact_url_argument(argument: str) -> str:
+    try:
+        parts: Final = urlsplit(argument)
+    except ValueError:
+        return _redact_credentials(argument)
+    if parts.password is None:
+        return _redact_credentials(argument)
+    host: Final = parts.netloc.rpartition("@")[2]
+    return _redact_credentials(urlunsplit(parts._replace(netloc=f"{parts.username}:****@{host}")))
+
+
+def _redact_command_error(error: subprocess.CalledProcessError) -> str:
+    command: Final = (
+        _redact_credentials(error.cmd)
+        if isinstance(error.cmd, str)
+        else [_redact_url_argument(str(argument)) for argument in error.cmd]
+    )
+    return str(subprocess.CalledProcessError(error.returncode, command))
+
+
 def _get_prisma_command() -> str:
     """Get the Prisma command to use, bypassing Python wrapper in offline mode."""
     if str_to_bool(os.getenv("PRISMA_OFFLINE_MODE")):
@@ -298,7 +329,8 @@ class ProxyExtrasDBManager:
             return False
         except subprocess.CalledProcessError as e:
             logger.warning(
-                f"Error creating baseline migration: {e}, {e.stderr}, {e.stdout}"
+                f"Error creating baseline migration: {_redact_command_error(e)}, "
+                f"{_redact_credentials(str(e.stderr))}, {_redact_credentials(str(e.stdout))}"
             )
             raise e
 
@@ -1518,6 +1550,10 @@ class ProxyExtrasDBManager:
                                     f"Error: {stderr}"
                                 )
                                 raise
+                        else:
+                            logger.error(
+                                f"prisma migrate deploy failed with an error the resolver does not handle: {_redact_credentials(stderr)}"
+                            )
                 else:
                     if ProxyExtrasDBManager.spend_logs_is_partitioned():
                         raise RuntimeError(PARTITIONED_SPEND_LOGS_PUSH_ERROR)
@@ -1532,7 +1568,7 @@ class ProxyExtrasDBManager:
                     )
                     return True
             except subprocess.TimeoutExpired:
-                logger.warning(
+                logger.error(
                     "Attempt %s timed out. Raise %s if this database needs longer to apply its schema.",
                     attempt + 1,
                     PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR if use_migrate else PRISMA_COMMAND_TIMEOUT_ENV_VAR,
@@ -1545,7 +1581,10 @@ class ProxyExtrasDBManager:
                     if attempts_left > 0
                     else ""
                 )
-                logger.info(f"The process failed to execute. Details: {e}.{retry_msg}")
+                stderr_detail: Final = (
+                    f" stderr: {_redact_credentials(str(e.stderr))}" if e.stderr else ""
+                )
+                logger.error(f"The process failed to execute. Details: {_redact_command_error(e)}.{stderr_detail}{retry_msg}")
                 time.sleep(random.randrange(5, 15))
             finally:
                 os.chdir(original_dir)
