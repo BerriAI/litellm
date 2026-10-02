@@ -1,94 +1,141 @@
-import { Aperture, ArrowUpRight, CheckCircle2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import Link from "next/link";
+import { Check, ArrowRight, Loader2 } from "lucide-react";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { uiHref } from "@/utils/uiHref";
 
 export function LensWelcome({
+  tracesReady,
+  requestsReady = false,
+  checking,
+  traceError,
   connected,
   readOnly,
   onConnect,
   onCreate,
+  onRetry,
+  onExample,
 }: {
+  tracesReady: boolean;
+  requestsReady?: boolean;
+  checking: boolean;
+  traceError?: string;
   connected: boolean;
   readOnly: boolean;
   onConnect: () => void;
   onCreate: () => void;
+  onRetry: () => void;
+  onExample: () => void;
 }) {
+  const activityReady = tracesReady || requestsReady;
+  const workerReady = activityReady && connected;
+  const canCreate = workerReady && !readOnly;
+  const canConnect = activityReady && !readOnly;
+  const traceStatus = activityStatus(tracesReady, requestsReady, checking);
+  const waitingForWorker = activityReady && !connected;
+  const pendingClass = activityReady ? "" : "text-muted-foreground";
+  const firstStepTitle = requestsReady && !tracesReady ? "Recorded activity" : "Set up traces";
+  const traceButtonClass = buttonVariants({
+    variant: activityReady ? "ghost" : "default",
+    className: "col-start-2 w-fit sm:col-start-auto",
+  });
   return (
-    <section aria-labelledby="lens-welcome" className="overflow-hidden rounded-xl border bg-card">
-      <div className="border-b bg-muted/20 px-6 py-10 sm:px-10">
-        <Aperture aria-hidden="true" className="mb-5 size-8" strokeWidth={1.5} />
-        <p className="mb-2 text-xs font-medium uppercase tracking-widest text-muted-foreground">Getting started</p>
-        <h2 id="lens-welcome" className="text-2xl font-semibold tracking-tight">
-          Understand what your agents are doing
-        </h2>
-        <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
-          Tell Lens how your agent should behave. It reviews recorded runs, finds recurring problems, and links each
-          finding to the evidence behind it.
-        </p>
-      </div>
-      <ol className="grid divide-y lg:grid-cols-3 lg:divide-x lg:divide-y-0">
-        <li className="flex flex-col gap-3 p-6 sm:p-8">
-          <span className="flex size-7 items-center justify-center rounded-full border text-xs font-medium">1</span>
-          <h3 className="font-medium">Start with recorded activity</h3>
-          <p className="text-sm leading-6 text-muted-foreground">
-            Use the agent traces or LLM requests already in LiteLLM. Lens needs their inputs and outputs to understand
-            what happened.
-          </p>
-          <a
-            href={uiHref("logs/")}
-            className="mt-auto inline-flex items-center gap-1 pt-3 text-sm font-medium underline-offset-4 hover:underline"
+    <section aria-labelledby="lens-welcome" className="max-w-3xl py-4 sm:py-6">
+      <h2 id="lens-welcome" className="text-xl font-semibold tracking-tight">
+        Find what needs attention
+      </h2>
+      <p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">
+        Check how your agents behave. Get findings you can trace back to what happened.
+      </p>
+      <Button variant="link" className="mt-3 h-auto px-0 text-sm" onClick={onExample}>
+        View an example <ArrowRight className="size-3.5" />
+      </Button>
+      <ol className="mt-8 divide-y border-y">
+        <li className="grid grid-cols-[28px_minmax(0,1fr)] items-center gap-x-4 gap-y-3 py-5 sm:grid-cols-[28px_minmax(0,1fr)_auto]">
+          <Step number={1} complete={activityReady} checking={checking} active={!activityReady} />
+          <div>
+            <h3 className="text-sm font-medium">{firstStepTitle}</h3>
+            <p className="mt-1 text-sm text-muted-foreground">{traceStatus}</p>
+          </div>
+          <Link href={uiHref("lens/?tab=traces")} className={traceButtonClass}>
+            {tracesReady ? "View traces" : "Set up traces"}
+          </Link>
+        </li>
+        <li
+          className={`grid grid-cols-[28px_minmax(0,1fr)] items-center gap-x-4 gap-y-3 py-5 sm:grid-cols-[28px_minmax(0,1fr)_auto] ${pendingClass}`}
+        >
+          <Step number={2} complete={workerReady} active={waitingForWorker} />
+          <div>
+            <h3 className="text-sm font-medium">Connect a worker</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {workerReady ? "Worker connected" : "Runs your investigations in the background."}
+            </p>
+          </div>
+          <Button
+            className="col-start-2 w-fit sm:col-start-auto"
+            variant={waitingForWorker ? "default" : "ghost"}
+            disabled={!canConnect}
+            onClick={onConnect}
           >
-            View logs <ArrowUpRight aria-hidden="true" className="size-4" />
-          </a>
+            {connected ? "Manage worker" : "Connect worker"}
+          </Button>
         </li>
-        <li className="flex flex-col gap-3 p-6 sm:p-8">
-          <span className="flex size-7 items-center justify-center rounded-full border text-xs font-medium">
-            {connected ? <CheckCircle2 aria-hidden="true" className="size-4 text-emerald-600" /> : "2"}
-          </span>
-          <h3 className="font-medium">Connect the analyzer</h3>
-          <p className="text-sm leading-6 text-muted-foreground">
-            Run one Docker command on your server. The analyzer connects to LiteLLM and runs scans in the background for
-            all your lenses.
-          </p>
-          <div className="mt-auto pt-3">
-            {connected && (
-              <p role="status" className="text-sm font-medium text-emerald-700 dark:text-emerald-400">
-                Analyzer connected
-              </p>
-            )}
-            {!connected && !readOnly && (
-              <Button variant="outline" onClick={onConnect}>
-                Connect analyzer
-              </Button>
-            )}
-            {!connected && readOnly && (
-              <p className="text-sm text-muted-foreground">An administrator can connect the analyzer.</p>
-            )}
+        <li
+          className={`grid grid-cols-[28px_minmax(0,1fr)] items-center gap-x-4 gap-y-3 py-5 sm:grid-cols-[28px_minmax(0,1fr)_auto] ${!workerReady ? "text-muted-foreground" : ""}`}
+        >
+          <Step number={3} complete={false} active={workerReady} />
+          <div>
+            <h3 className="text-sm font-medium">Run an investigation</h3>
           </div>
-        </li>
-        <li className="flex flex-col gap-3 p-6 sm:p-8">
-          <span className="flex size-7 items-center justify-center rounded-full border text-xs font-medium">3</span>
-          <h3 className="font-medium">Create your first lens</h3>
-          <p className="text-sm leading-6 text-muted-foreground">
-            Describe expected behavior, choose the runs to review, and start a scan. Run it once or repeat on a
-            schedule.
-          </p>
-          <div className="mt-auto pt-3">
-            {!readOnly ? (
-              <Button onClick={onCreate}>
-                Set up your first lens <ArrowUpRight aria-hidden="true" className="size-4" />
-              </Button>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                Ask an administrator to create a lens. Findings will appear here.
-              </p>
-            )}
-          </div>
+          <Button
+            className="col-start-2 w-fit sm:col-start-auto"
+            variant={workerReady ? "default" : "ghost"}
+            disabled={!canCreate}
+            onClick={onCreate}
+          >
+            New investigation
+          </Button>
         </li>
       </ol>
-      <div className="border-t bg-muted/20 px-6 py-4 text-sm text-muted-foreground sm:px-10">
-        Try questions like “Did the agent finish the task?”, “Are handoffs working?”, or “Where is it repeating work?”
-      </div>
+      {traceError && (
+        <div role="alert" className="mt-6 text-sm text-destructive">
+          Could not check recorded activity. {traceError}{" "}
+          <Button variant="link" onClick={onRetry}>
+            Retry
+          </Button>
+        </div>
+      )}
+      {readOnly && (
+        <p className="mt-6 text-sm text-muted-foreground">An administrator can finish setup and run investigations.</p>
+      )}
     </section>
   );
+}
+
+function Step({
+  number,
+  complete,
+  checking = false,
+  active = false,
+}: {
+  number: number;
+  complete: boolean;
+  checking?: boolean;
+  active?: boolean;
+}) {
+  const incomplete = checking ? <Loader2 className="size-4 animate-spin" /> : number;
+  const unfinishedStyle = active ? "bg-foreground text-background" : "border text-muted-foreground";
+  return (
+    <span
+      className={`flex size-7 items-center justify-center rounded-full text-xs font-medium ${complete ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400" : unfinishedStyle}`}
+      aria-label={complete ? `Step ${number} complete` : `Step ${number}`}
+    >
+      {complete ? <Check className="size-4" /> : incomplete}
+    </span>
+  );
+}
+
+function activityStatus(traces: boolean, requests: boolean, checking: boolean) {
+  if (traces) return "Traces received";
+  if (requests) return "Request logs received";
+  return checking ? "Checking for activity…" : "Connect your agent and send a trace.";
 }

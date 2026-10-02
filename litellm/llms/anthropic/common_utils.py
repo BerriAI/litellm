@@ -27,16 +27,20 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
+    ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
     ANTHROPIC_OAUTH_BETA_HEADER,
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
+    ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
     AnthropicMessagesToolChoice,
+    AnthropicThinkingParam,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.model_listing import ModelInfoResponse
@@ -336,6 +340,23 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """
         file_ids: Final = get_file_ids_from_messages(messages)
         return len(file_ids) > 0
+
+    def is_thinking_display_updates_used(self, thinking: AnthropicThinkingParam | None) -> bool:
+        if not isinstance(thinking, dict):
+            return False
+        return thinking.get("type") in ("adaptive", "enabled") and thinking.get("display") == "updates"
+
+    def is_mid_conversation_tool_change_used(self, messages: Sequence[object]) -> bool:
+        for message in messages:
+            if message_field(message, "role") != "system":
+                continue
+            for block in parts_of(message_field(message, "content")):
+                if (
+                    message_field(block, "type") in ("tool_addition", "tool_removal")
+                    and message_field(message_field(block, "tool"), "type") == "tool_reference"
+                ):
+                    return True
+        return False
 
     def is_mid_conversation_output_config_used(self, messages: list[AllMessageValues]) -> bool:
         """
@@ -749,7 +770,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             custom_llm_provider=custom_llm_provider,
         )
         existing_output_config: Final = optional_params.get("output_config")
-        optional_params["thinking"] = {"type": "adaptive"}
+        display: Final = thinking.get("display")
+        if display in ("summarized", "omitted"):
+            optional_params["thinking"] = {"type": "adaptive", "display": display}
+        else:
+            optional_params["thinking"] = {"type": "adaptive"}
         optional_params["output_config"] = {
             "effort": effort,
             **(existing_output_config if isinstance(existing_output_config, dict) else MappingProxyType({})),
@@ -869,6 +894,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         *,
         custom_llm_provider: str,
         is_mid_conversation_output_config_used: bool = False,
+        is_thinking_display_updates_used: bool = False,
+        is_mid_conversation_tool_change_used: bool = False,
     ) -> list[str]:
         """
         Get list of common beta headers based on the features that are active.
@@ -904,7 +931,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if is_mid_conversation_output_config_used:
             betas.append(ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER)
 
-        return list(set(betas))
+        thinking_display_betas: Final = (
+            (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,) if is_thinking_display_updates_used else ()
+        )
+        tool_change_betas: Final = (
+            (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,) if is_mid_conversation_tool_change_used else ()
+        )
+        return list(set(betas).union(thinking_display_betas, tool_change_betas))
 
     @staticmethod
     def _make_api_key_auth_header(api_key: str, api_base: str | None, use_bearer_for_custom_base: bool = False) -> dict:
@@ -937,6 +970,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_base: str | None = None,
         use_bearer_for_custom_base: bool = False,
         is_mid_conversation_output_config_used: bool = False,
+        is_thinking_display_updates_used: bool = False,
+        is_mid_conversation_tool_change_used: bool = False,
     ) -> dict:
         betas: Final = set()
         # Anthropic no longer requires the prompt-caching beta header
@@ -993,6 +1028,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if user_anthropic_beta_headers is not None:
             betas.update(user_anthropic_beta_headers)
 
+        all_betas: Final = betas.union(
+            (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,) if is_thinking_display_updates_used else (),
+            (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,) if is_mid_conversation_tool_change_used else (),
+        )
+
         # Don't send any beta headers to Vertex, except web search which is required
         if is_vertex_request is True:
             # Vertex AI requires web search beta header for web search to work
@@ -1000,8 +1040,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 
                 headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
-        elif len(betas) > 0:
-            headers["anthropic-beta"] = ",".join(betas)
+        elif len(all_betas) > 0:
+            headers["anthropic-beta"] = ",".join(all_betas)
 
         return headers
 
@@ -1059,6 +1099,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             auth_token=auth_token,
             file_id_used=file_id_used,
             is_mid_conversation_output_config_used=is_mid_conversation_output_config_used,
+            is_thinking_display_updates_used=self.is_thinking_display_updates_used(optional_params.get("thinking")),
+            is_mid_conversation_tool_change_used=self.is_mid_conversation_tool_change_used(messages),
             web_search_tool_used=web_search_tool_used,
             is_vertex_request=optional_params.get("is_vertex_request", False),
             user_anthropic_beta_headers=user_anthropic_beta_headers,
@@ -1310,12 +1352,12 @@ def _without_encrypted_reasoning_blocks(message: dict) -> dict | None:  # mutabl
     content: Final = message.get("content")
     if not isinstance(content, list):
         return message
-    kept: Final = [b for b in content if not is_encrypted_reasoning_block(b)]  # mutable-ok: API message payload
+    kept: Final = [b for b in content if not is_encrypted_reasoning_block(b)]
     if len(kept) == len(content):
         return message
     if not kept:
         return None
-    return {**message, "content": kept}  # mutable-ok: API message payload
+    return {**message, "content": kept}
 
 
 def strip_encrypted_reasoning_blocks_from_anthropic_messages(
@@ -1327,7 +1369,7 @@ def strip_encrypted_reasoning_blocks_from_anthropic_messages(
     Anthropic, which cannot verify them. Anthropic's own signed blocks are kept.
     """
     stripped: Final = (_without_encrypted_reasoning_blocks(m) for m in messages)
-    return [m for m in stripped if m is not None]  # mutable-ok: API message payload
+    return [m for m in stripped if m is not None]
 
 
 def strip_thinking_blocks_from_anthropic_messages_request_dict(
@@ -1615,7 +1657,7 @@ def _flatten_web_search_results_in_message(message: object) -> object:
         }
     )
     rewritten: Final = tuple(_rewrite_replayed_web_search_block(block, flattenable, queries) for block in content)
-    return {**message, "content": [b for b in rewritten if b is not None]}  # mutable-ok: JSON wire format
+    return {**message, "content": [b for b in rewritten if b is not None]}
 
 
 def flatten_unencrypted_web_search_results_in_anthropic_messages(
@@ -1633,49 +1675,47 @@ def flatten_unencrypted_web_search_results_in_anthropic_messages(
     evidence in the conversation instead of 400ing the follow-up turn, and leaves
     genuine Anthropic-issued blocks untouched.
     """
-    return [_flatten_web_search_results_in_message(m) for m in messages]  # mutable-ok: JSON wire format
+    return [_flatten_web_search_results_in_message(m) for m in messages]
 
 
 def _without_provider_specific_fields(block: object) -> object:
     if not isinstance(block, dict) or "provider_specific_fields" not in block:
         return block
-    return {k: v for k, v in block.items() if k != "provider_specific_fields"}  # mutable-ok: JSON wire format
+    return {k: v for k, v in block.items() if k != "provider_specific_fields"}
 
 
 def _strip_provider_specific_fields_in_message(message: object) -> object:
     if not isinstance(message, dict) or not isinstance(message.get("content"), list):
         return message
-    content: Final = [_without_provider_specific_fields(b) for b in message["content"]]  # mutable-ok: JSON wire format
-    return {**message, "content": content}  # mutable-ok: JSON wire format
+    content: Final = [_without_provider_specific_fields(b) for b in message["content"]]
+    return {**message, "content": content}
 
 
 def strip_provider_specific_fields_from_anthropic_messages(
     messages: Sequence[object],
 ) -> Sequence[object]:
-    return [_strip_provider_specific_fields_in_message(m) for m in messages]  # mutable-ok: JSON wire format
+    return [_strip_provider_specific_fields_in_message(m) for m in messages]
 
 
 def _normalized_cache_control(cache_control: object) -> dict[str, str] | None:  # mutable-ok: JSON wire format
     if not isinstance(cache_control, Mapping):
         return None
     cache_type: Final = cache_control.get("type")
-    return {"type": cache_type if isinstance(cache_type, str) else "ephemeral"}  # mutable-ok: JSON wire format
+    return {"type": cache_type if isinstance(cache_type, str) else "ephemeral"}
 
 
 def _with_portable_cache_control(block: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: JSON wire format
     if "cache_control" not in block:
-        return dict(block)  # mutable-ok: JSON wire format
+        return dict(block)
     normalized: Final = _normalized_cache_control(block["cache_control"])
-    rest: Final = {key: value for key, value in block.items() if key != "cache_control"}  # mutable-ok: JSON wire format
-    return rest if normalized is None else {**rest, "cache_control": normalized}  # mutable-ok: JSON wire format
+    rest: Final = {key: value for key, value in block.items() if key != "cache_control"}
+    return rest if normalized is None else {**rest, "cache_control": normalized}
 
 
 def _with_portable_cache_control_in_blocks(blocks: object) -> object:
     if isinstance(blocks, str) or not isinstance(blocks, Sequence):
         return blocks
-    return [  # mutable-ok: JSON wire format
-        _with_portable_cache_control(block) if isinstance(block, Mapping) else block for block in blocks
-    ]
+    return [_with_portable_cache_control(block) if isinstance(block, Mapping) else block for block in blocks]
 
 
 def _with_portable_cache_control_in_content_block(block: object) -> object:
@@ -1684,7 +1724,7 @@ def _with_portable_cache_control_in_content_block(block: object) -> object:
     portable: Final = _with_portable_cache_control(block)
     if portable.get("type") != "tool_result" or "content" not in portable:
         return portable
-    return {  # mutable-ok: JSON wire format
+    return {
         **portable,
         "content": _with_portable_cache_control_in_blocks(portable["content"]),
     }
@@ -1696,20 +1736,16 @@ def _with_portable_cache_control_in_message(message: object) -> object:
     content: Final = message["content"]
     if isinstance(content, str) or not isinstance(content, Sequence):
         return message
-    return {  # mutable-ok: JSON wire format
+    return {
         **message,
-        "content": [  # mutable-ok: JSON wire format
-            _with_portable_cache_control_in_content_block(block) for block in content
-        ],
+        "content": [_with_portable_cache_control_in_content_block(block) for block in content],
     }
 
 
 def _with_portable_cache_control_in_messages(messages: object) -> object:
     if isinstance(messages, str) or not isinstance(messages, Sequence):
         return messages
-    return [  # mutable-ok: JSON wire format
-        _with_portable_cache_control_in_message(message) for message in messages
-    ]
+    return [_with_portable_cache_control_in_message(message) for message in messages]
 
 
 def _with_portable_cache_control_in_scoped_value(key: str, value: object) -> object:
@@ -1741,9 +1777,7 @@ def normalize_cache_control_in_anthropic_payload(
     dropped entirely. The caller's payload is never mutated.
     """
     portable: Final = _with_portable_cache_control(payload)
-    return {  # mutable-ok: JSON wire format
-        key: _with_portable_cache_control_in_scoped_value(key, value) for key, value in portable.items()
-    }
+    return {key: _with_portable_cache_control_in_scoped_value(key, value) for key, value in portable.items()}
 
 
 def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
@@ -1770,7 +1804,7 @@ def _anthropic_model_entry(
     source: Final[Mapping[str, object]] = (
         MappingProxyType({"source_model": model["id"]}) if listed_id is not None else MappingProxyType({})
     )
-    return {  # mutable-ok: JSON response body, serialized by the route and never mutated
+    return {
         "type": "model",
         "id": listed_id or model["id"],
         **source,
@@ -1801,10 +1835,8 @@ def create_anthropic_model_list_response(
     created_at: Final = (
         datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     )
-    data: Final = [  # mutable-ok: JSON response body, serialized by the route and never mutated
-        _anthropic_model_entry(model, created_at, display_names, listed_ids) for model in models
-    ]
-    return {  # mutable-ok: JSON response body, serialized by the route and never mutated
+    data: Final = [_anthropic_model_entry(model, created_at, display_names, listed_ids) for model in models]
+    return {
         "data": data,
         "has_more": False,
         "first_id": data[0]["id"] if data else None,

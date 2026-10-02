@@ -5,13 +5,14 @@ The fixture is a trimmed real export from a Deep Agents run (LangSmith OTEL mode
 deep_research_agent -> task (tool) -> researcher (subagent) -> search_docs (tool).
 """
 
+import base64
 import gzip
 import json
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from google.protobuf.json_format import Parse
+from google.protobuf.json_format import ParseDict
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.common.v1.common_pb2 import AnyValue, KeyValue
 from opentelemetry.proto.trace.v1.trace_pb2 import ResourceSpans, ScopeSpans, Span, Status
@@ -31,7 +32,14 @@ def _fixture_json() -> bytes:
 
 def _fixture_protobuf() -> bytes:
     request = ExportTraceServiceRequest()
-    Parse(_fixture_json().decode(), request)
+    payload = json.loads(_fixture_json())
+    for resource in payload["resourceSpans"]:
+        for scope in resource["scopeSpans"]:
+            for span in scope["spans"]:
+                for field in ("traceId", "spanId", "parentSpanId"):
+                    if field in span:
+                        span[field] = base64.b64encode(bytes.fromhex(span[field])).decode()
+    ParseDict(payload, request)
     return request.SerializeToString()
 
 
@@ -125,6 +133,49 @@ def test_incomplete_langsmith_completion_preserves_the_export(completion):
     assert rows[0]["Output"] == completion
 
 
+def test_llm_block_list_content_keeps_only_text():
+    reasoning = {"type": "reasoning", "summary": [], "encrypted_content": "gAAAAB-opaque"}
+    history = [reasoning, {"type": "text", "text": "Earlier answer", "annotations": []}]
+    answer = [reasoning, {"type": "text", "text": "Part one"}, {"type": "text", "text": "Part two"}]
+    prompt = {
+        "messages": [
+            [
+                {"kwargs": {"type": "human", "content": "refund please"}},
+                {"kwargs": {"type": "ai", "content": history}},
+                {"kwargs": {"type": "ai", "content": [reasoning]}},
+            ]
+        ]
+    }
+    completion = {"generations": [[{"message": {"kwargs": {"type": "ai", "content": answer}}}]]}
+    span = _span(
+        "ChatOpenAI",
+        b"\x03" * 8,
+        b"\x02" * 8,
+        langsmith__span__kind="llm",
+        gen_ai__prompt=json.dumps(prompt),
+        gen_ai__completion=json.dumps(completion),
+    )
+    rows = decode_otlp(_export(span, scope="langsmith"), "application/x-protobuf")
+    assert [m["content"] for m in json.loads(rows[0]["Input"])] == ["refund please", "Earlier answer", ""]
+    assert json.loads(rows[0]["Output"])["content"] == "Part one\n\nPart two"
+    assert "encrypted_content" not in rows[0]["Input"] + rows[0]["Output"]
+
+
+def test_llm_unrecognized_list_content_is_kept_as_json():
+    content = [{"type": "image_url", "image_url": {"url": "https://x.test/a.png"}}]
+    completion = {"generations": [[{"message": {"kwargs": {"type": "ai", "content": content}}}]]}
+    span = _span(
+        "ChatOpenAI",
+        b"\x03" * 8,
+        b"\x02" * 8,
+        langsmith__span__kind="llm",
+        gen_ai__prompt='{"messages": [[{"kwargs": {"type": "human", "content": "hi"}}]]}',
+        gen_ai__completion=json.dumps(completion),
+    )
+    rows = decode_otlp(_export(span, scope="langsmith"), "application/x-protobuf")
+    assert json.loads(json.loads(rows[0]["Output"])["content"]) == content
+
+
 def test_task_tool_output_is_subagent_final_message_text(rows_by_name):
     task = rows_by_name["task"]
     assert json.loads(task["Input"])["subagent_type"] == "researcher"
@@ -148,7 +199,7 @@ def test_plain_tool_input_output(rows_by_name):
 
 def test_heavy_attributes_are_lifted_out_of_span_attributes(rows_by_name):
     for row in rows_by_name.values():
-        assert not set(row["SpanAttributes"]) & decode._HEAVY_ATTRIBUTES
+        assert not set(row["SpanAttributes"]) & {"gen_ai.prompt", "gen_ai.completion"}
     assert rows_by_name["ChatOpenAI"]["SpanAttributes"]["langsmith.span.kind"] == "llm"
 
 
@@ -174,10 +225,38 @@ def test_content_type_defaults_to_protobuf():
     assert len(decode_otlp(_fixture_protobuf(), None)) == 6
 
 
-@pytest.mark.parametrize("content_encoding", ["gzip", None])
-def test_gzip_body_by_header_or_magic_bytes(content_encoding):
-    rows = decode_otlp(gzip.compress(_fixture_protobuf()), "application/x-protobuf", content_encoding)
+def test_gzip_body_by_header():
+    rows = decode_otlp(gzip.compress(_fixture_protobuf()), "application/x-protobuf", "gzip")
     assert len(rows) == 6
+
+
+def test_gzip_requires_content_encoding_header():
+    with pytest.raises(decode.InvalidOTLPPayloadError):
+        decode_otlp(gzip.compress(_fixture_protobuf()), "application/x-protobuf")
+
+
+def test_invalid_gzip_body_is_rejected():
+    with pytest.raises(decode.InvalidOTLPPayloadError):
+        decode_otlp(b"not gzip", "application/x-protobuf", "gzip")
+
+
+def test_gzip_expansion_respects_body_limit():
+    with patch.object(decode, "OTLP_MAX_BODY_BYTES", 1024):
+        with pytest.raises(decode.OTLPPayloadTooLargeError):
+            decode_otlp(gzip.compress(b" " * 16384), "application/json", "gzip")
+
+
+def test_concatenated_gzip_members_are_decoded():
+    body = _fixture_json()
+    midpoint = len(body) // 2
+    compressed = gzip.compress(body[:midpoint]) + gzip.compress(body[midpoint:])
+    assert len(decode_otlp(compressed, "application/json", "gzip")) == 6
+
+
+@pytest.mark.parametrize("encoding", ["br", "gzip, identity"])
+def test_unsupported_content_encoding_is_rejected(encoding):
+    with pytest.raises(decode.InvalidOTLPPayloadError):
+        decode_otlp(_fixture_protobuf(), "application/x-protobuf", encoding)
 
 
 def test_long_values_are_truncated_with_marker():
@@ -187,6 +266,64 @@ def test_long_values_are_truncated_with_marker():
     assert "…[truncated " in task["Input"]
     assert task["Input"].encode().startswith(task["Input"].split("…")[0].encode())
     assert len(task["Input"].split("…")[0].encode()) <= 100
+
+
+def test_long_message_history_drops_middle_messages_and_stays_valid_json():
+    history = [{"kwargs": {"type": "human", "content": f"turn {i} " + "x" * 60}} for i in range(12)]
+    prompt = json.dumps({"messages": [[{"kwargs": {"type": "system", "content": "be brief"}}, *history]]})
+    completion = json.dumps({"generations": [[{"message": {"kwargs": {"type": "ai", "content": "ok"}}}]]})
+    span = _span(
+        "ChatOpenAI",
+        b"\x03" * 8,
+        b"\x02" * 8,
+        langsmith__span__kind="llm",
+        gen_ai__prompt=prompt,
+        gen_ai__completion=completion,
+    )
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 400):
+        rows = decode_otlp(_export(span, scope="langsmith"), "application/x-protobuf")
+    messages = json.loads(rows[0]["Input"])
+    assert len(rows[0]["Input"].encode()) <= 400
+    assert messages[0]["content"] == "be brief"
+    assert "earlier messages truncated" in messages[1]["content"]
+    assert messages[-1]["content"].startswith("turn 11 ")
+    kept = int(messages[1]["content"].split("[")[1].split()[0])
+    assert kept + len(messages) - 2 == 12
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [{"role": "system", "content": "s" * 2000}, {"role": "user", "content": "short question"}],
+        [{"role": "user", "content": "a" * 900}, {"role": "assistant", "content": "b" * 900}],
+        [
+            {"role": "system", "content": "s" * 900},
+            {"role": "user", "content": "middle"},
+            {"role": "user", "content": "q" * 900},
+        ],
+    ],
+    ids=["huge-first-message", "two-messages", "huge-first-and-last"],
+)
+def test_oversized_message_arrays_are_shortened_not_cut(messages):
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 400):
+        out = decode._truncate_payload(json.dumps(messages))
+    assert len(out.encode()) <= 400
+    kept = json.loads(out)
+    assert kept[0]["role"] == messages[0]["role"]
+    assert kept[-1]["role"] == messages[-1]["role"]
+    assert all(isinstance(m["content"], str) for m in kept)
+
+
+def test_oversized_non_content_fields_still_fit_the_limit():
+    heavy = {"role": "assistant", "content": "x", "tool_calls": [{"name": "t", "args": {"blob": "z" * 3000}}]}
+    messages = [heavy, {"role": "user", "content": "—" * 900}]
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 400):
+        out = decode._truncate_payload(json.dumps(messages))
+    kept = json.loads(out)
+    assert len(out.encode()) <= 400
+    assert [m["role"] for m in kept] == ["assistant", "user"]
+    assert kept[0]["content"].startswith("x")
+    assert kept[1]["content"].startswith("\u2014")
 
 
 # ---------------------------------------------------------------- status / exceptions
@@ -301,7 +438,7 @@ def test_non_string_attribute_values_are_stringified():
     assert row["SpanAttributes"]["flag"] == "true"
     assert row["SpanAttributes"]["ratio"] == "0.5"
     assert row["SpanAttributes"]["raw"] == "abc"
-    assert json.loads(row["SpanAttributes"]["list"]) == ["a", "1"]
+    assert json.loads(row["SpanAttributes"]["list"]) == ["a", 1]
 
 
 # ---------------------------------------------------------------- helpers
@@ -311,3 +448,53 @@ def test_encode_otlp_response_matches_request_encoding():
     assert encode_otlp_response("application/json") == (b"{}", "application/json")
     assert encode_otlp_response("application/x-protobuf") == (b"", "application/x-protobuf")
     assert encode_otlp_response(None) == (b"", "application/x-protobuf")
+    body, media_type = encode_otlp_response("application/x-protobuf", "invalid trace")
+    assert media_type == "application/x-protobuf"
+    from google.rpc.status_pb2 import Status
+
+    assert Status.FromString(body).message == "invalid trace"
+
+
+@pytest.mark.parametrize(
+    "attributes, expected",
+    [
+        ({"langsmith__span__kind": "llm"}, "llm"),
+        ({"langsmith__span__kind": "tool"}, "tool"),
+        ({"gen_ai__operation__name": "chat"}, "llm"),
+        ({"gen_ai__operation__name": "execute_tool"}, "tool"),
+        ({"openinference__span__kind": "LLM"}, "llm"),
+    ],
+)
+def test_explicit_root_span_semantics_and_response_id_are_preserved(attributes, expected):
+    exported = _span("root", b"\x01" * 8, gen_ai__response__id="response-123", **attributes)
+    (row,) = decode_otlp(_export(exported))
+    assert (row["ObservationType"], row["LiteLLMRequestId"]) == (expected, "response-123")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"messages": 7}',
+        '{"messages": {"0": "wrong"}}',
+        '{"messages": [{"kwargs": []}]}',
+        '{"messages": [{"role": "assistant", "tool_calls": [1]}]}',
+    ],
+)
+def test_malformed_framework_messages_preserve_raw_content_without_rejecting_the_batch(payload):
+    exported = _span("agent", b"\x01" * 8, langsmith__span__kind="chain", gen_ai__prompt=payload)
+    (row,) = decode_otlp(_export(exported))
+    assert row["Input"] == payload
+
+
+def test_unrecognized_heavy_attributes_are_retained():
+    exported = _span("root", b"\x01" * 8, gen_ai__prompt="unknown convention", gen_ai__tool__definitions="tools")
+    (row,) = decode_otlp(_export(exported))
+    assert row["SpanAttributes"]["gen_ai.prompt"] == "unknown convention"
+    assert row["SpanAttributes"]["gen_ai.tool.definitions"] == "tools"
+
+
+@pytest.mark.parametrize("count", [-1, 1 << 32])
+def test_token_counts_outside_storage_range_are_rejected(count):
+    exported = _span("root", b"\x01" * 8, gen_ai__usage__input_tokens=count)
+    with pytest.raises(decode.InvalidOTLPPayloadError, match="storage range"):
+        decode_otlp(_export(exported))
