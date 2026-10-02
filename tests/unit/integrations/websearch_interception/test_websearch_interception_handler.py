@@ -946,3 +946,63 @@ async def test_messages_web_search_honors_the_native_tool_domain_filter(
     returned_urls = [url for url in _DOMAIN_FILTER_URLS if url in text]
     assert returned_urls == expected_urls
     assert mock_asearch.await_args.kwargs.get("search_domain_filter") == expected_provider_filter
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("domain_field", "expected_urls", "expected_provider_filter"),
+    [
+        ("allowed_domains", ["https://docs.example.org/b"], ["example.org"]),
+        ("blocked_domains", ["https://www.example.com/a", "https://docs.example.org/b"], None),
+    ],
+)
+async def test_router_chat_completion_web_search_honors_the_native_tool_domain_filter(
+    monkeypatch: pytest.MonkeyPatch,
+    domain_field: str,
+    expected_urls: list[str],
+    expected_provider_filter: list[str] | None,
+):
+    import litellm
+    from litellm import Router
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.llms.base_llm.search.transformation import SearchResult
+    from litellm.proxy import proxy_server
+
+    sent_messages: list[list[dict]] = []
+
+    class _SentMessages(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            sent_messages.append(messages)
+
+    domain = {"allowed_domains": "example.org", "blocked_domains": "example.net"}[domain_field]
+    mock_asearch = AsyncMock(
+        return_value=SearchResponse(
+            object="search",
+            results=[SearchResult(title=url, url=url, snippet="snippet") for url in _DOMAIN_FILTER_URLS],
+        )
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", _perplexity_router())
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), _SentMessages()]
+    )
+    router = Router(
+        model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"}}]
+    )
+
+    await router.acompletion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "litellm"}],
+        tools=[{"type": "web_search_20250305", "name": "web_search", domain_field: [domain]}],
+        mock_tool_calls=[
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": LITELLM_WEB_SEARCH_TOOL_NAME, "arguments": '{"query": "litellm"}'},
+            }
+        ],
+    )
+
+    search_result = next(m["content"] for messages in sent_messages for m in messages if m["role"] == "tool")
+    assert [url for url in _DOMAIN_FILTER_URLS if url in search_result] == expected_urls
+    assert mock_asearch.await_args.kwargs.get("search_domain_filter") == expected_provider_filter
