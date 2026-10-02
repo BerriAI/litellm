@@ -1,7 +1,8 @@
 """Trace-context + Baggage helpers."""
 
 import os
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Final
 
@@ -246,11 +247,26 @@ def resolve_service_span_context(
     return set_span_in_context(INVALID_SPAN, ctx), (Link(parent.get_span_context()),)
 
 
+_post_response_root: Final["ContextVar[SpanContext | None]"] = ContextVar(
+    "litellm_otel_post_response_root", default=None
+)
+
+
+@contextmanager
+def post_response_root(span: Span) -> Generator[None]:
+    """Nest the post-response service calls inside this block under ``span``."""
+    token: Final = _post_response_root.set(span.get_span_context())
+    try:
+        yield
+    finally:
+        _post_response_root.reset(token)
+
+
 def _is_post_response(parent: Span, end_time_ns: int | None) -> bool:
     if not isinstance(parent, ReadableSpan):
         return False
     if in_post_response_phase():
-        return True
+        return parent.get_span_context() != _post_response_root.get()
     if parent.end_time is None:
         return False
     return end_time_ns is None or end_time_ns > parent.end_time

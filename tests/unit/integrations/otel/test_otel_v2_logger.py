@@ -23,7 +23,11 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E4
 from opentelemetry.trace import SpanKind  # noqa: E402
 from opentelemetry.trace.status import StatusCode  # noqa: E402
 
-from litellm._internal_context import in_post_response_phase, post_response_phase  # noqa: E402
+from litellm._internal_context import (  # noqa: E402
+    in_post_response_phase,
+    post_response_phase,
+    service_target,
+)
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY  # noqa: E402
 from litellm.integrations.otel import (  # noqa: E402
     GenAI,
@@ -1773,10 +1777,11 @@ class _Service:
 
 
 class _ServicePayload:
-    def __init__(self, service="redis", call_type="set", error=None, caller=None):
+    def __init__(self, service="redis", call_type="set", error=None, caller=None, target=None):
         self.service = _Service(service)
         self.call_type = call_type
         self.caller = caller
+        self.target = target
         self.error = error
 
 
@@ -1829,10 +1834,145 @@ def test_redis_service_span_is_named_by_operation_and_keeps_the_caller_chain_as_
     assert span.name == "redis async_get_cache"
     assert span.attributes[LiteLLM.SERVICE_CALL_TYPE] == "async_get_cache"
     assert span.attributes["db.operation.name"] == "async_get_cache"
-    callers = span.attributes[LiteLLM.SERVICE_CALLER].split(" <- ")
-    assert callers[0] == "_redis_get_through_service_logger" and len(callers) == 2, (
-        callers
-    )
+    # The chain stops at the event loop, so the test coroutine is the whole chain.
+    assert span.attributes[LiteLLM.SERVICE_CALLER] == "_redis_get_through_service_logger"
+    assert LiteLLM.SERVICE_TARGET not in span.attributes
+
+
+def test_service_span_is_named_by_purpose_when_the_producer_declares_a_target():
+    """``redis.get llm_response``, the ``{operation} {target}`` shape the OTel database
+    conventions ask for, while the raw method name stays on the attributes dashboards
+    filter on (``litellm.service.call_type``, ``db.operation.name`` and the V1 ``call_type``)."""
+    logger, exporter = _logger()
+    parent = _service_parent(logger)
+    try:
+        asyncio.run(
+            logger.async_service_success_hook(
+                payload=_ServicePayload(
+                    "redis",
+                    "async_get_cache",
+                    caller="_retrieve_from_cache <- _async_get_cache",
+                    target="llm_response",
+                ),
+                parent_otel_span=parent,
+            )
+        )
+    finally:
+        parent.end()
+    (span,) = [s for s in exporter.get_finished_spans() if s.name.startswith("redis")]
+    assert span.name == "redis.get llm_response"
+    assert span.kind is SpanKind.CLIENT
+    assert span.attributes[LiteLLM.SERVICE_CALL_TYPE] == "async_get_cache"
+    assert span.attributes["db.operation.name"] == "async_get_cache"
+    assert span.attributes["call_type"] == "async_get_cache"
+    assert span.attributes[LiteLLM.SERVICE_TARGET] == "llm_response"
+    assert span.attributes[LiteLLM.SERVICE_CALLER] == "_retrieve_from_cache <- _async_get_cache"
+
+
+@pytest.mark.parametrize(
+    ("call_type", "expected"),
+    [
+        ("async_batch_get_cache", "redis.mget auth_objects"),
+        ("async_set_cache_pipeline_with_ttls", "redis.set auth_objects"),
+        ("async_increment_pipeline", "redis.incr auth_objects"),
+        ("async_delete_cache", "redis.delete auth_objects"),
+        ("async_scan_iter", "redis.scan auth_objects"),
+        ("async_frobnicate", "redis.frobnicate auth_objects"),
+    ],
+)
+def test_service_span_verb_follows_the_cache_method_behind_the_call(call_type, expected):
+    from litellm.integrations.otel.model.payloads import ServiceSpanData
+    from litellm.integrations.otel.model.spans import service_span_name
+
+    data = ServiceSpanData(service_name="redis", call_type=call_type, target="auth_objects")
+    assert service_span_name(data) == expected
+    assert service_span_name(ServiceSpanData(service_name="redis", call_type=call_type)) == f"redis {call_type}"
+
+
+def test_service_target_declared_by_the_producer_rides_the_service_logger_payload():
+    """``service_target`` is a contextvar the real ``ServiceLogging`` stamps onto the payload,
+    so a producer names its key family once and every cache read inside picks it up."""
+    logger, exporter = _logger()
+
+    async def _lookup():
+        with service_target("llm_response"):
+            await _redis_get_through_service_logger(logger)
+
+    asyncio.run(_lookup())
+    (span,) = [s for s in exporter.get_finished_spans() if s.name.startswith("redis")]
+    assert span.name == "redis.get llm_response"
+    assert span.attributes[LiteLLM.SERVICE_TARGET] == "llm_response"
+    assert span.attributes[LiteLLM.SERVICE_CALL_TYPE] == "async_get_cache"
+
+
+def test_response_cache_lookup_nests_its_redis_read_under_a_cache_get_span_on_the_request_root():
+    """The lookup runs inside a live ``cache.get llm_response`` phase span, a child of the
+    server span, so the Redis GET is its child and sits before ``chat {model}`` in causal order
+    instead of landing flat on the root."""
+    logger, exporter = _logger()
+    server = _service_parent(logger)
+
+    async def _lookup():
+        with logger.start_phase_span("cache.get llm_response"):
+            await logger.async_service_success_hook(
+                payload=_ServicePayload("redis", "async_get_cache", target="llm_response"),
+                parent_otel_span=server,
+            )
+
+    try:
+        with trace.use_span(server, end_on_exit=False):
+            asyncio.run(_lookup())
+    finally:
+        server.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    phase = by_name["cache.get llm_response"]
+    redis = by_name["redis.get llm_response"]
+    request_ctx = server.get_span_context()
+    assert phase.kind is SpanKind.INTERNAL
+    assert phase.parent.span_id == request_ctx.span_id
+    assert not phase.links
+    assert redis.parent.span_id == phase.context.span_id
+    assert redis.context.trace_id == request_ctx.trace_id
+    assert not redis.links
+
+
+def test_response_cache_write_from_the_post_response_phase_is_one_linked_trace():
+    """The write runs after the response is on the wire, so its ``cache.set llm_response``
+    span detaches from the request as a linked root (the request trace keeps its real
+    duration), and the Redis SET it issues nests under that root instead of detaching
+    into a third, unrelated trace."""
+    logger, exporter = _logger()
+    server = _service_parent(logger)
+
+    async def _write_task():
+        with logger.start_phase_span("cache.set llm_response"):
+            await logger.async_service_success_hook(
+                payload=_ServicePayload("redis", "async_set_cache", target="llm_response"),
+                parent_otel_span=server,
+            )
+
+    async def _request():
+        with post_response_phase():
+            task = asyncio.create_task(_write_task())
+        await task
+
+    try:
+        with trace.use_span(server, end_on_exit=False):
+            asyncio.run(_request())
+    finally:
+        server.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    phase = by_name["cache.set llm_response"]
+    redis = by_name["redis.set llm_response"]
+    request_ctx = server.get_span_context()
+    assert phase.parent is None
+    assert phase.context.trace_id != request_ctx.trace_id
+    assert [(link.context.trace_id, link.context.span_id) for link in phase.links] == [
+        (request_ctx.trace_id, request_ctx.span_id)
+    ]
+    assert redis.parent.span_id == phase.context.span_id
+    assert redis.context.trace_id == phase.context.trace_id
+    assert not redis.links
 
 
 def test_async_service_success_hook_emits_service_span():

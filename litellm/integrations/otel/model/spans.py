@@ -198,9 +198,43 @@ def guardrail_span_name(data: "GuardrailSpanData") -> str:
     return f"execute_guardrail {data.guardrail_name}".strip()
 
 
+_SERVICE_VERB_BY_CALL_TYPE: Final[dict[str, str]] = {
+    "get_cache": "get",
+    "async_get_cache": "get",
+    "batch_get_cache": "mget",
+    "async_batch_get_cache": "mget",
+    "set_cache": "set",
+    "async_set_cache": "set",
+    "async_set_cache_pipeline": "set",
+    "async_set_cache_pipeline_with_ttls": "set",
+    "async_set_cache_sadd": "sadd",
+    "increment_cache": "incr",
+    "async_increment": "incr",
+    "async_increment_pipeline": "incr",
+    "delete_cache": "delete",
+    "async_delete_cache": "delete",
+    "async_rpush": "rpush",
+    "async_lpop": "lpop",
+    "async_scan_iter": "scan",
+}
+
+
+def service_operation(data: "ServiceSpanData") -> str | None:
+    """``"redis.get"`` for a call whose producer named its target, else ``None``."""
+    if not data.target or not data.call_type:
+        return None
+    verb: Final = _SERVICE_VERB_BY_CALL_TYPE.get(data.call_type, data.call_type.removeprefix("async_"))
+    return f"{data.service_name}.{verb}"
+
+
 def service_span_name(data: "ServiceSpanData") -> str:
-    """``"{service} {call_type}"`` e.g. ``"redis set"`` — service name alone when
-    no call type is known, so identically-named calls stay distinguishable."""
+    """``"{service}.{verb} {target}"`` (``"redis.get llm_response"``) when the producer
+    said what the call was for, else ``"{service} {call_type}"`` (``"redis set"``) —
+    service name alone when no call type is known, so identically-named calls stay
+    distinguishable."""
+    operation: Final = service_operation(data)
+    if operation is not None:
+        return f"{operation} {data.target}"
     return f"{data.service_name} {data.call_type or ''}".strip()
 
 

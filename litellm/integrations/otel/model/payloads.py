@@ -329,6 +329,7 @@ class ServiceSpanData:
     service_name: str
     call_type: str | None = None
     caller: str | None = None
+    target: str | None = None
     error: SpanError | None = None
     # Caller-supplied attributes to stamp on the service span, passed through
     # from ``async_service_*_hook(event_metadata=...)``. The mapper owns how
@@ -351,6 +352,7 @@ class ServiceSpanData:
             service_name=payload.service.value,
             call_type=payload.call_type,
             caller=payload.caller,
+            target=payload.target,
             error=SpanError(message=payload.error) if payload.error else None,
             event_metadata=sanitize_event_metadata(event_metadata),
         )

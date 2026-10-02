@@ -21,7 +21,7 @@ from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
-from types import MappingProxyType
+from types import FrameType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
 
 from pydantic import TypeAdapter
@@ -92,9 +92,29 @@ class _AsyncRedisCommands(Protocol):
     def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
 
 
-_BREAKER_GUARD_FRAME_NAMES: Final = frozenset(
-    {"<lambda>", "wrapper", "_run_under_circuit_breaker", "_run_under_circuit_breaker_sync"}
+_GENERIC_CALLER_MODULES: Final = frozenset(
+    {__name__, "litellm.caching.redis_batch", "litellm.caching.dual_cache", "litellm.caching.caching", "contextlib"}
 )
+_GENERIC_CALLER_FRAME_NAMES: Final = frozenset(
+    {
+        "<lambda>",
+        "wrapper",
+        "_run_under_circuit_breaker",
+        "_run_under_circuit_breaker_sync",
+        "run_alone",
+        "_settle_alone",
+        "get_cache",
+        "set_cache",
+        "async_get_cache",
+        "async_set_cache",
+        "async_batch_get_cache",
+        "async_batch_get_cache_shared",
+        "async_set_cache_pipeline",
+        "async_increment_cache",
+        "async_delete_cache",
+    }
+)
+_CALL_STACK_END_MODULES: Final = ("asyncio", "concurrent", "threading")
 
 _INCREMENT_WITH_FLOOR_LUA: Final = (
     "local count = redis.call('INCRBY', KEYS[1], ARGV[1]) "
@@ -113,18 +133,31 @@ def _decoded_counts(values: Sequence[bytes | str | None]) -> tuple[int | None, .
     )
 
 
+def _is_generic_caller_frame(frame: FrameType) -> bool:
+    module: Final = frame.f_globals.get("__name__")
+    return module in _GENERIC_CALLER_MODULES or frame.f_code.co_name in _GENERIC_CALLER_FRAME_NAMES
+
+
+def _ends_call_stack(frame: FrameType) -> bool:
+    module: Final = frame.f_globals.get("__name__")
+    return isinstance(module, str) and module.startswith(_CALL_STACK_END_MODULES)
+
+
 def _get_call_stack_info(num_frames: int = 2) -> str:
     """
-    Get the function names from the previous 1-2 functions in the call stack.
+    Get the function names of the nearest meaningful callers of the cache method.
 
-    Frames belonging to this module's circuit-breaker guards are skipped so the
-    reported callers stay the real ones even on guarded methods.
+    Frames that merely forward the call (this module's circuit-breaker guards, the
+    cache facades, the batch pipeline's retry path, generic cache verbs) are
+    skipped, and the walk stops at the event loop, so the chain names the litellm
+    code that wanted the call. When nothing but forwarding frames is found the raw
+    frames are reported instead of nothing.
 
     Args:
         num_frames: Number of previous frames to include (default: 2)
 
     Returns:
-        A string with format "current_function <- caller_function [<- grandparent_function]"
+        A string with format "caller_function [<- grandparent_function]"
     """
     try:
         current_frame: Final = inspect.currentframe()
@@ -135,22 +168,25 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
         f_back: Final = current_frame.f_back
         if f_back is None:
             return "unknown"
-        frame = f_back.f_back
-        if frame is None:
+        first: Final = f_back.f_back
+        if first is None:
             return "unknown"
-        function_names: Final = []
+        function_names: Final[list[str]] = []
+        raw_names: Final[list[str]] = []
 
-        while frame is not None and len(function_names) < num_frames:
-            if frame.f_code.co_name in _BREAKER_GUARD_FRAME_NAMES and frame.f_globals.get("__name__") == __name__:
-                frame = frame.f_back
-                continue
-            function_names.append(frame.f_code.co_name)
+        frame: FrameType | None = first
+        while frame is not None and len(function_names) < num_frames and not _ends_call_stack(frame):
+            if len(raw_names) < num_frames:
+                raw_names.append(frame.f_code.co_name)
+            if not _is_generic_caller_frame(frame):
+                function_names.append(frame.f_code.co_name)
             frame = frame.f_back
 
-        if not function_names:
-            return "unknown"
-
-        return " <- ".join(function_names)
+        if function_names:
+            return " <- ".join(function_names)
+        if raw_names:
+            return " <- ".join(raw_names)
+        return "unknown"
     except Exception:
         return "unknown"
 

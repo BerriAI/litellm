@@ -327,6 +327,7 @@ class LiteLLM:
     SERVICE_NAME: Final = "litellm.service.name"
     SERVICE_CALL_TYPE: Final = "litellm.service.call_type"
     SERVICE_CALLER: Final = "litellm.service.caller"
+    SERVICE_TARGET: Final = "litellm.service.target"
     PREPROCESSING_MS: Final = "litellm.preprocessing.duration_ms"
     # The logical name of the MCP server a tool call was routed to. There is no
     # semconv key for an MCP server's *name* (the convention uses ``server.address``

@@ -22,6 +22,7 @@ from datetime import timedelta
 from types import MappingProxyType, TracebackType
 from typing import Final, Generic, Protocol, TypeVar
 
+from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
 from litellm.caching.redis_cache import (
     RedisCache,
@@ -56,12 +57,13 @@ class _Op(Generic[_T]):
     how to run on its own when the batch cannot pipeline (cluster client, or a reply the pipeline cannot
     settle, like NOSCRIPT)."""
 
-    __slots__ = ("future", "settled_hooks")
+    __slots__ = ("future", "settled_hooks", "target")
 
     def __init__(self) -> None:
         self.future: Final[asyncio.Future[_T]] = asyncio.get_running_loop().create_future()
         self.future.add_done_callback(_mark_retrieved)
         self.settled_hooks: Final[list[SettledHook[_T]]] = []  # mutable-ok: append-only registry
+        self.target: Final = current_service_target()
 
     async def run_settled_hooks(self) -> None:
         for hook in self.settled_hooks:
@@ -100,7 +102,8 @@ class _Op(Generic[_T]):
 
     async def _settle_alone(self) -> None:
         try:
-            self.future.set_result(await self.run_alone())
+            with service_target(self.target):
+                self.future.set_result(await self.run_alone())
         except Exception as e:  # noqa: BLE001  # the declaring caller owns the failure of its own operation
             self.future.set_exception(e)
 
@@ -371,28 +374,30 @@ class RedisBatch:
             replies: Final = await _run_under_circuit_breaker(self.redis_cache._circuit_breaker, self.name, run)  # pyright: ignore[reportPrivateUsage]  # same breaker as the cache's own methods
         except Exception as e:  # noqa: BLE001  # each declaring caller applies its own Redis fallback
             log_redis_failure(verbose_logger, logging.WARNING, f"{self.name}: pipeline of {len(ops)} ops failed", e)
+            with service_target(None):  # one pipeline carries every owner's ops, so it serves no single target
+                asyncio.create_task(
+                    self.redis_cache.service_logger_obj.async_service_failure_hook(
+                        service=ServiceTypes.REDIS,
+                        duration=time.time() - start_time,
+                        error=e,
+                        call_type=f"{self.name}[{len(ops)}]",
+                        start_time=start_time,
+                        end_time=time.time(),
+                    )
+                )
+            for op in ops:
+                op.future.set_exception(e)
+            return
+        with service_target(None):
             asyncio.create_task(
-                self.redis_cache.service_logger_obj.async_service_failure_hook(
+                self.redis_cache.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=time.time() - start_time,
-                    error=e,
                     call_type=f"{self.name}[{len(ops)}]",
                     start_time=start_time,
                     end_time=time.time(),
                 )
             )
-            for op in ops:
-                op.future.set_exception(e)
-            return
-        asyncio.create_task(
-            self.redis_cache.service_logger_obj.async_service_success_hook(
-                service=ServiceTypes.REDIS,
-                duration=time.time() - start_time,
-                call_type=f"{self.name}[{len(ops)}]",
-                start_time=start_time,
-                end_time=time.time(),
-            )
-        )
         retries: list[Awaitable[None]] = []  # mutable-ok: collected while slicing replies
         offset = 0
         for op, width in zip(ops, widths):

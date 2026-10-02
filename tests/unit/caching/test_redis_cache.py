@@ -1556,3 +1556,64 @@ async def test_async_rpush_and_trim_runs_push_and_trim_in_one_transaction(monkey
     assert pushed_len == 4
     assert rows == ["b", "c", "d"]
     assert pipe.queued == [("rpush", "ns:buf", "c", "d"), ("ltrim", "ns:buf", "-3", "-1")]
+
+
+def test_call_stack_info_skips_generic_cache_facade_frames():
+    """A read through ``DualCache.async_get_cache`` -> ``RedisCache.async_get_cache`` used to
+    report ``async_get_cache <- async_get_cache``; the chain names the code that wanted the
+    read, skipping the facade verbs and the batch retry wrappers in between."""
+    from litellm.caching.redis_cache import _get_call_stack_info
+
+    def probe():  # the RedisCache method that sets call_type
+        return _get_call_stack_info()
+
+    def async_get_cache():  # a facade's generic verb
+        return probe()
+
+    def run_alone():  # the batch retry wrapper
+        return async_get_cache()
+
+    def _retrieve_from_cache():
+        return run_alone()
+
+    def _async_get_cache():
+        return _retrieve_from_cache()
+
+    assert _async_get_cache() == "_retrieve_from_cache <- _async_get_cache"
+
+
+def test_call_stack_info_stops_at_the_event_loop():
+    """Event-loop frames are not callers, so a read issued straight from a task names the
+    task's coroutine alone rather than padding the chain with asyncio internals."""
+    from litellm.caching.redis_cache import _get_call_stack_info
+
+    def probe():
+        return _get_call_stack_info()
+
+    async def _lookup():
+        return probe()
+
+    assert asyncio.run(_lookup()) == "_lookup"
+
+
+def test_call_stack_info_reports_the_raw_frames_when_only_wrappers_are_found():
+    """A retried batch op is driven by the pipeline flush, so there is no meaningful caller
+    above its wrappers; the raw wrapper names are still better than ``unknown``."""
+    import threading
+
+    from litellm.caching.redis_cache import _get_call_stack_info
+
+    def probe():
+        return _get_call_stack_info()
+
+    def run_alone():
+        return probe()
+
+    def _settle_alone():
+        return run_alone()
+
+    seen: list[str] = []
+    worker = threading.Thread(target=lambda: seen.append(_settle_alone()))
+    worker.start()
+    worker.join()
+    assert seen == ["run_alone <- _settle_alone"]

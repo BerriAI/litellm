@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from redis.exceptions import NoScriptError
 
+from litellm._internal_context import current_service_target, service_target
 from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_batch import (
     RedisBatch,
@@ -359,3 +360,28 @@ async def test_a_failed_mget_marks_nothing_as_missing() -> None:
     with pytest.raises(ConnectionError):
         await batch.mget(["b-miss"])
     assert batch.read_as_missing("b-miss") is False
+
+
+@pytest.mark.asyncio
+async def test_an_operation_retried_alone_keeps_the_target_it_was_declared_under() -> None:
+    """The retry runs on the flush, outside the declaring caller's block, so the op carries
+    the target it was declared under and the retried call is still named by its purpose."""
+    seen: list[str | None] = []
+
+    async def record_target(keys: Sequence[str], args: Sequence[Any]) -> object:
+        seen.append(current_service_target())
+        return ["alone", *keys]
+
+    def reply_for(command: tuple[Any, ...]) -> Any:
+        if command[0] == "EVALSHA":
+            return NoScriptError("NOSCRIPT")
+        return replies(command)
+
+    cache = FakeRedisCache(FakeClient(reply_for))
+    batch = RedisBatch(cache)
+    with service_target("spend_counters"):
+        script = batch.script(SCRIPT, record_target, ["w"], [])
+    assert current_service_target() is None
+    assert await script == ["alone", "w"]
+    assert seen == ["spend_counters"]
+    assert current_service_target() is None

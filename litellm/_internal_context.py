@@ -23,6 +23,8 @@ _billing_time: Final[ContextVar[datetime | None]] = ContextVar("billing_time", d
 
 _post_response: Final[ContextVar[bool]] = ContextVar("post_response", default=False)
 
+_service_target: Final[ContextVar[str | None]] = ContextVar("service_target", default=None)
+
 
 @contextmanager
 def post_response_phase() -> Generator[None]:
@@ -36,6 +38,20 @@ def post_response_phase() -> Generator[None]:
 
 def in_post_response_phase() -> bool:
     return _post_response.get()
+
+
+@contextmanager
+def service_target(target: str | None) -> Generator[None]:
+    """Name what the datastore calls inside this block are for; ``None`` clears an inherited target."""
+    token: Final = _service_target.set(target)
+    try:
+        yield
+    finally:
+        _service_target.reset(token)
+
+
+def current_service_target() -> str | None:
+    return _service_target.get()
 
 
 @contextmanager

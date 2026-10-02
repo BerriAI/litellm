@@ -59,11 +59,20 @@ traceable units of work:
   the trace. `auth` is also excluded here because it gets a **live phase span**
   instead (see below).
 
-Spans are named `"{service} {call_type}"` (e.g. `"redis set"`) so repeated calls
-to one service stay distinguishable. `call_type` is the operation only; the
-litellm call chain that issued it (`async_set_cache <- async_add_cache`) travels
-as `ServiceLoggerPayload.caller` and lands on the `litellm.service.caller`
-attribute, so one operation is one span name. Like every other span they parent to the
+Spans are named `"{service}.{verb} {target}"` (e.g. `"redis.get llm_response"`,
+`"redis.mget auth_objects"`) when the producer declared what the call was for by
+running it inside `litellm._internal_context.service_target(...)`, the
+`{db.operation.name} {target}` shape of the OTel database conventions; the
+target is a key family (`llm_response`, `auth_objects`, `router_cooldowns`,
+`prompt_cache_pins`, `spend_counters`), never a key. Calls with no declared
+target keep the `"{service} {call_type}"` name (e.g. `"redis set"`). Either way
+the raw method name stays on `litellm.service.call_type` and `db.operation.name`
+(and the bare `call_type` the metrics are keyed by), the target lands on
+`litellm.service.target`, and the litellm call chain that issued the call
+(`_retrieve_from_cache <- _async_get_cache`) travels as
+`ServiceLoggerPayload.caller` onto `litellm.service.caller`, with the forwarding
+frames (cache facades, circuit-breaker guards, batch retry wrappers) skipped so
+it names the code that wanted the call. Like every other span they parent to the
 **ambient** context, falling back to the threaded `litellm_parent_otel_span` only
 when ambient has no live span; a background job with neither starts its own root
 trace.
@@ -94,7 +103,13 @@ Caller-supplied `event_metadata` is **sanitized** before it reaches a span
 
 **Live phase spans.** `auth` is wrapped in a real, active span
 (`logger.phase_span`) for the duration of authentication, so the DB lookups it
-triggers nest **under** it instead of flattening onto the server span. Identity
+triggers nest **under** it instead of flattening onto the server span. The
+response cache does the same: the lookup runs inside `cache.get llm_response`
+(a child of the server span, so its Redis read sits before `chat {model}` in
+causal order) and the write inside `cache.set llm_response`. The write runs from
+the post-response phase, so that span is a linked root rather than a child that
+would stretch the request, and the Redis write it issues nests under it instead
+of starting a third trace (`context.post_response_root`). Identity
 Baggage (team/key/user) is seeded once the key resolves, so every post-auth span
 inherits it; auth-internal DB lookups that run before the key is known stay
 unlabeled, which is correct.

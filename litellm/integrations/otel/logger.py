@@ -2,7 +2,7 @@
 
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from datetime import datetime
 from types import MappingProxyType
@@ -54,6 +54,7 @@ from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import (
     is_recordable_span,
     mcp_message_transport_span,
+    post_response_root,
     request_root_http_route,
     request_root_span,
     resolve_mcp_span_context,
@@ -735,8 +736,15 @@ class OpenTelemetryV2(CustomLogger):
 
     @contextmanager
     def start_phase_span(self, name: str) -> "Iterator[Span]":
-        span: Final = self._emitter.start_span(SpanRole.SERVICE, name)
-        with use_span(span, end_on_exit=True):
+        """A live INTERNAL span the service calls inside the block nest under.
+
+        Parents like a service span: ambient first, and from the post-response phase
+        it becomes a linked root that then adopts the calls made inside it, so the
+        response-cache write is one small trace rather than a scatter of roots.
+        """
+        parent_context, links = resolve_service_span_context()
+        span: Final = self._emitter.start_span(SpanRole.SERVICE, name, parent_context=parent_context, links=links)
+        with use_span(span, end_on_exit=True), post_response_root(span) if links else nullcontext():
             try:
                 yield span
             except Exception as exc:

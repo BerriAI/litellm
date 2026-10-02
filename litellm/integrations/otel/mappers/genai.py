@@ -149,6 +149,7 @@ class GenAIMapper:
         LiteLLM.SERVICE_NAME: lambda d: d.service_name,
         LiteLLM.SERVICE_CALL_TYPE: lambda d: d.call_type,
         LiteLLM.SERVICE_CALLER: lambda d: d.caller,
+        LiteLLM.SERVICE_TARGET: lambda d: d.target,
     }
 
     def __init__(self, tool_attr_budget: int = MAX_TOOL_DEFINITION_ATTRS_PER_SPAN) -> None:
