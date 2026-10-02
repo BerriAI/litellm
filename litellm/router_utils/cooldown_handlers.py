@@ -511,10 +511,9 @@ async def _async_get_cooldown_deployments(
 
     `model_ids` limits the cooldown read to those deployments; None reads every router deployment.
     """
-    if model_ids is None:
-        model_ids = litellm_router_instance.get_model_ids()
+    read_ids: Final = litellm_router_instance.get_model_ids() if model_ids is None else model_ids
     cooldown_models: Final = await litellm_router_instance.cooldown_cache.async_get_active_cooldowns(
-        model_ids=model_ids,
+        model_ids=read_ids,
         parent_otel_span=parent_otel_span,
     )
 
@@ -562,11 +561,10 @@ def _get_cooldown_deployments(
     # ----------------------
     # Return cooldown models
     # ----------------------
-    if model_ids is None:
-        model_ids = litellm_router_instance.get_model_ids()
+    read_ids: Final = litellm_router_instance.get_model_ids() if model_ids is None else model_ids
 
     cooldown_models: Final = litellm_router_instance.cooldown_cache.get_active_cooldowns(
-        model_ids=model_ids, parent_otel_span=parent_otel_span
+        model_ids=read_ids, parent_otel_span=parent_otel_span
     )
 
     cached_value_deployment_ids = []
