@@ -121,9 +121,9 @@ async def test_v2_counts_prompt_tokens_only_when_a_deployment_declares_a_tpm_lim
 ) -> None:
     counter: Final = Mock(return_value=40_000)
     monkeypatch.setattr(strategy_module, "token_counter", counter)
-    router_cache = DualCache()
-    router_cache.async_batch_get_cache = AsyncMock(return_value=[10, 20, None, None])  # type: ignore[method-assign]
-    strategy = LowestTPMLoggingHandler_v2(router_cache=router_cache)
+    router_cache: Final = DualCache()
+    monkeypatch.setattr(router_cache, "async_batch_get_cache", AsyncMock(return_value=[10, 20, None, None]))
+    strategy: Final = LowestTPMLoggingHandler_v2(router_cache=router_cache)
     messages: Final = [{"role": "user", "content": "a long prompt"}]
     unlimited: Final = [
         {"model_name": "g", "litellm_params": {"model": "m"}, "model_info": {"id": "a"}},
@@ -145,3 +145,20 @@ async def test_v2_counts_prompt_tokens_only_when_a_deployment_declares_a_tpm_lim
     )
     assert counter.call_count == 1, "a declared tpm limit needs the prompt size to be enforced"
     assert chosen_limited["model_info"]["id"] == "b", "a's tpm limit cannot fit the counted prompt, so b is picked"
+
+
+@pytest.mark.asyncio
+async def test_v2_treats_a_failed_prompt_count_as_zero_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(strategy_module, "token_counter", Mock(side_effect=ValueError("no tokenizer")))
+    router_cache: Final = DualCache()
+    monkeypatch.setattr(router_cache, "async_batch_get_cache", AsyncMock(return_value=[10, 20, None, None]))
+    strategy: Final = LowestTPMLoggingHandler_v2(router_cache=router_cache)
+    limited: Final = [
+        {"model_name": "g", "litellm_params": {"model": "m", "tpm": 30_000}, "model_info": {"id": "a"}},
+        {"model_name": "g", "litellm_params": {"model": "m"}, "model_info": {"id": "b"}},
+    ]
+
+    chosen: Final = await strategy.async_get_available_deployments(
+        model_group="g", healthy_deployments=limited, messages=[{"role": "user", "content": "a long prompt"}]
+    )
+    assert chosen["model_info"]["id"] == "a", "a failed count weighs as zero tokens, so the lowest counter still wins"
