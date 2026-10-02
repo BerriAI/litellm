@@ -19,7 +19,8 @@ defaults to ``True`` so a config dict (raw, not Pydantic) without an
 ``auth`` key still requires authentication.
 """
 
-from collections.abc import Iterator
+from itertools import chain
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -33,8 +34,8 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.pass_through_endpoints import pass_through_endpoints
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    InitPassThroughEndpointHelpers,
     _register_pass_through_endpoint,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -139,150 +140,110 @@ async def test_runtime_check_explicit_auth_false_still_skips_validation():
     assert isinstance(result, UserAPIKeyAuth)
 
 
-@pytest.fixture
-def pass_through_route_globals() -> Iterator[None]:
-    openai_routes = list(LiteLLMRoutes.openai_routes.value)
-    registered = dict(
-        pass_through_endpoints._registered_pass_through_routes  # pyright: ignore[reportPrivateUsage]  # registry under test
-    )
-    yield
-    LiteLLMRoutes.openai_routes.value[:] = openai_routes
-    pass_through_endpoints._registered_pass_through_routes.clear()  # pyright: ignore[reportPrivateUsage]  # registry under test
-    pass_through_endpoints._registered_pass_through_routes.update(  # pyright: ignore[reportPrivateUsage]  # registry under test
-        registered
-    )
+def _route_level_dependencies(app: FastAPI, path: str) -> list[object]:
+    matching: Final = [route for route in app.routes if isinstance(route, APIRoute) and route.path == path]
+    return [dep.dependency for dep in chain.from_iterable(route.dependencies for route in matching)]
 
 
-def _registered_app_route_calls(app: FastAPI, *paths: str) -> list[object]:
-    return [
-        dep.dependency
-        for app_route in app.routes
-        if isinstance(app_route, APIRoute) and app_route.path in paths
-        for dep in app_route.dependencies
-    ]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("route", ["/omitted-auth-pt", "/omitted-auth-pt/sub"])
-async def test_config_dict_without_auth_registers_auth_enforced_route(route: str, pass_through_route_globals: None):
-    app = FastAPI()
-    await _register_pass_through_endpoint(
-        endpoint={
-            "path": "/omitted-auth-pt",
-            "target": "http://upstream.invalid",
-            "include_subpath": True,
-        },
-        app=app,
-        premium_user=False,
-        visited_endpoints=set(),
-    )
-
-    assert "/omitted-auth-pt" in LiteLLMRoutes.openai_routes.value
-    assert "/omitted-auth-pt/*" in LiteLLMRoutes.openai_routes.value
-    assert RouteChecks.is_llm_api_route(route=route)
-    assert RouteChecks.is_auth_enforced_pass_through_route(route=route, method="POST")
-    upstream_error = HTTPException(
-        status_code=403,
-        detail="Upstream passthrough request failed with status 403",
-    )
-    assert ProxyLogging(user_api_key_cache=UserApiKeyCache())._is_proxy_only_llm_api_error(  # pyright: ignore[reportPrivateUsage]  # asserts the failure-spend gate
-        original_exception=upstream_error,
+def _is_proxy_only_error(proxy_logging: ProxyLogging, original_exception: Exception, route: str) -> bool:
+    return proxy_logging._is_proxy_only_llm_api_error(  # pyright: ignore[reportPrivateUsage]  # asserts the failure-spend gate
+        original_exception=original_exception,
         route=route,
     )
-    assert user_api_key_auth in _registered_app_route_calls(app, "/omitted-auth-pt", "/omitted-auth-pt/{subpath:path}")
+
+
+_CONFIG_OMITTED: Final = {
+    "id": "cfg-omitted",
+    "path": "/cfg-omitted-pt",
+    "target": "http://upstream.invalid",
+    "include_subpath": True,
+}
+_CONFIG_AUTH_FALSE: Final = {
+    "id": "cfg-authfalse",
+    "path": "/cfg-authfalse-pt",
+    "target": "http://upstream.invalid",
+    "include_subpath": True,
+    "auth": False,
+}
+_DB_DEFAULT: Final = PassThroughGenericEndpoint(
+    id="db-default",
+    path="/db-default-pt",
+    target="http://upstream.invalid",
+    include_subpath=True,
+)
+_DB_AUTH_FALSE: Final = PassThroughGenericEndpoint(
+    id="db-authfalse",
+    path="/db-authfalse-pt",
+    target="http://upstream.invalid",
+    include_subpath=True,
+    auth=False,
+)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("route", ["/omitted-auth-pt", "/omitted-auth-pt/sub"])
-async def test_config_dict_with_auth_false_registers_unenforced_route(route: str, pass_through_route_globals: None):
-    app = FastAPI()
-    await _register_pass_through_endpoint(
-        endpoint={
-            "path": "/omitted-auth-pt",
-            "target": "http://upstream.invalid",
-            "include_subpath": True,
-            "auth": False,
-        },
-        app=app,
-        premium_user=False,
-        visited_endpoints=set(),
-    )
-
-    assert "/omitted-auth-pt" not in LiteLLMRoutes.openai_routes.value
-    assert "/omitted-auth-pt/*" not in LiteLLMRoutes.openai_routes.value
-    assert not RouteChecks.is_llm_api_route(route=route)
-    assert not RouteChecks.is_auth_enforced_pass_through_route(route=route, method="POST")
-    upstream_error = HTTPException(
-        status_code=403,
-        detail="Upstream passthrough request failed with status 403",
-    )
-    assert not ProxyLogging(user_api_key_cache=UserApiKeyCache())._is_proxy_only_llm_api_error(  # pyright: ignore[reportPrivateUsage]  # asserts the failure-spend gate
-        original_exception=upstream_error,
-        route=route,
-    )
-    assert user_api_key_auth not in _registered_app_route_calls(
-        app, "/omitted-auth-pt", "/omitted-auth-pt/{subpath:path}"
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("route", ["/db-default-pt", "/db-default-pt/sub"])
-async def test_db_endpoint_default_auth_registers_auth_enforced_route(route: str, pass_through_route_globals: None):
-    app = FastAPI()
-    await _register_pass_through_endpoint(
-        endpoint=PassThroughGenericEndpoint(
-            path="/db-default-pt",
-            target="http://upstream.invalid",
-            include_subpath=True,
+@pytest.mark.parametrize(
+    ("endpoint", "endpoint_id", "path", "enforced", "route"),
+    [
+        pytest.param(_CONFIG_OMITTED, "cfg-omitted", "/cfg-omitted-pt", True, "/cfg-omitted-pt", id="config-omitted-exact"),
+        pytest.param(_CONFIG_OMITTED, "cfg-omitted", "/cfg-omitted-pt", True, "/cfg-omitted-pt/sub", id="config-omitted-sub"),
+        pytest.param(
+            _CONFIG_AUTH_FALSE,
+            "cfg-authfalse",
+            "/cfg-authfalse-pt",
+            False,
+            "/cfg-authfalse-pt",
+            id="config-authfalse-exact",
         ),
-        app=app,
-        premium_user=False,
-        visited_endpoints=set(),
-    )
-
-    assert "/db-default-pt" in LiteLLMRoutes.openai_routes.value
-    assert "/db-default-pt/*" in LiteLLMRoutes.openai_routes.value
-    assert RouteChecks.is_llm_api_route(route=route)
-    assert RouteChecks.is_auth_enforced_pass_through_route(route=route, method="POST")
-    upstream_error = HTTPException(
-        status_code=403,
-        detail="Upstream passthrough request failed with status 403",
-    )
-    assert ProxyLogging(user_api_key_cache=UserApiKeyCache())._is_proxy_only_llm_api_error(  # pyright: ignore[reportPrivateUsage]  # asserts the failure-spend gate
-        original_exception=upstream_error,
-        route=route,
-    )
-    assert user_api_key_auth in _registered_app_route_calls(app, "/db-default-pt", "/db-default-pt/{subpath:path}")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("route", ["/db-authfalse-pt", "/db-authfalse-pt/sub"])
-async def test_db_endpoint_auth_false_registers_unenforced_route(route: str, pass_through_route_globals: None):
-    app = FastAPI()
-    await _register_pass_through_endpoint(
-        endpoint=PassThroughGenericEndpoint(
-            path="/db-authfalse-pt",
-            target="http://upstream.invalid",
-            include_subpath=True,
-            auth=False,
+        pytest.param(
+            _CONFIG_AUTH_FALSE,
+            "cfg-authfalse",
+            "/cfg-authfalse-pt",
+            False,
+            "/cfg-authfalse-pt/sub",
+            id="config-authfalse-sub",
         ),
-        app=app,
-        premium_user=False,
-        visited_endpoints=set(),
-    )
+        pytest.param(_DB_DEFAULT, "db-default", "/db-default-pt", True, "/db-default-pt", id="db-default-exact"),
+        pytest.param(_DB_DEFAULT, "db-default", "/db-default-pt", True, "/db-default-pt/sub", id="db-default-sub"),
+        pytest.param(_DB_AUTH_FALSE, "db-authfalse", "/db-authfalse-pt", False, "/db-authfalse-pt", id="db-authfalse-exact"),
+        pytest.param(
+            _DB_AUTH_FALSE,
+            "db-authfalse",
+            "/db-authfalse-pt",
+            False,
+            "/db-authfalse-pt/sub",
+            id="db-authfalse-sub",
+        ),
+    ],
+)
+async def test_pass_through_registration_auth_enforcement(
+    endpoint: dict[str, object] | PassThroughGenericEndpoint,
+    endpoint_id: str,
+    path: str,
+    enforced: bool,
+    route: str,
+):
+    app: Final = FastAPI()
+    try:
+        await _register_pass_through_endpoint(
+            endpoint=endpoint,
+            app=app,
+            premium_user=False,
+            visited_endpoints=set(),
+        )
+        upstream_error: Final = HTTPException(
+            status_code=403,
+            detail="Upstream passthrough request failed with status 403",
+        )
+        proxy_logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+        exact_dependencies: Final = _route_level_dependencies(app, path)
+        subpath_dependencies: Final = _route_level_dependencies(app, f"{path}/{{subpath:path}}")
 
-    assert "/db-authfalse-pt" not in LiteLLMRoutes.openai_routes.value
-    assert "/db-authfalse-pt/*" not in LiteLLMRoutes.openai_routes.value
-    assert not RouteChecks.is_llm_api_route(route=route)
-    assert not RouteChecks.is_auth_enforced_pass_through_route(route=route, method="POST")
-    upstream_error = HTTPException(
-        status_code=403,
-        detail="Upstream passthrough request failed with status 403",
-    )
-    assert not ProxyLogging(user_api_key_cache=UserApiKeyCache())._is_proxy_only_llm_api_error(  # pyright: ignore[reportPrivateUsage]  # asserts the failure-spend gate
-        original_exception=upstream_error,
-        route=route,
-    )
-    assert user_api_key_auth not in _registered_app_route_calls(
-        app, "/db-authfalse-pt", "/db-authfalse-pt/{subpath:path}"
-    )
+        assert (path in LiteLLMRoutes.openai_routes.value) == enforced
+        assert (f"{path}/*" in LiteLLMRoutes.openai_routes.value) == enforced
+        assert RouteChecks.is_llm_api_route(route=route) == enforced
+        assert RouteChecks.is_auth_enforced_pass_through_route(route=route, method="POST") == enforced
+        assert _is_proxy_only_error(proxy_logging, upstream_error, route) == enforced
+        assert (user_api_key_auth in exact_dependencies) == enforced
+        assert (user_api_key_auth in subpath_dependencies) == enforced
+    finally:
+        InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_id)
