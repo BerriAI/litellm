@@ -7047,10 +7047,20 @@ async def test_user_defined_passthrough_is_neither_tracked_nor_enforced(metadata
         "user_api_key_model_max_budget", "user_api_key_team_model_max_budget",
         "user_api_key_user_model_max_budget", "user_api_key_end_user_model_max_budget",
     })
-    assert metadata.keys().isdisjoint({
-        "user_api_key_model_max_budget", "user_api_key_team_model_max_budget",
-        "user_api_key_user_model_max_budget", "user_api_key_end_user_model_max_budget",
+
+
+@pytest.mark.parametrize("metadata_slot", ["metadata", "litellm_metadata"])
+def test_builtin_passthrough_pins_model_group_to_the_resolved_model(metadata_slot: str) -> None:
+    request: Final = Request({
+        "type": "http", "method": "POST", "path": "/gemini/v1beta/models/gemini-2.5-flash:generateContent",
+        "headers": [], "query_string": b"",
     })
+    kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request, user_api_key_dict=UserAPIKeyAuth(token="hash", user_id="u-1"),
+        passthrough_logging_payload=MagicMock(), logging_obj=MagicMock(),
+        _parsed_body={"contents": [], metadata_slot: {"model_group": "unbounded-client-choice"}},
+    )
+    assert kwargs["litellm_params"]["metadata"]["model_group"] == "gemini-2.5-flash"
 
 
 @pytest.mark.parametrize(
