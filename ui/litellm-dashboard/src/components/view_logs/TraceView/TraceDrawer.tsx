@@ -253,6 +253,7 @@ function RunBody({ trace, accessToken, initialSpanId, embedded }: RunBodyProps) 
         onToggleSpan={toggleSpan}
         onToggleGroup={toggleGroup}
         onLoadMore={loadMore}
+        onOpenDetails={detailOpen ? undefined : () => setDetailOpen(true)}
         embedded={embedded}
       />
       {detailOpen && (
