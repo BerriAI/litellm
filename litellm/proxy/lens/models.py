@@ -157,10 +157,16 @@ class RunAssessment(Record):
     cannot_assess: bool = False
 
 
+class StageMark(Record):
+    stage: str = Field(max_length=100)
+    started_at: datetime
+
+
 class Job(Record):
     id: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"] = "queued"
     stage: str = "Queued"
+    timeline: tuple[StageMark, ...] = ()
     created_at: datetime
     start: datetime
     end: datetime
