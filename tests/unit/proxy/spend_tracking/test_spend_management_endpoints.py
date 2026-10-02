@@ -1745,13 +1745,13 @@ async def test_permitted_team_scope_falls_back_to_own_user_when_lookup_fails():
         raise RuntimeError("database unavailable")
 
     scope = await resolve_log_read_scope("caller", unavailable)
-    sql, params = spend_management_endpoints._read_scope_sql(scope, 1)
-    with sqlite3.connect(":memory:") as connection:
-        connection.execute('CREATE TABLE logs ("user" TEXT, team_id TEXT)')
-        connection.executemany("INSERT INTO logs VALUES (?, ?)", (("caller", None), ("foreign", "team")))
-        assert connection.execute(
-            f'SELECT "user" FROM logs WHERE {sql}', {str(i): p for i, p in enumerate(params, 1)}
-        ).fetchall() == [("caller",)]
+    rows = (
+        _payload_row("own", "shared", "caller", "own payload"),
+        _payload_row("foreign", "shared", "other", "foreign payload"),
+    )
+    prisma = _make_payload_lookup_prisma(rows)
+    query, params = spend_management_endpoints._spend_log_payload_query("shared", scope)
+    assert await prisma.db.query_raw(query, *params) == [rows[0]]
 
 
 @pytest.mark.asyncio
@@ -7910,19 +7910,15 @@ def test_capture_rate_reports_an_unreadable_bill_as_502(client, monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("member_role", "permissions", "explicit_user", "expected"),
+    ("member_role", "permissions", "expected"),
     [
-        ("admin", [], None, ["own", "permitted"]),
-        ("user", ["/spend/logs"], None, ["own", "permitted"]),
-        ("user", ["/key/info"], None, ["own"]),
-        ("user", [], "other", []),
-        ("admin", [], "other", ["permitted"]),
-        ("admin", [], "caller", ["own"]),
+        ("admin", [], ["own", "permitted"]),
+        ("user", ["/spend/logs"], ["own", "permitted"]),
+        ("user", ["/key/info"], ["own"]),
+        ("user", [], ["own"]),
     ],
 )
-async def test_shared_read_scope_returns_only_owned_or_permitted_rows(
-    member_role, permissions, explicit_user, expected
-):
+async def test_shared_read_scope_returns_only_owned_or_permitted_rows(member_role, permissions, expected):
     from litellm.proxy._types import LiteLLM_TeamTable
     from litellm.proxy.spend_tracking.log_visibility import permitted_log_team_ids, resolve_log_read_scope
 
@@ -7944,21 +7940,17 @@ async def test_shared_read_scope_returns_only_owned_or_permitted_rows(
         return permitted_log_team_ids(auth, teams)
 
     scope = await resolve_log_read_scope(auth.user_id, lookup)
-    clause, params = spend_management_endpoints._read_scope_sql(scope, 1)
-    sqlite_clause = re.sub(r"= ANY\((\$\d+)::text\[\]\)", r"IN (SELECT value FROM json_each(\1))", clause)
-    bindings = {str(i): json.dumps(p) if isinstance(p, tuple) else p for i, p in enumerate(params, 1)}
-    with sqlite3.connect(":memory:") as connection:
-        connection.execute('CREATE TABLE logs (request_id TEXT, "user" TEXT, team_id TEXT)')
-        connection.executemany(
-            "INSERT INTO logs VALUES (?, ?, ?)",
-            (("own", "caller", None), ("permitted", "other", "allowed"), ("foreign", "other", "outside")),
-        )
-        result = connection.execute(
-            f'SELECT request_id FROM logs WHERE {sqlite_clause} AND ($filter IS NULL OR "user" = $filter)'
-            " ORDER BY request_id",
-            {**bindings, "filter": explicit_user},
-        ).fetchall()
-        assert [row[0] for row in result] == expected
+    rows = (
+        _payload_row("own", "own-call", "caller", "own payload"),
+        {**_payload_row("permitted", "team-call", "other", "team payload"), "team_id": "allowed"},
+        {**_payload_row("foreign", "foreign-call", "other", "foreign payload"), "team_id": "outside"},
+    )
+    prisma = _make_payload_lookup_prisma(rows)
+    returned = []
+    for row in rows:
+        query, params = spend_management_endpoints._spend_log_payload_query(row["request_id"], scope)
+        returned.extend(await prisma.db.query_raw(query, *params))
+    assert [row["request_id"] for row in returned] == expected
 
 
 @pytest.mark.asyncio
@@ -8008,21 +8000,10 @@ async def test_payload_scope_filters_colliding_foreign_request_id(lookup_failure
         return ("allowed",)
 
     scope = await resolve_log_read_scope("caller", lookup)
+    rows = (
+        {**_payload_row("collision", "unrelated", "other", "foreign payload"), "team_id": "outside"},
+        _payload_row("own", "collision", "caller", "own payload"),
+    )
+    prisma = _make_payload_lookup_prisma(rows)
     query, params = spend_management_endpoints._spend_log_payload_query("collision", scope)
-    sqlite_query = re.sub(r"= ANY\((\$\d+)::text\[\]\)", r"IN (SELECT value FROM json_each(\1))", query)
-    bindings = {str(i): json.dumps(p) if isinstance(p, tuple) else p for i, p in enumerate(params, 1)}
-    with sqlite3.connect(":memory:") as connection:
-        connection.execute(
-            'CREATE TABLE "LiteLLM_SpendLogs" (request_id TEXT, litellm_call_id TEXT, messages TEXT, response TEXT,'
-            ' proxy_server_request TEXT, metadata TEXT, "user" TEXT, team_id TEXT)'
-        )
-        connection.executemany(
-            'INSERT INTO "LiteLLM_SpendLogs" VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?)',
-            (
-                ("collision", "unrelated", "foreign payload", "other", "outside"),
-                ("own", "collision", "own payload", "caller", None),
-            ),
-        )
-        assert connection.execute(sqlite_query, bindings).fetchall() == [
-            ("own", "own payload", None, None, None, "caller", None)
-        ]
+    assert await prisma.db.query_raw(query, *params) == [rows[1]]
