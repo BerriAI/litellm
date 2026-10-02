@@ -16,7 +16,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from functools import partial
 from types import MappingProxyType
-from typing import (  # noqa: TID251  # typed view of the untyped bounded task registry
+from typing import (
     TYPE_CHECKING,
     Any,
     Final,
@@ -25,7 +25,7 @@ from typing import (  # noqa: TID251  # typed view of the untyped bounded task r
     Optional,
     Protocol,
     TypeAlias,
-    cast,
+    cast,  # noqa: TID251  # typed view of the untyped bounded task registry
 )
 
 from fastapi import HTTPException, Request, status
