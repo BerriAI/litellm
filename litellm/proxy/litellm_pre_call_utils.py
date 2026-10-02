@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import itertools
 import json
 import re
 import time
@@ -1804,7 +1805,7 @@ class LiteLLMProxyRequestSetup:
             ("tags", tags or None),
             (
                 "spend_logs_metadata",
-                dict(item for source in spend_logs_metadata_sources for item in source.items())
+                dict(itertools.chain.from_iterable(source.items() for source in spend_logs_metadata_sources))
                 if spend_logs_metadata_sources
                 else None,
             ),
