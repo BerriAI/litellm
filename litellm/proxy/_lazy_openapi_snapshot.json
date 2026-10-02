@@ -27761,6 +27761,30 @@
           ]
         }
       },
+      "/laya/v1/systemone": {
+        "post": {
+          "operationId": "laya_proxy_route_laya_v1_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Laya Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
       "/milvus/{endpoint}": {
         "delete": {
           "description": "Enable using Milvus `/vectors` endpoint as a pass-through endpoint.",

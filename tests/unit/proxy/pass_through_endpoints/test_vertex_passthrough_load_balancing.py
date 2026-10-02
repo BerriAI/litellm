@@ -1,8 +1,8 @@
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
-from starlette.datastructures import Headers, State
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
@@ -771,12 +771,15 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
     """The router deployment that rewrote the upstream URL is the one the logging kwargs must name, so
     the Prometheus model_id label (and SpendLogs.model_id) on a Vertex passthrough success reads the
     deployment's id instead of "" (LIT-1761)."""
-    mock_request = MagicMock(spec=Request)
-    mock_request.method = "POST"
-    mock_request.url = "http://0.0.0.0:4000/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent"
-    mock_request.headers = Headers({})
-    mock_request.scope = {}
-    mock_request.state = State()
+    mock_request: Final = Request({
+        "type": "http",
+        "method": "POST",
+        "scheme": "http",
+        "server": ("0.0.0.0", 4000),
+        "path": "/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
+        "headers": [],
+        "query_string": b"",
+    })
     mock_handler = MagicMock()
     mock_handler.get_default_base_target_url.return_value = "https://aiplatform.googleapis.com"
 
