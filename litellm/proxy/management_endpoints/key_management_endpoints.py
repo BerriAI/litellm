@@ -2519,7 +2519,7 @@ async def _update_key_row_with_soft_budget(
     non_default_values: Mapping[str, object],
     existing_key_row: LiteLLM_VerificationToken,
     changed_by: str,
-    expect_unassigned_project: bool,
+    expect_unassigned_project: bool = False,
 ) -> _KeyUpdateResult:
     hashed_token: Final = _hash_token_if_needed(key)
     key_where: Final[_KeyRowWhere] = {"token": hashed_token}
