@@ -488,7 +488,14 @@ class LLMCallSpanData:
             usage=LLMUsage.from_standard_logging_payload(payload),
             finish_reasons=finish_reasons,
             error=_parse_error(payload),
-            response_cost=as_float(payload.get("response_cost")),
+            # response_cost = 0 is ambiguous between a free model and a
+            # pricing failure; when the pricing-failure debug info is
+            # present, report None (unknown) instead of a fake 0 (issue
+            # #44186) — e.g. Langfuse prefers an ingested cost over its own
+            # price knowledge, so a fake 0 hides real spend there.
+            response_cost=(
+                as_float(payload.get("response_cost")) if not payload.get("response_cost_failure_debug_info") else None
+            ),
             cost=LLMCost.from_breakdown(cast("Mapping[str, object] | None", payload.get("cost_breakdown"))),
             server=ServerInfo.from_api_base(context.api_base),
             identity=context.identity,
@@ -585,7 +592,10 @@ class MCPToolCallSpanData:
                 _json_or_none(meta.get("result")) if capture_content and meta.get("result") is not None else None
             ),
             error=_parse_error(payload),
-            response_cost=as_float(payload.get("response_cost")),
+            # Same 0-vs-pricing-failure ambiguity as the LLM span above.
+            response_cost=(
+                as_float(payload.get("response_cost")) if not payload.get("response_cost_failure_debug_info") else None
+            ),
             identity=RequestContext.from_standard_logging_payload(payload).identity,
         )
 

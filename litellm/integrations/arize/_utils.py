@@ -898,6 +898,14 @@ def _set_response_cost_attr(span: "Span", standard_logging_payload) -> None:
     cost: Final = standard_logging_payload.get("response_cost")
     if cost is None:
         return
+    # A 0 cost is ambiguous between "genuinely free" and "pricing failed".
+    # When the pricing-failure debug info is present, omit the attributes
+    # rather than reporting a fake $0 that cost backends cannot distinguish
+    # from a free model (issue #44186) — e.g. Langfuse prefers an ingested
+    # cost over its own price knowledge, so a fake 0 hides real spend there.
+    failure_debug: Final = standard_logging_payload.get("response_cost_failure_debug_info")
+    if failure_debug:
+        return
     try:
         cost_value: Final = float(cost)
     except (TypeError, ValueError):
