@@ -60,10 +60,7 @@ from litellm.llms.deepgram.common_utils import (
 from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost, fal_ai_queue_base
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.llms.openai.common_utils import OpenAIError as LiteLLMOpenAIError
-from litellm.llms.openai.workload_identity import (
-    get_workload_identity_bearer_token_async,
-    resolve_openai_workload_identity_config,
-)
+from litellm.llms.openai.workload_identity import get_workload_identity_bearer_token_for_api_base
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 from litellm.proxy._types import *
@@ -2938,10 +2935,7 @@ async def _openai_passthrough_credential(base_target_url: str) -> str | None:
     )
     if static_api_key is not None:
         return static_api_key
-    workload_identity_config: Final = resolve_openai_workload_identity_config(api_key=None, api_base=base_target_url)
-    if workload_identity_config is None:
-        return None
-    return await get_workload_identity_bearer_token_async(workload_identity_config)
+    return await get_workload_identity_bearer_token_for_api_base(base_target_url)
 
 
 @router.api_route(
