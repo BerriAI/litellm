@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Final
 
-from litellm.proxy.lens.models import Finding, FindingDraft, Job, Lens, LensSettings, Scope, Worker
+from litellm.proxy.lens.models import Finding, FindingDraft, Job, Lens, LensSettings, Scope, StageMark, Worker
 
 
 def can_access(viewer: Scope, target: Scope) -> bool:
@@ -12,6 +12,12 @@ def can_access(viewer: Scope, target: Scope) -> bool:
         and viewer.team_id == target.team_id
         and (bool(viewer.team_id) or viewer.api_key_hash == target.api_key_hash)
     )
+
+
+def advance_timeline(timeline: tuple[StageMark, ...], stage: str, now: datetime) -> tuple[StageMark, ...]:
+    if timeline and timeline[-1].stage == stage:
+        return timeline
+    return (*timeline, StageMark(stage=stage, started_at=now))
 
 
 def current_job(lens: Lens) -> Job | None:
@@ -72,6 +78,7 @@ def claim_job(lens: Lens, worker: Worker, now: datetime) -> Lens:
                 {
                     "status": "running",
                     "stage": "Collecting executions",
+                    "timeline": (StageMark(stage="Collecting executions", started_at=now),),
                     "worker_id": worker.id,
                     "lease_until": now + timedelta(minutes=5),
                     "attempts": job.attempts + 1,
