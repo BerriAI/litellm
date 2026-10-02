@@ -7595,7 +7595,7 @@ def test_passthrough_sees_the_public_list_rebound_after_import(monkeypatch: pyte
 def test_passthrough_metadata_carries_key_team_project_tags_and_key_spend_logs_metadata():
     mock_request = MagicMock(spec=Request)
     mock_request.method = "POST"
-    mock_request.url = "http://0.0.0.0:4000/anthropic/v1/messages"
+    mock_request.url = httpx.URL("http://0.0.0.0:4000/anthropic/v1/messages")
     mock_request.headers = Headers({"x-litellm-tags": "caller-tag,key-tag"})
     mock_request.scope = {}
 
