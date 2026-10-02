@@ -160,13 +160,18 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
     def _is_vision_forwardable_content(self, message: AllMessageValues, content: Sequence[object]) -> bool:
         """
-        True only for a user message whose content list holds well-formed
-        text and image_url blocks with at least one image; a block missing
-        its payload falls back to the string collapse instead of crashing
-        or reaching the wire malformed. The model capability gate lives in
-        the caller.
+        True only for a user or tool message whose content list holds
+        well-formed text and image_url blocks with at least one image; a block
+        missing its payload falls back to the string collapse instead of
+        crashing or reaching the wire malformed. The model capability gate
+        lives in the caller.
+
+        ``role="tool"`` is forwardable: the DeepSeek Chat Completions API
+        accepts and reads image_url blocks in tool results (verified directly
+        against the API; bug #44211) — agent loops that screenshot inside a
+        tool rely on it.
         """
-        if message.get("role") != "user":
+        if message.get("role") not in ("user", "tool"):
             return False
         if not all(self._is_forwardable_block(block) for block in content):
             return False
