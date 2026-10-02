@@ -10289,10 +10289,30 @@ def test_get_configured_service_tiers_returns_the_deployment_model_info_value_as
         ]
     )
 
-    assert router.get_configured_service_tiers("gpt-6-astra") == configured
+    assert router.get_configured_service_tiers("gpt-6-astra") == (configured,)
 
 
-def test_get_configured_service_tiers_returns_none_for_unset_or_unknown():
+def test_get_configured_service_tiers_returns_one_value_per_deployment_in_model_list_order():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            },
+            {"model_name": "gpt-6-astra", "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://a.example"}},
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://b.example"},
+                "model_info": {"service_tiers": ["priority", "ultrafast"]},
+            },
+        ]
+    )
+
+    assert router.get_configured_service_tiers("gpt-6-astra") == (["ultrafast"], None, ["priority", "ultrafast"])
+
+
+def test_get_configured_service_tiers_returns_none_for_an_unset_deployment_and_nothing_for_an_unknown_name():
     router = litellm.Router(
         model_list=[
             {
@@ -10302,8 +10322,8 @@ def test_get_configured_service_tiers_returns_none_for_unset_or_unknown():
         ]
     )
 
-    assert router.get_configured_service_tiers("no-tiers-model") is None
-    assert router.get_configured_service_tiers("not-a-real-model") is None
+    assert router.get_configured_service_tiers("no-tiers-model") == (None,)
+    assert router.get_configured_service_tiers("not-a-real-model") == ()
 
 
 def test_get_configured_service_tiers_does_not_apply_a_wildcard_deployment_to_matched_names():
@@ -10317,7 +10337,7 @@ def test_get_configured_service_tiers_does_not_apply_a_wildcard_deployment_to_ma
         ]
     )
 
-    assert router.get_configured_service_tiers("openai/gpt-6-astra") is None
+    assert router.get_configured_service_tiers("openai/gpt-6-astra") == ()
 
 
 def test_get_configured_display_name_treats_malformed_values_as_absent():

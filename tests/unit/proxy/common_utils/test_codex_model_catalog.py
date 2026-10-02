@@ -49,7 +49,14 @@ _STOCK = MappingProxyType(
 
 
 def _row(model_id, **overrides):
-    return CodexCatalogRow(**{"id": model_id, "mode": "responses", "max_input_tokens": 272000, **overrides})
+    """A one-deployment row; `service_tiers` is that deployment's raw value, `deployments` a per-deployment tuple."""
+    per_deployment = (
+        {"service_tiers": (overrides["service_tiers"],)}
+        if "service_tiers" in overrides
+        else {"service_tiers": overrides["deployments"]} if "deployments" in overrides else {}
+    )
+    listing = {key: value for key, value in overrides.items() if key not in ("service_tiers", "deployments")}
+    return CodexCatalogRow(**{"id": model_id, "mode": "responses", "max_input_tokens": 272000, **listing, **per_deployment})
 
 
 def _body(*rows, **kwargs):
@@ -196,6 +203,41 @@ def test_invalid_service_tiers_are_ignored_and_the_stock_tiers_stay(invalid):
 
 
 @pytest.mark.parametrize(
+    ("deployments", "expected"),
+    [
+        ((["ultrafast"], ["ultrafast"]), [("ultrafast", "Ultrafast", "Sends service_tier=ultrafast upstream")]),
+        (
+            (["priority", "ultrafast"], ["ultrafast", "flex", "priority"]),
+            [("priority", "Fast", "2x speed, increased usage"), ("ultrafast", "Ultrafast", "Sends service_tier=ultrafast upstream")],
+        ),
+        ((["priority", "ultrafast"], ["ultrafast"]), [("ultrafast", "Ultrafast", "Sends service_tier=ultrafast upstream")]),
+        ((["ultrafast"], ["priority"]), []),
+        ((["ultrafast"], None), []),
+        ((None, ["ultrafast"], None), []),
+    ],
+)
+def test_a_tier_is_offered_only_when_every_deployment_of_the_model_lists_it(deployments, expected):
+    """Any deployment can serve the request, so the first deployment's order is kept but a tier one of them
+    lacks, or a deployment that lists none, offers nothing Codex could send to the wrong deployment."""
+    (entry,) = _models(_row("gpt-5.5", deployments=deployments))
+
+    assert _tiers(entry) == expected
+
+
+def test_deployments_that_all_leave_service_tiers_unset_keep_the_stock_tiers():
+    stock_entry, fallback_entry = _models(_row("gpt-5.5", deployments=(None, None)), _row("mystery", deployments=(None, None)))
+
+    assert _tiers(stock_entry) == [("priority", "Fast", "2x speed, increased usage")]
+    assert fallback_entry["service_tiers"] == []
+
+
+def test_an_invalid_value_on_one_deployment_ignores_the_configuration_for_the_whole_model():
+    (entry,) = _models(_row("gpt-5.5", deployments=(["ultrafast"], "not-a-list")))
+
+    assert _tiers(entry) == [("priority", "Fast", "2x speed, increased usage")]
+
+
+@pytest.mark.parametrize(
     ("configured", "expected"),
     [(None, "priority"), (["priority", "ultrafast"], "priority"), (["ultrafast"], None), ([], None)],
 )
@@ -257,10 +299,11 @@ def test_vendored_codex_catalog_entries_decode_on_codex():
 
 
 def test_configured_service_tiers_without_known_tiers_names_strings_after_their_id():
-    assert configured_service_tiers(["ultrafast"], "m") == (
+    assert configured_service_tiers((["ultrafast"],), "m") == (
         CodexServiceTier(id="ultrafast", name="Ultrafast", description="Sends service_tier=ultrafast upstream"),
     )
-    assert configured_service_tiers(None, "m") is None
+    assert configured_service_tiers((None,), "m") is None
+    assert configured_service_tiers((), "m") is None
 
 
 def test_catalog_rows_read_the_router_by_each_entry_lookup_id():
@@ -270,6 +313,10 @@ def test_catalog_rows_read_the_router_by_each_entry_lookup_id():
                 "model_name": "model_name_team-1_c0ffee",
                 "litellm_params": {"model": "openai/gpt-5.5"},
                 "model_info": {"display_name": "Team 5.5", "service_tiers": ["ultrafast"]},
+            },
+            {
+                "model_name": "model_name_team-1_c0ffee",
+                "litellm_params": {"model": "openai/gpt-5.5", "api_base": "https://second.example"},
             },
             {"model_name": "plain", "litellm_params": {"model": "openai/some-unmapped-model"}},
         ]
@@ -288,9 +335,9 @@ def test_catalog_rows_read_the_router_by_each_entry_lookup_id():
             max_input_tokens=7,
             upstream_model="openai/gpt-5.5",
             display_name="Team 5.5",
-            service_tiers=["ultrafast"],
+            service_tiers=(["ultrafast"], None),
         ),
-        CodexCatalogRow(id="plain", upstream_model="openai/some-unmapped-model"),
+        CodexCatalogRow(id="plain", upstream_model="openai/some-unmapped-model", service_tiers=(None,)),
     )
 
 

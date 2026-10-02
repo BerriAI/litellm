@@ -139,14 +139,16 @@ CodexCatalogEntry = CodexFallbackModel | CodexStockModel
 @dataclass(frozen=True, slots=True)
 class CodexCatalogRow:
     """What the catalog needs to know about one listed model: its public id, the listing's mode and
-    input limit, the upstream model behind it, and the `model_info` values the operator set."""
+    input limit, the upstream model behind it, and the `model_info` values the operator set;
+    `service_tiers` holds one raw `model_info.service_tiers` value per deployment behind the id, None
+    where a deployment sets none."""
 
     id: str
     mode: str | None = None
     max_input_tokens: int | None = None
     upstream_model: str | None = None
     display_name: str | None = None
-    service_tiers: object = None
+    service_tiers: tuple[object, ...] = ()
 
 
 @cache
@@ -183,19 +185,9 @@ def _first_by_id(tiers: Sequence[CodexServiceTier]) -> tuple[CodexServiceTier, .
 _NO_KNOWN_TIERS: Final[Mapping[str, CodexServiceTier]] = MappingProxyType({})
 
 
-def configured_service_tiers(
-    raw: object, model_id: str, known: Mapping[str, CodexServiceTier] = _NO_KNOWN_TIERS
+def _deployment_tiers(
+    raw: object, model_id: str, known: Mapping[str, CodexServiceTier]
 ) -> tuple[CodexServiceTier, ...] | None:
-    """The tiers `model_info.service_tiers` configures for `model_id`, or None when it sets none.
-
-    Accepts tier id strings and `{id, name, description}` objects. A string naming one of the
-    model's `known` tiers (the ones Codex ships for it) keeps that tier's name and description, so
-    `"priority"` stays Codex's `/fast`; any other string `x` is the command `/x` described as
-    "Sends service_tier=x upstream". A duplicate id keeps its first entry. An invalid value is
-    logged and treated as unset so one typo never fails the whole listing.
-    """
-    if raw is None:
-        return None
     try:
         items: Final = _CONFIGURED_TIERS.validate_python(raw)
     except ValidationError as e:
@@ -206,6 +198,49 @@ def configured_service_tiers(
         )
         return None
     return _first_by_id(tuple(_tier(item, known) for item in items))
+
+
+def configured_service_tiers(
+    per_deployment: Sequence[object], model_id: str, known: Mapping[str, CodexServiceTier] = _NO_KNOWN_TIERS
+) -> tuple[CodexServiceTier, ...] | None:
+    """The tiers `model_info.service_tiers` configures for `model_id`, given each of its deployments'
+    raw value (None where unset), or None when no deployment sets one.
+
+    Accepts tier id strings and `{id, name, description}` objects. A string naming one of the
+    model's `known` tiers (the ones Codex ships for it) keeps that tier's name and description, so
+    `"priority"` stays Codex's `/fast`; any other string `x` is the command `/x` described as
+    "Sends service_tier=x upstream". A duplicate id keeps its first entry. A request to `model_id`
+    can route to any of its deployments, so a tier is offered only when every deployment lists it,
+    in the first deployment's order; a deployment that sets none leaves nothing to offer. Each of
+    those cases is logged, and an invalid value anywhere is logged and treated as unset for the
+    whole model so one typo never fails the listing.
+    """
+    declared: Final = tuple(raw for raw in per_deployment if raw is not None)
+    if not declared:
+        return None
+    parsed_or_invalid: Final = tuple(_deployment_tiers(raw, model_id, known) for raw in declared)
+    parsed: Final = tuple(tiers for tiers in parsed_or_invalid if tiers is not None)
+    if len(parsed) < len(parsed_or_invalid):
+        return None
+    if len(parsed) < len(per_deployment):
+        verbose_proxy_logger.warning(
+            "model_info.service_tiers for %s is set on %d of its %d deployments, so no tier is offered: "
+            "a tier is offered only when every deployment lists it",
+            model_id,
+            len(parsed),
+            len(per_deployment),
+        )
+        return ()
+    tier_ids: Final = tuple(frozenset(tier.id for tier in tiers) for tiers in parsed)
+    shared: Final = tier_ids[0].intersection(*tier_ids[1:])
+    offered: Final = tuple(tier for tier in parsed[0] if tier.id in shared)
+    if len(offered) < len(parsed[0]):
+        verbose_proxy_logger.warning(
+            "model_info.service_tiers for %s differs between its deployments, offering only the tiers every one lists: %s",
+            model_id,
+            ", ".join(tier.id for tier in offered) or "none",
+        )
+    return offered
 
 
 def _codex_can_drive(row: CodexCatalogRow) -> bool:
@@ -331,7 +366,7 @@ def _catalog_row(row: ModelInfoResponse, lookup_id: str, llm_router: Router | No
         max_input_tokens=row.get("max_input_tokens"),
         upstream_model=deployment.litellm_params.model if deployment is not None else None,
         display_name=llm_router.get_configured_display_name(lookup_id) if llm_router is not None else None,
-        service_tiers=llm_router.get_configured_service_tiers(lookup_id) if llm_router is not None else None,
+        service_tiers=llm_router.get_configured_service_tiers(lookup_id) if llm_router is not None else (),
     )
 
 

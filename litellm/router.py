@@ -473,6 +473,7 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
 
 _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 
 
@@ -10529,19 +10530,24 @@ class Router:
             return display_name
         return None
 
-    def get_configured_service_tiers(self, model_name: str) -> object:
-        """
-        Return the service_tiers value configured in a concrete deployment's
-        model_info for model_name, unvalidated, via the same O(1) index lookup as
-        get_configured_display_name; the caller validates the shape it expects.
+    @staticmethod
+    def _configured_service_tiers_of(deployment: Mapping[str, object]) -> object:
+        return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {}).get("service_tiers")
 
-        Returns None for wildcard-expanded or unknown names and when nothing is
-        configured.
+    def get_configured_service_tiers(self, model_name: str) -> tuple[object, ...]:
         """
-        deployment: Final = self.get_deployment_by_model_group_name(model_group_name=model_name)
-        if deployment is None:
-            return None
-        return deployment.model_info.get("service_tiers")
+        Return the service_tiers value each concrete deployment of model_name
+        configures in its model_info, unvalidated and in model_list order, None
+        for a deployment that sets none, via the same O(1) index lookup as
+        get_configured_display_name; the caller validates the shape it expects
+        and decides how the deployments combine.
+
+        Returns an empty tuple for wildcard-expanded or unknown names.
+        """
+        return tuple(
+            self._configured_service_tiers_of(deployment)
+            for deployment in self._get_all_deployments(model_name=model_name)
+        )
 
     def get_credential_deployment(self, model_id: str, team_id: str | None = None) -> Deployment | None:
         """

@@ -47,7 +47,7 @@ def patched_models(monkeypatch):
     deployment.litellm_params.model = "gpt-4"
     router.get_deployment_by_model_group_name = MagicMock(return_value=deployment)
     router.get_configured_display_name = MagicMock(return_value=None)
-    router.get_configured_service_tiers = MagicMock(return_value=None)
+    router.get_configured_service_tiers = MagicMock(return_value=())
 
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
@@ -444,7 +444,7 @@ def test_codex_format_carries_configured_service_tiers(client, auth_as, patched_
     """A deployment's ``model_info.service_tiers`` becomes the entry's ``service_tiers``, which Codex
     offers as slash commands; a model without one offers none, and the OpenAI shape gains no field."""
     patched_models.get_configured_service_tiers = MagicMock(
-        side_effect=lambda model_name: ["ultrafast"] if model_name == "gpt-4" else None
+        side_effect=lambda model_name: (["ultrafast"],) if model_name == "gpt-4" else (None,)
     )
 
     with auth_as():
@@ -475,7 +475,7 @@ def test_codex_service_tiers_resolved_via_internal_team_key(client, auth_as, pat
     )
     patched_models.get_model_names = MagicMock(return_value=[internal_name])
     patched_models.get_configured_service_tiers = MagicMock(
-        side_effect=lambda model_name: ["ultrafast"] if model_name == internal_name else None
+        side_effect=lambda model_name: (["ultrafast"],) if model_name == internal_name else ()
     )
 
     async def _fake_get_available_models_for_user(**kwargs):
