@@ -296,10 +296,18 @@ class ToolCall(BaseModel):
     function: ToolCallFunction = ToolCallFunction()
 
 
+class ThinkingBlock(BaseModel):
+    type: str
+    thinking: str | None = None
+    signature: str | None = None
+    data: str | None = None
+
+
 class ChatAssistantTurn(BaseModel):
     role: Literal["assistant"] = "assistant"
     content: str | None = None
     reasoning_content: str | None = None
+    thinking_blocks: list[ThinkingBlock] | None = None
     tool_calls: list[ToolCall] | None = None
 
 
@@ -422,6 +430,7 @@ class OutMessage(BaseModel):
     role: str | None = None
     content: str | None = None
     reasoning_content: str | None = None
+    thinking_blocks: list[ThinkingBlock] | None = None
     tool_calls: list[ToolCall] | None = None
     provider_specific_fields: McpResponseMetadata | None = None
 
@@ -817,10 +826,15 @@ class OcrPage(BaseModel):
     markdown: str
 
 
+class OcrUsageInfo(BaseModel):
+    pages_processed: int | None = None
+
+
 class OcrResponse(BaseModel):
     object: str | None = None
     model: str | None = None
     pages: list[OcrPage] = []
+    usage_info: OcrUsageInfo | None = None
 
 
 # ---------- completions ----------
@@ -1523,6 +1537,7 @@ class UserNewBody(BaseModel):
 
 class UserNewResponse(BaseModel):
     user_id: str
+    key: str | None = None
 
 
 class UserUpdateBody(BaseModel):
@@ -1564,6 +1579,40 @@ class UserListRow(BaseModel):
 class UserListResponse(BaseModel):
     users: list[UserListRow]
     total: int
+
+
+class UserKeyRow(BaseModel):
+    token: str
+    key_alias: str | None = None
+
+
+class UserInfoWithKeysResponse(BaseModel):
+    user_id: str | None = None
+    keys: list[UserKeyRow] = []
+
+
+class JwtKeyMappingRow(BaseModel):
+    id: str
+    jwt_claim_name: str
+    jwt_claim_value: str
+    created_by: str | None = None
+
+
+class JwtKeyMappingListParams(BaseModel):
+    size: int = 100
+
+
+class JwtKeyMappingListResponse(BaseModel):
+    mappings: list[JwtKeyMappingRow]
+    total_count: int
+
+
+class JwtKeyMappingDeleteBody(BaseModel):
+    id: str
+
+
+class JwtKeyMappingDeleteResponse(BaseModel):
+    status: str
 
 
 class OrgNewBody(BaseModel):

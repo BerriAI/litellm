@@ -7,8 +7,9 @@ import { formatActivityTimestamp } from "@/utils/activityTimestamp";
 import { cn } from "@/lib/cva.config";
 
 import { StatusMark } from "./StatusMark";
+import { FrameworkLogo, traceFramework } from "./TraceFramework";
 import type { TraceSummary } from "./traceTypes";
-import { fmtMs, previewText, traceDisplayName } from "./traceUtils";
+import { fmtMs, previewText, traceDisplayName, traceAgentNames } from "./traceUtils";
 
 interface AgentTracesTableProps {
   traces: TraceSummary[];
@@ -31,6 +32,20 @@ const firstLine = (text: string): string => text.split("\n")[0] ?? text;
 const TH = "px-3 font-medium";
 const TH_NUM = "px-3 text-right font-medium";
 const TD_NUM = "px-3 text-right font-mono tabular-nums text-muted-foreground";
+
+function AgentCell({ run }: { run: TraceSummary }) {
+  const framework = traceFramework(run);
+  const agents = traceAgentNames(run).join(", ");
+  const title = [agents, framework?.label].filter(Boolean).join(" · ");
+  return (
+    <td className="px-3 text-muted-foreground" title={title}>
+      <div className="flex min-w-0 items-center gap-1.5">
+        {framework && <FrameworkLogo framework={framework} />}
+        <span className="truncate">{agents || framework?.label || "—"}</span>
+      </div>
+    </td>
+  );
+}
 
 /** Devtool-dense runs list: one row per agent run, newest first. */
 export function AgentTracesTable({
@@ -83,9 +98,7 @@ export function AgentTracesTable({
               >
                 {formatActivityTimestamp(run.start_time)}
               </td>
-              <td className="truncate px-3 text-muted-foreground" title={run.service}>
-                {run.service}
-              </td>
+              <AgentCell run={run} />
               <td className="px-3">
                 <div className="flex min-w-0 items-center gap-2">
                   <StatusMark status={run.error_count > 0 ? "error" : "ok"} subtle />

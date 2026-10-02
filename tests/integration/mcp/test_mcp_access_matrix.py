@@ -3,6 +3,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway
+from integration._support.database import read_rows
 from integration._support.mcp import (
     ENTRY_POINTS,
     EntryPoint,
@@ -25,6 +26,16 @@ def _server_scoped(entry: EntryPoint, identity: str) -> str | None:
 
 def _name(entry: EntryPoint, alias: str, tool: str) -> str:
     return tool if entry == "rest" else f"{alias}-{tool}"
+
+
+def _open_aliases() -> frozenset[str]:
+    rows: Final = read_rows('SELECT alias FROM "LiteLLM_MCPServerTable" WHERE allow_all_keys', ())
+    return frozenset(str(row["alias"]) for row in rows)
+
+
+def _without_foreign_open_servers(tools: tuple[str, ...], open_aliases: frozenset[str]) -> set[str]:
+    prefixes: Final = tuple(f"{alias}-" for alias in open_aliases)
+    return {tool for tool in tools if not tool.startswith(prefixes)}
 
 
 def _assert_denied(caller: McpCaller, peer: McpPeer, name: str, identity: str, entry: EntryPoint) -> None:
@@ -51,14 +62,16 @@ def test_subject_grant_lists_only_reachable_tools_and_denies_the_rest(
             scenario, subject, (granted,), (granted, denied), access_group=group, allowed_tools={granted: ("add",)}
         )
         reach: Final = McpCaller(gateway, caller.key, entry, granted_alias, caller.headers)
+        open_before: Final = _open_aliases()
         listed: Final = reach.list_tools(_server_scoped(entry, granted))
         assert listed.ok, listed.raw
+        open_aliases: Final = open_before | _open_aliases()
         expected: Final = (
             {_name(entry, granted_alias, "add")}
             if subject in ("toolset", "allowed_tools")
             else {_name(entry, granted_alias, tool) for tool in ("add", "multiply", "fail")}
         )
-        assert set(listed.tools) == expected, listed.tools
+        assert _without_foreign_open_servers(listed.tools, open_aliases) == expected, listed.tools
         for tool, arguments in CALLABLE.items():
             name: Final = _name(entry, granted_alias, tool)
             if name not in listed.tools:
