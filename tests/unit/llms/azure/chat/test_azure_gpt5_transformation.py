@@ -430,6 +430,60 @@ def test_azure_gpt6_astra_row_turns_none_and_minimal_off():
     assert row["supports_max_reasoning_effort"] is False
 
 
+def test_azure_chat_gate_reads_the_foundry_row_when_azure_ai_prefix_survives_provider_remap(
+    config: AzureOpenAIGPT5Config, monkeypatch: pytest.MonkeyPatch
+):
+    """A Foundry deployment on an OpenAI-v1 host is re-routed to the azure provider with its
+    azure_ai/ prefix intact, and this config then gates it. The rows are made to disagree on low,
+    a level neither real row flags, so the prefixed name has to read azure_ai/gpt-6-sol while the
+    bare deployment name keeps reading azure/gpt-6-sol."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure_ai/gpt-6-sol",
+        {**litellm.model_cost["azure_ai/gpt-6-sol"], "supports_low_reasoning_effort": False},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/gpt-6-sol",
+        {**litellm.model_cost["azure/gpt-6-sol"], "supports_low_reasoning_effort": True},
+    )
+    prefixed = config.map_openai_params(
+        non_default_params={"reasoning_effort": "low"},
+        optional_params={},
+        model="azure_ai/gpt-6-sol",
+        drop_params=True,
+        api_version="2025-04-01-preview",
+    )
+    assert "reasoning_effort" not in prefixed
+    bare = config.map_openai_params(
+        non_default_params={"reasoning_effort": "low"},
+        optional_params={},
+        model="gpt-6-sol",
+        drop_params=True,
+        api_version="2025-04-01-preview",
+    )
+    assert bare["reasoning_effort"] == "low"
+
+
+def test_azure_chat_gate_falls_back_to_the_azure_row_for_an_azure_ai_name_the_map_lacks(
+    config: AzureOpenAIGPT5Config, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delitem(litellm.model_cost, "azure_ai/gpt-6-sol")
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/gpt-6-sol",
+        {**litellm.model_cost["azure/gpt-6-sol"], "supports_low_reasoning_effort": False},
+    )
+    dropped = config.map_openai_params(
+        non_default_params={"reasoning_effort": "low"},
+        optional_params={},
+        model="azure_ai/gpt-6-sol",
+        drop_params=True,
+        api_version="2025-04-01-preview",
+    )
+    assert "reasoning_effort" not in dropped
+
+
 @pytest.mark.parametrize("key", ["azure/gpt-6.1-sol", "azure/gpt-6.1-sol-2026-09-29", "azure_ai/gpt-6.1-sol"])
 def test_azure_gpt61_sol_rows_turn_none_off(key: str):
     """Pinned on purpose, as the astra row above: a Foundry gpt-6.1-sol deployment (model

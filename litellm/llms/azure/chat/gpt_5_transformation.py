@@ -2,6 +2,7 @@
 
 from typing import ClassVar, Final
 
+import litellm
 from litellm.llms.openai.chat.gpt_5_transformation import (
     OpenAIGPT5Config,
     is_gpt_reasoning_series_name,
@@ -31,11 +32,18 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         model_prices_and_context_window.json; ``azure/gpt-5.1`` is. Overriding the shared
         resolver rather than one lookup means the supports, explicitly-disabled and
         default-effort answers all read the same entry.
+
+        An ``azure_ai/`` name reaches this config when ``get_llm_provider`` re-routes a Foundry
+        deployment on an OpenAI-v1 host to the azure provider with the prefix intact. It is the
+        same product the azure_ai config reads ``azure_ai/<model>`` for, so that row answers when
+        the map carries it, and the azure/ twin when it does not.
         """
         if model.startswith(cls.GPT5_SERIES_ROUTE):
             return "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
         if model.startswith("azure/"):
             return model
+        if model.startswith("azure_ai/"):
+            return model if model in litellm.model_cost else "azure/" + model.removeprefix("azure_ai/")
         return "azure/" + model
 
     @classmethod

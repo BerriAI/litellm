@@ -31,6 +31,10 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return LlmProviders.AZURE
 
     @staticmethod
+    def _is_gpt_5_model(model: str) -> bool:
+        return AzureOpenAIGPT5Config.is_model_gpt_5_model(model)
+
+    @staticmethod
     def _supports_reasoning_effort_none(model: str) -> bool:
         return AzureOpenAIGPT5Config._supports_reasoning_effort_level(model, "none")
 

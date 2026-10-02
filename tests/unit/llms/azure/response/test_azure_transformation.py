@@ -731,6 +731,69 @@ def test_azure_gpt6_astra_keeps_max_on_this_route_whatever_its_row_says(local_mo
     assert kept["reasoning"] == {"effort": "max"}
 
 
+@pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+def test_azure_responses_effort_gate_fires_when_azure_ai_prefix_survives_provider_remap(
+    local_model_cost_map: None, level: str
+):
+    """litellm.responses(model="azure_ai/gpt-6.1-sol", api_base=<Foundry host>) is re-routed to the
+    azure provider with the prefix intact, so this config sees the prefixed name. The gate used to
+    skip every prefixed name as another provider's pass-through, and a live Foundry gpt-6.1-sol
+    answered the forwarded none and minimal with 400 on 2026-10-02 even under drop_params. The
+    prefixed name reads the azure_ai/ row and drops or refuses exactly what that row turns off."""
+    forwarded = (
+        level == "max"
+        or litellm.model_cost["azure_ai/gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is not False
+    )
+    dropped = AzureOpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            max_output_tokens=60, reasoning={"effort": level}
+        ),
+        model="azure_ai/gpt-6.1-sol",
+        drop_params=True,
+    )
+    assert ("reasoning" in dropped) is forwarded
+    if forwarded:
+        return
+    with pytest.raises(litellm.UnsupportedParamsError):
+        AzureOpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                max_output_tokens=60, reasoning={"effort": level}
+            ),
+            model="azure_ai/gpt-6.1-sol",
+            drop_params=False,
+        )
+
+
+def test_azure_responses_prefixed_name_reads_the_foundry_row_not_the_azure_twin(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+):
+    """The rows are made to disagree on low, a level neither real row flags, so the prefixed name
+    proving it reads azure_ai/gpt-6-sol cannot pass by reading azure/gpt-6-sol, which the bare
+    deployment name keeps reading."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure_ai/gpt-6-sol",
+        {**litellm.model_cost["azure_ai/gpt-6-sol"], "supports_low_reasoning_effort": False},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/gpt-6-sol",
+        {**litellm.model_cost["azure/gpt-6-sol"], "supports_low_reasoning_effort": True},
+    )
+    prefixed = AzureOpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": "low"}),
+        model="azure_ai/gpt-6-sol",
+        drop_params=True,
+    )
+    assert "reasoning" not in prefixed
+    bare = AzureOpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": "low"}),
+        model="gpt-6-sol",
+        drop_params=True,
+    )
+    assert bare["reasoning"] == {"effort": "low"}
+
+
 def test_azure_responses_sends_the_deployment_name_when_azure_ai_prefix_survives_provider_remap():
     request = AzureOpenAIResponsesAPIConfig().transform_responses_api_request(
         model="azure_ai/gpt-5.4-nano",
