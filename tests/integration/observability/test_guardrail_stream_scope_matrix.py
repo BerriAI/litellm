@@ -1,32 +1,42 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import os
+import socket
+import socketserver
+import ssl
+import threading
 import uuid
 from asyncio import run, wait_for
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
+from queue import SimpleQueue
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, cast
 
 import anthropic
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 import httpx
 import openai
 import pytest
 import websockets
 import yaml
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, JsonValue, Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.mcp import McpCaller, echo_tool, register_mcp, scripted_peer
 from integration._support.process import owned_proxy_process
+from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.upstream import delete_scenario, register_scenario
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.cost_calculation.cost_tracking_case import RealtimeResponse
 from pydantic import TypeAdapter
+from websockets.asyncio.server import ServerConnection, serve
 
 Endpoint: TypeAlias = Literal["chat", "messages", "responses"]
 Mode: TypeAlias = Literal["pre_call", "during_call", "post_call", "logging_only"]
@@ -1799,6 +1809,143 @@ def test_g3_provider_errors_reach_caller_and_proxy_remains_usable(rig: MatrixRig
     assert len(_matching_requests(rig.provider, healthy_marker)) == 1
 
 
+VERTEX_LIVE_HOST: Final = "us-central1-aiplatform.googleapis.com"
+VERTEX_LIVE_PATH: Final = "/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+VERTEX_LIVE_AUTHORITY: Final = f"{VERTEX_LIVE_HOST}:443"
+
+
+@dataclass(frozen=True, slots=True)
+class _VertexLivePeer:
+    port: int
+    paths: SimpleQueue[str]
+    authorizations: SimpleQueue[str]
+    frames: SimpleQueue[dict[str, JsonValue]]
+
+
+@dataclass(frozen=True, slots=True)
+class _VertexConnectTunnel:
+    url: str
+    authorities: SimpleQueue[str]
+
+
+async def _answer_vertex_live_peer(
+    connection: ServerConnection,
+    paths: SimpleQueue[str],
+    authorizations: SimpleQueue[str],
+    frames: SimpleQueue[dict[str, JsonValue]],
+) -> None:
+    request: Final = connection.request
+    assert request is not None
+    paths.put(request.path)
+    authorizations.put(request.headers.get("Authorization", ""))
+    async for raw_frame in connection:
+        frame: Final = JSON_OBJECT.validate_python(json.loads(raw_frame))
+        frames.put(frame)
+        if frames.qsize() == 1:
+            await connection.send(json.dumps({"setupComplete": {}}))
+
+
+async def _serve_vertex_live_peer(
+    tls: ssl.SSLContext,
+    paths: SimpleQueue[str],
+    authorizations: SimpleQueue[str],
+    frames: SimpleQueue[dict[str, JsonValue]],
+    ports: SimpleQueue[int],
+    stop: asyncio.Event,
+) -> None:
+    async with serve(
+        lambda connection: _answer_vertex_live_peer(connection, paths, authorizations, frames),
+        "127.0.0.1",
+        0,
+        ssl=tls,
+    ) as server:
+        ports.put(next(iter(server.sockets)).getsockname()[1])
+        await stop.wait()
+
+
+@contextmanager
+def _vertex_live_peer(cert: tuple[Path, Path]) -> Iterator[_VertexLivePeer]:
+    loop: Final = asyncio.new_event_loop()
+    stop: Final = asyncio.Event()
+    paths: Final = SimpleQueue[str]()
+    authorizations: Final = SimpleQueue[str]()
+    frames: Final = SimpleQueue[dict[str, JsonValue]]()
+    ports: Final = SimpleQueue[int]()
+    thread: Final = threading.Thread(
+        target=loop.run_until_complete,
+        args=(_serve_vertex_live_peer(server_context(*cert), paths, authorizations, frames, ports, stop),),
+        daemon=True,
+    )
+    thread.start()
+    try:
+        yield _VertexLivePeer(ports.get(timeout=10), paths, authorizations, frames)
+    finally:
+        loop.call_soon_threadsafe(stop.set)
+        thread.join(timeout=10)
+        loop.close()
+
+
+def _pipe_vertex_socket(source: socket.socket, sink: socket.socket) -> None:
+    with contextlib.suppress(OSError):
+        for chunk in iter(lambda: source.recv(65536), b""):
+            sink.sendall(chunk)
+    with contextlib.suppress(OSError):
+        sink.shutdown(socket.SHUT_WR)
+
+
+@contextmanager
+def _vertex_connect_tunnel(peer: _VertexLivePeer) -> Generator[_VertexConnectTunnel, None, None]:
+    authorities: Final = SimpleQueue[str]()
+
+    class ConnectHandler(socketserver.StreamRequestHandler):
+        rbufsize = 0
+        request: socket.socket
+
+        def handle(self) -> None:
+            request_line: Final = self.rfile.readline().decode().split()
+            authority: Final = request_line[1] if len(request_line) > 1 else ""
+            while self.rfile.readline() not in (b"\r\n", b""):
+                pass
+            authorities.put(authority)
+            if authority != VERTEX_LIVE_AUTHORITY:
+                self.wfile.write(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n")
+                return
+            self.wfile.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            self.request.settimeout(10)
+            with socket.create_connection(("127.0.0.1", peer.port), timeout=10) as upstream:
+                outbound: Final = threading.Thread(target=_pipe_vertex_socket, args=(self.request, upstream))
+                outbound.start()
+                _pipe_vertex_socket(upstream, self.request)
+                outbound.join(timeout=12)
+
+    with socketserver.ThreadingTCPServer(("127.0.0.1", 0), ConnectHandler) as server:
+        thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
+        thread.start()
+        try:
+            yield _VertexConnectTunnel(f"http://127.0.0.1:{server.server_address[1]}", authorities)
+        finally:
+            server.shutdown()
+            thread.join(timeout=6)
+
+
+async def _exchange_vertex_live_frame(
+    url: str, key: str, vertex_project: str, vertex_location: str, frame: str
+) -> str | bytes:
+    websocket_url: Final = (
+        f"{url.replace('http://', 'ws://', 1).rstrip('/')}/vertex_ai/live"
+        f"?vertex_project={vertex_project}&vertex_location={vertex_location}"
+    )
+    async with websockets.connect(
+        websocket_url,
+        additional_headers={"Authorization": f"Bearer {key}"},
+        open_timeout=10,
+    ) as websocket:
+        await websocket.send(frame)
+        reply: Final = await wait_for(websocket.recv(), timeout=10)
+        await websocket.close()
+        return reply
+
+
 def test_ej_websocket_passthrough_runs_only_streaming_scoped_rails(rig: MatrixRig, tmp_path: Path) -> None:
     vertex_project: Final = f"matrix-ej-{uuid.uuid4().hex}"
     vertex_location: Final = "us-central1"
@@ -1824,23 +1971,10 @@ def test_ej_websocket_passthrough_runs_only_streaming_scoped_rails(rig: MatrixRi
     ).decode("utf-8")
     credentials_path: Final = tmp_path / "vertex-service-account.json"
 
-    async def _wait_for_server_close(url: str, key: str) -> None:
-        websocket_url: Final = (
-            f"{url.replace('http://', 'ws://', 1).rstrip('/')}/vertex_ai/live"
-            f"?vertex_project={vertex_project}&vertex_location={vertex_location}"
-        )
-        async with websockets.connect(
-            websocket_url,
-            additional_headers={"Authorization": f"Bearer {key}"},
-        ) as websocket:
-            try:
-                await wait_for(websocket.wait_closed(), timeout=30)
-            except TimeoutError:
-                pass
-
-    with wire_server(_token_response) as token_double, wire_server(
-        lambda _request: Reply(body=_json({"action": "NONE"}))
-    ) as sink:
+    with (
+        wire_server(_token_response) as token_double,
+        wire_server(lambda _request: Reply(body=_json({"action": "NONE"}))) as sink,
+    ):
         credentials_path.write_text(
             json.dumps(
                 {
@@ -1866,46 +2000,74 @@ def test_ej_websocket_passthrough_runs_only_streaming_scoped_rails(rig: MatrixRi
         config: Final = cast(dict[str, JsonValue], {**config_base, "guardrails": list(rails)})
         config_path: Final = tmp_path / "ej-vertex-live-stream-scope.yaml"
         config_path.write_text(yaml.safe_dump(config))
-        with owned_proxy_process(
-            rig.candidate,
-            tmp_path,
-            {
-                "DEFAULT_VERTEXAI_PROJECT": vertex_project,
-                "DEFAULT_VERTEXAI_LOCATION": vertex_location,
-                "DEFAULT_GOOGLE_APPLICATION_CREDENTIALS": str(credentials_path),
-            },
-            config=config_path,
-            workers=1,
-        ) as owned:
-            with owned.gateway.scenario() as scenario:
-                key: Final = scenario.key()
-                run(_wait_for_server_close(str(owned.gateway.client.base_url), key))
-            proxy_log: Final = owned.log
+        certificate: Final = write_self_signed_cert(tmp_path, (VERTEX_LIVE_HOST,))
+        with _vertex_live_peer(certificate) as peer, _vertex_connect_tunnel(peer) as tunnel:
+            with owned_proxy_process(
+                rig.candidate,
+                tmp_path,
+                {
+                    "DEFAULT_VERTEXAI_PROJECT": vertex_project,
+                    "DEFAULT_VERTEXAI_LOCATION": vertex_location,
+                    "DEFAULT_GOOGLE_APPLICATION_CREDENTIALS": str(credentials_path),
+                    "HTTPS_PROXY": tunnel.url,
+                    "https_proxy": tunnel.url,
+                    "NO_PROXY": "127.0.0.1,localhost",
+                    "no_proxy": "127.0.0.1,localhost",
+                    "SSL_CERT_FILE": str(certificate[0]),
+                },
+                config=config_path,
+                workers=1,
+            ) as owned:
+                with owned.gateway.scenario() as scenario:
+                    key: Final = scenario.key()
+                    marker: Final = f"vertex-live-{uuid.uuid4().hex}"
+                    frame: Final = json.dumps(
+                        {
+                            "clientContent": {
+                                "turns": [{"role": "user", "parts": [{"text": marker}]}],
+                                "turnComplete": True,
+                            }
+                        }
+                    )
+                    client_reply_raw: Final = run(
+                        _exchange_vertex_live_frame(
+                            str(owned.gateway.client.base_url),
+                            key,
+                            vertex_project,
+                            vertex_location,
+                            frame,
+                        )
+                    )
+                proxy_log: Final = owned.log
 
-    token_requests: Final = token_double.drain()
-    sink_rows: Final = sink.drain()
-    streaming_rows: Final = tuple(row for row in sink_rows if row.target.startswith(f"/{streaming_name}/"))
-    non_streaming_rows: Final = tuple(row for row in sink_rows if row.target.startswith(f"/{non_streaming_name}/"))
-    token_request_count: Final = len(token_requests)
-    streaming_count: Final = len(streaming_rows)
-    non_streaming_count: Final = len(non_streaming_rows)
-    total_scan_count: Final = streaming_count + non_streaming_count
-    assert token_request_count == 1, (token_request_count, proxy_log)
-    assert total_scan_count > 0, (
-        token_request_count,
-        streaming_count,
-        non_streaming_count,
-        proxy_log,
-    )
-    assert streaming_count == 1, (
-        token_request_count,
-        streaming_count,
-        non_streaming_count,
-        proxy_log,
-    )
-    assert non_streaming_count == 0, (
-        token_request_count,
-        streaming_count,
-        non_streaming_count,
-        proxy_log,
-    )
+            tunnel_authorities: Final = tuple(
+                tunnel.authorities.get_nowait() for _ in range(tunnel.authorities.qsize())
+            )
+            peer_path: Final = peer.paths.get_nowait()
+            peer_authorization: Final = peer.authorizations.get_nowait()
+            peer_frames: Final = tuple(peer.frames.get_nowait() for _ in range(peer.frames.qsize()))
+            client_reply: Final = JSON_OBJECT.validate_python(json.loads(client_reply_raw))
+            expected_frame: Final = JSON_OBJECT.validate_python(json.loads(frame))
+            token_requests: Final = token_double.drain()
+            sink_rows: Final = sink.drain()
+            streaming_rows: Final = tuple(row for row in sink_rows if row.target.startswith(f"/{streaming_name}/"))
+            non_streaming_rows: Final = tuple(
+                row for row in sink_rows if row.target.startswith(f"/{non_streaming_name}/")
+            )
+            token_request_count: Final = len(token_requests)
+            streaming_count: Final = len(streaming_rows)
+            non_streaming_count: Final = len(non_streaming_rows)
+            assert tunnel_authorities == (VERTEX_LIVE_AUTHORITY,), (
+                tunnel_authorities,
+                proxy_log,
+            )
+            assert peer_path == VERTEX_LIVE_PATH, (
+                peer_path,
+                proxy_log,
+            )
+            assert peer_authorization == "Bearer synthetic-vertex-access-token", (peer_authorization, proxy_log)
+            assert peer_frames == (expected_frame,), (marker, peer_frames, proxy_log)
+            assert client_reply == {"setupComplete": {}}, (client_reply, proxy_log)
+            assert token_request_count == 1, (token_request_count, proxy_log)
+            assert streaming_count == 1, (streaming_count, non_streaming_count, proxy_log)
+            assert non_streaming_count == 0, (streaming_count, non_streaming_count, proxy_log)
