@@ -17,7 +17,7 @@ from __future__ import annotations
 import itertools
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import assert_never
@@ -125,12 +125,7 @@ def jwt_auth_issuers() -> tuple[str, ...]:
     env_issuer: Final = os.getenv("JWT_ISSUER")
     env: Final[tuple[str, ...]] = (env_issuer,) if env_issuer else ()
 
-    settings: Final = (
-        cast(  # cast-ok: general_settings is a raw dict; the value is validated by _jwt_auth_issuer_entries
-            Mapping[str, object],
-            general_settings,
-        )
-    )
+    settings: Final[Mapping[str, object]] = general_settings if isinstance(general_settings, Mapping) else {}
     configured: Final = tuple(
         entry.issuer for entry in _jwt_auth_issuer_entries(settings.get("litellm_jwtauth")) if entry.issuer
     )
