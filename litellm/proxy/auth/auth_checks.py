@@ -15,13 +15,12 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from functools import partial
-from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, TypeIs, Unpack
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, Unpack
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -154,6 +153,7 @@ from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
 from litellm.utils import get_utc_datetime
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 from .auth_checks_organization import (
     add_team_org_context_to_request_body,
@@ -6806,32 +6806,6 @@ def _get_rag_query_vector_store_id(request_body: Mapping[str, object]) -> str | 
     return vector_store_id if isinstance(vector_store_id, str) and vector_store_id else None
 
 
-def _is_object_list(value: object) -> TypeIs[list[object]]:  # guard-ok: trivial isinstance narrowing
-    return isinstance(value, list)
-
-
-def _is_object_mapping(value: object) -> TypeIs[Mapping[str, object]]:  # guard-ok: request JSON keys are str
-    return isinstance(value, dict)
-
-
-def _object_items(value: object) -> tuple[object, ...]:
-    return tuple(value) if _is_object_list(value) else ()
-
-
-def _tool_vector_store_ids(tool: object) -> tuple[object, ...]:
-    return _object_items(tool.get("vector_store_ids")) if _is_object_mapping(tool) else ()
-
-
-def _get_requested_vector_store_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
-    candidate_ids: Final = (
-        *_object_items(request_body.get("vector_store_ids")),
-        *chain.from_iterable(_tool_vector_store_ids(tool) for tool in _object_items(request_body.get("tools"))),
-    )
-    return tuple(
-        vector_store_id for vector_store_id in candidate_ids if isinstance(vector_store_id, str) and vector_store_id
-    )
-
-
 def _is_strict_vector_store_identity(valid_token: UserAPIKeyAuth | None) -> bool:
     return (
         valid_token is not None
@@ -6868,9 +6842,29 @@ async def vector_store_access_check(
     deny_by_default: bool = False,
 ):
     """
-    Checks if the object (key, team, org) has access to the vector store.
+    Checks whether the caller may use every vector store the request names.
 
-    Raises ProxyException if the object (key, team, org) cannot access the specific vector store.
+    Requested stores come from `vector_store_ids`, `tools[].vector_store_ids` and the RAG
+    `retrieval_config.vector_store_id`. Grants come from each identity's
+    `object_permission.vector_stores`.
+
+    With `deny_by_default=False` (legacy), a key or team only restricts access when its list is
+    nonempty, and stores are only read from the request when a vector store registry is loaded.
+
+    With `deny_by_default=True` (`general_settings.vector_store_deny_by_default`), stores are read
+    even without a registry, and a missing record, `null` or `[]` grants nothing:
+
+    - virtual key: the key must grant every store, and so must its team when it has one, even if
+      the team failed to load
+    - keyless team member (JWT, `lite login` session token): only the resolved team is checked
+    - keyless user with no team: the user's own grant is checked
+    - master key and dashboard sessions: legacy behavior
+
+    The user's personal grant is only consulted in the keyless no-team case, so it can neither
+    rescue nor restrict a key or team request.
+
+    Raises ProxyException (401, `{key,team,user}_vector_store_access_denied`) on the first identity
+    that does not grant a requested store.
     """
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -6881,18 +6875,18 @@ async def vector_store_access_check(
         verbose_proxy_logger.debug("Prisma client not found, skipping vector store access check")
         return True
 
-    registry_ids: Final = (
-        _get_requested_vector_store_ids(_typed_request_body(request_body))
-        if deny_by_default
-        else (
-            litellm.vector_store_registry.get_vector_store_ids_to_run(
-                non_default_params=request_body, tools=request_body.get("tools", None)
-            )
-            if litellm.vector_store_registry is not None
-            else None
-        )
-        or ()
+    vector_store_registry: Final = (
+        VectorStoreRegistry()
+        if litellm.vector_store_registry is None and deny_by_default
+        else litellm.vector_store_registry
     )
+    registry_ids: Final = (
+        vector_store_registry.get_vector_store_ids_to_run(
+            non_default_params=request_body, tools=request_body.get("tools", None)
+        )
+        if vector_store_registry is not None
+        else None
+    ) or ()
     rag_vector_store_id: Final = _get_rag_query_vector_store_id(_typed_request_body(request_body))
     rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
     vector_store_ids_to_run: Final = tuple(dict.fromkeys((*registry_ids, *rag_ids)))
