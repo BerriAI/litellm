@@ -65,6 +65,8 @@ legacy_paths() {
       echo tests/unit/experimental_mcp_client
       echo tests/unit/proxy/_experimental/mcp_server
       echo tests/unit/responses/mcp
+      echo tests/unit/proxy/test_mcp_asgi_response.py
+      echo tests/unit/proxy/management_endpoints/test_mcp_management_endpoints.py
       echo tests/mcp_tests/test_proxy_mcp_e2e.py ;;
     misc)
       find tests/unit -maxdepth 1 -name 'test_*.py'

@@ -1715,8 +1715,9 @@ async def test_mcp_server_tool_call_renders_denial_message_not_detail_dict(_mcp_
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_tool_call_body_with_none_arguments(_mcp_request_ctx):
-    """Test that proxy_server_request body handles None arguments correctly"""
+@pytest.mark.parametrize("tool_arguments,expected", ((None, {}), ({}, {}), ({"value": 7}, {"value": 7})))
+async def test_mcp_server_tool_call_body_with_optional_arguments(_mcp_request_ctx, tool_arguments, expected):
+    """Omitted MCP arguments are an empty object; explicit inputs remain intact."""
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             mcp_server_tool_call,
@@ -1727,7 +1728,6 @@ async def test_mcp_server_tool_call_body_with_none_arguments(_mcp_request_ctx):
 
     # Setup test data
     tool_name = "test_tool_no_args"
-    tool_arguments = None
 
     # Mock user auth
     user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
@@ -1771,7 +1771,7 @@ async def test_mcp_server_tool_call_body_with_none_arguments(_mcp_request_ctx):
 
     body = captured_data["proxy_server_request"]["body"]
     assert body["name"] == tool_name
-    assert body["arguments"] == tool_arguments  # Should be None
+    assert body["arguments"] == expected
 
 
 @pytest.mark.asyncio
@@ -3267,7 +3267,7 @@ async def test_admin_terminated_session_id_gets_404_instead_of_a_fresh_stateless
             )
             assert [k for k, _ in unknown_scope["headers"]] == [b"content-type"]
     finally:
-        mcp_server._admin_terminated_session_ids.clear()
+        mcp_server._terminated_session_ids.clear()
 
 
 @pytest.mark.asyncio
@@ -3332,13 +3332,13 @@ async def test_admin_terminated_session_id_stays_refused_while_replayed_and_is_f
                 assert await replay(retrying_id, 1000.0 + elapsed) == (True, [b"content-type", b"mcp-session-id"])
 
             await mcp_server._purge_expired_stateful_session_auth_contexts(now=1000.0 + idle_timeout)
-            assert set(mcp_server._admin_terminated_session_ids) == {retrying_id}
+            assert set(mcp_server._terminated_session_ids) == {retrying_id}
 
             assert await replay(silent_id, 1000.0 + idle_timeout) == (False, [b"content-type"])
             assert await replay(retrying_id, 1000.0 + 4 * idle_timeout) == (False, [b"content-type"])
-            assert mcp_server._admin_terminated_session_ids == {}
+            assert mcp_server._terminated_session_ids == {}
     finally:
-        mcp_server._admin_terminated_session_ids.clear()
+        mcp_server._terminated_session_ids.clear()
 
 
 @pytest.mark.asyncio
@@ -6389,16 +6389,13 @@ class TestEnsureUpstreamInitializeInstructionsCached:
     @pytest.mark.asyncio
     async def test_reload_resets_probe_cooldown(self):
         """load_servers_from_config clears the negative-cache map so reloads re-probe."""
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 
-        global_mcp_server_manager._upstream_initialize_instructions_probed_at["reload-target"] = 1.0
-        try:
-            await global_mcp_server_manager.load_servers_from_config({})
-            assert "reload-target" not in global_mcp_server_manager._upstream_initialize_instructions_probed_at
-        finally:
-            global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop("reload-target", None)
+        manager: Final = MCPServerManager()
+        manager._upstream_initialize_instructions_probed_at["reload-target"] = 1.0
+        await manager.load_servers_from_config({})
+        assert "reload-target" not in manager._upstream_initialize_instructions_probed_at
+
 
 
 class TestGatewayCreateInitializationOptions:
