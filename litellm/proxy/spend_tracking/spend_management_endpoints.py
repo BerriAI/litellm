@@ -4892,7 +4892,9 @@ async def _assert_user_can_view_request_id(
     raise _spend_log_forbidden(request_id)
 
 
-async def _spend_log_read_scope(user_api_key_dict: UserAPIKeyAuth, log_team_lookup: LogTeamLookup) -> LogReadScope:
+async def _spend_log_read_scope(
+    user_api_key_dict: UserAPIKeyAuth, log_team_lookup: LogTeamLookup
+) -> UserLogs | AnyOf[LogGrant]:
     return await resolve_log_read_scope(
         user_api_key_dict.user_id,
         partial(log_team_lookup, user_api_key_dict),
@@ -4907,7 +4909,7 @@ def _read_scope_sql(scope: LogReadScope, next_param: int) -> tuple[str, tuple[ob
             return (f'"user" = ${next_param}', (user_id,))
         case TeamLogs(team_id=team_id):
             return (f"team_id = ${next_param}", (team_id,))
-        case _:
+        case AnyOf():
             combined: Final[AnyOf[LogGrant]] = scope
             user_ids: Final = tuple(grant.user_id for grant in combined.grants if isinstance(grant, UserLogs))
             team_ids: Final = tuple(grant.team_id for grant in combined.grants if isinstance(grant, TeamLogs))
@@ -4917,6 +4919,8 @@ def _read_scope_sql(scope: LogReadScope, next_param: int) -> tuple[str, tuple[ob
             )
             params: Final[tuple[object, ...]] = user_ids + ((team_ids,) if team_ids else ())
             return (f"({' OR '.join(conditions)})" if conditions else "FALSE", params)
+        case _:
+            assert_never(scope)
 
 
 def _read_scope_where(scope: LogReadScope) -> Mapping[str, object]:
@@ -4927,7 +4931,7 @@ def _read_scope_where(scope: LogReadScope) -> Mapping[str, object]:
             return {"user": user_id}
         case TeamLogs(team_id=team_id):
             return {"team_id": team_id}
-        case _:
+        case AnyOf():
             combined: Final[AnyOf[LogGrant]] = scope
             user_conditions: Final = tuple(
                 {"user": grant.user_id} for grant in combined.grants if isinstance(grant, UserLogs)
@@ -4935,6 +4939,8 @@ def _read_scope_where(scope: LogReadScope) -> Mapping[str, object]:
             team_ids: Final = tuple(grant.team_id for grant in combined.grants if isinstance(grant, TeamLogs))
             conditions: Final = user_conditions + (({"team_id": {"in": list(team_ids)}},) if team_ids else ())
             return {"OR": list(conditions)}
+        case _:
+            assert_never(scope)
 
 
 def _spend_log_payload_query(request_id: str, scope: LogReadScope) -> tuple[str, tuple[object, ...]]:

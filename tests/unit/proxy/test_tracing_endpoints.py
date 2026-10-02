@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
+from litellm.proxy.auth.authorization import ApiKeyLogs, TeamLogs, TraceReadScope, UserLogs, any_of
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
@@ -732,3 +733,28 @@ def test_composed_trace_permissions_reach_read_and_sql_boundaries(
             LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
         ) else 0
     )
+
+
+@pytest.mark.parametrize(
+    ("scope", "expected"),
+    (
+        (UserLogs(None), ("", (), "")),
+        (TeamLogs("team"), ("", ("team",), "")),
+        (ApiKeyLogs("key"), ("", (), "key")),
+        (any_of(), ("", (), "")),
+        (any_of(TeamLogs("a"), UserLogs("user"), ApiKeyLogs("key"), TeamLogs("b")), ("user", ("a", "b"), "key")),
+        (any_of(UserLogs(None), UserLogs("later"), ApiKeyLogs(""), ApiKeyLogs("later")), ("", (), "")),
+        (any_of(UserLogs("first"), UserLogs("later"), ApiKeyLogs("first"), ApiKeyLogs("later")), ("first", (), "first")),
+        (any_of(TeamLogs("a"), TeamLogs("a")), ("", ("a", "a"), "")),
+    ),
+)
+def test_trace_storage_permissions_preserve_first_identity_and_all_team_grants(
+    scope: TraceReadScope,
+    expected: tuple[str, tuple[str, ...], str],
+) -> None:
+    assert tracing_endpoints._trace_scope(scope) == TraceScope(
+        all_teams=0, user_id=expected[0], team_ids=expected[1], api_key_hash=expected[2]
+    )
+    assert tracing_endpoints.trace_query_scope(scope) == {
+        "kind": "logs", "user_id": expected[0], "team_ids": expected[1], "api_key_hash": expected[2]
+    }

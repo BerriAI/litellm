@@ -12,11 +12,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
 from http.client import responses
+from itertools import chain
 from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import OTLP_RETRY_AFTER_SECONDS
@@ -26,6 +28,7 @@ from litellm.proxy.auth.authorization import (
     AnyOf,
     ApiKeyLogs,
     TeamLogs,
+    TraceLogGrant,
     TraceReadScope,
     UserLogs,
     resolve_trace_read_scope,
@@ -35,7 +38,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
 from litellm.rust_bridge.trace_query_responses import TraceQueryHelp, TraceSQLResponse
-from litellm.rust_bridge.traces import ClickHouseStorage, QueryScope
+from litellm.rust_bridge.traces import AdminQueryScope, ClickHouseStorage, LogQueryScope
 from litellm.tracing import (
     Tenant,
     TraceReceiver,
@@ -81,15 +84,41 @@ async def provide_trace_access(
     return TraceAccessContext(tracing, read_scope, write_tenant)
 
 
+@dataclass(frozen=True, slots=True)
+class _TraceLogVisibility:
+    user_id: str | None = None
+    team_ids: tuple[str, ...] = ()
+    api_key_hash: str | None = None
+
+
+def _trace_log_visibility(scope: TraceLogGrant | AnyOf[TraceLogGrant]) -> _TraceLogVisibility:
+    match scope:
+        case UserLogs(user_id=user_id):
+            return _TraceLogVisibility(user_id=user_id or "")
+        case TeamLogs(team_id=team_id):
+            return _TraceLogVisibility(team_ids=(team_id,))
+        case ApiKeyLogs(api_key_hash=api_key_hash):
+            return _TraceLogVisibility(api_key_hash=api_key_hash)
+        case AnyOf(grants=grants):
+            parts: Final = tuple(_trace_log_visibility(grant) for grant in grants)
+            return _TraceLogVisibility(
+                user_id=next((part.user_id for part in parts if part.user_id is not None), None),
+                team_ids=tuple(chain.from_iterable(part.team_ids for part in parts)),
+                api_key_hash=next((part.api_key_hash for part in parts if part.api_key_hash is not None), None),
+            )
+        case _:
+            assert_never(scope)
+
+
 def _trace_scope(scope: TraceReadScope) -> TraceScope:
     if isinstance(scope, AllLogs):
         return TraceScope(all_teams=1, user_id="", team_ids=(), api_key_hash="")
-    grants: Final = scope.grants if isinstance(scope, AnyOf) else (scope,)
+    visibility: Final[_TraceLogVisibility] = _trace_log_visibility(scope)
     return TraceScope(
         all_teams=0,
-        user_id=next((grant.user_id or "" for grant in grants if isinstance(grant, UserLogs)), ""),
-        team_ids=tuple(grant.team_id for grant in grants if isinstance(grant, TeamLogs)),
-        api_key_hash=next((grant.api_key_hash for grant in grants if isinstance(grant, ApiKeyLogs)), ""),
+        user_id=visibility.user_id or "",
+        team_ids=visibility.team_ids,
+        api_key_hash=visibility.api_key_hash or "",
     )
 
 
@@ -180,16 +209,16 @@ def provide_trace_query_secret() -> str:
     return master_key
 
 
-def trace_query_scope(scope: TraceReadScope) -> QueryScope:
+def trace_query_scope(scope: TraceReadScope) -> AdminQueryScope | LogQueryScope:
     if isinstance(scope, AllLogs):
-        return {"kind": "admin"}
-    visibility: Final = _trace_scope(scope)
-    return {
-        "kind": "logs",
-        "user_id": visibility["user_id"],
-        "team_ids": visibility["team_ids"],
-        "api_key_hash": visibility["api_key_hash"],
-    }
+        return AdminQueryScope(kind="admin")
+    visibility: Final[_TraceLogVisibility] = _trace_log_visibility(scope)
+    return LogQueryScope(
+        kind="logs",
+        user_id=visibility.user_id or "",
+        team_ids=visibility.team_ids,
+        api_key_hash=visibility.api_key_hash or "",
+    )
 
 
 async def provide_trace_query_access(
