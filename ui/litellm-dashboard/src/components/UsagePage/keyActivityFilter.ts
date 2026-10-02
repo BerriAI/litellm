@@ -3,7 +3,7 @@ import type { ModelActivityData } from "./types";
 export type KeyQuery =
   | { readonly kind: "all" }
   | { readonly kind: "substring"; readonly needle: string }
-  | { readonly kind: "pattern"; readonly regex: RegExp }
+  | { readonly kind: "pattern"; readonly regex: RegExp; readonly searchHint: string | null }
   | { readonly kind: "invalid"; readonly source: string };
 
 export function parseKeyQuery(query: string): KeyQuery {
@@ -14,7 +14,7 @@ export function parseKeyQuery(query: string): KeyQuery {
   if (regexLiteral !== null) {
     const [, body, flags] = regexLiteral;
     try {
-      return { kind: "pattern", regex: new RegExp(body, flags) };
+      return { kind: "pattern", regex: new RegExp(body, flags), searchHint: null };
     } catch {
       return { kind: "invalid", source: trimmedQuery };
     }
@@ -22,10 +22,33 @@ export function parseKeyQuery(query: string): KeyQuery {
 
   if (trimmedQuery.includes("*")) {
     const escapedGlob = trimmedQuery.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-    return { kind: "pattern", regex: new RegExp(`^${escapedGlob.replace(/\*/g, ".*")}$`, "i") };
+    const searchHint = trimmedQuery
+      .split("*")
+      .reduce((longest, segment) => (segment.length > longest.length ? segment : longest), "");
+    return {
+      kind: "pattern",
+      regex: new RegExp(`^${escapedGlob.replace(/\*/g, ".*")}$`, "i"),
+      searchHint: searchHint === "" ? null : searchHint,
+    };
   }
 
   return { kind: "substring", needle: trimmedQuery.toLowerCase() };
+}
+
+export function remoteSearchTerm(query: KeyQuery, rawQuery: string): string | null {
+  switch (query.kind) {
+    case "all":
+    case "invalid":
+      return null;
+    case "substring":
+      return rawQuery.trim();
+    case "pattern":
+      return query.searchHint;
+    default: {
+      const unreachableQuery: never = query;
+      return unreachableQuery;
+    }
+  }
 }
 
 function keyActivityFields(apiKey: string, data: ModelActivityData): readonly (string | null | undefined)[] {

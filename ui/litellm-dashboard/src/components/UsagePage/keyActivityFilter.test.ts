@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { filterKeyActivity, keyActivityMatches, parseKeyQuery } from "./keyActivityFilter";
+import { filterKeyActivity, keyActivityMatches, parseKeyQuery, remoteSearchTerm } from "./keyActivityFilter";
 import type { KeyMetadata, ModelActivityData } from "./types";
 
 function activity(label: string, key_metadata?: KeyMetadata): ModelActivityData {
@@ -16,7 +16,6 @@ function activity(label: string, key_metadata?: KeyMetadata): ModelActivityData 
     prompt_tokens: 5,
     completion_tokens: 5,
     total_spend: 0.01,
-    top_api_keys: [],
     top_models: [],
     daily_data: [],
   };
@@ -90,6 +89,22 @@ describe("parseKeyQuery and keyActivityMatches", () => {
 
   it("matches the key hash with a glob", () => {
     expect(keyActivityMatches("deadbeef", orphan, "dead*")).toBe(true);
+  });
+
+  it("uses the longest literal glob segment as its remote search hint", () => {
+    expect(parseKeyQuery(" cli-session-* ")).toMatchObject({ kind: "pattern", searchHint: "cli-session-" });
+    expect(parseKeyQuery("*-batch")).toMatchObject({ kind: "pattern", searchHint: "-batch" });
+    expect(parseKeyQuery("a*bc*d")).toMatchObject({ kind: "pattern", searchHint: "bc" });
+    expect(parseKeyQuery("*")).toMatchObject({ kind: "pattern", searchHint: null });
+    expect(parseKeyQuery("/^session-\\d+$/")).toMatchObject({ kind: "pattern", searchHint: null });
+  });
+
+  it("uses a safe remote search term for each query kind", () => {
+    expect(remoteSearchTerm(parseKeyQuery("  "), "  ")).toBeNull();
+    expect(remoteSearchTerm(parseKeyQuery("/[/"), "/[/")).toBeNull();
+    expect(remoteSearchTerm(parseKeyQuery("  Alice@Example.com  "), "  Alice@Example.com  ")).toBe("Alice@Example.com");
+    expect(remoteSearchTerm(parseKeyQuery("cli-session-*"), "cli-session-*")).toBe("cli-session-");
+    expect(remoteSearchTerm(parseKeyQuery("/^session/"), "/^session/")).toBeNull();
   });
 
   it("matches regular expressions with standard case sensitivity", () => {
