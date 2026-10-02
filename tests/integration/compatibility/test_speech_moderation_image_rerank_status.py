@@ -393,13 +393,10 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
                 seconds=30,
             )
             assert probe.status_code == 200, probe.text
-            tree: Final = subprocess.run(
-                ["pstree", "-ap", str(owned.process.pid)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            record_property("owned_proxy_process_tree", tree.stdout)
+            process_root: Final = psutil.Process(owned.process.pid)
+            processes: Final = (process_root, *process_root.children(recursive=True))
+            process_tree: Final = "\n".join(f"{process.pid} {' '.join(process.cmdline())}" for process in processes)
+            record_property("owned_proxy_process_tree", process_tree)
             workers: Final = eventually(
                 lambda: _workers(owned.process),
                 lambda children: len(children) >= 2,
