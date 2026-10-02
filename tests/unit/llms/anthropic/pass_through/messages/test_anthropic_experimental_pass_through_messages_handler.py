@@ -1688,7 +1688,7 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
 
 @pytest.mark.asyncio
 async def test_anthropic_pass_through_drop_params(monkeypatch):
-    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+    from litellm.llms.anthropic.pass_through.messages import handler
 
     mock_handler = AsyncMock()
     monkeypatch.setattr(handler.base_llm_http_handler, "anthropic_messages_handler", mock_handler)
@@ -1708,7 +1708,7 @@ async def test_anthropic_pass_through_drop_params(monkeypatch):
 
 
 def test_drop_params_filters_unsupported_anthropic_params():
-    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+    from litellm.llms.anthropic.pass_through.messages.handler import (
         _drop_unsupported_anthropic_messages_params,
     )
 
@@ -1733,7 +1733,7 @@ def test_drop_params_filters_unsupported_anthropic_params():
 
 
 def test_drop_params_preserves_supported_anthropic_params():
-    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+    from litellm.llms.anthropic.pass_through.messages.handler import (
         _drop_unsupported_anthropic_messages_params,
     )
 
@@ -1756,7 +1756,7 @@ def test_drop_params_preserves_supported_anthropic_params():
 @pytest.mark.asyncio
 async def test_anthropic_pass_through_keeps_supported_params_without_drop(monkeypatch):
     import litellm
-    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+    from litellm.llms.anthropic.pass_through.messages import handler
 
     mock_handler = AsyncMock()
     monkeypatch.setattr(litellm, "drop_params", False)
