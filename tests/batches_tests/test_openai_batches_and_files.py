@@ -196,6 +196,128 @@ def cleanup_azure_ft_models():
         print(f"Error on cleanup_azure_ft_models: {str(e)}")
 
 
+@pytest.mark.parametrize("provider", ["openai"])
+@pytest.mark.asyncio()
+@skip_if_no_openai_network
+async def test_async_create_batch(provider, tmp_path):
+    """
+    1. Create File for Batch completion
+    2. Create Batch Request
+    3. Retrieve the specific batch
+    """
+    litellm._turn_on_debug()
+    print("Testing async create batch")
+    litellm.logging_callback_manager._reset_all_callbacks()
+
+    file_name = "openai_batch_completions.jsonl"
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(_current_dir, file_name)
+    with open(file_path, "rb") as batch_file:
+        file_obj = await litellm.acreate_file(
+            file=batch_file,
+            purpose="batch",
+            custom_llm_provider=provider,
+        )
+    print("Response from creating file=", file_obj)
+
+    await asyncio.sleep(10)
+    batch_input_file_id = file_obj.id
+    assert (
+        batch_input_file_id is not None
+    ), "Failed to create file, expected a non null file_id but got {batch_input_file_id}"
+
+    extra_metadata_field = {
+        "user_api_key_alias": "special_api_key_alias",
+        "user_api_key_team_alias": "special_team_alias",
+    }
+    custom_logger = TestCustomLogger()
+    litellm.callbacks = [custom_logger, "datadog"]
+    create_batch_response = await litellm.acreate_batch(
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id=batch_input_file_id,
+        custom_llm_provider=provider,
+        metadata={"key1": "value1", "key2": "value2"},
+        # litellm specific param - used for logging metadata on logging callback
+        litellm_metadata=extra_metadata_field,
+    )
+
+    print("response from litellm.create_batch=", create_batch_response)
+
+    assert (
+        create_batch_response.id is not None
+    ), f"Failed to create batch, expected a non null batch_id but got {create_batch_response.id}"
+    assert (
+        create_batch_response.endpoint == "/v1/chat/completions"
+        or create_batch_response.endpoint == "/chat/completions"
+    ), f"Failed to create batch, expected endpoint to be /v1/chat/completions but got {create_batch_response.endpoint}"
+    assert (
+        create_batch_response.input_file_id == batch_input_file_id
+    ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
+
+    # Assert that the create batch event is logged on CustomLogger
+    standard_logging_object = await _wait_for_standard_logging_object(custom_logger)
+    print(
+        "standard_logging_object=",
+        json.dumps(standard_logging_object, indent=4, default=str),
+    )
+    assert (
+        standard_logging_object["metadata"]["user_api_key_alias"]
+        == extra_metadata_field["user_api_key_alias"]
+    )
+    assert (
+        standard_logging_object["metadata"]["user_api_key_team_alias"]
+        == extra_metadata_field["user_api_key_team_alias"]
+    )
+
+    retrieved_batch = await litellm.aretrieve_batch(
+        batch_id=create_batch_response.id, custom_llm_provider=provider
+    )
+    print("retrieved batch=", retrieved_batch)
+    # just assert that we retrieved a non None batch
+
+    assert retrieved_batch.id == create_batch_response.id
+
+    # list all batches
+    list_batches = await litellm.alist_batches(custom_llm_provider=provider, limit=2)
+    print("list_batches=", list_batches)
+
+    # try to get file content for our original file
+
+    file_content = await litellm.afile_content(
+        file_id=batch_input_file_id, custom_llm_provider=provider
+    )
+
+    print("file content = ", file_content)
+
+    # file obj
+    file_obj = await litellm.afile_retrieve(
+        file_id=batch_input_file_id, custom_llm_provider=provider
+    )
+    print("file obj = ", file_obj)
+    assert file_obj.id == batch_input_file_id
+
+    # delete file
+    delete_file_response = await litellm.afile_delete(
+        file_id=batch_input_file_id, custom_llm_provider=provider
+    )
+
+    print("delete file response = ", delete_file_response)
+
+    assert delete_file_response.id == batch_input_file_id
+
+    all_files_list = await litellm.afile_list(
+        custom_llm_provider=provider,
+    )
+
+    print("all_files_list = ", all_files_list)
+
+    result_file_path = tmp_path / "batch_job_results_furniture.jsonl"
+    result_file_path.write_bytes(file_content.content)
+
+    await cancel_batch_unless_already_terminal(batch_id=create_batch_response.id, provider=provider)
+
+
 mock_file_response = {
     "kind": "storage#object",
     "id": "litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb/1739598666670574",

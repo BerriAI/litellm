@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -29,7 +30,7 @@ ANTHROPIC_BACKEND: Final = "anthropic/claude-haiku-4-5"
 BEDROCK_CONVERSE_BACKEND: Final = "bedrock/converse/us.anthropic.claude-sonnet-5-5"
 
 PROMPT: Final = "What is the weather in Paris and in Tokyo? Use the get_weather tool for each city."
-CITY_TEMPERATURES: Final = (("paris", "22"), ("tokyo", "31"))
+CITY_TEMPERATURES: Final = MappingProxyType({"paris": "22", "tokyo": "31"})
 THINKING: Final = ThinkingParam(type="enabled", budget_tokens=1024)
 
 WEATHER_TOOL: Final = ChatTool(
@@ -76,11 +77,11 @@ def _choice(client: PassthroughClient, key: str, body: ChatBody) -> tuple[OutMes
     return choice.message, choice.finish_reason
 
 
-def _temperature_for(call: ToolCall) -> str:
+def _city_for(call: ToolCall) -> str:
     location = _WeatherArgs.model_validate_json(call.function.arguments or "").location.lower()
-    temperature = next((temp for city, temp in CITY_TEMPERATURES if city in location), None)
-    assert temperature is not None, f"get_weather called for a city the prompt never named: {location!r}"
-    return temperature
+    city = next((city for city in CITY_TEMPERATURES if city in location), None)
+    assert city is not None, f"get_weather called for a city the prompt never named: {location!r}"
+    return city
 
 
 def _assert_tool_results_reach_the_model(
@@ -103,7 +104,11 @@ def _assert_tool_results_reach_the_model(
     assert finish_reason == "tool_calls", f"a tool-calling turn must finish with tool_calls, got {finish_reason!r}"
     if thinking is not None:
         assert first.thinking_blocks, f"thinking was enabled but no thinking blocks came back: {first}"
-    temperatures = tuple(_temperature_for(call) for call in calls)
+    cities = tuple(_city_for(call) for call in calls)
+    assert set(cities) == set(CITY_TEMPERATURES), (
+        f"expected a get_weather call for every city {sorted(CITY_TEMPERATURES)}, got calls for {cities}"
+    )
+    temperatures = tuple(CITY_TEMPERATURES[city] for city in cities)
 
     answer, _ = _choice(
         client,
