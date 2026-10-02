@@ -1350,9 +1350,10 @@ export interface paths {
          *
          *     Reads session rollups folded once per request at spend-write time, so this endpoint
          *     never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
-         *     internal user when written; older key-only history remains outside user views. A session
-         *     is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
-         *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
+         *     internal user when written; older key-only history remains outside user views. Money counts
+         *     only requests on the selected UTC days, and the all-router savings headline is the same daily
+         *     total the Overall view reads. Session shape and caching cover every session that overlaps the
+         *     window, whole. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
          *     over that bucket's turns.
          *
          *     The rollup supplies the measures, never the list. Which routers appear comes from the
@@ -8828,6 +8829,23 @@ export interface paths {
          *     [Docs](https://docs.litellm.ai/docs/pass_through/langfuse)
          */
         patch: operations["langfuse_proxy_route_langfuse__endpoint__patch"];
+        trace?: never;
+    };
+    "/laya/v1/systemone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Laya Proxy Route */
+        post: operations["laya_proxy_route_laya_v1_systemone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/lazy/warm/{name}": {
@@ -26152,12 +26170,21 @@ export interface components {
          * @description One auto-router's slice of the benchmarks.
          */
         AutoRouterBenchmarkGroup: {
-            /** Avg Session Seconds */
-            avg_session_seconds: number;
-            /** Avg Tokens Per Session */
-            avg_tokens_per_session: number;
-            /** Avg Turns Per Session */
-            avg_turns_per_session: number;
+            /**
+             * Avg Session Seconds
+             * @description Lifetime seconds per overlapping session; null as above
+             */
+            avg_session_seconds: number | null;
+            /**
+             * Avg Tokens Per Session
+             * @description Lifetime tokens per overlapping session; null as above
+             */
+            avg_tokens_per_session: number | null;
+            /**
+             * Avg Turns Per Session
+             * @description Lifetime turns per overlapping session; null when the window has routed requests but no session rows for this router type, such as an alias whose router type changed mid-session
+             */
+            avg_turns_per_session: number | null;
             /**
              * Baseline Spend
              * @description Estimated single-model cost: compared actual spend plus recorded savings; null when traffic has no recorded savings
@@ -26185,13 +26212,8 @@ export interface components {
              */
             saved_pct: number | null;
             /**
-             * Saved Per Session
-             * @description Recorded savings per session, including historical estimates
-             */
-            saved_per_session: number | null;
-            /**
              * Saved Spend
-             * @description Recorded historical savings plus newer estimates; null when traffic has no recorded savings estimates
+             * @description Recorded savings on the selected UTC days; null when traffic has no recorded savings estimates. On totals this is the same daily figure the Overall savings view reports
              */
             saved_spend: number | null;
             /**
@@ -26209,11 +26231,14 @@ export interface components {
              * @description Requests compared against the baseline: every request on complexity routers that recorded savings
              */
             savings_estimated_turns: number;
-            /** Sessions */
+            /**
+             * Sessions
+             * @description Sessions overlapping the window, counted whole
+             */
             sessions: number;
             /**
              * Spend
-             * @description What the routed traffic actually cost
+             * @description What the selected days' routed traffic actually cost
              */
             spend: number;
             /**
@@ -26223,20 +26248,38 @@ export interface components {
             tier_turns?: {
                 [key: string]: number;
             };
-            /** Turns */
+            /**
+             * Turns
+             * @description Auto-routed requests on the selected UTC days
+             */
             turns: number;
+            /**
+             * Unattributed Saved Spend
+             * @description Part of saved_spend no router's daily rows account for, such as history recorded before per-router daily tracking; when set, baseline_spend and saved_pct are null
+             */
+            unattributed_saved_spend?: number | null;
         };
         /**
          * AutoRouterBenchmarkTotals
-         * @description Session-shape and savings aggregates over auto-routed traffic in the window.
+         * @description Auto-routed traffic in the window. Turns, spend and savings count requests on the selected UTC days;
+         *     the session averages and cache stats describe every session overlapping the window, whole.
          */
         AutoRouterBenchmarkTotals: {
-            /** Avg Session Seconds */
-            avg_session_seconds: number;
-            /** Avg Tokens Per Session */
-            avg_tokens_per_session: number;
-            /** Avg Turns Per Session */
-            avg_turns_per_session: number;
+            /**
+             * Avg Session Seconds
+             * @description Lifetime seconds per overlapping session; null as above
+             */
+            avg_session_seconds: number | null;
+            /**
+             * Avg Tokens Per Session
+             * @description Lifetime tokens per overlapping session; null as above
+             */
+            avg_tokens_per_session: number | null;
+            /**
+             * Avg Turns Per Session
+             * @description Lifetime turns per overlapping session; null when the window has routed requests but no session rows for this router type, such as an alias whose router type changed mid-session
+             */
+            avg_turns_per_session: number | null;
             /**
              * Baseline Spend
              * @description Estimated single-model cost: compared actual spend plus recorded savings; null when traffic has no recorded savings
@@ -26254,13 +26297,8 @@ export interface components {
              */
             saved_pct: number | null;
             /**
-             * Saved Per Session
-             * @description Recorded savings per session, including historical estimates
-             */
-            saved_per_session: number | null;
-            /**
              * Saved Spend
-             * @description Recorded historical savings plus newer estimates; null when traffic has no recorded savings estimates
+             * @description Recorded savings on the selected UTC days; null when traffic has no recorded savings estimates. On totals this is the same daily figure the Overall savings view reports
              */
             saved_spend: number | null;
             /**
@@ -26278,19 +26316,30 @@ export interface components {
              * @description Requests compared against the baseline: every request on complexity routers that recorded savings
              */
             savings_estimated_turns: number;
-            /** Sessions */
+            /**
+             * Sessions
+             * @description Sessions overlapping the window, counted whole
+             */
             sessions: number;
             /**
              * Spend
-             * @description What the routed traffic actually cost
+             * @description What the selected days' routed traffic actually cost
              */
             spend: number;
-            /** Turns */
+            /**
+             * Turns
+             * @description Auto-routed requests on the selected UTC days
+             */
             turns: number;
+            /**
+             * Unattributed Saved Spend
+             * @description Part of saved_spend no router's daily rows account for, such as history recorded before per-router daily tracking; when set, baseline_spend and saved_pct are null
+             */
+            unattributed_saved_spend?: number | null;
         };
         /**
          * AutoRouterBenchmarksResponse
-         * @description Benchmarks for the auto-router dashboard, aggregated from the per-session rollup.
+         * @description Benchmarks for the auto-router dashboard, aggregated from the per-session and per-day rollups.
          */
         AutoRouterBenchmarksResponse: {
             /**
@@ -33152,44 +33201,6 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
-        /** JevClassifierConfig */
-        JevClassifierConfig: {
-            /**
-             * Api Base
-             * @description TypeSafe API base, falling back to TYPESAFE_API_BASE and then https://api.typesafe.ai
-             */
-            api_base?: string | null;
-            /**
-             * Api Key
-             * @description TypeSafe API key, falling back to TYPESAFE_API_KEY
-             */
-            api_key?: string | null;
-            /**
-             * Circuit Breaker Cooldown Seconds
-             * @default 30
-             */
-            circuit_breaker_cooldown_seconds: number;
-            /**
-             * Circuit Breaker Enabled
-             * @default true
-             */
-            circuit_breaker_enabled: boolean;
-            /**
-             * Instructions
-             * @description Replaces the built-in Jev question instructions
-             */
-            instructions?: string | null;
-            /**
-             * Model
-             * @default jev-latest
-             */
-            model: string;
-            /**
-             * Timeout Ms
-             * @default 3000
-             */
-            timeout_ms: number;
-        };
         /** Job */
         Job: {
             /**
@@ -39134,6 +39145,50 @@ export interface components {
              */
             type: "openIdConnect";
         };
+        /** OpenSourceClassifierConfig */
+        OpenSourceClassifierConfig: {
+            /**
+             * Api Base
+             * @description Provider API base; defaults to TYPESAFE_API_BASE or LAYA_API_BASE for the selected provider
+             */
+            api_base?: string | null;
+            /**
+             * Api Key
+             * @description Provider API key; optional for self-hosted Laya
+             */
+            api_key?: string | null;
+            /**
+             * Circuit Breaker Cooldown Seconds
+             * @default 30
+             */
+            circuit_breaker_cooldown_seconds: number;
+            /**
+             * Circuit Breaker Enabled
+             * @default true
+             */
+            circuit_breaker_enabled: boolean;
+            /**
+             * Instructions
+             * @description Replaces the built-in Jev question instructions
+             */
+            instructions?: string | null;
+            /**
+             * Model
+             * @default jev-latest
+             */
+            model: string;
+            /**
+             * Provider
+             * @default jev
+             * @enum {string}
+             */
+            provider: "jev" | "laya";
+            /**
+             * Timeout Ms
+             * @default 3000
+             */
+            timeout_ms: number;
+        };
         /**
          * OperationCreateFile
          * @description Instruction describing how to create a file via the apply_patch tool.
@@ -41934,11 +41989,11 @@ export interface components {
             classifier_plugin_timeout_ms: number;
             /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary, or 'jev', a TypeSafe AI Jev structured choice call
+             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary, or 'oss_classifier', a structured choice call using Jev or Laya
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "capability" | "llm_v2" | "custom" | "heuristic_first" | "hybrid" | "jev";
+            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "capability" | "llm_v2" | "custom" | "heuristic_first" | "hybrid" | "oss_classifier";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -42037,7 +42092,6 @@ export interface components {
              * @description How close to a tier boundary a heuristic score has to land before the LLM classifier breaks the tie; required when classifier_type is 'hybrid' and rejected otherwise. Everything further than this from every active boundary routes on the scorer's own tier with no classifier call, at any tier, which is what separates 'hybrid' from 'heuristic_first' and its cheap-tier ceiling. A prompt where no dimension fired still goes to the classifier, since the scorer has no opinion to be near a boundary with. 0 escalates only scores sitting exactly on a boundary.
              */
             hybrid_boundary_margin?: number | null;
-            jev_classifier_config?: components["schemas"]["JevClassifierConfig"] | null;
             /**
              * Keyword Tier Rules
              * @description Rules that force a specific tier when their keywords match the prompt
@@ -42069,6 +42123,7 @@ export interface components {
              * @default false
              */
             modality_routing: boolean;
+            opensource_classifier_config?: components["schemas"]["OpenSourceClassifierConfig"] | null;
             /**
              * Plan Mode Min Tier
              * @description When set, requests carrying a coding-agent plan-mode sentinel (Claude Code plan mode, VS Code Copilot Plan mode, Copilot CLI's exit_plan_mode tool) are routed to at least this tier: the classified tier still wins when it is higher, and the floor also overrides a session-affinity pin to a lower tier for exactly the turns carrying the sentinel, without rewriting the pin -- the first turn after plan mode exits routes as if plan mode had never happened. Names a built-in tier, or with tier_definitions set, one of the defined tier names (list order is ascending severity, same as keyword_tier_rules). Unset disables detection entirely. The sentinels ride in client-injected prompt text, so a caller who pastes one can spend up to this tier's models -- never down, and never outside the configured pools.
@@ -42166,7 +42221,7 @@ export interface components {
             };
             /**
              * Tier Definitions
-             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet; entries named after a built-in tier may omit the description and inherit the built-in criteria. List order is ascending severity and decides which tier wins when several keyword_tier_rules match. Requires classifier_type 'llm', 'jev' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, plugins, tier_labels, and the calibration-example rubric presets are unavailable with a custom tier set: the first four are built on the built-in tier ladder, and the last two rename or exemplify tiers the set replaces.
+             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet; entries named after a built-in tier may omit the description and inherit the built-in criteria. List order is ascending severity and decides which tier wins when several keyword_tier_rules match. Requires classifier_type 'llm', 'oss_classifier' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, plugins, tier_labels, and the calibration-example rubric presets are unavailable with a custom tier set: the first four are built on the built-in tier ladder, and the last two rename or exemplify tiers the set replaces.
              */
             tier_definitions?: components["schemas"]["TierDefinition"][] | null;
             /**
@@ -46849,6 +46904,8 @@ export interface components {
             agent_count: number;
             /** Agent Invocations */
             agent_invocations: number;
+            /** Agent Names */
+            agent_names?: string[];
             /** Duration Ms */
             duration_ms: number;
             /** Error Count */
@@ -61635,6 +61692,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    laya_proxy_route_laya_v1_systemone_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
