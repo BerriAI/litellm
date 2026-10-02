@@ -1,11 +1,12 @@
 "use client";
 
+import { Page, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import React from "react";
 import { Info, PiggyBank } from "lucide-react";
 
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { Alert, AlertDescription } from "@/components/shared/Alert";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TabsContent } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/shared/PageHeader";
 import UsageTab from "./UsageTab";
 import PromptCompressionTab from "./PromptCompressionTab";
@@ -33,35 +34,24 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
   };
 
   return (
-    <main className="w-full p-8">
-      <Tabs defaultValue="usage" onValueChange={handleTabChange} className="gap-6">
+    <Page>
+      <PageTabs defaultValue="usage" onValueChange={handleTabChange}>
         <PageHeader
           icon={<PiggyBank />}
           title="Cost Optimization"
           subtitle="Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers live under Models + Endpoints, on the Auto-Routers tab"
           tabs={({ leadingControls }) => (
-            <TabsList
-              variant="line"
-              className="gap-0 p-0 [&>[data-slot=tabs-trigger]+[data-slot=tabs-trigger]]:ml-[22px]"
-            >
+            <PageTabsList>
               {leadingControls}
-              <TabsTrigger value="usage" className="flex-none px-0 py-[7px] data-active:font-semibold">
-                Overall
-              </TabsTrigger>
+              <PageTabsTrigger value="usage">Overall</PageTabsTrigger>
               {canViewProxyWideCostData && (
                 <>
-                  <TabsTrigger value="compression" className="flex-none px-0 py-[7px] data-active:font-semibold">
-                    Prompt Compression
-                  </TabsTrigger>
-                  <TabsTrigger value="caching" className="flex-none px-0 py-[7px] data-active:font-semibold">
-                    Prompt Caching
-                  </TabsTrigger>
-                  <TabsTrigger value="autorouter-usage" className="flex-none px-0 py-[7px] data-active:font-semibold">
-                    Auto-Router
-                  </TabsTrigger>
+                  <PageTabsTrigger value="compression">Prompt Compression</PageTabsTrigger>
+                  <PageTabsTrigger value="caching">Prompt Caching</PageTabsTrigger>
+                  <PageTabsTrigger value="autorouter-usage">Auto-Router</PageTabsTrigger>
                 </>
               )}
-            </TabsList>
+            </PageTabsList>
           )}
         />
 
@@ -108,8 +98,8 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
             </TabsContent>
           </>
         )}
-      </Tabs>
-    </main>
+      </PageTabs>
+    </Page>
   );
 };
 

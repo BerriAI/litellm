@@ -3,6 +3,7 @@
  *
  */
 
+import { Page, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { Plus, Wallet } from "lucide-react";
 import React, { useCallback, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -78,8 +79,8 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   };
 
   return (
-    <main className="flex h-full flex-col p-8">
-      <Tabs defaultValue="budgets" className="min-h-0 flex-1 gap-6">
+    <Page className="h-full">
+      <PageTabs defaultValue="budgets">
         <PageHeader
           icon={<Wallet />}
           title="Budgets"
@@ -93,18 +94,11 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
             ) : undefined
           }
           tabs={({ leadingControls }) => (
-            <TabsList
-              variant="line"
-              className="gap-0 p-0 [&>[data-slot=tabs-trigger]+[data-slot=tabs-trigger]]:ml-[22px]"
-            >
+            <PageTabsList>
               {leadingControls}
-              <TabsTrigger value="budgets" className="flex-none px-0 py-[7px] data-active:font-semibold">
-                Budgets
-              </TabsTrigger>
-              <TabsTrigger value="examples" className="flex-none px-0 py-[7px] data-active:font-semibold">
-                Examples
-              </TabsTrigger>
-            </TabsList>
+              <PageTabsTrigger value="budgets">Budgets</PageTabsTrigger>
+              <PageTabsTrigger value="examples">Examples</PageTabsTrigger>
+            </PageTabsList>
           )}
         />
         <TabsContent value="budgets" className="flex min-h-0 flex-1 flex-col" keepMounted>
@@ -174,8 +168,8 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
             </Tabs>
           </div>
         </TabsContent>
-      </Tabs>
-    </main>
+      </PageTabs>
+    </Page>
   );
 };
 

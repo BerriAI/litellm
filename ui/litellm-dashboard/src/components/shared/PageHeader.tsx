@@ -31,7 +31,7 @@ export function PageHeader({ title, subtitle, icon, primaryAction, titleAction, 
   const hasControlRow = primaryAction != null || tabs != null || utilities != null;
 
   return (
-    <div>
+    <div className="shrink-0">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <span

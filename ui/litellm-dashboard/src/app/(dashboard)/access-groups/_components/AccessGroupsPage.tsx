@@ -1,3 +1,4 @@
+import { Page, PageContent } from "@/components/shared/Page";
 import { AccessGroupResponse, useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { useDeleteAccessGroup } from "@/app/(dashboard)/hooks/accessGroups/useDeleteAccessGroup";
 import { Boxes, Plus, SearchIcon, X } from "lucide-react";
@@ -59,7 +60,7 @@ export function AccessGroupsPage() {
   }
 
   return (
-    <div className="p-8">
+    <Page>
       <PageHeader
         icon={<Boxes />}
         title="Access Groups"
@@ -74,34 +75,36 @@ export function AccessGroupsPage() {
         }
       />
 
-      <div className="mt-6 mb-3 flex items-center">
-        <InputGroup className="max-w-[400px]">
-          <InputGroupAddon>
-            <SearchIcon className="size-4 text-muted-foreground" />
-          </InputGroupAddon>
-          <InputGroupInput
-            placeholder="Search groups by name, ID, or description..."
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-          />
-          {searchText && (
-            <InputGroupAddon align="inline-end">
-              <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchText("")}>
-                <X />
-              </InputGroupButton>
+      <PageContent className="gap-3">
+        <div className="flex items-center">
+          <InputGroup className="max-w-[400px]">
+            <InputGroupAddon>
+              <SearchIcon className="size-4 text-muted-foreground" />
             </InputGroupAddon>
-          )}
-        </InputGroup>
-      </div>
+            <InputGroupInput
+              placeholder="Search groups by name, ID, or description..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+            />
+            {searchText && (
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchText("")}>
+                  <X />
+                </InputGroupButton>
+              </InputGroupAddon>
+            )}
+          </InputGroup>
+        </div>
 
-      <AccessGroupsTable
-        groups={filteredGroups}
-        isLoading={isLoading}
-        isFiltered={searchText.trim().length > 0}
-        canModify={canModify}
-        onGroupClick={setSelectedGroupId}
-        onDeleteClick={setGroupToDelete}
-      />
+        <AccessGroupsTable
+          groups={filteredGroups}
+          isLoading={isLoading}
+          isFiltered={searchText.trim().length > 0}
+          canModify={canModify}
+          onGroupClick={setSelectedGroupId}
+          onDeleteClick={setGroupToDelete}
+        />
+      </PageContent>
 
       <AccessGroupCreateDialog open={isCreateModalVisible} onOpenChange={setIsCreateModalVisible} />
 
@@ -126,6 +129,6 @@ export function AccessGroupsPage() {
         }}
         confirmLoading={deleteMutation.isPending}
       />
-    </div>
+    </Page>
   );
 }

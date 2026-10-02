@@ -16,6 +16,7 @@ import {
   type UrlTableStateOptions,
 } from "@/components/shared/DataTable";
 import { SearchSelect } from "@/components/shared/SearchSelect";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -229,7 +230,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-6">
+    <PageContent>
       <PageHeader
         icon={<KeyRound />}
         title="Virtual Keys"
@@ -338,6 +339,6 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
           </>
         )}
       />
-    </div>
+    </PageContent>
   );
 }

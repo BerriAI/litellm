@@ -1,3 +1,4 @@
+import { Page, PageContent } from "@/components/shared/Page";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Folder, Plus, SearchIcon, X } from "lucide-react";
@@ -56,7 +57,7 @@ export function ProjectsPage() {
   }
 
   return (
-    <div className="p-8">
+    <Page>
       <PageHeader
         icon={<Folder />}
         title="Projects"
@@ -69,36 +70,38 @@ export function ProjectsPage() {
         }
       />
 
-      <div className="mt-6 mb-3 flex items-center">
-        <InputGroup className="max-w-[400px]">
-          <InputGroupAddon>
-            <SearchIcon className="size-4 text-muted-foreground" />
-          </InputGroupAddon>
-          <InputGroupInput
-            placeholder="Search projects by name, ID, description, or team..."
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-          />
-          {searchText && (
-            <InputGroupAddon align="inline-end">
-              <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchText("")}>
-                <X />
-              </InputGroupButton>
+      <PageContent className="gap-3">
+        <div className="flex items-center">
+          <InputGroup className="max-w-[400px]">
+            <InputGroupAddon>
+              <SearchIcon className="size-4 text-muted-foreground" />
             </InputGroupAddon>
-          )}
-        </InputGroup>
-      </div>
+            <InputGroupInput
+              placeholder="Search projects by name, ID, description, or team..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+            />
+            {searchText && (
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchText("")}>
+                  <X />
+                </InputGroupButton>
+              </InputGroupAddon>
+            )}
+          </InputGroup>
+        </div>
 
-      <ProjectsTable
-        projects={filteredProjects}
-        isLoading={isLoading}
-        isFiltered={searchText.trim().length > 0}
-        onProjectClick={(id) => void setSelectedProjectId(id)}
-        teamAliasMap={teamAliasMap}
-        isTeamsLoading={isTeamsLoading}
-      />
+        <ProjectsTable
+          projects={filteredProjects}
+          isLoading={isLoading}
+          isFiltered={searchText.trim().length > 0}
+          onProjectClick={(id) => void setSelectedProjectId(id)}
+          teamAliasMap={teamAliasMap}
+          isTeamsLoading={isTeamsLoading}
+        />
+      </PageContent>
 
       <CreateProjectModal isOpen={isCreateModalVisible} onClose={() => setIsCreateModalVisible(false)} />
-    </div>
+    </Page>
   );
 }

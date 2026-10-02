@@ -1,3 +1,4 @@
+import { Page, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import AvailableTeamsPanel from "@/components/team/AvailableTeamsPanel";
@@ -15,7 +16,7 @@ import { SearchSelect } from "@/components/shared/SearchSelect";
 import { labelWithDocsHint, labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TabsContent } from "@/components/ui/tabs";
 import { ChevronDown, Plus, Users } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { z } from "zod/v4";
@@ -652,7 +653,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   ];
 
   return (
-    <main className={selectedTeamId ? "px-12 py-6" : "flex h-full flex-col p-8"}>
+    <Page className={selectedTeamId ? undefined : "h-full"}>
       {selectedTeamId ? (
         <TeamInfoView
           teamId={selectedTeamId}
@@ -672,7 +673,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           premiumUser={premiumUser}
         />
       ) : (
-        <Tabs defaultValue={tabItems[0].key} className="min-h-0 flex-1 gap-6">
+        <PageTabs defaultValue={tabItems[0].key}>
           <PageHeader
             icon={<Users />}
             title="Teams"
@@ -686,21 +687,14 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
               ) : undefined
             }
             tabs={({ leadingControls }) => (
-              <TabsList
-                variant="line"
-                className="gap-0 p-0 [&>[data-slot=tabs-trigger]+[data-slot=tabs-trigger]]:ml-[22px]"
-              >
+              <PageTabsList>
                 {leadingControls}
                 {tabItems.map((item) => (
-                  <TabsTrigger
-                    key={item.key}
-                    value={item.key}
-                    className="flex-none px-0 py-[7px] data-active:font-semibold"
-                  >
+                  <PageTabsTrigger key={item.key} value={item.key}>
                     {item.label}
-                  </TabsTrigger>
+                  </PageTabsTrigger>
                 ))}
-              </TabsList>
+              </PageTabsList>
             )}
           />
           {tabItems.map((item) => (
@@ -708,7 +702,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
               {item.children}
             </TabsContent>
           ))}
-        </Tabs>
+        </PageTabs>
       )}
 
       {canCreateOrManageTeams(userRole, userID, organizations) && (
@@ -1312,7 +1306,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           </DialogContent>
         </Dialog>
       )}
-    </main>
+    </Page>
   );
 };
 
