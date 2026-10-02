@@ -7,15 +7,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 export type RunStatusFilter = "all" | "ok" | "error";
 
-export const ALL_SERVICES = "all";
+export const ALL_AGENTS = "all";
 
 interface RunsToolbarProps {
   query: string;
-  service: string;
+  agent: string;
   status: RunStatusFilter;
-  services: string[];
+  agents: string[];
   onQueryChange: (value: string) => void;
-  onServiceChange: (value: string) => void;
+  onAgentChange: (value: string) => void;
   onStatusChange: (value: RunStatusFilter) => void;
   /** Extra controls (time range, live tail) rendered on the right. */
   children?: React.ReactNode;
@@ -27,21 +27,18 @@ const STATUS_ITEMS: { value: RunStatusFilter; label: string }[] = [
   { value: "error", label: "Failed" },
 ];
 
-/** Search + service / status filters for the Runs table. Filtering is client-side over the loaded page. */
+/** Search + agent / status filters for the Runs table. Filtering is client-side over the loaded page. */
 export function RunsToolbar({
   query,
-  service,
+  agent,
   status,
-  services,
+  agents,
   onQueryChange,
-  onServiceChange,
+  onAgentChange,
   onStatusChange,
   children,
 }: RunsToolbarProps) {
-  const serviceItems = [
-    { value: ALL_SERVICES, label: "All services" },
-    ...services.map((s) => ({ value: s, label: s })),
-  ];
+  const agentItems = [{ value: ALL_AGENTS, label: "All agents" }, ...agents.map((s) => ({ value: s, label: s }))];
   return (
     <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2">
       <div className="relative w-full max-w-[380px]">
@@ -55,15 +52,15 @@ export function RunsToolbar({
         />
       </div>
       <Select
-        items={serviceItems}
-        value={service}
-        onValueChange={(value: string | null) => value !== null && onServiceChange(value)}
+        items={agentItems}
+        value={agent}
+        onValueChange={(value: string | null) => value !== null && onAgentChange(value)}
       >
-        <SelectTrigger size="sm" className="h-7 min-w-[130px] text-[12px]" aria-label="Filter by service">
+        <SelectTrigger size="sm" className="h-7 min-w-[130px] text-[12px]" aria-label="Filter by agent">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {serviceItems.map((item) => (
+          {agentItems.map((item) => (
             <SelectItem key={item.value} value={item.value}>
               {item.label}
             </SelectItem>

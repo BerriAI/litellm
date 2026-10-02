@@ -417,6 +417,7 @@ function MatchingActivity({
 }) {
   const paginated = data?.next_offset != null || offset > 0;
   const showSelection = selectedCount !== data?.eligible || paginated;
+  const selectionData = ready && showSelection ? data : undefined;
   return (
     <section aria-label="Matching activity" className="self-start rounded-lg border">
       <div className="border-b px-4 py-3">
@@ -473,15 +474,15 @@ function MatchingActivity({
             </div>
           ))}
       </div>
-      {ready && data && showSelection && (
+      {selectionData && (
         <div className="border-t px-4 py-3 space-y-2">
           <p className="text-xs text-muted-foreground">
             {selectedCount} selected for analysis
             {paginated && (
               <>
                 {" "}
-                · Showing {offset + (data.executions.length ? 1 : 0)}–{offset + data.executions.length} of{" "}
-                {data.eligible}
+                · Showing {offset + (selectionData.executions.length ? 1 : 0)}–
+                {offset + selectionData.executions.length} of {selectionData.eligible}
               </>
             )}
           </p>
@@ -498,8 +499,8 @@ function MatchingActivity({
               <Button
                 size="sm"
                 variant="ghost"
-                disabled={data.next_offset == null}
-                onClick={() => onPage(data.next_offset ?? offset)}
+                disabled={selectionData.next_offset == null}
+                onClick={() => onPage(selectionData.next_offset ?? offset)}
               >
                 Next
               </Button>

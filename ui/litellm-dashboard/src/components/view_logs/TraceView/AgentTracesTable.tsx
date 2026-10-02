@@ -53,7 +53,7 @@ export function AgentTracesTable({
                 Time <ArrowDown className="size-2.5" />
               </span>
             </th>
-            <th className={`w-[160px] ${TH}`}>Service</th>
+            <th className={`w-[160px] ${TH}`}>Agent</th>
             <th className={TH}>Input</th>
             <th className={`w-[72px] ${TH_NUM}`}>Agents</th>
             <th className={`w-[74px] ${TH_NUM}`}>Steps</th>
