@@ -206,7 +206,7 @@ class LLMModelDetails(BaseModel):
 
 
 class PromptTemplatingModuleConfig(BaseModel):
-    prompt: Template
+    prompt: Template | None = None
     model: LLMModelDetails
 
 
