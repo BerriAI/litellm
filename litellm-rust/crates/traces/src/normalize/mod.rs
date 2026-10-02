@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::DecodeError;
+use crate::{DecodeError, otlp::DecodedEvent};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -17,6 +17,7 @@ pub enum ObservationType {
 pub struct NormalizedSpan {
     pub observation_type: ObservationType,
     pub agent_name: String,
+    pub framework: String,
     pub litellm_request_id: String,
     pub model: String,
     pub input_tokens: u32,
@@ -27,6 +28,7 @@ pub struct NormalizedSpan {
 
 pub(crate) struct Normalization {
     pub span: NormalizedSpan,
+    pub display_name: Option<String>,
     pub consumed_attributes: [&'static str; 2],
 }
 
@@ -38,7 +40,7 @@ pub struct NormalizedFieldDefinition {
     pub meaning: &'static str,
 }
 
-pub const NORMALIZED_FIELD_DEFINITIONS: [NormalizedFieldDefinition; 8] = [
+pub const NORMALIZED_FIELD_DEFINITIONS: [NormalizedFieldDefinition; 9] = [
     NormalizedFieldDefinition {
         name: "observation_type",
         clickhouse_column: "ObservationType",
@@ -50,6 +52,12 @@ pub const NORMALIZED_FIELD_DEFINITIONS: [NormalizedFieldDefinition; 8] = [
         clickhouse_column: "AgentName",
         clickhouse_type: "LowCardinality(String)",
         meaning: "Agent associated with this span",
+    },
+    NormalizedFieldDefinition {
+        name: "framework",
+        clickhouse_column: "Framework",
+        clickhouse_type: "LowCardinality(String)",
+        meaning: "Agent framework or SDK that emitted this span, e.g. claude-agent-sdk",
     },
     NormalizedFieldDefinition {
         name: "litellm_request_id",
@@ -97,13 +105,20 @@ trait SpanNormalizer {
         name: &str,
         parent_span_id: &str,
         attributes: &BTreeMap<String, String>,
+        events: &[DecodedEvent],
     ) -> Result<NormalizedSpan, DecodeError>;
+    fn display_name(&self, _attributes: &BTreeMap<String, String>) -> Option<String> {
+        None
+    }
 }
 
+mod claude_code;
 mod genai;
 mod langsmith;
 mod openinference;
 
+use claude_code::ClaudeCodeNormalizer;
+pub(crate) use claude_code::{CLAUDE_CODE_AGENT, CLAUDE_CODE_SCOPE};
 use genai::GenAiNormalizer;
 use langsmith::LangSmithNormalizer;
 use openinference::OpenInferenceNormalizer;
@@ -207,8 +222,10 @@ pub fn normalize(
     name: &str,
     parent_span_id: &str,
     attributes: &BTreeMap<String, String>,
+    events: &[DecodedEvent],
 ) -> Result<Normalization, DecodeError> {
-    let normalizers: [&dyn SpanNormalizer; 3] = [
+    let normalizers: [&dyn SpanNormalizer; 4] = [
+        &ClaudeCodeNormalizer,
         &LangSmithNormalizer,
         &OpenInferenceNormalizer,
         &GenAiNormalizer,
@@ -217,7 +234,7 @@ pub fn normalize(
         .into_iter()
         .find(|normalizer| normalizer.matches(scope_name, attributes))
         .expect("GenAI fallback always matches");
-    let span = normalizer.normalize(name, parent_span_id, attributes)?;
+    let span = normalizer.normalize(name, parent_span_id, attributes, events)?;
     let agent_name = recorded_agent_name(name, attributes, &span);
     let observation_type = if !parent_span_id.is_empty()
         && scope_name == "openinference.instrumentation.langchain"
@@ -233,6 +250,7 @@ pub fn normalize(
             observation_type,
             ..span
         },
+        display_name: normalizer.display_name(attributes),
         consumed_attributes: normalizer.consumed_attributes(attributes),
     })
 }
@@ -249,6 +267,7 @@ mod tests {
     #[case::langsmith("langsmith", [("langsmith.span.kind", "llm"), ("openinference.span.kind", "TOOL")], ObservationType::Llm)]
     #[case::openinference("other", [("openinference.span.kind", "LLM"), ("gen_ai.operation.name", "execute_tool")], ObservationType::Llm)]
     #[case::genai("other", [("gen_ai.operation.name", "execute_tool"), ("gen_ai.usage.input_tokens", "7")], ObservationType::Tool)]
+    #[case::claude_code("com.anthropic.claude_code.tracing", [("span.type", "llm_request"), ("openinference.span.kind", "TOOL")], ObservationType::Llm)]
     fn convention_dispatch_preserves_precedence(
         #[case] scope: &str,
         #[case] attributes: [(&str, &str); 2],
@@ -258,7 +277,7 @@ mod tests {
             .into_iter()
             .map(|(key, value)| (key.to_owned(), value.to_owned()))
             .collect();
-        let fields = normalize(scope, "step", "parent", &attributes)
+        let fields = normalize(scope, "step", "parent", &attributes, &[])
             .expect("valid tokens")
             .span;
         assert_eq!(fields.observation_type, expected);
@@ -269,7 +288,7 @@ mod tests {
 
     #[rstest]
     fn field_definitions_match_serialized_normalized_span() {
-        let fields = normalize("", "root", "", &BTreeMap::new())
+        let fields = normalize("", "root", "", &BTreeMap::new(), &[])
             .expect("valid tokens")
             .span;
         let serialized = serde_json::to_value(fields).expect("serializable fields");
@@ -290,7 +309,7 @@ mod tests {
     fn token_counts_accept_surrounding_whitespace() {
         let attributes =
             BTreeMap::from([("gen_ai.usage.input_tokens".to_owned(), " 7 ".to_owned())]);
-        let fields = normalize("", "root", "", &attributes)
+        let fields = normalize("", "root", "", &attributes, &[])
             .expect("valid tokens")
             .span;
         assert_eq!(fields.input_tokens, 7);
@@ -302,6 +321,6 @@ mod tests {
     fn token_counts_outside_storage_range_are_rejected(#[case] value: &str) {
         let attributes =
             BTreeMap::from([("gen_ai.usage.input_tokens".to_owned(), value.to_owned())]);
-        assert!(normalize("", "root", "", &attributes).is_err());
+        assert!(normalize("", "root", "", &attributes, &[]).is_err());
     }
 }

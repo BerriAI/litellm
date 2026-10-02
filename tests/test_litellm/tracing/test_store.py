@@ -238,6 +238,29 @@ def test_trace_groups_normalized_names_and_preserves_span_labels():
     assert agents["researcher"]["llm_calls"] == 1
 
 
+def test_trace_frameworks_are_the_sorted_distinct_span_frameworks():
+    rows = [
+        _row("root", "", "claude_code.interaction", "agent", "claude-code", framework="claude-code"),
+        _llm_row("llm", "root", "claude-code", "msg_1", framework="claude-agent-sdk"),
+        _row("tool", "root", "Bash", "tool", "claude-code", framework="claude-code"),
+        _row("other", "root", "step", "chain", "claude-code", framework=""),
+    ]
+    trace = trace_from_rows("t1", rows)
+    assert trace is not None
+    assert trace["summary"]["frameworks"] == ("claude-agent-sdk", "claude-code")
+    spans = {span["span_id"]: span for span in trace["spans"]}
+    assert (spans["llm"]["framework"], spans["other"]["framework"]) == ("claude-agent-sdk", "")
+    assert trace["agents"][0]["llm_calls"] == 1
+    assert trace["agents"][0]["tool_calls"] == 1
+
+
+def test_spans_without_a_framework_column_report_none():
+    trace = trace_from_rows("t1", _deep_agent_rows())
+    assert trace is not None
+    assert trace["summary"]["frameworks"] == ()
+    assert {span["framework"] for span in trace["spans"]} == {""}
+
+
 # ---------------------------------------------------------------- list helpers
 
 
@@ -272,8 +295,10 @@ def test_trace_summary_from_row():
             "input_tokens": "30175",
             "output_tokens": "2620",
             "models": ["claude-sonnet-4-5"],
+            "frameworks": ["claude-agent-sdk", "claude-code"],
         }
     )
+    assert summary["frameworks"] == ("claude-agent-sdk", "claude-code")
     assert summary["status"] == "ok"
     assert (summary["span_count"], summary["error_count"]) == (126, 1)
     assert summary["start_time"] == "2026-09-30T04:36:29.377000+00:00"

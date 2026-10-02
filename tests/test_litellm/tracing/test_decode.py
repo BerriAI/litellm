@@ -579,3 +579,17 @@ def test_token_counts_outside_storage_range_are_rejected(count):
     exported = _span("root", b"\x01" * 8, gen_ai__usage__input_tokens=count)
     with pytest.raises(decode.InvalidOTLPPayloadError, match="storage range"):
         decode_otlp(_export(exported))
+
+
+def test_claude_agent_sdk_rows_carry_framework_tool_names_and_arguments():
+    fixture = Path(__file__).parent / "fixtures" / "claude_agent_sdk_detailed_export.json"
+    rows = decode_otlp(fixture.read_bytes(), "application/json")
+    sdk_llms = [r for r in rows if r["ObservationType"] == "llm" and r["SpanAttributes"]["query_source_safe"] == "sdk"]
+    assert sdk_llms and {r["Framework"] for r in sdk_llms} == {"claude-agent-sdk"}
+    tools = {r["SpanName"]: r for r in rows if r["ObservationType"] == "tool"}
+    assert set(tools) == {"Bash", "Read"}
+    assert json.loads(tools["Bash"]["Input"])["command"] == tools["Bash"]["SpanAttributes"]["full_command"]
+    assert "tool_input" not in tools["Bash"]["SpanAttributes"]
+    root = next(r for r in rows if r["ObservationType"] == "agent")
+    assert "user_prompt" not in root["SpanAttributes"]
+    assert json.loads(root["Input"])[0]["role"] == "user"

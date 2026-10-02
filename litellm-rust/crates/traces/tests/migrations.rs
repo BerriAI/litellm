@@ -371,14 +371,54 @@ async fn listed_agent_names_preserve_scope_and_cursor(
     let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
-    for (team, key, trace, agent, span, parent) in [
-        ("alpha", "one", "shared", "research_agent", "root", ""),
-        ("alpha", "one", "shared", "reviewer", "child", "root"),
-        ("alpha", "one", "shared", "reviewer", "repeated", "root"),
-        ("alpha", "one", "shared", "", "unnamed", "root"),
-        ("alpha", "one", "second", "support_agent", "root", ""),
-        ("alpha", "two", "shared", "private_agent", "root", ""),
-        ("beta", "one", "shared", "other_agent", "root", ""),
+    for (team, key, trace, agent, span, parent, framework) in [
+        (
+            "alpha",
+            "one",
+            "shared",
+            "research_agent",
+            "root",
+            "",
+            "claude-code",
+        ),
+        (
+            "alpha",
+            "one",
+            "shared",
+            "reviewer",
+            "child",
+            "root",
+            "claude-agent-sdk",
+        ),
+        (
+            "alpha",
+            "one",
+            "shared",
+            "reviewer",
+            "repeated",
+            "root",
+            "claude-agent-sdk",
+        ),
+        ("alpha", "one", "shared", "", "unnamed", "root", ""),
+        ("alpha", "one", "second", "support_agent", "root", "", ""),
+        (
+            "alpha",
+            "two",
+            "shared",
+            "private_agent",
+            "root",
+            "",
+            "private-sdk",
+        ),
+        (
+            "beta",
+            "one",
+            "shared",
+            "other_agent",
+            "root",
+            "",
+            "other-sdk",
+        ),
     ] {
         insert_rows(
             &database,
@@ -386,7 +426,7 @@ async fn listed_agent_names_preserve_scope_and_cursor(
             vec![serde_json::from_value(serde_json::json!({
                 "Timestamp": timestamp, "TraceId": trace, "SpanId": span, "ParentSpanId": parent,
                 "ServiceName": "shared-app", "SpanName": span, "AgentName": agent,
-                "ObservationType": "agent",
+                "Framework": framework, "ObservationType": "agent",
                 "ResourceAttributes": {"litellm.team_id": team, "litellm.api_key_hash": key}
             }))?],
         )
@@ -477,6 +517,15 @@ async fn listed_agent_names_preserve_scope_and_cursor(
         serde_json::json!(["research_agent", "reviewer"])
     );
     assert_eq!(names["second"], serde_json::json!(["support_agent"]));
+    let frameworks = [&first["data"][0], &second["data"][0]]
+        .into_iter()
+        .map(|row| (row["trace_id"].as_str().unwrap(), row["frameworks"].clone()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        frameworks["shared"],
+        serde_json::json!(["claude-agent-sdk", "claude-code"])
+    );
+    assert_eq!(frameworks["second"], serde_json::json!([]));
     let counts = [&first["data"][0], &second["data"][0]]
         .into_iter()
         .map(|row| {

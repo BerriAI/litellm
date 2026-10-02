@@ -25,11 +25,13 @@ ORDER BY start_ms DESC, trace_ref DESC
 LIMIT {limit:UInt32}
 )
 SELECT page.* EXCEPT (trace_start, trace_end),
-       identities.agent_names AS agent_names, identities.agent_count AS agent_count
+       identities.agent_names AS agent_names, identities.agent_count AS agent_count,
+       identities.frameworks AS frameworks
 FROM page
 LEFT JOIN (
     SELECT TeamId, ApiKeyHash, TraceId,
            arraySort(groupUniqArrayIf(AgentName, AgentName != '')) AS agent_names,
+           arraySort(groupUniqArrayIf(toString(Framework), Framework != '')) AS frameworks,
            uniqExactIf(if(AgentName = '', SpanName, AgentName), ObservationType = 'agent') AS agent_count
     FROM otel_traces
     WHERE Timestamp >= (SELECT min(trace_start) FROM page)

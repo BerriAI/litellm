@@ -386,3 +386,223 @@ fn normalizes_langsmith_fixture() {
     assert_eq!(tool.normalized.observation_type, ObservationType::Tool);
     assert!(tool.normalized.output.starts_with("Based on my research"));
 }
+
+const CLAUDE_AGENT_SDK_FIXTURE: &[u8] =
+    include_bytes!("../../../../tests/test_litellm/tracing/fixtures/claude_agent_sdk_export.json");
+const CLAUDE_AGENT_SDK_DETAILED_FIXTURE: &[u8] = include_bytes!(
+    "../../../../tests/test_litellm/tracing/fixtures/claude_agent_sdk_detailed_export.json"
+);
+
+fn raw_spans(fixture: &[u8]) -> Vec<serde_json::Value> {
+    let export: serde_json::Value = serde_json::from_slice(fixture).expect("fixture JSON");
+    export["resourceSpans"][0]["scopeSpans"][0]["spans"]
+        .as_array()
+        .expect("spans")
+        .clone()
+}
+
+fn raw_attribute(span: &serde_json::Value, key: &str) -> Option<serde_json::Value> {
+    span["attributes"]
+        .as_array()
+        .expect("attributes")
+        .iter()
+        .find(|attribute| attribute["key"] == key)
+        .map(|attribute| attribute["value"].clone())
+}
+
+fn raw_string(span: &serde_json::Value, key: &str) -> String {
+    raw_attribute(span, key)
+        .and_then(|value| value["stringValue"].as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+fn raw_int(span: &serde_json::Value, key: &str) -> u64 {
+    raw_attribute(span, key).map_or(0, |value| match &value["intValue"] {
+        serde_json::Value::String(text) => text.parse().expect("integer"),
+        number => number.as_u64().expect("integer"),
+    })
+}
+
+fn raw_span<'a>(raw: &'a [serde_json::Value], span_id: &str) -> &'a serde_json::Value {
+    raw.iter()
+        .find(|span| {
+            span["spanId"]
+                .as_str()
+                .is_some_and(|id| id.eq_ignore_ascii_case(span_id))
+        })
+        .expect("raw span")
+}
+
+#[rstest]
+#[case::default_telemetry(CLAUDE_AGENT_SDK_FIXTURE)]
+#[case::detailed_telemetry(CLAUDE_AGENT_SDK_DETAILED_FIXTURE)]
+fn normalizes_claude_agent_sdk_fixture(#[case] fixture: &[u8]) {
+    let spans = decode_otlp(fixture, Some("application/json")).expect("valid OTLP export");
+    let raw = raw_spans(fixture);
+    let types: std::collections::BTreeSet<_> = spans
+        .iter()
+        .map(|span| format!("{:?}", span.normalized.observation_type))
+        .collect();
+    assert_eq!(
+        types,
+        ["Agent", "Framework", "Llm", "Tool"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    );
+
+    let root = spans
+        .iter()
+        .find(|span| span.normalized.observation_type == ObservationType::Agent)
+        .expect("interaction root");
+    assert!(root.parent_span_id.is_empty());
+    let root_input: serde_json::Value =
+        serde_json::from_str(&root.normalized.input).expect("root input messages");
+    assert_eq!(root_input[0]["role"], "user");
+    assert_eq!(
+        root_input[0]["content"],
+        raw_string(raw_span(&raw, &root.span_id), "user_prompt")
+    );
+    assert!(root.consumed_attributes.contains(&"user_prompt"));
+
+    let tools: Vec<_> = spans
+        .iter()
+        .filter(|span| span.normalized.observation_type == ObservationType::Tool)
+        .collect();
+    assert_eq!(tools.len(), 2);
+    for tool in &tools {
+        assert_eq!(
+            tool.name,
+            raw_string(raw_span(&raw, &tool.span_id), "tool_name")
+        );
+        let input: serde_json::Value =
+            serde_json::from_str(&tool.normalized.input).expect("tool argument object");
+        assert!(input.is_object());
+        assert!(input.get("role").is_none());
+        let event = tool
+            .events
+            .iter()
+            .find(|event| event.name == "tool.output")
+            .expect("tool output event");
+        let expected_output = ["output", "content", "diff"]
+            .into_iter()
+            .filter_map(|key| event.attributes.get(key))
+            .find(|value| !value.is_empty())
+            .expect("event output");
+        assert_eq!(&tool.normalized.output, expected_output);
+    }
+    let bash = tools
+        .iter()
+        .find(|tool| tool.name == "Bash")
+        .expect("Bash tool");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&bash.normalized.input).unwrap()["command"],
+        raw_string(raw_span(&raw, &bash.span_id), "full_command")
+    );
+
+    let llms: Vec<_> = spans
+        .iter()
+        .filter(|span| span.normalized.observation_type == ObservationType::Llm)
+        .collect();
+    assert!(!llms.is_empty());
+    for llm in &llms {
+        let raw_llm = raw_span(&raw, &llm.span_id);
+        let expected = raw_int(raw_llm, "input_tokens")
+            + raw_int(raw_llm, "cache_read_tokens")
+            + raw_int(raw_llm, "cache_creation_tokens");
+        assert_eq!(u64::from(llm.normalized.input_tokens), expected);
+        assert_eq!(
+            u64::from(llm.normalized.output_tokens),
+            raw_int(raw_llm, "output_tokens")
+        );
+        assert_eq!(llm.normalized.model, raw_string(raw_llm, "model"));
+        if raw_string(raw_llm, "query_source_safe") == "sdk" {
+            assert_eq!(llm.normalized.framework, "claude-agent-sdk");
+        }
+    }
+    assert!(spans.iter().all(|span| {
+        span.normalized.agent_name == span.resource_attributes["service.name"].as_str()
+    }));
+}
+
+#[rstest]
+fn claude_agent_sdk_detailed_fixture_keeps_full_tool_arguments_and_llm_messages() {
+    let spans = decode_otlp(CLAUDE_AGENT_SDK_DETAILED_FIXTURE, Some("application/json"))
+        .expect("valid OTLP export");
+    let raw = raw_spans(CLAUDE_AGENT_SDK_DETAILED_FIXTURE);
+    let bash = spans
+        .iter()
+        .find(|span| span.name == "Bash")
+        .expect("Bash tool");
+    let tool_input = raw_string(raw_span(&raw, &bash.span_id), "tool_input");
+    let (_, arguments) = tool_input.split_once('\n').expect("tool input header");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&bash.normalized.input).unwrap(),
+        serde_json::from_str::<serde_json::Value>(arguments).unwrap()
+    );
+    assert!(bash.consumed_attributes.contains(&"tool_input"));
+
+    let answer = spans
+        .iter()
+        .find(|span| {
+            span.normalized.observation_type == ObservationType::Llm
+                && span.attributes.get("query_source_safe").map(String::as_str) == Some("sdk")
+                && !span.normalized.output.is_empty()
+        })
+        .expect("final SDK answer");
+    let raw_answer = raw_span(&raw, &answer.span_id);
+    let input: serde_json::Value =
+        serde_json::from_str(&answer.normalized.input).expect("llm input messages");
+    assert_eq!(input[0]["role"], "system");
+    assert_eq!(
+        input[0]["content"],
+        raw_string(raw_answer, "system_prompt_preview")
+    );
+    let output: serde_json::Value =
+        serde_json::from_str(&answer.normalized.output).expect("llm output message");
+    assert_eq!(output["role"], "assistant");
+    assert_eq!(
+        output["content"],
+        raw_string(raw_answer, "response.model_output")
+    );
+
+    let title = spans
+        .iter()
+        .find(|span| {
+            span.attributes.get("query_source_safe").map(String::as_str)
+                == Some("generate_session_title")
+        })
+        .expect("side query");
+    assert_eq!(title.normalized.framework, "claude-agent-sdk");
+}
+
+#[rstest]
+fn claude_code_scope_takes_precedence_over_openinference_attributes(
+    mut span: opentelemetry_proto::tonic::trace::v1::Span,
+) {
+    use opentelemetry_proto::tonic::common::v1::{
+        AnyValue, InstrumentationScope, KeyValue, any_value::Value,
+    };
+    let string = |key: &str, value: &str| KeyValue {
+        key: key.to_owned(),
+        value: Some(AnyValue {
+            value: Some(Value::StringValue(value.to_owned())),
+        }),
+        ..Default::default()
+    };
+    span.attributes = vec![
+        string("span.type", "tool"),
+        string("tool_name", "Grep"),
+        string("openinference.span.kind", "LLM"),
+    ];
+    let mut request = request_with(span);
+    request.resource_spans[0].scope_spans[0].scope = Some(InstrumentationScope {
+        name: "com.anthropic.claude_code.tracing".to_owned(),
+        ..Default::default()
+    });
+    let spans = decode_otlp(&prost::Message::encode_to_vec(&request), None).expect("valid span");
+    assert_eq!(spans[0].normalized.observation_type, ObservationType::Tool);
+    assert_eq!(spans[0].name, "Grep");
+    assert_eq!(spans[0].normalized.framework, "claude-code");
+    assert_eq!(spans[0].normalized.agent_name, "claude-code");
+}

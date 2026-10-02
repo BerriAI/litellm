@@ -10,7 +10,10 @@ use super::{
     attributes::attributes,
     limits::{Budget, MAX_ATTRIBUTES, MAX_DECODED_SPAN_BYTES, MAX_EVENTS, MAX_SPANS},
 };
-use crate::{DecodeError, Shared, normalize::normalize};
+use crate::{
+    DecodeError, Shared,
+    normalize::{CLAUDE_CODE_AGENT, CLAUDE_CODE_SCOPE, normalize},
+};
 
 pub(super) fn flatten(request: ExportTraceServiceRequest) -> Result<Vec<DecodedSpan>, DecodeError> {
     let mut budget = Budget::new(MAX_DECODED_SPAN_BYTES);
@@ -127,11 +130,23 @@ fn decoded_span(
     let status = span.status.unwrap_or_default();
     let parent_span_id = hex_bytes(&span.parent_span_id);
     let span_attributes = attributes(span.attributes, budget)?;
+    let events = span
+        .events
+        .into_iter()
+        .map(|event| {
+            budget.consume(event.name.len() + 96)?;
+            Ok(DecodedEvent {
+                name: event.name,
+                attributes: attributes(event.attributes, budget)?,
+            })
+        })
+        .collect::<Result<Vec<_>, DecodeError>>()?;
     let normalization = normalize(
         scope_name.as_ref(),
         &span.name,
         &parent_span_id,
         &span_attributes,
+        &events,
     )?;
     let resource_agent_name = resource_attributes
         .get("gen_ai.agent.name")
@@ -139,6 +154,13 @@ fn decoded_span(
     let agent_name = match (resource_agent_name, normalization.span.agent_name.as_str()) {
         (Some(name), "") => name.clone(),
         (Some(name), "hermes-agent") if scope_name.as_ref() == "hermes-otel-plugin" => name.clone(),
+        (Some(name), CLAUDE_CODE_AGENT) if scope_name.as_ref() == CLAUDE_CODE_SCOPE => name.clone(),
+        (None, CLAUDE_CODE_AGENT) if scope_name.as_ref() == CLAUDE_CODE_SCOPE => {
+            resource_attributes
+                .get("service.name")
+                .filter(|name| !name.is_empty())
+                .map_or_else(|| CLAUDE_CODE_AGENT.to_owned(), Clone::clone)
+        }
         (_, name) => name.to_owned(),
     };
     let normalized = crate::normalize::NormalizedSpan {
@@ -149,15 +171,17 @@ fn decoded_span(
         normalized.input.len()
             + normalized.output.len()
             + normalized.agent_name.len()
+            + normalized.framework.len()
             + normalized.litellm_request_id.len()
-            + normalized.model.len(),
+            + normalized.model.len()
+            + normalization.display_name.as_ref().map_or(0, String::len),
     )?;
     Ok(DecodedSpan {
         trace_id: hex_bytes(&span.trace_id),
         span_id: hex_bytes(&span.span_id),
         parent_span_id,
         trace_state: span.trace_state,
-        name: span.name,
+        name: normalization.display_name.unwrap_or(span.name),
         kind: SpanKind::try_from(span.kind)
             .unwrap_or(SpanKind::Unspecified)
             .as_str_name()
@@ -178,17 +202,7 @@ fn decoded_span(
             .as_str_name()
             .to_owned(),
         status_message: status.message,
-        events: span
-            .events
-            .into_iter()
-            .map(|event| {
-                budget.consume(event.name.len() + 96)?;
-                Ok(DecodedEvent {
-                    name: event.name,
-                    attributes: attributes(event.attributes, budget)?,
-                })
-            })
-            .collect::<Result<Vec<_>, DecodeError>>()?,
+        events,
         normalized,
         consumed_attributes: normalization.consumed_attributes,
     })
