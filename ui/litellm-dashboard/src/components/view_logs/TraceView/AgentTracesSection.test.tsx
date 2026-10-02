@@ -300,12 +300,12 @@ describe("AgentTracesSection", () => {
     expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
   });
 
-  it("labels each run with the SDK that produced it, before its agent names", async () => {
+  it("shows each run's agent name with the logo of the SDK that produced it", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({
       ...(traceList as TracePage),
       data: [
-        { ...runs[0], agent_names: ["claude-code"], frameworks: ["claude-agent-sdk", "claude-code"] },
-        { ...runs[1], agent_names: ["claude-code"], frameworks: ["claude-code"] },
+        { ...runs[0], agent_names: ["research-bot"], frameworks: ["claude-agent-sdk", "claude-code"] },
+        { ...runs[1], agent_names: [], frameworks: ["claude-code"] },
         { ...runs[2], frameworks: [] },
       ],
     });
@@ -313,13 +313,14 @@ describe("AgentTracesSection", () => {
     const [sdkRun, cliRun, plainRun] = await screen.findAllByTestId("agent-trace-row");
     const agentCell = (row: HTMLElement) => within(row).getAllByRole("cell")[1];
 
-    expect(agentCell(sdkRun)).toHaveTextContent(/^Claude Agent SDKclaude-code$/);
-    expect(within(sdkRun).getByRole("img", { name: "Claude Agent SDK logo" })).toHaveAttribute(
+    expect(agentCell(sdkRun)).toHaveTextContent(/^research-bot$/);
+    expect(agentCell(sdkRun)).toHaveAttribute("title", "research-bot · Claude Agent SDK");
+    expect(within(sdkRun).getByRole("img", { name: "Claude Agent SDK logo", hidden: true })).toHaveAttribute(
       "src",
       expect.stringContaining("anthropic.svg"),
     );
-    expect(agentCell(cliRun)).toHaveTextContent(/^Claude Codeclaude-code$/);
-    expect(within(plainRun).queryByRole("img")).not.toBeInTheDocument();
+    expect(agentCell(cliRun)).toHaveTextContent(/^Claude Code$/);
+    expect(within(plainRun).queryByRole("img", { hidden: true })).not.toBeInTheDocument();
     expect(agentCell(plainRun)).toHaveTextContent((runs[2].agent_names ?? [runs[2].service]).join(", "));
   });
 
