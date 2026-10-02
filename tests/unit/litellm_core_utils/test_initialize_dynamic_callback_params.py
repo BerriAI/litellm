@@ -279,3 +279,17 @@ def test_arize_sampling_rates_are_picked_up_from_metadata():
 
     assert params.get("arize_success_sampling_rate") == "0.5"
     assert params.get("arize_error_sampling_rate") == "0.1"
+
+
+def test_capture_message_content_comes_only_from_the_trusted_team_vars():
+    from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD
+
+    caller_only = {
+        "capture_message_content": "span_only",
+        "metadata": {"capture_message_content": "span_only"},
+        "litellm_params": {"metadata": {"capture_message_content": "span_only"}},
+    }
+    assert initialize_standard_callback_dynamic_params(caller_only).get("capture_message_content") is None
+
+    stamped = {**caller_only, TRUSTED_CALLBACK_VARS_FIELD: {"capture_message_content": "no_content"}}
+    assert initialize_standard_callback_dynamic_params(stamped).get("capture_message_content") == "no_content"

@@ -69,7 +69,7 @@ _MAX_RETIRED_PROVIDERS: Final = 64
 
 _HeaderItems: TypeAlias = tuple[tuple[str, str], ...]
 
-_RouteKey: TypeAlias = tuple[_HeaderItems, _HeaderItems, str | None, str | None]
+_RouteKey: TypeAlias = tuple[_HeaderItems, _HeaderItems, str | None, str | None, bool]
 
 _NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
@@ -249,15 +249,23 @@ class TenantTracerCache:
         # A fixed per-integration region endpoint (New Relic us/eu), never a
         # caller-supplied host; ``None`` keeps the preset's own endpoint.
         endpoint: Final = dynamic_otlp_endpoint(self._callback_name, dynamic_params)
+        # The tenant's own account gets the content restriction its callback vars name; the
+        # operator's account, reached with a project header alone, keeps the global policy.
+        redacted: Final = (
+            bool(credential_headers)
+            and dynamic_params is not None
+            and dynamic_params.get("capture_message_content") == "no_content"
+        )
         cache_key: Final = (
             tuple(sorted(credential_headers.items())),
             tuple(sorted(project_headers.items())),
             endpoint,
             service_name,
+            redacted,
         )
         with self._lock:
             provider: Final = self._cached_provider_locked(
-                cache_key, credential_headers, project_headers, endpoint, service_name
+                cache_key, credential_headers, project_headers, endpoint, service_name, redacted
             )
             self._open_span_counts[provider] = self._open_span_counts.get(provider, 0) + 1
             evicted: Final = self._evicted_on_overflow_locked()
@@ -276,13 +284,15 @@ class TenantTracerCache:
         project_headers: Mapping[str, str],
         endpoint: str | None,
         service_name: str | None,
+        redacted: bool,
     ) -> TracerProvider:
         cached: Final = self._providers.get(cache_key)
         if cached is not None:
             self._providers.move_to_end(cache_key)
             return cached
         built: Final = build_tracer_provider(
-            self._routed_config(credential_headers, project_headers, endpoint, service_name)
+            self._routed_config(credential_headers, project_headers, endpoint, service_name),
+            content_redacted_owner=self._callback_name if redacted else None,
         )
         self._providers[cache_key] = built
         return built
