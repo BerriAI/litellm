@@ -8,12 +8,12 @@ import { useMutation } from "@tanstack/react-query";
 import { Code, Info, LoaderCircle, RotateCcw, Send } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { makeSystemOneRequest } from "../../llm_calls/system_one";
-import { SYSTEM_ONE_EXAMPLE } from "./system_one_example";
-import type { SystemOneRequest } from "./system_one_schemas";
-import SystemOneJsonEditor from "./SystemOneJsonEditor";
-import SystemOneQuestionBreakdown from "./SystemOneQuestionBreakdown";
-import SystemOneResponseView from "./SystemOneResponseView";
-import { validateSystemOnePayload } from "./validate_system_one_payload";
+import { SYSTEM_ONE_EXAMPLE } from "./lib/example";
+import type { SystemOneRequest } from "./lib/schemas";
+import JsonEditor from "./JsonEditor";
+import QuestionBreakdown from "./QuestionBreakdown";
+import ResponseView from "./ResponseView";
+import { validateSystemOnePayload } from "./lib/validatePayload";
 
 interface SystemOneUIProps {
   accessToken: string | null;
@@ -159,17 +159,17 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
 
       <div className="grid gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-2">
         <section className="flex min-h-96 flex-col xl:min-h-0" aria-label="System One request editor">
-          <SystemOneJsonEditor value={rawPayload} onChange={handlePayloadChange} validation={validation} />
+          <JsonEditor value={rawPayload} onChange={handlePayloadChange} validation={validation} />
         </section>
         <section className="grid content-start gap-4 xl:min-h-0 xl:overflow-auto" aria-label="System One results">
-          <SystemOneResponseView
+          <ResponseView
             response={systemOne.data?.response}
             fallbackModel={validation.payload?.model}
             latencyMs={systemOne.data?.latencyMs}
             error={systemOne.error?.message}
             isLoading={isLoading}
           />
-          <SystemOneQuestionBreakdown payload={validation.payload} />
+          <QuestionBreakdown payload={validation.payload} />
         </section>
       </div>
     </div>

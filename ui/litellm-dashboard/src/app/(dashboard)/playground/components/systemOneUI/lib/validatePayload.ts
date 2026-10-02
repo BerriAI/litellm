@@ -1,4 +1,4 @@
-import { systemOneRequestSchema, type SystemOneRequest } from "./system_one_schemas";
+import { systemOneRequestSchema, type SystemOneRequest } from "./schemas";
 
 const RECOMMENDED_MAX_SCORE_LEVELS = 10;
 

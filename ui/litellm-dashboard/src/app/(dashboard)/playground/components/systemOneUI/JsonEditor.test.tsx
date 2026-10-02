@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import SystemOneJsonEditor from "./SystemOneJsonEditor";
-import { validateSystemOnePayload } from "./validate_system_one_payload";
+import JsonEditor from "./JsonEditor";
+import { validateSystemOnePayload } from "./lib/validatePayload";
 
 const validPayload = JSON.stringify(
   { state: "Hi", questions: { escalate: { type: "noul", instructions: "Escalate?" } } },
@@ -9,15 +9,9 @@ const validPayload = JSON.stringify(
   2,
 );
 
-describe("SystemOneJsonEditor", () => {
+describe("JsonEditor", () => {
   it("marks a valid payload as ready to send and counts its lines", () => {
-    render(
-      <SystemOneJsonEditor
-        value={validPayload}
-        onChange={vi.fn()}
-        validation={validateSystemOnePayload(validPayload)}
-      />,
-    );
+    render(<JsonEditor value={validPayload} onChange={vi.fn()} validation={validateSystemOnePayload(validPayload)} />);
 
     expect(screen.getByText("Valid payload")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Ready to send");
@@ -33,7 +27,7 @@ describe("SystemOneJsonEditor", () => {
         urgency: { type: "score", instructions: "Rate", criteria: ["Low"] },
       },
     });
-    render(<SystemOneJsonEditor value={payload} onChange={vi.fn()} validation={validateSystemOnePayload(payload)} />);
+    render(<JsonEditor value={payload} onChange={vi.fn()} validation={validateSystemOnePayload(payload)} />);
 
     expect(screen.getByText("2 issues")).toBeInTheDocument();
     const issues = screen.getByRole("list", { name: "Payload validation issues" });
@@ -47,7 +41,7 @@ describe("SystemOneJsonEditor", () => {
       state: "Hi",
       questions: { urgency: { type: "score", instructions: "Rate", criteria: Array.from({ length: 11 }, () => "L") } },
     });
-    render(<SystemOneJsonEditor value={payload} onChange={vi.fn()} validation={validateSystemOnePayload(payload)} />);
+    render(<JsonEditor value={payload} onChange={vi.fn()} validation={validateSystemOnePayload(payload)} />);
 
     expect(screen.getByText("Valid payload")).toBeInTheDocument();
     expect(screen.getByRole("list", { name: "Payload validation issues" })).toHaveTextContent(
@@ -57,7 +51,7 @@ describe("SystemOneJsonEditor", () => {
 
   it("numbers every line, including a trailing empty one, so wrapped lines keep their number", () => {
     const value = `${validPayload}\n`;
-    render(<SystemOneJsonEditor value={value} onChange={vi.fn()} validation={validateSystemOnePayload(value)} />);
+    render(<JsonEditor value={value} onChange={vi.fn()} validation={validateSystemOnePayload(value)} />);
 
     const lineCount = value.split("\n").length;
     expect(screen.getByText(`${lineCount} lines`)).toBeInTheDocument();
@@ -67,13 +61,7 @@ describe("SystemOneJsonEditor", () => {
 
   it("reports edits to the caller", () => {
     const onChange = vi.fn();
-    render(
-      <SystemOneJsonEditor
-        value={validPayload}
-        onChange={onChange}
-        validation={validateSystemOnePayload(validPayload)}
-      />,
-    );
+    render(<JsonEditor value={validPayload} onChange={onChange} validation={validateSystemOnePayload(validPayload)} />);
 
     fireEvent.change(screen.getByRole("textbox", { name: "System One JSON payload" }), { target: { value: "{}" } });
 

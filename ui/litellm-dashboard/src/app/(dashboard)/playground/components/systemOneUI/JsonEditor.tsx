@@ -5,8 +5,8 @@ import { useId, useMemo, useRef } from "react";
 import { createElement, PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import type { SyntaxHighlighterProps } from "react-syntax-highlighter";
 import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
-import { findRootBlocks, ROOT_BLOCK_STYLES, type RootBlock } from "./json_root_blocks";
-import type { SystemOnePayloadValidation } from "./validate_system_one_payload";
+import { findRootBlocks, ROOT_BLOCK_STYLES, type RootBlock } from "./lib/rootBlocks";
+import type { SystemOnePayloadValidation } from "./lib/validatePayload";
 
 SyntaxHighlighter.registerLanguage("json", json);
 
@@ -25,7 +25,7 @@ const TOKEN_COLORS = [
   "[&_.token.punctuation]:text-muted-foreground [&_.token.operator]:text-muted-foreground",
 ].join(" ");
 
-interface SystemOneJsonEditorProps {
+interface JsonEditorProps {
   value: string;
   onChange: (value: string) => void;
   validation: SystemOnePayloadValidation;
@@ -98,7 +98,7 @@ function renderLines(rootBlocks: readonly RootBlock[]) {
   };
 }
 
-export default function SystemOneJsonEditor({ value, onChange, validation }: SystemOneJsonEditorProps) {
+export default function JsonEditor({ value, onChange, validation }: JsonEditorProps) {
   const issuesId = useId();
   const highlightRef = useRef<HTMLDivElement>(null);
   const renderer = useMemo(() => renderLines(findRootBlocks(value)), [value]);

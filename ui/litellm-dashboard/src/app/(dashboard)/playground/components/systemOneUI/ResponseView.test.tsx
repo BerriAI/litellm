@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import SystemOneResponseView from "./SystemOneResponseView";
-import type { SystemOneResponse } from "./system_one_schemas";
+import ResponseView from "./ResponseView";
+import type { SystemOneResponse } from "./lib/schemas";
 
 const sampleResponse: SystemOneResponse = {
   model: "jev-1.13.0",
@@ -24,9 +24,9 @@ const sampleResponse: SystemOneResponse = {
   usage: { input_tokens: 378, output_tokens: 63 },
 };
 
-describe("SystemOneResponseView", () => {
+describe("ResponseView", () => {
   it("renders calibrated probabilities for choice, noul, and score answers", () => {
-    render(<SystemOneResponseView response={sampleResponse} isLoading={false} latencyMs={120} />);
+    render(<ResponseView response={sampleResponse} isLoading={false} latencyMs={120} />);
 
     expect(screen.getAllByText("technical")).toHaveLength(2);
     const meters = screen.getAllByRole("meter");
@@ -52,7 +52,7 @@ describe("SystemOneResponseView", () => {
         severity: { type: "score", score: 2.39, probabilities: { "1": 0, "2": 0.62, "3": 0.38 } },
       },
     };
-    render(<SystemOneResponseView response={fractional} isLoading={false} />);
+    render(<ResponseView response={fractional} isLoading={false} />);
 
     expect(screen.getByRole("meter", { name: "2 probability" })).toHaveAttribute("aria-valuetext", "62%, selected");
     expect(screen.getByRole("meter", { name: "3 probability" })).toHaveAttribute("aria-valuetext", "38%");
@@ -60,7 +60,7 @@ describe("SystemOneResponseView", () => {
   });
 
   it("shows an inline error message", () => {
-    render(<SystemOneResponseView error="Upstream request failed" isLoading={false} />);
+    render(<ResponseView error="Upstream request failed" isLoading={false} />);
 
     expect(screen.getByRole("alert")).toHaveTextContent("Upstream request failed");
   });

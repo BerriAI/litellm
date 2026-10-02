@@ -5,9 +5,9 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronDown, LoaderCircle } from "lucide-react";
 import { useState } from "react";
-import type { SystemOneAnswer, SystemOneResponse } from "./system_one_schemas";
+import type { SystemOneAnswer, SystemOneResponse } from "./lib/schemas";
 
-interface SystemOneResponseViewProps {
+interface ResponseViewProps {
   response?: SystemOneResponse;
   fallbackModel?: string;
   latencyMs?: number;
@@ -107,13 +107,7 @@ function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
   );
 }
 
-export default function SystemOneResponseView({
-  response,
-  fallbackModel,
-  latencyMs,
-  error,
-  isLoading,
-}: SystemOneResponseViewProps) {
+export default function ResponseView({ response, fallbackModel, latencyMs, error, isLoading }: ResponseViewProps) {
   const [showRaw, setShowRaw] = useState(false);
 
   if (isLoading) {

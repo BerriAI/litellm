@@ -5,7 +5,7 @@ import {
   systemOneResponseSchema,
   type SystemOneRequest,
   type SystemOneResponse,
-} from "../components/systemOneUI/system_one_schemas";
+} from "../components/systemOneUI/lib/schemas";
 
 export interface SystemOneResult {
   response: SystemOneResponse;

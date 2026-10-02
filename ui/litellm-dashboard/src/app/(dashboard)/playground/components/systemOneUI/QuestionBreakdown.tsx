@@ -1,8 +1,8 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/cva.config";
-import { ROOT_BLOCK_STYLES } from "./json_root_blocks";
-import type { SystemOneQuestion, SystemOneRequest } from "./system_one_schemas";
+import { ROOT_BLOCK_STYLES } from "./lib/rootBlocks";
+import type { SystemOneQuestion, SystemOneRequest } from "./lib/schemas";
 
 function formatState(state: unknown): string {
   if (typeof state === "string") {
@@ -55,7 +55,7 @@ function QuestionCriteria({ question }: { question: SystemOneQuestion }) {
   );
 }
 
-export default function SystemOneQuestionBreakdown({ payload }: { payload?: SystemOneRequest }) {
+export default function QuestionBreakdown({ payload }: { payload?: SystemOneRequest }) {
   if (!payload) {
     return (
       <Card>

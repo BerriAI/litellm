@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { SYSTEM_ONE_EXAMPLE } from "./system_one_example";
-import { validateSystemOnePayload } from "./validate_system_one_payload";
+import { SYSTEM_ONE_EXAMPLE } from "./example";
+import { validateSystemOnePayload } from "./validatePayload";
 
 const requestWith = (fields: Record<string, unknown> = {}) =>
   JSON.stringify({

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findRootBlocks } from "./json_root_blocks";
+import { findRootBlocks } from "./rootBlocks";
 
 describe("findRootBlocks", () => {
   it("maps each top-level request key to the lines its value spans", () => {

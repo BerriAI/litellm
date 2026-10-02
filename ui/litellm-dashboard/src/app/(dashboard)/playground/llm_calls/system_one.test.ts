@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeSystemOneRequest } from "./system_one";
-import type { SystemOneRequest, SystemOneResponse } from "../components/systemOneUI/system_one_schemas";
+import type { SystemOneRequest, SystemOneResponse } from "../components/systemOneUI/lib/schemas";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "https://proxy.example.com"),

@@ -1,4 +1,4 @@
-import type { SystemOneRequest } from "./system_one_schemas";
+import type { SystemOneRequest } from "./schemas";
 
 export const SYSTEM_ONE_EXAMPLE: SystemOneRequest = {
   model: "jev-latest",

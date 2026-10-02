@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SystemOneUI from "./SystemOneUI";
-import type { SystemOneResponse } from "./system_one_schemas";
+import type { SystemOneResponse } from "./lib/schemas";
 
 const responseBody: SystemOneResponse = {
   model: "jev-1.13.0",
