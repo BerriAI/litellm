@@ -549,7 +549,7 @@ def _will_bridge_to_chat_completions(
 
 @contextmanager
 def _prompt_management_sees_a_provisional_message_list(
-    kwargs: dict[str, Any],  # mutable-ok: the signal is read and popped out of the caller's own kwargs
+    kwargs: dict[str, object],  # mutable-ok: the signal is read and popped out of the caller's own kwargs
     bridged: bool,
 ) -> Generator[None, None]:
     """Tell the cache-control hook that this layer's messages are not the ones sent upstream.
@@ -981,7 +981,7 @@ def _responses_try_dispatch_mcp_gateway(
     background: bool | None,
     stream: bool | None,
     temperature: float | None,
-    text: Any,
+    text: Optional["ResponseText"],
     tool_choice: ToolChoice | None,
     top_p: float | None,
     truncation: Literal["auto", "disabled"] | None,
@@ -1054,7 +1054,7 @@ def _responses_try_dispatch_emulated_file_search(
     background: bool | None,
     stream: bool | None,
     temperature: float | None,
-    text: Any,
+    text: Optional["ResponseText"],
     tool_choice: ToolChoice | None,
     top_p: float | None,
     truncation: Literal["auto", "disabled"] | None,
@@ -1324,9 +1324,7 @@ def responses(
         )
         response_api_optional_params: Final[ResponsesAPIOptionalRequestParams] = (
             ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
-                {  # mutable-ok: callee pops keys off the dict it is given
-                    k: v for k, v in {**local_vars, "reasoning": request_reasoning}.items() if k != "reasoning_effort"
-                }
+                {k: v for k, v in {**local_vars, "reasoning": request_reasoning}.items() if k != "reasoning_effort"}
             )
         )
 

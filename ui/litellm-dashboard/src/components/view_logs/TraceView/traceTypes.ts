@@ -1,0 +1,31 @@
+import type { components, paths } from "@/lib/http/schema";
+
+export type Trace = paths["/v1/traces/{trace_id}"]["get"]["responses"][200]["content"]["application/json"];
+export type TracePage = paths["/v1/traces"]["get"]["responses"][200]["content"]["application/json"];
+export type SpanErrorPage =
+  paths["/v1/traces/{trace_id}/spans/{span_id}/error"]["get"]["responses"][200]["content"]["application/json"];
+type ApiSpanDetail =
+  paths["/v1/traces/{trace_id}/spans/{span_id}"]["get"]["responses"][200]["content"]["application/json"];
+export type Span = Trace["spans"][number];
+export type SpanType = Span["type"];
+export type SpanStatus = Span["status"];
+export type AgentNode = Trace["agents"][number];
+export type TraceSummary = Trace["summary"];
+export type SpanDetail = Omit<ApiSpanDetail, "input_ui" | "output_ui"> &
+  Partial<Pick<ApiSpanDetail, "input_ui" | "output_ui">>;
+export type UIToolCall = components["schemas"]["UIToolCall"];
+export type UIMessage = components["schemas"]["UIMessage"];
+export type UIField = components["schemas"]["UIField"];
+export type UIContent = ApiSpanDetail["input_ui"];
+
+export interface TraceToolCall {
+  name: string;
+  args: unknown;
+}
+
+export interface TraceMessage {
+  role: string;
+  content: string;
+  name?: string;
+  tool_calls?: TraceToolCall[];
+}

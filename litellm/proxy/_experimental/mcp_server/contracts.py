@@ -5,6 +5,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Protocol
 
+from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -13,7 +14,7 @@ def copy_caller(auth: UserAPIKeyAuth | None) -> UserAPIKeyAuth | None:
     if auth is None:
         return None
     span: Final = auth.parent_otel_span
-    return deepcopy(auth, {id(span): span} if span is not None else None)  # mutable-ok: deepcopy mutates its memo
+    return deepcopy(auth, {id(span): span} if span is not None else None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +27,8 @@ class OperationContext:
     raw_headers: Mapping[str, str] | None = field(default=None, repr=False)
     client_ip: str | None = None
     mcp_proxy_mode: bool = False
+    wire_compat: WireCompat = WireCompat.LEGACY
+    protocol_version: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_caller", copy_caller(self._caller))
@@ -66,12 +69,12 @@ class OperationContext:
         return (
             self.user_api_key_auth,
             self.mcp_auth_header,
-            list(self.mcp_servers) if self.mcp_servers is not None else None,  # mutable-ok: legacy policy list input
+            list(self.mcp_servers) if self.mcp_servers is not None else None,
             {key: dict(value) for key, value in self.mcp_server_auth_headers.items()}
             if self.mcp_server_auth_headers is not None
             else None,
             dict(self.oauth2_headers) if self.oauth2_headers is not None else None,
-            dict(self.raw_headers) if self.raw_headers is not None else None,  # mutable-ok: legacy request header input
+            dict(self.raw_headers) if self.raw_headers is not None else None,
             self.client_ip,
         )
 

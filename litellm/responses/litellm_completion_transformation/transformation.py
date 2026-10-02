@@ -178,7 +178,7 @@ class _ToolFunctionDefinition(TypedDict, total=False):
 
 def _attribute_fields(value: object) -> dict[str, object]:
     if not hasattr(value, "__dict__"):
-        return {}  # mutable-ok: provider_specific_fields payload
+        return {}
     return dict(cast("Iterable[tuple[str, object]]", value))  # cast-ok: dict() raises on non-pair values, as before
 
 
@@ -742,9 +742,7 @@ class LiteLLMCompletionResponsesConfig:
         if reasoning_text:
             message["reasoning_content"] = reasoning_text
         if thinking_blocks:
-            message["thinking_blocks"] = list(  # mutable-ok: thinking_blocks is a list on the message contract
-                thinking_blocks
-            )
+            message["thinking_blocks"] = list(thinking_blocks)
         return message
 
     @staticmethod
@@ -827,9 +825,7 @@ class LiteLLMCompletionResponsesConfig:
                 else:
                     setattr(msg, "reasoning_content", combined)  # noqa: B010  # attribute name is fixed, not dynamic
             if pending_blocks:
-                replayed: Final = list(  # mutable-ok: thinking_blocks is a list on the message contract
-                    pending_blocks + (_thinking_blocks(msg) or ())
-                )
+                replayed: Final = list(pending_blocks + (_thinking_blocks(msg) or ()))
                 if isinstance(msg, dict):
                     cast(dict[str, object], msg)["thinking_blocks"] = replayed  # cast-ok: mutable reasoning carrier
                 else:
@@ -842,13 +838,13 @@ class LiteLLMCompletionResponsesConfig:
             | GenericChatCompletionMessage
             | ChatCompletionMessageToolCall
             | ChatCompletionResponseMessage
-        ] = []  # mutable-ok: accumulator
+        ] = []
         pending: list[  # mutable-ok: accumulator  # rebind-ok: accumulator
             tuple[
                 str | None,
                 tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...] | None,
             ]
-        ] = []  # mutable-ok: accumulator
+        ] = []
 
         for msg in messages:
             if (
@@ -862,20 +858,16 @@ class LiteLLMCompletionResponsesConfig:
 
             if pending and _role(msg) == "assistant":
                 _apply_pending(msg, pending)
-                pending = []  # mutable-ok: reset accumulator
+                pending = []
             elif pending:
                 # Not followed by an assistant message — keep the reasoning
                 # standalone instead of dropping it.
-                merged.extend(
-                    [_standalone(text, blocks) for text, blocks in pending]  # mutable-ok: append reasoning messages
-                )
-                pending = []  # mutable-ok: reset accumulator
+                merged.extend([_standalone(text, blocks) for text, blocks in pending])
+                pending = []
 
             merged.append(msg)
 
-        merged.extend(
-            [_standalone(text, blocks) for text, blocks in pending]  # mutable-ok: append trailing reasoning
-        )
+        merged.extend([_standalone(text, blocks) for text, blocks in pending])
 
         return merged
 
@@ -911,7 +903,7 @@ class LiteLLMCompletionResponsesConfig:
         content: Final = (
             new_content
             if not previous_content
-            else [  # mutable-ok: outbound chat content uses JSON arrays
+            else [
                 block
                 for value in (previous_content, new_content)
                 for block in (
@@ -921,7 +913,7 @@ class LiteLLMCompletionResponsesConfig:
                 )
             ]
         )
-        merged: Final = {  # mutable-ok: json.dumps rejects MappingProxyType in outbound chat messages
+        merged: Final = {
             **last_message,
             "content": content,
         }
@@ -1352,7 +1344,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         if input_item.get("type") == "web_search_call":
             search: Final = ResponseFunctionWebSearch.model_validate(input_item)
-            return [  # mutable-ok: input conversion returns chat message lists
+            return [
                 GenericChatCompletionMessage(
                     role="assistant",
                     content="Hosted web search: " + search.model_dump_json(exclude_none=True),
@@ -1392,8 +1384,8 @@ class LiteLLMCompletionResponsesConfig:
                     or input_item.get("content")
                 )
                 if inspectable is None:
-                    return []  # mutable-ok: empty drop result
-                return [  # mutable-ok: single message result
+                    return []
+                return [
                     GenericChatCompletionMessage(
                         role=_input_item_role(input_item),
                         content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
@@ -1408,8 +1400,8 @@ class LiteLLMCompletionResponsesConfig:
                 input_item
             )
             if not reasoning_text and not thinking_blocks:
-                return []  # mutable-ok: empty drop result
-            return [  # mutable-ok: single message result
+                return []
+            return [
                 LiteLLMCompletionResponsesConfig._reasoning_only_assistant_message(
                     reasoning_text=reasoning_text,
                     thinking_blocks=thinking_blocks,
@@ -1925,9 +1917,7 @@ class LiteLLMCompletionResponsesConfig:
         function: Final = ChatCompletionToolParamFunctionChunk(
             name=chat_tool_name,
             description=description,
-            parameters=dict(  # mutable-ok: json.dumps rejects MappingProxyType in the outbound payload
-                normalized_parameters
-            ),
+            parameters=dict(normalized_parameters),
             strict=bool(namespace_tool.get("strict", False)),
         )
         allowed_callers: Final = validated_allowed_callers(namespace_tool.get("allowed_callers"))
@@ -2004,11 +1994,7 @@ class LiteLLMCompletionResponsesConfig:
         if tool_type == "function":
             typed_tool: Final = cast(FunctionToolParam, tool)
             raw_parameters: Final = typed_tool.get("parameters", {}) or {}
-            parameters: Final = (
-                {**raw_parameters}  # mutable-ok: json.dumps rejects MappingProxyType
-                if "type" in raw_parameters
-                else {**raw_parameters, "type": "object"}  # mutable-ok: json.dumps rejects MappingProxyType
-            )
+            parameters: Final = {**raw_parameters} if "type" in raw_parameters else {**raw_parameters, "type": "object"}
             chat_completion_tool: Final[dict[str, object]] = {
                 "type": "function",
                 "function": {
@@ -2182,7 +2168,7 @@ class LiteLLMCompletionResponsesConfig:
         )
         responses_tools: Final[
             list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem]
-        ] = []  # mutable-ok: preserves provider tool-call order
+        ] = []
         for tool in all_chat_completion_tools:
             if tool.type == "function":
                 function_definition = tool.function
@@ -2254,7 +2240,7 @@ class LiteLLMCompletionResponsesConfig:
     ) -> Mapping[str, ResponseFunctionWebSearch]:
         calls: Final[dict[str, ResponseFunctionWebSearch]] = {}  # mutable-ok: indexes provider-built calls
         for choice in chat_completion_response.choices:
-            provider_fields = getattr(choice.message, "provider_specific_fields", None)
+            provider_fields = choice.message.provider_specific_fields
             if not isinstance(provider_fields, Mapping):
                 continue
             web_search_calls = provider_fields.get("web_search_calls")

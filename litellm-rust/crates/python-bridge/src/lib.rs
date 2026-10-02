@@ -1,11 +1,15 @@
 mod cache;
+mod callable;
 mod coercion;
 mod credentials;
 mod diagnostics;
 mod errors;
+mod execution;
 mod http;
+mod lifecycle;
 mod logger;
 mod marshal;
+mod preflight;
 mod python_settings;
 mod routes;
 mod secrets;
@@ -13,7 +17,7 @@ mod tokenizer;
 
 #[pymodule(gil_used = true)]
 mod _native {
-    use crate::cache::{CacheResolver, CacheTestHandle, ResolvedCache};
+    use crate::cache::ResolvedCache;
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -27,18 +31,23 @@ mod _native {
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
     use crate::routes::chat_completions::{
-        achat_completions, acompletion, chat_completions, chat_completions_decline, completion,
+        achat_completions, acompletion, chat_completions, completion,
     };
     #[pymodule_export]
     use crate::routes::embeddings::{aembedding, embedding};
     #[pymodule_export]
     use crate::routes::messages::{amessages, messages};
     #[pymodule_export]
-    use crate::routes::ocr::{aocr, ocr};
+    use crate::routes::ocr::{aocr, ocr, ocr_health_check_document, ocr_passthrough_response};
     #[pymodule_export]
     use crate::routes::responses::{ResponsesWebSocketConnection, aresponses, responses};
     #[pymodule_export]
     use crate::routes::token_counter::TokenCounter;
+    #[pymodule_export]
+    use crate::routes::traces::{
+        NativeTraceStorage, trace_decode_otlp, trace_encode_error,
+        trace_normalized_field_definitions,
+    };
     #[cfg(feature = "huggingface")]
     #[pymodule_export]
     use crate::tokenizer::HuggingFaceEncoding;
@@ -52,9 +61,10 @@ mod _native {
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         let py = module.py();
         let dict = module.dict();
-        dict.set_item("_CacheTestHandle", py.get_type::<CacheTestHandle>())?;
-        dict.set_item("_CacheResolver", py.get_type::<CacheResolver>())?;
-        dict.set_item("_CacheTestResolver", py.get_type::<CacheResolver>())?;
+        dict.set_item(
+            "NativeCacheHandle",
+            py.get_type::<crate::cache::NativeCacheHandle>(),
+        )?;
         dict.set_item("_ResponseCacheRuntime", py.get_type::<ResolvedCache>())?;
         dict.set_item(
             "_SecretManagerRuntime",
@@ -74,24 +84,26 @@ pub(crate) fn native_module(py: Python<'_>) -> Bound<'_, PyModule> {
 mod tests {
     use super::*;
 
-    #[test]
+    #[rstest::rstest]
     fn module_registration_preserves_the_public_surface() {
         Python::initialize();
         Python::attach(|py| {
             let mut expected = vec![
+                "NativeCacheHandle",
                 "RustBridgeDeclined",
                 "RustUpstreamError",
                 "ForkedAfterNativeRuntimeStarted",
                 "ProcessReservedForForking",
                 "ocr",
                 "aocr",
+                "ocr_health_check_document",
+                "ocr_passthrough_response",
                 "embedding",
                 "aembedding",
                 "transcription",
                 "atranscription",
                 "messages",
                 "amessages",
-                "chat_completions_decline",
                 "chat_completions",
                 "achat_completions",
                 "completion",
@@ -100,6 +112,10 @@ mod tests {
                 "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
+                "NativeTraceStorage",
+                "trace_decode_otlp",
+                "trace_encode_error",
+                "trace_normalized_field_definitions",
                 "TokenCounter",
                 "Tokenizer",
                 "gil_stats",

@@ -13,6 +13,7 @@ from typing_extensions import ReadOnly, Required, assert_never
 
 import litellm
 from litellm.llms.litellm_proxy.skills.skill_search import DEFAULT_SKILL_SEARCH_TOP_K
+from litellm.proxy._experimental.mcp_server.result_conversion import WireCompat, complete_call_tool_result
 from litellm.proxy.agent_endpoints.agent_search import DEFAULT_AGENT_SEARCH_TOP_K
 from litellm.proxy.common_utils.semantic_text_index import (
     Embedder,
@@ -120,22 +121,19 @@ _MCP_PROXY_IDENTITY_META_KEY: Final[str] = "litellm.ai/proxy_tool_identity"
 
 def with_mcp_proxy_identity(tool: Tool, server_id: str) -> Tool:
     identity: Final[MCPProxyToolIdentity] = {"server_id": server_id, "tool_name": tool.name}
-    return tool.model_copy(
-        update={  # mutable-ok: Pydantic update payload
-            "meta": {**(tool.meta or {}), _MCP_PROXY_IDENTITY_META_KEY: identity}  # mutable-ok: metadata mapping
-        }
-    )
+    return tool.model_copy(update={"meta": {**(tool.meta or {}), _MCP_PROXY_IDENTITY_META_KEY: identity}})
 
 
 def _mcp_proxy_identity(tool: Tool) -> MCPProxyToolIdentity:
-    identity: Final = (tool.meta or {}).get(_MCP_PROXY_IDENTITY_META_KEY)  # mutable-ok: absent metadata default
+    identity: Final = None if tool.meta is None else tool.meta.get(_MCP_PROXY_IDENTITY_META_KEY)
     if not isinstance(identity, Mapping):
         raise TypeError("MCP proxy tool identity is missing")
     server_id: Final = identity.get("server_id")
     tool_name: Final = identity.get("tool_name")
     if not isinstance(server_id, str) or not isinstance(tool_name, str):
         raise TypeError("MCP proxy tool identity is invalid")
-    return {"server_id": server_id, "tool_name": tool_name}  # mutable-ok: TypedDict identity payload
+    resolved: Final[MCPProxyToolIdentity] = {"server_id": server_id, "tool_name": tool_name}
+    return resolved
 
 
 def mcp_proxy_tool_id(tool: Tool) -> str:
@@ -149,7 +147,7 @@ def _proxy_search_result(hit: MCPToolSearchHit) -> MCPProxySearchResult:
         "name": hit.tool.name,
         "description": hit.tool.description or "",
     }
-    return {**base, "score": hit.score} if hit.score is not None else base  # mutable-ok: wire result payload
+    return {**base, "score": hit.score} if hit.score is not None else base
 
 
 def _proxy_schema_result(tool: Tool) -> MCPProxySchemaResult:
@@ -161,7 +159,7 @@ def _proxy_schema_result(tool: Tool) -> MCPProxySchemaResult:
     }
     if tool.output_schema is None:
         return base
-    return {**base, "outputSchema": tool.output_schema}  # mutable-ok: wire schema payload
+    return {**base, "outputSchema": tool.output_schema}
 
 
 def _tool_text(tool: Tool) -> str:
@@ -261,7 +259,7 @@ class VirtualToolDefinition(TypedDict):
 
 
 def _json_array(*items: str) -> Sequence[str]:
-    return list(items)  # mutable-ok: jsonschema's metaschema only accepts a JSON array for required
+    return list(items)
 
 
 _MCP_TOOL_SEARCH_DEFINITION: Final[VirtualToolDefinition] = {
@@ -380,7 +378,7 @@ def _text_tool_result(text: str, is_error: bool) -> CallToolResult:
     from mcp.types import CallToolResult, TextContent
 
     return CallToolResult(
-        content=[TextContent(type="text", text=text)],  # mutable-ok: CallToolResult accepts only list content
+        content=[TextContent(type="text", text=text)],
         is_error=is_error,
     )
 
@@ -533,7 +531,7 @@ async def handle_mcp_proxy_tool(
         raw_headers=raw_headers,
         mcp_proxy_mode=True,
     )
-    tools_by_id: Final = {mcp_proxy_tool_id(tool): tool for tool in listing.tools}  # mutable-ok: lookup index
+    tools_by_id: Final = {mcp_proxy_tool_id(tool): tool for tool in listing.tools}
 
     if name == MCP_PROXY_SEARCH_TOOL_NAME:
         llm_router: Final = proxy_server.llm_router
@@ -570,7 +568,7 @@ async def handle_mcp_proxy_tool(
     if name != MCP_PROXY_CALL_TOOL_NAME:
         raise HTTPException(status_code=400, detail=f"Unknown MCP proxy tool: {name}")
 
-    tool_arguments: Final = arguments.get("arguments", {})  # mutable-ok: JSON Schema validator consumes mapping
+    tool_arguments: Final = arguments.get("arguments", {})
     if not isinstance(tool_arguments, dict):
         return _text_tool_result("arguments must be an object", is_error=True)
     try:
@@ -633,7 +631,7 @@ async def handle_mcp_tool_call(
 
         raise HTTPException(status_code=403, detail="User not allowed to call this tool.")
 
-    return await execute_mcp_tool(
+    result: Final = await execute_mcp_tool(
         name=tool_name,
         arguments=arguments,
         allowed_mcp_servers=allowed_mcp_servers,
@@ -648,3 +646,4 @@ async def handle_mcp_tool_call(
         requested_server_id=requested_server_id,
         guardrail_context=guardrail_context,
     )
+    return complete_call_tool_result(result, WireCompat.LEGACY)

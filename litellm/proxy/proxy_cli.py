@@ -211,6 +211,25 @@ class ProxyInitializationHelpers:
         print(json.dumps(response.json(), indent=4))
 
     @staticmethod
+    def _run_config_validation(config: str | None) -> None:
+        if config is None:
+            raise click.UsageError("--validate_config requires --config <path>")
+        import asyncio
+
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        async def _load() -> int:
+            _, model_list, _ = await ProxyConfig().load_config(router=None, config_file_path=config)
+            return len(model_list)
+
+        try:
+            model_count: Final = asyncio.run(_load())
+        except Exception as error:
+            click.echo(f"LiteLLM: config validation failed: {error}", err=True)
+            raise click.exceptions.Exit(1) from error
+        click.echo(f"LiteLLM: config OK ({model_count} models)")
+
+    @staticmethod
     def _run_test_chat_completion(
         host: str,
         port: int,
@@ -888,6 +907,12 @@ class ProxyInitializationHelpers:
     help="Skip starting the server after setup (useful for migrations only)",
 )
 @click.option(
+    "--validate_config",
+    is_flag=True,
+    default=False,
+    help="Load and validate the config file (including mcp_servers) without starting the server, then exit. Exit code 1 on any config error.",
+)
+@click.option(
     "--keepalive_timeout",
     default=None,
     type=int,
@@ -941,8 +966,11 @@ class ProxyInitializationHelpers:
     "--enforce_prisma_migration_check",
     is_flag=True,
     default=False,
-    help="Exit with error if database migration fails on startup.",
-    envvar="ENFORCE_PRISMA_MIGRATION_CHECK",
+    hidden=True,
+    help=(
+        "Deprecated and ignored: the proxy always exits when database setup fails at "
+        "startup. It is still accepted so existing commands keep working."
+    ),
 )
 @click.option(
     "--use_v2_migration_resolver",
@@ -1027,6 +1055,7 @@ def run_server(
     log_config,
     use_prisma_db_push: bool,
     skip_server_startup,
+    validate_config: bool,
     keepalive_timeout,
     timeout_worker_healthcheck,
     max_requests_before_restart,
@@ -1069,6 +1098,15 @@ def run_server(
     if version is True:
         ProxyInitializationHelpers._echo_litellm_version()
         return
+    if validate_config is True:
+        ProxyInitializationHelpers._run_config_validation(config)
+        return
+    if enforce_prisma_migration_check:
+        print(
+            "\033[1;33mLiteLLM Proxy: --enforce_prisma_migration_check is "
+            "deprecated and has no effect, because the proxy always exits "
+            "when database setup fails at startup. You can safely remove it.\033[0m"
+        )
     if model and "ollama" in model and api_base is None:
         ProxyInitializationHelpers._run_ollama_serve()
     if health is True:
@@ -1381,10 +1419,15 @@ def run_server(
                             "LiteLLM versions contend for the same DB.\033[0m"
                         )
                     try:
-                        setup_ok: Final = PrismaManager.setup_database(
+                        migrated: Final = PrismaManager.setup_database(
                             use_migrate=not use_prisma_db_push,
                             use_v2_resolver=use_v2_resolver,
                         )
+                        setup_ok: Final = migrated and (
+                            not skip_server_startup or PrismaManager.build_request_log_indexes()
+                        )
+                        if migrated and not skip_server_startup:
+                            PrismaManager.start_request_log_index_build()
                     except RuntimeError as e:
                         # Raised on unrecoverable migration errors: the v2
                         # resolver's non-idempotent failures and permission
@@ -1397,17 +1440,11 @@ def run_server(
                         )
                         sys.exit(2)
                     if not setup_ok:
-                        if enforce_prisma_migration_check:
-                            print(
-                                "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
-                                "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
-                            )
-                            sys.exit(1)
-                        else:
-                            print(
-                                "\033[1;33mLiteLLM Proxy: Database migration failed but continuing startup. "
-                                "Set --enforce_prisma_migration_check or ENFORCE_PRISMA_MIGRATION_CHECK=true to exit on failure.\033[0m"
-                            )
+                        print(
+                            "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
+                            "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
+                        )
+                        sys.exit(1)
             else:
                 print(
                     "Unable to connect to DB. DATABASE_URL found in environment, but the prisma CLI is neither on "

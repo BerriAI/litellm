@@ -18,6 +18,7 @@ from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
 from sdk_clients import NO_PROXY_CACHE, SdkClients
+from structured_output import SENTIMENT_OUTPUT_FORMAT, SENTIMENT_PROMPT, assert_sentiment_json
 
 pytestmark = pytest.mark.e2e
 
@@ -120,3 +121,17 @@ class TestAzureFoundryMessages:
             event.type == "content_block_start" and event.content_block.type == "tool_use" for event in events
         ), "stream carried no tool_use block"
         assert "message_stop" in event_types, "stream never reached message_stop"
+
+    def test_output_format_returns_schema_json(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model = self._register(proxy, resources)
+        client = sdk.anthropic(resources.key(models=[model]))
+
+        message = client.messages.create(
+            model=model,
+            max_tokens=128,
+            messages=[{"role": "user", "content": SENTIMENT_PROMPT}],
+            extra_body={**NO_PROXY_CACHE, "output_format": SENTIMENT_OUTPUT_FORMAT},
+        )
+        assert_sentiment_json("".join(block.text for block in message.content if block.type == "text"))

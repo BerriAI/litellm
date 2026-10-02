@@ -196,12 +196,14 @@ def _proxy_with_one_seeded_row(
             gateway,
             tmp_path,
             {
+                "DATABASE_URL": os.environ["DATABASE_URL"],
                 "LITELLM_LOG": "DEBUG",
                 "GRACEFUL_SHUTDOWN_TIMEOUT": "1",
                 "SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS": "1",
                 "SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS": str(cancel_timeout_seconds),
             },
             config=_config_with_pool_limit(tmp_path, pool_limit),
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
             workers=workers,
         ) as owned:
             key: Final = string_value(

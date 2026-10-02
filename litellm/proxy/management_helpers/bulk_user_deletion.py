@@ -34,10 +34,8 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
-from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_org_admin_for_team,  # pyright: ignore[reportPrivateUsage]  # same check /team/member_delete uses
-    _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # same check /team/member_delete uses
-)
+from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN
+from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage]  # same audit path /key/delete uses
 )
@@ -137,19 +135,19 @@ def _forbidden(detail: str) -> ManagementProblem:
 
 
 def _in_filter(field: str, values: Iterable[str]) -> Mapping[str, object]:
-    return {field: {"in": sorted(values)}}  # mutable-ok: Prisma query filters are dict-shaped
+    return {field: {"in": sorted(values)}}
 
 
 def _eq_filter(field: str, value: str) -> Mapping[str, object]:
-    return {field: value}  # mutable-ok: Prisma query filters are dict-shaped
+    return {field: value}
 
 
 def _team_users_filter(team_id: str, user_ids: Iterable[str]) -> Mapping[str, object]:
-    return {"team_id": team_id, **_in_filter("user_id", user_ids)}  # mutable-ok: Prisma query filters are dict-shaped
+    return {"team_id": team_id, **_in_filter("user_id", user_ids)}
 
 
 def _any_filter(*clauses: Mapping[str, object]) -> Mapping[str, object]:
-    return {"OR": clauses}  # mutable-ok: Prisma query filters are dict-shaped
+    return {"OR": clauses}
 
 
 def _team_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
@@ -204,7 +202,7 @@ def _error_message(exc: BaseException) -> str:
     if isinstance(exc, HTTPException) and isinstance(exc.detail, dict):
         return str(exc.detail.get("error", exc.detail))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # HTTPException.detail is untyped
     if isinstance(exc, HTTPException):
-        return str(exc.detail)  # pyright: ignore[reportUnknownArgumentType]  # HTTPException.detail is untyped
+        return str(exc.detail)
     return str(exc) or type(exc).__name__
 
 
@@ -324,11 +322,7 @@ async def bulk_remove_team_members(
     if team is None:
         raise _team_not_found(team_id)
 
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team)
-    ):
+    if not await get_team_access().allows(user_api_key_dict, team, TEAM_OR_ORG_ADMIN):
         raise _forbidden(
             "Call not allowed. User not proxy admin OR team admin OR org admin for this team. "
             f"route='/management/v1/teams/{team_id}/members/bulk_delete'"

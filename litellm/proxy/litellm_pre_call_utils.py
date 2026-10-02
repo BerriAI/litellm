@@ -7,7 +7,7 @@ from collections import OrderedDict
 from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from fastapi import HTTPException, Request
 from pydantic import TypeAdapter
@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.url_utils import (
     is_url_destination_allowed_by_host,
     provider_url_destination_candidates,
 )
+from litellm.llms.anthropic.common_utils import ANTHROPIC_OAUTH_FORWARD_PROVIDERS
 from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
@@ -196,6 +197,9 @@ from litellm.types.utils import (
     SupportedCacheControls,
 )
 
+_CALLBACK_CREDENTIAL_KEYS: Final = frozenset(StandardCallbackDynamicParams.__annotations__) | frozenset(
+    {TRUSTED_CALLBACK_VARS_FIELD}
+)
 service_logger_obj: Final = ServiceLogging()  # used for tracking latency on OTEL
 # Bounded dedup for stale-alias warnings (FIFO eviction when over cap).
 _MAX_STALE_ALIAS_WARNING_KEYS: Final = 10_000
@@ -645,11 +649,14 @@ def _get_metadata_variable_name(request: Request) -> str:
     # Inline imports — auth_utils/route_checks participate in a proxy import cycle.
     from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
 
-    path: Final = get_request_route(request)
-    if "thread" in path or "assistant" in path:
+    return metadata_variable_name_for_route(get_request_route(request))
+
+
+def metadata_variable_name_for_route(route: str) -> Literal["metadata", "litellm_metadata"]:
+    if "thread" in route or "assistant" in route:
         return "litellm_metadata"
 
-    if any(route in path for route in LITELLM_METADATA_ROUTES):
+    if any(metadata_route in route for metadata_route in LITELLM_METADATA_ROUTES):
         return "litellm_metadata"
 
     return "metadata"
@@ -923,6 +930,8 @@ def convert_key_logging_metadata_to_callback(
         # put newrelic_* under a different callback never asked for New Relic and
         # must not export to it.
         if var.startswith("newrelic_") and data.callback_name != "newrelic":
+            continue
+        if var.startswith("signoz_") and data.callback_name != "signoz":
             continue
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}
@@ -1603,13 +1612,19 @@ class LiteLLMProxyRequestSetup:
         return data
 
     @staticmethod
+    def get_logged_api_key(user_api_key_dict: UserAPIKeyAuth) -> str | None:
+        if user_api_key_dict.is_session_token and user_api_key_dict.key_alias:
+            return user_api_key_dict.key_alias
+        return user_api_key_dict.api_key
+
+    @staticmethod
     def get_sanitized_user_information_from_key(
         user_api_key_dict: UserAPIKeyAuth,
     ) -> StandardLoggingUserAPIKeyMetadata:
         stripped_metadata: Final = strip_callback_config(user_api_key_dict.metadata)
         auth_metadata: Final = cast("dict[str, str] | None", stripped_metadata)  # cast-ok: metadata is free-form JSON
         user_api_key_logged_metadata: Final = StandardLoggingUserAPIKeyMetadata(
-            user_api_key_hash=user_api_key_dict.api_key,  # just the hashed token
+            user_api_key_hash=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
             user_api_key_alias=user_api_key_dict.key_alias,
             user_api_key_spend=user_api_key_dict.spend,
             user_api_key_max_budget=user_api_key_dict.max_budget,
@@ -1647,13 +1662,25 @@ class LiteLLMProxyRequestSetup:
             user_api_key_dict=user_api_key_dict
         )
         data[_metadata_variable_name].update(user_api_key_logged_metadata)
-        data[_metadata_variable_name]["user_api_key"] = user_api_key_dict.api_key  # this is just the hashed token
+        data[_metadata_variable_name]["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
 
         # Key-owned agent_id for spend attribution; keep existing (e.g. from header) if key has none
         _key_agent_id: Final = getattr(user_api_key_dict, "agent_id", None)
         _existing_agent_id: Final = data[_metadata_variable_name].get("agent_id")
         _resolved_agent_id: Final = _key_agent_id or _existing_agent_id
-        data[_metadata_variable_name]["agent_id"] = _resolved_agent_id
+        data[_metadata_variable_name]["agent_id"] = user_api_key_dict.invoked_agent_id or _resolved_agent_id
+        managed_context: Final = user_api_key_dict.managed_agent_context
+        data[_metadata_variable_name].update(
+            MappingProxyType(
+                {
+                    "actor_agent_id": user_api_key_dict.agent_id,
+                    "target_agent_id": user_api_key_dict.invoked_agent_id,
+                    "billing_agent_id": user_api_key_dict.agent_id or user_api_key_dict.invoked_agent_id,
+                    "agent_execution_mode": managed_context.mode if managed_context else None,
+                    "verified_human_user_id": managed_context.user_id if managed_context else None,
+                }
+            )
+        )
 
         data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
             user_api_key_dict, "end_user_max_budget", None
@@ -1950,11 +1977,11 @@ def refresh_proxy_server_request_body_snapshot(
     if not isinstance(proxy_server_request, dict):
         return
     _body_snapshot_exclude: Final = (
-        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj"}) | _TRANSPORT_ONLY_CREDENTIAL_KEYS
+        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj"})
+        | _TRANSPORT_ONLY_CREDENTIAL_KEYS
+        | _CALLBACK_CREDENTIAL_KEYS
     )
-    body: Final = {  # mutable-ok: audit JSON serialization requires a dict with shared nested messages
-        k: v for k, v in data.items() if k not in _body_snapshot_exclude
-    }
+    body: Final = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
     proxy_server_request["body"] = body
     if guardrails_applied and isinstance(logging_obj, Logging):
         metadata: Final = data.get(get_metadata_variable_name_from_kwargs(data))
@@ -2162,7 +2189,9 @@ async def add_litellm_data_to_request(
         data["api_version"] = dynamic_api_version
 
     ## Forward any LLM API Provider specific headers in extra_headers
-    add_provider_specific_headers_to_request(data=data, headers=_headers)
+    data[_metadata_variable_name]["used_client_oauth_token"] = add_provider_specific_headers_to_request(
+        data=data, headers=_headers
+    )
 
     ## Cache Controls
     cache_control_header: Final = _headers.get("Cache-Control", None)
@@ -3454,13 +3483,13 @@ _ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
         LlmProviders.VERTEX_AI.value,
     )
 )
-_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = LlmProviders.ANTHROPIC.value
+_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
 
 
 def add_provider_specific_headers_to_request(
     data: dict,
     headers: dict,
-):
+) -> bool:
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
 
     anthropic_api_headers: Final = {header: headers[header] for header in ANTHROPIC_API_HEADERS if header in headers}
@@ -3481,6 +3510,7 @@ def add_provider_specific_headers_to_request(
 
     if scoped_headers:
         data["provider_specific_header"] = scoped_headers[0] if len(scoped_headers) == 1 else scoped_headers
+    return bool(anthropic_oauth_credential_headers)
 
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):
