@@ -12,7 +12,7 @@ Endpoints for /project operations
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import TypeAdapter
@@ -54,6 +54,15 @@ def _team_table(prisma_client: PrismaClient) -> TableActions["prisma_models.Lite
 
 def _project_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_ProjectTable"]:
     return ProjectRepository(prisma_client).table
+
+
+def _writer_project_table(
+    prisma_client: PrismaClient,
+) -> TableActions["prisma_models.LiteLLM_ProjectTable"]:
+    return cast(  # cast-ok: writer_db exposes generated Prisma tables through a dynamic wrapper
+        "TableActions[prisma_models.LiteLLM_ProjectTable]",
+        prisma_client.writer_db.litellm_projecttable,
+    )
 
 
 def _verification_token_table(
@@ -793,7 +802,7 @@ async def update_project(
         }
 
         if data.team_id is not None:
-            current_project_record: Final = await prisma_client.writer_db.litellm_projecttable.find_unique(
+            current_project_record: Final = await _writer_project_table(prisma_client).find_unique(
                 where={"project_id": data.project_id}
             )
             current_project: Final = (

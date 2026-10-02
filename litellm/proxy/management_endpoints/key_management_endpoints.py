@@ -262,6 +262,15 @@ def _prisma_table(
     )
 
 
+def _writer_project_table(
+    prisma_client: PrismaClient,
+) -> "TableActions[prisma_models.LiteLLM_ProjectTable]":
+    return cast(  # cast-ok: writer_db exposes generated Prisma tables through a dynamic wrapper
+        "TableActions[prisma_models.LiteLLM_ProjectTable]",
+        prisma_client.writer_db.litellm_projecttable,
+    )
+
+
 def _deleted_verification_token_table(
     prisma_client: PrismaClient,
 ) -> "TableActions[prisma_models.LiteLLM_DeletedVerificationToken]":
@@ -1332,7 +1341,8 @@ async def _common_key_generation_helper(
             apply_enterprise_key_management_params,
         )
 
-        data = apply_enterprise_key_management_params(data, team_table)
+        enterprise_data: Final[object] = apply_enterprise_key_management_params(data, team_table)
+        data = GenerateKeyRequest.model_validate(enterprise_data)
     except Exception as e:
         verbose_proxy_logger.debug(
             "litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - %s", e
@@ -1817,9 +1827,7 @@ async def _check_key_project_team(
     key_team_id: str | None,
     prisma_client: PrismaClient,
 ) -> None:
-    project_record: Final = await prisma_client.writer_db.litellm_projecttable.find_unique(
-        where={"project_id": project_id}
-    )
+    project_record: Final = await _writer_project_table(prisma_client).find_unique(where={"project_id": project_id})
     project_obj: Final = (
         LiteLLM_ProjectTable.model_validate(record_to_dict(project_record)) if project_record is not None else None
     )
