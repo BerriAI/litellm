@@ -304,17 +304,9 @@ def test_bad_key_on_the_long_version_model_is_refused_before_any_route(gateway: 
         assert [marker_of(request) for request in received] == [control_marker], _routes(received)
 
 
-@pytest.mark.parametrize(
-    "effort",
-    [
-        pytest.param(7, id="int"),
-        pytest.param(["high"], id="list"),
-        pytest.param("", id="empty"),
-        pytest.param("x" * 5120, id="five_kb"),
-    ],
-)
+@pytest.mark.parametrize("effort", [pytest.param("", id="empty"), pytest.param("x" * 5120, id="five_kb")])
 def test_invalid_reasoning_effort_reaches_the_peer_and_its_400_reaches_the_caller(
-    gateway: Gateway, effort: JsonValue
+    gateway: Gateway, effort: str
 ) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -326,6 +318,36 @@ def test_invalid_reasoning_effort_reaches_the_peer_and_its_400_reaches_the_calle
         request: Final = _only_request(wire, marker)
         assert forwarded_effort(request) == effort, request.body
         _assert_row(_call_id(response), model, "failure")
+
+
+NON_STRING_EFFORTS: Final = (pytest.param(7, id="int"), pytest.param(["high"], id="list"))
+
+
+@pytest.mark.parametrize("effort", NON_STRING_EFFORTS)
+def test_non_string_reasoning_effort_is_refused_before_any_wire_request(gateway: Gateway, effort: JsonValue) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        response: Final = _chat(gateway, model, marker, reasoning_effort=effort)
+        assert response.status_code == 400, response.text
+        message: Final = _error_message(response)
+        assert message.startswith("litellm.UnsupportedParamsError"), response.text
+        assert "reasoning_effort as a string" in message and "drop_params" in message, response.text
+        _assert_row(_call_id(response), model, "failure")
+        assert _routes(wire.drain()) == []
+
+
+@pytest.mark.parametrize("effort", NON_STRING_EFFORTS)
+def test_drop_params_deployment_drops_a_non_string_reasoning_effort(gateway: Gateway, effort: JsonValue) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, drop_params=True)
+        response: Final = _chat(gateway, model, marker, reasoning_effort=effort)
+        assert _content(response) == answer(marker), response.text
+        request: Final = _only_request(wire, marker)
+        assert target_of(request) == NATIVE_TARGET, request.body
+        assert "reasoning_effort" not in _body(request), request.body
+        _assert_row(string_value(_payload(response)["id"]), model, "success")
 
 
 def test_duplicated_reasoning_effort_key_lets_the_last_value_win(gateway: Gateway) -> None:

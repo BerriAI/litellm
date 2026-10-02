@@ -114,6 +114,18 @@ def without_refused_reasoning_effort(model: str, params: Mapping[str, object]) -
     return _without_params(params, frozenset(("reasoning_effort",)))
 
 
+def non_string_reasoning_effort(params: Mapping[str, object]) -> frozenset[str]:
+    """``reasoning_effort`` when the request sends it as anything but a string (an int, a list, an object).
+
+    AWS's Chat Completions endpoint answers such a value with a 400 where Converse silently dropped it, so the
+    native config refuses it before the call, or drops it under ``drop_params`` so AWS applies its default effort.
+    """
+    effort: Final = params.get("reasoning_effort")
+    if effort is None or isinstance(effort, str):
+        return frozenset()
+    return frozenset(("reasoning_effort",))
+
+
 def _held_close_tag_prefix(text: str) -> int:
     return next(
         (
@@ -355,7 +367,17 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             drop_params=drop_params,
             replace_max_completion_tokens_with_max_tokens=replace_max_completion_tokens_with_max_tokens,
         )
+        malformed_effort: Final = non_string_reasoning_effort(non_default_params)
         refused_while_reasoning: Final = chat_completions_params_refused_while_reasoning(model, non_default_params)
+        if malformed_effort and not (litellm.drop_params or drop_params):
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} takes reasoning_effort as a string on Bedrock's Chat Completions endpoint, not "
+                    f"{type(non_default_params['reasoning_effort']).__name__}. Send one of its named efforts, or "
+                    "set `litellm.drop_params = True` to drop it"
+                ),
+                status_code=400,
+            )
         if refused_while_reasoning and not (litellm.drop_params or drop_params):
             raise litellm.utils.UnsupportedParamsError(
                 message=(
@@ -367,7 +389,8 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             )
         return dict(  # mutable-ok: get_optional_params keeps filling this dict
             without_refused_reasoning_effort(
-                model, with_max_completion_tokens(_without_params(mapped, refused_while_reasoning))
+                model,
+                with_max_completion_tokens(_without_params(mapped, refused_while_reasoning | malformed_effort)),
             )
         )
 

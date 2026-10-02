@@ -668,16 +668,35 @@ def test_map_openai_params_keeps_reasoning_effort_low_for_grok():
 
 
 @pytest.mark.parametrize("model", ["us.xai.grok-4.6", "global.openai.gpt-5.6-sol"])
-@pytest.mark.parametrize("reasoning_effort", [["low"], {"effort": "low"}, 5])
-def test_map_openai_params_forwards_a_malformed_reasoning_effort_for_aws_to_refuse(model, reasoning_effort):
+@pytest.mark.parametrize("reasoning_effort", [["low"], {"effort": "low"}, 5], ids=["list", "object", "int"])
+def test_map_openai_params_refuses_a_non_string_reasoning_effort_without_drop_params(model, reasoning_effort):
     cfg = AmazonBedrockRuntimeChatCompletionsConfig()
-    mapped = cfg.map_openai_params(
+    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params") as refused:
+        cfg.map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort, "max_tokens": 64},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+    assert refused.value.status_code == 400
+    assert type(reasoning_effort).__name__ in str(refused.value)
+
+
+@pytest.mark.parametrize("model", ["us.xai.grok-4.6", "global.openai.gpt-5.6-sol"])
+@pytest.mark.parametrize("reasoning_effort", [["low"], {"effort": "low"}, 5], ids=["list", "object", "int"])
+@pytest.mark.parametrize("drop_params_via", ["request", "litellm.drop_params"])
+def test_map_openai_params_drops_a_non_string_reasoning_effort_under_drop_params(
+    monkeypatch, model, reasoning_effort, drop_params_via
+):
+    monkeypatch.setattr(litellm, "drop_params", drop_params_via == "litellm.drop_params")
+    mapped = AmazonBedrockRuntimeChatCompletionsConfig().map_openai_params(
         non_default_params={"reasoning_effort": reasoning_effort, "max_tokens": 64},
         optional_params={},
         model=model,
-        drop_params=False,
+        drop_params=drop_params_via == "request",
     )
-    assert mapped["reasoning_effort"] == reasoning_effort
+    assert "reasoning_effort" not in mapped
+    assert mapped["max_completion_tokens"] == 64
 
 
 def test_map_openai_params_keeps_reasoning_effort_none_for_gpt56():
@@ -750,6 +769,28 @@ def test_refused_params_are_dropped_or_refused_before_reaching_aws(local_cost_ma
 
     assert str(requests[0].url).endswith("/openai/v1/chat/completions")
     assert param.keys().isdisjoint(json.loads(requests[0].content))
+
+
+@pytest.mark.parametrize("reasoning_effort", [3, ["high"]], ids=["int", "list"])
+def test_non_string_reasoning_effort_is_refused_or_dropped_before_reaching_aws(
+    local_cost_map, fake_aws_env, reasoning_effort
+):
+    requests, client = _recording_client(json=_chat_completion_json("ok", "global.openai.gpt-5.6-sol"))
+    request = {
+        "model": "bedrock/global.openai.gpt-5.6-sol",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning_effort": reasoning_effort,
+        "client": client,
+    }
+    with pytest.raises(litellm.UnsupportedParamsError, match="reasoning_effort") as refused:
+        litellm.completion(**request)
+    assert refused.value.status_code == 400
+    assert requests == []
+
+    litellm.completion(**request, drop_params=True)
+
+    assert str(requests[0].url).endswith("/openai/v1/chat/completions")
+    assert "reasoning_effort" not in json.loads(requests[0].content)
 
 
 GPT_PARAMS_TIED_TO_REASONING_OFF = {
