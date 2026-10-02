@@ -1,10 +1,39 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import React from "react";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActivityMetrics, formatKeyLabel, processActivityData, ResponseTimeTooltip } from "./activity_metrics";
 import type { ChartTooltipProps } from "@/components/shared/charts";
 import { Team } from "./key_team_helpers/key_list";
+import type { DailyActivityRequest, ModelTopKeysResponse } from "./UsagePage/dailyActivityApi";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData } from "./UsagePage/types";
+import { modelTopKeysQueryOptions } from "@/app/(dashboard)/hooks/dailyActivity/dailyActivityQueries";
+
+vi.mock("@/components/networking", () => ({
+  dailyActivityModelTopKeysCall: vi.fn(),
+}));
+
+import { dailyActivityModelTopKeysCall } from "@/components/networking";
+
+const mockModelTopKeysCall = vi.mocked(dailyActivityModelTopKeysCall);
+
+const render = (ui: React.ReactElement) => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  return rtlRender(ui, { wrapper });
+};
+
+const topKeysRequest = (entityId?: string): DailyActivityRequest => ({
+  accessToken: "test-token",
+  startTime: new Date(2025, 0, 1),
+  endTime: new Date(2025, 0, 31),
+  entityIds: entityId ? [entityId] : null,
+});
+
+const topKeysQueryFor = (request: DailyActivityRequest) => (model: string) =>
+  modelTopKeysQueryOptions("user", request, model, true);
 
 beforeAll(() => {
   if (typeof window !== "undefined" && !window.ResizeObserver) {
@@ -175,6 +204,10 @@ describe("ActivityMetrics", () => {
     "gpt-4": createMockModelActivityData("GPT-4"),
   };
 
+  beforeEach(() => {
+    mockModelTopKeysCall.mockReset();
+  });
+
   it("should render", () => {
     render(<ActivityMetrics modelMetrics={mockModelMetrics} />);
     expect(screen.getByText("Overall Usage")).toBeInTheDocument();
@@ -243,7 +276,7 @@ describe("ActivityMetrics", () => {
   });
 
   it("only fetches top keys for sections that have been expanded", async () => {
-    const fetchTopApiKeys = vi.fn().mockResolvedValue({
+    mockModelTopKeysCall.mockResolvedValue({
       api_keys: [
         {
           api_key: "key-123",
@@ -258,23 +291,25 @@ describe("ActivityMetrics", () => {
           "gpt-4": { ...mockModelMetrics["gpt-4"], total_spend: 100 },
           "gpt-3.5": { ...GPT_35_MODEL_DATA, total_spend: 10 },
         }}
-        fetchTopApiKeys={fetchTopApiKeys}
+        topKeysQuery={topKeysQueryFor(topKeysRequest())}
       />,
     );
 
     expect(await screen.findAllByText("Test Key")).toHaveLength(1);
-    expect(fetchTopApiKeys).toHaveBeenCalledTimes(1);
-    expect(fetchTopApiKeys).toHaveBeenCalledWith("gpt-4");
+    expect(mockModelTopKeysCall).toHaveBeenCalledTimes(1);
+    expect(mockModelTopKeysCall).toHaveBeenCalledWith("user", expect.anything(), "gpt-4", true, undefined);
 
     fireEvent.click(screen.getAllByText("GPT-3.5")[0]);
 
-    await waitFor(() => expect(fetchTopApiKeys).toHaveBeenCalledWith("gpt-3.5"));
-    expect(await screen.findAllByText("Test Key")).toHaveLength(2);
-    expect(fetchTopApiKeys).toHaveBeenCalledTimes(2);
+    await waitFor(() =>
+      expect(mockModelTopKeysCall).toHaveBeenCalledWith("user", expect.anything(), "gpt-3.5", true, undefined),
+    );
+    await waitFor(() => expect(screen.getAllByText("Test Key")).toHaveLength(2));
+    expect(mockModelTopKeysCall).toHaveBeenCalledTimes(2);
   });
 
   it("renders the keys the model_top_keys route returns", async () => {
-    const fetchTopApiKeys = vi.fn().mockResolvedValue({
+    mockModelTopKeysCall.mockResolvedValue({
       api_keys: [
         {
           api_key: "key-123",
@@ -293,7 +328,7 @@ describe("ActivityMetrics", () => {
         },
       ],
     });
-    render(<ActivityMetrics modelMetrics={mockModelMetrics} fetchTopApiKeys={fetchTopApiKeys} />);
+    render(<ActivityMetrics modelMetrics={mockModelMetrics} topKeysQuery={topKeysQueryFor(topKeysRequest())} />);
 
     expect(await screen.findByText("Top Virtual Keys by Spend")).toBeInTheDocument();
     expect(await screen.findByText("Test Key")).toBeInTheDocument();
@@ -303,46 +338,67 @@ describe("ActivityMetrics", () => {
     expect(screen.queryByText("User: Owner Alias")).not.toBeInTheDocument();
     expect(screen.getByText(/key-789012/)).toBeInTheDocument();
     expect(screen.getByText("User: owner-id-3")).toBeInTheDocument();
-    expect(fetchTopApiKeys).toHaveBeenCalledTimes(1);
+    expect(mockModelTopKeysCall).toHaveBeenCalledTimes(1);
   });
 
-  it("refetches and shows loading again when the fetcher identity changes on an expanded model", async () => {
-    const firstFetch = vi.fn().mockResolvedValue({
-      api_keys: [
-        {
-          api_key: "key-old",
-          metrics: { ...EMPTY_SPEND_METRICS, spend: 10, api_requests: 5, total_tokens: 100 },
-          metadata: { key_alias: "Old Scope Key", team_id: null },
-        },
-      ],
-    });
-    const secondFetch = vi.fn().mockResolvedValue({
-      api_keys: [
-        {
-          api_key: "key-new",
-          metrics: { ...EMPTY_SPEND_METRICS, spend: 20, api_requests: 7, total_tokens: 200 },
-          metadata: { key_alias: "New Scope Key", team_id: null },
-        },
-      ],
-    });
-    const { rerender } = render(<ActivityMetrics modelMetrics={mockModelMetrics} fetchTopApiKeys={firstFetch} />);
+  it("refetches and shows loading again when the query key changes on an expanded model", async () => {
+    mockModelTopKeysCall
+      .mockResolvedValueOnce({
+        api_keys: [
+          {
+            api_key: "key-old",
+            metrics: { ...EMPTY_SPEND_METRICS, spend: 10, api_requests: 5, total_tokens: 100 },
+            metadata: { key_alias: "Old Scope Key", team_id: null },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        api_keys: [
+          {
+            api_key: "key-new",
+            metrics: { ...EMPTY_SPEND_METRICS, spend: 20, api_requests: 7, total_tokens: 200 },
+            metadata: { key_alias: "New Scope Key", team_id: null },
+          },
+        ],
+      });
+    const { rerender } = render(
+      <ActivityMetrics modelMetrics={mockModelMetrics} topKeysQuery={topKeysQueryFor(topKeysRequest("first"))} />,
+    );
 
     expect(await screen.findByText("Old Scope Key")).toBeInTheDocument();
-    expect(firstFetch).toHaveBeenCalledWith("gpt-4");
+    expect(mockModelTopKeysCall).toHaveBeenCalledWith("user", expect.anything(), "gpt-4", true, undefined);
 
-    rerender(<ActivityMetrics modelMetrics={mockModelMetrics} fetchTopApiKeys={secondFetch} />);
+    rerender(
+      <ActivityMetrics modelMetrics={mockModelMetrics} topKeysQuery={topKeysQueryFor(topKeysRequest("second"))} />,
+    );
 
     expect(screen.getByText("Loading top keys...")).toBeInTheDocument();
     expect(screen.queryByText("Old Scope Key")).not.toBeInTheDocument();
     expect(await screen.findByText("New Scope Key")).toBeInTheDocument();
-    expect(secondFetch).toHaveBeenCalledWith("gpt-4");
+    expect(mockModelTopKeysCall).toHaveBeenCalledTimes(2);
   });
 
   it("shows an error with Retry when the top keys request fails and refetches on retry", async () => {
-    const fetchTopApiKeys = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("boom"))
-      .mockResolvedValueOnce({
+    let resolveRetry: ((value: ModelTopKeysResponse) => void) | undefined;
+    mockModelTopKeysCall.mockRejectedValueOnce(new Error("boom")).mockImplementationOnce(
+      () =>
+        new Promise<ModelTopKeysResponse>((resolve) => {
+          resolveRetry = resolve;
+        }),
+    );
+    render(<ActivityMetrics modelMetrics={mockModelMetrics} topKeysQuery={topKeysQueryFor(topKeysRequest())} />);
+
+    expect(await screen.findByText(/Could not load top keys\./)).toBeInTheDocument();
+    expect(screen.getByText("Top Virtual Keys by Spend")).toBeInTheDocument();
+    expect(mockModelTopKeysCall).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByText("Loading top keys...")).toBeInTheDocument();
+    expect(mockModelTopKeysCall).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      resolveRetry?.({
         api_keys: [
           {
             api_key: "key-retry",
@@ -351,21 +407,10 @@ describe("ActivityMetrics", () => {
           },
         ],
       });
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    render(<ActivityMetrics modelMetrics={mockModelMetrics} fetchTopApiKeys={fetchTopApiKeys} />);
-
-    expect(await screen.findByText(/Could not load top keys\./)).toBeInTheDocument();
-    expect(screen.getByText("Top Virtual Keys by Spend")).toBeInTheDocument();
-    expect(fetchTopApiKeys).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-
-    expect(screen.getByText("Loading top keys...")).toBeInTheDocument();
+    });
     expect(await screen.findByText("Retried Key")).toBeInTheDocument();
-    expect(fetchTopApiKeys).toHaveBeenCalledTimes(2);
-    expect(fetchTopApiKeys).toHaveBeenLastCalledWith("gpt-4");
+    expect(mockModelTopKeysCall).toHaveBeenLastCalledWith("user", expect.anything(), "gpt-4", true, undefined);
     expect(screen.queryByText(/Could not load top keys\./)).not.toBeInTheDocument();
-    consoleError.mockRestore();
   });
 
   it("hides the top keys section without a fetcher", () => {

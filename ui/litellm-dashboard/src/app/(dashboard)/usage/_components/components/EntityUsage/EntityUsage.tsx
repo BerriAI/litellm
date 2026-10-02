@@ -27,10 +27,14 @@ import { ActivityMetrics, processActivityData } from "@/components/activity_metr
 import { UsageExportHeader } from "@/components/EntityUsageExport";
 import type { EntityType } from "@/components/EntityUsageExport/types";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { useAggregatedDailyActivity } from "../../hooks/useAggregatedDailyActivity";
+import {
+  modelTopKeysQueryOptions,
+  useAggregatedDailyActivity,
+} from "@/app/(dashboard)/hooks/dailyActivity/dailyActivityQueries";
 import { ENTITY_API } from "./entityFetchFns";
 import {
   EMPTY_DAILY_ACTIVITY_METADATA,
+  EMPTY_DAILY_ACTIVITY_RESPONSE,
   toDailyData,
   type DailyActivityRequest,
 } from "@/components/UsagePage/dailyActivityApi";
@@ -106,7 +110,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const canViewEntity = entityCapability === undefined || hasCapability(userRole, entityCapability, isOrgAdmin);
   const showAgentBreakdown = entityType === "team" && hasCapability(userRole, "viewAgentUsage");
   const hasRequestWindow = !!accessToken && !!startTime && !!endTime;
-  const enabled = hasRequestWindow && canViewEntity;
 
   const request = useMemo<DailyActivityRequest | null>(
     () =>
@@ -133,15 +136,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     [hasRequestWindow, accessToken, startTime, endTime],
   );
 
-  const {
-    data: spendDataRaw,
-    loading,
-    failed,
-  } = useAggregatedDailyActivity({
-    fetch: () => api.aggregated(request as DailyActivityRequest),
-    enabled: enabled && request !== null,
-    deps: [entityType, accessToken, startTime, endTime, selectedTags],
-  });
+  const spendQuery = useAggregatedDailyActivity(entityType, canViewEntity ? request : null);
+  const spendDataRaw = spendQuery.data ?? EMPTY_DAILY_ACTIVITY_RESPONSE;
+  const loading = spendQuery.isLoading;
+  const failed = spendQuery.isError;
 
   const spendData = useMemo(
     () => ({
@@ -152,15 +150,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   );
   const summaryMetrics = useMemo(() => overallUsageMetrics(spendData.results, spendData.metadata), [spendData]);
 
-  const {
-    data: agentSpendDataRaw,
-    loading: agentLoading,
-    failed: agentFailed,
-  } = useAggregatedDailyActivity({
-    fetch: () => ENTITY_API.agent.aggregated(agentRequest as DailyActivityRequest),
-    enabled: enabled && showAgentBreakdown && agentRequest !== null,
-    deps: [accessToken, startTime, endTime, showAgentBreakdown],
-  });
+  const agentQuery = useAggregatedDailyActivity("agent", canViewEntity && showAgentBreakdown ? agentRequest : null);
+  const agentSpendDataRaw = agentQuery.data ?? EMPTY_DAILY_ACTIVITY_RESPONSE;
+  const agentLoading = agentQuery.isLoading;
+  const agentFailed = agentQuery.isError;
 
   const agentSpendData = useMemo(
     () => ({
@@ -170,9 +163,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     [agentSpendDataRaw],
   );
 
-  const fetchTopApiKeys = useCallback(
-    (model: string) => api.modelTopKeys(request as DailyActivityRequest, model, modelViewType === "groups"),
-    [api, request, modelViewType],
+  const topKeysQuery = useCallback(
+    (model: string) =>
+      modelTopKeysQueryOptions(entityType, request as DailyActivityRequest, model, modelViewType === "groups"),
+    [entityType, request, modelViewType],
   );
   const searchKeys = useCallback(
     (query: string) => (request === null ? Promise.resolve({ api_keys: [] }) : api.searchKeys(request, query)),
@@ -676,7 +670,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           <ActivityMetrics
             modelMetrics={modelMetrics}
             hidePromptCachingMetrics={entityType === "agent"}
-            fetchTopApiKeys={request ? fetchTopApiKeys : undefined}
+            topKeysQuery={request ? topKeysQuery : undefined}
           />
         </>
       ),

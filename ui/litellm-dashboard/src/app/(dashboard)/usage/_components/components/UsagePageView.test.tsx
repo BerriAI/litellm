@@ -7,7 +7,7 @@ import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "@/../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import type { Organization } from "@/components/networking";
 import * as networking from "@/components/networking";
 import UsagePage from "./UsagePageView";
@@ -366,6 +366,7 @@ describe("UsagePage", () => {
   };
 
   beforeEach(() => {
+    testQueryClient.clear();
     mockUseAuthorized.mockReturnValue({
       isLoading: false,
       isAuthorized: true,

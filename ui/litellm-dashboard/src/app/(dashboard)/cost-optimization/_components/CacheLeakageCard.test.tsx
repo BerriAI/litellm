@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -65,27 +66,31 @@ const dayWithModels = (date: string, models: Record<string, Partial<SpendMetrics
   },
 });
 
-const renderWith = (results: DailyData[], overrides: Partial<DailyActivityRange> = {}) =>
-  render(
-    <CacheLeakageCard
-      activity={{
-        dateValue: {},
-        onDateChange: vi.fn(),
-        results,
-        metadata: EMPTY_DAILY_ACTIVITY_METADATA,
-        loading: false,
-        failed: false,
-        scope: {
-          accessToken: "test-token",
-          startTime: new Date(2025, 0, 1),
-          endTime: new Date(2025, 0, 31),
-          userId: null,
-          apiKey: null,
-        },
-        ...overrides,
-      }}
-    />,
+const renderWith = (results: DailyData[], overrides: Partial<DailyActivityRange> = {}) => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <CacheLeakageCard
+        activity={{
+          dateValue: {},
+          onDateChange: vi.fn(),
+          results,
+          metadata: EMPTY_DAILY_ACTIVITY_METADATA,
+          loading: false,
+          failed: false,
+          scope: {
+            accessToken: "test-token",
+            startTime: new Date(2025, 0, 1),
+            endTime: new Date(2025, 0, 31),
+            userId: null,
+            apiKey: null,
+          },
+          ...overrides,
+        }}
+      />
+    </QueryClientProvider>,
   );
+};
 
 describe("CacheLeakageCard", () => {
   beforeEach(() => {

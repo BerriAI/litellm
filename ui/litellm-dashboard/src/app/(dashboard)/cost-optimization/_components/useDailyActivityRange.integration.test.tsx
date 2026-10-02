@@ -1,7 +1,17 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
+import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useScopedDailyActivityRange } from "./useDailyActivityRange";
+
+const createWrapper = () => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const Wrapper = ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  return Wrapper;
+};
 
 // The sibling unit test mocks networking, so it pins the positional args array against itself and
 // would still pass if the array and the two networking signatures drifted apart. Nothing else runs
@@ -28,7 +38,9 @@ describe("useScopedDailyActivityRange wiring", () => {
       dateValue: { from: new Date(2026, 7, 1), to: new Date(2026, 7, 10) },
       onDateChange: vi.fn(),
     };
-    renderHook(() => useScopedDailyActivityRange("sk-token", { userId: "u1", apiKey: "hash-abc" }, activity));
+    renderHook(() => useScopedDailyActivityRange("sk-token", { userId: "u1", apiKey: "hash-abc" }, activity), {
+      wrapper: createWrapper(),
+    });
 
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
 

@@ -12,6 +12,8 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { resolveTeamAliasFromTeamID } from "@/utils/teamUtils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useQuery } from "@tanstack/react-query";
+import type { ModelTopKeysQueryOptions } from "@/app/(dashboard)/hooks/dailyActivity/dailyActivityQueries";
 import { ChevronDown } from "lucide-react";
 import React, { useRef, useState } from "react";
 import { Team } from "./key_team_helpers/key_list";
@@ -26,7 +28,7 @@ interface ActivityMetricsProps {
   summaryMetrics?: ModelActivityData;
   summaryTitle?: string;
   hidePromptCachingMetrics?: boolean;
-  fetchTopApiKeys?: (model: string) => Promise<ModelTopKeysResponse>;
+  topKeysQuery?: (model: string) => ModelTopKeysQueryOptions;
 }
 
 const modelAverageResponseTimeMs = (metrics: ModelActivityData): number | null =>
@@ -41,63 +43,37 @@ export const ResponseTimeTooltip = ({ active, payload, label }: ChartTooltipProp
   />
 );
 
+interface ModelTopKeyRow {
+  api_key: string;
+  key_alias: string | null;
+  team_id: string | null;
+  user: string | null;
+  spend: number;
+  requests: number;
+  tokens: number;
+}
+
+const toModelTopKeyRows = (response: ModelTopKeysResponse): ModelTopKeyRow[] =>
+  response.api_keys.map((row) => ({
+    api_key: row.api_key,
+    key_alias: row.metadata.key_alias ?? null,
+    team_id: row.metadata.team_id ?? null,
+    user: row.metadata.user_email ?? row.metadata.user_id ?? null,
+    spend: row.metrics.spend,
+    requests: row.metrics.api_requests,
+    tokens: row.metrics.total_tokens,
+  }));
+
 const ModelTopKeys = ({
   modelName,
-  fetchTopApiKeys,
+  topKeysQuery,
 }: {
   modelName: string;
-  fetchTopApiKeys: (model: string) => Promise<ModelTopKeysResponse>;
+  topKeysQuery: (model: string) => ModelTopKeysQueryOptions;
 }) => {
-  interface ModelTopKeyRow {
-    api_key: string;
-    key_alias: string | null;
-    team_id: string | null;
-    user: string | null;
-    spend: number;
-    requests: number;
-    tokens: number;
-  }
-  const [settled, setSettled] = useState<{
-    modelName: string;
-    fetchTopApiKeys: (model: string) => Promise<ModelTopKeysResponse>;
-    rows: ModelTopKeyRow[];
-    failed: boolean;
-  } | null>(null);
-  const [retryToken, setRetryToken] = useState(0);
+  const query = useQuery({ ...topKeysQuery(modelName), select: toModelTopKeyRows });
 
-  React.useEffect(() => {
-    let cancelled = false;
-    fetchTopApiKeys(modelName)
-      .then((response) => {
-        if (cancelled) return;
-        setSettled({
-          modelName,
-          fetchTopApiKeys,
-          rows: response.api_keys.map((row) => ({
-            api_key: row.api_key,
-            key_alias: row.metadata.key_alias ?? null,
-            team_id: row.metadata.team_id ?? null,
-            user: row.metadata.user_email ?? row.metadata.user_id ?? null,
-            spend: row.metrics.spend,
-            requests: row.metrics.api_requests,
-            tokens: row.metrics.total_tokens,
-          })),
-          failed: false,
-        });
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        console.error(`Failed to fetch top keys for ${modelName}:`, error);
-        setSettled({ modelName, fetchTopApiKeys, rows: [], failed: true });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [modelName, fetchTopApiKeys, retryToken]);
-
-  const current = settled?.modelName === modelName && settled.fetchTopApiKeys === fetchTopApiKeys ? settled : null;
-
-  if (current === null) {
+  if (query.isPending || (query.isError && query.isFetching)) {
     return (
       <Card className="mt-4">
         <CardContent>
@@ -108,7 +84,7 @@ const ModelTopKeys = ({
     );
   }
 
-  if (current.failed) {
+  if (query.isError) {
     return (
       <Card className="mt-4">
         <CardContent>
@@ -118,10 +94,7 @@ const ModelTopKeys = ({
             <button
               type="button"
               className="font-medium text-foreground underline"
-              onClick={() => {
-                setSettled(null);
-                setRetryToken((token) => token + 1);
-              }}
+              onClick={() => void query.refetch()}
             >
               Retry
             </button>
@@ -131,7 +104,7 @@ const ModelTopKeys = ({
     );
   }
 
-  const rows = current.rows;
+  const rows = query.data ?? [];
   if (rows.length === 0) return null;
 
   return (
@@ -171,12 +144,12 @@ export const ModelSection = ({
   modelName,
   metrics,
   hidePromptCachingMetrics = false,
-  fetchTopApiKeys,
+  topKeysQuery,
 }: {
   modelName: string;
   metrics: ModelActivityData;
   hidePromptCachingMetrics?: boolean;
-  fetchTopApiKeys?: (model: string) => Promise<ModelTopKeysResponse>;
+  topKeysQuery?: (model: string) => ModelTopKeysQueryOptions;
 }) => {
   return (
     <div className="space-y-2">
@@ -228,7 +201,7 @@ export const ModelSection = ({
         </Card>
       </div>
 
-      {fetchTopApiKeys && <ModelTopKeys modelName={modelName} fetchTopApiKeys={fetchTopApiKeys} />}
+      {topKeysQuery && <ModelTopKeys modelName={modelName} topKeysQuery={topKeysQuery} />}
 
       {metrics.top_models && metrics.top_models.length > 0 && <KeyModelUsageView topModels={metrics.top_models} />}
 
@@ -422,7 +395,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({
   summaryMetrics,
   summaryTitle = "Overall Usage",
   hidePromptCachingMetrics = false,
-  fetchTopApiKeys,
+  topKeysQuery,
 }) => {
   const modelNames = Object.keys(modelMetrics).sort((a, b) => {
     if (a === "") return 1;
@@ -609,7 +582,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({
                 modelName={modelName || "Unknown Model"}
                 metrics={modelMetrics[modelName]}
                 hidePromptCachingMetrics={hidePromptCachingMetrics}
-                fetchTopApiKeys={fetchTopApiKeys}
+                topKeysQuery={topKeysQuery}
               />
             </ModelCollapsible>
           ))}
