@@ -4,7 +4,7 @@ Tests for the agent tracing endpoints (litellm/proxy/tracing_endpoints.py).
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.spend_tracking.log_visibility_dependencies import get_log_team_lookup
 from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
 from litellm.rust_bridge.trace_queries import SPAN_DETAIL, SpanDetailParams
 from litellm.rust_bridge.trace_query_responses import TraceQueryHelp, TraceSQLResponse
@@ -667,4 +668,67 @@ def test_queries_require_a_proxy_secret(
     assert result.status_code == 200, result.text
     receiver.store.storage.query_sql.assert_awaited_once_with(
         "SELECT 1", {"kind": "logs", "user_id": "", "team_ids": (), "api_key_hash": "hashed-key"}, secret
+    )
+
+
+@pytest.mark.parametrize(
+    ("auth", "teams", "lookup_fails", "expected"),
+    (
+        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), ("team-a",), True, (1, "", (), "")),
+        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY), ("team-a",), True, (1, "", (), "")),
+        (UserAPIKeyAuth(user_id="user", token="key", team_id="unpermitted"), ("a", "b"), False,
+         (0, "user", ("a", "b"), "key")),
+        (UserAPIKeyAuth(user_id="user", token="key"), (), False, (0, "user", (), "key")),
+        (UserAPIKeyAuth(user_id="user", token="key"), ("a",), True, (0, "user", (), "key")),
+        (UserAPIKeyAuth(user_id="user"), ("a",), False, (0, "user", ("a",), "")),
+        (UserAPIKeyAuth(token="key", team_id="unpermitted"), ("a",), True, (0, "", (), "key")),
+        (UserAPIKeyAuth(user_id="", token="key"), ("a",), True, (0, "", (), "key")),
+    ),
+)
+def test_composed_trace_permissions_reach_read_and_sql_boundaries(
+    client: TestClient,
+    auth: UserAPIKeyAuth,
+    teams: tuple[str, ...],
+    lookup_fails: bool,
+    expected: tuple[Literal[0, 1], str, tuple[str, ...], str],
+) -> None:
+    async def lookup(caller: UserAPIKeyAuth) -> tuple[str, ...]:
+        assert caller is auth
+        if lookup_fails:
+            raise RuntimeError("Permission storage unavailable")
+        return teams
+
+    team_lookup: Final = AsyncMock(side_effect=lookup)
+    storage: Final = MagicMock(spec=ClickHouseStorage)
+    storage.query = AsyncMock(return_value=[{"span_id": "s1", "input": "", "output": "", "attributes": {}}])
+    storage.query_sql = AsyncMock(return_value=TraceSQLResponse.model_validate(SQL_ENVELOPE))
+    storage.query_help = AsyncMock(return_value=TraceQueryHelp.model_validate(QUERY_HELP))
+    client.app.dependency_overrides[user_api_key_auth] = lambda: auth
+    client.app.dependency_overrides[get_log_team_lookup] = lambda: team_lookup
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
+    client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
+
+    response: Final = client.get("/v1/traces/t1/spans/s1?trace_ref=run-one")
+    assert response.status_code == 200, response.text
+    assert response.json()["span_id"] == "s1"
+    storage.query.assert_awaited_once_with(
+        SPAN_DETAIL,
+        SpanDetailParams(
+            all_teams=expected[0], user_id=expected[1], team_ids=expected[2], api_key_hash=expected[3],
+            trace_id="t1", span_id="s1", trace_ref="run-one",
+        ),
+    )
+    sql_response: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
+    assert sql_response.status_code == 200, sql_response.text
+    assert sql_response.json() == SQL_ENVELOPE
+    assert client.get("/v1/traces/query/help").json() == QUERY_HELP
+    query_scope: Final = {"kind": "admin"} if expected[0] else {
+        "kind": "logs", "user_id": expected[1], "team_ids": expected[2], "api_key_hash": expected[3],
+    }
+    storage.query_sql.assert_awaited_once_with("SELECT * FROM otel_traces", query_scope, "test-secret")
+    storage.query_help.assert_awaited_once_with(query_scope, "test-secret")
+    assert team_lookup.await_count == (
+        3 if auth.user_id and auth.user_role not in (
+            LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+        ) else 0
     )

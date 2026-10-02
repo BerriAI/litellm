@@ -10,6 +10,7 @@ GET  /v1/traces/{trace_id}/spans/{span_id}   SpanDetail
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import partial
 from http.client import responses
 from types import MappingProxyType
 from typing import Annotated, Final
@@ -20,9 +21,18 @@ from pydantic import BaseModel, ConfigDict
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import OTLP_RETRY_AFTER_SECONDS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.authorization import AnyOf
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
-from litellm.proxy.spend_tracking.log_visibility import log_visibility
+from litellm.proxy.spend_tracking.log_visibility import (
+    AllLogs,
+    ApiKeyLogs,
+    TeamLogs,
+    TraceReadScope,
+    UserLogs,
+    resolve_trace_read_scope,
+)
+from litellm.proxy.spend_tracking.log_visibility_dependencies import LogTeamLookupDependency
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
 from litellm.rust_bridge.trace_query_responses import TraceQueryHelp, TraceSQLResponse
 from litellm.rust_bridge.traces import ClickHouseStorage, QueryScope
@@ -43,14 +53,14 @@ MS_PER_DAY: Final = 24 * 60 * 60 * 1000
 @dataclass(frozen=True, slots=True)
 class TraceAccessContext:
     receiver: TraceReceiver | None
-    read_scope: TraceScope | None
+    read_scope: TraceReadScope | None
     write_tenant: Tenant | None
 
     def reader(self) -> tuple[TraceReceiver, TraceScope]:
         tracing: Final = require_receiver(self.receiver)
         if self.read_scope is None:
             raise HTTPException(status_code=403, detail="Not allowed to view agent traces")
-        return tracing, self.read_scope
+        return tracing, _trace_scope(self.read_scope)
 
     def writer(self) -> tuple[TraceReceiver, Tenant]:
         if self.write_tenant is None:
@@ -61,27 +71,25 @@ class TraceAccessContext:
 async def provide_trace_access(
     auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
+    log_team_lookup: LogTeamLookupDependency,
 ) -> TraceAccessContext:
     tenant: Final = Tenant(
         team_id=auth.team_id or "", api_key_hash=auth.token or "", org_id=auth.org_id or "", user_id=auth.user_id or ""
     )
     write_tenant: Final = None if auth.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY else tenant
-    if (
-        not auth.user_id
-        and not auth.token
-        and auth.user_role not in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
-    ):
-        return TraceAccessContext(tracing, None, write_tenant)
-    visibility: Final = await log_visibility(auth)
-    return TraceAccessContext(
-        tracing,
-        TraceScope(
-            all_teams=1 if visibility.all_teams else 0,
-            user_id=visibility.user_id,
-            team_ids=visibility.team_ids,
-            api_key_hash=visibility.api_key_hash,
-        ),
-        write_tenant,
+    read_scope: Final = await resolve_trace_read_scope(auth, partial(log_team_lookup, auth))
+    return TraceAccessContext(tracing, read_scope, write_tenant)
+
+
+def _trace_scope(scope: TraceReadScope) -> TraceScope:
+    if isinstance(scope, AllLogs):
+        return TraceScope(all_teams=1, user_id="", team_ids=(), api_key_hash="")
+    grants: Final = scope.grants if isinstance(scope, AnyOf) else (scope,)
+    return TraceScope(
+        all_teams=0,
+        user_id=next((grant.user_id or "" for grant in grants if isinstance(grant, UserLogs)), ""),
+        team_ids=tuple(grant.team_id for grant in grants if isinstance(grant, TeamLogs)),
+        api_key_hash=next((grant.api_key_hash for grant in grants if isinstance(grant, ApiKeyLogs)), ""),
     )
 
 
@@ -160,7 +168,7 @@ class TraceQueryRequest(BaseModel):
 @dataclass(frozen=True, slots=True)
 class TraceQueryAccess:
     storage: ClickHouseStorage
-    scope: QueryScope
+    scope: TraceReadScope
     secret: str
 
 
@@ -172,15 +180,15 @@ def provide_trace_query_secret() -> str:
     return master_key
 
 
-async def trace_query_scope(auth: UserAPIKeyAuth) -> QueryScope:
-    visibility: Final = await log_visibility(auth)
-    if visibility.all_teams:
+def trace_query_scope(scope: TraceReadScope) -> QueryScope:
+    if isinstance(scope, AllLogs):
         return {"kind": "admin"}
+    visibility: Final = _trace_scope(scope)
     return {
         "kind": "logs",
-        "user_id": visibility.user_id,
-        "team_ids": visibility.team_ids,
-        "api_key_hash": visibility.api_key_hash,
+        "user_id": visibility["user_id"],
+        "team_ids": visibility["team_ids"],
+        "api_key_hash": visibility["api_key_hash"],
     }
 
 
@@ -188,8 +196,13 @@ async def provide_trace_query_access(
     auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
     secret: Annotated[str, Depends(provide_trace_query_secret)],
+    log_team_lookup: LogTeamLookupDependency,
 ) -> TraceQueryAccess:
-    return TraceQueryAccess(require_receiver(tracing).store.storage, await trace_query_scope(auth), secret)
+    storage: Final = require_receiver(tracing).store.storage
+    scope: Final = await resolve_trace_read_scope(auth, partial(log_team_lookup, auth))
+    if scope is None:
+        raise HTTPException(status_code=403, detail="Not allowed to view logs")
+    return TraceQueryAccess(storage, scope, secret)
 
 
 @router.post("/v1/traces/query", response_model=TraceSQLResponse, response_model_exclude_unset=True)
@@ -198,7 +211,7 @@ async def query_agent_traces(
     access: Annotated[TraceQueryAccess, Depends(provide_trace_query_access)],
 ) -> TraceSQLResponse:
     try:
-        return await access.storage.query_sql(body.sql, access.scope, access.secret)
+        return await access.storage.query_sql(body.sql, trace_query_scope(access.scope), access.secret)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error:
@@ -211,7 +224,7 @@ async def help_agent_trace_queries(
     access: Annotated[TraceQueryAccess, Depends(provide_trace_query_access)],
 ) -> TraceQueryHelp:
     try:
-        return await access.storage.query_help(access.scope, access.secret)
+        return await access.storage.query_help(trace_query_scope(access.scope), access.secret)
     except RuntimeError as error:
         verbose_proxy_logger.warning("Trace query help unavailable: %s", error)
         raise HTTPException(status_code=503, detail="Trace query help is temporarily unavailable") from error
