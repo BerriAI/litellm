@@ -140,7 +140,7 @@ fn decoded_span(
                 attributes: attributes(event.attributes, budget)?,
             })
         })
-        .collect::<Result<Vec<_>, DecodeError>>()?;
+        .collect::<Result<Vec<_>, Error>>()?;
     let normalization = normalize(
         scope_name.as_ref(),
         &span.name,
