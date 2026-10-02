@@ -2476,15 +2476,15 @@ async def _apply_soft_budget_update(
 
 
 async def _apply_object_permission_update(
-    data_json: dict[str, object],
+    data_json: Mapping[str, object],
     existing_object_permission_id: str | None,
     prisma_client: PrismaClient,
     table: "TableActions[prisma_models.LiteLLM_ObjectPermissionTable]",
-) -> None:
+) -> Mapping[str, object]:
     """Upsert the requested object permission row inside the caller's writer transaction."""
-    new_object_permission: Final = data_json.pop("object_permission", None)
+    new_object_permission: Final = data_json.get("object_permission")
     if new_object_permission is None:
-        return
+        return data_json
     loaded: Final[object] = (
         json.loads(new_object_permission) if isinstance(new_object_permission, str) else new_object_permission
     )
@@ -2504,7 +2504,12 @@ async def _apply_object_permission_update(
         where={"object_permission_id": upsert.object_permission_id},
         data={"create": upsert.record, "update": upsert.record},
     )
-    data_json["object_permission_id"] = row.object_permission_id
+    return MappingProxyType(
+        {
+            **{k: v for k, v in data_json.items() if k != "object_permission"},
+            "object_permission_id": row.object_permission_id,
+        }
+    )
 
 
 async def _write_guarded_project_assignment(
@@ -2553,9 +2558,8 @@ async def _update_key_row_assigning_project(
         tx: Final[_KeyUpdateTx] = cast(  # cast-ok: the transaction object exposes the same table actions
             "_KeyUpdateTx", tx_ctx
         )
-        update_values: Final[dict[str, object]] = dict(non_default_values)
-        await _apply_object_permission_update(
-            data_json=update_values,
+        update_values: Final[Mapping[str, object]] = await _apply_object_permission_update(
+            data_json=non_default_values,
             existing_object_permission_id=existing_key_row.object_permission_id,
             prisma_client=prisma_client,
             table=tx.litellm_objectpermissiontable,
@@ -2588,14 +2592,16 @@ async def _update_key_row_with_soft_budget(
     key_where: Final[_KeyRowWhere] = {"token": hashed_token}
     tx: _KeyUpdateTx
     async with prisma_client.tx() as tx:
-        update_input: Final[dict[str, object]] = dict(non_default_values)
-        if expect_unassigned_project:
+        update_input: Final[Mapping[str, object]] = (
             await _apply_object_permission_update(
-                data_json=update_input,
+                data_json=non_default_values,
                 existing_object_permission_id=existing_key_row.object_permission_id,
                 prisma_client=prisma_client,
                 table=tx.litellm_objectpermissiontable,
             )
+            if expect_unassigned_project
+            else non_default_values
+        )
         update_values: Final = await _apply_soft_budget_update(
             data=data,
             non_default_values=update_input,
