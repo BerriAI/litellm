@@ -151,6 +151,7 @@ class DeploymentOptions:
     order: int | None = None
     tag_regex: Sequence[str] | None = None
     max_file_size_mb: float | None = None
+    silent_model: str | Sequence[str] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -199,6 +200,7 @@ class ObservabilityOptions:
     logger_fn: Callable[[Mapping[str, object]], None] | None = None
     verbose: bool | None = None
     no_log: bool | None = field(default=None, metadata=wire("no-log"))
+    log_client_error_tracebacks: bool | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

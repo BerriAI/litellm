@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 
 OPENAI_BILLED_LITELLM_PROVIDERS: Final = ("openai", "text-completion-openai")
 
-CaptureRatePublisher: TypeAlias = Callable[[SpendCaptureProvider, float | None], None]  # mutable-ok: Callable params
+CaptureRatePublisher: TypeAlias = Callable[[SpendCaptureProvider, float | None], None]
 
 _CAPTURED_SPEND_BY_DAY_SQL: Final = """
     SELECT date, COALESCE(SUM(spend), 0)::float AS spend

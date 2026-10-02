@@ -5353,6 +5353,7 @@ def completion(
     ### CUSTOM MODEL COST ###
     input_cost_per_token: Final = kwargs.get("input_cost_per_token", None)
     output_cost_per_token: Final = kwargs.get("output_cost_per_token", None)
+    cost_per_second: Final = kwargs.get("cost_per_second", None)
     input_cost_per_second: Final = kwargs.get("input_cost_per_second", None)
     output_cost_per_second: Final = kwargs.get("output_cost_per_second", None)
     ### CUSTOM PROMPT TEMPLATE ###
@@ -5514,8 +5515,11 @@ def completion(
 
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if (
-            input_cost_per_token is not None and output_cost_per_token is not None
-        ) or input_cost_per_second is not None:
+            (input_cost_per_token is not None and output_cost_per_token is not None)
+            or input_cost_per_second is not None
+            or output_cost_per_second is not None
+            or cost_per_second is not None
+        ):
             _register_custom_pricing_for_request(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -5657,6 +5661,7 @@ def completion(
             proxy_server_request=proxy_server_request,
             preset_cache_key=preset_cache_key,
             no_log=no_log,
+            cost_per_second=cost_per_second,
             input_cost_per_second=input_cost_per_second,
             input_cost_per_token=input_cost_per_token,
             output_cost_per_second=output_cost_per_second,
@@ -6354,7 +6359,9 @@ def embedding(
     ### CUSTOM MODEL COST ###
     input_cost_per_token: Final = kwargs.get("input_cost_per_token", None)
     output_cost_per_token: Final = kwargs.get("output_cost_per_token", None)
+    cost_per_second: Final = kwargs.get("cost_per_second", None)
     input_cost_per_second: Final = kwargs.get("input_cost_per_second", None)
+    output_cost_per_second: Final = kwargs.get("output_cost_per_second", None)
     openai_params: Final = [
         "user",
         "dimensions",
@@ -6395,7 +6402,12 @@ def embedding(
     )
 
     ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
-    if (input_cost_per_token is not None and output_cost_per_token is not None) or input_cost_per_second is not None:
+    if (
+        (input_cost_per_token is not None and output_cost_per_token is not None)
+        or input_cost_per_second is not None
+        or output_cost_per_second is not None
+        or cost_per_second is not None
+    ):
         _register_custom_pricing_for_request(
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -7816,11 +7828,11 @@ async def amoderation(
             },
             custom_llm_provider=custom_llm_provider,
         )
-        moderation_request: Final = {"input": input, "model": model}  # mutable-ok: logged as the raw request body
+        moderation_request: Final = {"input": input, "model": model}
         litellm_logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+            additional_args={
                 "complete_input_dict": moderation_request,
                 "api_base": str(_openai_client.base_url),
             },
@@ -7919,6 +7931,7 @@ def transcription(
     api_version: str | None = None,
     max_retries: int | None = None,
     custom_llm_provider=None,
+    base_url: str | None = None,
     **kwargs,
 ) -> TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]:
     """
@@ -7952,7 +7965,7 @@ def transcription(
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
-        api_base=api_base,
+        api_base=api_base or base_url,
         api_key=api_key,
     )
 
@@ -8225,6 +8238,7 @@ def speech(
     headers: dict | None = None,
     custom_llm_provider: str | None = None,
     aspeech: bool | None = None,
+    base_url: str | None = None,
     **kwargs,
 ) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
     user: Final = kwargs.get("user", None)
@@ -8234,7 +8248,7 @@ def speech(
     model_info: Final = kwargs.get("model_info", None)
     shared_session: Final = kwargs.get("shared_session", None)
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base or base_url
     )
     kwargs.pop("tags", [])
 
@@ -8538,7 +8552,7 @@ def speech(
             extra_headers=headers,
             base_llm_http_handler=base_llm_http_handler,
             aspeech=aspeech or False,
-            api_base=generic_optional_params.api_base,
+            api_base=api_base,
             api_key=None,  # Vertex AI uses OAuth, not API key
             **kwargs,
         )
@@ -8904,8 +8918,8 @@ def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional
 
 def _joined_streamed_citations(streamed_citations: "tuple[object, ...]") -> "list[object]":
     if all(isinstance(citation, list) for citation in streamed_citations):
-        return list(streamed_citations)  # mutable-ok: JSON list field
-    return [list(streamed_citations)]  # mutable-ok: JSON list field
+        return list(streamed_citations)
+    return [list(streamed_citations)]
 
 
 def _stream_builder_model_map_cost(response: ModelResponse) -> float | None:
@@ -9185,11 +9199,9 @@ def stream_chunk_builder(
                 fields["citation"] for fields in provider_field_dicts if fields.get("citation") is not None
             )
             citation_fields: Final = (
-                {"citations": _joined_streamed_citations(streamed_citations)}  # mutable-ok: JSON dict field
-                if streamed_citations
-                else {}  # mutable-ok: JSON dict field
+                {"citations": _joined_streamed_citations(streamed_citations)} if streamed_citations else {}
             )
-            combined_provider_fields: Final = {  # mutable-ok: Message.provider_specific_fields is a plain dict field
+            combined_provider_fields: Final = {
                 key: value
                 for fields in (citation_fields, *provider_field_dicts)
                 for key, value in fields.items()

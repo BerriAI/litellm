@@ -505,7 +505,7 @@ class TokenCounter(Protocol):
 def _count_objects(
     values: Sequence[Mapping[str, JsonValue]],
 ) -> list[dict[str, JsonValue]]:  # mutable-ok: the existing provider count API requires JSON lists/dicts
-    return [dict(value) for value in values]  # mutable-ok: serialize read-only inputs at the provider API boundary
+    return [dict(value) for value in values]
 
 
 def _messages_url(model: str, api_key: str, api_base: str | None) -> str:

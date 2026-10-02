@@ -1,5 +1,5 @@
 use crate::cache::cache_error;
-use crate::logger::run_async;
+use crate::execution::run_async;
 use std::{collections::VecDeque, time::Duration};
 
 use litellm_cache::Error;
