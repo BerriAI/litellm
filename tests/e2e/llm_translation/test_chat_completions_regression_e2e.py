@@ -53,7 +53,18 @@ OPENAI_BACKEND = "openai/gpt-5.6"
 ANTHROPIC_BACKEND = "anthropic/claude-haiku-4-5-20251001"
 BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 BEDROCK_NOVA_BACKEND: Final = "bedrock/us.amazon.nova-2-lite-v1:0"
-VERTEX_PARTNER_BACKENDS: Final = ("vertex_ai/mistral-small-2503", "vertex_ai/openai/gpt-oss-120b-maas")
+VERTEX_PARTNER_BACKENDS: Final = (
+    pytest.param(
+        "vertex_ai/mistral-small-2503",
+        marks=pytest.mark.skip(
+            reason="the e2e Vertex project has no access to mistral-small-2503 (404 publisher model not found)"
+        ),
+    ),
+    pytest.param(
+        "vertex_ai/openai/gpt-oss-120b-maas",
+        marks=pytest.mark.skip(reason="never served by the e2e Vertex project (60s read timeout, no headers)"),
+    ),
+)
 PDF_DOCUMENT_URL: Final = (
     "https://cdn.jsdelivr.net/gh/BerriAI/litellm"
     "@d769e81c90d453240c61fc572cdb27fae06a89d0"
