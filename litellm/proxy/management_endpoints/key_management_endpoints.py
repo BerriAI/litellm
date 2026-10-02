@@ -2526,6 +2526,7 @@ async def _write_guarded_project_assignment(
             "team_id": existing_key_row.team_id,
             "models": {"equals": validated_models},
             "max_budget": existing_key_row.max_budget,
+            "object_permission_id": existing_key_row.object_permission_id,
         },
         data=data,
     )
