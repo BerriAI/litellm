@@ -16,7 +16,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias, cast
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -1124,11 +1124,17 @@ async def common_checks(
 
     # Every tag the request can be attributed to must be unowned or owned by the
     # caller's team. Independent of budget skips and runs before any reservation.
+    attributable_request_data: Final = cast(
+        Mapping[str, object], request_body
+    )  # cast-ok: common_checks signature declares request_body as a bare dict
+    attributable_request_headers: Final = cast(
+        Mapping[str, str], _safe_get_request_headers(request=request)
+    )  # cast-ok: _safe_get_request_headers returns a bare dict
     tag_ownership_map: Final = (
         await _enforce_tag_ownership(
             tags=LiteLLMProxyRequestSetup.attributable_request_tags(
-                request_data=request_body,
-                headers=_safe_get_request_headers(request=request),
+                request_data=attributable_request_data,
+                headers=attributable_request_headers,
                 user_api_key_dict=valid_token,
             ),
             valid_token=valid_token,

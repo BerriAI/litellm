@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import itertools
 import json
 import re
 import time
@@ -1960,14 +1961,20 @@ class LiteLLMProxyRequestSetup:
 
         raw_body_tags: Final = request_data.get("tags")
         body_tags: Final = raw_body_tags if isinstance(raw_body_tags, list) else ()
-        token_tags: Final = (
-            (
-                *tags_from_metadata_value(user_api_key_dict.metadata),
-                *tags_from_metadata_value(user_api_key_dict.team_metadata),
-                *tags_from_metadata_value(user_api_key_dict.project_metadata),
+        token_metadata: Final = (
+            cast(  # cast-ok: the token's metadata fields are bare dicts on UserAPIKeyAuth
+                tuple[object, ...],
+                (
+                    user_api_key_dict.metadata,
+                    user_api_key_dict.team_metadata,
+                    user_api_key_dict.project_metadata,
+                ),
             )
             if user_api_key_dict is not None
             else ()
+        )
+        token_tags: Final = tuple(
+            itertools.chain.from_iterable(tags_from_metadata_value(source) for source in token_metadata)
         )
         return tuple(
             dict.fromkeys(
