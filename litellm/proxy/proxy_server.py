@@ -325,6 +325,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._experimental.mcp_server.byok_credential_cache import byok_credential_cache
+from litellm.proxy._experimental.mcp_server.stdio_gate import MCP_STDIO_ENABLED_ENV_VAR, is_mcp_stdio_flag_key
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
@@ -5160,6 +5161,7 @@ class ProxyConfig:
         self._last_websearch_interception_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
         self._last_cyberark_config: dict[str, object] | None = None  # mutable-ok: change-detection cache
+        self._warned_db_mcp_stdio_flag_ignored: bool = False
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
@@ -5944,6 +5946,12 @@ class ProxyConfig:
             for key, value in environment_variables.items():
                 if key in self._BLOCKED_ENV_KEYS:
                     verbose_proxy_logger.warning("Skipping blocked environment variable key: %s", key)
+                    continue
+                if isinstance(key, str) and is_mcp_stdio_flag_key(key):
+                    verbose_proxy_logger.warning(
+                        "Ignoring %s set in the config file. Set it in the proxy's environment instead",
+                        MCP_STDIO_ENABLED_ENV_VAR,
+                    )
                     continue
                 #########################################################
                 # handles this scenario:
@@ -7347,6 +7355,14 @@ class ProxyConfig:
         """
         decrypted_env_vars: Final = {}
         for k, v in environment_variables.items():
+            if isinstance(k, str) and is_mcp_stdio_flag_key(k):
+                if not self._warned_db_mcp_stdio_flag_ignored:
+                    verbose_proxy_logger.warning(
+                        "Ignoring %s stored in the database. Set it in the proxy's environment instead",
+                        MCP_STDIO_ENABLED_ENV_VAR,
+                    )
+                    self._warned_db_mcp_stdio_flag_ignored = True
+                continue
             try:
                 decrypted_value = decrypt_value_helper(value=v, key=k, return_original_value=return_original_value)
                 if decrypted_value is not None:

@@ -4533,7 +4533,8 @@ class TestMCPApprovalWorkflow:
         assert "team" in str(exc_info.value.detail).lower()
 
     @pytest.mark.asyncio
-    async def test_register_mcp_server_rejects_stdio_transport(self):
+    async def test_register_mcp_server_rejects_stdio_transport(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
         # stdio servers spawn a local subprocess on the proxy host. Accepting
         # them from the non-admin submission endpoint would let a team member
         # propose a config that an admin could rubber-stamp into local code

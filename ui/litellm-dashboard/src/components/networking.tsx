@@ -369,6 +369,7 @@ export interface LiteLLMWellKnownUiConfig {
   hide_default_credentials_hint?: boolean;
   is_control_plane?: boolean;
   workers?: WorkerInfo[];
+  mcp_stdio_enabled?: boolean;
 }
 
 export interface CredentialsResponse {
