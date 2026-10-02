@@ -16,6 +16,93 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
 from litellm.proxy.auth.route_checks import RouteChecks
 
+DAILY_ACTIVITY_ROUTE_PAIRS: Final[tuple[tuple[str, str], ...]] = (
+    ("/user/daily/activity", "/user/daily/activity/aggregated"),
+    ("/user/daily/activity", "/user/daily/activity/aggregated/keys"),
+    ("/user/daily/activity", "/user/daily/activity/aggregated/search"),
+    ("/user/daily/activity", "/user/daily/activity/aggregated/model_top_keys"),
+    ("/user/daily/activity", "/user/daily/activity/export"),
+    ("/user/daily/activity", "/user/daily/activity/aggregated/cache_leakage_keys"),
+    ("/team/daily/activity", "/team/daily/activity/aggregated"),
+    ("/team/daily/activity", "/team/daily/activity/aggregated/keys"),
+    ("/team/daily/activity", "/team/daily/activity/aggregated/search"),
+    ("/team/daily/activity", "/team/daily/activity/aggregated/model_top_keys"),
+    ("/team/daily/activity", "/team/daily/activity/export"),
+    ("/tag/daily/activity", "/tag/daily/activity/aggregated"),
+    ("/tag/daily/activity", "/tag/daily/activity/aggregated/keys"),
+    ("/tag/daily/activity", "/tag/daily/activity/aggregated/search"),
+    ("/tag/daily/activity", "/tag/daily/activity/aggregated/model_top_keys"),
+    ("/tag/daily/activity", "/tag/daily/activity/export"),
+    ("/organization/daily/activity", "/organization/daily/activity/aggregated"),
+    ("/organization/daily/activity", "/organization/daily/activity/aggregated/keys"),
+    ("/organization/daily/activity", "/organization/daily/activity/aggregated/search"),
+    ("/organization/daily/activity", "/organization/daily/activity/aggregated/model_top_keys"),
+    ("/organization/daily/activity", "/organization/daily/activity/export"),
+    ("/customer/daily/activity", "/customer/daily/activity/aggregated"),
+    ("/customer/daily/activity", "/customer/daily/activity/aggregated/keys"),
+    ("/customer/daily/activity", "/customer/daily/activity/aggregated/search"),
+    ("/customer/daily/activity", "/customer/daily/activity/aggregated/model_top_keys"),
+    ("/customer/daily/activity", "/customer/daily/activity/export"),
+    ("/customer/daily/activity", "/end_user/daily/activity/aggregated"),
+    ("/customer/daily/activity", "/end_user/daily/activity/aggregated/keys"),
+    ("/customer/daily/activity", "/end_user/daily/activity/aggregated/search"),
+    ("/customer/daily/activity", "/end_user/daily/activity/aggregated/model_top_keys"),
+    ("/customer/daily/activity", "/end_user/daily/activity/export"),
+    ("/agent/daily/activity", "/agent/daily/activity/aggregated"),
+    ("/agent/daily/activity", "/agent/daily/activity/aggregated/keys"),
+    ("/agent/daily/activity", "/agent/daily/activity/aggregated/search"),
+    ("/agent/daily/activity", "/agent/daily/activity/aggregated/model_top_keys"),
+    ("/agent/daily/activity", "/agent/daily/activity/export"),
+)
+
+DAILY_ACTIVITY_ROLES: Final[tuple[LitellmUserRoles, ...]] = (
+    LitellmUserRoles.PROXY_ADMIN,
+    LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    LitellmUserRoles.INTERNAL_USER,
+    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    LitellmUserRoles.ORG_ADMIN,
+    LitellmUserRoles.TEAM,
+    LitellmUserRoles.CUSTOMER,
+)
+
+
+def _daily_activity_route_outcome(route: str, user_role: LitellmUserRoles) -> str:
+    if user_role == LitellmUserRoles.PROXY_ADMIN:
+        return "allowed"
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=user_role.value,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=user_role)
+    request = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=user_role.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    except HTTPException as exc:
+        return f"denied:{exc.status_code}"
+    except Exception as exc:
+        return f"denied:{type(exc).__name__}"
+    return "allowed"
+
+
+@pytest.mark.parametrize(("existing_path", "new_path"), DAILY_ACTIVITY_ROUTE_PAIRS)
+@pytest.mark.parametrize("user_role", DAILY_ACTIVITY_ROLES)
+def test_daily_activity_routes_preserve_route_access_outcomes(
+    existing_path: str, new_path: str, user_role: LitellmUserRoles
+) -> None:
+    assert _daily_activity_route_outcome(new_path, user_role) == _daily_activity_route_outcome(
+        existing_path, user_role
+    )
+
 
 def test_non_admin_config_update_route_rejected():
     """Test that non-admin users are rejected when trying to call /config/update"""
@@ -2219,7 +2306,7 @@ def test_internal_user_can_access_logs_drawer_detail_route(user_role):
             request_data={},
         )
     except Exception as e:
-        pytest.fail(f"{user_role.value} should be able to access {route}. Got error: {str(e)}")
+        pytest.fail(f"{user_role.value} should be able to access {route}. Got error: {e!s}")
 
 
 @pytest.mark.parametrize(

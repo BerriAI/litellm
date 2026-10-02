@@ -28,11 +28,6 @@ class TestOpenAIResponsesAPITest(BaseResponsesAPITest):
             "model": "openai/gpt-5.5",
         }
 
-    def get_base_completion_reasoning_call_args(self):
-        return {
-            "model": "openai/gpt-5-mini",
-        }
-
     def get_advanced_model_for_shell_tool(self):
         return "openai/gpt-5.2"
 

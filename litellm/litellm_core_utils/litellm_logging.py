@@ -114,6 +114,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     SERVED_OUTPUT_TEXTS_KEY,
     overlay_served_output_texts,
 )
+from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.base_utils import DynamicModelInfoProvider
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
@@ -180,7 +181,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.types.videos.main import VideoObject
-from litellm.utils import ProviderConfigManager, _get_base_model_from_metadata, executor, print_verbose
+from litellm.utils import ProviderConfigManager, _get_base_model_from_metadata, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
@@ -4027,7 +4028,7 @@ class Logging(LiteLLMLoggingBaseClass):
         result: object,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
-        cache_hit: object | None = None,
+        cache_hit: bool | None = None,
     ) -> None:
         """
         Handles calling success callbacks for Async calls.
