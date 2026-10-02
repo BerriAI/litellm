@@ -1,8 +1,8 @@
 import asyncio
 import json
 from copy import deepcopy
-from unittest.mock import AsyncMock, MagicMock
 from typing import Final, Literal
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from openai.types.responses.response_function_web_search import (
@@ -15,12 +15,12 @@ from openai.types.responses.response_function_web_search import (
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+    LiteLLMCompletionStreamingIterator,
+)
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
     LiteLLMCompletionResponsesConfig,
-)
-from litellm.responses.litellm_completion_transformation.streaming_iterator import (
-    LiteLLMCompletionStreamingIterator,
 )
 from litellm.responses.streaming_iterator import (
     CachedResponsesAPIStreamingIterator,
