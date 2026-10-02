@@ -257,7 +257,7 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
         </CardHeader>
         <CardContent>
           <ChartContainer config={chartConfig} className="h-[380px] w-full aspect-auto">
-            <BarChart data={series} margin={{ left: 8, right: 8 }} barCategoryGap={2}>
+            <BarChart data={series} margin={{ left: 8, right: 8 }} barCategoryGap="15%" maxBarSize={64}>
               <CartesianGrid vertical={false} />
               <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={48} />
               <YAxis
