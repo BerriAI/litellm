@@ -21,6 +21,7 @@ from pydantic import (
 )
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
+import litellm.constants as litellm_constants
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
@@ -1652,6 +1653,8 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         if isinstance(values, dict):
             transport: Final = values.get("transport")
             if transport == MCPTransport.stdio:
+                if not litellm_constants.MCP_STDIO_TRANSPORT_ENABLED:
+                    raise ValueError(litellm_constants.MCP_STDIO_DISABLED_MESSAGE)
                 if not values.get("command"):
                     raise ValueError("command is required for stdio transport")
                 if not values.get("args"):
@@ -1751,6 +1754,8 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
         if isinstance(values, dict):
             transport: Final = values.get("transport")
             if transport == MCPTransport.stdio:
+                if not litellm_constants.MCP_STDIO_TRANSPORT_ENABLED:
+                    raise ValueError(litellm_constants.MCP_STDIO_DISABLED_MESSAGE)
                 if not values.get("command"):
                     raise ValueError("command is required for stdio transport")
                 if not values.get("args"):

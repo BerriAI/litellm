@@ -52,6 +52,7 @@ from pydantic import AnyUrl, BaseModel, TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
+import litellm.constants as litellm_constants
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
@@ -2382,6 +2383,19 @@ class MCPServerManager:
         a LiteLLM_MCPServerTable row is always resolved to that row first."""
         return server_id in self.config_mcp_servers
 
+    @staticmethod
+    def _warn_if_stdio_transport_disabled(server_name: str, server_config: MCPServerConfig) -> None:
+        if (
+            litellm_constants.MCP_STDIO_TRANSPORT_ENABLED
+            or server_config.get("transport", MCPTransport.http) != MCPTransport.stdio
+        ):
+            return
+        verbose_logger.warning(
+            "MCP server '%s' uses stdio transport, which is disabled by default. Set "
+            "LITELLM_ENABLE_STDIO_MCP=true in the proxy's process environment to enable it",
+            server_name,
+        )
+
     async def load_servers_from_config(
         self,
         mcp_servers_config: dict[str, MCPServerConfig],
@@ -2408,6 +2422,7 @@ class MCPServerManager:
 
         for server_name, raw_server_config in mcp_servers_config.items():
             server_config: MCPServerConfig = raw_server_config
+            self._warn_if_stdio_transport_disabled(server_name, server_config)
             _mcp_info: MCPInfo = server_config.get("mcp_info", None) or {}
             # Preserve all custom fields from config while setting defaults for core fields
             mcp_info: MCPInfo = _mcp_info.copy()
@@ -4280,6 +4295,9 @@ class MCPServerManager:
 
         # Handle stdio transport
         if transport == MCPTransport.stdio:
+            if not litellm_constants.MCP_STDIO_TRANSPORT_ENABLED:
+                raise HTTPException(status_code=403, detail=litellm_constants.MCP_STDIO_DISABLED_MESSAGE)
+
             resolved_env: Final = (
                 stdio_env
                 if stdio_env is not None

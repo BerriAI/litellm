@@ -207,10 +207,16 @@ MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH: Final = 8
 MCP_BYOK_CREDENTIAL_CACHE_TTL_SECONDS: Final = 60
 MCP_BYOK_CREDENTIAL_CACHE_MAX_SIZE: Final = 4096
 
-# Allowlist of commands permitted for MCP stdio transport.
-# Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
-# Note: allowlisted runtimes can still execute code via args (e.g. python -c "...").
-# This is an accepted residual risk since these endpoints require PROXY_ADMIN.
+# Config and DB environment_variables are applied after import, so they cannot enable stdio.
+MCP_STDIO_TRANSPORT_ENABLED: Final[bool] = os.getenv("LITELLM_ENABLE_STDIO_MCP", "false").lower() == "true"
+MCP_STDIO_DISABLED_MESSAGE: Final[str] = (
+    "stdio MCP transport is disabled on this proxy. stdio servers run a command on the proxy host, so they are off "
+    "by default. To allow them, the operator must set LITELLM_ENABLE_STDIO_MCP=true in the proxy's process "
+    "environment. Alternatively, run the server behind a stdio-to-HTTP bridge and register it as an HTTP MCP server"
+)
+
+# Defense-in-depth command allowlist for MCP stdio transport, which only applies after operator opt-in.
+# The opt-in is the real control; allowlisted runtimes can still execute arbitrary code through their arguments.
 # Extend via LITELLM_MCP_STDIO_EXTRA_COMMANDS env var (comma-separated).
 _MCP_STDIO_EXTRA_COMMANDS: Final = os.getenv("LITELLM_MCP_STDIO_EXTRA_COMMANDS", "")
 MCP_STDIO_ALLOWED_COMMANDS: Final[frozenset] = frozenset(

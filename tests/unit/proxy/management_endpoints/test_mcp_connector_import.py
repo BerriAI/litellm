@@ -1,5 +1,6 @@
 import pytest
 
+import litellm.constants as litellm_constants
 from litellm.proxy.management_endpoints.mcp_connector_import import (
     ConnectorConversionError,
     ConvertedConnector,
@@ -124,7 +125,8 @@ class TestConvertMcpServersMapping:
         assert isinstance(result, ConvertedConnector)
         assert result.request.transport == MCPTransport.sse
 
-    def test_stdio_connector(self):
+    def test_stdio_connector(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm_constants, "MCP_STDIO_TRANSPORT_ENABLED", True)
         result = _single(
             {
                 "mcpServers": {
@@ -142,10 +144,17 @@ class TestConvertMcpServersMapping:
         assert result.request.args == ["-y", "@example/mcp-server"]
         assert result.request.env == {"API_KEY": "value"}
 
-    def test_disallowed_stdio_command_returns_error(self):
+    def test_disallowed_stdio_command_returns_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm_constants, "MCP_STDIO_TRANSPORT_ENABLED", True)
         result = _single({"mcpServers": {"evil": {"command": "rm", "args": ["-rf", "/"]}}})
         assert isinstance(result, ConnectorConversionError)
         assert "not in the allowed commands list" in result.error
+
+    def test_stdio_connector_is_rejected_when_operator_gate_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm_constants, "MCP_STDIO_TRANSPORT_ENABLED", False)
+        result = _single({"mcpServers": {"local": {"command": "python3", "args": ["-m", "test_server"]}}})
+        assert isinstance(result, ConnectorConversionError)
+        assert litellm_constants.MCP_STDIO_DISABLED_MESSAGE in result.error
 
     def test_unsupported_type_returns_error(self):
         result = _single({"mcpServers": {"ws": {"type": "websocket", "url": "wss://x.example"}}})

@@ -1,8 +1,10 @@
 import json
+from typing import Final
 
 import pytest
 from pydantic import ValidationError
 
+import litellm.constants as litellm_constants
 from litellm.proxy._types import (
     ROLES_WITHIN_ORG,
     ChangePasswordRequest,
@@ -11,13 +13,16 @@ from litellm.proxy._types import (
     LiteLLM_AuditLogs,
     LiteLLM_TeamMembership,
     LitellmUserRoles,
+    NewMCPServerRequest,
     NewUserRequest,
     OrganizationMemberUpdateRequest,
     ResetSpendRequest,
     UpdateKeyRequest,
+    UpdateMCPServerRequest,
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
+from litellm.types.mcp import MCPTransport
 
 SERVER_ONLY_MARKERS = (
     "requires_fresh_policy",
@@ -47,6 +52,65 @@ def test_a_caller_cannot_forge_a_server_only_marker_through_model_validate(marke
     auth = UserAPIKeyAuth.model_validate({marker: "forged-by-caller"})
 
     assert getattr(auth, marker) != "forged-by-caller"
+
+
+def test_new_mcp_stdio_request_obeys_operator_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm_constants, "MCP_STDIO_TRANSPORT_ENABLED", False)
+    with pytest.raises(ValidationError) as exc_info:
+        NewMCPServerRequest(
+            server_name="stdio-gate-test",
+            transport="stdio",
+            command="python3",
+            args=["-m", "test_server"],
+        )
+    assert litellm_constants.MCP_STDIO_DISABLED_MESSAGE in str(exc_info.value)
+
+    monkeypatch.setattr(litellm_constants, "MCP_STDIO_TRANSPORT_ENABLED", True)
+    request: Final = NewMCPServerRequest(
+        server_name="stdio-gate-test",
+        transport="stdio",
+        command="python3",
+        args=["-m", "test_server"],
+    )
+    assert request.transport == MCPTransport.stdio
+
+
+def test_update_mcp_stdio_request_obeys_operator_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm_constants, "MCP_STDIO_TRANSPORT_ENABLED", False)
+    with pytest.raises(ValidationError) as exc_info:
+        UpdateMCPServerRequest(
+            server_id="stdio-gate-test",
+            transport="stdio",
+            command="python3",
+            args=["-m", "test_server"],
+        )
+    assert litellm_constants.MCP_STDIO_DISABLED_MESSAGE in str(exc_info.value)
+
+    monkeypatch.setattr(litellm_constants, "MCP_STDIO_TRANSPORT_ENABLED", True)
+    request: Final = UpdateMCPServerRequest(
+        server_id="stdio-gate-test",
+        transport="stdio",
+        command="python3",
+        args=["-m", "test_server"],
+    )
+    assert request.transport == MCPTransport.stdio
+
+
+def test_http_mcp_requests_are_accepted_when_stdio_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm_constants, "MCP_STDIO_TRANSPORT_ENABLED", False)
+    new_request: Final = NewMCPServerRequest(
+        server_name="http-gate-test",
+        transport="http",
+        url="https://example.com/mcp",
+    )
+    update_request: Final = UpdateMCPServerRequest(
+        server_id="http-gate-test",
+        transport="http",
+        url="https://example.com/mcp",
+    )
+
+    assert new_request.transport == MCPTransport.http
+    assert update_request.transport == MCPTransport.http
 
 
 @pytest.mark.parametrize("marker", SERVER_ONLY_MARKERS)

@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from mcp.types import CallToolResult, TextContent
 from starlette.requests import Request
 
+import litellm.constants as litellm_constants
 from litellm.constants import MCP_TOOL_LISTING_TIMEOUT
 from litellm.proxy._experimental.mcp_server import rest_endpoints
 from litellm.proxy._experimental.mcp_server.auth import (
@@ -3729,6 +3730,10 @@ class TestGetToolsForSingleServer:
 
 class TestStdioCommandAllowlist:
     """Tests for MCP stdio command allowlist validation."""
+
+    @pytest.fixture(autouse=True)
+    def enable_stdio_for_allowlist_tests(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm_constants, "MCP_STDIO_TRANSPORT_ENABLED", True)
 
     def test_allowed_command_passes_validation(self):
         """npx, uvx, python, etc. should be accepted."""

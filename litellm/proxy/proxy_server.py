@@ -6174,6 +6174,8 @@ class ProxyConfig:
         "LOGNAME",
         "NO_PROXY",
         "no_proxy",
+        "LITELLM_ENABLE_STDIO_MCP",
+        "LITELLM_MCP_STDIO_EXTRA_COMMANDS",
     }
 
     def _load_environment_variables(self, config: dict):
@@ -6182,8 +6184,11 @@ class ProxyConfig:
         environment_variables: Final = config.get("environment_variables", None)
         if environment_variables:
             for key, value in environment_variables.items():
-                if key in self._BLOCKED_ENV_KEYS:
-                    verbose_proxy_logger.warning("Skipping blocked environment variable key: %s", key)
+                if key.upper() in self._BLOCKED_ENV_KEYS:
+                    verbose_proxy_logger.warning(
+                        "Skipping blocked environment variable key: %s",
+                        cast(str, key),  # cast-ok: config environment-variable keys are strings
+                    )
                     continue
                 #########################################################
                 # handles this scenario:
@@ -7586,6 +7591,12 @@ class ProxyConfig:
         """
         decrypted_env_vars: Final = {}
         for k, v in environment_variables.items():
+            if k.upper() in self._BLOCKED_ENV_KEYS:
+                verbose_proxy_logger.warning(
+                    "Skipping blocked environment variable key: %s",
+                    cast(str, k),  # cast-ok: stored environment-variable keys are strings
+                )
+                continue
             try:
                 decrypted_value = decrypt_value_helper(value=v, key=k, return_original_value=return_original_value)
                 if decrypted_value is not None:
@@ -8033,6 +8044,12 @@ class ProxyConfig:
                 **{key.upper(): decrypted_value for key, decrypted_value in decrypted.items()},
             }
             for key, decrypted_value in normalized.items():
+                if key.upper() in self._BLOCKED_ENV_KEYS:
+                    verbose_proxy_logger.warning(
+                        "Skipping blocked environment variable key: %s",
+                        cast(str, key),  # cast-ok: normalized environment-variable keys are strings
+                    )
+                    continue
                 os.environ[key] = decrypted_value
             return _as_settings_mapping(normalized)
 

@@ -20,6 +20,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 import litellm
+import litellm.constants as litellm_constants
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -149,6 +150,25 @@ def create_mcp_router_test_client() -> TestClient:
     app = FastAPI()
     app.include_router(router)
     return TestClient(app)
+
+
+def test_post_mcp_server_returns_422_when_stdio_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm_constants, "MCP_STDIO_TRANSPORT_ENABLED", False)
+    client = create_mcp_router_test_client()
+    client.app.dependency_overrides[mgmt_endpoints.user_api_key_auth] = lambda: generate_mock_user_api_key_auth()
+
+    response = client.post(
+        "/v1/mcp/server",
+        json={
+            "server_name": "stdio-gate-test",
+            "transport": "stdio",
+            "command": "python3",
+            "args": ["-m", "test_server"],
+        },
+    )
+
+    assert response.status_code == 422
+    assert litellm_constants.MCP_STDIO_DISABLED_MESSAGE in response.text
 
 
 def patch_proxy_general_settings(settings: dict):
@@ -4881,7 +4901,8 @@ class TestMCPApprovalWorkflow:
         assert "team" in str(exc_info.value.detail).lower()
 
     @pytest.mark.asyncio
-    async def test_register_mcp_server_rejects_stdio_transport(self):
+    async def test_register_mcp_server_rejects_stdio_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm_constants, "MCP_STDIO_TRANSPORT_ENABLED", True)
         # stdio servers spawn a local subprocess on the proxy host. Accepting
         # them from the non-admin submission endpoint would let a team member
         # propose a config that an admin could rubber-stamp into local code

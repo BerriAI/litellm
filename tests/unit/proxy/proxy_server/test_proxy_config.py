@@ -13,7 +13,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
@@ -2118,6 +2118,28 @@ def test_ProxyConfig__load_environment_variables_blocks_dangerous_keys(monkeypat
     assert os.environ.get("PATH", "") == original_path
 
 
+@pytest.mark.parametrize(
+    "blocked_key",
+    (
+        "LITELLM_ENABLE_STDIO_MCP",
+        "litellm_enable_stdio_mcp",
+        "LITELLM_MCP_STDIO_EXTRA_COMMANDS",
+        "litellm_mcp_stdio_extra_commands",
+    ),
+)
+def test_ProxyConfig__load_environment_variables_blocks_stdio_controls_and_sets_normal_key(
+    monkeypatch: pytest.MonkeyPatch, blocked_key: str
+) -> None:
+    monkeypatch.delenv(blocked_key, raising=False)
+    monkeypatch.delenv("STDIO_GATE_CONFIG_NORMAL", raising=False)
+    ProxyConfig()._load_environment_variables(
+        {"environment_variables": {blocked_key: "true", "STDIO_GATE_CONFIG_NORMAL": "allowed"}}
+    )
+
+    assert blocked_key not in os.environ
+    assert os.environ["STDIO_GATE_CONFIG_NORMAL"] == "allowed"
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig.load_config
 # ---------------------------------------------------------------------------
@@ -3501,6 +3523,72 @@ def test_ProxyConfig__decrypt_and_set_db_env_variables_sets_env(monkeypatch):
         "KEY_Y_env": "y-dec",
         "returned_keys": ["KEY_X", "KEY_Y"],
     }
+
+
+@pytest.mark.parametrize(
+    "blocked_key",
+    (
+        "LITELLM_ENABLE_STDIO_MCP",
+        "litellm_enable_stdio_mcp",
+        "LITELLM_MCP_STDIO_EXTRA_COMMANDS",
+        "litellm_mcp_stdio_extra_commands",
+    ),
+)
+def test_ProxyConfig__prepared_db_settings_blocks_stdio_controls_and_sets_normal_key(
+    monkeypatch: pytest.MonkeyPatch, blocked_key: str
+) -> None:
+    passthrough_decrypt: Final[Callable[[str, str, bool], str]] = (
+        lambda value, key, return_original_value=False: value
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        passthrough_decrypt,
+    )
+    monkeypatch.delenv(blocked_key, raising=False)
+    monkeypatch.delenv("STDIO_GATE_DB_NORMAL", raising=False)
+    pc = ProxyConfig()
+
+    result: Final = pc._prepared_db_settings_values(
+        section="environment_variables",
+        value={blocked_key: "true", "STDIO_GATE_DB_NORMAL": "allowed"},
+    )
+
+    assert blocked_key not in os.environ
+    assert "LITELLM_ENABLE_STDIO_MCP" not in result
+    assert "LITELLM_MCP_STDIO_EXTRA_COMMANDS" not in result
+    assert result == {"STDIO_GATE_DB_NORMAL": "allowed"}
+    assert os.environ["STDIO_GATE_DB_NORMAL"] == "allowed"
+
+
+@pytest.mark.parametrize(
+    "blocked_key",
+    (
+        "LITELLM_ENABLE_STDIO_MCP",
+        "litellm_enable_stdio_mcp",
+        "LITELLM_MCP_STDIO_EXTRA_COMMANDS",
+        "litellm_mcp_stdio_extra_commands",
+    ),
+)
+def test_ProxyConfig__decrypt_and_set_db_env_variables_blocks_stdio_controls(
+    monkeypatch: pytest.MonkeyPatch, blocked_key: str
+) -> None:
+    passthrough_decrypt: Final[Callable[[str, str, bool], str]] = (
+        lambda value, key, return_original_value=False: value
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        passthrough_decrypt,
+    )
+    monkeypatch.delenv(blocked_key, raising=False)
+    monkeypatch.delenv("STDIO_GATE_DECRYPT_NORMAL", raising=False)
+
+    result: Final = ProxyConfig()._decrypt_and_set_db_env_variables(
+        {blocked_key: "true", "STDIO_GATE_DECRYPT_NORMAL": "allowed"}
+    )
+
+    assert blocked_key not in os.environ
+    assert result == {"STDIO_GATE_DECRYPT_NORMAL": "allowed"}
+    assert os.environ["STDIO_GATE_DECRYPT_NORMAL"] == "allowed"
 
 
 def test_ProxyConfig__decrypt_and_set_db_env_variables_invalid_dict_raises():
