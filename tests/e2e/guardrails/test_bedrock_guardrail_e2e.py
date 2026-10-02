@@ -21,11 +21,12 @@ from typing import Final
 
 import pytest
 from e2e_config import unique_marker
-from e2e_http import UnknownApiError
+from e2e_http import StreamingResponse, UnknownApiError
 from guardrails_client import (
     BedrockGuardrailParamsBody,
     GuardrailsClient,
     poll_until_blocked,
+    poll_until_blocked_stream,
 )
 from lifecycle import ResourceManager
 from pydantic import JsonValue, TypeAdapter
@@ -135,3 +136,83 @@ class TestBedrockGuardrail:
                 )
             case _:
                 pytest.fail(f"bedrock post_call guardrail did not block denied model output; got {result}")
+
+    @pytest.mark.covers("guardrail.bedrock.pre_call.blocks", exercised_on=["messages"])
+    def test_bedrock_pre_call_blocks_on_messages(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        name = _register_pre_call(client, resources, "e2e-bedrock-messages")
+
+        result = poll_until_blocked_stream(
+            lambda: client.messages_raw(scoped_key, MODEL, BLOCKED_PROMPT, guardrails=[name])
+        )
+        _assert_policy_block(result, "/v1/messages")
+
+    @pytest.mark.covers("guardrail.bedrock.pre_call.blocks", exercised_on=["responses"])
+    def test_bedrock_pre_call_blocks_on_responses(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        name = _register_pre_call(client, resources, "e2e-bedrock-responses")
+
+        result = poll_until_blocked_stream(
+            lambda: client.responses(scoped_key, MODEL, BLOCKED_PROMPT, guardrails=[name])
+        )
+        _assert_policy_block(result, "/v1/responses")
+
+    @pytest.mark.covers("guardrail.bedrock.post_call.blocks", exercised_on=["chat_completions"])
+    def test_bedrock_post_call_blocks_denied_streamed_output_and_passes_clean_streams(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        blocked_word = os.environ.get("BEDROCK_GUARDRAIL_BLOCKED_WORD", "FORBIDDENWORD")
+        name = f"e2e-bedrock-post-stream-{unique_marker()}"
+        guardrail_id = client.register(
+            name,
+            BedrockGuardrailParamsBody(
+                mode="post_call",
+                default_on=False,
+                guardrailIdentifier=os.environ["BEDROCK_GUARDRAIL_IDENTIFIER"],
+                guardrailVersion=os.environ["BEDROCK_GUARDRAIL_VERSION"],
+            ),
+        )
+        resources.defer(lambda: client.delete_guardrail(guardrail_id))
+
+        prompt = f"Reply with exactly this one word and nothing else: {blocked_word}"
+        blocked = poll_until_blocked_stream(
+            lambda: client.chat_stream_raw(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=128)
+        )
+        _assert_policy_block(blocked, "streamed /chat/completions")
+        assert blocked.chunks == 0 and not blocked.stream_events, (
+            f"a post_call block must deliver no content chunk, got {blocked.chunks}: {blocked.stream_events[:3]}"
+        )
+        assert "text/event-stream" not in (blocked.content_type or ""), (
+            f"the block must be a JSON error, not an SSE stream; got content-type {blocked.content_type!r}"
+        )
+        assert blocked_word not in json.dumps(_without_assessments(_JSON.validate_json(blocked.body))), (
+            f"the blocked model output must not leak into the error body; got: {blocked.body[:400]}"
+        )
+
+        clean = client.chat_stream_raw(
+            scoped_key, MODEL, "Reply with exactly this one word and nothing else: hello", guardrails=[name]
+        )
+        assert clean.ok and clean.is_streaming, f"a clean output must stream through the guardrail: {clean.body[:400]}"
+        assert clean.stream_events and clean.stream_error is None, f"clean stream carried no content: {clean!r}"
+
+
+def _register_pre_call(client: GuardrailsClient, resources: ResourceManager, prefix: str) -> str:
+    name = f"{prefix}-{unique_marker()}"
+    guardrail_id = client.create_bedrock_guardrail(
+        name,
+        identifier=os.environ["BEDROCK_GUARDRAIL_IDENTIFIER"],
+        version=os.environ["BEDROCK_GUARDRAIL_VERSION"],
+    )
+    resources.defer(lambda: client.delete_guardrail(guardrail_id))
+    return name
+
+
+def _assert_policy_block(result: StreamingResponse, surface: str) -> None:
+    assert result.status_code == 400, (
+        f"{surface}: a Bedrock policy block must be HTTP 400, got {result.status_code}: {result.body[:400]}"
+    )
+    assert "violated guardrail policy" in result.body.lower(), (
+        f"{surface}: block body must name the guardrail verdict; got: {result.body[:400]}"
+    )
