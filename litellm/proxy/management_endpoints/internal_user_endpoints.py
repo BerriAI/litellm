@@ -54,8 +54,9 @@ from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventH
 from litellm.proxy.management.teams.access import is_team_admin
 from litellm.proxy.management_endpoints.common_daily_activity import (
     DailySpendRecord,
+    ScopeDenied,
     get_daily_activity,
-    get_daily_activity_aggregated,
+    raise_public,
 )
 from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_view,
@@ -2830,7 +2831,7 @@ async def ui_view_users(
         if org_filter_ids is not None:
             where_conditions["organization_memberships"] = {"some": {"organization_id": {"in": org_filter_ids}}}
 
-        where: Final[Mapping[str, object]] = {  # mutable-ok: prisma serializes `where`, keep it a plain dict
+        where: Final[Mapping[str, object]] = {
             key: value
             for key, value in (*where_conditions.items(), *_user_search_where(search).items())
             if value is not None
@@ -2860,6 +2861,18 @@ async def ui_view_users(
 
 
 # Using shared metric helper implementations from common_daily_activity
+
+
+def resolve_user_daily_activity_entity_ids(
+    *, user_id: str | None, user_api_key_dict: UserAPIKeyAuth
+) -> tuple[str, ...] | None | ScopeDenied:
+    if _user_has_admin_view(user_api_key_dict):
+        return (user_id,) if user_id is not None else None
+
+    caller_user_id: Final = require_caller_user_id_for_non_admin(user_api_key_dict)
+    if user_id is not None and user_id != caller_user_id:
+        return ScopeDenied(403, "Non-admin users can only view their own spend data.")
+    return (caller_user_id,)
 
 
 async def _resolve_user_email_metadata(
@@ -2956,20 +2969,13 @@ async def get_user_daily_activity(
         )
 
     try:
-        is_admin: Final = _user_has_admin_view(user_api_key_dict)
-
-        if is_admin:
-            entity_id = user_id  # None means global view, otherwise filter by user
-        else:
-            caller_user_id: Final = require_caller_user_id_for_non_admin(user_api_key_dict)
-            if user_id is None:
-                user_id = caller_user_id
-            if user_id != caller_user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"error": "Non-admin users can only view their own spend data."},
-                )
-            entity_id = user_id
+        resolved_entity_ids: Final = resolve_user_daily_activity_entity_ids(
+            user_id=user_id,
+            user_api_key_dict=user_api_key_dict,
+        )
+        if isinstance(resolved_entity_ids, ScopeDenied):
+            raise_public(resolved_entity_ids)
+        entity_id: Final[str | None] = resolved_entity_ids[0] if resolved_entity_ids is not None else None
 
         return await get_daily_activity(
             prisma_client=prisma_client,
@@ -2992,111 +2998,6 @@ async def get_user_daily_activity(
         raise
     except Exception as e:
         verbose_proxy_logger.exception("/spend/daily/analytics: Exception occured - %s", e)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to fetch analytics: {e}"},
-        )
-
-
-@router.get(
-    "/user/daily/activity/aggregated",
-    tags=["Budget & Spend Tracking", "Internal User management"],
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=SpendAnalyticsPaginatedResponse,
-)
-@management_endpoint_wrapper
-async def get_user_daily_activity_aggregated(
-    start_date: str | None = fastapi.Query(
-        default=None,
-        description="Start date in YYYY-MM-DD format",
-    ),
-    end_date: str | None = fastapi.Query(
-        default=None,
-        description="End date in YYYY-MM-DD format",
-    ),
-    model: str | None = fastapi.Query(
-        default=None,
-        description="Filter by specific model",
-    ),
-    api_key: str | None = fastapi.Query(
-        default=None,
-        description="Filter by specific API key",
-    ),
-    user_id: str | None = fastapi.Query(
-        default=None,
-        description="Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id.",
-    ),
-    timezone: int | None = fastapi.Query(
-        default=None,
-        description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
-        "Matches JavaScript's Date.getTimezoneOffset() convention.",
-    ),
-    include_current_utc_day: bool = fastapi.Query(
-        default=False,
-        description="When the range ends on the caller's current local day, extend it to "
-        "today's UTC bucket so spend written after the caller's local midnight (in UTC "
-        "terms) is included. Requires the timezone parameter. Historical ranges are "
-        "never extended.",
-    ),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> SpendAnalyticsPaginatedResponse:
-    """
-    Aggregated analytics for a user's daily activity without pagination.
-    Returns the same response shape as the paginated endpoint with page metadata set to single-page.
-
-    Reads daily spend records that only ever accumulate and are never affected by budget
-    resets. Their total can legitimately exceed the `spend` field returned by
-    `/v2/user/info`, which is a running budget counter that every budget reset sets back
-    to zero (or to the overage above `max_budget` when `budget_rollover` is enabled).
-    """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
-
-    if start_date is None or end_date is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": "Please provide start_date and end_date"},
-        )
-
-    try:
-        is_admin: Final = _user_has_admin_view(user_api_key_dict)
-
-        if is_admin:
-            entity_id = user_id  # None means global view, otherwise filter by user
-        else:
-            caller_user_id: Final = require_caller_user_id_for_non_admin(user_api_key_dict)
-            if user_id is None:
-                user_id = caller_user_id
-            if user_id != caller_user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"error": "Non-admin users can only view their own spend data."},
-                )
-            entity_id = user_id
-
-        return await get_daily_activity_aggregated(
-            prisma_client=prisma_client,
-            table_name="litellm_dailyuserspend",
-            entity_id_field="user_id",
-            entity_id=entity_id,
-            entity_metadata_field=None,
-            start_date=start_date,
-            end_date=end_date,
-            model=model,
-            api_key=api_key,
-            timezone_offset_minutes=timezone,
-            include_current_utc_day=include_current_utc_day,
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        verbose_proxy_logger.exception("/user/daily/activity/aggregated: Exception occured - %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {e}"},

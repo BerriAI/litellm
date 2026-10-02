@@ -61,7 +61,7 @@ class EdenAIChatConfig(OpenAIGPTConfig):
             if litellm.supports_reasoning(model=model, custom_llm_provider=litellm.LlmProviders.EDENAI.value)
             else ()
         )
-        return [*super().get_supported_openai_params(model), *reasoning]  # mutable-ok: inherited contract
+        return [*super().get_supported_openai_params(model), *reasoning]
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
@@ -84,7 +84,7 @@ class EdenAIChatConfig(OpenAIGPTConfig):
         )
         if not request.get("stream"):
             return request
-        return {**request, "stream_options": dict(_stream_options_with_usage(request))}  # mutable-ok: JSON body
+        return {**request, "stream_options": dict(_stream_options_with_usage(request))}
 
     def transform_response(
         self,
@@ -141,4 +141,4 @@ class EdenAIChatConfig(OpenAIGPTConfig):
         if not response.is_success:
             raise EdenAIException(status_code=response.status_code, message=response.text, headers=response.headers)
         catalog: Final = _EdenAIModelCatalog.model_validate(response.json())
-        return [f"edenai/{model.id}" for model in catalog.data]  # mutable-ok: inherited contract
+        return [f"edenai/{model.id}" for model in catalog.data]

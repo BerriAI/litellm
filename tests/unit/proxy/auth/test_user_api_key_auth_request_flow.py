@@ -6267,6 +6267,7 @@ async def test_user_api_key_auth_sets_end_user_id_when_builder_skips_it():
             "type": "http",
             "headers": [(b"content-type", b"application/json")],
             "method": "POST",
+            "path": "/chat/completions",
         }
     )
     request._url = URL(url="/chat/completions")
@@ -6321,6 +6322,7 @@ async def test_user_api_key_auth_does_not_overwrite_end_user_id_set_by_builder()
             "type": "http",
             "headers": [(b"content-type", b"application/json")],
             "method": "POST",
+            "path": "/chat/completions",
         }
     )
     request._url = URL(url="/chat/completions")
@@ -6376,6 +6378,7 @@ async def test_user_api_key_auth_authenticates_before_raising_malformed_body_err
             "type": "http",
             "headers": [(b"content-type", b"application/json")],
             "method": "POST",
+            "path": "/chat/completions",
         }
     )
     request._url = URL(url="/chat/completions")
@@ -6435,6 +6438,7 @@ async def _run_auth_with_malformed_body(post_call_failure_hook):
             "type": "http",
             "headers": [(b"content-type", b"application/json")],
             "method": "POST",
+            "path": "/chat/completions",
         }
     )
     request._url = URL(url="/chat/completions")
@@ -6507,6 +6511,7 @@ async def test_user_api_key_auth_malformed_body_with_rejected_key_still_returns_
             "type": "http",
             "headers": [(b"content-type", b"application/json")],
             "method": "POST",
+            "path": "/chat/completions",
         }
     )
     request._url = URL(url="/chat/completions")
@@ -6557,6 +6562,7 @@ async def test_user_api_key_auth_does_not_double_log_a_malformed_body_from_a_rej
             "type": "http",
             "headers": [(b"content-type", b"application/json")],
             "method": "POST",
+            "path": "/chat/completions",
         }
     )
     request._url = URL(url="/chat/completions")

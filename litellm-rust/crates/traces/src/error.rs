@@ -1,37 +1,29 @@
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("invalid ClickHouse insert row")]
-    InvalidRow,
-    #[error("invalid ClickHouse insert table")]
-    InvalidTable,
-    #[error("invalid ClickHouse HTTP URL")]
-    InvalidUrl,
-    #[error("database must be a nonempty SQL identifier and retention must be positive")]
-    InvalidSchema,
-    #[error("SQL query must not be empty")]
-    EmptySql,
-    #[error("unknown ClickHouse read query")]
-    InvalidQuery,
-    #[error("ClickHouse query failed with HTTP status {0}")]
-    QueryFailed(u16),
-    #[error("ClickHouse insert failed with HTTP status {0}")]
-    InsertFailed(u16),
-    #[error("ClickHouse insert exceeds the encoded size limit")]
-    InsertTooLarge,
-    #[error("ClickHouse schema setup failed with HTTP status {0}")]
-    SchemaFailed(u16),
-    #[error("ClickHouse query exceeded the response size limit")]
-    ResponseTooLarge,
-    #[error("ClickHouse returned an invalid or failed JSON query response")]
-    InvalidResponse,
-    #[error("ClickHouse query transport failed")]
-    Transport,
-}
-
-#[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
     #[error("invalid OTLP trace payload")]
     InvalidPayload,
-    #[error("OTLP trace payload exceeds the decompressed size limit")]
+    #[error("OTLP trace payload exceeds the decoding budget")]
     TooLarge,
+    #[error("OTLP token count is outside the storage range")]
+    TokenCountOutOfRange,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum QueryAccessError {
+    #[error("trace SQL queries require a configured proxy master key")]
+    MissingSecret,
+    #[error("invalid trace query scope")]
+    InvalidScope,
+    #[error("trace SQL query concurrency limit exceeded")]
+    Busy,
+    #[error(
+        "ClickHouse reader provisioning failed with HTTP status {0}; the configured connection must be allowed to manage users, row policies, and SELECT grants on the trace tables"
+    )]
+    ProvisionFailed(u16),
+    #[error("ClickHouse reader provisioning transport failed")]
+    ProvisionTransport,
+    #[error(transparent)]
+    Storage(#[from] litellm_storage_clickhouse::Error),
+    #[error(transparent)]
+    Cached(#[from] std::sync::Arc<QueryAccessError>),
 }

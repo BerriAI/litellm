@@ -2789,6 +2789,167 @@ def test_sanitize_response_redacts_credential_named_fields() -> None:
     }
 
 
+def test_sanitize_response_keeps_logprob_tokens() -> None:
+    response: Final = {
+        "system_fingerprint": "fp_x",
+        "choices": [
+            {
+                "logprobs": {
+                    "content": [
+                        {
+                            "token": "sort",
+                            "logprob": -0.1,
+                            "bytes": [115],
+                            "top_logprobs": [{"token": "sort", "logprob": -0.1}],
+                        }
+                    ]
+                }
+            }
+        ],
+    }
+
+    assert _sanitize_request_body_for_spend_logs_payload({"response": response}) == {
+        "response": {
+            "system_fingerprint": REDACTED_BY_LITELM_STRING,
+            "choices": [
+                {
+                    "logprobs": {
+                        "content": [
+                            {
+                                "token": "sort",
+                                "logprob": -0.1,
+                                "bytes": [115],
+                                "top_logprobs": [{"token": "sort", "logprob": -0.1}],
+                            }
+                        ]
+                    }
+                }
+            ],
+        }
+    }
+
+
+def test_sanitize_request_body_keeps_key_named_tool_payload_fields() -> None:
+    request_body: Final = {
+        "model": "anthropic/claude",
+        "aws_secret_access_key": "AKIAEXAMPLESECRET",
+        "prompt_cache_key": "tenant-42-cache",
+        "metadata": {"user_api_key_alias": "tenant-user"},
+        "secret_fields": {"raw_headers": {"authorization": "Bearer secret"}},
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "input": {"key": "order-123", "sort_key": "created_at"}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_order",
+                            "arguments": {"key": "order-123", "sort_key": "created_at"},
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "content": {"token_type": "bearer", "partition_key": "tenant_42"}},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "content": [{"token_type": "bearer", "partition_key": "tenant_42"}],
+                    }
+                ],
+            },
+        ],
+        "input": [
+            {"type": "function_call", "arguments": {"key": "tenant-42", "access_level": "admin"}},
+            {
+                "type": "function_call_output",
+                "output": {"token_type": "bearer", "partition_key": "tenant_42"},
+            },
+        ],
+    }
+
+    assert _sanitize_request_body_for_spend_logs_payload(request_body) == {
+        "model": "anthropic/claude",
+        "aws_secret_access_key": REDACTED_BY_LITELM_STRING,
+        "prompt_cache_key": REDACTED_BY_LITELM_STRING,
+        "metadata": {"user_api_key_alias": REDACTED_BY_LITELM_STRING},
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "input": {"key": "order-123", "sort_key": "created_at"}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_order",
+                            "arguments": {"key": "order-123", "sort_key": "created_at"},
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "content": {"token_type": "bearer", "partition_key": "tenant_42"}},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "content": [{"token_type": "bearer", "partition_key": "tenant_42"}],
+                    }
+                ],
+            },
+        ],
+        "input": [
+            {"type": "function_call", "arguments": {"key": "tenant-42", "access_level": "admin"}},
+            {
+                "type": "function_call_output",
+                "output": {"token_type": "bearer", "partition_key": "tenant_42"},
+            },
+        ],
+    }
+
+
+def test_sanitize_request_body_masks_credentials_beside_tool_blocks() -> None:
+    request_body: Final = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "api_key": "sk-live", "input": {"key": "order-123"}},
+                    {"type": {"nested": 1}, "input": {"api_key": "x"}},
+                ],
+            }
+        ]
+    }
+
+    assert _sanitize_request_body_for_spend_logs_payload(request_body) == {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "api_key": REDACTED_BY_LITELM_STRING,
+                        "input": {"key": "order-123"},
+                    },
+                    {"type": {"nested": 1}, "input": {"api_key": REDACTED_BY_LITELM_STRING}},
+                ],
+            }
+        ]
+    }
+
+
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_proxy_server_request_payload_excludes_secret_fields(mock_should_store):
     """
@@ -5448,13 +5609,13 @@ def test_baseline_estimate_metadata_comes_from_the_logging_stamp() -> None:
     supplied: Final = MappingProxyType({"version": 1, "status": "estimated", "reason": "caller_supplied"})
     recorded: Final = MappingProxyType({"version": 1, "status": "unknown", "reason": "history_unavailable"})
     result: Final = _get_spend_logs_metadata(
-        {"autorouter_savings": 999.0, "autorouter_savings_estimate": supplied},  # mutable-ok: legacy metadata helper accepts dicts
+        {"autorouter_savings": 999.0, "autorouter_savings_estimate": supplied},
         autorouter_savings=None,
         autorouter_savings_estimate=recorded,
     )
     assert result["autorouter_savings"] is None
     assert result["autorouter_savings_estimate"] == recorded
-    absent: Final = _get_spend_logs_metadata({"autorouter_savings_estimate": supplied})  # mutable-ok: legacy metadata helper accepts dicts
+    absent: Final = _get_spend_logs_metadata({"autorouter_savings_estimate": supplied})
     assert absent["autorouter_savings_estimate"] is None
 
 

@@ -33,7 +33,7 @@ from litellm.types.services import ServiceTypes
 
 _T = TypeVar("_T")
 _ScriptArg = str | bytes | int | float
-SettledHook = Callable[[asyncio.Future[_T]], Awaitable[None] | None]  # mutable-ok: Callable params
+SettledHook = Callable[[asyncio.Future[_T]], Awaitable[None] | None]
 POST_CALL_FLUSH_DEADLINE_SECONDS: Final = 1.0
 
 
@@ -139,7 +139,7 @@ class _MGet(_Op[Mapping[str, object]]):
         )
 
     async def run_alone(self) -> Mapping[str, object]:
-        found: Mapping[str, object] = await self._redis_cache.async_batch_get_cache(key_list=list(self._keys))  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped cache API  # mutable-ok: the cache API takes a list
+        found: Mapping[str, object] = await self._redis_cache.async_batch_get_cache(key_list=list(self._keys))  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped cache API
         if any(key not in found for key in self._keys):
             raise ConnectionError("batch get did not return every key")
         return found

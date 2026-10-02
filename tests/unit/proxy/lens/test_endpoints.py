@@ -4,7 +4,22 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.lens.endpoints import user_scope
+from litellm.proxy.lens.endpoints import list_agents, user_scope
+
+
+@pytest.mark.parametrize("role", (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY))
+@pytest.mark.asyncio
+async def test_agent_discovery_without_trace_storage_is_empty(role: LitellmUserRoles) -> None:
+    auth: Final = UserAPIKeyAuth(user_role=role)
+    assert await list_agents(auth, None) == ()
+
+
+@pytest.mark.asyncio
+async def test_agent_discovery_without_trace_storage_still_requires_admin_access() -> None:
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+    with pytest.raises(HTTPException) as error:
+        await list_agents(auth, None)
+    assert error.value.status_code == 403
 
 
 @pytest.mark.parametrize(

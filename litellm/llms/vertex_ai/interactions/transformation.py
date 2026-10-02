@@ -91,7 +91,7 @@ class VertexAIInteractionsConfig(VertexBase, GoogleAIStudioInteractionsConfig):
         litellm_params: GenericLiteLLMParams | None,
     ) -> dict:  # mutable-ok: BaseInteractionsAPIConfig declares plain-dict headers
         access_token, _ = self._mint(litellm_params or GenericLiteLLMParams())
-        return {  # mutable-ok: BaseInteractionsAPIConfig declares plain-dict headers
+        return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {access_token}",
             **headers,
@@ -119,7 +119,7 @@ class VertexAIInteractionsConfig(VertexBase, GoogleAIStudioInteractionsConfig):
         url_suffix: str = "",
     ) -> tuple[str, dict]:  # mutable-ok: BaseInteractionsAPIConfig declares a plain-dict request body
         target: Final = self._target(api_base or None, litellm_params)
-        return f"{target.interaction_url(interaction_id)}{url_suffix}", {}  # mutable-ok: same base contract
+        return f"{target.interaction_url(interaction_id)}{url_suffix}", {}
 
     def transform_get_interaction_request(
         self,

@@ -1247,7 +1247,7 @@ async def map_raw_file_ids_to_unified(
     if not raw_file_ids or not prisma_client:
         return MappingProxyType({})
     managed_files: Final = await ManagedFileRepository(prisma_client).table.find_many(
-        where={"flat_model_file_ids": {"hasSome": sorted(raw_file_ids)}}  # mutable-ok: prisma where is a plain dict
+        where={"flat_model_file_ids": {"hasSome": sorted(raw_file_ids)}}
     )
     return MappingProxyType(
         {

@@ -184,6 +184,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
         admitted_user_context,
         build_effective_auth_contexts,
+        granted_toolset_ids,
         is_ui_session_credential,
     )
     from litellm.proxy._types import (
@@ -303,9 +304,7 @@ if MCP_AVAILABLE:
     def raise_mcp_identifier_conflict(conflict: McpIdentifierConflict) -> NoReturn:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
-                "error": mcp_identifier_conflict_message(conflict)
-            },
+            detail={"error": mcp_identifier_conflict_message(conflict)},
         )
 
     def warn_if_id_jag_server_outruns_sso(server_id: str | None, auth_type: MCPAuth | str | None) -> None:
@@ -692,7 +691,7 @@ if MCP_AVAILABLE:
             if scopes_as_objects and all(isinstance(scope, str) and scope for scope in scopes_as_objects)
             else {}
         )
-        preserved: Final = {  # mutable-ok: API response payload
+        preserved: Final = {
             **{
                 key: value
                 for key in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS
@@ -727,7 +726,7 @@ if MCP_AVAILABLE:
             if not _user_is_full_admin(user_api_key_dict):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
+                    detail={
                         "error": "Proxy admin access required to revoke another user's MCP credential.",
                     },
                 )
@@ -1463,9 +1462,7 @@ if MCP_AVAILABLE:
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={  # mutable-ok: HTTPException detail must be a plain mapping to keep this route's {"error": ...} response shape
-                    "error": "Admin access required to view MCP gateway sessions."
-                },
+                detail={"error": "Admin access required to view MCP gateway sessions."},
             )
         from litellm.proxy._experimental.mcp_server.server import (
             get_mcp_gateway_sessions_report,
@@ -1491,14 +1488,14 @@ if MCP_AVAILABLE:
         if not _user_is_full_admin(user_api_key_dict):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
+                detail={
                     "error": "Proxy admin access required to terminate MCP gateway sessions.",
                 },
             )
         if session_id_prefix is None and user_id is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
+                detail={
                     "error": "Provide session_id_prefix and/or user_id to select the sessions to terminate.",
                 },
             )
@@ -1923,7 +1920,7 @@ if MCP_AVAILABLE:
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
+                detail={
                     "error": "User does not have permission to import mcp servers. You can only import mcp servers if you are a PROXY_ADMIN."
                 },
             )
@@ -2514,7 +2511,7 @@ if MCP_AVAILABLE:
         if binding is not None and binding.mode == "enforce":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={  # mutable-ok: FastAPI exception detail requires a JSON-serializable dictionary
+                detail={
                     "error": "oauth_identity_binding_enforced",
                     "error_description": (
                         "Direct credential storage is disabled for this server: its OAuth identity "
@@ -2719,7 +2716,7 @@ if MCP_AVAILABLE:
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
+                detail={
                     "error": "Admin access required to view MCP server user credentials.",
                 },
             )
@@ -3017,7 +3014,7 @@ if MCP_AVAILABLE:
             if not relay_eligible:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
+                    detail={
                         "error": (
                             "per_server_oauth_discovery is only supported for auth_type oauth2 with oauth2_flow "
                             "authorization_code and without delegate_auth_to_upstream."
@@ -3336,18 +3333,15 @@ if MCP_AVAILABLE:
     ):
         """Return toolsets the calling key is allowed to access."""
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
-        is_admin: Final = _user_has_admin_view(user_api_key_dict)
-        op: Final = user_api_key_dict.object_permission
-        # mcp_toolsets=None or [] both mean "not restricted by toolsets".
-        # For admins: either value → no restriction → return all.
-        # For non-admins: either value → no toolsets explicitly granted → return nothing.
-        # (An admin whose DB row has mcp_toolsets=[] should still see all toolsets.)
-        raw_toolsets: Final = getattr(op, "mcp_toolsets", None) if op else None
-        if not raw_toolsets:
-            if is_admin:
+        if _user_has_admin_view(user_api_key_dict):
+            op: Final = user_api_key_dict.object_permission
+            if op is None or not op.mcp_toolsets:
                 return await list_mcp_toolsets(prisma_client)
+            return await list_mcp_toolsets(prisma_client, toolset_ids=op.mcp_toolsets)
+        granted: Final = await granted_toolset_ids(user_api_key_dict)
+        if not granted:
             return []
-        return await list_mcp_toolsets(prisma_client, toolset_ids=raw_toolsets)
+        return await list_mcp_toolsets(prisma_client, toolset_ids=sorted(granted))
 
     @router.get(
         "/toolset/{toolset_id}",
@@ -3359,15 +3353,13 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
-        # Non-admin keys may only fetch toolsets they've been explicitly granted.
-        if not _user_has_admin_view(user_api_key_dict):
-            op: Final = user_api_key_dict.object_permission
-            granted: Final = getattr(op, "mcp_toolsets", None) if op else None
-            if granted is None or toolset_id not in granted:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"error": "API key does not have access to this toolset."},
-                )
+        if not _user_has_admin_view(user_api_key_dict) and toolset_id not in await granted_toolset_ids(
+            user_api_key_dict
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "API key does not have access to this toolset."},
+            )
         toolset: Final = await get_mcp_toolset(prisma_client, toolset_id)
         if toolset is None:
             raise HTTPException(
