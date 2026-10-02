@@ -400,6 +400,7 @@ class MCPClient:
         elicitation_callback: Callable | None = None,
         logging_callback: Callable | None = None,
         protocol_version: MCPUpstreamProtocol = "auto",
+        upstream_transport: httpx2.AsyncBaseTransport | None = None,
     ):
         self.protocol_version: MCPUpstreamProtocol = TypeAdapter(MCPUpstreamProtocol).validate_python(protocol_version)
         self.server_url: str = server_url
@@ -423,6 +424,7 @@ class MCPClient:
         self._sampling_callback: Callable | None = sampling_callback
         self._elicitation_callback: Callable | None = elicitation_callback
         self._logging_callback: Callable | None = logging_callback
+        self._upstream_transport: httpx2.AsyncBaseTransport | None = upstream_transport
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
@@ -470,7 +472,11 @@ class MCPClient:
             return stdio_client(server_params), None
         if self.transport_type == MCPTransport.sse:
             headers = self._get_auth_headers()
-            httpx_client_factory = self._create_httpx_client_factory()
+            httpx_client_factory = (
+                self._create_httpx_client_factory()
+                if self._upstream_transport is None
+                else self._create_httpx_client_factory(transport=self._upstream_transport)
+            )
             return (
                 sse_client(
                     url=self.server_url,
@@ -482,7 +488,11 @@ class MCPClient:
             )
         # HTTP transport (default)
         headers = self._get_auth_headers()
-        httpx_client_factory = self._create_httpx_client_factory()
+        httpx_client_factory = (
+            self._create_httpx_client_factory()
+            if self._upstream_transport is None
+            else self._create_httpx_client_factory(transport=self._upstream_transport)
+        )
         verbose_logger.debug("litellm headers for streamable_http_client: %s", headers)
         http_client = httpx_client_factory(
             headers=headers,
