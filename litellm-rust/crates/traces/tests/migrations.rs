@@ -1014,7 +1014,7 @@ async fn lens_agent_discovery_and_selection_preserve_scope(
         .await?;
     }
     let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
-    let mut parameters = BTreeMap::from([
+    let scope_parameters = BTreeMap::from([
         ("all_teams".into(), Parameter::Integer(0)),
         ("team".into(), Parameter::Text("alpha".into())),
         ("key_hash".into(), Parameter::Text("one".into())),
@@ -1024,7 +1024,7 @@ async fn lens_agent_discovery_and_selection_preserve_scope(
             &database.client,
             &connection,
             LensQuery::Agents.sql(),
-            &parameters,
+            &scope_parameters,
         )
         .await?,
     )?;
@@ -1034,32 +1034,35 @@ async fn lens_agent_discovery_and_selection_preserve_scope(
             {"agent_name": "research_agent"}, {"agent_name": "support_agent"}
         ])
     );
-    parameters.extend([
-        ("source".into(), Parameter::Text("traces".into())),
-        (
-            "start".into(),
-            Parameter::Integer(timestamp / 1_000_000 - 1000),
-        ),
-        (
-            "end".into(),
-            Parameter::Integer(timestamp / 1_000_000 + 1000),
-        ),
-        ("service".into(), Parameter::Text("shared-app".into())),
-        (
-            "agent_name".into(),
-            Parameter::Text("research_agent".into()),
-        ),
-        ("filter_keys".into(), Parameter::Strings(vec![])),
-        ("filter_values".into(), Parameter::Strings(vec![])),
-        ("limit".into(), Parameter::Integer(100)),
-        ("offset".into(), Parameter::Integer(0)),
-        ("after".into(), Parameter::Text(String::new())),
-        ("sample_percent".into(), Parameter::Text("100".into())),
-        ("sample_cap".into(), Parameter::Integer(0)),
-        ("preview".into(), Parameter::Integer(1)),
-        ("selected_team".into(), Parameter::Text(String::new())),
-        ("execution_ids".into(), Parameter::Strings(vec![])),
-    ]);
+    let parameters = scope_parameters
+        .into_iter()
+        .chain([
+            ("source".into(), Parameter::Text("traces".into())),
+            (
+                "start".into(),
+                Parameter::Integer(timestamp / 1_000_000 - 1000),
+            ),
+            (
+                "end".into(),
+                Parameter::Integer(timestamp / 1_000_000 + 1000),
+            ),
+            ("service".into(), Parameter::Text("shared-app".into())),
+            (
+                "agent_name".into(),
+                Parameter::Text("research_agent".into()),
+            ),
+            ("filter_keys".into(), Parameter::Strings(vec![])),
+            ("filter_values".into(), Parameter::Strings(vec![])),
+            ("limit".into(), Parameter::Integer(100)),
+            ("offset".into(), Parameter::Integer(0)),
+            ("after".into(), Parameter::Text(String::new())),
+            ("sample_percent".into(), Parameter::Text("100".into())),
+            ("sample_cap".into(), Parameter::Integer(0)),
+            ("preview".into(), Parameter::Integer(1)),
+            ("selected_team".into(), Parameter::Text(String::new())),
+            ("execution_ids".into(), Parameter::Strings(vec![])),
+        ])
+        .collect::<BTreeMap<_, _>>();
     let sample: serde_json::Value = serde_json::from_str(
         &execute_read(
             &database.client,

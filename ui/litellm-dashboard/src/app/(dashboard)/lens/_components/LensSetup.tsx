@@ -147,7 +147,9 @@ export function LensSetup({
   const modelsReady = !modelsLoading && !modelsError;
   const unavailable = !!model && modelsReady && !models.includes(model);
   const supported = !unsupported && !unavailable;
-  const modelValid = !!model && supported && modelsReady;
+  const preservingSavedModel = mode === "edit" && model === initial?.model;
+  const modelReady = modelsReady || preservingSavedModel;
+  const modelValid = !!model && supported && modelReady;
   const intervalRangeValid = interval >= 1 && interval <= 10080;
   const intervalValid = !repeat || (Number.isInteger(interval) && intervalRangeValid);
   const configurationValid = modelValid && budgetValid && intervalValid;

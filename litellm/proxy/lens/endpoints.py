@@ -178,7 +178,7 @@ async def activity_available(auth: Auth, storage: StorageDep) -> ActivityAvailab
 @router.get("/agents", response_model=tuple[str, ...])
 async def list_agents(auth: Auth, storage: StorageDep) -> tuple[str, ...]:
     scope: Final = user_scope(auth)
-    return await source_reader(storage).agents(scope)
+    return await source_reader(storage).agents(scope) if storage is not None else ()
 
 
 @router.put("/{lens_id}", response_model=Lens)

@@ -215,6 +215,52 @@ it.each(["empty", "error"])("allows editing saved settings when the preview is %
   else expect(await screen.findByText(/No matches/)).toBeVisible();
 });
 
+it.each(["loading", "error"])("saves edits with the existing model while models are %s", async (state) => {
+  const user = userEvent.setup();
+  const save = vi.fn().mockResolvedValue(undefined);
+  renderWithProviders(
+    <LensSetup
+      initial={settings}
+      models={[]}
+      modelsLoading={state === "loading"}
+      modelsError={state === "error" ? "Temporarily unavailable" : undefined}
+      accessToken="test"
+      onClose={vi.fn()}
+      onSave={save}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "What should the agent be doing?" }), {
+    target: { value: "Include verified sources" },
+  });
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.click(screen.getByRole("button", { name: "Save changes" }));
+  expect(save).toHaveBeenCalledWith(
+    expect.objectContaining({ model: settings.model, context: "Include verified sources" }),
+  );
+});
+
+it.each(["new", "duplicate"] as const)("blocks a %s investigation until its model is verified", async (mode) => {
+  const user = userEvent.setup();
+  const save = vi.fn();
+  renderWithProviders(
+    <LensSetup
+      initial={settings}
+      mode={mode}
+      models={[]}
+      modelsError="Temporarily unavailable"
+      accessToken="test"
+      onClose={vi.fn()}
+      onSave={save}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  expect(await screen.findByText("1 matching run")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Run investigation" })).toBeDisabled();
+  expect(save).not.toHaveBeenCalled();
+});
+
 it("shows optional budget and repeat controls only under advanced options and saves their values", async () => {
   const user = userEvent.setup();
   const save = vi.fn().mockResolvedValue(undefined);

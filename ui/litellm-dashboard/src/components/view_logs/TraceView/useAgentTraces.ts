@@ -12,7 +12,7 @@ export const TRACING_NOT_ENABLED_STATUS = 501;
 /** A proxy without the tracing routes at all answers 404; treat it like tracing being off. */
 const TRACING_ROUTE_MISSING_STATUS = 404;
 
-export const isTracingNotEnabled = (error: unknown): error is ApiError =>
+export const isTracingNotEnabled = (error: unknown): boolean =>
   error instanceof ApiError &&
   (error.status === TRACING_NOT_ENABLED_STATUS || error.status === TRACING_ROUTE_MISSING_STATUS);
 

@@ -133,7 +133,6 @@ const lens: Lens = {
             metadata: [],
             root_seen: true,
             service: "",
-            agent_name: "",
             source: "traces",
             trace_id: "trace-42",
             team_id: "",
