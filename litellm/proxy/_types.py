@@ -508,6 +508,7 @@ class LiteLLMRoutes(enum.Enum):
         "/mistral",
         "/typesafe",
         "/laya",
+        "/bespoke",
         "/openrouter",
         "/milvus",
         "/gigachat",
