@@ -373,7 +373,7 @@ async fn listed_agent_names_preserve_scope_and_cursor(
         ("alpha", "one", "shared", "", "unnamed", "root"),
         ("alpha", "one", "second", "support_agent", "root", ""),
         ("alpha", "two", "shared", "private_agent", "root", ""),
-        ("beta", "one", "shared", "other_agent", "root", ""),
+        ("beta", "other", "shared", "other_agent", "root", ""),
     ] {
         insert_rows(
             &database,
@@ -401,7 +401,9 @@ async fn listed_agent_names_preserve_scope_and_cursor(
     insert_rows(&database, "otel_traces", historical_rows).await?;
     let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
     let parameters = BTreeMap::from([
-        ("team_ids".into(), Parameter::Strings(vec!["alpha".into()])),
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("user_id".into(), Parameter::Text(String::new())),
+        ("team_ids".into(), Parameter::Strings(vec![])),
         ("api_key_hash".into(), Parameter::Text("one".into())),
         (
             "start_ms".into(),
@@ -542,6 +544,8 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
     );
     let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
     let parameters = BTreeMap::from([
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("user_id".into(), Parameter::Text(String::new())),
         ("team_ids".into(), Parameter::Strings(vec!["team-1".into()])),
         ("api_key_hash".into(), Parameter::Text(String::new())),
         (
