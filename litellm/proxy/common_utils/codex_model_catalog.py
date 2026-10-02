@@ -187,16 +187,16 @@ _NO_KNOWN_TIERS: Final[Mapping[str, CodexServiceTier]] = MappingProxyType({})
 
 def _deployment_tiers(
     raw: object, model_id: str, known: Mapping[str, CodexServiceTier]
-) -> tuple[CodexServiceTier, ...] | None:
+) -> tuple[CodexServiceTier, ...]:
     try:
         items: Final = _CONFIGURED_TIERS.validate_python(raw)
     except ValidationError as e:
         verbose_proxy_logger.warning(
-            "model_info.service_tiers for %s is ignored, expected a list of tier ids or {id, name, description} objects: %s",
+            "model_info.service_tiers for %s offers no tier, expected a list of tier ids or {id, name, description} objects: %s",
             model_id,
             e.errors()[0]["msg"],
         )
-        return None
+        return ()
     return _first_by_id(tuple(_tier(item, known) for item in items))
 
 
@@ -212,16 +212,14 @@ def configured_service_tiers(
     "Sends service_tier=x upstream". A duplicate id keeps its first entry. A request to `model_id`
     can route to any of its deployments, so a tier is offered only when every deployment lists it,
     in the first deployment's order; a deployment that sets none leaves nothing to offer. Each of
-    those cases is logged, and an invalid value anywhere is logged and treated as unset for the
-    whole model so one typo never fails the listing.
+    those cases is logged, and an invalid value on any deployment is logged and offers no tier for
+    the whole model, stock tiers included, so one typo never fails the listing and never offers a
+    tier nobody declared.
     """
     declared: Final = tuple(raw for raw in per_deployment if raw is not None)
     if not declared:
         return None
-    parsed_or_invalid: Final = tuple(_deployment_tiers(raw, model_id, known) for raw in declared)
-    parsed: Final = tuple(tiers for tiers in parsed_or_invalid if tiers is not None)
-    if len(parsed) < len(parsed_or_invalid):
-        return None
+    parsed: Final = tuple(_deployment_tiers(raw, model_id, known) for raw in declared)
     if len(parsed) < len(per_deployment):
         verbose_proxy_logger.warning(
             "model_info.service_tiers for %s is set on %d of its %d deployments, so no tier is offered: "

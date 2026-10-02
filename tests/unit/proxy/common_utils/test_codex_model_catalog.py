@@ -195,10 +195,11 @@ def test_configured_service_tiers_replace_stock_tiers_and_a_known_id_keeps_its_c
 
 
 @pytest.mark.parametrize("invalid", ["ultrafast", [""], ["  "], [1], [{"name": "no id"}], [{"id": "x", "bogus": 1}], {"id": "x"}])
-def test_invalid_service_tiers_are_ignored_and_the_stock_tiers_stay(invalid):
+def test_invalid_service_tiers_offer_no_tier_even_on_a_model_codex_ships_tiers_for(invalid):
+    """Keeping the stock tiers would offer Codex's `/fast` on a model whose operator declared something else."""
     stock_entry, fallback_entry = _models(_row("gpt-5.5", service_tiers=invalid), _row("mystery", service_tiers=invalid))
 
-    assert _tiers(stock_entry) == [("priority", "Fast", "2x speed, increased usage")]
+    assert _tiers(stock_entry) == []
     assert fallback_entry["service_tiers"] == []
 
 
@@ -231,10 +232,12 @@ def test_deployments_that_all_leave_service_tiers_unset_keep_the_stock_tiers():
     assert fallback_entry["service_tiers"] == []
 
 
-def test_an_invalid_value_on_one_deployment_ignores_the_configuration_for_the_whole_model():
-    (entry,) = _models(_row("gpt-5.5", deployments=(["ultrafast"], "not-a-list")))
+@pytest.mark.parametrize("deployments", [(["ultrafast"], "not-a-list"), ("not-a-list", ["ultrafast"]), (["priority"], "not-a-list")])
+def test_an_invalid_value_on_one_deployment_offers_no_tier_for_the_whole_model(deployments):
+    """The deployment with the typo lists nothing Codex could send, and the stock `/fast` stays off too."""
+    (entry,) = _models(_row("gpt-5.5", deployments=deployments))
 
-    assert _tiers(entry) == [("priority", "Fast", "2x speed, increased usage")]
+    assert _tiers(entry) == []
 
 
 @pytest.mark.parametrize(
