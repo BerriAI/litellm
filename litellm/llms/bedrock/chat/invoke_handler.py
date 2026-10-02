@@ -378,7 +378,7 @@ class _EventStreamTally:
         self.bytes_decoded = 0
         self.events = 0
         self.recognized_events = 0
-        self.unrecognized_event_types: tuple[str, ...] = ()
+        self.unrecognized_event_types: frozenset[str] = frozenset()
         self.unrecognized_head = b""
         self.head = b""
 
@@ -398,7 +398,7 @@ class _EventStreamTally:
         ):
             self.recognized_events += 1
             return
-        self.unrecognized_event_types = (*self.unrecognized_event_types, event_type or "<missing>")
+        self.unrecognized_event_types = self.unrecognized_event_types | {event_type or "<missing>"}
         if not self.unrecognized_head:
             self.unrecognized_head = event.payload[:_STREAM_HEAD_BYTES]
 
@@ -424,7 +424,7 @@ class _EventStreamTally:
                 status_code=502,
                 message=(
                     f"Bedrock answered the stream with HTTP 200 but none of its {self.events} events carried a known "
-                    f"event type (event types={sorted(set(self.unrecognized_event_types))}, {detail}, "
+                    f"event type (event types={sorted(self.unrecognized_event_types)}, {detail}, "
                     f"first payload={self.unrecognized_head!r})"
                 ),
             )

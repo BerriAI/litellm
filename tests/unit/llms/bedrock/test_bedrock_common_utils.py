@@ -1019,3 +1019,34 @@ def test_bedrock_stream_event_statuses_load_failure_returns_none():
         assert mod.get_bedrock_stream_event_statuses() is None
         assert mod.bedrock_stream_event_error_status("validationException") is None
     mod.get_bedrock_stream_event_statuses.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected_status", "expected_message"),
+    [
+        ({":message-type": "error"}, 400, '{"message":"upstream failed"}'),
+        (
+            {":message-type": "exception", ":exception-type": "somethingNotModeled"},
+            400,
+            'somethingNotModeled {"message":"upstream failed"}',
+        ),
+        (
+            {":message-type": "exception", ":exception-type": "throttlingException"},
+            429,
+            'throttlingException {"message":"upstream failed"}',
+        ),
+    ],
+)
+def test_build_bedrock_stream_error_resolves_status_from_the_exception_type(
+    headers: dict[str, str], expected_status: int, expected_message: str
+):
+    pytest.importorskip("botocore")
+    from litellm.llms.bedrock.common_utils import build_bedrock_stream_error, get_bedrock_response_stream_shape
+
+    error = build_bedrock_stream_error(
+        {"status_code": 400, "headers": headers, "body": b'{"message":"upstream failed"}'},
+        get_bedrock_response_stream_shape(),
+    )
+
+    assert error.status_code == expected_status
+    assert error.message == expected_message
