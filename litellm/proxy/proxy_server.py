@@ -604,6 +604,7 @@ from litellm.proxy.management_endpoints.cost_tracking_settings import (
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
 )
+from litellm.proxy.management_endpoints.daily_activity_routes import router as daily_activity_router
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     router as fallback_management_router,
 )
@@ -19953,6 +19954,7 @@ app.include_router(pass_through_router)
 app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
+app.include_router(daily_activity_router)
 app.include_router(password_management_router)
 app.include_router(session_management_router)
 app.include_router(team_router)

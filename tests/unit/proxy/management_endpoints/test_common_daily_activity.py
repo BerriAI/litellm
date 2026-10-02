@@ -10,6 +10,7 @@ from fastapi import HTTPException
 import litellm.proxy.management_endpoints.common_daily_activity as common_daily_activity_module
 from litellm.constants import USAGE_TOP_API_KEYS_DEFAULT
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    InvalidDateRange,
     _is_user_agent_tag,
     _ProxyDailyActivityReads,
     _record_to_spend_metrics,
@@ -18,6 +19,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     daily_activity_scope,
     get_api_key_metadata,
     get_daily_activity,
+    raise_public,
     update_metrics,
 )
 from litellm.proxy.management_endpoints.common_daily_activity import (
@@ -2362,17 +2364,17 @@ async def test_get_api_key_metadata_resolves_session_key_via_spend_log_window():
 
 
 def test_spend_logs_window_pads_min_minus_one_day_and_max_plus_two_days():
-    from litellm.proxy.management_endpoints.common_daily_activity import _spend_logs_window
+    from litellm.proxy.management_endpoints.common_daily_activity import spend_logs_window
 
-    window = _spend_logs_window({"2026-09-08", "2026-09-05", "not-a-date"})
+    window = spend_logs_window({"2026-09-08", "2026-09-05", "not-a-date"})
 
     assert window == (datetime(2026, 9, 4), datetime(2026, 9, 10))
 
 
 def test_spend_logs_window_is_none_when_no_date_parses():
-    from litellm.proxy.management_endpoints.common_daily_activity import _spend_logs_window
+    from litellm.proxy.management_endpoints.common_daily_activity import spend_logs_window
 
-    assert _spend_logs_window({"garbage", ""}) is None
+    assert spend_logs_window({"garbage", ""}) is None
 
 
 @pytest.mark.asyncio
@@ -2477,3 +2479,10 @@ async def test_get_api_key_metadata_does_not_recover_daily_spend_owner_for_activ
     assert active_metadata.get("user_email") == "active-owner@example.com"
     assert active_metadata.get("key_exists") is True
     recovery_query_raw.assert_not_awaited()
+
+
+def test_raise_public_maps_invalid_date_range_to_400() -> None:
+    with pytest.raises(HTTPException) as excinfo:
+        raise_public(InvalidDateRange(reason="Date range must be at most 400 days"))
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == {"error": "Date range must be at most 400 days"}

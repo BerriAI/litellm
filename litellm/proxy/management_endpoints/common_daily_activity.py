@@ -4,10 +4,10 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final, Literal, NoReturn, Protocol
 
 from fastapi import HTTPException, status
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
@@ -43,6 +43,27 @@ from litellm.types.repositories.daily_activity import (
     RollupMetricsRow,
     SpendLogsWindow,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeDenied:
+    status_code: Literal[403, 404]
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidDateRange:
+    reason: str
+
+
+def raise_public(error: ScopeDenied | InvalidDateRange) -> NoReturn:
+    match error:
+        case ScopeDenied():
+            raise HTTPException(status_code=error.status_code, detail={"error": error.reason})
+        case InvalidDateRange():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": error.reason})
+        case _:
+            assert_never(error)
 
 
 class DailySpendRecord(Protocol):
@@ -402,7 +423,7 @@ def update_breakdown_metrics(
     return breakdown
 
 
-def _spend_logs_window(dates: AbstractSet[str | None]) -> tuple[datetime, datetime] | None:
+def spend_logs_window(dates: AbstractSet[str | None]) -> tuple[datetime, datetime] | None:
     parsed: Final = sorted(day for day in (_parse_spend_date(raw) for raw in dates) if day is not None)
     if not parsed:
         return None
@@ -622,7 +643,7 @@ async def _aggregate_spend_records(
 
     api_key_metadata: Final[Mapping[str, KeyMetadataRow]] = (
         await repository.key_metadata(
-            frozenset(api_keys), _spend_logs_window(frozenset(record.date for record in records))
+            frozenset(api_keys), spend_logs_window(frozenset(record.date for record in records))
         )
         if api_keys
         else MappingProxyType({})
@@ -823,7 +844,7 @@ async def _aggregate_grouping_sets_records(
     api_keys: Final[set[str]] = {r.api_key for r in records if r.api_key and r.api_key != PTU_SENTINEL_API_KEY}
 
     api_key_metadata: Final[Mapping[str, KeyMetadataRow]] = (
-        await repository.key_metadata(frozenset(api_keys), _spend_logs_window(frozenset(r.date for r in records)))
+        await repository.key_metadata(frozenset(api_keys), spend_logs_window(frozenset(r.date for r in records)))
         if api_keys
         else MappingProxyType({})
     )
@@ -997,7 +1018,7 @@ async def get_daily_activity_aggregated(
             )
             entity_key_metadata: Final[Mapping[str, KeyMetadataRow]] = (
                 await repository.key_metadata(
-                    entity_api_keys, _spend_logs_window(frozenset(row.date for row in entity_records))
+                    entity_api_keys, spend_logs_window(frozenset(row.date for row in entity_records))
                 )
                 if entity_api_keys
                 else MappingProxyType({})
