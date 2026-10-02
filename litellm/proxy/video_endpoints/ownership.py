@@ -84,18 +84,18 @@ async def record_video_owner(response: object, user_api_key_dict: UserAPIKeyAuth
         )
         return
     model_object_id: Final = _video_model_object_id(video_id)
-    row: Final = {  # mutable-ok: prisma rows are plain dicts
+    row: Final = {
         "unified_object_id": video_id,
         "model_object_id": model_object_id,
-        "file_object": json.dumps({"id": video_id, "object": "video"}),  # mutable-ok: serialized immediately
+        "file_object": json.dumps({"id": video_id, "object": "video"}),
         "file_purpose": VIDEO_OBJECT_PURPOSE,
         "created_by": owner,
         "updated_by": owner,
     }
     try:
         await ManagedObjectRepository(prisma_client).table.upsert(
-            where={"model_object_id": model_object_id},  # mutable-ok: prisma filters are plain dicts
-            data={"create": row, "update": {"updated_by": owner}},  # mutable-ok: prisma payloads are plain dicts
+            where={"model_object_id": model_object_id},
+            data={"create": row, "update": {"updated_by": owner}},
         )
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -108,7 +108,7 @@ async def _get_video_owner(prisma_client: "PrismaClient", model_object_id: str) 
     if isinstance(cached, str):
         return cached
     row: Final = await ManagedObjectRepository(prisma_client).table.find_first(
-        where={  # mutable-ok: prisma filters are plain dicts
+        where={
             "model_object_id": model_object_id,
             "file_purpose": VIDEO_OBJECT_PURPOSE,
         }
@@ -154,10 +154,10 @@ async def filter_video_list_for_caller(listed: object, user_api_key_dict: UserAP
             ManagedObjectRepository(prisma_client).table,
             "model_object_id",
             candidate_ids,
-            where={  # mutable-ok: prisma filters are plain dicts
+            where={
                 "file_purpose": VIDEO_OBJECT_PURPOSE,
                 # bounded-ok: owner scopes are the caller's user, team, org and key identities
-                "created_by": {"in": owner_scopes},  # mutable-ok: prisma filters are plain dicts
+                "created_by": {"in": owner_scopes},
             },
         )
         if candidate_ids and owner_scopes
@@ -167,4 +167,4 @@ async def filter_video_list_for_caller(listed: object, user_api_key_dict: UserAP
     kept: Final = tuple(
         item for item, video_id in ids_by_item if video_id is not None and _video_model_object_id(video_id) in owned
     )
-    return {**listed, "data": kept}  # mutable-ok: provider list JSON body
+    return {**listed, "data": kept}

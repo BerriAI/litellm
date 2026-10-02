@@ -101,7 +101,7 @@ async def _image_edit_field(
         return None
     if len(parts) == 1 and isinstance(parts[0], str):
         return parts[0]
-    return list(parts)  # mutable-ok: provider image edit handlers take a list of image parts
+    return list(parts)
 
 
 async def image_edit_assets(request: Request, body: Mapping[str, object]) -> Mapping[str, object]:
