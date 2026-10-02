@@ -3029,7 +3029,6 @@ class MCPServerManager:
         credentials_are_encrypted: bool = True,
         env_vars_are_encrypted: bool | None = None,
     ) -> MCPServer:
-        warn_if_mcp_stdio_blocked(mcp_server.alias or mcp_server.server_name, mcp_server.transport)
         _mcp_info: Final[MCPInfo] = mcp_server.mcp_info or {}
         env_dict: Final = _deserialize_json_dict(getattr(mcp_server, "env", None))
         static_headers_dict: Final = _deserialize_json_dict(getattr(mcp_server, "static_headers", None))
@@ -3290,6 +3289,7 @@ class MCPServerManager:
                 # `credentials` field is the only one still encrypted here).
                 # Re-decrypting plaintext would zero the values, so build with
                 # env_vars_are_encrypted=False.
+                self._warn_if_newly_blocked_stdio(mcp_server, None)
                 new_server: Final = await self.build_mcp_server_from_table(mcp_server, env_vars_are_encrypted=False)
                 self._assign_unique_short_prefix(new_server)
                 self._invalidate_server_definition_caches(mcp_server.server_id)
@@ -4650,6 +4650,11 @@ class MCPServerManager:
             separators=(",", ":"),
         )
         return server.server_id, hashlib.sha256(material.encode()).hexdigest()
+
+    @staticmethod
+    def _warn_if_newly_blocked_stdio(row: LiteLLM_MCPServerTable, previous: MCPServer | None) -> None:
+        if previous is None or previous.transport != row.transport:
+            warn_if_mcp_stdio_blocked(row.alias or row.server_name, row.transport)
 
     def _skip_blocked_stdio_listing(self, server: MCPServer, listing: str) -> bool:
         if not is_mcp_stdio_blocked(server.transport):
@@ -6737,7 +6742,10 @@ class MCPServerManager:
         if matched is not None:
             matched_prefix, original_tool_name = matched
             matched_server: Final = prefix_to_server.get(matched_prefix)
-            if matched_server is not None and self.server_exposes_tool(matched_server, original_tool_name):
+            if matched_server is not None and (
+                self.server_exposes_tool(matched_server, original_tool_name)
+                or is_mcp_stdio_blocked(matched_server.transport)
+            ):
                 return matched_server
 
         return None
@@ -6799,6 +6807,7 @@ class MCPServerManager:
                     alias=getattr(server, "alias", None),
                     server_name=getattr(server, "server_name", None),
                 )
+                self._warn_if_newly_blocked_stdio(server, existing_server)
                 verbose_logger.debug("Building server from DB: %s (%s)", server.server_id, server.server_name)
                 # raw_rows come straight from the DB, so their global env var
                 # values (like credentials) are still encrypted here, unlike the

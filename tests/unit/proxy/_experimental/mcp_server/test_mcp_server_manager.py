@@ -573,6 +573,27 @@ class TestMCPServerManager:
         with pytest.raises(ValueError, match="Tool echo not found"):
             manager._resolve_mcp_server_for_tool_call(server_name="stdio_call", name="echo")
 
+    @pytest.mark.parametrize("flag, routed", [(None, True), ("true", False)])
+    async def test_a_prefixed_tool_name_routes_to_its_blocked_stdio_server(self, monkeypatch, flag, routed):
+        if flag is None:
+            monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+        else:
+            monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", flag)
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="stdio-route",
+            name="stdio_route",
+            alias="stdio_route",
+            transport=MCPTransport.stdio,
+            command="python",
+            args=["server.py"],
+        )
+        manager.registry[server.server_id] = server
+
+        resolved = manager._get_mcp_server_from_tool_name("stdio_route-echo")
+
+        assert (resolved is server) is routed
+
     async def test_health_check_reports_a_stdio_server_unhealthy_with_the_flag_to_set(self, monkeypatch):
         monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
         manager = MCPServerManager()
@@ -633,9 +654,11 @@ class TestMCPServerManager:
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
             await manager.add_server(row)
+            await manager.update_server(row)
+            await manager.update_server(row)
 
         assert "db-stdio" in manager.registry
-        assert any("db_stdio" in m and "LITELLM_ENABLE_MCP_STDIO=true" in m for m in caplog.messages)
+        assert sum("db_stdio" in m and "LITELLM_ENABLE_MCP_STDIO=true" in m for m in caplog.messages) == 1
 
     def test_build_stdio_env_only_accepts_x_prefixed_placeholders(self):
         """Ensure only ${X-*} placeholders are substituted from headers."""
@@ -15139,6 +15162,53 @@ class TestSharedIdentifierPrefixWarning:
         assert "srv-b" in shared_warnings[0]
         assert "srv-c" not in shared_warnings[0]
         assert "'shared'" in shared_warnings[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "flag,transports,expected_warnings",
+    [
+        (None, ["stdio", "stdio", "stdio"], 1),
+        (None, ["http", "stdio", "stdio"], 1),
+        ("true", ["stdio", "stdio", "stdio"], 0),
+    ],
+)
+async def test_reload_warns_once_about_a_blocked_stdio_row_that_is_rebuilt_every_time(
+    monkeypatch, caplog, flag, transports, expected_warnings
+):
+    if flag is None:
+        monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", flag)
+    manager = MCPServerManager()
+    repository = MagicMock()
+
+    async def build_from_table(table, **_kwargs):
+        return MCPServer(server_id=table.server_id, name=table.server_name, transport=table.transport)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+            return_value=repository,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch.object(manager, "build_mcp_server_from_table", new=build_from_table),
+        patch.object(manager, "_maybe_register_openapi_tools", new=AsyncMock()),
+        patch.object(manager, "_prime_oauth_metadata_discovery_for_servers"),
+        caplog.at_level(logging.WARNING, logger="LiteLLM"),
+    ):
+        for transport in transports:
+            row = LiteLLM_MCPServerTable(
+                server_id="srv-null-ts", server_name="null_ts", transport=transport, command="python", updated_at=None
+            )
+            repository.table.find_many = AsyncMock(return_value=[MagicMock(model_dump=row.model_dump)])
+            await manager.reload_servers_from_database()
+
+    assert manager.registry["srv-null-ts"].transport == transports[-1]
+    assert sum("'null_ts' will not start" in m for m in caplog.messages) == expected_warnings
 
 
 @pytest.mark.asyncio
