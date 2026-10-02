@@ -12,8 +12,8 @@ Run with:
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from fastapi.routing import Mount
+from starlette.applications import Starlette
+from starlette.routing import Mount
 from starlette.types import Lifespan
 
 # Assemble DATABASE_URL (+ DATABASE_URL_READ_REPLICA) from the discrete
@@ -61,7 +61,7 @@ _proxy_lifespan = app.router.lifespan_context
 
 @asynccontextmanager
 async def _gateway_lifespan(
-    app_: FastAPI, lifespan: Lifespan[FastAPI] = _proxy_lifespan
+    app_: Starlette, lifespan: Lifespan[Starlette] = _proxy_lifespan
 ) -> AsyncGenerator[Mapping[str, object], None]:
     async with lifespan(app_) as state:
         app_.router.routes = [r for r in app_.router.routes if _is_gateway_route(r)]

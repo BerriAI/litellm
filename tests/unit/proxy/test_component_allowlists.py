@@ -32,8 +32,11 @@ from functools import partial
 from typing import Final
 
 import pytest
-from fastapi import FastAPI, Request
-from fastapi.testclient import TestClient
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
+from starlette.testclient import TestClient
 from starlette.types import Lifespan
 
 # Importing ``litellm.proxy.proxy_server`` runs its module-level setup, which
@@ -51,7 +54,6 @@ _PRE_EXISTING_ENV = {key: os.environ.get(key) for key in _THROWAWAY_ENV}
 for _key, _value in _THROWAWAY_ENV.items():
     os.environ.setdefault(_key, _value)
 
-from fastapi.routing import Mount
 from prometheus_client import make_asgi_app
 
 # gateway/ and backend/ live at the repo root, not inside litellm/.
@@ -96,7 +98,7 @@ for _key, _previous in _PRE_DB_ENV.items():
 _COVERAGE_PROBE: Final = """
 import json, os, sys
 sys.path.insert(0, os.environ["LITELLM_COMPONENT_ALLOWLIST_REPO_ROOT"])
-from fastapi.routing import Mount
+from starlette.routing import Mount
 from backend.routes.allowlist import BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES
 from gateway.routes.allowlist import GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
 from litellm.proxy._lazy_features import loaded_lazy_modules
@@ -126,25 +128,25 @@ json.dump({
 @pytest.mark.parametrize("component_lifespan", (_gateway_lifespan, _backend_lifespan), ids=("gateway", "backend"))
 @pytest.mark.parametrize("has_state", (True, False), ids=("stateful", "stateless"))
 def test_component_lifespan_preserves_state_for_trace_requests(
-    component_lifespan: Lifespan[FastAPI], has_state: bool
+    component_lifespan: Lifespan[Starlette], has_state: bool
 ) -> None:
     marker: Final = object()
 
     @asynccontextmanager
-    async def stateful_lifespan(application: FastAPI) -> AsyncGenerator[Mapping[str, object], None]:
+    async def stateful_lifespan(application: Starlette) -> AsyncGenerator[Mapping[str, object], None]:
         yield {"tracing_receiver": marker}
 
     @asynccontextmanager
-    async def stateless_lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
+    async def stateless_lifespan(application: Starlette) -> AsyncGenerator[None, None]:
         yield
 
-    component_app: Final = FastAPI(
-        lifespan=partial(component_lifespan, lifespan=stateful_lifespan if has_state else stateless_lifespan)
-    )
+    async def trace_state(request: Request) -> JSONResponse:
+        return JSONResponse({"receiver_available": getattr(request.state, "tracing_receiver", None) is marker})
 
-    @component_app.get("/v1/traces")
-    async def trace_state(request: Request) -> dict[str, bool]:
-        return {"receiver_available": getattr(request.state, "tracing_receiver", None) is marker}
+    component_app: Final = Starlette(
+        routes=(Route("/v1/traces", trace_state),),
+        lifespan=partial(component_lifespan, lifespan=stateful_lifespan if has_state else stateless_lifespan),
+    )
 
     with TestClient(component_app) as client:
         response: Final = client.get("/v1/traces")
