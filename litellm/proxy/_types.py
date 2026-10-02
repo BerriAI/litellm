@@ -507,6 +507,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vllm",
         "/mistral",
         "/typesafe",
+        "/laya",
         "/openrouter",
         "/milvus",
         "/gigachat",
@@ -5463,6 +5464,17 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "'auto_register': auto-create a virtual key and mapping on first encounter."
         ),
     )
+    auto_register_map_existing_key: bool = Field(
+        default=False,
+        description=(
+            "Only used with unregistered_jwt_client_behavior='auto_register'. When True and the virtual key claim "
+            "field is the user_id_jwt_field or user_email_jwt_field, the JWT claim is mapped to a virtual key the "
+            "JWT-resolved user already owns instead of minting a new one. If the user owns several, the most recently created key in the "
+            "JWT-resolved team (or with no team when the JWT resolves none) is chosen among keys that never "
+            "expire, are not blocked, are not Admin UI session keys, were not minted by auto_register, and "
+            "have no allowed_routes or include llm_api_routes. Otherwise a new key is minted as usual."
+        ),
+    )
     routing_overrides: list[JWTRoutingOverride] | None = Field(
         default=None,
         description="Optional claim-based routing overrides for JWT-shaped tokens. Matching rules route requests to oauth2 before default JWT flow.",
@@ -5562,6 +5574,15 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         if issuer_config is not None and issuer_config.virtual_key_claim_field is not None:
             return issuer_config.virtual_key_claim_field
         return self.virtual_key_claim_field
+
+    def is_user_identity_claim(self, claim_field: str, issuer: str | None) -> bool:
+        issuer_config: Final = self.get_issuer_config(issuer)
+        if issuer_config is None:
+            return claim_field in (self.user_id_jwt_field, self.user_email_jwt_field)
+        return claim_field in (
+            issuer_config.user_id_jwt_field or self.user_id_jwt_field,
+            issuer_config.user_email_jwt_field or self.user_email_jwt_field,
+        )
 
     def get_unregistered_jwt_client_behavior(self, issuer: str | None) -> UnregisteredJWTClientBehavior:
         issuer_config: Final = self.get_issuer_config(issuer)

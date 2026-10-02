@@ -364,6 +364,143 @@ async fn keyed_rollup_keeps_same_trace_ids_separate_by_api_key(
 
 #[rstest]
 #[tokio::test]
+async fn listed_agent_names_preserve_scope_and_cursor(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    for (team, key, trace, agent, span, parent) in [
+        ("alpha", "one", "shared", "research_agent", "root", ""),
+        ("alpha", "one", "shared", "reviewer", "child", "root"),
+        ("alpha", "one", "shared", "reviewer", "repeated", "root"),
+        ("alpha", "one", "shared", "", "unnamed", "root"),
+        ("alpha", "one", "second", "support_agent", "root", ""),
+        ("alpha", "two", "shared", "private_agent", "root", ""),
+        ("beta", "one", "shared", "other_agent", "root", ""),
+    ] {
+        insert_rows(
+            &database,
+            "otel_traces",
+            vec![serde_json::from_value(serde_json::json!({
+                "Timestamp": timestamp, "TraceId": trace, "SpanId": span, "ParentSpanId": parent,
+                "ServiceName": "shared-app", "SpanName": span, "AgentName": agent,
+                "ObservationType": "agent",
+                "ResourceAttributes": {"litellm.team_id": team, "litellm.api_key_hash": key}
+            }))?],
+        )
+        .await?;
+    }
+    let historical_rows = (0..5000)
+        .map(|index| {
+            serde_json::from_value(serde_json::json!({
+                "Timestamp": timestamp - 86_400_000_000_000_i64,
+                "TraceId": "shared", "SpanId": format!("historical-{index}"),
+                "ParentSpanId": "", "SpanName": "historical", "AgentName": "private_agent",
+                "ObservationType": "agent", "ServiceName": "shared-app",
+                "ResourceAttributes": {"litellm.team_id": "alpha", "litellm.api_key_hash": "history"}
+            }))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    insert_rows(&database, "otel_traces", historical_rows).await?;
+    let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let parameters = BTreeMap::from([
+        ("team_ids".into(), Parameter::Strings(vec!["alpha".into()])),
+        ("api_key_hash".into(), Parameter::Text("one".into())),
+        (
+            "start_ms".into(),
+            Parameter::Integer(timestamp / 1_000_000 - 1000),
+        ),
+        (
+            "end_ms".into(),
+            Parameter::Integer(timestamp / 1_000_000 + 1000),
+        ),
+        ("cursor_ms".into(), Parameter::Integer(0)),
+        ("cursor_trace_id".into(), Parameter::Text(String::new())),
+        ("limit".into(), Parameter::Integer(1)),
+    ]);
+    let first: serde_json::Value = serde_json::from_str(
+        &execute_named_read(
+            &database.client,
+            &connection,
+            ReadQuery::ListTraces,
+            &parameters,
+        )
+        .await?,
+    )?;
+    let cursor = first["data"][0]["trace_ref"]
+        .as_str()
+        .ok_or("missing cursor")?;
+    let next_parameters = parameters
+        .into_iter()
+        .chain([
+            (
+                "cursor_ms".into(),
+                Parameter::Integer(timestamp / 1_000_000),
+            ),
+            ("cursor_trace_id".into(), Parameter::Text(cursor.into())),
+        ])
+        .collect();
+    let second: serde_json::Value = serde_json::from_str(
+        &execute_named_read(
+            &database.client,
+            &connection,
+            ReadQuery::ListTraces,
+            &next_parameters,
+        )
+        .await?,
+    )?;
+    assert_eq!(
+        first["data"].as_array().ok_or("missing first page")?.len(),
+        1
+    );
+    assert_eq!(
+        second["data"]
+            .as_array()
+            .ok_or("missing second page")?
+            .len(),
+        1
+    );
+    assert_ne!(first["data"][0]["trace_id"], second["data"][0]["trace_id"]);
+    let names = [&first["data"][0], &second["data"][0]]
+        .into_iter()
+        .map(|row| {
+            (
+                row["trace_id"].as_str().unwrap(),
+                row["agent_names"].clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        names["shared"],
+        serde_json::json!(["research_agent", "reviewer"])
+    );
+    assert_eq!(names["second"], serde_json::json!(["support_agent"]));
+    let counts = [&first["data"][0], &second["data"][0]]
+        .into_iter()
+        .map(|row| {
+            (
+                row["trace_id"].as_str().unwrap(),
+                row["agent_count"].as_u64(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(counts["shared"], Some(3));
+    assert_eq!(counts["second"], Some(1));
+    for page in [&first, &second] {
+        assert!(
+            page["statistics"]["rows_read"]
+                .as_u64()
+                .ok_or("missing read statistics")?
+                < 5000
+        );
+    }
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
 async fn rollup_merges_spans_across_days_without_losing_root_fields(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
@@ -376,6 +513,7 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
     let root = serde_json::from_value(serde_json::json!({
         "Timestamp": day_start - 1_000_000_000, "TraceId": "cross-day", "SpanId": "span-root",
         "ParentSpanId": "", "ServiceName": "proxy", "SpanName": "root", "Input": "root input",
+        "AgentName": "lead", "ObservationType": "agent",
         "StatusCode": "STATUS_CODE_ERROR",
         "ResourceAttributes": {"litellm.team_id": "team-1"}
     }))?;
@@ -383,6 +521,7 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
     let child = serde_json::from_value(serde_json::json!({
         "Timestamp": day_start + 1_000_000_000, "TraceId": "cross-day", "SpanId": "span-child",
         "ParentSpanId": "span-root", "ServiceName": "proxy", "SpanName": "child",
+        "AgentName": "researcher", "ObservationType": "agent",
         "StatusCode": "STATUS_CODE_UNSET",
         "ResourceAttributes": {"litellm.team_id": "team-1"}
     }))?;
@@ -406,6 +545,33 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
             "RootStatus": "STATUS_CODE_ERROR", "SpanCount": 2
         }])
     );
+    let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let parameters = BTreeMap::from([
+        ("team_ids".into(), Parameter::Strings(vec!["team-1".into()])),
+        ("api_key_hash".into(), Parameter::Text(String::new())),
+        (
+            "start_ms".into(),
+            Parameter::Integer(day_start / 1_000_000 - 2000),
+        ),
+        ("end_ms".into(), Parameter::Integer(day_start / 1_000_000)),
+        ("cursor_ms".into(), Parameter::Integer(0)),
+        ("cursor_trace_id".into(), Parameter::Text(String::new())),
+        ("limit".into(), Parameter::Integer(10)),
+    ]);
+    let listed: serde_json::Value = serde_json::from_str(
+        &execute_named_read(
+            &database.client,
+            &connection,
+            ReadQuery::ListTraces,
+            &parameters,
+        )
+        .await?,
+    )?;
+    assert_eq!(
+        listed["data"][0]["agent_names"],
+        serde_json::json!(["lead", "researcher"])
+    );
+    assert_eq!(listed["data"][0]["agent_count"], 2);
     Ok(())
 }
 
