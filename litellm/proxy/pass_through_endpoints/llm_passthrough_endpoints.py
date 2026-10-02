@@ -22,6 +22,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
 
 import httpx
+import openai
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
 from fastapi.responses import StreamingResponse
 from starlette.websockets import WebSocketState
@@ -58,6 +59,7 @@ from litellm.llms.deepgram.common_utils import (
 )
 from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost, fal_ai_queue_base
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
+from litellm.llms.openai.common_utils import OpenAIError as LiteLLMOpenAIError
 from litellm.llms.openai.workload_identity import (
     get_workload_identity_bearer_token_async,
     resolve_openai_workload_identity_config,
@@ -2924,6 +2926,9 @@ async def vertex_proxy_route(
     )
 
 
+_OPENAI_WS_TOKEN_EXCHANGE_FAILED_REASON: Final = "OpenAI workload identity token exchange failed"
+
+
 async def _openai_passthrough_credential(base_target_url: str) -> str | None:
     static_api_key: Final = normalize_nonempty_secret_str(
         passthrough_endpoint_router.get_credentials(
@@ -3142,7 +3147,12 @@ async def openai_websocket_proxy_route(
         return
 
     base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
-    openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
+    try:
+        openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
+    except (openai.OpenAIError, httpx.HTTPError, LiteLLMOpenAIError):
+        verbose_proxy_logger.exception("OpenAI workload identity token exchange failed for websocket passthrough")
+        await websocket.close(code=1011, reason=_OPENAI_WS_TOKEN_EXCHANGE_FAILED_REASON)
+        return
     if openai_api_key is None:
         await websocket.close(
             code=1011,
