@@ -9,7 +9,6 @@ gzip JSONEachRow insert, either every `CLICKHOUSE_FLUSH_INTERVAL_SECONDS` or as 
 """
 
 import asyncio
-import os
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from typing import Any, ClassVar, Final
@@ -23,13 +22,11 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.rust_bridge.traces import ClickHouseStorage
+from litellm.tracing.config import trace_storage_config
 
 
 def clickhouse_storage_from_env() -> ClickHouseStorage:
-    return ClickHouseStorage(
-        database=os.getenv("CLICKHOUSE_DATABASE", "litellm"),
-        url=os.getenv("CLICKHOUSE_URL", ""),
-    )
+    return ClickHouseStorage(trace_storage_config({}))
 
 
 class ClickHouseBatchLogger(CustomBatchLogger):

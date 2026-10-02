@@ -858,6 +858,7 @@ from litellm.secret_managers.main import (
     secret_manager_would_be_consulted,
     str_to_bool,
 )
+from litellm.tracing.config import is_clickhouse_tracing_enabled
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
@@ -1567,11 +1568,15 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
 
         register_scheduled_sync(scheduler)
 
-    tracing_settings: Final = general_settings.get("tracing")
-    tracing_enabled: Final = TypeAdapter(bool).validate_python(
-        isinstance(tracing_settings, dict) and tracing_settings.get("store") == "clickhouse"
+    tracing_settings: Final = cast(  # cast-ok: Pydantic validates the legacy untyped settings value
+        dict[str, object] | None,
+        TypeAdapter(dict[str, object] | None).validate_python(general_settings.get("tracing")),
     )
-    async with manage_tracing(enabled=tracing_enabled) as receiver:
+    tracing_enabled: Final = is_clickhouse_tracing_enabled(tracing_settings)
+    async with manage_tracing(
+        enabled=tracing_enabled,
+        settings=tracing_settings,
+    ) as receiver:
         state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
         yield state
 
