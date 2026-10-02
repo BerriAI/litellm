@@ -219,7 +219,7 @@ def _find_missing_required_body_param(
     llm_router: LitellmRouter | None,
 ) -> str | None:
     one_of_params: Final = REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE.get(route_type)
-    if one_of_params is not None and not any(param in data for param in one_of_params):
+    if one_of_params is not None and all(data.get(param) is None for param in one_of_params):
         return one_of_params[0]
     missing_merge_base_param: Final = next(
         (param for param in REQUIRED_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if data.get(param) is None),

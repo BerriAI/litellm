@@ -1201,19 +1201,6 @@ def test_required_present_body_param_without_router_default_still_raises() -> No
 
 
 @pytest.mark.parametrize(
-    "data",
-    (
-        {"model": None, "input": "hi"},
-        {"agent": None, "input": "hi"},
-    ),
-)
-def test_interaction_one_of_uses_key_presence(data: dict[str, object]) -> None:
-    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
-
-    raise_if_required_body_param_missing(route_type="acreate_interaction", data=data, llm_router=None)
-
-
-@pytest.mark.parametrize(
     "route_type, data, param",
     [
         ("arerank", {"model": "rerank-model", "query": "hi"}, "documents"),
@@ -1222,6 +1209,7 @@ def test_interaction_one_of_uses_key_presence(data: dict[str, object]) -> None:
         ("avideo_create_character", {"name": "hero"}, "video"),
         ("acreate_eval", {"data_source_config": {"type": "custom"}}, "testing_criteria"),
         ("acreate_interaction", {"input": "hi"}, "model"),
+        ("acreate_interaction", {"model": None, "agent": None, "input": "hi"}, "model"),
         ("acreate_interaction", {"model": "gemini-3-pro-preview"}, "input"),
     ],
 )

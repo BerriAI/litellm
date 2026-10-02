@@ -1269,6 +1269,51 @@ def test_default_search_model_uses_query_without_model(gateway: Gateway, tmp_pat
             assert outbound.get("query") == query, outbound
 
 
+def test_interaction_without_model_uses_completion_model(gateway: Gateway, tmp_path: Path) -> None:
+    with gateway.scenario() as scenario:
+        identity: Final = f"default-interaction-{uuid.uuid4().hex}"
+        handle: Final = register_scenario(identity, _response("acreate_interaction"))
+        scenario.cleanups.callback(delete_scenario, handle)
+        config: Final = tmp_path / "interaction.yaml"
+        config.write_text(
+            json.dumps(
+                {
+                    "model_list": [
+                        {
+                            "model_name": "interaction-default",
+                            "litellm_params": {
+                                "model": "gemini/gemini-2.5-flash",
+                                "api_base": handle.api_base(),
+                                "api_key": identity,
+                            },
+                        }
+                    ],
+                    "general_settings": {"completion_model": "interaction-default"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        with owned_proxy_process(gateway, tmp_path, {}, config=config) as owned:
+            candidate: Final = Gateway(owned.gateway.client, owned.gateway.key, gateway.upstream_url)
+            request_input: Final = f"interaction-{identity}"
+            response: Final = _post(candidate, "/interactions", {"input": request_input})
+            assert response.status_code == 200, response.text
+            _assert_scripted_response("acreate_interaction", JSON_OBJECT.validate_python(response.json()))
+            observations: Final = _Observations(gateway.upstream_url)
+            eventually(
+                observations.read,
+                lambda _items: any(item.get("method") == "POST" for item in observations.for_scenario(identity)),
+                seconds=20,
+            )
+            upstream_calls: Final = tuple(
+                item for item in observations.for_scenario(identity) if item.get("method") == "POST"
+            )
+            assert len(upstream_calls) == 1, upstream_calls
+            outbound: Final = object_value(upstream_calls[0]["body"])
+            assert outbound.get("input") == request_input, outbound
+            assert outbound.get("model") == "gemini-2.5-flash", outbound
+
+
 def test_promptless_image_edit_reaches_upstream(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         identity: Final = f"image-edit-{uuid.uuid4().hex}"
