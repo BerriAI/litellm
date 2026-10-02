@@ -26,7 +26,11 @@ from litellm.responses.streaming_iterator import (
     CachedResponsesAPIStreamingIterator,
     build_synthetic_response_events,
 )
-from litellm.types.llms.openai import ResponsesAPIStreamEvents
+from litellm.types.llms.openai import (
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
+)
 from litellm.types.responses.main import build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -5195,7 +5199,7 @@ def _chat_response(finish_reason: str) -> ModelResponse:
     )
 
 
-def _transform(finish_reason: str, request: dict):
+def _transform(finish_reason: str, request: ResponsesAPIOptionalRequestParams) -> ResponsesAPIResponse:
     return LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
         request_input="hi",
         responses_api_request=request,
@@ -5207,20 +5211,20 @@ def _transform(finish_reason: str, request: dict):
     "finish_reason, reason",
     [("length", "max_output_tokens"), ("content_filter", "content_filter")],
 )
-def test_truncated_finish_reason_sets_incomplete_details(finish_reason, reason):
+def test_truncated_finish_reason_sets_incomplete_details(finish_reason: str, reason: str) -> None:
     result = _transform(finish_reason, {})
     assert result.status == "incomplete"
     assert result.incomplete_details is not None
     assert result.incomplete_details.reason == reason
 
 
-def test_stop_finish_reason_has_no_incomplete_details():
+def test_stop_finish_reason_has_no_incomplete_details() -> None:
     result = _transform("stop", {})
     assert result.status == "completed"
     assert result.incomplete_details is None
 
 
-def test_request_sampling_params_are_echoed():
+def test_request_sampling_params_are_echoed() -> None:
     result = _transform("stop", {"temperature": 0.3, "top_p": 0.9, "max_output_tokens": 60})
     assert (result.temperature, result.top_p, result.max_output_tokens) == (0.3, 0.9, 60)
 
@@ -5232,7 +5236,7 @@ def test_request_sampling_params_are_echoed():
         ("stop", ResponsesAPIStreamEvents.RESPONSE_COMPLETED),
     ],
 )
-def test_stream_terminal_event_follows_status(finish_reason, event_type):
+def test_stream_terminal_event_follows_status(finish_reason: str, event_type: ResponsesAPIStreamEvents) -> None:
     iterator = LiteLLMCompletionStreamingIterator(
         model="some-model",
         litellm_custom_stream_wrapper=AsyncMock(),
@@ -5251,7 +5255,9 @@ def test_stream_terminal_event_follows_status(finish_reason, event_type):
         ("stop", ResponsesAPIStreamEvents.RESPONSE_COMPLETED),
     ],
 )
-def test_replayed_stream_terminal_event_follows_status(finish_reason, event_type):
+def test_replayed_stream_terminal_event_follows_status(
+    finish_reason: str, event_type: ResponsesAPIStreamEvents
+) -> None:
     events = build_synthetic_response_events(
         transformed=_transform(finish_reason, {}),
         logging_obj=None,
@@ -5260,13 +5266,13 @@ def test_replayed_stream_terminal_event_follows_status(finish_reason, event_type
     assert events[-1].type == event_type
 
 
-def test_omitted_temperature_defaults_to_zero():
+def test_omitted_temperature_defaults_to_zero() -> None:
     assert _transform("stop", {}).temperature == 0
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("finish_reason", ["length", "stop"])
-async def test_replayed_stream_logs_success_exactly_once(finish_reason):
+async def test_replayed_stream_logs_success_exactly_once(finish_reason: str) -> None:
     logging_obj = MagicMock()
     logging_obj._on_deferred_stream_complete = None
     logging_obj.dispatch_success_handlers = AsyncMock()
@@ -5280,7 +5286,7 @@ async def test_replayed_stream_logs_success_exactly_once(finish_reason):
     assert logging_obj.dispatch_success_handlers.await_count == 1
 
 
-def test_omitted_temperature_is_not_forwarded_to_the_chat_request():
+def test_omitted_temperature_is_not_forwarded_to_the_chat_request() -> None:
     result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
         model="some-model",
         input="hi",
