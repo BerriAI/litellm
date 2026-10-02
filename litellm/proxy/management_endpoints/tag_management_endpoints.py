@@ -209,8 +209,11 @@ async def _require_tag_update_permission(
         raise HTTPException(status_code=403, detail="Tag is not owned by a team")
     if not await _caller_administers_team(prisma_client, user_api_key_dict, existing_tag.team_id):
         raise HTTPException(status_code=403, detail=f"Caller does not administer team {existing_tag.team_id}")
-    if tag.models:
-        raise HTTPException(status_code=403, detail="Only proxy admins can attach deployments to a tag")
+    if "models" in tag.model_fields_set and set(tag.models or []) != set(existing_tag.models or []):
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can change a tag's model associations",
+        )
     if "team_id" in tag.model_fields_set and tag.team_id != existing_tag.team_id:
         raise HTTPException(status_code=403, detail="Team admins cannot change tag team ownership")
 
@@ -296,6 +299,14 @@ async def get_tag_daily_activity_api_key_filter(
     if requested_api_key is not None:
         return requested_api_key if requested_api_key in scoped_api_keys else []
     return scoped_api_keys
+
+
+def _parse_tag_model_info(model_info: object) -> object:
+    if not model_info:
+        return {}
+    if isinstance(model_info, str):
+        return json.loads(model_info)
+    return model_info
 
 
 async def _get_model_names(prisma_client: "PrismaClient", model_ids: Sequence[str]) -> dict[str, str]:
@@ -548,14 +559,17 @@ async def update_tag(
             budget_duration_cleared="budget_duration" in tag.model_fields_set and tag.budget_duration is None,
         )
 
-        # Get model names for model_info
-        model_info: Final = await _get_model_names(prisma_client, tag.models or [])
+        models_updated: Final = "models" in tag.model_fields_set
+        model_info: Final = (
+            await _get_model_names(prisma_client, tag.models or [])
+            if models_updated
+            else _parse_tag_model_info(existing_tag.model_info)
+        )
 
         # Prepare update data
         update_data: Final = {
             "description": tag.description,
-            "models": tag.models or [],
-            "model_info": json.dumps(model_info),
+            **({"models": tag.models or [], "model_info": json.dumps(model_info)} if models_updated else {}),
             **({"budget_id": budget_id} if budget_id != existing_tag.budget_id else {}),
             **({"team_id": tag.team_id} if "team_id" in tag.model_fields_set else {}),
         }
@@ -627,19 +641,11 @@ async def info_tag(
         # Build response
         requested_tags: Final = {}
         for tag_record in tag_records:
-            # Parse model_info from JSON
-            model_info: object = {}
-            if tag_record.model_info:
-                if isinstance(tag_record.model_info, str):
-                    model_info = json.loads(tag_record.model_info)
-                else:
-                    model_info = tag_record.model_info
-
             tag_dict = {
                 "name": tag_record.tag_name,
                 "description": tag_record.description,
                 "models": tag_record.models,
-                "model_info": model_info,
+                "model_info": _parse_tag_model_info(tag_record.model_info),
                 "created_at": tag_record.created_at.isoformat(),
                 "updated_at": tag_record.updated_at.isoformat(),
                 "created_by": tag_record.created_by,
@@ -755,19 +761,11 @@ async def list_tags(
         list_of_tags: Final = []
         for tag_record in tag_records:
             stored_tag_names.add(tag_record.tag_name)
-            # Parse model_info from JSON
-            model_info: object = {}
-            if tag_record.model_info:
-                if isinstance(tag_record.model_info, str):
-                    model_info = json.loads(tag_record.model_info)
-                else:
-                    model_info = tag_record.model_info
-
             tag_dict = {
                 "name": tag_record.tag_name,
                 "description": tag_record.description,
                 "models": tag_record.models,
-                "model_info": model_info,
+                "model_info": _parse_tag_model_info(tag_record.model_info),
                 "created_at": tag_record.created_at.isoformat(),
                 "updated_at": tag_record.updated_at.isoformat(),
                 "created_by": tag_record.created_by,

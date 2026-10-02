@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from prisma.actions import (
+    LiteLLM_BudgetTableActions,
     LiteLLM_DailyTagSpendActions,
     LiteLLM_ProxyModelTableActions,
     LiteLLM_TagTableActions,
@@ -201,6 +202,7 @@ async def test_update_tag():
             existing_tag.tag_name = "test-tag"
             existing_tag.description = "Original description"
             existing_tag.models = ["model-1"]
+            existing_tag.model_info = "{}"
             existing_tag.budget_id = None
             existing_tag.created_at = datetime.now()
             existing_tag.updated_at = datetime.now()
@@ -324,7 +326,7 @@ async def test_update_tag_explicit_null_preserves_general_budget_fields(field):
             "budget_duration": "30d",
         }
     )
-    existing_tag = SimpleNamespace(budget_id="budget-1")
+    existing_tag = SimpleNamespace(budget_id="budget-1", model_info="{}")
     updated_tag = SimpleNamespace(
         tag_name="budget-tag",
         description=None,
@@ -379,7 +381,7 @@ async def test_update_tag_explicit_null_clears_budget_duration():
     from litellm.types.tag_management import TagUpdateRequest
 
     budget_state = _BudgetState({"budget_id": "budget-1", "budget_duration": "30d"})
-    existing_tag = SimpleNamespace(budget_id="budget-1")
+    existing_tag = SimpleNamespace(budget_id="budget-1", model_info="{}")
     updated_tag = SimpleNamespace(
         tag_name="budget-tag",
         description=None,
@@ -593,6 +595,7 @@ async def test_update_tag_invalidates_only_the_tag_cache():
             existing_tag = Mock()
             existing_tag.tag_name = "cache-tag"
             existing_tag.budget_id = None
+            existing_tag.model_info = "{}"
             mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
             mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
 
@@ -1641,6 +1644,19 @@ class _EmptyFindMany:
         return []
 
 
+class FakeBudgetTable:
+    """In-memory ``litellm_budgettable`` recording created rows for budget-flow assertions."""
+
+    def __init__(self):
+        self.created: list[dict[str, object]] = []
+
+    async def create(self, **kwargs: object) -> SimpleNamespace:
+        inspect.signature(LiteLLM_BudgetTableActions.create).bind(None, **kwargs)
+        data = dict(kwargs["data"])
+        self.created.append(data)
+        return SimpleNamespace(budget_id=f"budget-{len(self.created)}", **data)
+
+
 class _EmptyGroupBy:
     def __init__(self, rows=()):
         self._rows = list(rows)
@@ -1672,6 +1688,7 @@ class FakeTagOwnershipDb:
         self.litellm_proxymodeltable = _EmptyFindMany(LiteLLM_ProxyModelTableActions.find_many)
         self.litellm_dailytagspend = _EmptyGroupBy()
         self.litellm_verificationtoken = _EmptyFindMany(LiteLLM_VerificationTokenActions.find_many)
+        self.litellm_budgettable = FakeBudgetTable()
 
 
 @contextmanager
@@ -1951,7 +1968,17 @@ async def test_team_admin_cannot_create_tag_without_team_id():
 @pytest.mark.asyncio
 async def test_team_admin_cannot_create_tag_with_models():
     fake_db = _team_a_db()
-    with _tag_ownership_gateway(fake_db, _team_admin_auth()):
+    with (
+        _tag_ownership_gateway(fake_db, _team_admin_auth()),
+        patch(
+            "litellm.proxy.management_endpoints.tag_management_endpoints.handle_budget_for_entity",
+            new=AsyncMock(),
+        ) as mock_budget,
+        patch(
+            "litellm.proxy.management_endpoints.tag_management_endpoints.get_deployments_by_model",
+            new=AsyncMock(),
+        ) as mock_deployments,
+    ):
         response = client.post(
             "/tag/new",
             json={"name": "team-tag", "team_id": "team-a", "models": ["shared-deployment"]},
@@ -1959,6 +1986,22 @@ async def test_team_admin_cannot_create_tag_with_models():
         )
         assert response.status_code == 403, response.text
         assert "team-tag" not in fake_db.tag_rows
+        mock_budget.assert_not_called()
+        mock_deployments.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_team_admin_creates_tag_with_no_models():
+    fake_db = _team_a_db()
+    with _tag_ownership_gateway(fake_db, _team_admin_auth()):
+        for name, body in (
+            ("tag-omitted", {"name": "tag-omitted", "team_id": "team-a"}),
+            ("tag-empty", {"name": "tag-empty", "team_id": "team-a", "models": []}),
+        ):
+            response = client.post("/tag/new", json=body, headers=_ADMIN_HEADERS)
+            assert response.status_code == 200, response.text
+            assert response.json()["tag"]["models"] == []
+            assert _persisted_tag_row(fake_db, name)["models"] == []
 
 
 @pytest.mark.asyncio
@@ -2291,3 +2334,118 @@ async def test_forbidden_tag_update_leaves_warmed_cache_and_row_unchanged():
         assert cached is not None
         assert cached.team_id == "team-a"
         assert fake_db.tag_rows["team-tag"] == before
+
+
+@pytest.mark.parametrize("auth", [_proxy_admin_auth, _team_admin_auth], ids=["proxy-admin", "team-admin"])
+@pytest.mark.asyncio
+async def test_update_tag_omitting_models_preserves_associations(auth):
+    fake_db = _team_a_db()
+    fake_db.tag_rows["team-tag"] = _new_tag_row(
+        tag_name="team-tag",
+        team_id="team-a",
+        models=["model-1"],
+        model_info='{"model-1": "Model One"}',
+    )
+    with _tag_ownership_gateway(fake_db, auth()):
+        response = client.post(
+            "/tag/update",
+            json={"name": "team-tag", "description": "edited"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        tag = response.json()["tag"]
+        assert tag["models"] == ["model-1"]
+        assert tag["model_info"] == {"model-1": "Model One"}
+        row = _persisted_tag_row(fake_db, "team-tag")
+        assert row["models"] == ["model-1"]
+        assert row["model_info"] == '{"model-1": "Model One"}'
+
+
+@pytest.mark.asyncio
+async def test_team_admin_edits_budget_and_description_without_models():
+    fake_db = _team_a_db()
+    fake_db.tag_rows["team-tag"] = _new_tag_row(
+        tag_name="team-tag",
+        team_id="team-a",
+        models=["model-1"],
+        model_info='{"model-1": "Model One"}',
+    )
+    with _tag_ownership_gateway(fake_db, _team_admin_auth()):
+        response = client.post(
+            "/tag/update",
+            json={"name": "team-tag", "description": "edited", "max_budget": 100.0},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        assert len(fake_db.litellm_budgettable.created) == 1
+        row = _persisted_tag_row(fake_db, "team-tag")
+        assert row["models"] == ["model-1"]
+        assert row["model_info"] == '{"model-1": "Model One"}'
+
+
+@pytest.mark.asyncio
+async def test_team_admin_update_with_same_models_reordered_is_allowed():
+    fake_db = _team_a_db()
+    fake_db.tag_rows["team-tag"] = _new_tag_row(
+        tag_name="team-tag",
+        team_id="team-a",
+        models=["model-1", "model-2"],
+    )
+    with _tag_ownership_gateway(fake_db, _team_admin_auth()):
+        response = client.post(
+            "/tag/update",
+            json={"name": "team-tag", "models": ["model-2", "model-1"]},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        assert set(response.json()["tag"]["models"]) == {"model-1", "model-2"}
+        assert set(_persisted_tag_row(fake_db, "team-tag")["models"]) == {"model-1", "model-2"}
+
+
+@pytest.mark.parametrize(
+    "models",
+    [["model-1"], ["model-1", "model-3"], [], None],
+    ids=["remove", "add", "clear-empty-list", "clear-null"],
+)
+@pytest.mark.asyncio
+async def test_team_admin_cannot_change_tag_models(models):
+    fake_db = _team_a_db()
+    fake_db.tag_rows["team-tag"] = _new_tag_row(
+        tag_name="team-tag",
+        team_id="team-a",
+        models=["model-1", "model-2"],
+        model_info='{"model-1": "Model One", "model-2": "Model Two"}',
+    )
+    before = dict(fake_db.tag_rows["team-tag"])
+    with _tag_ownership_gateway(fake_db, _team_admin_auth()):
+        response = client.post(
+            "/tag/update",
+            json={"name": "team-tag", "models": models},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 403, response.text
+        assert fake_db.tag_rows["team-tag"] == before
+
+
+@pytest.mark.parametrize(
+    ("models", "expected"),
+    [(["model-2"], ["model-2"]), ([], []), (None, [])],
+    ids=["change", "clear-empty-list", "clear-null"],
+)
+@pytest.mark.asyncio
+async def test_proxy_admin_sets_tag_models(models, expected):
+    fake_db = _team_a_db()
+    fake_db.tag_rows["team-tag"] = _new_tag_row(
+        tag_name="team-tag",
+        team_id="team-a",
+        models=["model-1"],
+    )
+    with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
+        response = client.post(
+            "/tag/update",
+            json={"name": "team-tag", "models": models},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["tag"]["models"] == expected
+        assert _persisted_tag_row(fake_db, "team-tag")["models"] == expected
