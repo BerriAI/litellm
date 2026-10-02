@@ -6664,6 +6664,7 @@ class MCPServerManager:
         wire_compat: WireCompat = WireCompat.LEGACY,
         *,
         catalog_auth_header: str | None | EllipsisType = ...,
+        listed_tool: MCPTool | None | EllipsisType = ...,
     ) -> CallToolResult | InputRequiredResult:
         """
         Call a tool with the given name and arguments
@@ -6717,7 +6718,7 @@ class MCPServerManager:
             raw_headers=raw_headers,
             litellm_logging_obj=litellm_logging_obj,
             guardrail_context=guardrail_context,
-            tool=self.get_listed_tool(mcp_server, name, listed_caller),
+            tool=self.get_listed_tool(mcp_server, name, listed_caller) if listed_tool is ... else listed_tool,
         )
         if "arguments" in hook_result:
             arguments = hook_result["arguments"]
