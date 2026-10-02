@@ -5,6 +5,7 @@ import { Calculator, RefreshCw } from "lucide-react";
 
 import { apiClient } from "@/components/networking";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { DemoNotice } from "@/components/shared/DemoNotice";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -245,17 +246,7 @@ export default function ROICalculatorView({
           </>
         }
       />
-      {sampleSummary && (
-        <Alert>
-          <AlertTitle>Sample report</AlertTitle>
-          <AlertDescription>
-            Example data only. No GitHub or model requests were made.
-            <Button variant="link" onClick={() => setSampleSummary(null)}>
-              Use my data
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+      {sampleSummary && <DemoNotice onExit={() => setSampleSummary(null)} />}
       {liveSummary && showLiveStatus && (
         <p className="text-xs text-muted-foreground">
           {status.next_update ? `Next update ${formatSyncedAt(status.next_update)}` : scheduleLabel}

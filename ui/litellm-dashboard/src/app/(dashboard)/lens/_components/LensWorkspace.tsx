@@ -5,7 +5,7 @@ import { Aperture } from "lucide-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { parseAsString, parseAsStringLiteral, useQueryState } from "nuqs";
 import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
-import { Button } from "@/components/ui/button";
+import { DemoNotice } from "@/components/shared/DemoNotice";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LensDemoContext, useLensDemo } from "@/components/lens/LensDemoContext";
 import { LensPreviewTarget } from "@/components/lens/LensPreviewButton";
@@ -74,16 +74,7 @@ function LensContent({
           </h1>
           <div ref={setPreviewTarget} />
         </div>
-        {demo && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/40 px-4 py-2">
-            <p role="status" className="text-sm">
-              You’re viewing demo data
-            </p>
-            <Button variant="outline" size="sm" onClick={onExit}>
-              Exit demo
-            </Button>
-          </div>
-        )}
+        {demo && <DemoNotice onExit={onExit} />}
         <Tabs
           value={activeTab}
           onValueChange={(value) => (demo ? setDemoTab(value as Tab) : void setTab(value as Tab))}
