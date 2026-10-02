@@ -1215,7 +1215,7 @@ def responses(
         )
 
         # get llm provider logic
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
         try:
             effective_extra_headers: Final = (
                 add_provider_affinity_header(
