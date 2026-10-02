@@ -765,7 +765,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         return combined
 
     @staticmethod
-    def update_stream_param_based_on_request_body(
+    def _update_stream_param_based_on_request_body(
         parsed_body: dict,
         stream: bool | None = None,
     ) -> bool | None:
@@ -1225,7 +1225,7 @@ async def pass_through_request(
         _parsed_body = guardrail_request_data_with_streaming(
             _parsed_body,
             is_streaming=bool(
-                HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
+                HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
                     parsed_body=_parsed_body,
                     stream=stream,
                 )
@@ -1436,7 +1436,7 @@ async def pass_through_request(
                 "headers": upstream_headers,
             },
         )
-        stream = HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
+        stream = HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
             parsed_body=_parsed_body or {},
             stream=stream,
         )

@@ -1637,7 +1637,9 @@ async def test_pass_through_request_preserves_caller_streaming_request_field(bod
 
                 mock_request = MagicMock(spec=Request)
                 mock_request.method = "POST"
-                mock_request.url = "http://test-proxy.com/gemini/v1beta/models/gemini-pro:streamGenerateContent"
+                mock_request.url = httpx.URL(
+                    "http://test-proxy.com/gemini/v1beta/models/gemini-pro:streamGenerateContent"
+                )
                 mock_request.scope = {"path": "/gemini/v1beta/models/gemini-pro:streamGenerateContent"}
                 request_body: Final = {
                     "contents": [{"parts": [{"text": "hi"}]}],
@@ -1724,7 +1726,7 @@ async def test_passthrough_guardrails_follow_effective_relay_stream_decision(
                 }
                 mock_request = MagicMock(spec=Request)
                 mock_request.method = "POST"
-                mock_request.url = "http://test-proxy.com/guardrail-stream-scope"
+                mock_request.url = httpx.URL("http://test-proxy.com/guardrail-stream-scope")
                 mock_request.scope = {"path": "/guardrail-stream-scope"}
                 mock_request.body = AsyncMock(return_value=json.dumps(request_body).encode())
                 mock_request.headers = Headers({"content-type": "application/json"})

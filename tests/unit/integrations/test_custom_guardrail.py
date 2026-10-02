@@ -1,5 +1,6 @@
 import asyncio
 import datetime as dt
+import json
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 from unittest.mock import AsyncMock
 
@@ -8,6 +9,7 @@ import pytest
 from litellm.integrations.custom_guardrail import (
     DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
+    _request_is_streaming,
     guardrail_request_data_with_streaming,
     log_guardrail_information,
     without_server_streaming_classification,
@@ -705,6 +707,17 @@ class TestCustomGuardrailStreamScope:
             )
             is False
         )
+
+    def test_streaming_classification_is_json_serializable_without_spoofing(self):
+        d: Final = guardrail_request_data_with_streaming({}, is_streaming=True)
+        serialized: Final = json.dumps(d)
+        assert _request_is_streaming(d) is True
+
+        round_tripped: Final = json.loads(serialized)
+        assert _request_is_streaming(round_tripped) is False
+        assert round_tripped["litellm_server_streaming_classification"] == "litellm-server-streaming"
+        assert isinstance(round_tripped["litellm_server_streaming_classification"], str)
+        assert without_server_streaming_classification(round_tripped) == round_tripped
 
     def test_streaming_classification_preserves_caller_fields_and_removes_only_server_marker(self):
         caller_data: Final = {

@@ -9,7 +9,7 @@ from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_in_ran
 SERVER_STREAMING_CLASSIFICATION_KEY: Final = "litellm_server_streaming_classification"
 
 
-class ServerStreamingClassification(Enum):
+class ServerStreamingClassification(str, Enum):
     MARKER = "litellm-server-streaming"
 
 
