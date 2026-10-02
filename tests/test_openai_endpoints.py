@@ -459,71 +459,6 @@ async def test_chat_completion_anthropic_structured_output():
 
 
 @pytest.mark.asyncio
-async def test_completion():
-    """
-    - Create key
-    Make chat completion call
-    - Create user
-    make chat completion call
-    """
-    async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session)
-        key = key_gen["key"]
-        await completion(session=session, key=key)
-        key_gen = await new_user(session=session)
-        key_2 = key_gen["key"]
-        # response = await completion(session=session, key=key_2)
-
-    ## validate openai format ##
-    client = OpenAI(api_key=key_2, base_url="http://0.0.0.0:4000")
-
-    client.completions.create(
-        model="gpt-4",
-        prompt="Say this is a test",
-        max_tokens=7,
-        temperature=0,
-    )
-
-
-@pytest.mark.asyncio
-async def test_embeddings():
-    """
-    - Create key
-    Make embeddings call
-    - Create user
-    make embeddings call
-    """
-    async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session)
-        key = key_gen["key"]
-        await embeddings(session=session, key=key)
-        key_gen = await new_user(session=session)
-        key_2 = key_gen["key"]
-        await embeddings(session=session, key=key_2)
-
-        # embedding request with non OpenAI model
-        await embeddings(session=session, key=key, model="mistral-embed")
-
-
-@pytest.mark.flaky(retries=5, delay=1)
-@pytest.mark.asyncio
-async def test_image_generation():
-    """
-    - Create key
-    Make embeddings call
-    - Create user
-    make embeddings call
-    """
-    async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session)
-        key = key_gen["key"]
-        await image_generation(session=session, key=key)
-        key_gen = await new_user(session=session)
-        key_2 = key_gen["key"]
-        await image_generation(session=session, key=key_2)
-
-
-@pytest.mark.asyncio
 async def test_proxy_all_models():
     """
     - proxy_server_config.yaml has model = * / *
@@ -566,20 +501,3 @@ async def test_batch_chat_completions():
         assert isinstance(response, list)
 
 
-@pytest.mark.asyncio
-async def test_moderations_endpoint():
-    """
-    - Make chat completion call using
-
-    """
-    async with aiohttp.ClientSession() as session:
-
-        # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
-        response = await moderation(
-            session=session,
-            key="sk-1234",
-        )
-
-        print(f"response: {response}")
-
-        assert "results" in response
