@@ -289,6 +289,10 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         task.add_done_callback(cls._on_close_task_done)
 
     def __del__(self) -> None:
+        """Deterministically dispose of an owned ClientSession upon GC collection."""
+        self._dispose_owned_session_on_finalization()
+
+    def _dispose_owned_session_on_finalization(self) -> None:
         try:
             if self._owns_session:
                 self._close_recycled_session(self.client)  # pyright: ignore[reportArgumentType]
