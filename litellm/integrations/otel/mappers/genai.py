@@ -43,6 +43,7 @@ class GenAIMapper:
         GenAI.OPERATION_NAME: lambda d: d.operation.value,
         GenAI.PROVIDER_NAME: lambda d: d.provider or None,
         GenAI.OUTPUT_TYPE: lambda d: d.output_type.value if d.output_type else None,
+        GenAI.CONVERSATION_ID: lambda d: d.session_id,
         GenAI.REQUEST_MODEL: lambda d: d.request_model or None,
         GenAI.REQUEST_TEMPERATURE: lambda d: d.request_params.temperature,
         GenAI.REQUEST_TOP_P: lambda d: d.request_params.top_p,
@@ -147,6 +148,7 @@ class GenAIMapper:
     _SERVICE_ATTRS: dict[str, Callable[[ServiceSpanData], AttrValue | None]] = {
         LiteLLM.SERVICE_NAME: lambda d: d.service_name,
         LiteLLM.SERVICE_CALL_TYPE: lambda d: d.call_type,
+        LiteLLM.SERVICE_CALLER: lambda d: d.caller,
     }
 
     def __init__(self, tool_attr_budget: int = MAX_TOOL_DEFINITION_ATTRS_PER_SPAN) -> None:

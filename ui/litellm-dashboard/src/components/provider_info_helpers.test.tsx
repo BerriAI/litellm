@@ -79,6 +79,17 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.BedrockMantle]);
     });
 
+    it("should map edenai slug and EDENAI enum key to the Eden AI display name and logo", () => {
+      const fromSlug = getProviderLogoAndName("edenai");
+      expect(fromSlug.displayName).toBe(Providers.EDENAI);
+      expect(fromSlug.logo).toBe(providerLogoMap[Providers.EDENAI]);
+      expect(fromSlug.logo).toBeTruthy();
+
+      const fromEnumKey = getProviderLogoAndName("EDENAI");
+      expect(fromEnumKey.displayName).toBe(Providers.EDENAI);
+      expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.EDENAI]);
+    });
+
     it("should resolve the BedrockMantle enum key to the Bedrock Mantle logo", () => {
       // The Add Model dropdown passes the provider_map key ("BedrockMantle"),
       // not the slug ("bedrock_mantle"). Unlike "Bedrock", the key does not
@@ -133,6 +144,13 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBeTruthy();
     });
 
+    it("should resolve the qwen_ai_platform slug and Qwen_AI_Platform enum key to the Qianwen AI Platform display name", () => {
+      expect(getProviderLogoAndName("qwen_ai_platform").displayName).toBe("Qianwen AI Platform");
+      expect(getProviderLogoAndName("Qwen_AI_Platform").displayName).toBe("Qianwen AI Platform");
+      expect(getProviderLogoAndName("qwencloud").displayName).toBe("QwenCloud");
+      expect(getProviderLogoAndName("qwen_ai_platform").logo).toBe(providerLogoMap[Providers.Qwen_AI_Platform]);
+    });
+
     it("should return provider value as display name when no mapping exists", () => {
       const unknownProvider = "unknown_provider";
       const result = getProviderLogoAndName(unknownProvider);
@@ -176,6 +194,7 @@ describe("provider_info_helpers", () => {
         Providers.PETALS,
         Providers.PG_VECTOR,
         Providers.PREDIBASE,
+        Providers.Sail,
         Providers.WANDB,
         Providers.ZAI,
       ];
@@ -190,6 +209,11 @@ describe("provider_info_helpers", () => {
       const { logo } = getProviderLogoAndName("openai");
       expect(logo).toContain("openai_small");
     });
+
+    it("should resolve the Tencent provider to its bundled logo", () => {
+      const { logo } = getProviderLogoAndName("tencent");
+      expect(logo).toContain("tencent");
+    });
   });
 
   describe("getPlaceholder", () => {
@@ -203,6 +227,10 @@ describe("provider_info_helpers", () => {
 
     it("should return an scx-ai model placeholder for SCX_AI provider", () => {
       expect(getPlaceholder(Providers.SCX_AI)).toBe("scx-ai/GLM-5.2");
+    });
+
+    it("should return an edenai model placeholder for EDENAI provider", () => {
+      expect(getPlaceholder(Providers.EDENAI)).toBe("edenai/openai/gpt-mini-latest");
     });
 
     it("should return claude-3-opus placeholder for Anthropic provider", () => {
@@ -284,6 +312,10 @@ describe("provider_info_helpers", () => {
 
     it("should return a chatgpt/ placeholder for the CHATGPT dropdown key", () => {
       expect(getPlaceholder("CHATGPT")).toBe("chatgpt/gpt-5.4");
+    });
+
+    it("should return a tencent/ placeholder for the Tencent provider", () => {
+      expect(getPlaceholder(Providers.Tencent)).toBe("tencent/deepseek-v4-pro");
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {
@@ -379,6 +411,14 @@ describe("provider_info_helpers", () => {
       expect(result).toContain("vertex_ai/text-bison");
       expect(result).toContain("vertex_ai_beta/something");
       expect(result).not.toContain("anthropic-native");
+    });
+
+    it("should list sail models when called with the 'Sail' provider key", () => {
+      const modelMap = {
+        "sail/openai/gpt-oss-120b": { litellm_provider: "sail" },
+        "sagemaker-model": { litellm_provider: "sagemaker" },
+      };
+      expect(getProviderModels("Sail" as Providers, modelMap)).toEqual(["sail/openai/gpt-oss-120b"]);
     });
 
     it("should include bedrock converse but exclude standalone bedrock_mantle when called with 'Bedrock' provider key", () => {

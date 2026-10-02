@@ -19,7 +19,7 @@ Quick summary:
 
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, TypeAlias
 
@@ -114,9 +114,7 @@ class BatchFileUsage(BaseModel):
     # each target a different model, so the project's per-model ITPM/OTPM
     # quota for a row's actual model must be charged with that row's own
     # tokens -- see `_create_project_io_descriptors_for_models`.
-    per_model_usage: dict[str, dict[str, int]] = Field(
-        default_factory=dict
-    )  # mutable-ok: accumulated incrementally per row while parsing the batch file
+    per_model_usage: dict[str, dict[str, int]] = Field(default_factory=dict)
 
 
 class _PROXY_BatchRateLimiter(CustomLogger):
@@ -328,7 +326,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             for descriptor in model_descriptors:
                 extra_descriptors.append(descriptor)
                 extra_increments.append(
-                    {  # mutable-ok: atomic limiter API requires mutable increment records
+                    {
                         "requests": 0,
                         "tokens": usage.get("output_tokens", 0)
                         if descriptor["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
@@ -465,7 +463,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         body: Final[Mapping[str, object]] = (
             MappingProxyType(_BATCH_BODY_ADAPTER.validate_python(raw_body))
             if isinstance(raw_body, Mapping)
-            else MappingProxyType({})  # mutable-ok: immediately frozen empty fallback
+            else MappingProxyType({})
         )
         # `max_tokens`/`max_completion_tokens` cap chat completions; `/v1/responses`
         # rows cap output with `max_output_tokens` instead -- omitting it here
@@ -661,7 +659,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         ) or self.parallel_request_limiter.window_size
         reset_time: Final = now + window_size if window_start is None else window_start + window_size
         retry_after: Final = max(0, int(reset_time - now))
-        reset_time_formatted: Final = datetime.fromtimestamp(reset_time).strftime("%Y-%m-%d %H:%M:%S UTC")
+        reset_time_formatted: Final = datetime.fromtimestamp(reset_time, tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S UTC"
+        )
 
         remaining_display: Final = max(0, status["limit_remaining"])
         current_limit: Final = status["current_limit"]
@@ -744,7 +744,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             )
 
         increments: list[IncrementAmounts] = [  # mutable-ok: reassigned below to append project IO increments
-            {  # mutable-ok: atomic limiter API requires mutable increment records
+            {
                 "requests": batch_usage.request_count,
                 "tokens": batch_usage.total_tokens,
             }

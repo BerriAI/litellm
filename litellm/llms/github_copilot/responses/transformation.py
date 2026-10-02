@@ -19,6 +19,7 @@ from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfi
 from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
+    ResponsesAPIStreamingResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -129,7 +130,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         model: str,
         parsed_chunk: dict,
         logging_obj: LiteLLMLoggingObj,
-    ) -> Any:
+    ) -> ResponsesAPIStreamingResponse:
         parsed_chunk = self._normalize_stream_item_id(parsed_chunk)
         return super().transform_streaming_response(
             model=model,
@@ -262,7 +263,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Return the responses endpoint
         return f"{effective_api_base}/responses"
 
-    def _handle_reasoning_item(self, item: dict[str, Any]) -> dict[str, Any]:
+    def _handle_reasoning_item(self, item: dict[str, object]) -> dict[str, object]:
         """
         Handle reasoning items for GitHub Copilot, preserving encrypted_content.
 
@@ -280,7 +281,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
             # Filter out None values for known problematic fields,
             # but preserve encrypted_content even if it exists
-            filtered_item: Final[dict[str, Any]] = {}
+            filtered_item: Final[dict[str, object]] = {}
             for k, v in item.items():
                 # Always include encrypted_content if present (even if None)
                 if k == "encrypted_content":

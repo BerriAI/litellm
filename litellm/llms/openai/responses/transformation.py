@@ -126,6 +126,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return is_gpt_reasoning_series_name(model)
 
     @staticmethod
+    def _model_map_lookup_name(model: str) -> str:
+        return model
+
+    @staticmethod
     def _supports_reasoning_effort_none(model: str) -> bool:
         """Return True if the model supports reasoning.effort='none'."""
         from litellm.utils import supports_none_reasoning_effort
@@ -208,8 +212,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> dict:
         """No mapping applied since inputs are in OpenAI spec already.
 
-        GPT-5 models have restrictions on temperature (only temperature=1
-        is accepted unless reasoning_effort='none' on models that support it).
+        GPT-5 models have restrictions on temperature and top_p (only temperature=1
+        is accepted, and top_p is rejected, unless reasoning.effort resolves to
+        'none' on models that support it).
         Apply the same validation used by the chat completions path.
         """
         params: Final = dict(response_api_optional_params)
@@ -234,13 +239,16 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     status_code=400,
                 )
 
-        if self._is_gpt_5_model(model=model):
+        lookup_name: Final = self._model_map_lookup_name(model)
+        if self._is_gpt_5_model(model=lookup_name):
+            reasoning: Final = params.get("reasoning") or {}
+            effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
+            supports_none: Final = self._supports_reasoning_effort_none(model=lookup_name)
+            effort_is_none: Final = supports_none and self._effort_resolves_to_none(lookup_name, effort)
+
             temperature: Final = params.get("temperature")
             if temperature is not None and temperature != 1:
-                reasoning: Final = params.get("reasoning") or {}
-                effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
-                supports_none: Final = self._supports_reasoning_effort_none(model=model)
-                if supports_none and self._effort_resolves_to_none(model, effort):
+                if effort_is_none:
                     pass  # flexible temperature allowed
                 elif drop_params or litellm.drop_params:
                     params.pop("temperature", None)
@@ -251,6 +259,20 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                             "active. Only temperature=1 is supported unless reasoning.effort resolves "
                             "to 'none', either set explicitly on the request or declared as the "
                             "model's default_reasoning_effort. "
+                            "To drop unsupported params set `litellm.drop_params = True`"
+                        ),
+                        status_code=400,
+                    )
+
+            if "top_p" in params and not effort_is_none:
+                if drop_params or litellm.drop_params:
+                    params.pop("top_p", None)
+                else:
+                    raise litellm.UnsupportedParamsError(
+                        message=(
+                            f"{model} only supports top_p when reasoning.effort resolves to 'none', "
+                            "either set explicitly on the request or declared as the model's "
+                            "default_reasoning_effort. "
                             "To drop unsupported params set `litellm.drop_params = True`"
                         ),
                         status_code=400,
@@ -313,7 +335,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         is left alone because the API accepts both."""
         if tools is None:
             return None
-        decoded: Final = [  # mutable-ok: request tools are a JSON list
+        decoded: Final = [
             self._tool_with_object_parameters(model=model, index=index, tool=tool) for index, tool in enumerate(tools)
         ]
         return cast("Sequence[ALL_RESPONSES_API_TOOL_PARAMS]", decoded)  # cast-ok: dict spread keeps each tool's shape
@@ -326,7 +348,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             return tool
         decoded: Final = safe_json_loads(parameters) if isinstance(parameters, str) else None
         if isinstance(decoded, dict):
-            return {**tool, "parameters": decoded}  # mutable-ok: request tools are JSON dicts
+            return {**tool, "parameters": decoded}
         raise litellm.BadRequestError(
             message=(
                 f"Invalid type for 'tools[{index}].parameters': expected an object, "
@@ -383,7 +405,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         genuine_prefix: Final = TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE.get(item_type) if isinstance(item_type, str) else None
         if genuine_prefix is None or not isinstance(item_id, str) or item_id.startswith(genuine_prefix):
             return item
-        return {key: value for key, value in item.items() if key != "id"}  # mutable-ok: outgoing JSON request item
+        return {key: value for key, value in item.items() if key != "id"}
 
     def _sanitized_tool_schemas_for_openai(
         self,
@@ -452,14 +474,14 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
         if not parameters_update and not tools_update:
             return entry
-        return {**entry, **parameters_update, **tools_update}  # mutable-ok: request tools are JSON dicts
+        return {**entry, **parameters_update, **tools_update}
 
     @staticmethod
     def _sanitized_tools(
         tools: Sequence[object],
         sanitize: Callable[[Mapping[str, object]], Mapping[str, object]],
     ) -> Sequence[object]:
-        sanitized: Final = [  # mutable-ok: request tools are a JSON list
+        sanitized: Final = [
             OpenAIResponsesAPIConfig._sanitized_tool_entry(item, sanitize) if isinstance(item, dict) else item
             for item in tools
         ]
