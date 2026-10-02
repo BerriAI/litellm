@@ -8723,33 +8723,36 @@ async def test_scoped_router_selects_the_server_the_connect_preflight_resolves(a
 
 
 @pytest.mark.asyncio
-async def test_scoped_name_of_an_ungranted_server_is_not_retried_as_an_access_group():
+async def test_scoped_name_of_an_ungranted_server_is_retried_as_an_access_group_the_key_holds():
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
     from litellm.proxy._experimental.mcp_server.server import _get_allowed_mcp_servers_from_mcp_server_names
 
-    private = MCPServer(server_id="p-id", name="p", server_name="p", alias="shared", transport=MCPTransport.http)
+    shadow = MCPServer(server_id="s-id", name="docs", server_name="docs", transport=MCPTransport.http)
     member = MCPServer(server_id="m-id", name="m", server_name="m", transport=MCPTransport.http)
     global_mcp_server_manager.registry.clear()
-    global_mcp_server_manager.registry.update({"p-id": private, "m-id": member})
+    global_mcp_server_manager.registry.update({"s-id": shadow, "m-id": member})
+    group_members = {"docs": ["m-id"]}
     try:
         with patch(
             "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
             "MCPRequestHandler._get_mcp_servers_from_access_groups",
             new_callable=AsyncMock,
-            return_value=["m-id"],
+            side_effect=lambda names: [sid for name in names for sid in group_members.get(name, [])],
         ) as groups:
-            denied = await _get_allowed_mcp_servers_from_mcp_server_names(
-                mcp_servers=["shared"], allowed_mcp_servers=[member]
+            collided = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=["docs"], allowed_mcp_servers=[member]
             )
-            unknown = await _get_allowed_mcp_servers_from_mcp_server_names(
+            unmatched = await _get_allowed_mcp_servers_from_mcp_server_names(
                 mcp_servers=["team"], allowed_mcp_servers=[member]
             )
     finally:
         global_mcp_server_manager.registry.clear()
 
-    assert denied == [], "a denied server name must not widen to an access group of the same name"
-    assert [s.server_id for s in unknown] == ["m-id"]
-    assert groups.await_args_list == [call(["team"])]
+    assert [s.server_id for s in collided] == ["m-id"], (
+        "a name owned by an ungranted server must still resolve to the access group of that name the key holds"
+    )
+    assert unmatched == [], "a name matching neither a granted server nor a granted access group stays denied"
+    assert groups.await_args_list == [call(["docs"]), call(["team"])]
 
 
 @pytest.mark.asyncio
@@ -8801,7 +8804,6 @@ async def test_scoped_router_hides_a_private_server_from_an_external_ip_like_the
         pytest.param(("a-id", "d-id"), "docs", ("d-id",), ["d-id"], id="alias-collision-alias-holder-listed-first"),
         pytest.param(("d-id", "a-id"), "docs", ("d-id",), ["d-id"], id="alias-collision-exact-name-listed-first"),
         pytest.param(("g1", "g2"), "GITHUB", ("g2",), ["g2"], id="case-variant-collision"),
-        pytest.param(("p-id", "m-id"), "shared", ("m-id",), [], id="ungranted-only-name-stays-denied"),
     ],
 )
 async def test_scoped_router_prefers_the_granted_server_answering_to_the_name(registry, scope, granted, expected):
@@ -8815,8 +8817,6 @@ async def test_scoped_router_prefers_the_granted_server_answering_to_the_name(re
         "d-id": MCPServer(server_id="d-id", name="docs", server_name="docs", transport=MCPTransport.http),
         "g1": MCPServer(server_id="g1", name="GitHub", server_name="GitHub", transport=MCPTransport.http),
         "g2": MCPServer(server_id="g2", name="github", server_name="github", transport=MCPTransport.http),
-        "p-id": MCPServer(server_id="p-id", name="p", server_name="p", alias="shared", transport=MCPTransport.http),
-        "m-id": MCPServer(server_id="m-id", name="m", server_name="m", transport=MCPTransport.http),
     }
     global_mcp_server_manager.registry.clear()
     global_mcp_server_manager.registry.update({server_id: servers[server_id] for server_id in registry})
@@ -8825,7 +8825,7 @@ async def test_scoped_router_prefers_the_granted_server_answering_to_the_name(re
             "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
             "MCPRequestHandler._get_mcp_servers_from_access_groups",
             new_callable=AsyncMock,
-            return_value=["m-id"],
+            return_value=[],
         ) as groups:
             selected: Final = await _get_allowed_mcp_servers_from_mcp_server_names(
                 mcp_servers=[scope], allowed_mcp_servers=[servers[server_id] for server_id in granted]
@@ -10400,6 +10400,75 @@ class TestPreemptive401ModeAware:
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
                 client_ip=None,
             )
+
+    async def _connect_with_a_grant(self, server, requested: str, path: str) -> HTTPException:
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        manager = mcp_operations.global_mcp_server_manager
+        manager.registry.clear()
+        manager.registry[server.server_id] = server
+        with (
+            patch.object(  # test-quality-ok: the key's grant list lives in the DB; the real router runs on it
+                manager, "get_allowed_mcp_servers", AsyncMock(return_value=[server.server_id])
+            ),
+            patch.object(manager, "has_user_oauth_token", new_callable=AsyncMock, return_value=False),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": path, "headers": [(b"host", b"testserver")]},
+                mcp_servers=[requested],
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
+                client_ip=None,
+            )
+        return exc.value
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("delegate", [True, False], ids=["oauth_delegate", "gateway_interactive"])
+    @pytest.mark.parametrize("shape", ["alias_case", "server_id", "x_mcp_servers"])
+    async def test_moved_connect_shapes_get_the_exact_name_routes_challenge(self, delegate, shape, monkeypatch):
+        """Alias-case, server-id and x-mcp-servers connects resolve the same server the router serves, so
+        they answer the exact-name route's 401 with the requested spelling in the route segment."""
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        server = _make_oauth2_server("gwx", oauth2_flow="authorization_code", delegate_auth_to_upstream=delegate)
+        requested, path, exact_path = {
+            "alias_case": ("GWX", "/mcp/GWX", "/mcp/gwx"),
+            "server_id": (server.server_id, f"/mcp/{server.server_id}", "/mcp/gwx"),
+            "x_mcp_servers": ("GWX", "/mcp", "/mcp"),
+        }[shape]
+
+        exact = await self._connect_with_a_grant(server, "gwx", exact_path)
+        moved = await self._connect_with_a_grant(server, requested, path)
+
+        assert exact.status_code == 401
+        assert (moved.status_code, moved.detail) == (exact.status_code, exact.detail)
+        exact_header = {k.lower(): v for k, v in (exact.headers or {}).items()}["www-authenticate"]
+        moved_header = {k.lower(): v for k, v in (moved.headers or {}).items()}["www-authenticate"]
+        assert "/gwx" in exact_header
+        assert moved_header == exact_header.replace("/gwx", f"/{requested}")
+
+    @pytest.mark.asyncio
+    async def test_aggregate_connect_without_a_server_selection_is_not_challenged(self):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        manager = mcp_operations.global_mcp_server_manager
+        manager.registry.clear()
+        for alias, delegate in (("gwx", False), ("relay", True)):
+            server = _make_oauth2_server(alias, oauth2_flow="authorization_code", delegate_auth_to_upstream=delegate)
+            manager.registry[server.server_id] = server
+
+        with patch.object(manager, "has_user_oauth_token", new_callable=AsyncMock, return_value=False) as tokens:
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": "/mcp", "headers": [(b"host", b"testserver")]},
+                mcp_servers=None,
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
+                client_ip=None,
+            )
+
+        assert tokens.await_count == 0, "an unselected aggregate connect must not probe any server for a token"
 
     @pytest.mark.asyncio
     async def test_deferred_discovery_runs_before_delegate_challenge(self):

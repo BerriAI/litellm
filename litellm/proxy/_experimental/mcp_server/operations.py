@@ -6,7 +6,7 @@ import types
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Final, Literal, NoReturn, TypeAlias, overload
+from typing import Any, Final, NoReturn, TypeAlias, overload
 
 from fastapi import HTTPException
 from mcp import ReadResourceResult, Resource
@@ -453,9 +453,7 @@ async def _get_allowed_mcp_servers_from_mcp_server_names(
     if mcp_servers is not None:
         for server_or_group in mcp_servers:
             scoped = _scoped_server(server_or_group, allowed_mcp_servers, client_ip)
-            if isinstance(scoped, str):
-                verbose_logger.debug("MCP scope name %s names a server the caller does not hold", server_or_group)
-            elif scoped is not None:
+            if scoped is not None:
                 filtered_server[scoped.server_id] = scoped
             else:
                 try:
@@ -494,25 +492,17 @@ def _server_answers_to(server: MCPServer, name: str) -> bool:
     return server_answers_to_name(server, name)
 
 
-def _scoped_server(
-    name: str, allowed_mcp_servers: Sequence[MCPServer], client_ip: str | None
-) -> MCPServer | Literal["denied"] | None:
-    """The server a scoped ``name`` selects for the caller, in this order. ``"denied"`` when the registry's
-    ``get_mcp_server_answering_to`` pick, made with the same ``client_ip`` the connect preflight and discovery
-    use, is a server hidden from that IP. Otherwise the granted server answering to ``name``: the registry's
-    own pass order run over ``allowed_mcp_servers`` alone, so a granted server wins over an ungranted alias or
-    case variant the registry would pick. With no granted server answering: ``"denied"`` when the registry
-    places the name on a server the caller does not hold, so it is not retried as an access group; ``None``
-    when the registry cannot place the name for any caller."""
-    registry_pick: Final = global_mcp_server_manager.get_mcp_server_answering_to(name, client_ip=client_ip)
-    if registry_pick is None and global_mcp_server_manager.get_mcp_server_answering_to(name) is not None:
-        return "denied"
-    granted: Final = global_mcp_server_manager.get_mcp_server_answering_to(
-        name, client_ip=client_ip, among=allowed_mcp_servers
-    )
-    if granted is not None:
-        return granted
-    return "denied" if registry_pick is not None else None
+def _scoped_server(name: str, allowed_mcp_servers: Sequence[MCPServer], client_ip: str | None) -> MCPServer | None:
+    """The granted server a scoped ``name`` selects for the caller: the registry's own pass order run over
+    ``allowed_mcp_servers`` alone, so a granted server wins over an ungranted alias or case variant the registry
+    would pick. ``None`` when no granted server answers, or when the registry's own pick for ``name`` is a server
+    hidden from ``client_ip``; the caller then retries the name as an access group it holds."""
+    if (
+        global_mcp_server_manager.get_mcp_server_answering_to(name, client_ip=client_ip) is None
+        and global_mcp_server_manager.get_mcp_server_answering_to(name) is not None
+    ):
+        return None
+    return global_mcp_server_manager.get_mcp_server_answering_to(name, client_ip=client_ip, among=allowed_mcp_servers)
 
 
 async def raise_denied_scoped_mcp_access(

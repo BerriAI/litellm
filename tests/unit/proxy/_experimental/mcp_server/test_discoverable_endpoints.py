@@ -7,6 +7,7 @@ from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi import HTTPException
@@ -390,6 +391,84 @@ def trust_xff():
         return_value=True,
     ):
         yield
+
+
+def _registered_gateway_oauth2_server():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server: Final = MCPServer(
+        server_id="oid-7f3a",
+        name="gwx",
+        server_name="gwx",
+        alias="gwx",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        client_id="gw-client",
+        client_secret="gw-secret",
+        authorization_url="https://provider.com/oauth/authorize",
+        token_url="https://provider.com/oauth/token",
+        scopes=["read"],
+    )
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry[server.server_id] = server
+    return server
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup", ["GWX", "oid-7f3a"], ids=["alias_case", "server_id"])
+async def test_authorization_server_doc_for_a_moved_lookup_matches_the_exact_name_doc(lookup):
+    """A case variant or server id now resolves like the exact name, so its AS metadata is the
+    exact-name doc with the requested spelling in the issuer and endpoint paths."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        oauth_authorization_server_mcp_standard,
+    )
+
+    _registered_gateway_oauth2_server()
+    request: Final = _mock_callback_request("http://litellm.example.com/")
+
+    exact: Final = await oauth_authorization_server_mcp_standard(request=request, mcp_server_name="gwx")
+    moved: Final = await oauth_authorization_server_mcp_standard(request=request, mcp_server_name=lookup)
+
+    assert exact["issuer"] == "http://litellm.example.com/mcp/gwx"
+    assert moved == {
+        key: value.replace("/gwx", f"/{lookup}") if isinstance(value, str) else value for key, value in exact.items()
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup", ["GWX", "oid-7f3a"], ids=["alias_case", "server_id"])
+async def test_authorize_relay_for_a_moved_lookup_redirects_like_the_exact_name(lookup):
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import authorize
+
+    _registered_gateway_oauth2_server()
+    request: Final = _mock_callback_request("http://litellm.example.com/")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper", return_value="sealed"
+    ):
+        exact: Final = await authorize(
+            request=request, mcp_server_name="gwx", redirect_uri="http://127.0.0.1:60108/callback", state="s1"
+        )
+        moved: Final = await authorize(
+            request=request, mcp_server_name=lookup, redirect_uri="http://127.0.0.1:60108/callback", state="s1"
+        )
+
+    exact_target: Final = urlparse(exact.headers["location"])
+    moved_target: Final = urlparse(moved.headers["location"])
+    exact_query: Final = parse_qs(exact_target.query)
+    moved_query: Final = parse_qs(moved_target.query)
+    assert exact.status_code == 307
+    assert exact_target._replace(query="") == urlparse("https://provider.com/oauth/authorize")
+    assert exact_query["client_id"] == ["gw-client"]
+    assert len(exact_query.pop("state")) == 1 and len(moved_query.pop("state")) == 1
+    assert (moved.status_code, moved_target._replace(query=""), moved_query) == (
+        exact.status_code,
+        exact_target._replace(query=""),
+        exact_query,
+    )
 
 
 @pytest.mark.asyncio
