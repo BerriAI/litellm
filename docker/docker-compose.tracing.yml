@@ -12,7 +12,6 @@ services:
       DATABASE_URL: postgresql://litellm:litellm@db:5432/litellm
       STORE_MODEL_IN_DB: "True"
       CLICKHOUSE_URL: http://default:local-tracing@clickhouse:8123
-      CLICKHOUSE_READER_URL: http://default:local-tracing@clickhouse:8123
       CLICKHOUSE_DATABASE: litellm
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:

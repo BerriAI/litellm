@@ -15,6 +15,7 @@ import { IdChip } from "./IdChip";
 import { formatCost } from "./AgentTracesTable";
 import { SpanIcon } from "./SpanIcon";
 import { SpanTree } from "./SpanTree";
+import { FrameworkLogo, traceFramework } from "./TraceFramework";
 import type { SpanTreeState, TreeRow } from "./traceTree";
 import type { Trace } from "./traceTypes";
 import {
@@ -25,6 +26,7 @@ import {
   isFrameworkSpan,
   nearestVisibleSpanId,
   revealSpanInState,
+  traceAgentNames,
   traceDisplayName,
 } from "./traceUtils";
 
@@ -107,6 +109,21 @@ function Stat({ label, value, error = false }: { label: string; value: string; e
   );
 }
 
+function RunIcon({ summary, failed }: { summary: Trace["summary"]; failed: boolean }) {
+  const framework = traceFramework(summary);
+  if (!framework) return <SpanIcon type="agent" error={failed} size="lg" />;
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 rounded-[5px] border border-border bg-card px-1.5 py-px text-[12px] text-foreground"
+      data-testid="run-framework"
+      title={framework.label}
+    >
+      <FrameworkLogo framework={framework} />
+      {traceAgentNames(summary).join(", ") || framework.label}
+    </span>
+  );
+}
+
 function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => void; embedded: boolean }) {
   const { summary } = trace;
   const failed = summary.error_count > 0;
@@ -125,7 +142,7 @@ function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => vo
           <span className="mx-1 h-[18px] w-px bg-border" />
         </>
       )}
-      <SpanIcon type="agent" error={failed} size="lg" />
+      <RunIcon summary={summary} failed={failed} />
       <h1 className="min-w-0 truncate text-[14px] font-medium text-foreground">{traceDisplayName(summary)}</h1>
       <IdChip value={summary.trace_id} label="Copy trace ID" showValue />
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">

@@ -124,6 +124,10 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 )
 from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN, TeamRole, is_team_admin, team_access_denied
 from litellm.proxy.management.teams.dependencies import get_team_access
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    InvalidDateRange,
+    parse_canonical_date_range,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _check_disable_global_guardrails_caller_permission,
     _check_passthrough_routes_caller_permission,
@@ -6694,16 +6698,12 @@ _MAX_AGGREGATED_RANGE_DAYS: Final = 400
 def aggregated_date_range_error(start_date: str | None, end_date: str | None) -> str | None:
     """The aggregated endpoint has no pagination to bound its work, so malformed
     dates and ranges wider than the UI ever requests are rejected before querying."""
-    if start_date is None or end_date is None:
-        return "Please provide start_date and end_date"
-    try:
-        parsed_start: Final = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        parsed_end: Final = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    except ValueError:
-        return "start_date and end_date must be valid YYYY-MM-DD dates"
-    if parsed_end < parsed_start:
+    date_range: Final = parse_canonical_date_range(start_date, end_date)
+    if isinstance(date_range, InvalidDateRange):
+        return date_range.reason
+    if date_range.end < date_range.start:
         return "end_date must be on or after start_date"
-    if (parsed_end - parsed_start).days > _MAX_AGGREGATED_RANGE_DAYS:
+    if (date_range.end - date_range.start).days > _MAX_AGGREGATED_RANGE_DAYS:
         return f"Date range must be at most {_MAX_AGGREGATED_RANGE_DAYS} days"
     return None
 

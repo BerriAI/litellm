@@ -15,12 +15,15 @@ from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel, ConfigDict
 
+from litellm._logging import verbose_proxy_logger
 from litellm.constants import OTLP_RETRY_AFTER_SECONDS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
+from litellm.rust_bridge.traces import ClickHouseStorage, QueryScope
 from litellm.tracing import (
     Tenant,
     TraceReceiver,
@@ -117,7 +120,7 @@ async def ingest_otlp_traces(
     return Response(content=body, media_type=media_type)
 
 
-@router.get("/v1/traces", response_model=None)
+@router.get("/v1/traces", response_model=TracePage)
 async def list_agent_traces(
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
     start_ms: Annotated[int | None, Query(description="Window start, unix ms. Default: 24h ago")] = None,
@@ -137,7 +140,78 @@ async def list_agent_traces(
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-@router.get("/v1/traces/{trace_id}", response_model=None)
+class TraceQueryRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    sql: str
+
+
+@dataclass(frozen=True, slots=True)
+class TraceQueryAccess:
+    storage: ClickHouseStorage
+    scope: QueryScope
+    secret: str
+
+
+def provide_trace_query_secret() -> str:
+    from litellm.proxy.proxy_server import master_key
+
+    if not master_key:
+        raise HTTPException(status_code=503, detail="Trace SQL queries require a configured proxy master key")
+    return master_key
+
+
+def trace_query_scope(auth: UserAPIKeyAuth) -> QueryScope:
+    if auth.user_role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
+        return {"kind": "admin"}
+    if auth.project_id and auth.token:
+        return {"kind": "key", "team_id": auth.team_id or "", "api_key_hash": auth.token}
+    if auth.project_id:
+        raise HTTPException(status_code=403, detail="Project trace SQL queries require a project key")
+    if auth.team_id:
+        return {"kind": "team", "team_id": auth.team_id}
+    if auth.token:
+        return {"kind": "key", "team_id": "", "api_key_hash": auth.token}
+    raise HTTPException(status_code=403, detail="Trace SQL queries require an authenticated trace scope")
+
+
+async def provide_trace_query_access(
+    auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
+    secret: Annotated[str, Depends(provide_trace_query_secret)],
+) -> TraceQueryAccess:
+    return TraceQueryAccess(require_receiver(tracing).store.storage, trace_query_scope(auth), secret)
+
+
+@router.post("/v1/traces/query")
+async def query_agent_traces(
+    body: TraceQueryRequest,
+    access: Annotated[TraceQueryAccess, Depends(provide_trace_query_access)],
+) -> Response:
+    try:
+        return Response(
+            content=await access.storage.query_sql(body.sql, access.scope, access.secret), media_type="application/json"
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except RuntimeError as error:
+        verbose_proxy_logger.warning("Trace SQL query unavailable: %s", error)
+        raise HTTPException(status_code=503, detail="Trace SQL query failed or exceeded reader limits") from error
+
+
+@router.get("/v1/traces/query/help")
+async def help_agent_trace_queries(
+    access: Annotated[TraceQueryAccess, Depends(provide_trace_query_access)],
+) -> Response:
+    try:
+        return Response(
+            content=await access.storage.query_help(access.scope, access.secret), media_type="application/json"
+        )
+    except RuntimeError as error:
+        verbose_proxy_logger.warning("Trace query help unavailable: %s", error)
+        raise HTTPException(status_code=503, detail="Trace query help is temporarily unavailable") from error
+
+
+@router.get("/v1/traces/{trace_id}", response_model=Trace)
 async def get_agent_trace(
     trace_id: str,
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
@@ -150,7 +224,7 @@ async def get_agent_trace(
     return trace
 
 
-@router.get("/v1/traces/{trace_id}/spans/{span_id}", response_model=None)
+@router.get("/v1/traces/{trace_id}/spans/{span_id}", response_model=SpanDetail)
 async def get_agent_trace_span(
     trace_id: str,
     span_id: str,
