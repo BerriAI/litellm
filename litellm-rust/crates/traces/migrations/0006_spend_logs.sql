@@ -34,9 +34,11 @@ CREATE TABLE IF NOT EXISTS {database}.spend_logs
     metadata              String CODEC(ZSTD(3)),
     messages              String CODEC(ZSTD(3)),
     response              String CODEC(ZSTD(3)),
+    EngineReceivedMs      UInt64 DEFAULT 0,
     INDEX idx_response_id response_id TYPE bloom_filter(0.001) GRANULARITY 1,
     INDEX idx_trace_id    trace_id    TYPE bloom_filter(0.001) GRANULARITY 1
 )
 ENGINE = ReplacingMergeTree(end_time)
 PARTITION BY toYYYYMM(start_time)
 ORDER BY (team_id, start_time, request_id)
+SETTINGS materialize_ttl_recalculate_only = 1

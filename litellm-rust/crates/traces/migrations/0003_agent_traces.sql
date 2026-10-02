@@ -22,4 +22,4 @@ CREATE TABLE IF NOT EXISTS {database}.agent_traces_by_key
 )
 ENGINE = AggregatingMergeTree
 ORDER BY (TeamId, ApiKeyHash, TraceId)
-SETTINGS non_replicated_deduplication_window = 1000
+SETTINGS materialize_ttl_recalculate_only = 1, non_replicated_deduplication_window = 1000
