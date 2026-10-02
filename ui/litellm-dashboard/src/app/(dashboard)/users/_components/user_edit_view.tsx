@@ -71,11 +71,11 @@ const budgetSchema = (unlimitedBudget: boolean) =>
     tpm_limit: z
       .union([z.string(), z.number()])
       .nullish()
-      .refine(isValidRateLimitInput, "Enter a whole number from 0 to 9007199254740991, or leave empty for unlimited"),
+      .refine(isValidRateLimitInput, "Enter a non-negative whole number, or leave empty for unlimited"),
     rpm_limit: z
       .union([z.string(), z.number()])
       .nullish()
-      .refine(isValidRateLimitInput, "Enter a whole number from 0 to 9007199254740991, or leave empty for unlimited"),
+      .refine(isValidRateLimitInput, "Enter a non-negative whole number, or leave empty for unlimited"),
   });
 
 type UserEditFormValues = z.infer<ReturnType<typeof budgetSchema>>;
