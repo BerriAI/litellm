@@ -131,11 +131,6 @@ class UsageTracker:
         )
 
 
-# ---------------------------------------------------------------------------
-# Usage parsing
-# ---------------------------------------------------------------------------
-
-
 def _as_int(value: object) -> int:
     if isinstance(value, bool):
         return 0
@@ -228,11 +223,6 @@ class SSEUsageParser:
             self.input_tokens = input_tokens
         if output_tokens:
             self.output_tokens = output_tokens
-
-
-# ---------------------------------------------------------------------------
-# Cost + helpers
-# ---------------------------------------------------------------------------
 
 
 def compute_cost(model: str | None, input_tokens: int, output_tokens: int) -> float:
@@ -373,11 +363,6 @@ def _noop() -> None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# ModelEndpoint
-# ---------------------------------------------------------------------------
-
-
 class ModelEndpoint:
     """Local HTTP endpoint for one harness session. Use as an async context manager."""
 
@@ -401,7 +386,6 @@ class ModelEndpoint:
         self.token = secrets.token_urlsafe(HARNESS_SESSION_TOKEN_BYTES)
         self.usage = UsageTracker()
         self.port = 0
-        # Injected client (tests); production uses LiteLLM's shared cached client.
         self._injected_client = client
         self._deps: _ServerDeps | None = None
         self._client: httpx.AsyncClient | None = None
@@ -411,8 +395,6 @@ class ModelEndpoint:
     @property
     def url(self) -> str:
         return f"http://{HARNESS_ENDPOINT_HOST}:{self.port}"
-
-    # -- lifecycle ----------------------------------------------------------
 
     async def __aenter__(self) -> ModelEndpoint:
         await self.start()
@@ -500,8 +482,6 @@ class ModelEndpoint:
             routes=[*post_routes, *get_routes]  # mutable-ok: Starlette takes a routes list
         )
 
-    # -- request handling ---------------------------------------------------
-
     @property
     def _responses(self) -> ModuleType:
         if self._deps is None:
@@ -565,8 +545,6 @@ class ModelEndpoint:
             cost = compute_cost(model, input_tokens, output_tokens)
         self.usage.add(input_tokens, output_tokens, cost)
 
-    # -- gateway mode -------------------------------------------------------
-
     async def _forward(self, request: Request, route: str, body: Mapping[str, Any]) -> Response:
         if self._client is None or self.gateway is None:
             raise HarnessError("gateway client is not started")
@@ -621,8 +599,6 @@ class ModelEndpoint:
             except ValueError:
                 tokens = (0, 0)
         self._record(model, tokens[0], tokens[1], header_cost(upstream.headers))
-
-    # -- SDK mode -----------------------------------------------------------
 
     def _sdk_kwargs(
         self, body: Mapping[str, Any]

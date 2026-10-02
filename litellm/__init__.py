@@ -2282,7 +2282,6 @@ if TYPE_CHECKING:
 # Track if async client cleanup has been registered (for lazy loading)
 _async_client_cleanup_registered = False
 
-# litellm.agent() entrypoints, resolved lazily from litellm.harness by __getattr__.
 _AGENT_EXPORTS: Final = frozenset(
     {
         "agent",
@@ -2333,7 +2332,6 @@ def __getattr__(name: str) -> Any:
         handler_func: Final = registry[name]
         return handler_func(name)
 
-    # litellm.agent() and friends: imported on first access (not needed for completion calls)
     if name == "harness" or name in _AGENT_EXPORTS:
         import importlib
 
