@@ -767,8 +767,6 @@ from litellm.proxy.rag_endpoints.endpoints import router as rag_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import (
-    JSON_OBJECT_ADAPTER,
-    raise_if_required_body_param_missing,
     route_request,
 )
 from litellm.proxy.route_priority import hot_routes_first
@@ -12549,9 +12547,6 @@ async def audio_speech(
 
         if user_model:
             data["model"] = user_model
-
-        request_data: Final = JSON_OBJECT_ADAPTER.validate_python(data)
-        raise_if_required_body_param_missing(route_type="aspeech", data=request_data, llm_router=llm_router)
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
