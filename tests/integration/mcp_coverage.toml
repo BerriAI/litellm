@@ -1,0 +1,15 @@
+[tool.coverage.run]
+branch = true
+parallel = true
+relative_files = true
+include = [
+    "litellm/proxy/_experimental/mcp_server/*",
+    "litellm/proxy/management_endpoints/mcp_management_endpoints.py",
+    "litellm/responses/mcp/*",
+    "litellm/experimental_mcp_client/*",
+    "litellm/proxy/guardrails/guardrail_hooks/mcp_*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true

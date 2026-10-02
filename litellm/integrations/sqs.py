@@ -22,7 +22,7 @@ from litellm.constants import (
     SQS_SEND_MESSAGE_ACTION,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -295,7 +295,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
                 data=prepped.body,
                 headers=prepped.headers,
             )
-            SigV4Auth(credentials, "sqs", self.sqs_region_name).add_auth(aws_request)
+            await run_aws_signing(SigV4Auth(credentials, "sqs", self.sqs_region_name).add_auth, aws_request)
 
             signed_headers: Final = dict(aws_request.headers.items())
 

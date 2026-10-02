@@ -28,7 +28,7 @@ const tagEditShape = {
   description: z.string().optional(),
   models: z.array(z.string()).optional(),
   max_budget: z.union([z.string(), z.number()]).optional(),
-  budget_duration: z.string().optional(),
+  budget_duration: z.string().nullish(),
 };
 
 const tagEditSchema = z.object(tagEditShape);

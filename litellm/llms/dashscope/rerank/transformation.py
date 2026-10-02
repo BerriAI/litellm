@@ -12,8 +12,12 @@ Endpoint
 - https://dashscope.aliyuncs.com/compatible-api/v1/reranks
 
 Note: chat/embed live under `/compatible-mode/v1/`, but DashScope's rerank
-route is exposed under `/compatible-api/v1/reranks` per the docs. Override
-with `DASHSCOPE_API_BASE_RERANK` to point at a different host or path.
+route is exposed under `/compatible-api/v1/reranks` per the docs. A chat-shaped
+`.aliyuncs.com/compatible-mode/v1` base reaching this config (the chat default
+from `get_llm_provider`, or a `DASHSCOPE_API_BASE` env var) is redirected to
+the same host's rerank route, since `/compatible-mode/v1/reranks` is a dead
+route on every DashScope host. Override with `DASHSCOPE_API_BASE_RERANK` to
+point at a different host or path.
 
 Empirically, qwen3-rerank accepts `return_documents=true` and echoes
 `results[].document.text` back, even though the public docs list the flag
@@ -40,7 +44,7 @@ from litellm.types.rerank import (
     RerankTokens,
 )
 
-from ..common_utils import DashScopeError
+from ..common_utils import DashScopeError, resolve_dashscope_family_rerank_api_base
 
 DEFAULT_RERANK_URL: Final = "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"
 
@@ -67,9 +71,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
         return resolved_api_key
 
     def _resolve_rerank_api_base(self, api_base: str | None) -> str:
-        if api_base is not None:
-            return api_base
-        return get_secret_str("DASHSCOPE_API_BASE_RERANK") or DEFAULT_RERANK_URL
+        return resolve_dashscope_family_rerank_api_base(api_base, "DASHSCOPE_API_BASE_RERANK", DEFAULT_RERANK_URL)
 
     def get_complete_url(
         self,

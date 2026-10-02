@@ -1,0 +1,17 @@
+{{- if .Values.metricsServer.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "litellm.fullname" . }}-metrics
+  labels:
+    {{- include "litellm.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.metricsServer.port }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "litellm.selectorLabels" . | nindent 4 }}
+{{- end }}
