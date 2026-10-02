@@ -1,4 +1,6 @@
-from unittest.mock import AsyncMock
+import asyncio
+
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -8,7 +10,10 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.responses.streaming_iterator import _build_synthetic_response_events
+from litellm.responses.streaming_iterator import (
+    CachedResponsesAPIStreamingIterator,
+    _build_synthetic_response_events,
+)
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
@@ -91,3 +96,18 @@ def test_replayed_stream_terminal_event_follows_status(finish_reason, event_type
 
 def test_omitted_temperature_defaults_to_zero():
     assert _transform("stop", {}).temperature == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_reason", ["length", "stop"])
+async def test_replayed_stream_logs_success_exactly_once(finish_reason):
+    logging_obj = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    iterator = CachedResponsesAPIStreamingIterator(
+        response=_transform(finish_reason, {}),
+        logging_obj=logging_obj,
+    )
+    async for _ in iterator:
+        pass
+    await asyncio.sleep(0)
+    assert logging_obj.dispatch_success_handlers.await_count == 1

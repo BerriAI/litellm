@@ -902,7 +902,10 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt = self._events[self._idx]
         self._idx += 1
         openai_types = _get_openai_response_types()
-        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        if getattr(evt, "type", None) in (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
             self.completed_response = evt
             self._log_completed_response(is_async=True)
         return evt
@@ -916,7 +919,10 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt = self._events[self._idx]
         self._idx += 1
         openai_types = _get_openai_response_types()
-        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        if getattr(evt, "type", None) in (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
             self.completed_response = evt
             self._log_completed_response(is_async=False)
         return evt
@@ -969,7 +975,10 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt = self._events[self._idx]
         self._idx += 1
         openai_types = _get_openai_response_types()
-        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        if getattr(evt, "type", None) in (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
             self.completed_response = evt
             self._log_completed_response(is_async=True)
         return evt
@@ -983,7 +992,10 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         evt = self._events[self._idx]
         self._idx += 1
         openai_types = _get_openai_response_types()
-        if getattr(evt, "type", None) == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+        if getattr(evt, "type", None) in (
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+        ):
             self.completed_response = evt
             self._log_completed_response(is_async=False)
         return evt
