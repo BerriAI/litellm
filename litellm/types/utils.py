@@ -1539,9 +1539,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
             function_call = FunctionCall(**function_call)
 
         if tool_calls is not None and isinstance(tool_calls, (list, tuple)):
-            coerced_tool_calls: list[
-                ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall
-            ] = []  # mutable-ok: public Delta.tool_calls contract is a list
+            coerced_tool_calls: list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] = []
             current_index = 0
             for tool_call in tool_calls:
                 if isinstance(tool_call, dict):
@@ -3186,6 +3184,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     cold_storage_object_key: str | None  # S3/GCS object key for cold storage retrieval
     team_alias: str | None
     team_id: str | None
+    used_client_oauth_token: ReadOnly[bool | None]
 
 
 class AzureSpillover(TypedDict):
@@ -3942,14 +3941,14 @@ def pricing_override_fields(*sources: Mapping[str, object]) -> tuple[str, ...]:
     )
 
 
-agentic_loop_internal_litellm_params: Final = list(AGENTIC_LOOP_KWARG_NAMES)  # mutable-ok: public type stays a list
+agentic_loop_internal_litellm_params: Final = list(AGENTIC_LOOP_KWARG_NAMES)
 
 bedrock_batch_litellm_params: Final = BEDROCK_BATCH_KWARG_NAMES
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = _litellm_params.TRUSTED_CALLBACK_VARS_FIELD
 ADDRESSED_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_RESPONSE_ID_FIELD
 
-all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it  # mutable-ok: callers concat
+all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it
     *OWNED_KWARG_NAMES,
     *KWARG_ARTIFACTS,
     *StandardCallbackDynamicParams.__annotations__,
@@ -4153,6 +4152,7 @@ class LlmProviders(str, Enum):
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
+    CORTECS = "cortecs"
     SCX_AI = "scx-ai"
     PRISM = "prism"
     DARKBLOOM = "darkbloom"

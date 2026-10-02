@@ -129,6 +129,7 @@ OPTION_NAMES: Final = (
     "order",
     "tag_regex",
     "max_file_size_mb",
+    "silent_model",
     "auto_router_config_path",
     "auto_router_config",
     "auto_router_default_model",
@@ -317,7 +318,7 @@ def test_caching_groups_is_a_flat_sequence_of_model_groups_that_share_one_cache_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for callback_list in ("input_callback", "success_callback", "_async_success_callback"):
-        monkeypatch.setattr(litellm, callback_list, [])  # mutable-ok: Cache() appends "cache" to these lists
+        monkeypatch.setattr(litellm, callback_list, [])
     options: Final = CachingOptions(caching_groups=(("gpt-4", "gpt-4o"), ("claude-3",)))
     cache: Final = Cache()
 
@@ -394,7 +395,7 @@ def test_owned_wire_names_refuse_a_root_that_declares_a_kwarg_outside_a_leaf() -
 
 
 def test_agentic_loop_names_concatenate_as_a_list() -> None:
-    extended: Final = agentic_loop_internal_litellm_params + ["caller_added"]  # mutable-ok: list contract under test
+    extended: Final = agentic_loop_internal_litellm_params + ["caller_added"]
 
     assert (type(extended), len(extended), frozenset(extended)) == (
         list,
@@ -417,7 +418,7 @@ def test_proxy_stamped_fields_keep_their_wire_names() -> None:
 
 
 def test_all_litellm_params_concatenates_with_a_list_like_the_completion_entrypoint_does() -> None:
-    extended: Final = ["aembedding", "extra_headers"] + all_litellm_params  # mutable-ok: list contract under test
+    extended: Final = ["aembedding", "extra_headers"] + all_litellm_params
 
     assert (type(extended), frozenset(extended)) == (list, frozenset(("aembedding", "extra_headers", *OWNED_NAMES)))
 

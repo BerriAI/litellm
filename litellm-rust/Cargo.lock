@@ -4039,6 +4039,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-migrate"
+version = "0.1.0"
+dependencies = [
+ "litellm-migrate-macros",
+ "rstest",
+]
+
+[[package]]
+name = "litellm-migrate-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rstest",
+ "syn 2.0.119",
+ "tempfile",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "litellm-model-catalog"
 version = "0.1.0"
 dependencies = [
@@ -4086,9 +4106,11 @@ dependencies = [
  "litellm-secrets",
  "litellm-secrets-aws",
  "litellm-secrets-types",
+ "litellm-storage-clickhouse",
  "litellm-token-counter",
  "litellm-traces",
  "litellm-tracing",
+ "prost",
  "pyo3",
  "pyo3-async-runtimes",
  "qdrant-client",
@@ -4289,6 +4311,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-storage-clickhouse"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "litellm-http",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "litellm-testkit"
 version = "0.1.0"
 dependencies = [
@@ -4369,19 +4405,24 @@ name = "litellm-traces"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "criterion",
  "flate2",
+ "indexmap 2.14.0",
  "litellm-http",
+ "litellm-migrate",
+ "litellm-storage-clickhouse",
  "opentelemetry-proto",
  "prost",
  "rstest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "strum",
  "testcontainers-modules",
  "thiserror 2.0.19",
  "time",
  "tokio",
- "url",
+ "wiremock",
 ]
 
 [[package]]
@@ -4804,6 +4845,7 @@ dependencies = [
  "js-sys",
  "pin-project-lite",
  "thiserror 2.0.19",
+ "tracing",
 ]
 
 [[package]]
@@ -4818,6 +4860,8 @@ dependencies = [
  "opentelemetry_sdk 0.33.0",
  "prost",
  "serde",
+ "tonic",
+ "tonic-prost",
 ]
 
 [[package]]

@@ -2,8 +2,8 @@ use std::{collections::BTreeMap, time::Duration};
 
 use litellm_http::Client;
 use litellm_traces::{
-    Connection, Error, InsertTable, Parameter, ReadQuery, encode_rows, ensure_schema,
-    execute_named_read, execute_read, schema_statements,
+    Connection, Error, InsertTable, NORMALIZED_FIELD_DEFINITIONS, Parameter, ReadQuery,
+    encode_rows, ensure_schema, execute_named_read, execute_read, schema_statements,
 };
 use rstest::{fixture, rstest};
 use testcontainers_modules::{
@@ -207,6 +207,43 @@ async fn schema_supports_span_rollups_and_spend_joins(
         body["data"],
         serde_json::json!([{"spans": 1, "tokens": 12}])
     );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn normalized_fields_match_clickhouse_catalog(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    ensure_schema(
+        &database.client,
+        &Connection::writer(&database.url)?,
+        "trace_test",
+        7,
+        14,
+    )
+    .await?;
+    let catalog = read_json(&database, "SELECT name, type FROM system.columns WHERE database = 'trace_test' AND table = 'otel_traces'").await?;
+    let columns: BTreeMap<&str, &str> = catalog["data"]
+        .as_array()
+        .expect("catalog rows")
+        .iter()
+        .map(|row| {
+            (
+                row["name"].as_str().expect("column name"),
+                row["type"].as_str().expect("column type"),
+            )
+        })
+        .collect();
+    for field in NORMALIZED_FIELD_DEFINITIONS {
+        assert_eq!(
+            columns.get(field.clickhouse_column).copied(),
+            Some(field.clickhouse_type),
+            "{}",
+            field.name
+        );
+    }
     Ok(())
 }
 
@@ -433,6 +470,20 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
     let database = database?;
     let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 30, 30).await?;
+    let tables = read_json(
+        &database,
+        "SELECT name FROM system.tables WHERE database = 'trace_test' \
+         AND match(engine_full, 'materialize_ttl_recalculate_only = 1') ORDER BY name",
+    )
+    .await?;
+    assert_eq!(
+        tables["data"],
+        serde_json::json!([
+            {"name": "agent_traces_by_key"},
+            {"name": "otel_traces"},
+            {"name": "spend_logs"}
+        ])
+    );
     let old_time = time::OffsetDateTime::now_utc() - time::Duration::days(20);
     let old_timestamp_ns = old_time.unix_timestamp_nanos() as i64;
     let old_timestamp_ms = old_timestamp_ns / 1_000_000;
@@ -551,6 +602,7 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
             "end".into(),
             Parameter::Integer(timestamp / 1_000_000 + 1000),
         ),
+        ("agent_name".into(), Parameter::Text(String::new())),
         ("service".into(), Parameter::Text("review".into())),
         (
             "filter_keys".into(),
@@ -561,6 +613,13 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
             Parameter::Strings(vec!["release".into()]),
         ),
         ("limit".into(), Parameter::Integer(10)),
+        ("offset".into(), Parameter::Integer(0)),
+        ("after".into(), Parameter::Text(String::new())),
+        ("sample_percent".into(), Parameter::Text("100".into())),
+        ("sample_cap".into(), Parameter::Integer(0)),
+        ("preview".into(), Parameter::Integer(0)),
+        ("selected_team".into(), Parameter::Text(String::new())),
+        ("execution_ids".into(), Parameter::Strings(vec![])),
     ]);
     let sample: serde_json::Value = serde_json::from_str(
         &execute_read(
@@ -645,10 +704,18 @@ async fn lens_request_sample_does_not_trust_caller_tags(
         ("key_hash".into(), Parameter::Text(String::new())),
         ("start".into(), Parameter::Integer(timestamp - 1000)),
         ("end".into(), Parameter::Integer(timestamp + 60000)),
+        ("agent_name".into(), Parameter::Text(String::new())),
         ("service".into(), Parameter::Text(String::new())),
         ("filter_keys".into(), Parameter::Strings(vec![])),
         ("filter_values".into(), Parameter::Strings(vec![])),
         ("limit".into(), Parameter::Integer(10)),
+        ("offset".into(), Parameter::Integer(0)),
+        ("after".into(), Parameter::Text(String::new())),
+        ("sample_percent".into(), Parameter::Text("100".into())),
+        ("sample_cap".into(), Parameter::Integer(0)),
+        ("preview".into(), Parameter::Integer(0)),
+        ("selected_team".into(), Parameter::Text(String::new())),
+        ("execution_ids".into(), Parameter::Strings(vec![])),
     ]);
     let sample: serde_json::Value = serde_json::from_str(
         &execute_read(
@@ -662,5 +729,423 @@ async fn lens_request_sample_does_not_trust_caller_tags(
     let rows = sample["data"].as_array().expect("sample rows");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["trace_id"], "external");
+    Ok(())
+}
+
+#[rstest]
+#[case::changing("100", 0, 0, 1001, 100, true)]
+#[case::all("100", 0, 0, 1001, 100, false)]
+#[case::percentage("10", 0, 0, 101, 100, false)]
+#[case::capped("100", 25, 0, 25, 100, false)]
+#[case::preview("10", 25, 1, 1001, 100, false)]
+#[tokio::test]
+async fn lens_selection_pages_without_losing_or_repeating_runs(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] percent: &str,
+    #[case] cap: i64,
+    #[case] preview: i64,
+    #[case] expected: usize,
+    #[case] page_size: usize,
+    #[case] changing: bool,
+) -> TestResult {
+    use litellm_traces::LensQuery;
+    let database = database?;
+    ensure_schema(
+        &database.client,
+        &Connection::writer(&database.url)?,
+        "trace_test",
+        7,
+        14,
+    )
+    .await?;
+    execute_write(&database, "INSERT INTO trace_test.spend_logs (request_id,team_id,start_time,end_time) SELECT toString(number),'team',now64(3)-INTERVAL 5 MINUTE,now64(3)-INTERVAL 5 MINUTE FROM numbers(1001)").await?;
+    let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let end = time::OffsetDateTime::now_utc().unix_timestamp() * 1000 + 60000;
+    let mut seen = std::collections::BTreeSet::new();
+    let mut cursor = String::new();
+    let step = if page_size == 0 { expected } else { page_size };
+    for offset in (0..expected).step_by(step) {
+        let parameters = BTreeMap::from([
+            ("source".into(), Parameter::Text("requests".into())),
+            ("all_teams".into(), Parameter::Integer(0)),
+            ("team".into(), Parameter::Text("team".into())),
+            ("key_hash".into(), Parameter::Text(String::new())),
+            ("start".into(), Parameter::Integer(0)),
+            ("end".into(), Parameter::Integer(end)),
+            ("agent_name".into(), Parameter::Text(String::new())),
+            ("service".into(), Parameter::Text(String::new())),
+            ("filter_keys".into(), Parameter::Strings(vec![])),
+            ("filter_values".into(), Parameter::Strings(vec![])),
+            ("limit".into(), Parameter::Integer(page_size as i64)),
+            (
+                "offset".into(),
+                Parameter::Integer(if changing { 0 } else { offset as i64 }),
+            ),
+            ("after".into(), Parameter::Text(cursor.clone())),
+            ("sample_percent".into(), Parameter::Text(percent.into())),
+            ("sample_cap".into(), Parameter::Integer(cap)),
+            ("preview".into(), Parameter::Integer(preview)),
+            ("selected_team".into(), Parameter::Text(String::new())),
+            ("execution_ids".into(), Parameter::Strings(vec![])),
+        ]);
+        let body = execute_read(
+            &database.client,
+            &connection,
+            LensQuery::Sample.sql(),
+            &parameters,
+        )
+        .await?;
+        let json: serde_json::Value = serde_json::from_str(&body)?;
+        let rows = json["data"].as_array().expect("sample rows");
+        assert_eq!(rows.len(), step.min(expected - offset));
+        for row in rows {
+            assert_eq!(
+                row["eligible"],
+                if changing && offset > 0 { 1000 } else { 1001 }
+            );
+            assert!(seen.insert(row["trace_id"].as_str().expect("run id").to_owned()));
+        }
+        if changing {
+            cursor = rows.last().expect("last run")["selection_key"]
+                .as_str()
+                .expect("selection key")
+                .to_owned();
+            if offset == 0 {
+                let removed = rows[0]["trace_id"].as_str().expect("request id");
+                execute_write(&database, &format!("ALTER TABLE trace_test.spend_logs DELETE WHERE request_id='{removed}' SETTINGS mutations_sync=1")).await?;
+            }
+        }
+    }
+    assert_eq!(seen.len(), expected);
+    Ok(())
+}
+
+#[rstest]
+#[case::short(100)]
+#[case::boundary(7970)]
+#[case::long(16000)]
+#[tokio::test]
+async fn lens_content_keeps_output_visible_after_long_input(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] input_length: usize,
+) -> TestResult {
+    use litellm_traces::LensQuery;
+    let database = database?;
+    ensure_schema(
+        &database.client,
+        &Connection::writer(&database.url)?,
+        "trace_test",
+        7,
+        14,
+    )
+    .await?;
+    insert_rows(&database, "spend_logs", vec![serde_json::from_value(serde_json::json!({
+        "request_id": "request", "team_id": "team", "start_time": time::OffsetDateTime::now_utc().unix_timestamp()*1000, "end_time": time::OffsetDateTime::now_utc().unix_timestamp()*1000, "messages": "x".repeat(input_length), "response": "Delivered result"
+    }))?]).await?;
+    let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let mut parameters = BTreeMap::from([
+        ("source".into(), Parameter::Text("requests".into())),
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("team".into(), Parameter::Text("team".into())),
+        ("record_team".into(), Parameter::Text("team".into())),
+        ("key_hash".into(), Parameter::Text(String::new())),
+        ("trace_ref".into(), Parameter::Text(String::new())),
+        ("id".into(), Parameter::Text("request".into())),
+        ("cursor".into(), Parameter::Text(String::new())),
+        ("offset".into(), Parameter::Integer(1)),
+    ]);
+    let body = execute_read(
+        &database.client,
+        &connection,
+        LensQuery::Content.sql(),
+        &parameters,
+    )
+    .await?;
+    let json: serde_json::Value = serde_json::from_str(&body)?;
+    let text = json["data"][0]["content"].as_str().expect("content");
+    assert!(text.contains("Output: Delivered result"));
+    assert!(text.len() <= 8000);
+    assert_eq!(
+        json["data"][0]["truncated"],
+        u8::from(input_length + "Input: \nOutput: Delivered result\nError: ".len() > 8000)
+    );
+    let original = format!(
+        "Input: {}\nOutput: Delivered result\nError: ",
+        "x".repeat(input_length)
+    );
+    let mut recovered = String::new();
+    for offset in (2..original.len() + 2).step_by(8000) {
+        parameters.insert("offset".into(), Parameter::Integer(offset as i64));
+        let body = execute_read(
+            &database.client,
+            &connection,
+            LensQuery::Content.sql(),
+            &parameters,
+        )
+        .await?;
+        let page: serde_json::Value = serde_json::from_str(&body)?;
+        recovered.push_str(page["data"][0]["content"].as_str().expect("content"));
+    }
+    assert_eq!(recovered, original);
+    Ok(())
+}
+
+#[rstest]
+#[case::ascii(10, format!("ParentCommand: {}", "x".repeat(460_000)))]
+#[case::multibyte(1_000, "\u{1f9ea}".repeat(1_024))]
+#[case::escaped(1_000, "\0\n\"\\".repeat(1_024))]
+#[tokio::test]
+async fn trace_error_previews_preserve_paginated_diagnostics(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] span_count: usize,
+    #[case] message: String,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let rows = (0..span_count)
+        .map(|index| {
+            serde_json::from_value(serde_json::json!({
+                "Timestamp": timestamp + index as i64, "TraceId": "diagnostic-trace",
+                "SpanId": format!("span-{index}"), "SpanName": "tool",
+                "StatusCode": "STATUS_CODE_ERROR", "StatusMessage": message,
+            }))
+        })
+        .collect::<Result<Vec<BTreeMap<String, serde_json::Value>>, _>>()?;
+    insert_rows(&database, "otel_traces", rows).await?;
+    let reader = Connection::reader(&database.url, "trace_test")?;
+    let mut parameters = BTreeMap::from([
+        (
+            "trace_id".into(),
+            Parameter::Text("diagnostic-trace".into()),
+        ),
+        ("team_ids".into(), Parameter::Strings(vec![])),
+        ("api_key_hash".into(), Parameter::Text(String::new())),
+        ("trace_ref".into(), Parameter::Text(String::new())),
+    ]);
+    let body = execute_named_read(
+        &database.client,
+        &reader,
+        ReadQuery::TraceSpans,
+        &parameters,
+    )
+    .await?;
+    let response: serde_json::Value = serde_json::from_str(&body)?;
+    let spans = response["data"].as_array().expect("trace spans");
+    assert_eq!(spans.len(), span_count);
+    let prefix: String = message.chars().take(128).collect();
+    assert!(!prefix.is_empty());
+    assert!(
+        spans
+            .iter()
+            .all(|span| span["status_message"] == prefix && span["error_truncated"] == 1)
+    );
+    parameters.insert("span_id".into(), Parameter::Text("span-0".into()));
+    parameters.insert("error_version".into(), Parameter::Text(String::new()));
+    let mut recovered = String::new();
+    loop {
+        parameters.insert(
+            "error_offset".into(),
+            Parameter::Integer(recovered.chars().count() as i64),
+        );
+        let body = execute_named_read(&database.client, &reader, ReadQuery::SpanError, &parameters)
+            .await?;
+        assert!(body.len() < 128 * 1024);
+        let response: serde_json::Value = serde_json::from_str(&body)?;
+        let chunk = response["data"][0]["message"]
+            .as_str()
+            .expect("diagnostic chunk");
+        assert!(!chunk.is_empty());
+        recovered.push_str(chunk);
+        let version = response["data"][0]["version"]
+            .as_str()
+            .expect("diagnostic version");
+        parameters.insert("error_version".into(), Parameter::Text(version.into()));
+        if recovered.chars().count() >= message.chars().count() {
+            break;
+        }
+    }
+    assert_eq!(recovered, message);
+    parameters.insert(
+        "api_key_hash".into(),
+        Parameter::Text("unrelated-key".into()),
+    );
+    let denied =
+        execute_named_read(&database.client, &reader, ReadQuery::SpanError, &parameters).await?;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&denied)?["data"],
+        serde_json::json!([])
+    );
+    Ok(())
+}
+
+#[rstest]
+#[case::different_start(1, 0)]
+#[case::different_receive(0, 1)]
+#[case::tied_timestamps(0, 0)]
+#[tokio::test]
+async fn duplicate_span_preview_matches_diagnostic(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] start_delta: i64,
+    #[case] receive_delta: i64,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let message = "a".repeat(200);
+    let rows = [
+        (start_delta, receive_delta, "z".repeat(200)),
+        (0, 0, message.clone()),
+    ]
+    .into_iter()
+    .map(|(start_delta, receive_delta, message)| {
+        serde_json::from_value(serde_json::json!({
+            "Timestamp": timestamp + start_delta, "EngineReceivedMs": 100 + receive_delta,
+            "TraceId": "duplicate-trace", "SpanId": "duplicate-span", "StatusMessage": message,
+        }))
+    })
+    .collect::<Result<Vec<BTreeMap<String, serde_json::Value>>, _>>()?;
+    insert_rows(&database, "otel_traces", rows).await?;
+    let reader = Connection::reader(&database.url, "trace_test")?;
+    let parameters = BTreeMap::from([
+        ("trace_id".into(), Parameter::Text("duplicate-trace".into())),
+        ("span_id".into(), Parameter::Text("duplicate-span".into())),
+        ("team_ids".into(), Parameter::Strings(vec![])),
+        ("api_key_hash".into(), Parameter::Text(String::new())),
+        ("trace_ref".into(), Parameter::Text(String::new())),
+        ("error_version".into(), Parameter::Text(String::new())),
+        ("error_offset".into(), Parameter::Integer(0)),
+    ]);
+    let preview = execute_named_read(
+        &database.client,
+        &reader,
+        ReadQuery::TraceSpans,
+        &parameters,
+    )
+    .await?;
+    let diagnostic =
+        execute_named_read(&database.client, &reader, ReadQuery::SpanError, &parameters).await?;
+    let preview: serde_json::Value = serde_json::from_str(&preview)?;
+    let diagnostic: serde_json::Value = serde_json::from_str(&diagnostic)?;
+    assert_eq!(preview["data"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["data"][0]["status_message"], message[..128]);
+    assert_eq!(diagnostic["data"][0]["message"], message);
+    Ok(())
+}
+
+#[rstest]
+fn schema_includes_every_migration_file() -> TestResult {
+    let files = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations"))?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "sql"))
+        .count();
+    assert_eq!(schema_statements("trace_test", 7, 14)?.len(), 1 + files);
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn lens_agent_discovery_and_selection_preserve_scope(
+    #[future] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    use litellm_traces::LensQuery;
+    let database = database.await?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    for (team, key, trace, agent, span, parent) in [
+        ("alpha", "one", "research", "research_agent", "root", ""),
+        ("alpha", "one", "research", "", "tool", "root"),
+        ("alpha", "one", "support", "support_agent", "root", ""),
+        ("alpha", "two", "hidden-key", "private_agent", "root", ""),
+        ("beta", "one", "hidden-team", "other_agent", "root", ""),
+    ] {
+        insert_rows(
+            &database,
+            "otel_traces",
+            vec![serde_json::from_value(serde_json::json!({
+                "Timestamp": timestamp, "TraceId": trace, "SpanId": span, "ParentSpanId": parent,
+                "ServiceName": "shared-app", "SpanName": "run", "Input": "test",
+                "SpanAttributes": {"gen_ai.agent.name": agent},
+                "ResourceAttributes": {"litellm.team_id": team, "litellm.api_key_hash": key}
+            }))?],
+        )
+        .await?;
+    }
+    let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let scope_parameters = BTreeMap::from([
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("team".into(), Parameter::Text("alpha".into())),
+        ("key_hash".into(), Parameter::Text("one".into())),
+    ]);
+    let agents: serde_json::Value = serde_json::from_str(
+        &execute_read(
+            &database.client,
+            &connection,
+            LensQuery::Agents.sql(),
+            &scope_parameters,
+        )
+        .await?,
+    )?;
+    assert_eq!(
+        agents["data"],
+        serde_json::json!([
+            {"agent_name": "research_agent"}, {"agent_name": "support_agent"}
+        ])
+    );
+    let parameters = scope_parameters
+        .into_iter()
+        .chain([
+            ("source".into(), Parameter::Text("traces".into())),
+            (
+                "start".into(),
+                Parameter::Integer(timestamp / 1_000_000 - 1000),
+            ),
+            (
+                "end".into(),
+                Parameter::Integer(timestamp / 1_000_000 + 1000),
+            ),
+            ("service".into(), Parameter::Text("shared-app".into())),
+            (
+                "agent_name".into(),
+                Parameter::Text("research_agent".into()),
+            ),
+            ("filter_keys".into(), Parameter::Strings(vec![])),
+            ("filter_values".into(), Parameter::Strings(vec![])),
+            ("limit".into(), Parameter::Integer(100)),
+            ("offset".into(), Parameter::Integer(0)),
+            ("after".into(), Parameter::Text(String::new())),
+            ("sample_percent".into(), Parameter::Text("100".into())),
+            ("sample_cap".into(), Parameter::Integer(0)),
+            ("preview".into(), Parameter::Integer(1)),
+            ("selected_team".into(), Parameter::Text(String::new())),
+            ("execution_ids".into(), Parameter::Strings(vec![])),
+        ])
+        .collect::<BTreeMap<_, _>>();
+    let sample: serde_json::Value = serde_json::from_str(
+        &execute_read(
+            &database.client,
+            &connection,
+            LensQuery::Sample.sql(),
+            &parameters,
+        )
+        .await?,
+    )?;
+    assert_eq!(sample["data"].as_array().expect("rows").len(), 1);
+    assert_eq!(sample["data"][0]["trace_id"], "research");
+    assert_eq!(sample["data"][0]["span_count"], 2);
+    let available: serde_json::Value = serde_json::from_str(
+        &execute_read(
+            &database.client,
+            &connection,
+            LensQuery::Availability.sql(),
+            &parameters,
+        )
+        .await?,
+    )?;
+    assert_eq!(available["data"][0]["traces"], 1);
+    assert_eq!(available["data"][0]["requests"], 0);
     Ok(())
 }

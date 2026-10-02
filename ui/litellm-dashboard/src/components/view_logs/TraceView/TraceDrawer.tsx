@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Check, Circle, Copy } from "lucide-react";
+import { ArrowLeft, Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,9 @@ import { copyToClipboard } from "@/utils/dataUtils";
 
 import { agentTraceCall, getProxyBaseUrl } from "../../networking";
 import { DetailPane } from "./DetailPane";
+import { IdChip } from "./IdChip";
 import { formatCost } from "./AgentTracesTable";
+import { SpanIcon } from "./SpanIcon";
 import { SpanTree } from "./SpanTree";
 import type { SpanTreeState, TreeRow } from "./traceTree";
 import type { Trace } from "./traceTypes";
@@ -80,7 +82,7 @@ function CopyForAgent({ traceId, traceRef }: { traceId: string; traceRef?: strin
     <Button
       variant="outline"
       size="xs"
-      className="shrink-0 gap-1.5 rounded-[4px] font-mono text-[10px] shadow-none"
+      className="h-7 shrink-0 gap-1.5 rounded-md text-[12px] shadow-none"
       onClick={async () =>
         setCopied(await copyToClipboard(agentHandoffText(traceId, null, traceRef), "Command copied"))
       }
@@ -93,40 +95,40 @@ function CopyForAgent({ traceId, traceRef }: { traceId: string; traceRef?: strin
 
 function Stat({ label, value, error = false }: { label: string; value: string; error?: boolean }) {
   return (
-    <span className={cn("shrink-0", error && "text-destructive")}>
-      <span className="text-muted-foreground/70">{label} </span>
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 rounded-[5px] border border-border bg-card px-1.5 py-px text-[12px] tabular-nums",
+        error && "border-destructive/40 bg-destructive/10 text-destructive",
+      )}
+    >
+      <span className={cn("text-muted-foreground", error && "text-destructive/80")}>{label} </span>
       {value}
     </span>
   );
 }
 
-function RunHeader({ trace, onBack }: { trace: Trace; onBack: () => void }) {
+function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => void; embedded: boolean }) {
   const { summary } = trace;
   const failed = summary.error_count > 0;
   return (
-    <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-card px-2">
-      <button
-        type="button"
-        onClick={onBack}
-        className="grid size-7 shrink-0 place-items-center rounded-[4px] text-muted-foreground hover:bg-muted hover:text-foreground"
-        aria-label="Back to runs"
-      >
-        <ArrowLeft className="size-4" />
-      </button>
-      <Circle className={cn("size-2 shrink-0 fill-current", failed ? "text-destructive" : "text-muted-foreground")} />
-      <h1 className="shrink-0 truncate text-[14px] font-medium text-foreground">{traceDisplayName(summary)}</h1>
-      <span className="flex min-w-0 items-center gap-1 font-mono text-[11px] text-muted-foreground">
-        <span className="truncate">{summary.trace_id}</span>
-        <button
-          type="button"
-          aria-label="Copy trace ID"
-          className="shrink-0 hover:text-foreground"
-          onClick={() => void copyToClipboard(summary.trace_id, "Trace ID copied")}
-        >
-          <Copy className="size-3" />
-        </button>
-      </span>
-      <div className="flex min-w-0 items-center gap-4 font-mono text-[11px] text-foreground tabular-nums">
+    <header className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border bg-card px-3 py-1.5">
+      {!embedded && (
+        <>
+          <button
+            type="button"
+            onClick={onBack}
+            className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Back to runs"
+          >
+            <ArrowLeft className="size-4" />
+          </button>
+          <span className="mx-1 h-[18px] w-px bg-border" />
+        </>
+      )}
+      <SpanIcon type="agent" error={failed} size="lg" />
+      <h1 className="min-w-0 truncate text-[14px] font-medium text-foreground">{traceDisplayName(summary)}</h1>
+      <IdChip value={summary.trace_id} label="Copy trace ID" showValue />
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         <Stat label="duration" value={fmtMs(summary.duration_ms)} />
         <Stat label="steps" value={summary.span_count.toLocaleString()} />
         <Stat label="cost" value={summary.spend == null ? "—" : formatCost(summary.spend)} />
@@ -140,7 +142,18 @@ function RunHeader({ trace, onBack }: { trace: Trace; onBack: () => void }) {
 }
 
 /** Tree + detail pane for one loaded run, with J/K/arrow keyboard navigation. */
-function RunBody({ trace, accessToken, initialSpanId }: { trace: Trace; accessToken: string; initialSpanId?: string }) {
+const SPAN_KEYS = { down: ["j", "J", "ArrowDown"], up: ["k", "K", "ArrowUp"] } as const;
+const EMBEDDED_SPAN_KEYS = { down: ["ArrowDown"], up: ["ArrowUp"] } as const;
+
+interface RunBodyProps {
+  trace: Trace;
+  accessToken: string;
+  initialSpanId?: string;
+  embedded: boolean;
+}
+
+function RunBody({ trace, accessToken, initialSpanId, embedded }: RunBodyProps) {
+  const spanKeys = embedded ? EMBEDDED_SPAN_KEYS : SPAN_KEYS;
   const initial = useMemo(() => initialRunSelection(trace, initialSpanId), [trace, initialSpanId]);
   const [state, setState] = useState<SpanTreeState>(initial.state);
   const [selectedId, setSelectedId] = useState<string>(initial.selectedId);
@@ -184,11 +197,11 @@ function RunBody({ trace, accessToken, initialSpanId }: { trace: Trace; accessTo
         setDetailOpen(false);
         return;
       }
-      if (["j", "J", "ArrowDown"].includes(event.key)) {
+      if ((spanKeys.down as readonly string[]).includes(event.key)) {
         event.preventDefault();
         const next = rows[Math.min(rows.length - 1, index + 1)];
         if (next) select(next.id);
-      } else if (["k", "K", "ArrowUp"].includes(event.key)) {
+      } else if ((spanKeys.up as readonly string[]).includes(event.key)) {
         event.preventDefault();
         const next = rows[Math.max(0, index - 1)];
         if (next) select(next.id);
@@ -202,21 +215,20 @@ function RunBody({ trace, accessToken, initialSpanId }: { trace: Trace; accessTo
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [rows, selectedRow, detailOpen, select, toggleSpan, toggleGroup]);
+  }, [rows, selectedRow, detailOpen, select, toggleSpan, toggleGroup, spanKeys]);
 
   return (
     <div
       className={cn(
         "grid min-h-0 flex-1",
         detailOpen
-          ? "grid-cols-1 grid-rows-2 lg:grid-cols-[minmax(0,3fr)_minmax(360px,2fr)] lg:grid-rows-1 2xl:grid-cols-[minmax(0,2fr)_minmax(420px,1fr)]"
+          ? "grid-cols-1 grid-rows-2 lg:grid-cols-[minmax(340px,400px)_minmax(0,1fr)] lg:grid-rows-1"
           : "grid-cols-1",
       )}
     >
       <SpanTree
         rows={rows}
-        spanCount={trace.summary.span_count}
-        totalMs={trace.summary.duration_ms}
+        summary={trace.summary}
         selectedId={selectedRow?.id ?? selectedId}
         hideFramework={state.hideFramework}
         onSelect={select}
@@ -224,9 +236,12 @@ function RunBody({ trace, accessToken, initialSpanId }: { trace: Trace; accessTo
         onToggleSpan={toggleSpan}
         onToggleGroup={toggleGroup}
         onLoadMore={loadMore}
+        embedded={embedded}
       />
       {detailOpen && (
-        <DetailPane trace={trace} row={selectedRow} accessToken={accessToken} onClose={() => setDetailOpen(false)} />
+        <div className="min-h-0 min-w-0 animate-slide-left motion-reduce:animate-none">
+          <DetailPane trace={trace} row={selectedRow} accessToken={accessToken} onClose={() => setDetailOpen(false)} />
+        </div>
       )}
     </div>
   );
@@ -238,10 +253,12 @@ interface RunViewProps {
   initialSpanId?: string;
   accessToken: string;
   onBack: () => void;
+  /** Rendered inside the side drawer: the drawer owns closing and sizing. */
+  embedded?: boolean;
 }
 
 /** One agent run: header with totals and "Copy for agent", span tree on the left, span details on the right. */
-export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack }: RunViewProps) {
+export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack, embedded = false }: RunViewProps) {
   const traceQuery = useQuery({
     queryKey: ["agentTrace", traceId, traceRef, accessToken],
     queryFn: () => agentTraceCall(accessToken, traceId, traceRef),
@@ -251,8 +268,18 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack 
 
   if (traceQuery.isLoading) {
     return (
-      <div role="status" aria-label="Loading trace" className="flex h-[60vh] items-center justify-center">
-        <UiLoadingSpinner className="size-6 text-muted-foreground" />
+      <div
+        role="status"
+        aria-label="Loading trace"
+        className={embedded ? "flex flex-col gap-3 p-4" : "flex h-[60vh] items-center justify-center"}
+      >
+        {embedded ? (
+          [72, 48, 88, 60, 80].map((w) => (
+            <div key={w} className="h-4 animate-pulse rounded bg-trace-row-hover" style={{ width: `${w}%` }} />
+          ))
+        ) : (
+          <UiLoadingSpinner className="size-6 text-muted-foreground" />
+        )}
       </div>
     );
   }
@@ -273,11 +300,20 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack 
   }
   return (
     <div
-      className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-background"
+      className={cn(
+        "flex flex-1 flex-col overflow-hidden bg-background",
+        embedded ? "min-h-0 animate-view-fade-in motion-reduce:animate-none" : "min-h-[560px] border-y border-border",
+      )}
       data-testid="run-view"
     >
-      <RunHeader trace={trace} onBack={onBack} />
-      <RunBody key={trace.summary.trace_id} trace={trace} accessToken={accessToken} initialSpanId={initialSpanId} />
+      <RunHeader trace={trace} onBack={onBack} embedded={embedded} />
+      <RunBody
+        key={trace.summary.trace_id}
+        trace={trace}
+        accessToken={accessToken}
+        initialSpanId={initialSpanId}
+        embedded={embedded}
+      />
     </div>
   );
 }
