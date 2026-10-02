@@ -134,7 +134,7 @@ class AuditTaskRegistry:
         self._pending_tasks: Final[set[asyncio.Task[object]]] = set()  # mutable-ok: background task tracking
 
     def track(self, task: asyncio.Task[_T]) -> asyncio.Task[_T]:
-        task_object: Final[asyncio.Task[object]] = cast(asyncio.Task[object], task)
+        task_object: Final[asyncio.Task[object]] = cast(asyncio.Task[object], task)  # noqa: LIT006  # Type cast required for tracking generic asyncio task state
         if task_object.done() or task_object in self._pending_tasks:
             return task
         self._pending_tasks.add(task_object)
