@@ -92,7 +92,7 @@ impl QueryReaders {
         }
         let identity = serde_json::to_vec(&("litellm_trace_reader_v1", &self.database, scope))
             .map_err(|_| QueryAccessError::InvalidScope)?;
-        let user = format!("litellm_traces_{}", credential(secret, b"user", &identity)?);
+        let user = format!("litellm_traces_{:x}", Sha256::digest(&identity));
         let password = credential(secret, b"password", &identity)?;
         self.readers
             .try_get_with(
@@ -130,6 +130,11 @@ impl QueryReaders {
             ),
         )
         .await?;
+        self.execute(
+            client,
+            format!("ALTER USER {user} IDENTIFIED WITH sha256_hash BY '{password_hash}'"),
+        )
+        .await?;
         for table in TABLES {
             let predicate = scope.predicate(table);
             self.execute(
@@ -156,11 +161,13 @@ impl QueryReaders {
             )
             .await?;
         }
-        let mut url = self.writer.url().clone();
-        url.set_query(None);
-        url.set_fragment(None);
-        Connection::configured(url.as_str(), database, user, password)
-            .map_err(QueryAccessError::Storage)
+        Connection::configured(
+            &self.writer.url()[..url::Position::AfterPath],
+            database,
+            user,
+            password,
+        )
+        .map_err(QueryAccessError::Storage)
     }
 
     async fn execute(&self, client: &Client, sql: String) -> Result<(), QueryAccessError> {

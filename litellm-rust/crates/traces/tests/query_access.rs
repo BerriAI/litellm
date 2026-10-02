@@ -112,6 +112,54 @@ async fn queries_and_help_are_scoped_by_the_database(
 
 #[rstest]
 #[tokio::test]
+async fn rotating_master_secret_revokes_previous_reader_credentials(
+    #[future(awt)] database: Result<Database, Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let database = database?;
+    let scope = QueryScope::Team {
+        team_id: "team-a".to_owned(),
+    };
+    let old_reader = database
+        .readers
+        .connection(&database.client, &scope, "old-master-secret")
+        .await?;
+    let old_result = query_sql(
+        &database.client,
+        &old_reader,
+        "SELECT SpanId AS id FROM otel_traces ORDER BY id",
+    )
+    .await?;
+    let old_rows: Value = serde_json::from_str(&old_result)?;
+    assert_eq!(old_rows["data"], json!([{ "id": "a1" }, { "id": "a2" }]));
+
+    let rotated_readers = QueryReaders::new(database.writer.clone(), "trace_test".into());
+    let new_reader = rotated_readers
+        .connection(&database.client, &scope, "new-master-secret")
+        .await?;
+    assert!(
+        query_sql(
+            &database.client,
+            &old_reader,
+            "SELECT SpanId AS id FROM otel_traces ORDER BY id",
+        )
+        .await
+        .is_err()
+    );
+    let new_result = query_sql(
+        &database.client,
+        &new_reader,
+        "SELECT SpanId AS id FROM otel_traces ORDER BY id",
+    )
+    .await?;
+    let new_rows: Value = serde_json::from_str(&new_result)?;
+    assert_eq!(new_rows["data"], json!([{ "id": "a1" }, { "id": "a2" }]));
+    assert_eq!(old_reader.url().username(), new_reader.url().username());
+    assert_ne!(old_reader.url().password(), new_reader.url().password());
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
 async fn managed_reader_rejects_privilege_and_scope_bypasses(
     #[future(awt)] database: Result<Database, Box<dyn std::error::Error>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
