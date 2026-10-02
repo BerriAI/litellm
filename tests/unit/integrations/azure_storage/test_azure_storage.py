@@ -447,6 +447,51 @@ def test_adls_safe_file_name_rewrites_base64_padding_and_reserved_characters(pay
     )
 
 
+def test_adls_safe_file_name_rewrites_only_responses_ids():
+    ids = ("svc/req-1", "svc_req-1", "trace=7", "trace7", "resp_YWJjZA==", "resp_+/8=")
+    names = {payload_id: adls_safe_file_name(payload_id) for payload_id in ids}
+    assert names == {
+        "svc/req-1": "svc/req-1.json",
+        "svc_req-1": "svc_req-1.json",
+        "trace=7": "trace=7.json",
+        "trace7": "trace7.json",
+        "resp_YWJjZA==": "resp_YWJjZA.json",
+        "resp_+/8=": "resp_+_8.json",
+    }, "caller-chosen ids must keep their own names so none overwrites another, while resp_ ids are rewritten"
+
+
+def test_adls_safe_file_name_rewrites_ids_with_dot_or_empty_path_segments():
+    ids = (
+        "../other-filesystem/x",
+        "../2026-09-30/x",
+        "svc/../../x",
+        "%2e%2e/other-filesystem/x",
+        ".%2E/x",
+        "a..b/c",
+        "../",
+        "svc/./x",
+        "./x",
+        "svc//x",
+        "/x",
+        "x/",
+    )
+    names = {payload_id: adls_safe_file_name(payload_id) for payload_id in ids}
+    assert names == {
+        "../other-filesystem/x": ".._other-filesystem_x.json",
+        "../2026-09-30/x": ".._2026-09-30_x.json",
+        "svc/../../x": "svc_.._.._x.json",
+        "%2e%2e/other-filesystem/x": "%2e%2e_other-filesystem_x.json",
+        ".%2E/x": ".%2E_x.json",
+        "a..b/c": "a..b/c.json",
+        "../": ".._.json",
+        "svc/./x": "svc_._x.json",
+        "./x": "._x.json",
+        "svc//x": "svc__x.json",
+        "/x": "_x.json",
+        "x/": "x_.json",
+    }, "a dot or empty segment must never reach the Data Lake path, while ids without one keep their own names"
+
+
 def test_adls_safe_file_name_is_deterministic_and_distinct_per_id():
     ids = (
         "resp_" + base64.b64encode(b"a").decode(),
