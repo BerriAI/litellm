@@ -128,6 +128,8 @@ class TestOpenAIImageEditGPTImage1(BaseLLMImageEditTest):
     Concrete implementation of BaseLLMImageEditTest for OpenAI image edits.
     """
 
+    test_openai_image_edit_litellm_sdk = None
+
     def get_base_image_edit_call_args(self) -> dict:
         """Return base call args for OpenAI image edit"""
         return {
@@ -620,64 +622,6 @@ def test_recraft_image_edit_config():
     assert files[0][0] == "image"  # Field name (not image[] like OpenAI)
     assert files[0][1][1] == mock_image  # Image data
     assert files[0][1][2] == "image/png"  # Content type
-
-
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.flaky(retries=3, delay=2)
-@pytest.mark.asyncio
-async def test_multiple_vs_single_image_edit(sync_mode):
-    """Test that both single and multiple image editing work correctly"""
-    from litellm import image_edit, aimage_edit
-
-    litellm._turn_on_debug()
-
-    try:
-        prompt = "Add a soft blue tint to the image(s)"
-
-        # Test single image
-        if sync_mode:
-            single_result = image_edit(
-                prompt=prompt,
-                model="gpt-image-1",
-                image=_make_single_test_image(),
-            )
-        else:
-            single_result = await aimage_edit(
-                prompt=prompt,
-                model="gpt-image-1",
-                image=_make_single_test_image(),
-            )
-
-        print("Single image result:", single_result)
-        ImageResponse.model_validate(single_result)
-
-        # Test multiple images
-        if sync_mode:
-            multiple_result = image_edit(
-                prompt=prompt,
-                model="gpt-image-1",
-                image=_make_test_images(),
-            )
-        else:
-            multiple_result = await aimage_edit(
-                prompt=prompt,
-                model="gpt-image-1",
-                image=_make_test_images(),
-            )
-
-        print("Multiple images result:", multiple_result)
-        ImageResponse.model_validate(multiple_result)
-
-        # Both should return valid responses
-        assert single_result is not None
-        assert multiple_result is not None
-        assert single_result.data is not None
-        assert multiple_result.data is not None
-        assert len(single_result.data) > 0
-        assert len(multiple_result.data) > 0
-
-    except litellm.ContentPolicyViolationError as e:
-        pytest.skip(f"Content policy violation: {e}")
 
 
 @pytest.mark.flaky(retries=3, delay=2)

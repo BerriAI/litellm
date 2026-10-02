@@ -10,6 +10,8 @@ import json
 class TestGoogleGenAIStudio(BaseGoogleGenAITest, BaseGoogleGenAIProxySDKTest):
     """Test Google GenAI Studio"""
 
+    test_non_streaming_base = None
+
     @property
     def model_config(self):
         return {

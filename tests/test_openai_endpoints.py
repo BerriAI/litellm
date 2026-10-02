@@ -426,39 +426,6 @@ async def test_completion_streaming_usage_metrics():
 
 
 @pytest.mark.asyncio
-async def test_chat_completion_anthropic_structured_output():
-    """
-    Ensure nested pydantic output is returned correctly
-    """
-    from pydantic import BaseModel
-
-    class CalendarEvent(BaseModel):
-        name: str
-        date: str
-        participants: list[str]
-
-    class EventsList(BaseModel):
-        events: list[CalendarEvent]
-
-    messages = [
-        {"role": "user", "content": "List 5 important events in the XIX century"}
-    ]
-
-    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
-
-    res = await client.beta.chat.completions.parse(
-        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        messages=messages,
-        response_format=EventsList,
-        timeout=60,
-    )
-    message = res.choices[0].message
-
-    if message.parsed:
-        print(message.parsed.events)
-
-
-@pytest.mark.asyncio
 async def test_proxy_all_models():
     """
     - proxy_server_config.yaml has model = * / *

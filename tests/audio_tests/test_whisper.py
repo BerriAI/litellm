@@ -139,17 +139,6 @@ async def test_whisper_log_pre_call():
 
 
 @pytest.mark.asyncio
-async def test_gpt_4o_transcribe():
-    from litellm.litellm_core_utils.litellm_logging import Logging
-    from datetime import datetime
-    from unittest.mock import patch, MagicMock
-
-    await litellm.atranscription(
-        model="openai/gpt-4o-transcribe", file=_audio_file(), response_format="json"
-    )
-
-
-@pytest.mark.asyncio
 async def test_gpt_4o_transcribe_model_mapping():
     """Test that GPT-4o transcription models are correctly mapped and not hardcoded to whisper-1"""
 

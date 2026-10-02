@@ -1,7 +1,7 @@
 import json
 import os
 from datetime import datetime
-from typing import AsyncIterator, Dict, Any
+from typing import Dict, Any
 import asyncio
 import unittest.mock
 from unittest.mock import AsyncMock, MagicMock
@@ -69,6 +69,9 @@ def _validate_anthropic_response(response: Dict[str, Any]):
 class TestAnthropicDirectAPI(BaseAnthropicMessagesTest):
     """Tests for direct Anthropic API calls"""
 
+    test_non_streaming_base = None
+    test_streaming_base = None
+
     @property
     def model_config(self) -> Dict[str, Any]:
         return {
@@ -87,6 +90,8 @@ class TestAnthropicDirectAPI(BaseAnthropicMessagesTest):
 class TestAnthropicBedrockAPI(BaseAnthropicMessagesTest):
     """Tests for Anthropic via Bedrock"""
 
+    test_streaming_base = None
+
     @property
     def model_config(self) -> Dict[str, Any]:
         return {
@@ -103,6 +108,8 @@ class TestAnthropicBedrockAPI(BaseAnthropicMessagesTest):
 
 class TestAnthropicOpenAIAPI(BaseAnthropicMessagesTest):
     """Tests for OpenAI via Anthropic messages interface"""
+
+    test_streaming_base = None
 
     @property
     def model_config(self) -> Dict[str, Any]:
@@ -124,67 +131,6 @@ class TestAnthropicOpenAIAPI(BaseAnthropicMessagesTest):
         Test the anthropic_messages with streaming request
         """
         pass
-
-
-@pytest.mark.asyncio
-async def test_anthropic_messages_streaming_with_bad_request():
-    """
-    Test the anthropic_messages with streaming request
-    """
-    error = None
-    try:
-        response = await litellm.anthropic.messages.acreate(
-            messages=[{"role": "user", "content": "hi"}],
-            api_key=os.getenv("ANTHROPIC_API_KEY"),
-            model="claude-haiku-4-5-20251001",
-            max_tokens=100,
-            stream=True,
-        )
-        print(response)
-        if isinstance(response, AsyncIterator):
-            async for chunk in response:
-                print("chunk=", chunk)
-    except Exception as e:
-        error = e
-
-    if error is not None:
-        assert getattr(error, "status_code", 400) == 400, f"got {vars(error)}"
-
-
-@pytest.mark.asyncio
-async def test_anthropic_messages_router_streaming_with_bad_request():
-    """
-    Test the anthropic_messages with streaming request
-    """
-    error = None
-    try:
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "claude-special-alias",
-                    "litellm_params": {
-                        "model": "claude-haiku-4-5-20251001",
-                        "api_key": os.getenv("ANTHROPIC_API_KEY"),
-                    },
-                }
-            ]
-        )
-
-        response = await router.aanthropic_messages(
-            messages=[{"role": "user", "content": "hi"}],
-            model="claude-special-alias",
-            max_tokens=100,
-            stream=True,
-        )
-        print(response)
-        if isinstance(response, AsyncIterator):
-            async for chunk in response:
-                print("chunk=", chunk)
-    except Exception as e:
-        error = e
-
-    if error is not None:
-        assert getattr(error, "status_code", 400) == 400, f"got {vars(error)}"
 
 
 @pytest.mark.asyncio

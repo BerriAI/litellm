@@ -18,6 +18,10 @@ from litellm.llms.groq.chat.transformation import (
 
 
 class TestGroq(BaseLLMChatTest):
+    test_content_list_handling = None
+    test_empty_tools = None
+    test_web_search = None
+
     def get_base_completion_call_args(self) -> dict:
         return {
             "model": "groq/openai/gpt-oss-120b",

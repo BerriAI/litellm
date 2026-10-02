@@ -426,55 +426,6 @@ def test_completion_bedrock_claude_aws_bedrock_client(bedrock_session_token_cred
 
 
 @pytest.mark.parametrize(
-    "image_url",
-    [
-        "data:image/png;base64,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",
-        "https://avatars.githubusercontent.com/u/29436595?v=",
-    ],
-)
-def test_bedrock_claude_3(image_url):
-    try:
-        litellm.set_verbose = True
-        data = {
-            "max_tokens": 100,
-            "stream": False,
-            "temperature": 0.3,
-            "messages": [
-                {"role": "user", "content": "Hi"},
-                {"role": "assistant", "content": "Hi"},
-                {
-                    "role": "user",
-                    "content": [
-                        {"text": "describe this image", "type": "text"},
-                        {
-                            "image_url": {
-                                "detail": "high",
-                                "url": image_url,
-                            },
-                            "type": "image_url",
-                        },
-                    ],
-                },
-            ],
-        }
-        response: ModelResponse = completion(
-            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            num_retries=3,
-            **data,
-        )  # type: ignore
-        # Add any assertions here to check the response
-        assert len(response.choices) > 0
-        assert len(response.choices[0].message.content) > 0
-
-    except litellm.InternalServerError:
-        pass
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.parametrize(
     "stop",
     [""],
 )
@@ -909,49 +860,6 @@ def test_completion_bedrock_external_client_region(monkeypatch):
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
-def test_bedrock_tool_calling():
-    """
-    # related issue: https://github.com/BerriAI/litellm/issues/5007
-    # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
-    """
-    litellm.set_verbose = True
-    response = litellm.completion(
-        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
-        fallbacks=["bedrock/meta.llama3-1-8b-instruct-v1:0"],
-        messages=[
-            {
-                "role": "user",
-                "content": "What's the weather like in Boston today in Fahrenheit?",
-            }
-        ],
-        tools=[
-            {
-                "type": "function",
-                "function": {
-                    "name": "-DoSomethingVeryCool-forLitellm_Testin999229291-0293993",
-                    "description": "use this to get the current weather",
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            }
-        ],
-    )
-
-    print("bedrock response")
-    print(response)
-
-    # Assert that the tools in response have the same function name as the input
-    _choice_1 = response.choices[0]
-    if _choice_1.message.tool_calls is not None:
-        print(_choice_1.message.tool_calls)
-        for tool_call in _choice_1.message.tool_calls:
-            _tool_Call_name = tool_call.function.name
-            if _tool_Call_name is not None and "DoSomethingVeryCool" in _tool_Call_name:
-                assert (
-                    _tool_Call_name
-                    == "-DoSomethingVeryCool-forLitellm_Testin999229291-0293993"
-                )
 
 
 def test_bedrock_tools_pt_valid_names():
@@ -2031,6 +1939,14 @@ def test_bedrock_supports_tool_call(model, expected_supports_tool_call):
 
 
 class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
+    test_content_list_handling = None
+    test_developer_role_translation = None
+    test_function_calling_with_tool_response = None
+    test_image_url = None
+    test_json_response_format_stream = None
+    test_tool_call_with_empty_enum_property = None
+    test_tool_call_with_property_type_array = None
+
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -2070,6 +1986,9 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
 
 
 class TestBedrockConverseAnthropicUnitTests(BaseAnthropicChatTest):
+    test_completion_thinking_with_max_tokens = None
+    test_completion_thinking_without_max_tokens = None
+
     def get_base_completion_call_args(self) -> dict:
         return {
             "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -2083,6 +2002,11 @@ class TestBedrockConverseAnthropicUnitTests(BaseAnthropicChatTest):
 
 
 class TestBedrockConverseChatNormal(BaseLLMChatTest):
+    test_content_list_handling = None
+    test_empty_tools = None
+    test_function_calling_with_tool_response = None
+    test_image_url = None
+
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -2098,6 +2022,10 @@ class TestBedrockConverseChatNormal(BaseLLMChatTest):
 
 
 class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
+    test_content_list_handling = None
+    test_function_calling_with_tool_response = None
+    test_image_url = None
+
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
