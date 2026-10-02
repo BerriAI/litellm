@@ -2929,6 +2929,25 @@ def test_mid_stream_continuation_eligible_allows_text_response_format():
     assert router._mid_stream_continuation_eligible(e=e, request_kwargs={"response_format": {"type": "json_object"}}) is False
 
 
+def test_raise_original_mid_stream_error_surfaces_the_provider_exception():
+    from litellm.exceptions import MidStreamFallbackError, RateLimitError
+
+    provider_error = RateLimitError(message="rate limited", llm_provider="openai", model="gpt-4")
+    wrapped = MidStreamFallbackError(
+        message="rate limited", model="gpt-4", llm_provider="openai",
+        original_exception=provider_error, generated_content="Hello",
+    )
+    with pytest.raises(RateLimitError) as raised:
+        litellm.Router._raise_original_mid_stream_error(wrapped)
+    assert raised.value is provider_error
+    assert raised.value.__cause__ is wrapped
+
+    bare = MidStreamFallbackError(message="boom", model="gpt-4", llm_provider="openai", generated_content="Hello")
+    with pytest.raises(MidStreamFallbackError) as bare_raised:
+        litellm.Router._raise_original_mid_stream_error(bare)
+    assert bare_raised.value is bare
+
+
 @pytest.mark.asyncio
 async def test_acompletion_streaming_iterator_reraises_original_exception_when_available():
     """Async: when the mid-stream MidStreamFallbackError wraps a real provider
