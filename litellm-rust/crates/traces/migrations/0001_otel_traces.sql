@@ -38,10 +38,11 @@ CREATE TABLE IF NOT EXISTS {database}.otel_traces
     Input              String CODEC(ZSTD(3)),
     Output             String CODEC(ZSTD(3)),
     InputPreview       String DEFAULT substring(Input, 1, 240),
+    EngineReceivedMs   UInt64 DEFAULT 0,
     INDEX idx_trace_id TraceId          TYPE bloom_filter(0.001) GRANULARITY 1,
     INDEX idx_req_id   LiteLLMRequestId TYPE bloom_filter(0.01)  GRANULARITY 1
 )
 ENGINE = MergeTree
 PARTITION BY toDate(Timestamp)
 ORDER BY (TeamId, ServiceName, toDateTime(Timestamp), TraceId)
-SETTINGS ttl_only_drop_parts = 1, non_replicated_deduplication_window = 1000
+SETTINGS ttl_only_drop_parts = 1, materialize_ttl_recalculate_only = 1, non_replicated_deduplication_window = 1000

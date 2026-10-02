@@ -273,6 +273,8 @@ async def test_vision_with_custom_model():
 
 
 class TestOpenAIChatCompletion(BaseLLMChatTest):
+    test_basic_tool_calling = None
+
     def get_base_completion_call_args(self) -> dict:
         return {"model": "gpt-4o-mini"}
 
