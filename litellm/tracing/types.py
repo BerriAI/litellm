@@ -26,6 +26,7 @@ class Span(TypedDict):
     name: ReadOnly[str]
     type: ReadOnly[SpanType]
     agent: ReadOnly[str]  # the agent this span runs inside, e.g. "researcher"
+    framework: ReadOnly[str]  # SDK that emitted the span, e.g. "claude-agent-sdk"; "" when unknown
     start_offset_ms: ReadOnly[float]  # relative to trace start
     duration_ms: ReadOnly[float]
     status: ReadOnly[SpanStatus]
@@ -57,6 +58,7 @@ class TraceSummary(TypedDict):
     name: ReadOnly[str]
     service: ReadOnly[str]
     agent_names: ReadOnly[NotRequired[tuple[str, ...]]]
+    frameworks: ReadOnly[NotRequired[tuple[str, ...]]]
     input_preview: ReadOnly[str]
     start_time: ReadOnly[str]  # ISO 8601
     duration_ms: ReadOnly[float]
@@ -129,6 +131,7 @@ class SpanRow(TypedDict):
     ApiKeyHash: ReadOnly[str]
     ObservationType: SpanType
     AgentName: str
+    Framework: ReadOnly[str]
     LiteLLMRequestId: str
     Model: str
     InputTokens: int
