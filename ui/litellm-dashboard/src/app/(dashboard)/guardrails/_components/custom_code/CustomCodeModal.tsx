@@ -2,14 +2,13 @@ import React, { useState, useRef, useEffect } from "react";
 import { CheckCircle2, ChevronRight, Code, ExternalLink, PlayCircle, Save, Users, XCircle } from "lucide-react";
 import { createGuardrailCall, updateGuardrailCall, testCustomCodeGuardrail } from "@/components/networking";
 import { toast } from "@/lib/toast";
+import { loggingOnlyScopeToChoice } from "../guardrail_info_helpers";
+import type { LoggingOnlyScope, LoggingOnlyScopeChoice } from "../guardrail_info_helpers";
 import {
-  choiceToLoggingOnlyScope,
-  getLoggingOnlyScopeOptions,
-  getLoggingOnlyScopeUpdate,
-  loggingOnlyScopeToChoice,
-  type LoggingOnlyScope,
-  type LoggingOnlyScopeChoice,
-} from "../guardrail_info_helpers";
+  CustomCodeLoggingOnlyScopeSelect,
+  getCustomCodeLoggingOnlyScopeCreate,
+  getCustomCodeLoggingOnlyScopeUpdate,
+} from "./CustomCodeLoggingOnlyScope";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -172,8 +171,6 @@ const TEMPLATE_ITEMS = Object.entries(CODE_TEMPLATES).map(([key, template]) => (
   label: template.name,
 }));
 
-const LOGGING_ONLY_SCOPE_ITEMS = getLoggingOnlyScopeOptions(true);
-
 type ModeOption = (typeof MODE_OPTIONS)[number];
 
 const MODE_OPTION_BY_VALUE: Record<string, ModeOption> = Object.fromEntries(
@@ -202,7 +199,6 @@ interface CustomCodeModalProps {
   editData?: EditGuardrailData | null;
 }
 
-/* eslint-disable max-lines -- The existing modal remains the requested location for this scope control */
 const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onSuccess, accessToken, editData }) => {
   const anchor = useComboboxAnchor();
   const isEditMode = !!editData;
@@ -399,6 +395,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         const updateData: any = {
           litellm_params: {
             custom_code: code,
+            ...getCustomCodeLoggingOnlyScopeUpdate(mode, editData.litellm_params, loggingOnlyScopeChoice),
           },
         };
 
@@ -414,17 +411,11 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         if (defaultOn !== editData.litellm_params?.default_on) {
           updateData.litellm_params.default_on = defaultOn;
         }
-        if (mode.includes("logging_only")) {
-          Object.assign(
-            updateData.litellm_params,
-            getLoggingOnlyScopeUpdate(editData.litellm_params, loggingOnlyScopeChoice),
-          );
-        }
+
         await updateGuardrailCall(accessToken, editData.guardrail_id, updateData);
         toast.success("Custom code guardrail updated successfully");
       } else {
         // Create new guardrail
-        const loggingOnlyScope = choiceToLoggingOnlyScope(loggingOnlyScopeChoice);
         const guardrailData = {
           guardrail_name: guardrailName,
           litellm_params: {
@@ -432,9 +423,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             mode: mode,
             default_on: defaultOn,
             custom_code: code,
-            ...(mode.includes("logging_only") && loggingOnlyScope !== null
-              ? { logging_only_scope: loggingOnlyScope }
-              : {}),
+            ...getCustomCodeLoggingOnlyScopeCreate(mode, loggingOnlyScopeChoice),
           },
           guardrail_info: {},
         };
@@ -572,27 +561,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             </Combobox>
           </div>
           {mode.includes("logging_only") && (
-            <div className="w-[200px]">
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">Logging only scope</label>
-              <Select
-                items={LOGGING_ONLY_SCOPE_ITEMS}
-                value={loggingOnlyScopeChoice}
-                onValueChange={(value: string | null) =>
-                  value && setLoggingOnlyScopeChoice(value as LoggingOnlyScopeChoice)
-                }
-              >
-                <SelectTrigger className="w-full" aria-label="Logging only scope">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {LOGGING_ONLY_SCOPE_ITEMS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <CustomCodeLoggingOnlyScopeSelect value={loggingOnlyScopeChoice} onChange={setLoggingOnlyScopeChoice} />
           )}
           <div className="w-[180px]">
             <label className="mb-1 block text-xs font-medium text-muted-foreground">Template</label>
