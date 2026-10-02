@@ -100,7 +100,7 @@ describe("SystemOneUI integration", () => {
     expect(Object.values(options?.headers as Record<string, string>)).toContain("Bearer session-key");
     expect(JSON.parse(options?.body as string)).toMatchObject({
       model: "jev-latest",
-      questions: { would_buy_again: { type: "noul" } },
+      questions: { has_repro_steps: { type: "noul" } },
     });
   });
 

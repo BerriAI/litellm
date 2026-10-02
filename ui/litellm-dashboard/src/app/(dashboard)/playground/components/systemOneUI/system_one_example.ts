@@ -3,30 +3,36 @@ import type { SystemOneRequest } from "./system_one_schemas";
 export const SYSTEM_ONE_EXAMPLE: SystemOneRequest = {
   model: "jev-latest",
   state:
-    "The headphones sound great and the battery easily lasts a full workday, but the left ear cushion started peeling after two weeks. I'd still buy them again if the build quality were better.",
+    "Since upgrading to the latest release, streaming responses stop halfway through whenever a fallback model takes over. Non-streaming requests still work. I haven't narrowed down which change caused it, but it happens on most long prompts.",
   questions: {
-    main_topic: {
+    area: {
       type: "choice",
-      instructions: "What is this review mainly about?",
+      instructions: "Which part of the project does this issue belong to?",
       criteria: {
-        sound_quality: "How the product sounds",
-        battery_life: "How long the battery lasts",
-        build_quality: "Durability, materials, and defects",
-        comfort: "How the product feels to wear",
+        backend: "Server, API routing, streaming, and fallbacks",
+        sdk: "The client library and its helpers",
+        ui: "The web dashboard",
+        docs: "Documentation and examples",
       },
     },
-    would_buy_again: {
+    has_repro_steps: {
       type: "noul",
-      instructions: "Would the reviewer buy this product again?",
+      instructions: "Does the issue include steps someone could follow to reproduce it?",
       criteria: {
-        true: "They say they would buy it again or recommend it",
-        false: "They say they would not buy it again or warn others away",
+        true: "It gives concrete steps, a config, or a request that triggers the bug",
+        false: "It only describes the symptom without a way to trigger it",
       },
     },
-    overall_sentiment: {
+    severity: {
       type: "score",
-      instructions: "How positive is the review overall?",
-      criteria: ["Very negative", "Mostly negative", "Mixed", "Mostly positive", "Very positive"],
+      instructions: "How severe is this issue?",
+      criteria: [
+        "Cosmetic or a typo",
+        "Minor bug with an easy workaround",
+        "Broken feature with a workaround",
+        "Broken feature with no workaround",
+        "Outage or data loss",
+      ],
     },
   },
 };
