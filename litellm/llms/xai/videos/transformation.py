@@ -1,8 +1,10 @@
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
 from httpx._types import RequestFiles
+from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire payloads without a runtime conversion
 
 import litellm
 from litellm.constants import XAI_API_BASE
@@ -25,6 +27,11 @@ from litellm.types.videos.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+
+def _is_json_object(value: object) -> TypeIs[Mapping[str, object]]:  # guard-ok: provider JSON objects have str keys
+    return isinstance(value, Mapping)
+
 
 _DROPPED: Final = frozenset(("seconds", "size", "input_reference", "user", "extra_headers", "model"))
 _SIZE_TO_ASPECT_RATIO: Final = {
@@ -101,7 +108,7 @@ class XAIVideoConfig(BaseVideoConfig):
         self,
         api_base: str | None,
         api_key: str | None,
-        litellm_params: GenericLiteLLMParams | dict | None,  # mutable-ok: get_complete_url receives the base-class dict
+        litellm_params: GenericLiteLLMParams | dict[str, object] | None,  # mutable-ok: base-class dict
     ) -> str:
         from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
 
@@ -172,11 +179,12 @@ class XAIVideoConfig(BaseVideoConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,  # mutable-ok: provider JSON body and base-class dict signature
+        litellm_params: dict[str, object],  # mutable-ok: provider JSON body and base-class dict signature
     ) -> str:
+        api_key: Final = litellm_params.get("api_key") if litellm_params else None
         resolved: Final = self._resolve_api_base(
             api_base=api_base,
-            api_key=litellm_params.get("api_key") if litellm_params else None,
+            api_key=api_key if isinstance(api_key, str) else None,
             litellm_params=litellm_params,
         )
         if not model:
@@ -271,14 +279,12 @@ class XAIVideoConfig(BaseVideoConfig):
         response_data: Final = raw_response.json()
         status_raw: Final = str(response_data.get("status") or "processing").lower()
         status: Final = _STATUS_MAP.get(status_raw, status_raw)
-        video_body: Final = response_data.get("video")
-        video_meta: Final = video_body or {}
-        video_url: Final = video_meta.get("url") if isinstance(video_meta, dict) else None
-        seconds: Final = (
-            str(video_meta.get("duration"))
-            if isinstance(video_meta, dict) and video_meta.get("duration") is not None
-            else None
-        )
+        video_body: Final[object] = response_data.get("video")
+        video_meta: Final[Mapping[str, object]] = video_body if _is_json_object(video_body) else {}
+        url_value: Final = video_meta.get("url")
+        video_url: Final = url_value if isinstance(url_value, str) else None
+        duration: Final = video_meta.get("duration")
+        seconds: Final = str(duration) if duration is not None else None
         request_id: Final = (
             response_data.get("request_id")
             or response_data.get("id")

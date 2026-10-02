@@ -2,7 +2,7 @@ import asyncio
 import io
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, get_type_hints
+from typing import Final, cast, get_type_hints  # noqa: TID251  # untyped JSON request bodies need cast
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -86,7 +86,9 @@ def _image_edit_values(form: FormData | None, body: Mapping[str, object], name: 
     raw: Final = body.get(name)
     if raw is None:
         return ()
-    return tuple(raw) if isinstance(raw, list) else (raw,)
+    if isinstance(raw, list):
+        return tuple(cast(list[object], raw))  # cast-ok: JSON arrays hold arbitrary values
+    return (raw,)
 
 
 async def _image_edit_field(
