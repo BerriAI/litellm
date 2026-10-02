@@ -168,6 +168,7 @@ start_proxy() {
     "${database_env[@]}" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
     INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
     LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" LITELLM_SALT_KEY="$LITELLM_SALT_KEY" LITELLM_UI_PATH="$LITELLM_UI_PATH" PROXY_BASE_URL="http://127.0.0.1:$port" \
+    LITELLM_LICENSE="${LITELLM_LICENSE:-}" \
     LITELLM_MODE=PRODUCTION STORE_MODEL_IN_DB=True "${cost_map_env[@]}" \
     AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 COVERAGE_FILE="$coverage_data" \
     "${proxy_command[@]}" --config tests/integration/proxy_config.yaml \
@@ -190,7 +191,7 @@ if [ "$suite" = management ] || [ "$suite" = mcp ]; then
 fi
 
 if [ "$suite" = providers ]; then
-  INTEGRATION_RUN_ID="$integration_identity" .venv/bin/python -m pytest --noconftest -o addopts= \
+  INTEGRATION_RUN_ID="$integration_identity" .venv/bin/python -m pytest --tb=short --noconftest -o addopts= \
     --strict-markers --strict-config -p no:pytest-retry -p no:rerunfailures --timeout=30 \
     tests/e2e/test_provider_edge.py::TestReplayMode::test_content_drift_returns_the_miss_status_naming_both_keys \
     tests/e2e/test_provider_edge.py::TestReplayMode::test_exhausted_key_returns_the_miss_status \
@@ -228,6 +229,7 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
   INTEGRATION_WORKERS="${INTEGRATION_WORKERS:-1}" \
   INTEGRATION_MASTER_KEY="$INTEGRATION_MASTER_KEY" LITELLM_MODE=PRODUCTION \
+  LITELLM_LICENSE="${LITELLM_LICENSE:-}" \
   INTEGRATION_SEED="$INTEGRATION_SEED" \
   INTEGRATION_ORDER_SEED="$INTEGRATION_ORDER_SEED" \
   LITELLM_LOCAL_MODEL_COST_MAP=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \

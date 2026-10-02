@@ -1,17 +1,26 @@
 "use client";
 
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
-import { AlertTriangle, Bot, CornerDownRight, Wrench } from "lucide-react";
+import { useState } from "react";
+import { AlertTriangle } from "lucide-react";
 
-import { agentTraceSpanCall } from "../../networking";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cva.config";
+
+import { agentTraceSpanCall, agentTraceSpanErrorCall } from "../../networking";
+import { type KeyValue, KeyValueRows, objectEntries } from "./KeyValueRows";
+import { Card, MessageCard, Section, ToolResultCard } from "./MessageCard";
 import type { ErrorSource } from "./traceTree";
-import type { Span, SpanDetail, TraceMessage } from "./traceTypes";
-import { errorSource, parseMessages, prettyPayload } from "./traceUtils";
+import type { Span, SpanDetail, SpanErrorPage, TraceMessage, UIContent, UIMessage } from "./traceTypes";
+import { errorSource, parseJson, parseMessages, prettyPayload } from "./traceUtils";
 
 const ERROR_SOURCE_LABEL: Record<ErrorSource, string> = { tool: "Tool", model: "Model", litellm: "LiteLLM" };
 const TRACEBACK_MARKER = "Traceback (most recent call last):";
+const STATUS_TEXT = "px-5 py-2 text-[13px] tracking-[-0.26px] text-trace-duration";
+const PAYLOAD_PRE =
+  "font-mono text-[13px] leading-[1.5] tracking-[-0.26px] break-words whitespace-pre-wrap text-trace-text";
 
-/** LangSmith records `repr(exc)` + traceback with no separator; keep the exception line. */
+/** Exporters record `repr(exc)` + traceback with no separator; keep the exception line. */
 export const errorHeadline = (error: string): string =>
   (error.split(TRACEBACK_MARKER, 1)[0].split("\n")[0] ?? "").trim() || error.trim();
 
@@ -29,93 +38,104 @@ export function useSpanDetail(accessToken: string, traceId: string, spanId: stri
   return useQuery(queryOptions);
 }
 
-export function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-1.5 font-mono text-[9px] font-medium tracking-[0.1em] text-muted-foreground uppercase">
-      {children}
-    </div>
-  );
-}
-
-export function TextBlock({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <section>
-      <SectionLabel>{label}</SectionLabel>
-      <div
-        className={`mt-1.5 max-h-72 overflow-auto rounded border border-border bg-card p-3 leading-5 whitespace-pre-wrap break-words text-foreground ${
-          mono ? "font-mono text-[11px]" : "text-[12px]"
-        }`}
-      >
-        {value}
-      </div>
-    </section>
-  );
-}
-
-function RoleIcon({ role }: { role: string }) {
-  if (role === "assistant") return <Bot className="size-3" />;
-  if (role === "tool") return <Wrench className="size-3" />;
-  return <CornerDownRight className="size-3" />;
-}
-
-export function MessageBlock({ message }: { message: TraceMessage }) {
-  return (
-    <section className="overflow-hidden rounded border border-border bg-card">
-      <div className="flex h-7 items-center gap-2 border-b border-border bg-muted/40 px-2.5 font-mono text-[9px] tracking-[0.1em] text-muted-foreground uppercase">
-        <RoleIcon role={message.role} />
-        {message.role}
-        {message.name ? <span className="normal-case">· {message.name}</span> : null}
-      </div>
-      {(message.tool_calls ?? []).map((call, i) => (
-        <div
-          key={`${call.name}-${i}`}
-          className="border-b border-border bg-muted/20 p-2.5 font-mono text-[11px] break-all text-foreground last:border-b-0"
-        >
-          {call.name}
-          <span className="text-muted-foreground">(</span>
-          <span className="text-muted-foreground">{JSON.stringify(call.args)}</span>
-          <span className="text-muted-foreground">)</span>
-        </div>
-      ))}
-      {message.content && (
-        <div className="p-2.5 text-[12px] leading-5 whitespace-pre-wrap break-words text-foreground">
-          {message.content}
-        </div>
-      )}
-    </section>
-  );
-}
-
 export function ErrorBlock({ span }: { span: Span }) {
   const source = errorSource(span);
   if (!source) return null;
   const headline = errorHeadline(span.error ?? "") || "Span reported an error status.";
   return (
-    <section aria-label="Error" className="rounded border border-destructive/40 bg-destructive/5 p-3">
-      <div className="flex items-center gap-2 font-mono text-[9px] font-medium tracking-[0.08em] text-destructive uppercase">
-        <AlertTriangle className="size-3" />
+    <section
+      aria-label="Error"
+      className="mx-5 mb-2 rounded-[4px] border-[0.67px] border-destructive/40 bg-destructive/5 px-3 py-2.5"
+    >
+      <div className="flex items-center gap-2 text-[13px] leading-[1.2] font-medium tracking-[-0.26px] text-destructive">
+        <AlertTriangle className="size-3.5" />
         {ERROR_SOURCE_LABEL[source]} · {errorReason(headline)}
       </div>
-      <pre className="mt-2 font-mono text-[11px] leading-5 whitespace-pre-wrap break-words text-foreground">
-        {headline}
-      </pre>
+      <pre className={cn("mt-2", PAYLOAD_PRE)}>{headline}</pre>
     </section>
   );
 }
 
-function Payload({ label, value, mono }: { label: string; value: string; mono: boolean }) {
-  const messages = parseMessages(value);
-  if (messages) {
-    return (
-      <>
-        <SectionLabel>{`${label}${messages.length > 1 ? ` · ${messages.length} messages` : ""}`}</SectionLabel>
-        {messages.map((message, i) => (
-          <MessageBlock key={`${message.role}-${i}`} message={message} />
-        ))}
-      </>
-    );
+function FieldsCard({ entries }: { entries: readonly KeyValue[] }) {
+  return (
+    <Card className="px-3 py-2.5">
+      <KeyValueRows entries={entries} />
+    </Card>
+  );
+}
+
+function TextCard({ text }: { text: string }) {
+  return (
+    <Card className="px-3 py-2.5">
+      <pre className={cn("max-h-96 overflow-auto", PAYLOAD_PRE)}>{text}</pre>
+    </Card>
+  );
+}
+
+function PlainPayload({ value }: { value: string }) {
+  const entries = objectEntries(parseJson(value));
+  if (entries && entries.length > 0) return <FieldsCard entries={entries} />;
+  return <TextCard text={prettyPayload(value)} />;
+}
+
+function Messages({ messages, model }: { messages: TraceMessage[]; model: string | null }) {
+  return (
+    <>
+      {messages.map((message, i) => (
+        <MessageCard key={`${message.role}-${i}`} message={message} model={model} />
+      ))}
+    </>
+  );
+}
+
+const toTraceMessage = (message: UIMessage): TraceMessage => ({
+  ...message,
+  tool_calls: message.tool_calls?.map((call) => ({
+    name: call.name,
+    args: parseJson(call.arguments) ?? call.arguments,
+  })),
+});
+
+interface PayloadProps {
+  value: string;
+  span: Span;
+  role: "input" | "output";
+}
+
+const isToolResult = ({ span, role }: Omit<PayloadProps, "value">): boolean =>
+  span.type === "tool" && role === "output";
+
+function ToolResult({ value, span }: Omit<PayloadProps, "role">) {
+  return <ToolResultCard name={span.name} result={value} failed={span.status === "error"} />;
+}
+
+const singleText = (content: UIContent): string | null =>
+  content.kind === "messages" && content.messages.length === 1 && !content.messages[0].tool_calls?.length
+    ? content.messages[0].content
+    : null;
+
+function UIPayload({ content, ...props }: PayloadProps & { content: UIContent }) {
+  const toolText = isToolResult(props) ? singleText(content) : null;
+  if (toolText !== null) return <ToolResult {...props} value={toolText} />;
+  if (content.kind === "messages") {
+    return <Messages messages={content.messages.map(toTraceMessage)} model={props.span.model} />;
   }
-  return <TextBlock label={label} value={prettyPayload(value)} mono={mono} />;
+  if (isToolResult(props)) return <ToolResult {...props} />;
+  if (content.kind === "fields" && content.fields.length > 0) {
+    return <FieldsCard entries={content.fields.map((field): KeyValue => [field.key, field.value])} />;
+  }
+  return <TextCard text={content.kind === "text" ? content.text : props.value} />;
+}
+
+function Payload(props: PayloadProps) {
+  const messages = parseMessages(props.value);
+  if (messages) return <Messages messages={messages} model={props.span.model} />;
+  if (isToolResult(props)) return <ToolResult {...props} />;
+  return <PlainPayload value={props.value} />;
+}
+
+function SpanPayload({ content, ...props }: PayloadProps & { content: UIContent | undefined }) {
+  return content ? <UIPayload content={content} {...props} /> : <Payload {...props} />;
 }
 
 interface DetailContentProps {
@@ -125,26 +145,90 @@ interface DetailContentProps {
   span: Span;
 }
 
-/** Content tab: the error first (if any), then what went in and what came out. */
+function DiagnosticContent({ accessToken, traceId, traceRef, span }: DetailContentProps) {
+  const [opened, setOpened] = useState(false);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const queryOptions: UseQueryOptions<SpanErrorPage, Error> = {
+    queryKey: ["agentTraceSpanError", traceId, traceRef, span.span_id, accessToken, cursor],
+    queryFn: () => agentTraceSpanErrorCall(accessToken, traceId, span.span_id, { traceRef, cursor }),
+    enabled: opened,
+    staleTime: Infinity,
+    gcTime: 0,
+    retry: false,
+  };
+  const query = useQuery(queryOptions);
+  return (
+    <section aria-label="Stored diagnostic" className="mx-5 mb-2 space-y-2">
+      {span.error_truncated && <p className="text-xs text-muted-foreground">Error preview truncated</p>}
+      {!opened && (
+        <Button variant="outline" size="sm" onClick={() => setOpened(true)}>
+          View stored diagnostic
+        </Button>
+      )}
+      {opened && query.isPending && <p role="status">Loading diagnostic…</p>}
+      {opened && query.isError && (
+        <div role="alert">
+          Could not load diagnostic: {query.error.message}
+          <Button variant="outline" size="sm" onClick={() => query.refetch()}>
+            Retry
+          </Button>
+        </div>
+      )}
+      {opened && query.data && (
+        <>
+          <TextCard text={query.data.message} />
+          <p className="text-xs text-muted-foreground">
+            {cursor ? "Continuation" : "Beginning"} of stored diagnostic ({query.data.total_chars.toLocaleString()}{" "}
+            characters)
+          </p>
+          {query.data.next_cursor && (
+            <Button variant="outline" size="sm" onClick={() => setCursor(query.data.next_cursor)}>
+              Next section
+            </Button>
+          )}
+          {cursor && (
+            <Button variant="outline" size="sm" onClick={() => setCursor(null)}>
+              Back to beginning
+            </Button>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+/** Content tab: the error first (if any), then collapsible Input and Output rendered as chat cards. */
 export function DetailContent({ accessToken, traceId, traceRef, span }: DetailContentProps) {
   const detailQuery = useSpanDetail(accessToken, traceId, span.span_id, traceRef);
   const detail = detailQuery.data;
-  const isTool = span.type === "tool";
   const empty = detail && !detail.input && !detail.output;
 
   return (
-    <div className="space-y-3 p-3">
+    <div className="flex flex-col px-2 pt-1 pb-4">
       <ErrorBlock span={span} />
-      {detailQuery.isLoading && <div className="font-mono text-[11px] text-muted-foreground">Loading span…</div>}
-      {detailQuery.isError && (
-        <div className="font-mono text-[11px] text-muted-foreground">
-          Could not load span: {detailQuery.error.message}
-        </div>
+      {span.error && (
+        <DiagnosticContent
+          key={`${traceId}:${traceRef}:${span.span_id}`}
+          accessToken={accessToken}
+          traceId={traceId}
+          traceRef={traceRef}
+          span={span}
+        />
       )}
-      {detail?.input ? <Payload label={isTool ? "Input" : "Input"} value={detail.input} mono={isTool} /> : null}
-      {detail?.output ? <Payload label="Output" value={detail.output} mono={isTool} /> : null}
+      {detailQuery.isLoading && <div className={STATUS_TEXT}>Loading span…</div>}
+      {detailQuery.isError && <div className={STATUS_TEXT}>Could not load span: {detailQuery.error.message}</div>}
+      {detail?.input ? (
+        <Section title="Input">
+          <SpanPayload value={detail.input} content={detail.input_ui} span={span} role="input" />
+        </Section>
+      ) : null}
+      {detail?.output ? (
+        <Section title="Output">
+          <SpanPayload value={detail.output} content={detail.output_ui} span={span} role="output" />
+        </Section>
+      ) : null}
       {empty && span.status !== "error" && (
-        <div className="py-12 text-center font-mono text-[11px] text-muted-foreground">
+        <div className="py-12 text-center text-[13px] tracking-[-0.26px] text-trace-duration">
           No content recorded for this span.
         </div>
       )}

@@ -137,7 +137,7 @@ class AzureSpeechPassthroughLoggingHandler:
                 url_route, httpx_response, response_body
             )
 
-            updated_kwargs: Final = {  # mutable-ok: the logging pipeline requires a plain kwargs dict
+            updated_kwargs: Final = {
                 **kwargs,
                 "model": model_name,
                 "custom_llm_provider": AZURE_SPEECH_CUSTOM_LLM_PROVIDER,
