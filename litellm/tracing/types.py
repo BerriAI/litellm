@@ -9,10 +9,12 @@ A trace is one agent run. It's made of spans (agent / llm / tool / chain / frame
 
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
+
+from litellm.tracing.ui_format import UIContent
 
 SpanType = Literal["agent", "llm", "tool", "chain", "framework"]
 SpanStatus = Literal["ok", "error", "unset"]
@@ -27,7 +29,8 @@ class Span(TypedDict):
     start_offset_ms: ReadOnly[float]  # relative to trace start
     duration_ms: ReadOnly[float]
     status: ReadOnly[SpanStatus]
-    error: ReadOnly[str | None]  # exception message when status == "error"
+    error: ReadOnly[str | None]
+    error_truncated: ReadOnly[bool]
     input_preview: ReadOnly[str]
     model: ReadOnly[str | None]
     input_tokens: ReadOnly[int]
@@ -84,7 +87,16 @@ class SpanDetail(TypedDict):
     span_id: ReadOnly[str]
     input: ReadOnly[str]
     output: ReadOnly[str]
+    input_ui: ReadOnly[UIContent]
+    output_ui: ReadOnly[UIContent]
     attributes: ReadOnly[dict[str, str]]
+
+
+class SpanErrorPage(TypedDict):
+    span_id: ReadOnly[str]
+    message: ReadOnly[str]
+    total_chars: ReadOnly[int]
+    next_cursor: ReadOnly[str | None]
 
 
 class TraceScope(TypedDict):
@@ -105,15 +117,15 @@ class SpanRow(TypedDict):
     SpanName: ReadOnly[str]
     SpanKind: ReadOnly[str]
     ServiceName: ReadOnly[str]
-    ResourceAttributes: dict[str, str]
+    ResourceAttributes: ReadOnly[Mapping[str, str]]
     ScopeName: ReadOnly[str]
     ScopeVersion: ReadOnly[str]
-    SpanAttributes: dict[str, str]
+    SpanAttributes: ReadOnly[Mapping[str, str]]
     Duration: ReadOnly[int]  # ns
     StatusCode: ReadOnly[str]
     StatusMessage: ReadOnly[str]
-    TeamId: str
-    ApiKeyHash: str
+    TeamId: ReadOnly[str]
+    ApiKeyHash: ReadOnly[str]
     ObservationType: SpanType
     AgentName: str
     LiteLLMRequestId: str

@@ -4702,7 +4702,6 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-mock" },
-    { name = "pytest-postgresql" },
     { name = "pytest-recording" },
     { name = "pytest-rerunfailures" },
     { name = "pytest-socket" },
@@ -4916,7 +4915,6 @@ dev = [
     { name = "pytest-asyncio", specifier = "==1.3.0" },
     { name = "pytest-cov", specifier = "==5.0.0" },
     { name = "pytest-mock", specifier = "==3.15.1" },
-    { name = "pytest-postgresql", specifier = "==7.0.2" },
     { name = "pytest-recording", specifier = "==0.13.4" },
     { name = "pytest-rerunfailures", specifier = "==15.1" },
     { name = "pytest-socket", specifier = "==0.8.1" },
@@ -4962,13 +4960,23 @@ proxy-dev = [
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.72"
+version = "0.1.73"
 source = { editable = "enterprise" }
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.103"
+version = "0.4.104"
 source = { editable = "litellm-proxy-extras" }
+dependencies = [
+    { name = "psycopg" },
+    { name = "psycopg-binary" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "psycopg", specifier = ">=3.2,<4.0" },
+    { name = "psycopg-binary", specifier = ">=3.2,<4.0" },
+]
 
 [[package]]
 name = "llm-sandbox"
@@ -5460,18 +5468,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
-]
-
-[[package]]
-name = "mirakuru"
-version = "3.0.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "psutil", marker = "sys_platform != 'cygwin'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/53/23/db9034ba28c7d89a540ffb8ca789f70dc12079108ece1cd1762295d5c807/mirakuru-3.0.2.tar.gz", hash = "sha256:21192186a8680ea7567ca68170261df3785768b12962dd19fe8cccab15ad3441", size = 29338, upload-time = "2026-02-11T19:41:15.42Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/49/5f/a3f1a7f1f6e55de9285b03ae7e0d3c2a15e044b6e3f9b53bef5609ca05f2/mirakuru-3.0.2-py3-none-any.whl", hash = "sha256:10e5dac4a8f26872c63e9cdfdc01b775aaa2beb3ced98abc497279d2dc525b8f", size = 27583, upload-time = "2026-02-11T19:41:13.578Z" },
 ]
 
 [[package]]
@@ -6079,11 +6075,11 @@ wheels = [
 
 [[package]]
 name = "oauthlib"
-version = "3.3.1"
+version = "4.0.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/0b/5f/19930f824ffeb0ad4372da4812c50edbd1434f678c90c2733e1188edfc63/oauthlib-3.3.1.tar.gz", hash = "sha256:0f0f8aa759826a193cf66c12ea1af1637f87b9b4622d46e866952bb022e538c9", size = 185918, upload-time = "2025-06-19T22:48:08.269Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7a/d8/a1bcc8ba112a627f8ffbdc212a78ce18d3ac07e91a5ca65d27918eee25a1/oauthlib-4.0.0.tar.gz", hash = "sha256:efb274799819440f95b4ab3b818869f1ce9ae26c5beacba0201d1a1b76b54f86", size = 187232, upload-time = "2026-09-28T06:01:18.77Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/9c/92789c596b8df838baa98fa71844d84283302f7604ed565dafe5a6b5041a/oauthlib-3.3.1-py3-none-any.whl", hash = "sha256:88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1", size = 160065, upload-time = "2025-06-19T22:48:06.508Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/f4/78229a1066068ca14fc60fb26cf7381cabe4382261392b90e5f9552722d4/oauthlib-4.0.0-py3-none-any.whl", hash = "sha256:624c28c13a0a59cabf9747dfa52af63be3e512a7f2714df16e91b5b3a145e6cd", size = 159715, upload-time = "2026-09-28T06:01:17.008Z" },
 ]
 
 [[package]]
@@ -7166,15 +7162,6 @@ wheels = [
 ]
 
 [[package]]
-name = "port-for"
-version = "1.0.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/88/a0/80a64e8cc096c7a9d0f546a28994af849b4775afc5e4ee44bf2739a55115/port_for-1.0.0.tar.gz", hash = "sha256:404d161b1b2c82e2f6b31d8646396b4847d02bf5ee10068c92b7263657a14582", size = 21681, upload-time = "2025-09-30T10:22:51.149Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/70/2c/b1faca65b9728b4ac43f0bee4bb9e7294bd0a62cc2ee59fd59403bf575f6/port_for-1.0.0-py3-none-any.whl", hash = "sha256:35a848b98cf4cc075fe80dc49ae5c3a78e3ca345a23bd39bf5252277b4eef5c2", size = 17544, upload-time = "2025-09-30T10:22:49.878Z" },
-]
-
-[[package]]
 name = "posthog"
 version = "3.25.0"
 source = { registry = "https://pypi.org/simple" }
@@ -7937,14 +7924,14 @@ wheels = [
 
 [[package]]
 name = "pypdf"
-version = "6.16.2"
+version = "6.19.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/44/66/54212e75406afd9f3e933d0dda23072f6aecc55c5a273077dc2e0b028b23/pypdf-6.16.2.tar.gz", hash = "sha256:595647f6191de6f402cfde1d0c455d6cbccbd509aac32b34783009c032de5d6e", size = 7008996, upload-time = "2026-08-23T13:50:07.135Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1f/ac/63d71aaedb59acbcdef491e6ca6469165e3771c9c74358204818fd9bc5a6/pypdf-6.19.0.tar.gz", hash = "sha256:bbc43aca292369ccc6cbc8a921991ecf2538a3587ab5a116eff06c321d647155", size = 7033266, upload-time = "2026-09-16T09:32:05.946Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/13/f1/a2da3b55acd4ab737bf728c97edaaed5ec1d3c1236acb639dcdfa97e42c7/pypdf-6.16.2-py3-none-any.whl", hash = "sha256:c8b09a59399062fb45a1b8156c18a787a10a3dae03ac9674397a226712c94604", size = 385060, upload-time = "2026-08-23T13:50:05.349Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/2c/c43c03eaf630435f023f1dc61ec4a4a78951ad5530a62c71cc89bde307b7/pypdf-6.19.0-py3-none-any.whl", hash = "sha256:7e5d6e730e7dae87d560a2cee218b852f6498c8be61966f3cd02ead971e48d14", size = 395480, upload-time = "2026-09-16T09:32:04.087Z" },
 ]
 
 [[package]]
@@ -8051,22 +8038,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/68/14/eb014d26be205d38ad5ad20d9a80f7d201472e08167f0bb4361e251084a9/pytest_mock-3.15.1.tar.gz", hash = "sha256:1849a238f6f396da19762269de72cb1814ab44416fa73a8686deac10b0d87a0f", size = 34036, upload-time = "2025-09-16T16:37:27.081Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5a/cc/06253936f4a7fa2e0f48dfe6d851d9c56df896a9ab09ac019d70b760619c/pytest_mock-3.15.1-py3-none-any.whl", hash = "sha256:0a25e2eb88fe5168d535041d09a4529a188176ae608a6d249ee65abc0949630d", size = 10095, upload-time = "2025-09-16T16:37:25.734Z" },
-]
-
-[[package]]
-name = "pytest-postgresql"
-version = "7.0.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "mirakuru" },
-    { name = "packaging" },
-    { name = "port-for" },
-    { name = "psycopg" },
-    { name = "pytest" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/18/15/b3c07d1537c7608c3f45d3ee6f778a56b1daa480221bb500abc9e44e01a0/pytest_postgresql-7.0.2.tar.gz", hash = "sha256:57c8d3f7d4e91d0ea8b2eac786d04f60080fa6ed6e66f1f94d747c71c9e5a4f4", size = 50691, upload-time = "2025-05-17T20:17:59.227Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/18/57/f2db5a80b10c3ac48ce41786cb9b14172f997509ee1b1055ab7db4238e5e/pytest_postgresql-7.0.2-py3-none-any.whl", hash = "sha256:0b0d31c51620a9c1d6be93286af354256bc58a47c379f56f4147b22da6e81fb5", size = 41447, upload-time = "2025-05-17T20:17:58.011Z" },
 ]
 
 [[package]]

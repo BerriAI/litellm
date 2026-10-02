@@ -127,7 +127,7 @@ def save_setup(saved: SavedSetup) -> None:
         ensure_private_dir(path.parent)
         staged: Final = stage_private_json(
             str(path),
-            {  # mutable-ok: private_json serializes with json.dump, which requires a dict
+            {
                 "version": saved.version,
                 "target": saved.target,
                 "settings_path": saved.settings_path,
