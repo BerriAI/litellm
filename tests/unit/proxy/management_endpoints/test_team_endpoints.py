@@ -53,6 +53,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _update_model_table,
     _validate_and_populate_member_user_info,
     _validate_team_member_reset_spend_value,
+    aggregated_date_range_error,
     delete_team,
     list_available_teams,
     reset_team_member_budget_fn,
@@ -16819,3 +16820,22 @@ def test_list_team_v2_answers_503_no_db_connection_when_the_callers_user_read_hi
 
     assert response.status_code == 503, response.text
     assert response.json() == _DB_OUTAGE_503_BODY
+
+
+@pytest.mark.parametrize(
+    ("start_date", "end_date"),
+    (
+        ("2026-9-24", "2026-09-26"),
+        ("２０２６-09-24", "2026-09-26"),
+        ("2026-09-01", "2026-09-4"),
+        ("2026-02-30", "2026-09-26"),
+    ),
+)
+def test_aggregated_date_range_error_rejects_non_canonical_dates(start_date: str, end_date: str) -> None:
+    assert aggregated_date_range_error(start_date, end_date) == "start_date and end_date must be valid YYYY-MM-DD dates"
+
+
+def test_aggregated_date_range_error_accepts_canonical_dates_and_keeps_range_checks() -> None:
+    assert aggregated_date_range_error("2026-09-24", "2026-09-26") is None
+    assert aggregated_date_range_error("2026-09-26", "2026-09-24") == "end_date must be on or after start_date"
+    assert aggregated_date_range_error("2020-01-01", "2026-12-31") == "Date range must be at most 400 days"
