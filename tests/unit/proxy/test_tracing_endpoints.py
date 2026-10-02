@@ -33,10 +33,10 @@ QUERY_HELP: Final = {
     "dialect": "test SQL",
     "access": "authenticated scope",
     "response": "JSON envelope",
-    "tables": [{"name": "traces", "columns": [{"name": "value", "type": "String", "comment": "label"}]}],
+    "tables": [{"name": "otel_traces", "columns": [{"name": "value", "type": "String", "comment": "label"}]}],
     "normalized_fields": [],
     "metadata": {
-        "table": "traces",
+        "table": "spend_logs",
         "column": "metadata",
         "fields": [],
         "sampled_rows": 0,
