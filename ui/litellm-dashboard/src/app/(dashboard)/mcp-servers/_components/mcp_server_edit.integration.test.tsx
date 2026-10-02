@@ -16,6 +16,10 @@ vi.mock("@/components/networking", () => ({
   testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
 }));
 
+vi.mock("../../hooks/uiSettings/useStdioMcpEnabled", () => ({
+  useStdioMcpEnabled: () => false,
+}));
+
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
   useMcpOAuthFlow: () => ({
     startOAuthFlow: vi.fn(),

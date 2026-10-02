@@ -13,6 +13,10 @@ vi.mock("@/components/networking", () => ({
   testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
 }));
 
+vi.mock("../../hooks/uiSettings/useStdioMcpEnabled", () => ({
+  useStdioMcpEnabled: () => false,
+}));
+
 vi.mock("@/utils/mcpTokenStore", () => ({
   setToken: vi.fn(),
 }));
