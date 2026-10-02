@@ -106,8 +106,110 @@ def test_non_admin_key_cannot_set_tag_team_ownership(gateway: Gateway) -> None:
         assert _tag_rows(name) == [{"tag_name": name, "team_id": team_id}]
 
         unrelated: Final = gateway.request(
-            "POST", "/tag/update", {"name": name, "description": "allowed edit"}, key=key
+            "POST", "/tag/update", {"name": name, "description": "denied edit"}, key=key
         )
-        assert unrelated.status_code == 200, unrelated.text
+        assert unrelated.status_code == 403, unrelated.text
         assert _tag_rows(name) == [{"tag_name": name, "team_id": team_id}]
         assert _tag_info(gateway, name)["team_id"] == team_id
+
+
+def test_team_admin_manages_their_own_team_tags(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        admin_id: Final = scenario.user()
+        team_a: Final = scenario.team(members_with_roles=[{"role": "admin", "user_id": admin_id}])
+        team_b: Final = scenario.team()
+        admin_key: Final = scenario.key(user_id=admin_id, team_id=team_a)
+
+        name: Final = _tag_name()
+        create: Final = gateway.request(
+            "POST", "/tag/new", {"name": name, "team_id": team_a, "models": []}, key=admin_key
+        )
+        assert create.status_code == 200, create.text
+        scenario.cleanups.callback(lambda: gateway.request("POST", "/tag/delete", {"name": name}))
+        assert _tag_rows(name) == [{"tag_name": name, "team_id": team_a}]
+
+        update: Final = gateway.request(
+            "POST", "/tag/update", {"name": name, "description": "admin edit"}, key=admin_key
+        )
+        assert update.status_code == 200, update.text
+        assert _tag_rows(name) == [{"tag_name": name, "team_id": team_a}]
+
+        transfer: Final = gateway.request(
+            "POST", "/tag/update", {"name": name, "team_id": team_b}, key=admin_key
+        )
+        assert transfer.status_code == 403, transfer.text
+        assert _tag_rows(name) == [{"tag_name": name, "team_id": team_a}]
+
+        foreign_tag: Final = _tag_name()
+        _create_tag(scenario, foreign_tag, team_id=team_b)
+        foreign: Final = gateway.request("POST", "/tag/delete", {"name": foreign_tag}, key=admin_key)
+        assert foreign.status_code == 403, foreign.text
+        assert _tag_rows(foreign_tag) == [{"tag_name": foreign_tag, "team_id": team_b}]
+
+        unowned_tag: Final = _tag_name()
+        _create_tag(scenario, unowned_tag)
+        unowned: Final = gateway.request("POST", "/tag/delete", {"name": unowned_tag}, key=admin_key)
+        assert unowned.status_code == 403, unowned.text
+        assert _tag_rows(unowned_tag) == [{"tag_name": unowned_tag, "team_id": None}]
+
+        delete: Final = gateway.request("POST", "/tag/delete", {"name": name}, key=admin_key)
+        assert delete.status_code == 200, delete.text
+        assert _tag_rows(name) == []
+
+
+def test_regular_team_member_cannot_manage_tags_and_sees_only_own_team_tags(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        member_id: Final = scenario.user()
+        team_a: Final = scenario.team(members_with_roles=[{"role": "user", "user_id": member_id}])
+        team_b: Final = scenario.team()
+        member_key: Final = scenario.key(user_id=member_id, team_id=team_a)
+
+        team_a_tag: Final = _tag_name()
+        _create_tag(scenario, team_a_tag, team_id=team_a)
+        team_b_tag: Final = _tag_name()
+        _create_tag(scenario, team_b_tag, team_id=team_b)
+
+        member_tag: Final = _tag_name()
+        create: Final = gateway.request(
+            "POST", "/tag/new", {"name": member_tag, "team_id": team_a, "models": []}, key=member_key
+        )
+        assert create.status_code == 403, create.text
+        assert _tag_rows(member_tag) == []
+
+        update: Final = gateway.request(
+            "POST", "/tag/update", {"name": team_a_tag, "description": "member edit"}, key=member_key
+        )
+        assert update.status_code == 403, update.text
+
+        delete: Final = gateway.request("POST", "/tag/delete", {"name": team_a_tag}, key=member_key)
+        assert delete.status_code == 403, delete.text
+        assert _tag_rows(team_a_tag) == [{"tag_name": team_a_tag, "team_id": team_a}]
+
+        listing: Final = gateway.request("GET", "/tag/list", key=member_key)
+        assert listing.status_code == 200, listing.text
+        entries: Final = {entry["name"]: entry for entry in listing.json()}
+        assert team_a_tag in entries
+        assert entries[team_a_tag]["team_id"] == team_a
+        assert team_b_tag not in entries
+
+
+def test_deleting_two_owning_teams_nulls_all_their_tags(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team_a: Final = _new_team(gateway)
+        team_b: Final = _new_team(gateway)
+        team_c: Final = scenario.team()
+        tag_a: Final = _tag_name()
+        tag_b: Final = _tag_name()
+        tag_c: Final = _tag_name()
+        _create_tag(scenario, tag_a, team_id=team_a)
+        _create_tag(scenario, tag_b, team_id=team_b)
+        _create_tag(scenario, tag_c, team_id=team_c)
+
+        gateway.post("/team/delete", {"team_ids": [team_a, team_b]})
+
+        assert _tag_rows(tag_a) == [{"tag_name": tag_a, "team_id": None}]
+        assert _tag_rows(tag_b) == [{"tag_name": tag_b, "team_id": None}]
+        assert _tag_rows(tag_c) == [{"tag_name": tag_c, "team_id": team_c}]
+        assert _tag_info(gateway, tag_a)["team_id"] is None
+        assert _tag_info(gateway, tag_b)["team_id"] is None
+        assert _tag_info(gateway, tag_c)["team_id"] == team_c
