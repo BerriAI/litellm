@@ -44,6 +44,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 try:
@@ -239,7 +240,9 @@ if MCP_AVAILABLE:
         MCPCredentials,
         MCPGatewaySessionsResponse,
         MCPGatewaySessionsTerminateResponse,
+        MCPUpstreamProtocol,
         normalize_upstream_header_name,
+        validate_mcp_protocol_transport,
     )
     from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
 
@@ -2936,6 +2939,32 @@ if MCP_AVAILABLE:
                 statuses.append(status_obj)
         return statuses
 
+    def _validate_mcp_protocol_update(
+        payload: UpdateMCPServerRequest,
+        fields_set: set[str],
+        stored: LiteLLM_MCPServerTable | None,
+        read_failed: bool,
+    ) -> None:
+        if not {"transport", "mcp_info"}.intersection(fields_set):
+            return
+        if read_failed:
+            raise HTTPException(
+                status_code=503, detail="Cannot validate MCP configuration while stored state is unavailable"
+            )
+        if stored is None:
+            return
+        effective_transport: Final = payload.transport if "transport" in fields_set else stored.transport
+        effective_info: Final = payload.mcp_info if "mcp_info" in fields_set else stored.mcp_info
+        try:
+            validate_mcp_protocol_transport(
+                TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
+                    (effective_info or {}).get("protocol_version", "auto")
+                ),
+                effective_transport,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @router.put(
         "/server",
         description="Allows deleting mcp serves in the db",
@@ -2984,9 +3013,9 @@ if MCP_AVAILABLE:
                 },
             )
 
-        # Snapshot the pre-update identity so we can detect a mint-relevant change below. The read is
-        # advisory (it only feeds the stale-token purge decision), so a failure skips the purge with a
-        # warning instead of failing the edit, whose primary job is the update itself.
+        # Snapshot stored configuration for protocol validation and mint-relevant changes below.
+        # Protocol or transport edits require this read; other edits may continue on read failure
+        # while skipping the best-effort stale-token purge.
         try:
             old_server_record = await get_mcp_server(prisma_client, payload.server_id)
             old_server_record_read_failed = False
@@ -2998,6 +3027,8 @@ if MCP_AVAILABLE:
             )
             old_server_record = None
             old_server_record_read_failed = True
+
+        _validate_mcp_protocol_update(payload, payload_fields_set, old_server_record, old_server_record_read_failed)
 
         if payload.per_server_oauth_discovery and (old_server_record is not None or old_server_record_read_failed):
             relay_eligible: Final = old_server_record is not None and is_per_server_oauth_discovery_eligible(

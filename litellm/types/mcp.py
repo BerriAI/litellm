@@ -64,6 +64,13 @@ MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http, MCPTransport.std
 MCPLegacyVersion = Literal["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]
 MCP_LEGACY_VERSIONS: Final[tuple[MCPLegacyVersion, ...]] = ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25")
 MCPUpstreamProtocol = MCPLegacyVersion | Literal["auto", "2026-07-28"]
+
+
+def validate_mcp_protocol_transport(protocol_version: MCPUpstreamProtocol, transport: MCPTransportType) -> None:
+    if protocol_version == "2026-07-28" and transport == MCPTransport.sse:
+        raise ValueError("Modern MCP requires HTTP or stdio transport")
+
+
 MCPAdvertisedVersions = Annotated[tuple[MCPLegacyVersion, ...], Field(min_length=1)]
 MCPSpecVersionType = Literal[
     MCPSpecVersion.nov_2024,

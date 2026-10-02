@@ -85,6 +85,7 @@ from litellm.types.mcp import (
     MCPUpstreamProtocol,
     credential_redirect_hook,
     has_header,
+    validate_mcp_protocol_transport,
     without_header,
 )
 
@@ -402,9 +403,10 @@ class MCPClient:
         logging_callback: Callable | None = None,
         protocol_version: MCPUpstreamProtocol = "auto",
     ):
-        self.protocol_version: MCPUpstreamProtocol = TypeAdapter(MCPUpstreamProtocol).validate_python(protocol_version)
-        if self.protocol_version == "2026-07-28" and transport_type == MCPTransport.sse:
-            raise ValueError("Modern MCP requires HTTP or stdio transport")
+        self.protocol_version: MCPUpstreamProtocol = TypeAdapter[MCPUpstreamProtocol](
+            MCPUpstreamProtocol
+        ).validate_python(protocol_version)
+        validate_mcp_protocol_transport(self.protocol_version, transport_type)
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
         self.auth_type: MCPAuthType = auth_type
