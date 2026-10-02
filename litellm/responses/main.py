@@ -13,6 +13,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
+from litellm._internal_context import in_emulated_file_search
 from litellm._logging import verbose_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
@@ -34,7 +35,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
-from litellm.responses.tool_search.lowering import declares_function, needs_tool_search_lowering
+from litellm.responses.tool_search.lowering import needs_tool_search_lowering
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     PromptObject,
@@ -1147,13 +1148,6 @@ def _supports_tool_search_natively(responses_api_provider_config: BaseResponsesA
     return declared
 
 
-def _emulates_file_search(tools: Sequence[object] | None) -> bool:
-    # emulated file_search answers with its own calls only, so it would drop a lowered tool_search call
-    from litellm.responses.file_search.emulated_handler import FILE_SEARCH_FUNCTION_NAME
-
-    return declares_function(tools, FILE_SEARCH_FUNCTION_NAME)
-
-
 def _responses_try_dispatch_lowered_tool_search(
     *,
     tools: Iterable[ToolParam] | None,
@@ -1180,7 +1174,7 @@ def _responses_try_dispatch_lowered_tool_search(
         or _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api)
         or _supports_tool_search_natively(responses_api_provider_config, model_info)
         or not needs_tool_search_lowering(input, declared_tools)
-        or _emulates_file_search(declared_tools)
+        or in_emulated_file_search()
     ):
         return None
     from litellm.responses.tool_search.handler import (

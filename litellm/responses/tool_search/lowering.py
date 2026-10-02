@@ -217,7 +217,7 @@ def _lowered_tool_choice(tool_choice: ToolChoice | None) -> ToolChoice | None:
     return {"type": "function", "name": TOOL_SEARCH_FUNCTION_NAME}
 
 
-def declares_function(tools: Sequence[object] | None, name: str) -> bool:
+def _declares_function(tools: Sequence[object] | None, name: str) -> bool:
     return ("function", name) in (_merge_key(index, tool) for index, tool in enumerate(tools or ()))
 
 
@@ -227,7 +227,7 @@ def lower_tool_search_request(
     tool_choice: ToolChoice | None,
 ) -> ToolSearchLowering:
     declared: Final = tuple(tools or ())
-    if _declares_client_tool_search(declared) and declares_function(declared, TOOL_SEARCH_FUNCTION_NAME):
+    if _declares_client_tool_search(declared) and _declares_function(declared, TOOL_SEARCH_FUNCTION_NAME):
         return ToolSearchFunctionNameTaken()
     items: Final = () if isinstance(input, str) else tuple(input)
     lowered_tools: Final = _merged_tools((*(_lowered_tool(tool) for tool in declared), *_loaded_tools(items)))

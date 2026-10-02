@@ -201,6 +201,20 @@ async def test_emulated_file_search_leaves_client_tool_search_as_declared():
 
 
 @pytest.mark.asyncio
+async def test_a_client_function_named_like_the_file_search_emulation_keeps_tool_search_lowered():
+    upstream: Final = _Upstream()
+    own_function: Final = {
+        "type": "function",
+        "name": "litellm_file_search",
+        "parameters": {"type": "object", "properties": {}},
+    }
+
+    await _hosted_vllm_call(upstream, tools=[CLIENT_TOOL_SEARCH, own_function])
+
+    assert [tool["name"] for tool in upstream.bodies[0]["tools"]] == ["tool_search", "litellm_file_search"]
+
+
+@pytest.mark.asyncio
 async def test_the_call_is_logged_once_with_the_tool_search_call(monkeypatch: pytest.MonkeyPatch):
     success_log: Final = _SuccessLog("tool-search-logged-once")
     monkeypatch.setattr(litellm, "callbacks", [success_log])
