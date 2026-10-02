@@ -26,6 +26,7 @@ import {
   isFrameworkSpan,
   nearestVisibleSpanId,
   revealSpanInState,
+  traceAgentNames,
   traceDisplayName,
 } from "./traceUtils";
 
@@ -115,9 +116,10 @@ function RunIcon({ summary, failed }: { summary: Trace["summary"]; failed: boole
     <span
       className="inline-flex shrink-0 items-center gap-1 rounded-[5px] border border-border bg-card px-1.5 py-px text-[12px] text-foreground"
       data-testid="run-framework"
+      title={framework.label}
     >
       <FrameworkLogo framework={framework} />
-      {framework.label}
+      {traceAgentNames(summary).join(", ") || framework.label}
     </span>
   );
 }
