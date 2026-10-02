@@ -131,7 +131,7 @@ def validate_model(settings: LensSettings, auth: UserAPIKeyAuth) -> None:
     from litellm.proxy.proxy_server import llm_router
 
     validate_selection(settings)
-    if llm_router is None or settings.model not in llm_router.get_model_names(team_id=auth.team_id):
+    if llm_router is None or not llm_router.get_model_list(model_name=settings.model, team_id=auth.team_id):
         raise HTTPException(400, "Choose a model configured on this LiteLLM instance")
     allowed_models: Final = TypeAdapter(tuple[str, ...]).validate_python(auth.model_dump().get("models") or ())
     if (

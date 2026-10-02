@@ -4,7 +4,51 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.lens.endpoints import list_agents, user_scope
+from litellm import Router
+from litellm.proxy.lens.endpoints import list_agents, user_scope, validate_model
+from litellm.proxy.lens.models import LensSettings
+
+
+@pytest.fixture
+def analysis_router(monkeypatch: pytest.MonkeyPatch) -> Router:
+    from litellm.proxy import proxy_server
+
+    router: Final = Router(
+        model_list=[
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "test-key"}},
+            {"model_name": "analysis", "litellm_params": {"model": "openai/test-analysis", "api_key": "test-key"}},
+        ],
+        model_group_alias={"analysis-alias": "analysis"},
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    return router
+
+
+@pytest.mark.parametrize("model", ("openai/test-analysis", "analysis", "analysis-alias"))
+def test_analysis_accepts_models_served_by_configured_routes(analysis_router: Router, model: str) -> None:
+    settings: Final = LensSettings(name="Research", model=model, context="Answer using cited sources")
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    assert analysis_router.get_model_list(model_name=model)
+    validate_model(settings, auth)
+
+
+@pytest.mark.parametrize("model", ("unconfigured", "anthropic/test-analysis"))
+def test_analysis_rejects_models_without_a_configured_route(analysis_router: Router, model: str) -> None:
+    settings: Final = LensSettings(name="Research", model=model, context="Answer using cited sources")
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    assert not analysis_router.get_model_list(model_name=model)
+    with pytest.raises(HTTPException) as error:
+        validate_model(settings, auth)
+    assert error.value.status_code == 400
+
+
+def test_analysis_route_resolution_preserves_key_model_restrictions(analysis_router: Router) -> None:
+    settings: Final = LensSettings(name="Research", model="openai/test-analysis", context="Answer using cited sources")
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, models=["analysis"])
+    assert analysis_router.get_model_list(model_name=settings.model)
+    with pytest.raises(HTTPException) as error:
+        validate_model(settings, auth)
+    assert error.value.status_code == 403
 
 
 @pytest.mark.parametrize("role", (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY))

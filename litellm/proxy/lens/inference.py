@@ -3,7 +3,7 @@ from types import MappingProxyType
 from typing import Final
 
 from fastapi import HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import litellm
 from litellm.integrations.clickhouse.context import lens_analysis
@@ -58,6 +58,17 @@ class Prices(BaseModel):
     output_cost_per_token_above_200k_tokens: float = 0
     input_cost_per_token_above_128k_tokens: float = 0
     output_cost_per_token_above_128k_tokens: float = 0
+
+    @field_validator(
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens",
+        "input_cost_per_token_above_128k_tokens",
+        "output_cost_per_token_above_128k_tokens",
+        mode="before",
+    )
+    @classmethod
+    def missing_tier_rate(cls, value: object) -> object:
+        return 0 if value is None else value
 
 
 def deployment_prices(deployment: Deployment) -> Prices:
