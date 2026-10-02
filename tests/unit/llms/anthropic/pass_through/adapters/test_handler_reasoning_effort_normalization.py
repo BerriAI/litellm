@@ -208,18 +208,32 @@ class TestTheNormalizedTierIsTheTierSent:
     @pytest.mark.parametrize(
         "model, provider",
         [
+            ("gpt-5.5", "azure_ai"),
+            ("azure_ai/gpt-5.5", "azure_ai"),
+            ("gpt-5.6", "azure"),
+            ("us/gpt-5.6", "azure"),
+        ],
+    )
+    def test_an_azure_hosted_deployment_without_the_flag_drops_to_the_tier_it_accepts(
+        self, local_model_cost_map, model, provider
+    ):
+        """Chat Completions answers ``max`` on gpt-5.6 with a 400 naming ``none`` through ``xhigh``
+        (OpenAI, 2026-10-01) and none of these Azure rows declares the level, so the adapter sends
+        the tier below instead of the rejected one."""
+        assert _reasoning_effort_sent(model, provider, "max") == "xhigh"
+
+    @pytest.mark.parametrize(
+        "model, provider",
+        [
+            ("gpt-6-astra", "openai"),
             ("gpt-6-astra", "azure_ai"),
             ("azure_ai/gpt-6-astra", "azure_ai"),
             ("gpt-6-astra", "azure"),
             ("us/gpt-6-astra", "azure"),
         ],
     )
-    def test_an_azure_hosted_astra_deployment_drops_to_the_tier_it_accepts(
-        self, local_model_cost_map, model, provider
-    ):
-        """The deployment answers ``max`` with a 400 naming ``none`` through ``xhigh``, so the rows
-        say so and the adapter sends the tier below instead of the rejected one."""
-        assert _reasoning_effort_sent(model, provider, "max") == "xhigh"
-
-    def test_the_openai_hosted_twin_still_sends_max(self, local_model_cost_map):
-        assert _reasoning_effort_sent("gpt-6-astra", "openai", "max") == "max"
+    def test_every_astra_host_sends_max_once_its_row_declares_it(self, local_model_cost_map, model, provider):
+        """A live Foundry gpt-6-astra honored ``max`` on the Responses route on 2026-10-01 (effort
+        echoed back, 49 reasoning tokens), so its Azure rows declare the level like OpenAI's own row
+        and the adapter forwards it instead of degrading it."""
+        assert _reasoning_effort_sent(model, provider, "max") == "max"
