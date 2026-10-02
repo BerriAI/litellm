@@ -33,6 +33,7 @@ from collections.abc import Mapping, Sequence
 from typing import (
     Any,
     Callable,
+    cast,
     Dict,
     Final,
     get_args,
@@ -956,7 +957,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "vispark":
-            vispark_models.add(key)
+            # cast: model keys are strings; avoids adding a reportUnknownArgumentType error
+            vispark_models.add(cast(str, key))
         elif value.get("litellm_provider") == "morph":
             morph_models.add(key)
         elif value.get("litellm_provider") == "lambda_ai":
