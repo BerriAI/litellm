@@ -29529,6 +29529,12 @@ export interface components {
              */
             admission_queue_timeout_seconds: number;
             /**
+             * Agent Access Default Deny
+             * @description When true, a key with no agent grants on itself or its team can reach no agents instead of all agents. Proxy admins are exempt.
+             * @default false
+             */
+            agent_access_default_deny: boolean;
+            /**
              * Alert To Webhook Url
              * @description Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://nothooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`
              */
@@ -30006,12 +30012,6 @@ export interface components {
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
             reject_clientside_metadata_tags?: boolean | null;
-            /**
-             * Require Key Agent Access Defined
-             * @description When true, a key with no agent grants on itself or its team can reach no agents instead of all agents. Proxy admins are exempt.
-             * @default false
-             */
-            require_key_agent_access_defined: boolean;
             /**
              * Responses Websocket Session Limit Seconds
              * @description Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.

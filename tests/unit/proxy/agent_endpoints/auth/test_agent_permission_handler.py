@@ -143,7 +143,7 @@ class TestAgentRequestHandler:
                 )
                 assert result == UnrestrictedAgentAccess()
 
-    async def test_require_key_agent_access_defined_is_opt_in(self):
+    async def test_agent_access_default_deny_is_opt_in(self):
         auth: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="test-team")
         key_lookup: Final = _lookup(UnrestrictedAgentAccess())
         team_lookup: Final = _lookup(UnrestrictedAgentAccess())
@@ -151,7 +151,7 @@ class TestAgentRequestHandler:
         assert (
             await AgentRequestHandler.resolve_agent_access(
                 auth,
-                require_access_defined=lambda: False,
+                default_deny=lambda: False,
                 lookup_key_access=key_lookup,
                 lookup_team_access=team_lookup,
             )
@@ -159,13 +159,13 @@ class TestAgentRequestHandler:
         )
         assert await AgentRequestHandler.resolve_agent_access(
             auth,
-            require_access_defined=lambda: True,
+            default_deny=lambda: True,
             lookup_key_access=key_lookup,
             lookup_team_access=team_lookup,
         ) == RestrictedAgentAccess(frozenset())
         assert await AgentRequestHandler.resolve_agent_access(
             None,
-            require_access_defined=lambda: True,
+            default_deny=lambda: True,
             lookup_key_access=key_lookup,
             lookup_team_access=team_lookup,
         ) == RestrictedAgentAccess(frozenset())
@@ -176,14 +176,14 @@ class TestAgentRequestHandler:
 
         assert await AgentRequestHandler.resolve_agent_access(
             auth,
-            require_access_defined=lambda: True,
+            default_deny=lambda: True,
             lookup_key_access=unrestricted_lookup,
             lookup_team_access=_lookup(RestrictedAgentAccess(frozenset({"team-agent"}))),
         ) == RestrictedAgentAccess(frozenset({"team-agent"}))
 
         assert await AgentRequestHandler.resolve_agent_access(
             auth,
-            require_access_defined=lambda: True,
+            default_deny=lambda: True,
             lookup_key_access=_lookup(RestrictedAgentAccess(frozenset({"key-agent"}))),
             lookup_team_access=unrestricted_lookup,
         ) == RestrictedAgentAccess(frozenset({"key-agent"}))
@@ -201,7 +201,7 @@ class TestAgentRequestHandler:
         assert (
             await AgentRequestHandler.resolve_agent_access(
                 admin,
-                require_access_defined=lambda: True,
+                default_deny=lambda: True,
                 lookup_key_access=key_lookup,
                 lookup_team_access=team_lookup,
             )
@@ -210,7 +210,7 @@ class TestAgentRequestHandler:
         assert (
             await AgentRequestHandler.resolve_agent_access(
                 string_admin,
-                require_access_defined=lambda: True,
+                default_deny=lambda: True,
                 lookup_key_access=key_lookup,
                 lookup_team_access=team_lookup,
             )
@@ -229,7 +229,7 @@ class TestAgentRequestHandler:
         assert await AgentRequestHandler.resolve_agent_access(
             agent_key,
             resolve,
-            require_access_defined=lambda: True,
+            default_deny=lambda: True,
             lookup_key_access=unrestricted_lookup,
             lookup_team_access=unrestricted_lookup,
         ) == RestrictedAgentAccess(frozenset())
@@ -241,14 +241,14 @@ class TestAgentRequestHandler:
 
         assert await AgentRequestHandler.resolve_agent_access(
             auth,
-            require_access_defined=lambda: True,
+            default_deny=lambda: True,
             lookup_key_access=key_error_lookup,
             lookup_team_access=unrestricted_lookup,
         ) == RestrictedAgentAccess(frozenset())
         assert (
             await AgentRequestHandler.resolve_agent_access(
                 auth,
-                require_access_defined=lambda: False,
+                default_deny=lambda: False,
                 lookup_key_access=key_error_lookup,
                 lookup_team_access=unrestricted_lookup,
             )
@@ -259,27 +259,27 @@ class TestAgentRequestHandler:
         key_grant_lookup: Final = _lookup(RestrictedAgentAccess(frozenset({"key-agent"})))
         assert await AgentRequestHandler.resolve_agent_access(
             auth,
-            require_access_defined=lambda: True,
+            default_deny=lambda: True,
             lookup_key_access=key_grant_lookup,
             lookup_team_access=team_error_lookup,
         ) == RestrictedAgentAccess(frozenset())
         assert (
             await AgentRequestHandler.resolve_agent_access(
                 auth,
-                require_access_defined=lambda: False,
+                default_deny=lambda: False,
                 lookup_key_access=key_grant_lookup,
                 lookup_team_access=team_error_lookup,
             )
             == UnrestrictedAgentAccess()
         )
 
-    async def test_require_key_agent_access_defined_reads_general_settings(self, monkeypatch: pytest.MonkeyPatch):
+    async def test_agent_access_default_deny_reads_general_settings(self, monkeypatch: pytest.MonkeyPatch):
         from litellm.proxy import proxy_server
 
         auth: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
         monkeypatch.setattr(proxy_server, "prisma_client", None)
 
-        with patch.object(proxy_server, "general_settings", {"require_key_agent_access_defined": True}):
+        with patch.object(proxy_server, "general_settings", {"agent_access_default_deny": True}):
             assert await AgentRequestHandler.is_agent_allowed("agent-alpha", auth) is False
 
         with patch.object(proxy_server, "general_settings", {}):
@@ -288,18 +288,18 @@ class TestAgentRequestHandler:
     @pytest.mark.parametrize(
         ("settings", "expected_allowed"),
         [
-            pytest.param({"require_key_agent_access_defined": True}, False, id="true-bool"),
-            pytest.param({"require_key_agent_access_defined": "true"}, False, id="true-lower-string"),
-            pytest.param({"require_key_agent_access_defined": "True"}, False, id="true-capitalized-string"),
-            pytest.param({"require_key_agent_access_defined": 1}, False, id="one"),
-            pytest.param({"require_key_agent_access_defined": False}, True, id="false-bool"),
-            pytest.param({"require_key_agent_access_defined": "false"}, True, id="false-string"),
-            pytest.param({"require_key_agent_access_defined": 0}, True, id="zero"),
+            pytest.param({"agent_access_default_deny": True}, False, id="true-bool"),
+            pytest.param({"agent_access_default_deny": "true"}, False, id="true-lower-string"),
+            pytest.param({"agent_access_default_deny": "True"}, False, id="true-capitalized-string"),
+            pytest.param({"agent_access_default_deny": 1}, False, id="one"),
+            pytest.param({"agent_access_default_deny": False}, True, id="false-bool"),
+            pytest.param({"agent_access_default_deny": "false"}, True, id="false-string"),
+            pytest.param({"agent_access_default_deny": 0}, True, id="zero"),
             pytest.param({}, True, id="missing"),
-            pytest.param({"require_key_agent_access_defined": "not-a-bool"}, False, id="invalid-string"),
+            pytest.param({"agent_access_default_deny": "not-a-bool"}, False, id="invalid-string"),
         ],
     )
-    async def test_require_key_agent_access_defined_coerces_general_settings(
+    async def test_agent_access_default_deny_coerces_general_settings(
         self,
         monkeypatch: pytest.MonkeyPatch,
         settings: dict[str, object],
