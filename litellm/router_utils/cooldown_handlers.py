@@ -11,7 +11,7 @@ import math
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -489,14 +489,16 @@ def _set_cooldown_deployments(
     return False
 
 
+def _as_str_mapping(value: object) -> Mapping[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return cast("Mapping[str, object]", value)  # cast-ok: model_info is a str-keyed mapping
+
+
 def deployment_ids(deployments: Iterable[Mapping[str, object]]) -> list[str]:
     """Ids of the given deployments, so a cooldown lookup reads only those keys."""
-    return [
-        str(model_info["id"])
-        for deployment in deployments
-        for model_info in (deployment.get("model_info"),)
-        if isinstance(model_info, Mapping) and model_info.get("id") is not None
-    ]
+    infos: Final = [_as_str_mapping(deployment.get("model_info")) for deployment in deployments]
+    return [str(info["id"]) for info in infos if info is not None and info.get("id") is not None]
 
 
 async def _async_get_cooldown_deployments(
