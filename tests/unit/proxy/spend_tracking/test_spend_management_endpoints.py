@@ -1738,21 +1738,18 @@ async def test_ui_view_spend_logs_without_user_filter_includes_permitted_team_sc
 
 
 @pytest.mark.asyncio
-async def test_permitted_team_scope_falls_back_to_own_user_when_lookup_fails(monkeypatch):
-    monkeypatch.setattr(
-        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-        AsyncMock(side_effect=RuntimeError("database unavailable")),
-    )
+async def test_permitted_team_scope_falls_back_to_own_user_when_lookup_fails():
+    from litellm.proxy.spend_tracking.log_visibility import resolve_log_read_scope
 
-    permitted_team_ids = await spend_management_endpoints._get_permitted_team_ids_for_spend_logs_or_empty(
-        prisma_client=MagicMock(),
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.INTERNAL_USER,
-            user_id="caller@example.com",
-        ),
-    )
+    async def unavailable():
+        raise RuntimeError("database unavailable")
 
-    assert permitted_team_ids == ()
+    scope = await resolve_log_read_scope("caller", unavailable)
+    sql, params = spend_management_endpoints._read_scope_sql(scope, 1)
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute('CREATE TABLE logs ("user" TEXT, team_id TEXT)')
+        connection.executemany("INSERT INTO logs VALUES (?, ?)", (("caller", None), ("foreign", "team")))
+        assert connection.execute(f'SELECT "user" FROM logs WHERE {sql}', params).fetchall() == [("caller",)]
 
 
 @pytest.mark.asyncio
@@ -2130,7 +2127,8 @@ async def test_ui_view_session_spend_logs_rehydrates_metadata_jsonb_text(client,
 
 
 @pytest.mark.asyncio
-async def test_ui_view_session_spend_logs_scopes_non_admin_to_own_logs(client, monkeypatch):
+@pytest.mark.parametrize("lookup_failure", [False, True])
+async def test_ui_view_session_spend_logs_scopes_non_admin_to_own_logs(client, monkeypatch, lookup_failure):
     own_log = {
         "id": "log1",
         "request_id": "req1",
@@ -2158,6 +2156,8 @@ async def test_ui_view_session_spend_logs_scopes_non_admin_to_own_logs(client, m
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
 
     async def no_permitted_teams(*args, **kwargs):
+        if lookup_failure:
+            raise RuntimeError("team lookup failed")
         return []
 
     monkeypatch.setattr(
@@ -2200,7 +2200,7 @@ async def test_ui_view_session_spend_logs_includes_permitted_team_logs(client, m
         async def query_raw(self, sql_query, session_id, page_size, skip, scoped_user, team_ids):
             assert session_id == "session-123"
             assert scoped_user == "user-1"
-            assert team_ids == ["team-9"]
+            assert tuple(team_ids) == ("team-9",)
             assert '("user" = $4 OR team_id = ANY($5::text[]))' in sql_query
             return [
                 {
@@ -3405,9 +3405,7 @@ async def test_ui_view_spend_logs_with_used_client_oauth_token_filter(client, mo
 
     start_date, end_date = _default_date_range()
 
-    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN
-    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
     try:
         for flag, expected_ids in (("true", ["req-seat"]), ("false", ["req-key"])):
             response = client.get(
@@ -7906,3 +7904,123 @@ def test_capture_rate_reports_an_unreadable_bill_as_502(client, monkeypatch):
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
     assert response.status_code == 502
     assert "HTTP 401" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("member_role", "permissions", "explicit_user", "expected"),
+    [
+        ("admin", [], None, ["own", "permitted"]),
+        ("user", ["/spend/logs"], None, ["own", "permitted"]),
+        ("user", ["/key/info"], None, ["own"]),
+        ("user", [], "other", []),
+        ("admin", [], "other", ["permitted"]),
+        ("admin", [], "caller", ["own"]),
+    ],
+)
+async def test_shared_read_scope_returns_only_owned_or_permitted_rows(
+    member_role, permissions, explicit_user, expected
+):
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.spend_tracking.log_visibility import permitted_log_team_ids, resolve_log_read_scope
+
+    auth = UserAPIKeyAuth(user_id="caller", user_role=LitellmUserRoles.INTERNAL_USER)
+    teams = (
+        LiteLLM_TeamTable(
+            team_id="allowed",
+            members_with_roles=[Member(user_id="caller", role=member_role)],
+            team_member_permissions=permissions,
+        ),
+        LiteLLM_TeamTable(
+            team_id="outside",
+            members_with_roles=[Member(user_id="other", role="admin")],
+            team_member_permissions=["/spend/logs"],
+        ),
+    )
+
+    async def lookup():
+        return permitted_log_team_ids(auth, teams)
+
+    scope = await resolve_log_read_scope(auth.user_id, lookup)
+    clause, params = spend_management_endpoints._read_scope_sql(scope, 1)
+    sqlite_clause = re.sub(r"= ANY\((\$\d+)::text\[\]\)", r"IN (SELECT value FROM json_each(\1))", clause)
+    bindings = {str(i): json.dumps(p) if isinstance(p, tuple) else p for i, p in enumerate(params, 1)}
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute('CREATE TABLE logs (request_id TEXT, "user" TEXT, team_id TEXT)')
+        connection.executemany(
+            "INSERT INTO logs VALUES (?, ?, ?)",
+            (("own", "caller", None), ("permitted", "other", "allowed"), ("foreign", "other", "outside")),
+        )
+        result = connection.execute(
+            f'SELECT request_id FROM logs WHERE {sqlite_clause} AND ($filter IS NULL OR "user" = $filter)'
+            " ORDER BY request_id",
+            {**bindings, "filter": explicit_user},
+        ).fetchall()
+        assert [row[0] for row in result] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_id", "owner_user", "owner_team", "permitted", "expected"),
+    [
+        ("caller", "caller", "broken", False, True),
+        ("caller", "other", "allowed", True, True),
+        ("caller", "other", "allowed", False, False),
+        ("caller", "other", None, True, False),
+        (None, None, None, True, False),
+        (None, None, "allowed", True, True),
+    ],
+)
+async def test_shared_owner_policy_preserves_own_user_and_team_access(
+    user_id, owner_user, owner_team, permitted, expected
+):
+    from litellm.proxy.spend_tracking.log_visibility import can_read_log_owner
+
+    async def lookup(team_id):
+        if team_id == "broken":
+            raise RuntimeError("team lookup failed")
+        return permitted
+
+    assert await can_read_log_owner(user_id, owner_user, owner_team, lookup) is expected
+
+
+@pytest.mark.asyncio
+async def test_shared_owner_policy_propagates_team_lookup_failure():
+    from litellm.proxy.spend_tracking.log_visibility import can_read_log_owner
+
+    async def unavailable(team_id):
+        raise RuntimeError("team lookup failed")
+
+    with pytest.raises(RuntimeError, match="team lookup failed"):
+        await can_read_log_owner("caller", "other", "team", unavailable)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup_failure", [False, True])
+async def test_payload_scope_filters_colliding_foreign_request_id(lookup_failure):
+    from litellm.proxy.spend_tracking.log_visibility import resolve_log_read_scope
+
+    async def lookup():
+        if lookup_failure:
+            raise RuntimeError("team lookup failed")
+        return ("allowed",)
+
+    scope = await resolve_log_read_scope("caller", lookup)
+    query, params = spend_management_endpoints._spend_log_payload_query("collision", scope)
+    sqlite_query = re.sub(r"= ANY\((\$\d+)::text\[\]\)", r"IN (SELECT value FROM json_each(\1))", query)
+    bindings = {str(i): json.dumps(p) if isinstance(p, tuple) else p for i, p in enumerate(params, 1)}
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute(
+            'CREATE TABLE "LiteLLM_SpendLogs" (request_id TEXT, litellm_call_id TEXT, messages TEXT, response TEXT,'
+            ' proxy_server_request TEXT, metadata TEXT, "user" TEXT, team_id TEXT)'
+        )
+        connection.executemany(
+            'INSERT INTO "LiteLLM_SpendLogs" VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?)',
+            (
+                ("collision", "unrelated", "foreign payload", "other", "outside"),
+                ("own", "collision", "own payload", "caller", None),
+            ),
+        )
+        assert connection.execute(sqlite_query, bindings).fetchall() == [
+            ("own", "own payload", None, None, None, "caller", None)
+        ]

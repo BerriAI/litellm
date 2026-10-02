@@ -1,10 +1,70 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, TypeAlias
 
 from fastapi import HTTPException
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import KeyManagementRoutes, LiteLLM_TeamTable, UserAPIKeyAuth
+
+
+@dataclass(frozen=True, slots=True)
+class AllLogs:
+    """Unrestricted reads, granted by the consuming endpoint's role checks."""
+
+
+@dataclass(frozen=True, slots=True)
+class UserLogs:
+    user_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class UserAndTeamLogs:
+    user_id: str | None
+    team_ids: tuple[str, ...]
+
+
+LogReadScope: TypeAlias = AllLogs | UserLogs | UserAndTeamLogs
+
+
+async def resolve_log_read_scope(
+    user_id: str | None,
+    permitted_team_lookup: Callable[[], Awaitable[Sequence[str]]],
+) -> UserLogs | UserAndTeamLogs:
+    """Resolve own-user and permitted-team reads, falling back to own-user on lookup failure."""
+    try:
+        team_ids: Final = tuple(await permitted_team_lookup())
+    except Exception:  # noqa: BLE001  # preserve spend-log own-user fallback for every permission lookup failure
+        return UserLogs(user_id)
+    return UserAndTeamLogs(user_id, team_ids) if team_ids else UserLogs(user_id)
+
+
+def can_read_team_logs(auth: UserAPIKeyAuth, team: LiteLLM_TeamTable) -> bool:
+    from litellm.proxy.management.teams.access import is_team_admin
+    from litellm.proxy.management_endpoints.common_utils import _team_member_has_permission
+
+    return is_team_admin(user_api_key_dict=auth, team_obj=team) or _team_member_has_permission(
+        user_api_key_dict=auth,
+        team_obj=team,
+        permission=KeyManagementRoutes.SPEND_LOGS.value,
+    )
+
+
+def permitted_log_team_ids(auth: UserAPIKeyAuth, teams: Iterable[LiteLLM_TeamTable]) -> tuple[str, ...]:
+    return tuple(team.team_id for team in teams if can_read_team_logs(auth, team))
+
+
+async def can_read_log_owner(
+    user_id: str | None,
+    owner_user: str | None,
+    owner_team_id: str | None,
+    team_permission_lookup: Callable[[str], Awaitable[bool]],
+) -> bool:
+    """Authorize stored ownership without swallowing direct team-lookup failures."""
+    if owner_user is not None and owner_user == user_id:
+        return True
+    if owner_team_id:
+        return await team_permission_lookup(owner_team_id)
+    return False
 
 
 @dataclass(frozen=True, slots=True)

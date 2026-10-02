@@ -3,8 +3,8 @@ import collections
 import json
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from functools import partial
 from itertools import groupby
 from types import MappingProxyType
 from typing import (
@@ -39,6 +39,16 @@ from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.spend_tracking.log_visibility import (
+    AllLogs,
+    LogReadScope,
+    UserAndTeamLogs,
+    UserLogs,
+    can_read_log_owner,
+    can_read_team_logs,
+    permitted_log_team_ids,
+    resolve_log_read_scope,
+)
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     ProviderBillingCredentialMissing,
     ProviderBillingRequestFailed,
@@ -2775,16 +2785,8 @@ async def ui_view_spend_logs(
             and team_id is None
             and (is_request_id_lookup or _can_user_view_spend_log(user_api_key_dict=user_api_key_dict))
         )
-        permitted_team_ids: Final = (
-            await _get_permitted_team_ids_for_spend_logs_or_empty(
-                prisma_client=prisma_client,
-                user_api_key_dict=user_api_key_dict,
-            )
-            if user_scope_applies
-            else ()
-        )
-        explicit_user_requires_caller_scope: Final = (
-            user_scope_applies and not permitted_team_ids and user_id is not None
+        read_scope: Final = (
+            await _spend_log_read_scope(prisma_client, user_api_key_dict) if user_scope_applies else AllLogs()
         )
         if not is_admin_view:
             if team_id is not None:
@@ -2799,22 +2801,6 @@ async def ui_view_spend_logs(
                         detail={"error": f"Not authorized to view team spend for team_id={team_id}"},
                     )
                 where_conditions["team_id"] = team_id
-            elif user_scope_applies:
-                if permitted_team_ids:
-                    if user_id is None:
-                        where_conditions.pop("user", None)
-                    where_conditions["OR"] = [
-                        {"user": user_api_key_dict.user_id},
-                        {"team_id": {"in": permitted_team_ids}},
-                    ]
-                else:
-                    if user_id is None:
-                        where_conditions["user"] = user_api_key_dict.user_id
-                    else:
-                        where_conditions["AND"] = where_conditions.get("AND", []) + [
-                            {"user": user_api_key_dict.user_id}
-                        ]
-                where_conditions.pop("team_id", None)
         # Calculate skip value for pagination
         skip: Final = (page - 1) * page_size
 
@@ -2874,17 +2860,11 @@ async def ui_view_spend_logs(
             sql_params.append(request_id_filter)
             p += 1
 
-        # Multi-team OR filter: (user = $X OR team_id = ANY($Y))
-        if permitted_team_ids:
-            or_clause: Final = f'("user" = ${p} OR team_id = ANY(${p + 1}::text[]))'
-            sql_params.append(user_api_key_dict.user_id)
-            sql_params.append(permitted_team_ids)
-            p += 2
-            sql_conditions.append(or_clause)
-        elif explicit_user_requires_caller_scope:
-            sql_conditions.append(f'"user" = ${p}')
-            sql_params.append(user_api_key_dict.user_id)
-            p += 1
+        scope_clause, scope_params = _read_scope_sql(read_scope, p)
+        if scope_clause and not (read_scope == UserLogs(None) and user_id is None):
+            sql_conditions.append(scope_clause)
+            sql_params.extend(scope_params)
+            p += len(scope_params)
 
         if session_id is not None and isinstance(session_id, str):
             like_escaped_session_id: Final = session_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -4549,36 +4529,16 @@ async def ui_view_session_spend_logs(
                 detail="Database not connected",
             )
 
-        if _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
-            scope_sql = ""
-            scope_params = ()
-            where_conditions = {"session_id": session_id}
-        else:
-            try:
-                permitted_team_ids = (
-                    await _get_permitted_team_ids_for_spend_logs(
-                        prisma_client=prisma_client,
-                        user_api_key_dict=user_api_key_dict,
-                    )
-                    if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
-                    else []
-                )
-            except Exception:  # noqa: BLE001  # mirror /spend/logs/ui: failed team lookup falls back to own-logs-only scope
-                permitted_team_ids = []
-            if permitted_team_ids:
-                scope_sql = ' AND ("user" = $4 OR team_id = ANY($5::text[]))'
-                scope_params = (user_api_key_dict.user_id, permitted_team_ids)
-                where_conditions = {
-                    "session_id": session_id,
-                    "OR": [
-                        {"user": user_api_key_dict.user_id},
-                        {"team_id": {"in": permitted_team_ids}},
-                    ],
-                }
-            else:
-                scope_sql = ' AND "user" = $4'
-                scope_params = (user_api_key_dict.user_id,)
-                where_conditions = {"session_id": session_id, "user": user_api_key_dict.user_id}
+        read_scope: Final = (
+            AllLogs()
+            if _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+            else await _spend_log_read_scope(prisma_client, user_api_key_dict)
+            if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
+            else UserLogs(user_api_key_dict.user_id)
+        )
+        scope_clause, scope_params = _read_scope_sql(read_scope, 4)
+        scope_sql: Final = f" AND {scope_clause}" if scope_clause else ""
+        where_conditions: Final = {"session_id": session_id, **_read_scope_where(read_scope)}
 
         # Calculate pagination offsets
         skip: Final = (page - 1) * page_size
@@ -4859,22 +4819,12 @@ async def _can_team_member_view_log(
     Returns True if the team exists and the user is either a team admin or
     a team member with the ``/spend/logs`` permission.
     """
-    from litellm.proxy.management.teams.access import is_team_admin
-    from litellm.proxy.management_endpoints.common_utils import _team_member_has_permission
-
     if team_id is None:
         return False
     team_row: Final = await _find_team_row(prisma_client, team_id)
     if team_row is None:
         return False
-    team_obj: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
-    if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-        return True
-    return _team_member_has_permission(
-        user_api_key_dict=user_api_key_dict,
-        team_obj=team_obj,
-        permission=KeyManagementRoutes.SPEND_LOGS.value,
-    )
+    return can_read_team_logs(user_api_key_dict, LiteLLM_TeamTable.model_validate(team_row.model_dump()))
 
 
 def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -4899,15 +4849,12 @@ async def _user_can_view_spend_log_owner(
     owner_user: str | None,
     owner_team_id: str | None,
 ) -> bool:
-    if owner_user is not None and owner_user == user_api_key_dict.user_id:
-        return True
-    if owner_team_id:
-        return await _can_team_member_view_log(
-            prisma_client=prisma_client,
-            user_api_key_dict=user_api_key_dict,
-            team_id=owner_team_id,
-        )
-    return False
+    return await can_read_log_owner(
+        user_api_key_dict.user_id,
+        owner_user,
+        owner_team_id,
+        partial(_can_team_member_view_log, prisma_client, user_api_key_dict),
+    )
 
 
 def _spend_log_forbidden(request_id: str) -> HTTPException:
@@ -4940,44 +4887,53 @@ async def _assert_user_can_view_request_id(
     raise _spend_log_forbidden(request_id)
 
 
-@dataclass(frozen=True, slots=True)
-class _SpendLogViewer:
-    user_id: str | None
-    team_ids: tuple[str, ...]
-
-
-async def _spend_log_viewer(prisma_client: PrismaClient, user_api_key_dict: UserAPIKeyAuth) -> _SpendLogViewer:
-    return _SpendLogViewer(
-        user_id=user_api_key_dict.user_id,
-        team_ids=await _get_permitted_team_ids_for_spend_logs_or_empty(
-            prisma_client=prisma_client,
-            user_api_key_dict=user_api_key_dict,
-        ),
+async def _spend_log_read_scope(prisma_client: PrismaClient, user_api_key_dict: UserAPIKeyAuth) -> LogReadScope:
+    return await resolve_log_read_scope(
+        user_api_key_dict.user_id,
+        partial(_get_permitted_team_ids_for_spend_logs, prisma_client, user_api_key_dict),
     )
 
 
-def _viewer_scope_clause(viewer: _SpendLogViewer | None) -> tuple[str, tuple[object, ...]]:
-    match viewer:
-        case None:
+def _read_scope_sql(scope: LogReadScope, next_param: int) -> tuple[str, tuple[object, ...]]:
+    match scope:
+        case AllLogs():
             return ("", ())
-        case _SpendLogViewer(user_id=user_id, team_ids=()):
-            return (' AND "user" = $2', (user_id,))
-        case _SpendLogViewer(user_id=user_id, team_ids=team_ids):
-            return (' AND ("user" = $2 OR team_id = ANY($3::text[]))', (user_id, team_ids))
+        case UserLogs(user_id=user_id):
+            return (f'"user" = ${next_param}', (user_id,))
+        case UserAndTeamLogs(user_id=user_id, team_ids=team_ids):
+            return (
+                f'("user" = ${next_param} OR team_id = ANY(${next_param + 1}::text[]))',
+                (user_id, team_ids),
+            )
+        case _:
+            assert_never(scope)
 
 
-def _spend_log_payload_query(request_id: str, viewer: _SpendLogViewer | None) -> tuple[str, tuple[object, ...]]:
+def _read_scope_where(scope: LogReadScope) -> Mapping[str, object]:
+    match scope:
+        case AllLogs():
+            return {}
+        case UserLogs(user_id=user_id):
+            return {"user": user_id}
+        case UserAndTeamLogs(user_id=user_id, team_ids=team_ids):
+            return {"OR": [{"user": user_id}, {"team_id": {"in": list(team_ids)}}]}
+        case _:
+            assert_never(scope)
+
+
+def _spend_log_payload_query(request_id: str, scope: LogReadScope) -> tuple[str, tuple[object, ...]]:
     """
     Fetch the one row an id lookup resolves to, preferring the exact ``request_id``
     match over rows that merely carry the id as their client-set ``litellm_call_id``.
     A non-admin viewer only ever gets rows they own or rows of a team they may view.
     """
-    scope, scope_params = _viewer_scope_clause(viewer)
+    scope_clause, scope_params = _read_scope_sql(scope, 2)
+    scope_sql: Final = f" AND {scope_clause}" if scope_clause else ""
     return (
         f"""
             SELECT request_id, messages, response, proxy_server_request, metadata, "user", team_id
             FROM "LiteLLM_SpendLogs"
-            WHERE (request_id = $1 OR litellm_call_id = $1){scope}
+            WHERE (request_id = $1 OR litellm_call_id = $1){scope_sql}
             ORDER BY (request_id = $1) DESC
             LIMIT 1
         """,
@@ -4998,8 +4954,8 @@ async def _resolve_spend_log_payload_row(
     that id is only the caller's ``litellm_call_id``; the row's stored
     ``request_id`` is the key that names the caller's own request.
     """
-    viewer: Final = None if caller_is_admin else await _spend_log_viewer(prisma_client, user_api_key_dict)
-    sql_query, sql_params = _spend_log_payload_query(request_id, viewer)
+    scope: Final = AllLogs() if caller_is_admin else await _spend_log_read_scope(prisma_client, user_api_key_dict)
+    sql_query, sql_params = _spend_log_payload_query(request_id, scope)
     rows: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(prisma_client, sql_query, *sql_params)
     if not rows:
         return None
@@ -5087,8 +5043,6 @@ async def _get_permitted_team_ids_for_spend_logs(
     """
     # Imported here to avoid circular import: proxy_server imports this module.
     from litellm.proxy.auth.auth_checks import get_user_object
-    from litellm.proxy.management.teams.access import is_team_admin
-    from litellm.proxy.management_endpoints.common_utils import _team_member_has_permission
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
     user_obj: Final = await get_user_object(
@@ -5103,29 +5057,9 @@ async def _get_permitted_team_ids_for_spend_logs(
 
     team_rows: Final = await _find_team_rows(prisma_client, user_obj.teams)
 
-    permitted: Final[list[str]] = []
-    for team_row in team_rows:
-        team_obj = LiteLLM_TeamTable.model_validate(team_row.model_dump())
-        if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj) or _team_member_has_permission(
-            user_api_key_dict=user_api_key_dict,
-            team_obj=team_obj,
-            permission=KeyManagementRoutes.SPEND_LOGS.value,
-        ):
-            permitted.append(team_obj.team_id)
-    return permitted
-
-
-async def _get_permitted_team_ids_for_spend_logs_or_empty(
-    prisma_client: PrismaClient,
-    user_api_key_dict: UserAPIKeyAuth,
-) -> tuple[str, ...]:
-    """Resolve permitted teams once, falling back to the caller's own-user scope."""
-    try:
-        return tuple(
-            await _get_permitted_team_ids_for_spend_logs(
-                prisma_client=prisma_client,
-                user_api_key_dict=user_api_key_dict,
-            )
+    return list(
+        permitted_log_team_ids(
+            user_api_key_dict,
+            (LiteLLM_TeamTable.model_validate(team_row.model_dump()) for team_row in team_rows),
         )
-    except Exception:
-        return ()
+    )
