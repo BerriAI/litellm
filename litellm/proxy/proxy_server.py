@@ -407,6 +407,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
+from litellm.proxy.common_utils.codex_model_catalog import codex_model_list_body
 from litellm.proxy.common_utils.config_includes import resolve_include_file_path, resolve_includes
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
@@ -11541,6 +11542,7 @@ async def model_list(
     fallback_type: str | None = None,
     scope: str | None = None,
     healthy_only: bool | None = False,
+    client_version: str | None = None,
 ):
     """
     Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
@@ -11548,6 +11550,11 @@ async def model_list(
     This is just for compatibility with openai projects like aider.
 
     Query Parameters:
+    - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
+                    provider's model catalog. When present, the response is Codex's own
+                    catalog shape (`{"models": [...]}`) built from the same listing, with
+                    each model's `model_info.service_tiers` as its service tiers; absent,
+                    the OpenAI shape below is returned
     - include_metadata: Include additional metadata in the response with fallback information
     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
                     Defaults to "general" when include_metadata=true
@@ -11690,8 +11697,13 @@ async def model_list(
             model_info["id"] = response_id
             model_data.append(model_info)
 
+        admin_listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
+        if client_version is not None:
+            return Response(
+                content=codex_model_list_body(admin_listing, admin_entries, llm_router), media_type="application/json"
+            )
+
         if wants_anthropic_format:
-            admin_listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
             return create_anthropic_model_list_response(
                 admin_listing,
                 display_names=configured_display_names(admin_entries, llm_router),
@@ -11750,8 +11762,11 @@ async def model_list(
         model_info["id"] = response_id
         model_data.append(model_info)
 
+    listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
+    if client_version is not None:
+        return Response(content=codex_model_list_body(listing, entries, llm_router), media_type="application/json")
+
     if wants_anthropic_format:
-        listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
         return create_anthropic_model_list_response(
             listing,
             display_names=configured_display_names(entries, llm_router),

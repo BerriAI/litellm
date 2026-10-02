@@ -10529,6 +10529,20 @@ class Router:
             return display_name
         return None
 
+    def get_configured_service_tiers(self, model_name: str) -> object:
+        """
+        Return the service_tiers value configured in a concrete deployment's
+        model_info for model_name, unvalidated, via the same O(1) index lookup as
+        get_configured_display_name; the caller validates the shape it expects.
+
+        Returns None for wildcard-expanded or unknown names and when nothing is
+        configured.
+        """
+        deployment: Final = self.get_deployment_by_model_group_name(model_group_name=model_name)
+        if deployment is None:
+            return None
+        return deployment.model_info.get("service_tiers")
+
     def get_credential_deployment(self, model_id: str, team_id: str | None = None) -> Deployment | None:
         """
         The deployment a passthrough endpoint (files, batches, etc.) resolves for a

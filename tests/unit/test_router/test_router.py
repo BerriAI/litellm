@@ -10274,6 +10274,52 @@ def test_get_configured_display_name_skips_wildcard_pattern_matching():
         )
 
 
+@pytest.mark.parametrize(
+    "configured",
+    [["ultrafast"], ["priority", {"id": "ultrafast", "name": "Ultrafast", "description": "Fastest"}], [], "not-a-list"],
+)
+def test_get_configured_service_tiers_returns_the_deployment_model_info_value_as_set(configured):
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": configured},
+            }
+        ]
+    )
+
+    assert router.get_configured_service_tiers("gpt-6-astra") == configured
+
+
+def test_get_configured_service_tiers_returns_none_for_unset_or_unknown():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "no-tiers-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+            }
+        ]
+    )
+
+    assert router.get_configured_service_tiers("no-tiers-model") is None
+    assert router.get_configured_service_tiers("not-a-real-model") is None
+
+
+def test_get_configured_service_tiers_does_not_apply_a_wildcard_deployment_to_matched_names():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            }
+        ]
+    )
+
+    assert router.get_configured_service_tiers("openai/gpt-6-astra") is None
+
+
 def test_get_configured_display_name_treats_malformed_values_as_absent():
     malformed = ["", "   ", 12345, ["Kimi K3"], {"name": "Kimi K3"}, True]
     router = litellm.Router(

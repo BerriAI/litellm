@@ -47,6 +47,7 @@ def patched_models(monkeypatch):
     deployment.litellm_params.model = "gpt-4"
     router.get_deployment_by_model_group_name = MagicMock(return_value=deployment)
     router.get_configured_display_name = MagicMock(return_value=None)
+    router.get_configured_service_tiers = MagicMock(return_value=None)
 
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
@@ -397,3 +398,95 @@ def test_anthropic_format_keeps_served_ids_for_other_anthropic_clients(client, a
 
     assert response.status_code == 200
     assert [m["id"] for m in response.json()["data"]] == ["gpt-4", "claude-sonnet"]
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+@pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
+def test_codex_format_when_client_version_present(client, auth_as, patched_models, path, params):
+    """Codex CLI fetches a provider's catalog as ``GET /v1/models?client_version=<its version>`` and
+    decodes Codex's own ``{"models": [...]}`` shape; the same request without the parameter keeps the
+    OpenAI shape byte for byte."""
+    with auth_as():
+        codex_response = client.get(path, params={**params, "client_version": "0.159.3"})
+        openai_response = client.get(path, params=params)
+
+    assert codex_response.status_code == 200
+    assert codex_response.headers["content-type"] == "application/json"
+    body = codex_response.json()
+    assert list(body) == ["models"]
+    assert [(m["slug"], m["display_name"], m["priority"]) for m in body["models"]] == [
+        ("gpt-4", "gpt-4", 0),
+        ("claude-sonnet", "claude-sonnet", 1),
+    ]
+    assert all(m["base_instructions"] and m["visibility"] == "list" for m in body["models"])
+
+    assert openai_response.status_code == 200
+    assert normalize(openai_response.json()) == {
+        "data": [
+            {"id": "<VOLATILE>", "object": "model", "created": "<VOLATILE>", "owned_by": "openai"},
+            {"id": "<VOLATILE>", "object": "model", "created": "<VOLATILE>", "owned_by": "openai"},
+        ],
+        "object": "list",
+    }
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_codex_format_wins_over_the_anthropic_header(client, auth_as, patched_models, path):
+    with auth_as():
+        response = client.get(path, params={"client_version": "0.159.3"}, headers={"anthropic-version": "2023-06-01"})
+
+    assert response.status_code == 200
+    assert list(response.json()) == ["models"]
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_codex_format_carries_configured_service_tiers(client, auth_as, patched_models, path):
+    """A deployment's ``model_info.service_tiers`` becomes the entry's ``service_tiers``, which Codex
+    offers as slash commands; a model without one offers none, and the OpenAI shape gains no field."""
+    patched_models.get_configured_service_tiers = MagicMock(
+        side_effect=lambda model_name: ["ultrafast"] if model_name == "gpt-4" else None
+    )
+
+    with auth_as():
+        codex_response = client.get(path, params={"client_version": "0.159.3"})
+        openai_response = client.get(path)
+
+    gpt_4, claude = codex_response.json()["models"]
+    assert gpt_4["service_tiers"] == [
+        {"id": "ultrafast", "name": "Ultrafast", "description": "Sends service_tier=ultrafast upstream"}
+    ]
+    assert claude["service_tiers"] == []
+    assert all("service_tiers" not in m for m in openai_response.json()["data"])
+
+
+@pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
+def test_codex_service_tiers_resolved_via_internal_team_key(client, auth_as, patched_models, monkeypatch, params):
+    """A team-scoped row's tiers are looked up by the internal routing key while the entry is keyed by
+    the public name Codex sends back as the model."""
+    from litellm.proxy import utils as proxy_utils
+    from litellm.proxy.auth import model_checks
+
+    internal_name = "model_name_team-1_c0ffee"
+
+    patched_models.get_model_list = MagicMock(
+        return_value=[
+            {"model_name": internal_name, "model_info": {"team_id": "team-1", "team_public_model_name": "gpt-4-team"}}
+        ]
+    )
+    patched_models.get_model_names = MagicMock(return_value=[internal_name])
+    patched_models.get_configured_service_tiers = MagicMock(
+        side_effect=lambda model_name: ["ultrafast"] if model_name == internal_name else None
+    )
+
+    async def _fake_get_available_models_for_user(**kwargs):
+        return [internal_name]
+
+    monkeypatch.setattr(proxy_utils, "get_available_models_for_user", _fake_get_available_models_for_user)
+    monkeypatch.setattr(model_checks, "get_complete_model_list", lambda **kwargs: [internal_name])
+
+    with auth_as():
+        response = client.get("/v1/models", params={**params, "client_version": "0.159.3"})
+
+    assert response.status_code == 200
+    (entry,) = response.json()["models"]
+    assert (entry["slug"], [tier["id"] for tier in entry["service_tiers"]]) == ("gpt-4-team", ["ultrafast"])

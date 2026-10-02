@@ -10411,6 +10411,11 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
+         *                     provider's model catalog. When present, the response is Codex's own
+         *                     catalog shape (`{"models": [...]}`) built from the same listing, with
+         *                     each model's `model_info.service_tiers` as its service tiers; absent,
+         *                     the OpenAI shape below is returned
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -21150,6 +21155,11 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
+         *                     provider's model catalog. When present, the response is Codex's own
+         *                     catalog shape (`{"models": [...]}`) built from the same listing, with
+         *                     each model's `model_info.service_tiers` as its service tiers; absent,
+         *                     the OpenAI shape below is returned
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -64027,6 +64037,7 @@ export interface operations {
                 fallback_type?: string | null;
                 scope?: string | null;
                 healthy_only?: boolean | null;
+                client_version?: string | null;
             };
             header?: never;
             path?: never;
@@ -78401,6 +78412,7 @@ export interface operations {
                 fallback_type?: string | null;
                 scope?: string | null;
                 healthy_only?: boolean | null;
+                client_version?: string | null;
             };
             header?: never;
             path?: never;
