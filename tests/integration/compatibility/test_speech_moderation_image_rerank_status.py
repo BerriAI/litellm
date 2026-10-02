@@ -104,9 +104,7 @@ class _Observations:
 
     def read(self) -> tuple[dict[str, JsonValue], ...]:
         with httpx.Client(timeout=10, trust_env=False) as client:
-            payload: Final = JSON_OBJECT.validate_python(
-                client.get(f"{self.url}/__observations?include_method=true").json()
-            )
+            payload: Final = JSON_OBJECT.validate_python(client.get(f"{self.url}/__observations").json())
         requests: Final = payload.get("requests")
         assert isinstance(requests, list)
         self.items = (*self.items, *(object_value(item) for item in requests if isinstance(item, dict)))
@@ -114,14 +112,6 @@ class _Observations:
 
     def for_scenario(self, identity: str) -> tuple[dict[str, JsonValue], ...]:
         return tuple(item for item in self.items if f"/{identity}/" in str(item.get("path")))
-
-    def provider_calls(self, identity: str) -> tuple[dict[str, JsonValue], ...]:
-        calls: Final = tuple(
-            item
-            for item in self.for_scenario(identity)
-            if not (item.get("method") == "GET" and str(item.get("path", "")).endswith(("/v1/models", "/models")))
-        )
-        return calls
 
 
 def _response(body: dict[str, JsonValue] | None = None) -> JsonResponse:
@@ -216,7 +206,7 @@ def test_missing_required_body_field_returns_exact_400(gateway: Gateway, case: _
         assert response.json() == expected, response.text
         observations: Final = _Observations(gateway.upstream_url)
         observations.read()
-        assert observations.provider_calls(identity) == ()
+        assert observations.for_scenario(identity) == ()
 
 
 @pytest.mark.parametrize(
@@ -239,7 +229,7 @@ def test_image_and_rerank_missing_fields_echo_call_id(gateway: Gateway, case: _C
         assert response.headers.get("x-litellm-call-id") == call_id, response.headers
         observations: Final = _Observations(gateway.upstream_url)
         observations.read()
-        assert observations.provider_calls(identity) == ()
+        assert observations.for_scenario(identity) == ()
 
 
 @pytest.mark.parametrize("case", _VALID)
@@ -288,7 +278,7 @@ def test_openai_sdk_missing_moderations_input_returns_bad_request(gateway: Gatew
         assert raised.value.status_code == 400
         observations: Final = _Observations(gateway.upstream_url)
         observations.read()
-        assert observations.provider_calls(identity) == ()
+        assert observations.for_scenario(identity) == ()
 
 
 def _healthy(url: str) -> int:
@@ -497,7 +487,7 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
                 seconds=30,
             )
             missing_observations: Final = {
-                identity: len(observations.provider_calls(identity))
+                identity: len(observations.for_scenario(identity))
                 for _case, _parameter, _model, identity, _path, _body, _expected in missing_calls
             }
             assert all(count == 0 for count in missing_observations.values()), missing_observations
@@ -505,7 +495,7 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
                 "chaos_missing_split",
                 str(tuple(f"{case.name}:{parameter}" for case, parameter in missing_cases)),
             )
-            record_property("chaos_missing_upstream_provider_call_counts", str(missing_observations))
+            record_property("chaos_missing_upstream_observation_counts", str(missing_observations))
             request_ids: Final = tuple(str(JSON_OBJECT.validate_python(response.json())["id"]) for response in valid)
             spend_rows: Final = tuple(
                 eventually(
