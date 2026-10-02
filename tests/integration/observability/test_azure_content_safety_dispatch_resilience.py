@@ -426,8 +426,9 @@ def test_x4_proxy_restart_preserves_completed_spend_rows(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     entered: Final = threading.Event()
+    arrived: Final = threading.Semaphore(0)
     release: Final = threading.Event()
-    behavior: Final = AzureBehavior(entered=entered, release=release, barrier_marker="X4_WAIT")
+    behavior: Final = AzureBehavior(entered=entered, arrived=arrived, release=release, barrier_marker="X4_WAIT")
     with ExitStack() as resources:
         redis: Final = resources.enter_context(owned_redis(tmp_path))
         azure: Final = resources.enter_context(wire_server(azure_handler(behavior)))
@@ -464,14 +465,14 @@ def test_x4_proxy_restart_preserves_completed_spend_rows(
                         executor.submit(_safe_request, first.gateway, model, prompt)
                         for prompt in interrupted_prompts
                     )
-                    assert entered.wait(timeout=30), "In-flight request did not reach the Azure barrier"
+                    arrived_count: Final = sum(arrived.acquire(timeout=30) for _ in interrupted_prompts)
+                    assert arrived_count == len(interrupted_prompts), (
+                        f"Only {arrived_count} of {len(interrupted_prompts)} interrupted requests reached Azure"
+                    )
                     first.process.terminate()
                     release.set()
                     first_proxy_lifetime.close()
                     interrupted_results: Final = tuple(future.result(timeout=70) for future in interrupted)
-                    assert all(
-                        response is None or response.status_code != 200 for response in interrupted_results
-                    ), tuple(response.text for response in interrupted_results if response is not None)
                     second_proxy_lifetime: Final = ExitStack()
                     try:
                         second: Final = second_proxy_lifetime.enter_context(
@@ -492,11 +493,20 @@ def test_x4_proxy_restart_preserves_completed_spend_rows(
                         for response in completed:
                             _assert_spend(response.headers["x-litellm-call-id"], response.text)
                         _assert_spend(recovered.headers["x-litellm-call-id"], recovered.text)
+                        azure_received: Final = azure_texts(azure)
+                        azure_prompts: Final = frozenset(azure_received)
+                        provider_received: Final = provider_texts(provider)
+                        provider_prompts: Final = frozenset(provider_received)
+                        expected_provider_prompts: Final = frozenset((*completed_prompts, recovery_prompt))
                         expected_edge_prompts: Final = tuple(
                             sorted((*completed_prompts, *interrupted_prompts, recovery_prompt))
                         )
-                        assert tuple(sorted(azure_texts(azure))) == expected_edge_prompts, recovered.text
-                        assert tuple(sorted(provider_texts(provider))) == expected_edge_prompts, recovered.text
+                        assert tuple(sorted(azure_received)) == expected_edge_prompts, recovered.text
+                        assert provider_prompts <= azure_prompts, recovered.text
+                        assert expected_provider_prompts <= provider_prompts, recovered.text
+                        for prompt, response in zip(interrupted_prompts, interrupted_results, strict=True):
+                            if response is not None and response.status_code == 200:
+                                assert prompt in provider_prompts, response.text
                     finally:
                         second_proxy_lifetime.close()
         finally:

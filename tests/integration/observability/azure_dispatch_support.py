@@ -118,6 +118,7 @@ class AzureBehavior:
     delay_seconds: float = 0
     down: threading.Event | None = None
     entered: threading.Event | None = None
+    arrived: threading.Semaphore | None = None
     release: threading.Event | None = None
     barrier_marker: str | None = None
 
@@ -211,6 +212,8 @@ def azure_handler(behavior: AzureBehavior = AzureBehavior()) -> Callable[[Reques
             behavior.barrier_marker is None or behavior.barrier_marker in text
         ):
             behavior.entered.set()
+            if behavior.arrived is not None:
+                behavior.arrived.release()
         if behavior.release is not None and (
             behavior.barrier_marker is None or behavior.barrier_marker in text
         ):
