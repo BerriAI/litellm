@@ -314,8 +314,6 @@ class PassThroughStreamingHandler:
             and _is_message_stop_chunk(complete_frames)
             and not _is_provider_error_chunk(complete_frames)
         )
-        # An in-band ``event: error`` on a cleanly closed 200 stream is an upstream
-        # failure, not a success: log it as one (partial usage included).
         provider_error: Final = parse_anthropic_error_event(complete_frames) if complete_frames else None
         if endpoint_type == EndpointType.ANTHROPIC and provider_error is not None:
             _, error_message, error_status_code = provider_error
