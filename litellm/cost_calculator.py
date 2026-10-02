@@ -137,6 +137,8 @@ from litellm.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     _cached_get_model_info_helper,
+    _get_model_info_from_generalization,
+    _get_potential_model_names,
     token_counter,
 )
 
@@ -924,6 +926,22 @@ def _get_response_model(completion_response: object) -> str | None:
     return None
 
 
+def _prices_only_via_capability_rule(model: str | None, custom_llm_provider: str | None) -> bool:
+    if model is None:
+        return False
+    try:
+        return (
+            _get_model_info_from_generalization(
+                model=model,
+                potential_model_names=_get_potential_model_names(model=model, custom_llm_provider=custom_llm_provider),
+                custom_llm_provider=custom_llm_provider,
+            )
+            is not None
+        )
+    except Exception:
+        return False
+
+
 _GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER: Final[dict] = {
     # ON_DEMAND_PRIORITY maps to "priority" — selects input_cost_per_token_priority, etc.
     "ON_DEMAND_PRIORITY": "priority",
@@ -1440,12 +1458,10 @@ def completion_cost(
             region_name=region_name,
         )
 
-        potential_model_names: Final = [
-            selected_model,
-            _get_response_model(completion_response),
-        ]
-        if model is not None:
-            potential_model_names.append(model)
+        potential_model_names: Final = sorted(
+            (selected_model, _get_response_model(completion_response), *((model,) if model is not None else ())),
+            key=lambda candidate: _prices_only_via_capability_rule(candidate, custom_llm_provider),
+        )
 
         for idx, model in enumerate(potential_model_names):
             try:
@@ -2124,7 +2140,10 @@ def pricing_entry_for_cost_calc(
         router_model_id=router_model_id,
         region_name=region_name,
     )
-    candidates: Final = (selected_model, _get_response_model(completion_response), model)
+    candidates: Final = sorted(
+        (selected_model, _get_response_model(completion_response), model),
+        key=lambda candidate: _prices_only_via_capability_rule(candidate, custom_llm_provider),
+    )
     resolved: Final = next(
         (info for info in (_cost_map_model_info(name, custom_llm_provider) for name in candidates if name) if info),
         None,
