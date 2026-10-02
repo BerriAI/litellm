@@ -4905,8 +4905,6 @@ def _read_scope_sql(scope: LogReadScope, next_param: int) -> tuple[str, tuple[ob
                 f'("user" = ${next_param} OR team_id = ANY(${next_param + 1}::text[]))',
                 (user_id, team_ids),
             )
-        case _:
-            assert_never(scope)
 
 
 def _read_scope_where(scope: LogReadScope) -> Mapping[str, object]:
@@ -4917,8 +4915,6 @@ def _read_scope_where(scope: LogReadScope) -> Mapping[str, object]:
             return {"user": user_id}
         case UserAndTeamLogs(user_id=user_id, team_ids=team_ids):
             return {"OR": [{"user": user_id}, {"team_id": {"in": list(team_ids)}}]}
-        case _:
-            assert_never(scope)
 
 
 def _spend_log_payload_query(request_id: str, scope: LogReadScope) -> tuple[str, tuple[object, ...]]:

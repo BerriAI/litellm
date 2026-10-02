@@ -2660,7 +2660,7 @@ async def test_ui_view_spend_logs_request_id_rejects_foreign_row_inserted_after_
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
-def _make_payload_lookup_prisma(rows):
+def _make_payload_lookup_prisma(rows, team_table=None):
     """Emulate the detail endpoint's SQL over an in-memory corpus: the owner
     pre-check, the caller scope on ``"user"`` and permitted teams, and the
     exact-request_id-first ordering with LIMIT 1."""
@@ -2681,6 +2681,7 @@ def _make_payload_lookup_prisma(rows):
     class MockPrisma:
         def __init__(self):
             self.db = MockDB()
+            self.db.litellm_teamtable = team_table
 
     return MockPrisma()
 
@@ -7918,9 +7919,9 @@ def test_capture_rate_reports_an_unreadable_bill_as_502(client, monkeypatch):
         ("user", [], ["own"]),
     ],
 )
-async def test_shared_read_scope_returns_only_owned_or_permitted_rows(member_role, permissions, expected):
-    from litellm.proxy._types import LiteLLM_TeamTable
-    from litellm.proxy.spend_tracking.log_visibility import permitted_log_team_ids, resolve_log_read_scope
+async def test_shared_read_scope_returns_only_owned_or_permitted_rows(monkeypatch, member_role, permissions, expected):
+    from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     auth = UserAPIKeyAuth(user_id="caller", user_role=LitellmUserRoles.INTERNAL_USER)
     teams = (
@@ -7936,16 +7937,25 @@ async def test_shared_read_scope_returns_only_owned_or_permitted_rows(member_rol
         ),
     )
 
-    async def lookup():
-        return permitted_log_team_ids(auth, teams)
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="caller",
+        value=LiteLLM_UserTable(user_id="caller", teams=[team.team_id for team in teams]),
+        model_type=LiteLLM_UserTable,
+    )
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
 
-    scope = await resolve_log_read_scope(auth.user_id, lookup)
+    class TeamTable:
+        async def find_many(self, where):
+            return [team for team in teams if team.team_id in where["team_id"]["in"]]
+
     rows = (
         _payload_row("own", "own-call", "caller", "own payload"),
         {**_payload_row("permitted", "team-call", "other", "team payload"), "team_id": "allowed"},
         {**_payload_row("foreign", "foreign-call", "other", "foreign payload"), "team_id": "outside"},
     )
-    prisma = _make_payload_lookup_prisma(rows)
+    prisma = _make_payload_lookup_prisma(rows, team_table=TeamTable())
+    scope = await spend_management_endpoints._spend_log_read_scope(prisma, auth)
     returned = []
     for row in rows:
         query, params = spend_management_endpoints._spend_log_payload_query(row["request_id"], scope)
