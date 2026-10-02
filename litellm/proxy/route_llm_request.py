@@ -174,7 +174,6 @@ REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
     "anthropic_messages": ("messages", "max_tokens"),
     "agenerate_content": ("contents",),
     "aocr": ("document",),
-    "acreate_fine_tuning_job": ("training_file",),
     "avector_store_search": ("query",),
     "avector_store_file_create": ("file_id",),
     "avector_store_file_update": ("attributes",),

@@ -8,7 +8,7 @@ import socket
 import subprocess
 import sys
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import partial
@@ -18,7 +18,7 @@ from typing import Final
 import httpx
 import psutil
 import pytest
-from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value
+from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
@@ -27,7 +27,12 @@ from pydantic import JsonValue
 
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.videos.utils import decode_video_id_with_provider, encode_video_id_with_provider
-from tests.integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse
+from tests.integration.cost_calculation.cost_tracking_case import (
+    BinaryResponse,
+    JsonResponse,
+    RoutedResponse,
+    SseResponse,
+)
 
 _Route = tuple[str, str, tuple[str, ...], dict[str, JsonValue], str]
 _ROUTES: Final[dict[str, _Route]] = {
@@ -148,7 +153,13 @@ _ROUTES: Final[dict[str, _Route]] = {
         {"prompt": "remix"},
         "openai/sora-2",
     ),
-    "avideo_edit": ("/v1/videos/edits", "/videos/edits", ("prompt",), {"prompt": "edit"}, "openai/sora-2"),
+    "avideo_edit": (
+        "/v1/videos/edits",
+        "/videos/edits",
+        ("prompt",),
+        {"prompt": "edit", "video": {"id": "video-audit"}},
+        "openai/sora-2",
+    ),
     "avideo_extension": (
         "/v1/videos/extensions",
         "/videos/extensions",
@@ -171,7 +182,13 @@ _ROUTES: Final[dict[str, _Route]] = {
         {},
         "openai/gpt-4o-mini",
     ),
-    "acreate_agent": ("/v1beta/agents", "/v1beta/agents", ("name",), {"name": "agent"}, "gemini/gemini-2.5-flash"),
+    "acreate_agent": (
+        "/v1beta/agents",
+        "/v1beta/agents",
+        ("name",),
+        {"name": "agent", "base_agent": "waverunner", "instructions": "You are a helpful assistant."},
+        "gemini/gemini-2.5-flash",
+    ),
     "acreate_interaction": (
         "/interactions",
         "/interactions",
@@ -205,15 +222,21 @@ _SKIP_VALID: Final = frozenset(
         "asearch",
         "atranscription",
         "aocr",
-        "avideo_edit",
         "avideo_create_character",
         "aupload_container_file",
-        "acreate_agent",
         "acreate_fine_tuning_job",
+        "acreate_agent",
     }
 )
 _NO_MODEL_BODY: Final = frozenset(
-    {"asearch", "agenerate_content", "avector_store_search", "avector_store_file_create", "avector_store_file_update"}
+    {
+        "asearch",
+        "agenerate_content",
+        "avector_store_search",
+        "avector_store_file_create",
+        "avector_store_file_update",
+        "acreate_agent",
+    }
 )
 _DOCUMENTED_GAPS: Final = (
     pytest.param("/v1/audio/transcriptions", {}, 422, ("body", "file"), None, False, id="atranscription-gap"),
@@ -225,15 +248,6 @@ _DOCUMENTED_GAPS: Final = (
         None,
         True,
         id="avideo_create_character-gap",
-    ),
-    pytest.param(
-        "/v1/fine_tuning/jobs",
-        {"model": "gpt-4o-mini"},
-        422,
-        ("body", "training_file"),
-        None,
-        False,
-        id="acreate_fine_tuning_job-gap",
     ),
     pytest.param(
         "/v1/containers/container-audit/files",
@@ -407,6 +421,109 @@ _BODIES: Final[dict[str, dict[str, JsonValue]]] = {
         "data_source": {"type": "custom"},
         "eval_id": "eval-audit",
     },
+    "avideo_edit": {
+        "id": "video-audit-edit",
+        "object": "video",
+        "created_at": 1,
+        "status": "queued",
+        "model": "sora-2",
+    },
+    "avideo_create_character": {
+        "id": "character-audit",
+        "object": "character",
+        "created_at": 1,
+        "name": "character",
+    },
+    "aupload_container_file": {
+        "id": "container-file-audit",
+        "object": "container.file",
+        "container_id": "container-audit",
+        "created_at": 1,
+        "path": "notes.txt",
+        "source": "user",
+    },
+}
+_STREAM_RESPONSES: Final[dict[str, SseResponse]] = {
+    "acompletion": SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            (
+                'data: {"id":"chatcmpl-$UNIQUE_ID","object":"chat.completion.chunk","created":1,'
+                '"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}'
+            ),
+            (
+                'data: {"id":"chatcmpl-$UNIQUE_ID","object":"chat.completion.chunk","created":1,'
+                '"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"streamed "},"finish_reason":null}]}'
+            ),
+            (
+                'data: {"id":"chatcmpl-$UNIQUE_ID","object":"chat.completion.chunk","created":1,'
+                '"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"response"},"finish_reason":null}]}'
+            ),
+            (
+                'data: {"id":"chatcmpl-$UNIQUE_ID","object":"chat.completion.chunk","created":1,'
+                '"model":"gpt-4o-mini","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}'
+            ),
+            "data: [DONE]",
+        ),
+    ),
+    "aresponses": SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            (
+                "event: response.created\n"
+                'data: {"type":"response.created","response":{"id":"resp_$REQUEST_ID","object":"response",'
+                '"created_at":1,"status":"in_progress","model":"gpt-4o-mini","output":[],"usage":null}}'
+            ),
+            (
+                "event: response.output_item.added\n"
+                'data: {"type":"response.output_item.added","output_index":0,'
+                '"item":{"type":"message","id":"msg_$REQUEST_ID","status":"in_progress",'
+                '"role":"assistant","content":[]}}'
+            ),
+            (
+                "event: response.content_part.added\n"
+                'data: {"type":"response.content_part.added","item_id":"msg_$REQUEST_ID",'
+                '"output_index":0,"content_index":0,'
+                '"part":{"type":"output_text","text":"","annotations":[]}}'
+            ),
+            (
+                "event: response.output_text.delta\n"
+                'data: {"type":"response.output_text.delta","item_id":"msg_$REQUEST_ID",'
+                '"output_index":0,"content_index":0,"delta":"streamed "}'
+            ),
+            (
+                "event: response.output_text.delta\n"
+                'data: {"type":"response.output_text.delta","item_id":"msg_$REQUEST_ID",'
+                '"output_index":0,"content_index":0,"delta":"response"}'
+            ),
+            (
+                "event: response.output_text.done\n"
+                'data: {"type":"response.output_text.done","item_id":"msg_$REQUEST_ID",'
+                '"output_index":0,"content_index":0,"text":"streamed response"}'
+            ),
+            (
+                "event: response.content_part.done\n"
+                'data: {"type":"response.content_part.done","item_id":"msg_$REQUEST_ID",'
+                '"output_index":0,"content_index":0,'
+                '"part":{"type":"output_text","text":"streamed response","annotations":[]}}'
+            ),
+            (
+                "event: response.output_item.done\n"
+                'data: {"type":"response.output_item.done","output_index":0,'
+                '"item":{"type":"message","id":"msg_$REQUEST_ID","status":"completed",'
+                '"role":"assistant","content":[{"type":"output_text","text":"streamed response",'
+                '"annotations":[]}]}}'
+            ),
+            (
+                "event: response.completed\n"
+                'data: {"type":"response.completed","response":{"id":"resp_$REQUEST_ID",'
+                '"object":"response","created_at":1,"status":"completed","model":"gpt-4o-mini",'
+                '"output":[{"id":"msg_$REQUEST_ID","type":"message","status":"completed",'
+                '"role":"assistant","content":[{"type":"output_text","text":"streamed response",'
+                '"annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":2}}}'
+            ),
+        ),
+    ),
 }
 
 
@@ -427,7 +544,15 @@ class _Observations:
         return tuple(item for item in self.items if f"/{identity}/" in str(item.get("path")))
 
 
-def _response(route: str) -> JsonResponse | RoutedResponse:
+def _response(
+    route: str,
+    *,
+    streaming: bool = False,
+) -> BinaryResponse | JsonResponse | RoutedResponse | SseResponse:
+    if route == "aspeech":
+        return BinaryResponse(content_type="audio/mpeg", length=16)
+    if streaming:
+        return _STREAM_RESPONSES[route]
     if route == "acreate_fine_tuning_job":
         return RoutedResponse(
             content_type="application/x-routed",
@@ -445,6 +570,20 @@ def _response(route: str) -> JsonResponse | RoutedResponse:
                     },
                 ),
                 "POST /fine_tuning/jobs": JsonResponse(
+                    content_type="application/json",
+                    body=_BODIES[route],
+                ),
+            },
+        )
+    if route == "aupload_container_file":
+        return RoutedResponse(
+            content_type="application/x-routed",
+            routes={
+                "POST /containers": JsonResponse(
+                    content_type="application/json",
+                    body=_BODIES["acreate_container"],
+                ),
+                "POST /containers/container-audit/files": JsonResponse(
                     content_type="application/json",
                     body=_BODIES[route],
                 ),
@@ -529,7 +668,11 @@ def _assert_scripted_response(route: str, caller: dict[str, JsonValue]) -> None:
         "avideo_generation",
         "avideo_remix",
         "avideo_extension",
+        "avideo_edit",
+        "avideo_create_character",
+        "aupload_container_file",
         "acreate_container",
+        "acreate_agent",
         "acreate_interaction",
         "acreate_eval",
         "acreate_run",
@@ -541,18 +684,27 @@ def _assert_scripted_response(route: str, caller: dict[str, JsonValue]) -> None:
             actual_id: Final = caller.get("id")
             expected_id: Final = str(scripted["id"])
             assert isinstance(actual_id, str) and actual_id
-            if route in {"avideo_generation", "avideo_remix", "avideo_extension"}:
+            if route in {"avideo_generation", "avideo_remix", "avideo_extension", "avideo_edit"}:
                 assert decode_video_id_with_provider(actual_id)["video_id"] == expected_id
             elif route == "acreate_container":
                 assert ResponsesAPIRequestUtils.decode_container_id_to_original(actual_id) == expected_id
             else:
                 expected_prefix: Final = expected_id.split("$UNIQUE_ID", maxsplit=1)[0]
                 assert actual_id.startswith(expected_prefix)
+        if route in {"avideo_create_character", "acreate_agent"}:
+            assert caller.get("name") == scripted["name"]
+        if route == "aupload_container_file":
+            assert caller.get("container_id") == scripted["container_id"]
 
 
-def _register(scenario: Scenario, route: str) -> tuple[str, str, ScenarioHandle]:
+def _register(
+    scenario: Scenario,
+    route: str,
+    *,
+    streaming: bool = False,
+) -> tuple[str, str, ScenarioHandle]:
     identity: Final = f"audit-{route}-{uuid.uuid4().hex}"
-    handle: Final = register_scenario(identity, _response(route))
+    handle: Final = register_scenario(identity, _response(route, streaming=streaming))
     scenario.cleanups.callback(delete_scenario, handle)
     model: Final = (
         ""
@@ -640,6 +792,28 @@ def _observed(
     return buffer.for_scenario(identity)
 
 
+def _stream_event_payloads(lines: tuple[str, ...]) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(JSON_OBJECT.validate_json(line.removeprefix("data: ")) for line in lines if line.startswith("data: {"))
+
+
+def _stream_event_text(route: str, event: dict[str, JsonValue]) -> str:
+    if route == "acompletion":
+        choices: Final = event.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return ""
+        delta: Final = object_value(object_value(choices[0]).get("delta"))
+        content: Final = delta.get("content")
+        return content if isinstance(content, str) else ""
+    if route == "aresponses" and event.get("type") == "response.output_text.delta":
+        delta: Final = event.get("delta")
+        return delta if isinstance(delta, str) else ""
+    return ""
+
+
+def _assembled_stream_text(route: str, lines: tuple[str, ...]) -> str:
+    return "".join(_stream_event_text(route, event) for event in _stream_event_payloads(lines))
+
+
 @pytest.mark.parametrize("route", _MISSING, ids=_MISSING)
 def test_added_required_fields_return_exact_400(gateway: Gateway, route: str) -> None:
     template, error_route, fields, valid_body, _provider_model = _ROUTES[route]
@@ -652,10 +826,22 @@ def test_added_required_fields_return_exact_400(gateway: Gateway, route: str) ->
         path: Final = _path(template, model, tool, store)
         observations: Final = _Observations(gateway.upstream_url)
         for field in fields:
-            body: Final = {
+            missing_body: Final = {
                 key: value
                 for key, value in {**valid_body, **({"model": model} if route not in _NO_MODEL_BODY else {})}.items()
                 if key != field
+            }
+            body: Final = {
+                **missing_body,
+                **(
+                    {
+                        "video": {
+                            "id": encode_video_id_with_provider("video-audit", "openai", model_id=model),
+                        }
+                    }
+                    if route == "avideo_edit"
+                    else {}
+                ),
             }
             expected: Final = _error(error_route, field)
             response: Final = _missing_response(gateway, path, body, expected)
@@ -692,6 +878,19 @@ def test_unchanged_from_base_documented_gaps(
         assert object_value(detail[0]).get("loc") == list(expected_loc), response.text
 
 
+def test_fine_tuning_missing_training_file_returns_422_without_upstream_call(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model, identity, _handle = _register(scenario, "acreate_fine_tuning_job")
+        response: Final = _post(gateway, "/v1/fine_tuning/jobs", {"model": model})
+        assert response.status_code == 422, response.text
+        detail: Final = JSON_OBJECT.validate_python(response.json()).get("detail")
+        assert isinstance(detail, list) and detail, response.text
+        assert object_value(detail[0]).get("loc") == ["body", "training_file"], response.text
+        observations: Final = _Observations(gateway.upstream_url)
+        observations.read()
+        assert observations.for_scenario(identity) == ()
+
+
 @pytest.mark.parametrize(
     "route",
     tuple(name for name in _ROUTES if name not in _SKIP_VALID),
@@ -707,6 +906,15 @@ def test_valid_required_fields_reach_upstream(gateway: Gateway, route: str) -> N
         path: Final = _path(template, model, "", store)
         request_body: Final = {
             **body,
+            **(
+                {
+                    "video": {
+                        "id": encode_video_id_with_provider("video-audit", "openai", model_id=model),
+                    }
+                }
+                if route == "avideo_edit"
+                else {}
+            ),
             **({"model": model} if route not in _NO_MODEL_BODY else {}),
             **({"input": f"response-{identity}"} if route == "aresponses" else {}),
         }
@@ -724,6 +932,128 @@ def test_valid_required_fields_reach_upstream(gateway: Gateway, route: str) -> N
         assert all(
             outbound.get(field) == (expected_model if field == "model" else request_body[field]) for field in fields
         ), matches
+        if route == "avideo_edit":
+            assert outbound.get("video") == {"id": "video-audit"}, matches
+
+
+def test_valid_agent_creation_reaches_upstream(gateway: Gateway) -> None:
+    body: Final = _ROUTES["acreate_agent"][3]
+    with gateway.scenario() as scenario:
+        identity: Final = f"audit-acreate_agent-{uuid.uuid4().hex}"
+        handle: Final = register_scenario(identity, _response("acreate_agent"))
+        scenario.cleanups.callback(delete_scenario, handle)
+        request_body: Final = {
+            **body,
+            "litellm_params_template": {"api_base": handle.api_base(), "api_key": identity},
+        }
+        response: Final = gateway.request("POST", "/v1beta/agents", request_body)
+        assert response.status_code == 200, response.text
+        caller: Final = JSON_OBJECT.validate_python(response.json())
+        _assert_scripted_response("acreate_agent", caller)
+        matches: Final = _observed(_Observations(gateway.upstream_url), identity)
+        outbound: Final = object_value(matches[0]["body"])
+        assert outbound == {
+            "name": "agent",
+            "base_agent": "waverunner",
+            "instructions": "You are a helpful assistant.",
+        }, matches
+
+
+def test_valid_speech_returns_binary_audio_and_reaches_upstream(gateway: Gateway) -> None:
+    template, _error_route, fields, body, _provider_model = _ROUTES["aspeech"]
+    with gateway.scenario() as scenario:
+        model, identity, _handle = _register(scenario, "aspeech")
+        request_body: Final = {**body, "model": model}
+        response: Final = _post(gateway, template, request_body)
+        assert response.status_code == 200, response.text
+        assert response.headers.get("content-type") == "audio/mpeg"
+        assert response.content == b"\x00" * 16
+        matches: Final = _observed(_Observations(gateway.upstream_url), identity)
+        outbound: Final = object_value(matches[0]["body"])
+        assert all(outbound.get(field) == request_body[field] for field in fields), matches
+        assert outbound.get("voice") == request_body["voice"], matches
+
+
+def test_valid_video_character_request_reaches_upstream(gateway: Gateway) -> None:
+    template, _error_route, _fields, _body, _provider_model = _ROUTES["avideo_create_character"]
+    with gateway.scenario() as scenario:
+        model, identity, _handle = _register(scenario, "avideo_create_character")
+        path: Final = _path(template, model, "", "")
+        response: Final = gateway.request_multipart(
+            path,
+            {"name": "character", "model": model},
+            {"video": ("character.mp4", b"scripted-video", "video/mp4")},
+        )
+        assert response.status_code == 200, response.text
+        _assert_scripted_response("avideo_create_character", JSON_OBJECT.validate_python(response.json()))
+        matches: Final = _observed(_Observations(gateway.upstream_url), identity)
+        outbound: Final = object_value(matches[0]["body"])
+        assert outbound.get("video") == {
+            "filename": "character.mp4",
+            "content_type": "video/mp4",
+        }, matches
+        assert outbound.get("name") == "character", matches
+
+
+def test_valid_container_file_upload_reaches_upstream(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model, identity, _handle = _register(scenario, "aupload_container_file")
+        container_response: Final = gateway.request("POST", "/v1/containers", {"model": model, "name": "container"})
+        assert container_response.status_code == 200, container_response.text
+        container: Final = object_value(JSON_OBJECT.validate_python(container_response.json()))
+        assert container.get("object") == "container", container
+        container_id: Final = string_value(container["id"])
+        response: Final = gateway.request_multipart(
+            f"/v1/containers/{container_id}/files",
+            {},
+            {"file": ("notes.txt", b"container file contents", "text/plain")},
+        )
+        assert response.status_code == 200, response.text
+        _assert_scripted_response("aupload_container_file", JSON_OBJECT.validate_python(response.json()))
+        matches: Final = _observed(_Observations(gateway.upstream_url), identity, expected_count=2)
+        create_request: Final = object_value(matches[0]["body"])
+        upload_request: Final = object_value(matches[1]["body"])
+        assert str(matches[0]["path"]).endswith("/containers"), matches
+        assert create_request == {"name": "container"}, matches
+        assert str(matches[1]["path"]).endswith("/containers/container-audit/files"), matches
+        assert upload_request == {
+            "file": {
+                "filename": "notes.txt",
+                "content_type": "text/plain",
+            }
+        }, matches
+
+
+@pytest.mark.parametrize(
+    ("route", "expected_text"),
+    (
+        pytest.param("acompletion", "streamed response", id="chat-completions"),
+        pytest.param("aresponses", "streamed response", id="responses"),
+    ),
+)
+def test_valid_streaming_required_fields_reach_upstream(
+    gateway: Gateway,
+    route: str,
+    expected_text: str,
+) -> None:
+    template, _error_route, fields, body, _provider_model = _ROUTES[route]
+    with gateway.scenario() as scenario:
+        model, identity, _handle = _register(scenario, route, streaming=True)
+        request_body: Final = {
+            **body,
+            **({"input": f"response-{identity}"} if route == "aresponses" else {}),
+            "model": model,
+            "stream": True,
+        }
+        headers: Final = {"Authorization": f"Bearer {gateway.key}"}
+        with gateway.client.stream("POST", template, json=request_body, headers=headers) as response:
+            assert response.status_code == 200, response.read().decode()
+            lines: Final = tuple(response.iter_lines())
+        assert _assembled_stream_text(route, lines) == expected_text, lines
+        matches: Final = _observed(_Observations(gateway.upstream_url), identity)
+        outbound: Final = object_value(matches[0]["body"])
+        assert outbound.get("stream") is True, matches
+        assert all(outbound.get(field) == request_body[field] for field in fields), matches
 
 
 @pytest.mark.parametrize("client_kind", ("sync", "async"), ids=("sync", "async"))

@@ -1055,7 +1055,6 @@ async def test_route_request_override_enable_tag_filtering_beats_body_value():
         ("anthropic_messages", "messages", "anthropic_messages"),
         ("agenerate_content", "contents", "agenerate_content"),
         ("aocr", "document", "/ocr"),
-        ("acreate_fine_tuning_job", "training_file", "acreate_fine_tuning_job"),
         ("avector_store_search", "query", "avector_store_search"),
         ("avector_store_file_create", "file_id", "avector_store_file_create"),
         ("avector_store_file_update", "attributes", "avector_store_file_update"),
