@@ -31,9 +31,24 @@ impl AudioTranscriptionRoute {
         }
     }
 
+    #[tracing::instrument(name = "litellm.route", skip_all, fields(
+        route = "audio_transcription",
+        model = request.model,
+        provider,
+        resolved_model,
+        stream = false,
+        outcome
+    ))]
     pub async fn execute(&self, request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {
-        let request =
-            prepare_audio_transcription_provider_call(request, self.secrets.as_ref()).await?;
-        execute_audio_transcription_provider_call(&self.http, &self.auth, request).await
+        crate::diagnostic::unary(async {
+            let request =
+                prepare_audio_transcription_provider_call(request, self.secrets.as_ref()).await?;
+            crate::diagnostic::provider(&request.model, &request.custom_llm_provider);
+            let execute: futures_util::future::BoxFuture<'_, Result<Value, Error>> = Box::pin(
+                execute_audio_transcription_provider_call(&self.http, &self.auth, request),
+            );
+            execute.await
+        })
+        .await
     }
 }

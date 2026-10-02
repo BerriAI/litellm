@@ -1,4 +1,4 @@
-# The Tokio runtime is reached only through `host-python/src/execution.rs`, whose fork gate
+# The Tokio runtime is reached only through `host-python/src/runtime.rs`, whose fork gate
 # must see every entry. Going around it makes a fork-after-use hang instead of raising.
 disallowed-methods = [
     { path = "pyo3_async_runtimes::tokio::get_runtime", reason = "use litellm_host_python::run_sync / run_sync_value" },

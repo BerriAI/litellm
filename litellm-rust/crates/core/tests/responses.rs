@@ -1,3 +1,7 @@
+use litellm_host::{
+    interceptors::{ExecutionFacts, ResultSource},
+    lifecycle::ExecutionEvent,
+};
 use std::sync::Arc;
 
 use futures_util::TryStreamExt;
@@ -5,7 +9,7 @@ use litellm_core::responses::{
     route::Responses,
     types::{ResponsesCall, ResponsesOutput},
 };
-use litellm_host::{call::HostedCompletion, event::CallEvent};
+use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
 use rstest::{fixture, rstest};
 use serde_json::json;
 use wiremock::ResponseTemplate;
@@ -39,8 +43,9 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
         ..call
     });
     let response = if hosted {
-        let HostedCompletion::Complete(response) = litellm_host::in_process::run_hosted(
-            responses_route(no_secrets()).machine(host.request().unwrap()),
+        let HostedCompletion::Complete(response) = litellm_host_native::in_process::run_hosted(
+            responses_route(no_secrets())
+                .machine(host.request().unwrap(), Some(host.events.0.sender.clone())),
             host.runtime(),
         )
         .await
@@ -51,7 +56,7 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
     } else {
         let call = host.request.lock().unwrap().take().unwrap();
         let ResponsesOutput::Complete(response) = responses_route(no_secrets())
-            .execute(call, &host)
+            .execute(call, &host, Some(host.events.0.sender.clone()))
             .await
             .unwrap()
         else {
@@ -69,7 +74,13 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
         &host.events.0.lock().unwrap()[..],
         [
             CallEvent::Started { .. },
-            CallEvent::Machine(_),
+            CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }),
+            CallEvent::Execution(ExecutionEvent::ResultReady {
+                facts: ExecutionFacts {
+                    source: ResultSource::Provider,
+                    ..
+                }
+            }),
             CallEvent::Succeeded { .. }
         ]
     ));
@@ -95,8 +106,9 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
     });
     let (headers, bytes) = if hosted {
         assert_eq!(
-            litellm_host::in_process::run_hosted(
-                responses_route(no_secrets()).machine(host.request().unwrap()),
+            litellm_host_native::in_process::run_hosted(
+                responses_route(no_secrets())
+                    .machine(host.request().unwrap(), Some(host.events.0.sender.clone())),
                 host.runtime(),
             )
             .await
@@ -110,13 +122,24 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
     } else {
         let call = host.request.lock().unwrap().take().unwrap();
         let ResponsesOutput::Stream { head, chunks } = responses_route(no_secrets())
-            .execute(call, &host)
+            .execute(call, &host, Some(host.events.0.sender.clone()))
             .await
             .unwrap()
         else {
             panic!()
         };
-        assert_eq!(host.events.0.lock().unwrap().len(), 1);
+        assert!(matches!(
+            &host.events.0.lock().unwrap()[..],
+            [
+                CallEvent::Started { .. },
+                CallEvent::Execution(ExecutionEvent::ResultReady {
+                    facts: ExecutionFacts {
+                        source: ResultSource::Provider,
+                        ..
+                    }
+                }),
+            ]
+        ));
         (
             head.headers,
             chunks.try_collect::<Vec<_>>().await.unwrap().concat(),
@@ -126,7 +149,16 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
     assert_eq!(bytes, body.as_bytes());
     assert!(matches!(
         &host.events.0.lock().unwrap()[..],
-        [CallEvent::Started { .. }, CallEvent::Succeeded { .. }]
+        [
+            CallEvent::Started { .. },
+            CallEvent::Execution(ExecutionEvent::ResultReady {
+                facts: ExecutionFacts {
+                    source: ResultSource::Provider,
+                    ..
+                }
+            }),
+            CallEvent::Succeeded { .. }
+        ]
     ));
 }
 
@@ -147,7 +179,7 @@ async fn provider_failures_emit_failure_once(
     let call = host.request.lock().unwrap().take().unwrap();
     assert!(
         responses_route(no_secrets())
-            .execute(call, &host)
+            .execute(call, &host, Some(host.events.0.sender.clone()))
             .await
             .is_err()
     );
@@ -190,7 +222,7 @@ async fn credentials_and_endpoint_are_resolved_only_when_needed(
         ..call
     };
     responses_route(secrets.clone())
-        .execute(call, &())
+        .execute(call, &(), None)
         .await
         .unwrap();
     assert_eq!(
@@ -224,10 +256,224 @@ async fn unsupported_providers_fail_before_secrets_or_transport(
     };
     assert!(
         responses_route(secrets.clone())
-            .execute(call, &())
+            .execute(call, &(), None)
             .await
             .is_err()
     );
     assert!(secrets.requested().is_empty());
     assert!(received(&upstream).await.is_empty());
+}
+
+#[rstest]
+#[case::success(200, json!({"id":"response-1", "model":"test-model", "output":[]}), "success")]
+#[case::invalid_response(200, json!("private-response-sentinel"), "failure")]
+#[case::upstream_error(429, json!({"error":"private-response-sentinel"}), "failure")]
+#[tokio::test]
+async fn route_tracing_covers_native_and_hosted_outcomes(
+    call: ResponsesCall,
+    traces: TraceCapture,
+    #[case] status: u16,
+    #[case] body: serde_json::Value,
+    #[case] outcome: &str,
+    #[values(false, true)] hosted: bool,
+) {
+    let upstream = upstream([status_response(status, body)]).await;
+    let host = RecordingCall::<Responses>::new(ResponsesCall {
+        api_base: Some(upstream.uri()),
+        input: json!("private-prompt-sentinel"),
+        api_key: Some("private-key-sentinel".into()),
+        ..call
+    });
+    let route = responses_route(no_secrets());
+    let result = traces
+        .logger()
+        .instrument(async {
+            if hosted {
+                litellm_host_native::in_process::run_hosted(
+                    route
+                        .clone()
+                        .machine(host.request().unwrap(), Some(host.events.0.sender.clone())),
+                    host.runtime(),
+                )
+                .await
+                .map(|_| ())
+            } else {
+                route
+                    .execute(host.request().unwrap(), &(), None)
+                    .await
+                    .map(|_| ())
+            }
+        })
+        .await;
+    assert_eq!(result.is_ok(), outcome == "success");
+    let summaries = traces.summaries("litellm.route");
+    let [summary] = summaries.as_slice() else {
+        panic!("expected one route summary: {summaries:?}")
+    };
+    assert_eq!(summary["route"], "responses");
+    assert_eq!(summary["model"], "openai/test-model");
+    assert_eq!(summary["resolved_model"], "test-model");
+    assert_eq!(summary["provider"], "openai");
+    assert_eq!(summary["stream"], false);
+    assert_eq!(summary["outcome"], outcome);
+    assert!(summary["duration_ms"].as_f64().unwrap() >= 0.0);
+    let sends = traces.summaries("litellm.provider.send");
+    assert_eq!(sends.len(), 1);
+    assert_eq!(sends[0]["status"], status);
+    assert!(!format!("{:?}", traces.records()).contains("private-"));
+}
+
+#[rstest]
+#[case::exhausted(true, "success")]
+#[case::dropped(false, "cancelled")]
+#[tokio::test]
+async fn stream_trace_survives_handoff_and_closes_before_the_stream_object_is_dropped(
+    call: ResponsesCall,
+    traces: TraceCapture,
+    #[case] exhaust: bool,
+    #[case] outcome: &str,
+) {
+    let upstream = upstream([ResponseTemplate::new(200).set_body_string("stream-bytes")]).await;
+    let output = traces
+        .logger()
+        .instrument(async {
+            responses_route(no_secrets())
+                .execute(
+                    ResponsesCall {
+                        api_base: Some(upstream.uri()),
+                        optional_params: json!({"stream":true}).as_object().unwrap().clone(),
+                        ..call
+                    },
+                    &(),
+                    None,
+                )
+                .await
+        })
+        .await
+        .unwrap();
+    assert!(traces.summaries("litellm.route").is_empty());
+    let ResponsesOutput::Stream { mut chunks, .. } = output else {
+        panic!("expected stream")
+    };
+    let captured = traces.clone();
+    tokio::spawn(async move {
+        if exhaust {
+            while chunks.try_next().await.unwrap().is_some() {}
+            assert_eq!(captured.summaries("litellm.route").len(), 1);
+            assert!(chunks.try_next().await.unwrap().is_none());
+        }
+        drop(chunks);
+    })
+    .await
+    .unwrap();
+    let summaries = traces.summaries("litellm.route");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0]["stream"], true);
+    assert_eq!(summaries[0]["outcome"], outcome);
+}
+
+#[rstest]
+#[tokio::test]
+async fn preparation_failure_is_traced_but_unpolled_builders_are_not(
+    call: ResponsesCall,
+    traces: TraceCapture,
+) {
+    traces.logger().scope(|| {
+        drop(responses_route(no_secrets()).execute(
+            ResponsesCall {
+                model: "unknown/model".into(),
+                ..call
+            },
+            &(),
+            None,
+        ))
+    });
+    assert!(traces.records().is_empty());
+    let result = traces
+        .logger()
+        .instrument(async {
+            responses_route(no_secrets())
+                .execute(
+                    ResponsesCall {
+                        model: "unknown/model".into(),
+                        ..self::call()
+                    },
+                    &(),
+                    None,
+                )
+                .await
+        })
+        .await;
+    assert!(result.is_err());
+    let summaries = traces.summaries("litellm.route");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0]["outcome"], "failure");
+    assert!(traces.summaries("litellm.provider.send").is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn websocket_operations_trace_outcomes_without_capturing_frames_or_credentials(
+    traces: TraceCapture,
+) {
+    use futures_util::{SinkExt, StreamExt};
+    use litellm_core::responses::websocket::ResponsesWebSocketConnection;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+        let message = socket.next().await.unwrap().unwrap();
+        socket.send(message).await.unwrap();
+        let _ = socket.next().await;
+    });
+    traces
+        .logger()
+        .instrument(async {
+            let connection = ResponsesWebSocketConnection::connect_url(
+                &format!("ws://{address}/responses"),
+                &std::collections::HashMap::from([(
+                    "authorization".into(),
+                    "private-key-sentinel".into(),
+                )]),
+                None,
+            )
+            .await
+            .unwrap();
+            connection
+                .send_text("private-frame-sentinel".into())
+                .await
+                .unwrap();
+            assert_eq!(
+                connection.recv_text().await.unwrap().as_deref(),
+                Some("private-frame-sentinel")
+            );
+            connection.close().await.unwrap();
+            assert!(
+                connection
+                    .send_text("private-frame-sentinel".into())
+                    .await
+                    .is_err()
+            );
+        })
+        .await;
+    server.await.unwrap();
+    let sends = traces.summaries("litellm.websocket.send_text");
+    assert_eq!(sends.len(), 2);
+    assert_eq!(sends[0]["outcome"], "success");
+    assert_eq!(sends[1]["outcome"], "failure");
+    assert_eq!(
+        traces.summaries("litellm.websocket.connect_url")[0]["outcome"],
+        "success"
+    );
+    assert_eq!(
+        traces.summaries("litellm.websocket.recv_text")[0]["outcome"],
+        "success"
+    );
+    assert_eq!(
+        traces.summaries("litellm.websocket.close")[0]["outcome"],
+        "success"
+    );
+    assert!(!format!("{:?}", traces.records()).contains("private-"));
 }

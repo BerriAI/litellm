@@ -1,5 +1,6 @@
 //! `POST /v1/messages`, as the Python proxy's `anthropic_response` serves it.
 
+use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
 use axum::{
@@ -11,7 +12,7 @@ use axum::{
 };
 use litellm_core::messages::{MessagesCall, messages_body, route::Messages};
 use litellm_host_http::Sse;
-use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
 use crate::{Deployment, Error, Gateway, JsonObject, RequestId, request};
@@ -22,12 +23,13 @@ const ANTHROPIC_API_HEADER_PROVIDERS: &str = "anthropic,bedrock,bedrock_mantle,v
 
 pub async fn create(
     State(gateway): State<Arc<Gateway>>,
+    identity: AuthenticatedRequest,
     RequestId(request_id): RequestId,
     headers: HeaderMap,
     body: Result<JsonObject, Error>,
 ) -> impl IntoResponse {
     let result = match body {
-        Ok(JsonObject(body)) => handle(&gateway, &headers, body).await,
+        Ok(JsonObject(body)) => handle(&gateway, &identity, &headers, body).await,
         Err(error) => Err(error),
     };
     result.map_err(|error| (error.status(), Json(error.body(request_id.as_deref()))))
@@ -35,15 +37,29 @@ pub async fn create(
 
 async fn handle(
     gateway: &Gateway,
+    identity: &AuthenticatedRequest,
     headers: &HeaderMap,
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
     let deployment = request::resolve_deployment(gateway, &body)?;
+    request::authorize_model(identity, deployment, &body).await?;
+    let (body, cache_options) = crate::caching::prepare(identity, body)?;
+    let route = gateway.messages.clone();
+    let route = match &gateway.cache {
+        Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
+            cache.clone(),
+            cache_options.scope.clone(),
+        )),
+        None => route,
+    };
+
     let call = project(deployment, body, headers)?;
-    let machine = gateway.messages.clone().machine(call);
+    let machine = route.machine(call, cache_options.policy);
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
-    Ok(litellm_host_http::serve(machine, (), (), stream).await?)
+    let headers = crate::caching::CacheHeaders::default();
+    let response = litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?;
+    Ok(headers.apply(response))
 }
 
 fn project(

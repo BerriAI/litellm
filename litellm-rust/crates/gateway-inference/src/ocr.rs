@@ -1,9 +1,11 @@
+use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
 use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use litellm_auth::SecretValue;
 use litellm_core::ocr::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
-use litellm_llms::base_llm::ocr::transformation::OcrDocument;
+use litellm_llms::base_llm::ocr::transformation::decode_request_value;
+use litellm_llms_types::formats::ocr::OcrDocument;
 use serde_json::Value;
 
 use crate::{
@@ -13,14 +15,16 @@ use crate::{
 
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
+    identity: AuthenticatedRequest,
     headers: HeaderMap,
     body: InferenceBody,
 ) -> Result<impl IntoResponse, Error> {
-    handle(&gateway, &headers, body).await.map(Json)
+    handle(&gateway, &identity, &headers, body).await.map(Json)
 }
 
 async fn handle(
     gateway: &Gateway,
+    identity: &AuthenticatedRequest,
     headers: &HeaderMap,
     InferenceBody {
         fields: body,
@@ -32,13 +36,18 @@ async fn handle(
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     let deployment = request::resolve_deployment(gateway, &body)?;
+    request::authorize_model(identity, deployment, &body).await?;
     let document = match upload {
         Some(upload) => OcrDocumentInput::Bytes {
             bytes: upload.bytes,
             file_name: upload.file_name,
             mime_type: upload.mime_type,
         },
-        None => OcrDocument::try_from(body.get("document").cloned().unwrap_or_default())?.into(),
+        None => decode_request_value::<OcrDocument>(
+            body.get("document").cloned().unwrap_or_default(),
+            "document",
+        )?
+        .into(),
     };
     let format = body
         .get("req_format")
@@ -66,7 +75,7 @@ async fn handle(
             ..Default::default()
         },
     )?;
-    let response = gateway.ocr.execute(call, &()).await?;
+    let response = gateway.ocr.execute(call, &(), None).await?;
     match response.provider_native_response {
         Some(native) => Ok(Value::Object(native)),
         None => Ok(response.into_json()),

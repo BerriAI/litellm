@@ -90,6 +90,26 @@ fn object(body: &[u8]) -> Result<Map<String, Value>, Error> {
     }
 }
 
+pub(crate) async fn authorize_model(
+    identity: &litellm_gateway_auth::AuthenticatedRequest,
+    deployment: &Deployment,
+    body: &Map<String, Value>,
+) -> Result<(), Error> {
+    let name = body
+        .get("model")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::InvalidBody("model is required".into()))?;
+    let access = litellm_gateway_auth::AccessRequest::Model {
+        name: name.into(),
+        deployment: deployment.model.clone(),
+    };
+    identity
+        .authorize(access.clone())
+        .await?
+        .consume(identity.caller(), &access)?;
+    Ok(())
+}
+
 pub(crate) fn resolve_deployment<'a>(
     gateway: &'a Gateway,
     body: &Map<String, Value>,

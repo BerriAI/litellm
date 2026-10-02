@@ -4,11 +4,19 @@ use litellm_http::outbound::OutboundRequest;
 use litellm_llms::base_llm::auth::Authenticated;
 use serde_json::Value;
 
+#[tracing::instrument(
+    name = "litellm.provider.send",
+    level = "debug",
+    skip_all,
+    fields(status)
+)]
 pub(crate) async fn send(
     request: OutboundRequest,
     client: &litellm_http::Client,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    request.send(client).await
+    request.send(client).await.inspect(|response| {
+        tracing::Span::current().record("status", response.status().as_u16());
+    })
 }
 
 /// Header credentials are already in `headers`; SigV4 is applied here, over the

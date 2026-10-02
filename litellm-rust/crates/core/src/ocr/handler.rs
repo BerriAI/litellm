@@ -1,13 +1,12 @@
 use futures_util::future::BoxFuture;
-use litellm_host::{
-    event::{MachineEvent, RawResponse, RequestContext, WireRequest},
-    hooks::RouteHooks,
-};
+use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
+use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
 use litellm_llms::base_llm::ocr::{
     error::Error,
     handler::{CallHooks, OcrClient},
-    transformation::{LiteLLMOcrResponse, PreparedOcrRequest},
+    transformation::PreparedOcrRequest,
 };
+use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 use serde_json::Value;
 
 use super::{arguments::is_secret_param, prepare::prepare_request, provider_config::OcrConfigKind};
@@ -16,8 +15,9 @@ use crate::ocr::types::ResolvedOcrRequest;
 pub(crate) async fn perform_ocr_request(
     client: &OcrClient,
     request: ResolvedOcrRequest,
-    host: &impl RouteHooks<Error>,
+    host: &impl Interceptors<Error>,
     caller_document: bool,
+    observers: Option<&ObservationSender>,
 ) -> Result<LiteLLMOcrResponse, Error> {
     request.response_format()?;
     let config = request.config;
@@ -27,19 +27,26 @@ pub(crate) async fn perform_ocr_request(
         .await
         .map_err(|error| Error::Secret(std::sync::Arc::new(error)))?;
     let request = prepare_request(request, caller_document, client, secrets);
-    let hooks = OcrCallHooks::new(host, &request, config);
-    config.ocr(client, &request, &hooks).await
+    let interceptors = OcrCallHooks::new(host, &request, config, observers);
+    config.ocr(client, &request, &interceptors).await
 }
 
 struct OcrCallHooks<'a, H> {
-    hooks: &'a H,
+    interceptors: &'a H,
     context: RequestContext,
+    observers: Option<&'a ObservationSender>,
 }
 
 impl<'a, H> OcrCallHooks<'a, H> {
-    fn new(hooks: &'a H, request: &PreparedOcrRequest, config: OcrConfigKind) -> Self {
+    fn new(
+        interceptors: &'a H,
+        request: &PreparedOcrRequest,
+        config: OcrConfigKind,
+        observers: Option<&'a ObservationSender>,
+    ) -> Self {
         Self {
-            hooks,
+            interceptors,
+            observers,
             context: RequestContext {
                 model: request.model.clone(),
                 custom_llm_provider: <&str>::from(config.provider()).to_owned(),
@@ -56,22 +63,26 @@ impl<'a, H> OcrCallHooks<'a, H> {
     }
 }
 
-impl<H: RouteHooks<Error>> CallHooks<Error> for OcrCallHooks<'_, H> {
+impl<H: Interceptors<Error>> CallHooks<Error> for OcrCallHooks<'_, H> {
     fn before_provider_request(
         &self,
         wire: WireRequest,
     ) -> BoxFuture<'_, Result<WireRequest, Error>> {
         Box::pin(
-            self.hooks
+            self.interceptors
                 .before_provider_request(wire, self.context.clone()),
         )
     }
 
     fn response_received<'a>(&'a self, body: &'a [u8]) -> BoxFuture<'a, Result<(), Error>> {
-        Box::pin(self.hooks.on_event(MachineEvent::ResponseReceived {
-            raw: RawResponse {
-                body: String::from_utf8_lossy(body).into_owned(),
-            },
-        }))
+        let raw = RawResponse {
+            body: String::from_utf8_lossy(body).into_owned(),
+        };
+        if let Some(observers) = self.observers {
+            observers.emit(litellm_host::lifecycle::CallEvent::Execution(
+                ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
+            ));
+        }
+        Box::pin(self.interceptors.after_provider_response(raw))
     }
 }

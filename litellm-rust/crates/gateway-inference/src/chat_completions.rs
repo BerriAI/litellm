@@ -1,3 +1,4 @@
+use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
 use axum::{
@@ -12,13 +13,15 @@ use crate::{Error, Gateway, JsonObject, request};
 
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
+    identity: AuthenticatedRequest,
     JsonObject(body): JsonObject,
 ) -> Result<impl IntoResponse, Error> {
-    handle(&gateway, body).await
+    handle(&gateway, &identity, body).await
 }
 
 pub(crate) async fn create_from_model_path(
     State(gateway): State<Arc<Gateway>>,
+    identity: AuthenticatedRequest,
     Path(model): Path<String>,
     JsonObject(body): JsonObject,
 ) -> Result<impl IntoResponse, Error> {
@@ -29,17 +32,31 @@ pub(crate) async fn create_from_model_path(
             .collect(),
         Some(_) => body,
     };
-    handle(&gateway, body).await
+    handle(&gateway, &identity, body).await
 }
 
-async fn handle(gateway: &Gateway, body: Map<String, Value>) -> Result<Response, Error> {
+async fn handle(
+    gateway: &Gateway,
+    identity: &AuthenticatedRequest,
+    body: Map<String, Value>,
+) -> Result<Response, Error> {
     let deployment = request::resolve_deployment(gateway, &body)?;
+    request::authorize_model(identity, deployment, &body).await?;
+    let (body, cache_options) = crate::caching::prepare(identity, body)?;
+    let route = gateway.chat_completions.clone();
+    let route = match &gateway.cache {
+        Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
+            cache.clone(),
+            cache_options.scope.clone(),
+        )),
+        None => route,
+    };
+
     let messages = body.get("messages").cloned().unwrap_or_default();
+    let headers = crate::caching::CacheHeaders::default();
     let response = litellm_host_http::serve_unary(
-        gateway
-            .chat_completions
-            .clone()
-            .machine(ChatCompletionsCall {
+        route.machine(
+            ChatCompletionsCall {
                 model: deployment.model.clone(),
                 messages,
                 optional_params: body
@@ -51,11 +68,14 @@ async fn handle(gateway: &Gateway, body: Map<String, Value>) -> Result<Response,
                 custom_llm_provider: deployment.custom_llm_provider.clone(),
                 extra_headers: None,
                 timeout: deployment.timeout,
-            }),
+            },
+            cache_options.policy,
+        ),
         (),
-        (),
+        headers.clone(),
         litellm_host_http::Unary::new(Json),
+        None,
     )
     .await?;
-    Ok(response)
+    Ok(headers.apply(response))
 }

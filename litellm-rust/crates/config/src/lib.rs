@@ -1,5 +1,6 @@
 mod error;
 mod includes;
+mod mcp;
 mod model;
 mod settings;
 mod value;
@@ -9,6 +10,7 @@ use std::{fmt, path::Path};
 use serde::Deserialize;
 
 pub use error::Error;
+pub use mcp::{McpAuth, McpServer, McpTransport};
 pub use model::{LiteLlmParams, Model};
 pub use settings::{GeneralSettings, LiteLlmSettings, RouterSettings};
 pub use value::{AdditionalFields, Flag, NumberOrString, Object, OneOrMany, Value};
@@ -24,6 +26,7 @@ pub struct Config {
     pub callback_settings: Object,
     pub assistant_settings: Object,
     pub default_vertex_config: Object,
+    pub mcp_servers: std::collections::BTreeMap<String, McpServer>,
     pub credential_list: Box<[Object]>,
     pub guardrails: Box<[Object]>,
     pub prompts: Box<[Object]>,
@@ -55,6 +58,7 @@ impl fmt::Debug for Config {
             .field("callback_settings", &self.callback_settings)
             .field("assistant_settings", &self.assistant_settings)
             .field("default_vertex_config", &self.default_vertex_config)
+            .field("mcp_servers", &self.mcp_servers)
             .field("credential_list", &self.credential_list)
             .field("guardrails", &self.guardrails)
             .field("prompts", &self.prompts)
