@@ -8590,3 +8590,168 @@ def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
         team_callback_settings_obj=None,
     )
     assert under_other.callback_vars == {"langfuse_host": "https://cloud.langfuse.com"}
+
+
+class TestAttributableRequestTags:
+    """``LiteLLMProxyRequestSetup.attributable_request_tags``: the ordered,
+    deduplicated union of every source a tag can reach a request through."""
+
+    def _attributable(self, request_data, headers=None, token=None):
+        return LiteLLMProxyRequestSetup.attributable_request_tags(
+            request_data=request_data,
+            headers=headers or {},
+            user_api_key_dict=token,
+        )
+
+    def test_header_tags_comma_separated(self):
+        assert self._attributable(
+            {"model": "m"}, {"x-litellm-tags": "a, b ,, c "}
+        ) == ("a", "b", "c")
+
+    def test_header_tags_list_form_drops_non_str_and_empty(self):
+        assert self._attributable(
+            {}, {"x-litellm-tags": ["a", "", 3, "b"]}
+        ) == ("a", "b")
+
+    def test_root_body_tags(self):
+        assert self._attributable({"tags": ["a", "b"]}) == ("a", "b")
+
+    def test_metadata_and_litellm_metadata_tags_both_count(self):
+        assert self._attributable(
+            {
+                "metadata": {"tags": ["m1"]},
+                "litellm_metadata": {"tags": ["l1"]},
+            }
+        ) == ("m1", "l1")
+
+    def test_metadata_as_json_string(self):
+        assert self._attributable({"metadata": '{"tags": ["m1"]}'}) == ("m1",)
+
+    def test_non_str_entries_ignored_everywhere(self):
+        token = UserAPIKeyAuth(api_key="k", metadata={"tags": ["k1", 7, None]})
+        assert self._attributable(
+            {"tags": ["a", 1], "metadata": {"tags": ["m1", {"x": 1}]}},
+            {},
+            token,
+        ) == ("a", "m1", "k1")
+
+    def test_key_team_and_project_metadata_tags(self):
+        token = UserAPIKeyAuth(
+            api_key="k",
+            metadata={"tags": ["k1"]},
+            team_metadata={"tags": ["t1"]},
+            project_metadata={"tags": ["p1"]},
+        )
+        assert self._attributable({}, {}, token) == ("k1", "t1", "p1")
+
+    def test_dedupes_across_sources_preserving_order(self):
+        token = UserAPIKeyAuth(api_key="k", metadata={"tags": ["c", "d"]})
+        assert self._attributable(
+            {"tags": ["a", "b"], "metadata": {"tags": ["b", "c"]}},
+            {"x-litellm-tags": "a"},
+            token,
+        ) == ("a", "b", "c", "d")
+
+    def test_no_token_counts_only_request_sources(self):
+        assert self._attributable({"tags": ["a"]}, {"x-litellm-tags": "h"}, None) == ("h", "a")
+
+
+def _tag_pipeline_request(path: str, headers: dict) -> Request:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = path
+    request_mock.url.__str__.return_value = f"http://localhost{path}"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json", **headers}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state = MagicMock()
+    request_mock.state._cached_headers = None
+    return request_mock
+
+
+_TAG_SURFACES = [
+    ("/v1/chat/completions", "metadata"),
+    ("/v1/responses", "litellm_metadata"),
+    ("/v1/messages", "litellm_metadata"),
+]
+
+_TAG_SOURCES = [
+    "header",
+    "root-tags",
+    "metadata-tags",
+    "litellm-metadata-tags",
+    "key-tags",
+    "team-tags",
+    "project-tags",
+]
+
+
+def _inject_tag_source(source: str, data: dict, headers: dict, token_kwargs: dict, tag: str) -> None:
+    if source == "header":
+        headers["x-litellm-tags"] = tag
+    elif source == "root-tags":
+        data["tags"] = [tag]
+    elif source == "metadata-tags":
+        data.setdefault("metadata", {})["tags"] = [tag]
+    elif source == "litellm-metadata-tags":
+        data.setdefault("litellm_metadata", {})["tags"] = [tag]
+    elif source == "key-tags":
+        token_kwargs["metadata"] = {"tags": [tag]}
+    elif source == "team-tags":
+        token_kwargs["team_metadata"] = {"tags": [tag]}
+    elif source == "project-tags":
+        token_kwargs["project_metadata"] = {"tags": [tag]}
+
+
+@pytest.mark.parametrize("route,metadata_slot", _TAG_SURFACES, ids=["chat", "responses", "messages"])
+@pytest.mark.parametrize("source", _TAG_SOURCES)
+@pytest.mark.asyncio
+async def test_attributable_tags_cover_what_the_pipeline_merges(route, metadata_slot, source):
+    """For each tag source on each metadata surface, the post-auth merged
+    ``metadata.tags`` must stay a subset of what ``attributable_request_tags``
+    computed on the original request and token: the ownership check reading
+    that set cannot miss a tag the pipeline will attribute."""
+    data: dict = {"model": "gpt-3.5-turbo"}
+    headers: dict = {}
+    token_kwargs: dict = {}
+    _inject_tag_source(source, data, headers, token_kwargs, "tag-x")
+
+    request = _tag_pipeline_request(route, headers)
+    token = UserAPIKeyAuth(api_key="hashed-key", user_id="u", **token_kwargs)
+    attributable = set(
+        LiteLLMProxyRequestSetup.attributable_request_tags(
+            request_data=data,
+            headers=headers,
+            user_api_key_dict=token,
+        )
+    )
+    assert attributable == {"tag-x"}
+
+    LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(request_data=data, route=route)
+    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+        request=request, request_data=data, user_api_key_dict=token
+    )
+    LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(request_data=data, user_api_key_dict=token)
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request,
+        user_api_key_dict=token,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    merged_slot = updated.get(metadata_slot) or {}
+    assert set(merged_slot.get("tags") or ()) <= attributable
+    # caller_tags pins existing behavior: header and root "tags" always count;
+    # body "metadata.tags" counts only on litellm_metadata routes (where it is
+    # the non-active slot), and "litellm_metadata.tags" never does.
+    caller_sources = {"header", "root-tags"}
+    if source == "metadata-tags" and metadata_slot == "litellm_metadata":
+        caller_sources.add("metadata-tags")
+    expected_caller = ("tag-x",) if source in caller_sources else ()
+    expected_inherited = ("tag-x",) if source in {"key-tags", "team-tags", "project-tags"} else ()
+    assert tuple(merged_slot.get("caller_tags") or ()) == expected_caller
+    assert tuple(merged_slot.get("inherited_tags") or ()) == expected_inherited

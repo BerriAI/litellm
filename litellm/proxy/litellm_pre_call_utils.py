@@ -465,6 +465,14 @@ def _normalized_metadata_object(field: str, value: object) -> Mapping[str, objec
     raise _invalid_metadata_type_error(field=field, value=value)
 
 
+def _parse_header_tags(raw: object) -> tuple[str, ...]:
+    if isinstance(raw, str):
+        return tuple(piece for piece in (part.strip() for part in raw.split(",")) if piece)
+    if isinstance(raw, list):
+        return tuple(item for item in raw if isinstance(item, str) and item)
+    return ()
+
+
 def _normalized_metadata_slot(
     request_data: MutableMapping[str, object], metadata_variable_name: str
 ) -> dict[str, object]:
@@ -1921,17 +1929,7 @@ class LiteLLMProxyRequestSetup:
         # into metadata.tags (see add_litellm_data_to_request). The pre-auth
         # merge mirrors that so _tag_max_budget_check sees the same tags.
         headers: Final = _safe_get_request_headers(request=request)
-        raw_header_tags: Final = headers.get("x-litellm-tags")
-        if not raw_header_tags:
-            return
-
-        if isinstance(raw_header_tags, str):
-            header_tags: list[str] = [t.strip() for t in raw_header_tags.split(",") if t.strip()]
-        elif isinstance(raw_header_tags, list):
-            header_tags = [t for t in raw_header_tags if isinstance(t, str) and t]
-        else:
-            return
-
+        header_tags: Final = _parse_header_tags(headers.get("x-litellm-tags"))
         if not header_tags:
             return
 
@@ -1944,7 +1942,43 @@ class LiteLLMProxyRequestSetup:
         existing_tags: Final = metadata.get("tags")
         metadata["tags"] = LiteLLMProxyRequestSetup._merge_tags(
             request_tags=existing_tags if isinstance(existing_tags, list) else None,
-            tags_to_add=header_tags,
+            tags_to_add=list(header_tags),
+        )
+
+    @staticmethod
+    def attributable_request_tags(
+        request_data: Mapping[str, object],
+        headers: Mapping[str, str],
+        user_api_key_dict: UserAPIKeyAuth | None,
+    ) -> tuple[str, ...]:
+        """Every tag the request can be attributed to, from all seven sources:
+        the ``x-litellm-tags`` header, root ``tags``, ``metadata.tags`` and
+        ``litellm_metadata.tags`` (either may carry them post-merge), and the
+        key/team/project ``metadata["tags"]`` on the resolved token. Ordered
+        and deduplicated; reads nothing the pipeline mutated."""
+        from litellm.proxy.common_utils.http_parsing_utils import tags_from_metadata_value
+
+        raw_body_tags: Final = request_data.get("tags")
+        body_tags: Final = raw_body_tags if isinstance(raw_body_tags, list) else ()
+        token_tags: Final = (
+            (
+                *tags_from_metadata_value(user_api_key_dict.metadata),
+                *tags_from_metadata_value(user_api_key_dict.team_metadata),
+                *tags_from_metadata_value(user_api_key_dict.project_metadata),
+            )
+            if user_api_key_dict is not None
+            else ()
+        )
+        return tuple(
+            dict.fromkeys(
+                (
+                    *_parse_header_tags(headers.get("x-litellm-tags")),
+                    *(tag for tag in body_tags if isinstance(tag, str)),
+                    *tags_from_metadata_value(request_data.get("metadata")),
+                    *tags_from_metadata_value(request_data.get("litellm_metadata")),
+                    *token_tags,
+                )
+            )
         )
 
 
