@@ -110,6 +110,7 @@ from litellm.proxy.management_helpers.access_group_key_sync import (
     sync_key_regeneration_access_group_membership,
     sync_key_update_access_group_membership,
 )
+from litellm.proxy.management_helpers.audit_logs import track_audit_task
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
@@ -1550,12 +1551,14 @@ async def _common_key_generation_helper(
 
     response.token = response.token_id  # remap token to use the hash, and leave the key in the `key` field [TODO]: clean up generate_key_helper_fn to do this
 
-    asyncio.create_task(
-        KeyManagementEventHooks.async_key_generated_hook(
-            data=data,
-            response=response,
-            user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
+    track_audit_task(
+        asyncio.create_task(
+            KeyManagementEventHooks.async_key_generated_hook(
+                data=data,
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
         )
     )
 
@@ -2886,13 +2889,15 @@ async def _process_single_key_update(
     )
 
     # Trigger async hook
-    asyncio.create_task(
-        KeyManagementEventHooks.async_key_updated_hook(
-            data=key_request,
-            existing_key_row=existing_key_row,
-            response=response,
-            user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
+    track_audit_task(
+        asyncio.create_task(
+            KeyManagementEventHooks.async_key_updated_hook(
+                data=key_request,
+                existing_key_row=existing_key_row,
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
         )
     )
 
@@ -3583,13 +3588,15 @@ async def update_key_fn(
                         redis_err,
                     )
 
-        asyncio.create_task(
-            KeyManagementEventHooks.async_key_updated_hook(
-                data=data,
-                existing_key_row=existing_key_row,
-                response=response,
-                user_api_key_dict=user_api_key_dict,
-                litellm_changed_by=litellm_changed_by,
+        track_audit_task(
+            asyncio.create_task(
+                KeyManagementEventHooks.async_key_updated_hook(
+                    data=data,
+                    existing_key_row=existing_key_row,
+                    response=response,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_changed_by=litellm_changed_by,
+                )
             )
         )
 
@@ -4159,13 +4166,15 @@ async def delete_key_fn(
             "/keys/delete - cache after delete: %s", user_api_key_cache.key_object_cache.in_memory_cache.cache_dict
         )
 
-        asyncio.create_task(
-            KeyManagementEventHooks.async_key_deleted_hook(
-                data=data,
-                keys_being_deleted=_keys_being_deleted,
-                user_api_key_dict=user_api_key_dict,
-                litellm_changed_by=litellm_changed_by,
-                response=number_deleted_keys,
+        track_audit_task(
+            asyncio.create_task(
+                KeyManagementEventHooks.async_key_deleted_hook(
+                    data=data,
+                    keys_being_deleted=_keys_being_deleted,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_changed_by=litellm_changed_by,
+                    response=number_deleted_keys,
+                )
             )
         )
 
@@ -5686,13 +5695,15 @@ async def _execute_virtual_key_regeneration(
     )
 
     response: Final = GenerateKeyResponse.model_validate(updated_token_dict)
-    asyncio.create_task(
-        KeyManagementEventHooks.async_key_rotated_hook(
-            data=data,
-            existing_key_row=key_in_db,
-            response=response,
-            user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
+    track_audit_task(
+        asyncio.create_task(
+            KeyManagementEventHooks.async_key_rotated_hook(
+                data=data,
+                existing_key_row=key_in_db,
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
         )
     )
     return response

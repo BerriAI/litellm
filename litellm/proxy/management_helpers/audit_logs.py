@@ -150,7 +150,7 @@ class AuditTaskRegistry:
         if exc is not None:
             verbose_proxy_logger.error("Audit log callback task failed: %s", exc, exc_info=exc)
 
-    async def drain(self, timeout: float = 10.0) -> None:
+    async def drain(self, timeout: float = 5.0) -> None:
         deadline: Final = asyncio.get_running_loop().time() + timeout
         while self._pending_tasks:
             remaining = deadline - asyncio.get_running_loop().time()
@@ -187,7 +187,7 @@ def track_audit_task(task: asyncio.Task[_T]) -> asyncio.Task[_T]:
     return _audit_task_registry.track(task)
 
 
-async def drain_audit_tasks(timeout: float = 10.0) -> None:
+async def drain_audit_tasks(timeout: float = 5.0) -> None:
     await _audit_task_registry.drain(timeout=timeout)
 
 
@@ -261,12 +261,12 @@ async def create_object_audit_log(
 
 
 async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
+    if not is_audit_logging_enabled():
+        return
+
     current_task: Final = asyncio.current_task()
     if current_task is not None:
         track_audit_task(current_task)
-
-    if not is_audit_logging_enabled():
-        return
 
     from litellm.proxy.proxy_server import premium_user, prisma_client
 

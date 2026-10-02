@@ -41,6 +41,7 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 from starlette.datastructures import URL
 
 from litellm.proxy.management_helpers.audit_logs import (
+    _pending_audit_tasks,
     create_audit_log_for_update,
     drain_audit_tasks,
     get_audit_log_changed_by,
@@ -460,3 +461,72 @@ async def test_drain_audit_tasks_captures_tasks_queued_during_drain():
     await drain_audit_tasks(timeout=2.0)
 
     assert finished_tasks == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_create_audit_log_for_update_does_not_track_when_logging_disabled():
+    with (
+        patch("litellm.store_audit_logs", False),
+        patch("litellm.proxy.management_helpers.audit_logs.is_audit_logging_enabled", return_value=False),
+    ):
+        request_data: Final = LiteLLM_AuditLogs(
+            id=str(uuid.uuid4()),
+            updated_at=datetime.now(timezone.utc),
+            changed_by="test-user",
+            table_name=LitellmTableNames.KEY_TABLE_NAME,
+            object_id="test-obj",
+            action="updated",
+            updated_values="{}",
+            before_value="{}",
+        )
+        current_tracked_before: Final = len(_pending_audit_tasks)
+        await create_audit_log_for_update(request_data=request_data)
+        assert len(_pending_audit_tasks) == current_tracked_before
+
+
+@pytest.mark.asyncio
+async def test_hook_spawn_with_io_delay_drained_before_shutdown():
+    mock_prisma: Final = MagicMock()
+    writes: Final[list[dict[str, Any]]] = []
+    drain_completed: Final[list[bool]] = [False]
+
+    async def _mock_create(data: dict[str, Any]) -> None:
+        assert not drain_completed[0]
+        writes.append(data)
+
+    mock_prisma.db.litellm_auditlog.create = AsyncMock(side_effect=_mock_create)
+
+    async def _hook_with_preceding_io() -> None:
+        await asyncio.sleep(0.05)
+        await create_audit_log_for_update(
+            request_data=LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by="admin",
+                table_name=LitellmTableNames.KEY_TABLE_NAME,
+                object_id="token-hook",
+                action="created",
+                updated_values="{}",
+                before_value=None,
+            )
+        )
+
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+    ):
+        hook_task: Final = track_audit_task(asyncio.create_task(_hook_with_preceding_io()))
+        await drain_audit_tasks(timeout=2.0)
+        drain_completed[0] = True
+
+        assert hook_task.done()
+        assert len(writes) == 1
+        assert writes[0]["object_id"] == "token-hook"
+
+
+def test_drain_audit_tasks_default_timeout():
+    import inspect
+
+    sig: Final = inspect.signature(drain_audit_tasks)
+    assert sig.parameters["timeout"].default == 5.0
