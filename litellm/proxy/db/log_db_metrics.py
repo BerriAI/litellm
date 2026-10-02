@@ -6,6 +6,7 @@ ServiceLogger() then sends DB logs to Prometheus, OTEL, Datadog etc
 
 import asyncio
 from collections.abc import Callable
+from contextvars import ContextVar
 from datetime import datetime
 from functools import wraps
 from typing import Final
@@ -25,9 +26,46 @@ def _safe_db_event_metadata(kwargs: dict) -> dict[str, str] | None:
     return {"table_name": table_name} if isinstance(table_name, str) else None
 
 
+class _DbIoWitness:
+    """One per ``log_db_metrics`` activation; marked by the Prisma engine wrapper on every query.
+
+    Marks propagate to the enclosing activation so a decorated function that reaches the
+    database only through another decorated function still records its own event.
+    """
+
+    __slots__ = ("_parent", "_touched")
+
+    def __init__(self, parent: "_DbIoWitness | None") -> None:
+        self._parent: Final = parent
+        self._touched = False
+
+    @property
+    def touched(self) -> bool:
+        return self._touched
+
+    def mark(self) -> None:
+        self._touched = True
+        if self._parent is not None:
+            self._parent.mark()
+
+
+_db_io_witness: Final[ContextVar["_DbIoWitness | None"]] = ContextVar("litellm_db_io_witness", default=None)
+
+
+def record_db_io() -> None:
+    """Tell the enclosing ``log_db_metrics`` activations that a real database round trip happened."""
+    witness: Final = _db_io_witness.get()
+    if witness is not None:
+        witness.mark()
+
+
 def log_db_metrics(func):
     """
     Decorator to log the duration of a DB related function to ServiceLogger()
+
+    The DB success event is emitted only when the wrapped call performed database I/O
+    (reported through ``record_db_io`` by the Prisma engine wrapper), so cache hits in
+    cache-first helpers produce no ``postgres <fn>`` span or DB service metric
 
     Handles logging DB success/failure to ServiceLogger(), which logs to Prometheus, OTEL, Datadog
 
@@ -46,6 +84,8 @@ def log_db_metrics(func):
     @wraps(func)
     async def wrapper(*args, **kwargs):
         start_time: Final[datetime] = datetime.now()
+        witness: Final = _DbIoWitness(parent=_db_io_witness.get())
+        witness_token: Final = _db_io_witness.set(witness)
 
         try:
             result: Final = await func(*args, **kwargs)
@@ -53,6 +93,8 @@ def log_db_metrics(func):
             from litellm.proxy.proxy_server import proxy_logging_obj
 
             if "PROXY" not in func.__name__:
+                if not witness.touched:
+                    return result
                 asyncio.create_task(
                     proxy_logging_obj.service_logging_obj.async_service_success_hook(
                         service=ServiceTypes.DB,
@@ -99,6 +141,8 @@ def log_db_metrics(func):
                 end_time=end_time,
             )
             raise e
+        finally:
+            _db_io_witness.reset(witness_token)
 
     return wrapper
 

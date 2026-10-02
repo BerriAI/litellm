@@ -14,14 +14,23 @@ import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
 from litellm.proxy.utils import log_db_metrics, ServiceTypes
+from litellm.proxy.db.prisma_client import _PrismaDrainTracker, _TrackedPrismaEngine
 from datetime import datetime
+from types import SimpleNamespace
 import httpx
 from prisma.errors import ClientNotConnectedError
+
+
+async def _run_prisma_query() -> None:
+    """One round trip through the tracked engine wrapper, which is what marks a call as real DB I/O."""
+    engine = _TrackedPrismaEngine(SimpleNamespace(query=AsyncMock(return_value={})), _PrismaDrainTracker())
+    await engine.query("{}", tx_id=None)
 
 
 # Test async function to decorate
 @log_db_metrics
 async def sample_db_function(*args, **kwargs):
+    await _run_prisma_query()
     return "success"
 
 
@@ -71,6 +80,7 @@ async def test_log_db_metrics_event_metadata_is_safe():
 
         @log_db_metrics
         async def db_call(**kwargs):
+            await _run_prisma_query()
             return "success"
 
         await db_call(
@@ -99,6 +109,7 @@ async def test_log_db_metrics_duration():
         # Add a delay to the function to test duration
         @log_db_metrics
         async def delayed_function(**kwargs):
+            await _run_prisma_query()
             await asyncio.sleep(1)  # 1 second delay
             return "success"
 
