@@ -11,6 +11,7 @@ model the team could reach.
 from __future__ import annotations
 
 import time
+from typing import Final
 
 import pytest
 from access_control_client import (
@@ -71,7 +72,7 @@ class TestProjectAllTeamModels:
         resources.defer(lambda: client.delete_key(key))
 
         client.set_team_models(team_id, f"e2e-proj-team-{marker}", [TEAM_MODEL])
-        written_at = time.monotonic()
+        written_at: Final = time.monotonic()
         _ = client.proxy.read_body_back_everywhere(
             f"/team/info?team_id={team_id}",
             TeamInfoResponse,
