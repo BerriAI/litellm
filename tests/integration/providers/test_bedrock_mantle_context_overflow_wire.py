@@ -672,12 +672,11 @@ _Outcome = tuple[str, bool, bool, int, str, str]
 _Builder = Callable[[str, str, bool], dict[str, JsonValue]]
 _Cell = tuple[tuple[str, _Builder], str, bool]
 _BUILDERS: Final = (("/v1/chat/completions", _chat), ("/v1/messages", _messages), ("/v1/responses", _responses))
-_STREAMED_MESSAGES_OVERFLOW: Final = ("/v1/messages", _OVERFLOW_MARKER, True)
+_STREAMED_MESSAGES_OVERFLOW: Final = ("/v1/messages", True, True)
 
 
-def _logs_a_spend_row(cell: _Cell) -> bool:
-    (path, _), marker, stream = cell
-    return (path, marker, stream) != _STREAMED_MESSAGES_OVERFLOW
+def _logs_a_spend_row(path: str, overflow: bool, stream: bool) -> bool:
+    return (path, overflow, stream) != _STREAMED_MESSAGES_OVERFLOW
 
 
 def _chaos_peer(request: Request) -> Reply:
@@ -695,8 +694,7 @@ def _burst_bodies(model: str, round_name: str) -> tuple[_Call, ...]:
         prompt: Final = f"{marker} {round_name} {path} stream={stream} {tag}"
         return path, build(model, prompt, stream), marker == _OVERFLOW_MARKER, tag
 
-    cells: Final = product(_BUILDERS, (_HAPPY_MARKER, _OVERFLOW_MARKER), (False, True))
-    return tuple(call(cell) for cell in cells if _logs_a_spend_row(cell))
+    return tuple(call(cell) for cell in product(_BUILDERS, (_HAPPY_MARKER, _OVERFLOW_MARKER), (False, True)))
 
 
 def _tagged_rows(tag: str) -> list[dict[str, JsonValue]]:
@@ -732,7 +730,8 @@ def _assert_served(outcomes: tuple[_Outcome, ...]) -> None:
             continue
         assert _GENERIC in text, (path, status, text)
         assert status in (200, 400), (path, status, text)
-        assert _single_tagged_status(tag) == "failure", (path, tag)
+        if _logs_a_spend_row(path, overflow, stream):
+            assert _single_tagged_status(tag) == "failure", (path, tag)
 
 
 def test_messages_stream_overflow_logs_one_failure_row(gateway: Gateway) -> None:
