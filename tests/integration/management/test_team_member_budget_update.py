@@ -344,3 +344,65 @@ def test_concurrent_team_updates_preserve_member_default_inheritance(
             300,
             "team_default",
         )
+
+
+@pytest.mark.parametrize(
+    ("update", "expected_key_duration", "expected_budget"),
+    (
+        pytest.param({"team_member_budget": 100}, "1h", 100, id="budget-only"),
+        pytest.param({"team_member_key_duration": ""}, "", 75, id="metadata-backed-field"),
+    ),
+)
+def test_omitted_metadata_preserves_a_concurrent_metadata_change(
+    gateway: Gateway,
+    update: dict[str, JsonValue],
+    expected_key_duration: str,
+    expected_budget: int,
+) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team(
+            team_member_budget=75,
+            metadata={"label": "before", "team_member_key_duration": "1h"},
+        )
+        with psycopg.connect(os.environ["DATABASE_URL"]) as blocker, ThreadPoolExecutor(max_workers=2) as executor:
+            blocker.execute('SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_id=%s FOR UPDATE', (team,))
+            metadata_writer: Final = executor.submit(
+                gateway.request,
+                "POST",
+                "/team/update",
+                {"team_id": team, "metadata": {"label": "after", "team_member_key_duration": "1h"}},
+            )
+            try:
+                blocked_metadata: Final = eventually(
+                    lambda: read_rows(
+                        "SELECT pid::text FROM pg_stat_activity WHERE %s::int=ANY(pg_blocking_pids(pid))",
+                        (str(blocker.info.backend_pid),),
+                    ),
+                    bool,
+                    seconds=10,
+                )
+                metadata_pid: Final = string_value(blocked_metadata[0]["pid"])
+                other_writer: Final = executor.submit(
+                    gateway.request, "POST", "/team/update", {"team_id": team, **update}
+                )
+                eventually(
+                    lambda: read_rows(
+                        "SELECT pid::text FROM pg_stat_activity WHERE %s::int=ANY(pg_blocking_pids(pid))",
+                        (metadata_pid,),
+                    ),
+                    bool,
+                    seconds=10,
+                )
+            finally:
+                blocker.commit()
+            metadata_response: Final = metadata_writer.result(timeout=30)
+            other_response: Final = other_writer.result(timeout=30)
+        assert metadata_response.status_code == 200, metadata_response.text
+        assert other_response.status_code == 200, other_response.text
+        assert read_rows(
+            "SELECT t.metadata->>'label' AS label, "
+            "t.metadata->>'team_member_key_duration' AS key_duration, b.max_budget AS default_amount "
+            'FROM "LiteLLM_TeamTable" t LEFT JOIN "LiteLLM_BudgetTable" b '
+            "ON b.budget_id=t.metadata->>'team_member_budget_id' WHERE t.team_id=%s",
+            (team,),
+        ) == [{"label": "after", "key_duration": expected_key_duration, "default_amount": expected_budget}]

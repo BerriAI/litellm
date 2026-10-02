@@ -8,8 +8,13 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.litellm_core_utils.duration_parser import budget_reset_schedule_key
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy._types import (
+    LiteLLM_ManagementEndpoint_MetadataFields,
+    LiteLLM_ManagementEndpoint_MetadataFields_Premium,
+    UpdateTeamRequest,
+    UserAPIKeyAuth,
+)
 from litellm.proxy._types import LiteLLM_TeamTable as TeamView
-from litellm.proxy._types import UpdateTeamRequest, UserAPIKeyAuth
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_endpoints.common_utils import (
@@ -263,7 +268,19 @@ async def _apply_team_member_budget_update(
             shared_budget_ids=shared_ids,
         )
     current_budget_id: Final = saved_budget.budget_id if saved_budget is not None else budget_id
-    requested_metadata: Final = team_data.get("metadata", team_record.metadata)
+    encoded_metadata: Final = _metadata(team_data.get("metadata"))
+    metadata_fields: Final = {
+        field: encoded_metadata[field]
+        for field in (*LiteLLM_ManagementEndpoint_MetadataFields, *LiteLLM_ManagementEndpoint_MetadataFields_Premium)
+        if field in requested and requested[field] is not None and field in encoded_metadata
+    }
+    requested_metadata: Final = (
+        team_data.get("metadata")
+        if "metadata" in requested
+        else {**metadata, **metadata_fields}
+        if metadata_fields
+        else team_record.metadata
+    )
     next_metadata: Final = (
         {**_metadata(requested_metadata), "team_member_budget_id": current_budget_id}
         if current_budget_id is not None
