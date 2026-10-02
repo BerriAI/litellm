@@ -1,5 +1,6 @@
 import inspect
 import os
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -2064,6 +2065,18 @@ class TestRunServerDbSetup:
             use_migrate=True, use_v2_resolver=False
         )
 
+    @pytest.mark.parametrize(
+        ("arguments", "env", "exits"),
+        [
+            ((), {}, True),
+            (("--enforce_prisma_migration_check",), {}, True),
+            ((), {"ENFORCE_PRISMA_MIGRATION_CHECK": "true"}, True),
+            (("--no-enforce_prisma_migration_check",), {}, False),
+            ((), {"ENFORCE_PRISMA_MIGRATION_CHECK": "false"}, False),
+            ((), {"ENFORCE_PRISMA_MIGRATION_CHECK": "0"}, False),
+        ],
+        ids=("default", "flag", "env-true", "no-flag", "env-false", "env-0"),
+    )
     @patch("subprocess.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
@@ -2076,8 +2089,13 @@ class TestRunServerDbSetup:
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
+        arguments,
+        env,
+        exits,
+        capsys,
     ):
-        """Test that proxy exits with code 1 when PrismaManager.setup_database returns False and --enforce_prisma_migration_check is set"""
+        """A failed PrismaManager.setup_database exits 1 by default; only an explicit
+        --no-enforce_prisma_migration_check or ENFORCE_PRISMA_MIGRATION_CHECK=false keeps the proxy booting"""
         from litellm.proxy.proxy_cli import run_server
 
         mock_subprocess_run.return_value = MagicMock(returncode=0)
@@ -2094,12 +2112,13 @@ class TestRunServerDbSetup:
         clean_env = {
             k: v
             for k, v in os.environ.items()
-            if k not in ("DATABASE_URL", "DIRECT_URL")
+            if k not in ("DATABASE_URL", "DIRECT_URL", "ENFORCE_PRISMA_MIGRATION_CHECK")
         }
         clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+        outcome = pytest.raises(SystemExit) if exits else nullcontext()
 
         with (
-            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(os.environ, {**clean_env, **env}, clear=True),
             patch.dict(
                 "sys.modules",
                 {
@@ -2110,26 +2129,20 @@ class TestRunServerDbSetup:
             patch(
                 "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
             ) as mock_get_args,
+            outcome as exc_info,
         ):
             mock_get_args.return_value = {
                 "app": "litellm.proxy.proxy_server:app",
                 "host": "localhost",
                 "port": 8000,
             }
+            run_server.main(["--local", "--skip_server_startup", *arguments], standalone_mode=False)
 
-            with pytest.raises(SystemExit) as exc_info:
-                run_server.main(
-                    [
-                        "--local",
-                        "--skip_server_startup",
-                        "--enforce_prisma_migration_check",
-                    ],
-                    standalone_mode=False,
-                )
-            assert exc_info.value.code == 1
-            mock_setup_database.assert_called_once_with(
-                use_migrate=True, use_v2_resolver=False
-            )
+        assert (exc_info is not None and exc_info.value.code == 1) is exits
+        assert ("Database migration failed but continuing startup" in capsys.readouterr().out) is not exits
+        mock_setup_database.assert_called_once_with(
+            use_migrate=True, use_v2_resolver=False
+        )
 
     @patch("subprocess.run")
     @patch("atexit.register")

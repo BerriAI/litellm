@@ -921,10 +921,14 @@ class ProxyInitializationHelpers:
     envvar="LIMIT_CONCURRENCY",
 )
 @click.option(
-    "--enforce_prisma_migration_check",
-    is_flag=True,
-    default=False,
-    help="Exit with error if database migration fails on startup.",
+    "--enforce_prisma_migration_check/--no-enforce_prisma_migration_check",
+    default=True,
+    show_default=True,
+    help=(
+        "Exit when database setup fails on startup instead of serving against a database "
+        "whose schema may be behind the code. Opt out with --no-enforce_prisma_migration_check "
+        "or ENFORCE_PRISMA_MIGRATION_CHECK=false."
+    ),
     envvar="ENFORCE_PRISMA_MIGRATION_CHECK",
 )
 @click.option(
@@ -1380,8 +1384,8 @@ def run_server(
                             sys.exit(1)
                         else:
                             print(
-                                "\033[1;33mLiteLLM Proxy: Database migration failed but continuing startup. "
-                                "Set --enforce_prisma_migration_check or ENFORCE_PRISMA_MIGRATION_CHECK=true to exit on failure.\033[0m"
+                                "\033[1;33mLiteLLM Proxy: Database migration failed but continuing startup because "
+                                "ENFORCE_PRISMA_MIGRATION_CHECK is disabled. The schema may be behind the code.\033[0m"
                             )
             else:
                 print(
