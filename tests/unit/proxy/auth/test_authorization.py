@@ -3,7 +3,7 @@ from typing import Final
 import pytest
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.spend_tracking.log_visibility import resolve_trace_read_scope
+from litellm.proxy.auth.authorization import resolve_trace_read_scope
 from litellm.proxy.tracing_endpoints import _trace_scope
 from litellm.tracing.types import TraceScope
 

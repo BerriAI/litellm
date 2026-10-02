@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from litellm.proxy.spend_tracking.log_visibility_dependencies import get_log_team_lookup
+from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team,
     get_spend_by_team_and_customer,

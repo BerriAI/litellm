@@ -16,9 +16,8 @@ from pydantic import BaseModel, Field
 
 import litellm
 import litellm.proxy.proxy_server as ps
-from litellm.proxy.auth.authorization import any_of
-from litellm.proxy.spend_tracking.log_visibility import AllLogs, LogReadScope, TeamLogs, UserLogs
-from litellm.proxy.spend_tracking.log_visibility_dependencies import get_log_team_lookup
+from litellm.proxy.auth.authorization import AllLogs, LogReadScope, TeamLogs, UserLogs, any_of
+from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 
 
 def _default_date_range():
@@ -1738,7 +1737,7 @@ async def test_ui_view_spend_logs_without_user_filter_includes_permitted_team_sc
 
 @pytest.mark.asyncio
 async def test_permitted_team_scope_falls_back_to_own_user_when_lookup_fails():
-    from litellm.proxy.spend_tracking.log_visibility import resolve_log_read_scope
+    from litellm.proxy.auth.authorization import resolve_log_read_scope
 
     async def unavailable():
         raise RuntimeError("database unavailable")
@@ -8022,7 +8021,7 @@ async def test_shared_read_scope_returns_only_owned_or_permitted_rows(monkeypatc
 async def test_shared_owner_policy_preserves_own_user_and_team_access(
     user_id, owner_user, owner_team, permitted, expected
 ):
-    from litellm.proxy.spend_tracking.log_visibility import can_read_log_owner
+    from litellm.proxy.auth.authorization import can_read_log_owner
 
     async def lookup(team_id):
         if team_id == "broken":
@@ -8034,7 +8033,7 @@ async def test_shared_owner_policy_preserves_own_user_and_team_access(
 
 @pytest.mark.asyncio
 async def test_shared_owner_policy_propagates_team_lookup_failure():
-    from litellm.proxy.spend_tracking.log_visibility import can_read_log_owner
+    from litellm.proxy.auth.authorization import can_read_log_owner
 
     async def unavailable(team_id):
         raise RuntimeError("team lookup failed")
@@ -8046,7 +8045,7 @@ async def test_shared_owner_policy_propagates_team_lookup_failure():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("lookup_failure", [False, True])
 async def test_payload_scope_filters_colliding_foreign_request_id(lookup_failure):
-    from litellm.proxy.spend_tracking.log_visibility import resolve_log_read_scope
+    from litellm.proxy.auth.authorization import resolve_log_read_scope
 
     async def lookup():
         if lookup_failure:
@@ -8108,8 +8107,8 @@ async def test_log_team_dependency_preserves_checks_before_permission_lookup(
 @pytest.mark.asyncio
 async def test_management_team_lookup_without_memberships_keeps_own_user_scope(monkeypatch):
     from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.auth.authorization import resolve_log_read_scope
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.proxy.spend_tracking.log_visibility import resolve_log_read_scope
 
     cache = UserApiKeyCache()
     await cache.async_set_cache(

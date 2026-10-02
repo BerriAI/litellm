@@ -37,11 +37,9 @@ from litellm.constants import (
 from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, classifier_input_snapshot
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
-from litellm.proxy.auth.authorization import AnyOf
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
-from litellm.proxy.spend_tracking.log_visibility import (
+from litellm.proxy.auth.authorization import (
     AllLogs,
+    AnyOf,
     LogGrant,
     LogReadScope,
     TeamLogs,
@@ -50,11 +48,13 @@ from litellm.proxy.spend_tracking.log_visibility import (
     can_read_team_logs,
     resolve_log_read_scope,
 )
-from litellm.proxy.spend_tracking.log_visibility_dependencies import (
+from litellm.proxy.auth.authorization_dependencies import (
     LogTeamLookup,
     LogTeamLookupDependency,
     load_permitted_log_team_ids,
 )
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     ProviderBillingCredentialMissing,
     ProviderBillingRequestFailed,

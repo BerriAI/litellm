@@ -13,8 +13,8 @@ from fastapi.testclient import TestClient
 
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
+from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.spend_tracking.log_visibility_dependencies import get_log_team_lookup
 from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
 from litellm.rust_bridge.trace_queries import SPAN_DETAIL, SpanDetailParams
 from litellm.rust_bridge.trace_query_responses import TraceQueryHelp, TraceSQLResponse

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Annotated, Final, TypeAlias
 from fastapi import Depends
 
 from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
-from litellm.proxy.spend_tracking.log_visibility import permitted_log_team_ids
+from litellm.proxy.auth.authorization import permitted_log_team_ids
 
 if TYPE_CHECKING:
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache

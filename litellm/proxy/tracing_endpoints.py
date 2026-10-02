@@ -21,18 +21,18 @@ from pydantic import BaseModel, ConfigDict
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import OTLP_RETRY_AFTER_SECONDS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.authorization import AnyOf
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
-from litellm.proxy.spend_tracking.log_visibility import (
+from litellm.proxy.auth.authorization import (
     AllLogs,
+    AnyOf,
     ApiKeyLogs,
     TeamLogs,
     TraceReadScope,
     UserLogs,
     resolve_trace_read_scope,
 )
-from litellm.proxy.spend_tracking.log_visibility_dependencies import LogTeamLookupDependency
+from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
 from litellm.rust_bridge.trace_query_responses import TraceQueryHelp, TraceSQLResponse
 from litellm.rust_bridge.traces import ClickHouseStorage, QueryScope
