@@ -3,9 +3,10 @@ from types import MappingProxyType
 from typing import Final
 
 from fastapi import HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import litellm
+from litellm.exceptions import ModelNotMappedError
 from litellm.integrations.clickhouse.context import lens_analysis
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
 from litellm.proxy.lens.billing import complete, validate_key
@@ -59,6 +60,17 @@ class Prices(BaseModel):
     input_cost_per_token_above_128k_tokens: float = 0
     output_cost_per_token_above_128k_tokens: float = 0
 
+    @field_validator(
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens",
+        "input_cost_per_token_above_128k_tokens",
+        "output_cost_per_token_above_128k_tokens",
+        mode="before",
+    )
+    @classmethod
+    def missing_tier_rate(cls, value: object) -> object:
+        return 0 if value is None else value
+
 
 def deployment_prices(deployment: Deployment) -> Prices:
     params: Final = deployment.litellm_params
@@ -66,7 +78,14 @@ def deployment_prices(deployment: Deployment) -> Prices:
         return Prices(
             input_cost_per_token=params.input_cost_per_token, output_cost_per_token=params.output_cost_per_token
         )
-    return Prices.model_validate(litellm.get_model_info(model=params.model))
+    try:
+        return Prices.model_validate(litellm.get_model_info(model=params.model))
+    except (ModelNotMappedError, ValueError) as exc:
+        raise HTTPException(
+            400,
+            f"Pricing is not configured for {params.model}. Set input_cost_per_token and output_cost_per_token "
+            "on its deployment before running an investigation.",
+        ) from exc
 
 
 def quote(deployments: tuple[Deployment, ...], prompt: str) -> float:
