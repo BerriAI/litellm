@@ -116,6 +116,7 @@ def provider_reply(request: Request) -> Reply:
     """Scripted edge for every route the audit drives: anthropic messages, openai chat completions and
     responses, gemini generateContent. Error bodies keyed off the sentinel model name."""
     body: Final = json.loads(request.body) if request.body else {}
+    target: Final = request.target.split("?", 1)[0]
     if body.get("model") == "claude-nonexistent-model":
         return Reply(
             status=400,
@@ -123,9 +124,9 @@ def provider_reply(request: Request) -> Reply:
                 {"error": {"type": "invalid_request_error", "message": "model: claude-nonexistent-model"}}
             ).encode(),
         )
-    if request.target == "/v1/models" or request.target.startswith("/v1/models/"):
+    if target == "/v1/models" or target.startswith("/v1/models/"):
         return Reply(body=json.dumps({"object": "list", "data": []}).encode())
-    if request.target == "/v1/messages":
+    if target == "/v1/messages":
         identity: Final = _message_id()
         if body.get("stream") is True:
             events: Final = tuple(
@@ -134,7 +135,7 @@ def provider_reply(request: Request) -> Reply:
             )
             return Reply(content_type="text/event-stream", chunks=_sse_frames(events))
         return Reply(body=json.dumps({**ANTHROPIC_SONNET_BODY, "id": identity}).encode())
-    if request.target == "/v1/chat/completions":
+    if target == "/v1/chat/completions":
         identity = "chatcmpl_" + uuid.uuid4().hex
         if body.get("stream") is True:
             frames: Final = tuple(
@@ -142,7 +143,7 @@ def provider_reply(request: Request) -> Reply:
             ) + (b"data: [DONE]\n\n",)
             return Reply(content_type="text/event-stream", chunks=frames)
         return Reply(body=json.dumps({**CHAT_COMPLETION_BODY, "id": identity}).encode())
-    if request.target == "/v1/responses":
+    if target == "/v1/responses":
         identity = "resp_" + uuid.uuid4().hex
         message: Final = _message_id()
         completed_body: Final = {
@@ -165,7 +166,7 @@ def provider_reply(request: Request) -> Reply:
             completed: Final = {"type": "response.completed", "response": completed_body}
             return Reply(content_type="text/event-stream", chunks=_sse_frames((created, delta, completed)))
         return Reply(body=json.dumps(completed_body).encode())
-    if request.target.endswith(":generateContent") or request.target.endswith(":streamGenerateContent"):
+    if target.endswith(":generateContent") or target.endswith(":streamGenerateContent"):
         return Reply(body=json.dumps(GEMINI_BODY).encode())
     raise AssertionError(f"unexpected upstream target {request.target}")
 

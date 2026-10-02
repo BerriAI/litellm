@@ -1,4 +1,5 @@
 import asyncio
+import http.client
 import json
 import uuid
 from hashlib import sha256
@@ -19,6 +20,7 @@ from integration.spend._request_tag_helpers import (
     provider_reply,
     tags_by_id,
     tags_by_key,
+    tags_of,
     write_config,
 )
 
@@ -555,22 +557,30 @@ def test_routes_without_headers_record_no_tags(gateway: Gateway, tmp_path: Path,
                 model=f"anthropic/{MODEL}", api_base=wire.url, api_key="synthetic-anthropic-key"
             )
             key: Final = scenario.key()
-            response: Final = candidate.request(
+            connection: Final = http.client.HTTPConnection("127.0.0.1", candidate.client.base_url.port)
+            connection.request(
                 "POST",
                 route,
-                {
-                    "model": MODEL if route == "/anthropic/v1/messages" else model,
-                    "max_tokens": 16,
-                    "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
+                body=json.dumps(
+                    {
+                        "model": MODEL if route == "/anthropic/v1/messages" else model,
+                        "max_tokens": 16,
+                        "messages": [{"role": "user", "content": f"tag me {uuid.uuid4().hex}"}],
+                    }
+                ),
+                headers={
+                    "authorization": f"Bearer {key}",
+                    "content-type": "application/json",
+                    "anthropic-version": "2023-06-01",
                 },
-                key=key,
-                headers={"user-agent": "", "anthropic-version": "2023-06-01"},
             )
-            assert response.status_code == 200, response.text
+            raw: Final = connection.getresponse()
+            payload: Final = raw.read()
+            connection.close()
+            assert raw.status == 200, payload
+            request_id: Final = json.loads(payload)["id"]
             assert len(wire.drain()) == 1
-            assert eventually(lambda: tags_by_id(response.json()["id"]), lambda tags: len(tags) == 1, seconds=70) == [
-                []
-            ]
+            assert eventually(lambda: tags_by_id(request_id), lambda tags: len(tags) == 1, seconds=70) == [[]]
 
 
 # S3: disable_add_user_agent_to_request_tags keeps only the extra header tags
@@ -701,6 +711,15 @@ def test_unauthenticated_request_writes_no_spend_row(gateway: Gateway, tmp_path:
                 headers={**SENT_HEADERS, "anthropic-version": "2023-06-01"},
             )
             assert response.status_code == 401, response.text
+            anonymous: Final = eventually(
+                lambda: read_rows(
+                    "SELECT request_tags FROM \"LiteLLM_SpendLogs\" WHERE api_key IS NULL OR api_key=''",
+                    (),
+                ),
+                lambda rows: len(rows) == 1,
+                seconds=70,
+            )
+            assert [tags_of(row) for row in anonymous] == [[]]
             key: Final = scenario.key()
             control: Final = candidate.request(
                 "POST",
@@ -718,7 +737,7 @@ def test_unauthenticated_request_writes_no_spend_row(gateway: Gateway, tmp_path:
             assert eventually(lambda: tags_by_id(control.json()["id"]), lambda tags: len(tags) == 1, seconds=70) == [
                 EXPECTED_TAGS
             ]
-            assert _spend_count() == before + 1
+            assert _spend_count() == before + 2
 
 
 # S7: an upstream 400 surfaces the same status and its spend row records the tags
