@@ -990,31 +990,28 @@ def bedrock_converse_supports_strict_tools(model: str) -> bool:
     return flag if flag is not None else True
 
 
-def bedrock_converse_supports_regex_lookaround(model: str, litellm_params: Mapping[str, object] | None = None) -> bool:
+def bedrock_model_supports_regex_lookaround(model: str, litellm_params: Mapping[str, object] | None = None) -> bool:
     """
     Whether ``model`` accepts lookahead and lookbehind assertions in tool schema regexes.
 
-    The deployment's ``model_info.bedrock_converse_supports_regex_lookaround`` wins, then
-    the ``model_prices_and_context_window.json`` entry of its ``base_model``, then the
+    The deployment's ``model_info.supports_regex_lookaround`` wins, then the
+    ``model_prices_and_context_window.json`` entry of its ``base_model``, then the
     entry of ``model`` itself. A model nobody flagged keeps its schema as sent.
     """
     params: Final = litellm_params or {}
     model_info: Final = _DEPLOYMENT_MODEL_INFO.validate_python(params.get("model_info") or {})
-    deployment_flag: Final = model_info.get("bedrock_converse_supports_regex_lookaround")
+    deployment_flag: Final = model_info.get("supports_regex_lookaround")
     if isinstance(deployment_flag, bool):
         return deployment_flag
     base_model: Final = params.get("base_model")
     candidates: Final = (*((base_model,) if isinstance(base_model, str) else ()), model)
-    flags: Final = (
-        _bedrock_converse_model_flag(candidate, "bedrock_converse_supports_regex_lookaround")
-        for candidate in candidates
-    )
+    flags: Final = (_bedrock_converse_model_flag(candidate, "supports_regex_lookaround") for candidate in candidates)
     return next((flag for flag in flags if flag is not None), True)
 
 
 _BedrockConverseModelFlag: TypeAlias = Literal[
     "bedrock_converse_supports_strict_tools",
-    "bedrock_converse_supports_regex_lookaround",
+    "supports_regex_lookaround",
 ]
 
 

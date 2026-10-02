@@ -1364,9 +1364,9 @@ def drop_lookaround_regex_patterns(schema: Mapping[str, object]) -> Mapping[str,
     has no lookahead or lookbehind and refuse the whole request over one. The ``(?=``,
     ``(?!``, ``(?<=`` and ``(?<!`` openers are matched textually, so an escaped literal
     that spells one is dropped too, trading a hint for a request that goes through.
-    Dropping a ``patternProperties`` key next to ``additionalProperties: false`` forbids
-    the names it allowed, as in :func:`drop_non_python_regex_patterns`, whose walk this
-    shares.
+    A ``patternProperties`` key dropped from an object closed by ``additionalProperties:
+    false`` leaves its value schema as that object's ``additionalProperties``, so the
+    names it allowed stay allowed; :func:`drop_non_python_regex_patterns` shares the walk.
     """
     return _schema_without_rejected_regex(schema, _uses_regex_lookaround)
 
@@ -1411,7 +1411,33 @@ def _node_without_rejected_regex(
         for key, value in node.items()
         if key != "pattern" or not isinstance(value, str) or not rejected(value)
     }
-    return node if len(kept) == len(node) and all(kept[key] is node[key] for key in kept) else kept
+    if len(kept) == len(node) and all(kept[key] is node[key] for key in kept):
+        return node
+    dropped_pattern_properties: Final = _dropped_pattern_properties(node, kept, rebuilt)
+    if not dropped_pattern_properties or kept.get("additionalProperties") is not False:
+        return kept
+    return {**kept, "additionalProperties": _any_of(dropped_pattern_properties)}
+
+
+def _dropped_pattern_properties(
+    node: Mapping[str, object],
+    kept: Mapping[str, object],
+    rebuilt: Mapping[int, Mapping[str, object]],
+) -> tuple[object, ...]:
+    before: Final = _schema_at(node, "patternProperties")
+    after: Final = _schema_at(kept, "patternProperties")
+    if before is None or after is None:
+        return ()
+    return tuple(rebuilt.get(id(sub), sub) for name, sub in before.items() if name not in after)
+
+
+def _schema_at(container: Mapping[str, object], key: str) -> Mapping[str, object] | None:
+    value: Final = container.get(key)
+    return value if isinstance(value, dict) else None
+
+
+def _any_of(schemas: tuple[object, ...]) -> object:
+    return schemas[0] if len(schemas) == 1 else {"anyOf": list(schemas)}
 
 
 def _keyword_value_rebuilt(
@@ -1458,16 +1484,23 @@ def tool_with_sanitized_parameters(
     tool: Mapping[str, object],
     sanitize: Callable[[Mapping[str, object]], Mapping[str, object]],
 ) -> Mapping[str, object]:
-    function: Final = tool.get("function")
-    if not isinstance(function, dict):
+    """Run the tool's JSON schema through ``sanitize``: ``function.parameters`` on an
+    OpenAI tool, ``input_schema`` on an Anthropic one. The same object comes back when
+    nothing changed."""
+    function: Final = _schema_at(tool, "function")
+    if function is not None:
+        parameters: Final = _schema_at(function, "parameters")
+        if parameters is None:
+            return tool
+        sanitized_parameters: Final = sanitize(parameters)
+        if sanitized_parameters is parameters:
+            return tool
+        return {**tool, "function": {**function, "parameters": sanitized_parameters}}
+    input_schema: Final = _schema_at(tool, "input_schema")
+    if input_schema is None:
         return tool
-    parameters: Final = function.get("parameters")
-    if not isinstance(parameters, dict):
-        return tool
-    sanitized: Final = sanitize(parameters)
-    if sanitized is parameters:
-        return tool
-    return {**tool, "function": {**function, "parameters": sanitized}}
+    sanitized_schema: Final = sanitize(input_schema)
+    return tool if sanitized_schema is input_schema else {**tool, "input_schema": sanitized_schema}
 
 
 def _get_image_mime_type_from_url(url: str) -> str | None:

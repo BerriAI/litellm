@@ -60,9 +60,6 @@
         "audio_transcription_config": {
           "type": "string"
         },
-        "bedrock_converse_supports_regex_lookaround": {
-          "type": "boolean"
-        },
         "bedrock_converse_supports_strict_tools": {
           "type": "boolean"
         },
@@ -1063,6 +1060,9 @@
           "type": "boolean"
         },
         "supports_reasoning": {
+          "type": "boolean"
+        },
+        "supports_regex_lookaround": {
           "type": "boolean"
         },
         "supports_response_schema": {

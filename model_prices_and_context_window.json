@@ -47425,7 +47425,7 @@
         "supports_tool_choice": true
     },
     "us-gov.xai.grok-4.6": {
-        "bedrock_converse_supports_regex_lookaround": false,
+        "supports_regex_lookaround": false,
         "input_cost_per_token": 2.64e-06,
         "output_cost_per_token": 7.92e-06,
         "cache_read_input_token_cost": 6.6e-07,
@@ -59038,7 +59038,7 @@
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5-5.html"
     },
     "us.xai.grok-4.6": {
-        "bedrock_converse_supports_regex_lookaround": false,
+        "supports_regex_lookaround": false,
         "input_cost_per_token": 2.2e-06,
         "output_cost_per_token": 6.6e-06,
         "cache_read_input_token_cost": 5.5e-07,
@@ -59055,7 +59055,7 @@
         "supports_vision": true
     },
     "global.xai.grok-4.6": {
-        "bedrock_converse_supports_regex_lookaround": false,
+        "supports_regex_lookaround": false,
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 6e-06,
         "cache_read_input_token_cost": 5e-07,
@@ -76661,7 +76661,7 @@
         "supports_web_search": true
     },
     "moonshotai.kimi-k3": {
-        "bedrock_converse_supports_regex_lookaround": false,
+        "supports_regex_lookaround": false,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_read_input_token_cost": 3.3e-07,
         "input_cost_per_token": 3.3e-06,
@@ -76682,7 +76682,7 @@
         "supports_vision": true
     },
     "global.moonshotai.kimi-k3": {
-        "bedrock_converse_supports_regex_lookaround": false,
+        "supports_regex_lookaround": false,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
@@ -76703,7 +76703,7 @@
         "supports_vision": true
     },
     "us.moonshotai.kimi-k3": {
-        "bedrock_converse_supports_regex_lookaround": false,
+        "supports_regex_lookaround": false,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_read_input_token_cost": 3.3e-07,
         "input_cost_per_token": 3.3e-06,
@@ -79260,7 +79260,7 @@
         "supports_vision": false
     },
     "global.xai.grok-4.7": {
-        "bedrock_converse_supports_regex_lookaround": false,
+        "supports_regex_lookaround": false,
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "bedrock_converse",
@@ -79277,7 +79277,7 @@
         "supports_vision": true
     },
     "us.xai.grok-4.7": {
-        "bedrock_converse_supports_regex_lookaround": false,
+        "supports_regex_lookaround": false,
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 2.2e-06,
         "litellm_provider": "bedrock_converse",
@@ -79294,7 +79294,7 @@
         "supports_vision": true
     },
     "xai.grok-4.7": {
-        "bedrock_converse_supports_regex_lookaround": false,
+        "supports_regex_lookaround": false,
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "bedrock_converse",

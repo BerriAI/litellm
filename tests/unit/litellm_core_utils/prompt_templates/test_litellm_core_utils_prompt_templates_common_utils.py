@@ -1621,6 +1621,40 @@ class TestToolWithSanitizedParameters:
 
         assert tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns) is tool
 
+    def test_sanitizes_the_input_schema_of_an_anthropic_tool(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_lookaround_regex_patterns,
+            tool_with_sanitized_parameters,
+        )
+
+        tool = {
+            "name": "ArtifactData",
+            "description": "Read a shared database",
+            "input_schema": {
+                "type": "object",
+                "properties": {"doc_id": {"type": "string", "pattern": _ARTIFACT_DATA_ID_PATTERN}},
+            },
+        }
+
+        result = tool_with_sanitized_parameters(tool, drop_lookaround_regex_patterns)
+
+        assert result == {
+            "name": "ArtifactData",
+            "description": "Read a shared database",
+            "input_schema": {"type": "object", "properties": {"doc_id": {"type": "string"}}},
+        }
+        assert tool["input_schema"]["properties"]["doc_id"]["pattern"] == _ARTIFACT_DATA_ID_PATTERN
+
+    def test_returns_the_same_anthropic_tool_when_its_schema_has_nothing_to_drop(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_lookaround_regex_patterns,
+            tool_with_sanitized_parameters,
+        )
+
+        tool = {"name": "Read", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}}
+
+        assert tool_with_sanitized_parameters(tool, drop_lookaround_regex_patterns) is tool
+
 
 def _regex_schema(pattern):
     return {
@@ -1799,6 +1833,75 @@ class TestDropLookaroundRegexPatterns:
         }
 
         assert drop_lookaround_regex_patterns(schema) is schema
+
+
+@pytest.mark.parametrize(
+    ("dropper", "patterns"),
+    [
+        ("drop_non_python_regex_patterns", (_ARTIFACT_FIELD_PATTERN, r"^\p{L}+$")),
+        ("drop_lookaround_regex_patterns", (_ARTIFACT_DATA_ID_PATTERN, r"^(?=.*[a-z])\w+$")),
+    ],
+    ids=["non-python", "lookaround"],
+)
+class TestDroppedPatternPropertiesKeepTheirNamesAllowed:
+    """Dropping a ``patternProperties`` key from an object closed by ``additionalProperties:
+    false`` must not ban the names that key allowed: its value schema takes over as the
+    object's ``additionalProperties``."""
+
+    @staticmethod
+    def _drop(dropper):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_lookaround_regex_patterns,
+            drop_non_python_regex_patterns,
+        )
+
+        return {
+            "drop_non_python_regex_patterns": drop_non_python_regex_patterns,
+            "drop_lookaround_regex_patterns": drop_lookaround_regex_patterns,
+        }[dropper]
+
+    def test_closed_object_takes_the_dropped_value_schema(self, dropper, patterns):
+        schema = {
+            "type": "object",
+            "patternProperties": {patterns[0]: {"type": "string", "pattern": patterns[0]}},
+            "additionalProperties": False,
+        }
+
+        assert self._drop(dropper)(schema) == {
+            "type": "object",
+            "patternProperties": {},
+            "additionalProperties": {"type": "string"},
+        }
+
+    def test_closed_object_losing_two_entries_accepts_either_value_schema(self, dropper, patterns):
+        schema = {
+            "type": "object",
+            "patternProperties": {
+                patterns[0]: {"type": "string"},
+                patterns[1]: {"type": "integer"},
+                "^x_": {"type": "boolean"},
+            },
+            "additionalProperties": False,
+        }
+
+        assert self._drop(dropper)(schema) == {
+            "type": "object",
+            "patternProperties": {"^x_": {"type": "boolean"}},
+            "additionalProperties": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+        }
+
+    def test_object_with_its_own_additional_properties_schema_keeps_it(self, dropper, patterns):
+        schema = {
+            "type": "object",
+            "patternProperties": {patterns[0]: {"type": "string"}},
+            "additionalProperties": {"type": "integer"},
+        }
+
+        assert self._drop(dropper)(schema) == {
+            "type": "object",
+            "patternProperties": {},
+            "additionalProperties": {"type": "integer"},
+        }
 
 
 class TestRequestContainsImageContent:
