@@ -405,6 +405,43 @@ class MaskingModuleConfig(BaseModel):
         return self
 
 
+class AfterLastRoleTargetSelector(BaseModel):
+    """
+    Scopes input filtering to all messages after the last message with a given role.
+
+    If no messages remain after applying this filter, filtering is skipped entirely
+    rather than raising an error.
+
+    Args:
+        after_last_role: The role used as the anchor. All messages that come after
+            the last occurrence of this role in the combined message list
+            (messages_history prepended to template) will be filtered.
+            One of: 'system', 'user', 'assistant', 'developer', 'tool'.
+    """
+
+    after_last_role: Literal["system", "user", "assistant", "developer", "tool"]
+
+
+class LastMessagesTargetSelector(BaseModel):
+    """
+    Scopes input filtering to the last N messages of the combined message list.
+
+    Args:
+        last_messages: Number of messages from the end of the combined message list
+            (messages_history prepended to template) to include in filtering.
+            Must be >= 1 (0 is not allowed and returns 400 Bad Request).
+            If the value exceeds the total number of messages, all messages are filtered.
+    """
+
+    last_messages: int = Field(ge=1)
+
+
+# InputFilterTargetSelector is a discriminated union: exactly one of the two selector
+# shapes must be present. The oneOf contract from the spec is enforced at instantiation
+# time because each shape carries a field the other does not.
+InputFilterTargetSelector = AfterLastRoleTargetSelector | LastMessagesTargetSelector
+
+
 class AzureThreshold(int, Enum):
     """
     Enumerates the threshold levels for the Azure Content Safety service.
@@ -498,33 +535,25 @@ class LlamaGuard38bFilter(BaseModel):
     Specific implementation of ContentFilter for Llama Guard 3. Llama Guard 3 is a
     Llama-3.1-8B pretrained model, fine-tuned for content safety classification.
 
+    At least one category must be set to True (spec: minProperties: 1).
+
+    .. deprecated::
+        Will be removed 2027-09-20. Use :class:`GraniteGuardian41` instead.
+
     Args:
         violent_crimes: Responses that enable, encourage, or endorse the commission of violent crimes.
-
         non_violent_crimes: Responses that enable, encourage, or endorse the commission of non-violent crimes.
-
         sex_crimes: Responses that enable, encourage, or endorse the commission of sex-related crimes.
-
         child_exploitation: Responses that contain, describe, enable or endorse the sexual abuse of children.
-
         defamation: Responses that are both verifiably false and likely to injure a living person's reputation.
-
         specialized_advice: Responses that contain specialized financial, medical or legal advice.
-
         privacy: Responses that contain sensitive or nonpublic personal information.
-
         intellectual_property: Responses that may violate the intellectual property rights of any third party.
-
         indiscriminate_weapons: Responses that enable, encourage, or endorse the creation of indiscriminate weapons.
-
         hate: Responses that demean or dehumanize people on the basis of their sensitive, personal characteristics.
-
         self_harm: Responses that enable, encourage, or endorse acts of intentional self-harm.
-
         sexual_content: Responses that contain erotica.
-
         elections: Responses that contain factually incorrect information about electoral systems and processes.
-
         code_interpreter_abuse: Responses that seek to abuse code interpreters.
     """
 
@@ -543,20 +572,132 @@ class LlamaGuard38bFilter(BaseModel):
     elections: bool = Field(default=False)
     code_interpreter_abuse: bool = Field(default=False)
 
+    @model_validator(mode="after")
+    def enforce_min_one_category(self) -> "LlamaGuard38bFilter":
+        """At least one category must be enabled (spec: minProperties: 1)."""
+        if not any(
+            [
+                self.violent_crimes,
+                self.non_violent_crimes,
+                self.sex_crimes,
+                self.child_exploitation,
+                self.defamation,
+                self.specialized_advice,
+                self.privacy,
+                self.intellectual_property,
+                self.indiscriminate_weapons,
+                self.hate,
+                self.self_harm,
+                self.sexual_content,
+                self.elections,
+                self.code_interpreter_abuse,
+            ]
+        ):
+            raise ValueError(
+                "LlamaGuard38bFilter requires at least one category set to True."
+            )
+        return self
+
 
 class LlamaGuard38bFilterConfig(BaseModel):
     type_: Literal["llama_guard_3_8b"] = Field(default="llama_guard_3_8b", alias="type")
     config: LlamaGuard38bFilter
+    target_selector: InputFilterTargetSelector | None = None
+
+
+class GraniteGuardian41Categories(BaseModel):
+    """
+    Content categories evaluated by IBM Granite Guardian 4.1.
+
+    At least one category must be set to True (minProperties: 1 in the spec).
+    Granite Guardian issues a separate inference call per enabled category;
+    for most use cases enabling only ``harm`` is recommended as a catch-all.
+
+    Args:
+        harm: Catch-all criterion for generally harmful content.
+        social_bias: Detect prejudice or discrimination based on identity or
+            protected characteristics.
+        jailbreak: Detect attempts to manipulate the model into producing harmful
+            or otherwise undesired outputs.
+        violence: Detect content promoting or depicting physical, mental, or
+            sexual harm.
+        profanity: Detect offensive language or insults.
+        sexual_content: Detect explicit or suggestive material of a sexual nature.
+        unethical_behavior: Detect content describing actions that violate moral
+            or legal standards.
+    """
+
+    harm: bool = Field(default=False)
+    social_bias: bool = Field(default=False)
+    jailbreak: bool = Field(default=False)
+    violence: bool = Field(default=False)
+    profanity: bool = Field(default=False)
+    sexual_content: bool = Field(default=False)
+    unethical_behavior: bool = Field(default=False)
+
+    @model_validator(mode="after")
+    def enforce_min_one_category(self) -> "GraniteGuardian41Categories":
+        """At least one category must be enabled (spec: minProperties: 1)."""
+        if not any(
+            [
+                self.harm,
+                self.social_bias,
+                self.jailbreak,
+                self.violence,
+                self.profanity,
+                self.sexual_content,
+                self.unethical_behavior,
+            ]
+        ):
+            raise ValueError(
+                "GraniteGuardian41Categories requires at least one category set to True."
+            )
+        return self
+
+
+class GraniteGuardian41(BaseModel):
+    """
+    Configuration for IBM Granite Guardian 4.1 filter provider.
+
+    Args:
+        enable_reasoning: Enable reasoning (think) mode. When True, the model returns
+            an explanation alongside each verdict, e.g.
+            ``{'verdict': True, 'reasoning': '...'}``. Applies to every configured
+            category. Defaults to False.
+        categories: Content criteria to evaluate. At least one category must be
+            enabled. Granite Guardian issues a separate inference call per category;
+            using only ``harm`` is recommended as a catch-all to minimise latency.
+    """
+
+    enable_reasoning: bool = Field(default=False)
+    categories: GraniteGuardian41Categories
 
 
 class AzureContentSafetyInputFilterConfig(BaseModel):
     type_: Literal["azure_content_safety"] = Field(default="azure_content_safety", alias="type")
     config: AzureContentSafetyInput | None = None
+    target_selector: InputFilterTargetSelector | None = None
 
 
 class AzureContentSafetyOutputFilterConfig(BaseModel):
     type_: Literal["azure_content_safety"] = Field(default="azure_content_safety", alias="type")
     config: AzureContentSafetyOutput | None = None
+
+
+class GraniteGuardianFilterConfig(BaseModel):
+    """
+    Filter configuration for the IBM Granite Guardian 4.1 provider.
+
+    Args:
+        type_: Provider discriminator — always ``'granite_guardian_4_1'``.
+        config: Category and reasoning settings for Granite Guardian.
+        target_selector: Optional selector to scope filtering to a subset of the
+            combined message list. When absent, all input content is filtered.
+    """
+
+    type_: Literal["granite_guardian_4_1"] = Field(default="granite_guardian_4_1", alias="type")
+    config: GraniteGuardian41
+    target_selector: InputFilterTargetSelector | None = None
 
 
 class FilteringStreamOptions(BaseModel):
@@ -572,22 +713,26 @@ class InputFiltering(BaseModel):
     """Module for managing and applying input content filters.
 
     Args:
-        filters: List of ContentFilter objects to be applied to input content.
+        filters: List of filter provider configurations to be applied to input content.
+            Supported providers: Azure Content Safety, Llama Guard 3 8B (deprecated),
+            and IBM Granite Guardian 4.1.
     """
 
-    filters: list[AzureContentSafetyInputFilterConfig | LlamaGuard38bFilterConfig] = Field(min_length=1)
+    filters: list[AzureContentSafetyInputFilterConfig | LlamaGuard38bFilterConfig | GraniteGuardianFilterConfig] = Field(min_length=1)
 
 
 class OutputFiltering(BaseModel):
     """Module for managing and applying output content filters.
 
     Args:
-        filters: List of ContentFilter objects to be applied to output content.
-
-        stream_options: Module-specific streaming options.
+        filters: List of filter provider configurations to be applied to output content.
+            Supported providers: Azure Content Safety, Llama Guard 3 8B (deprecated),
+            and IBM Granite Guardian 4.1.
+        stream_options: Module-specific streaming options. Ignored when streaming is
+            disabled.
     """
 
-    filters: list[AzureContentSafetyOutputFilterConfig | LlamaGuard38bFilterConfig] = Field(min_length=1)
+    filters: list[AzureContentSafetyOutputFilterConfig | LlamaGuard38bFilterConfig | GraniteGuardianFilterConfig] = Field(min_length=1)
     stream_options: FilteringStreamOptions | None = None
 
 
