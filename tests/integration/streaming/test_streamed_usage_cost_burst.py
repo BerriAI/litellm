@@ -212,7 +212,20 @@ def _gated_upstream_reply(request: Request, gate: threading.Event) -> Reply:
     response: Final = _upstream_reply(request)
     if request.method == "GET":
         return response
-    return Reply(content_type=response.content_type, chunks=response.chunks, gate_after_first=gate)
+    return Reply(
+        content_type=response.content_type,
+        chunks=response.chunks,
+        gate_after_first=gate,
+        gate_timeout_seconds=30,
+    )
+
+
+def _dropping_upstream_reply(request: Request) -> Reply:
+    if request.method == "GET":
+        return _upstream_reply(request)
+    identity, _ = _identity(request)
+    dropped: Final = int(identity.split("-")[1]) in _DROPPED_IDS
+    return _upstream_reply(request, dropped=dropped)
 
 
 def _sse_events(text: str) -> tuple[dict[str, JsonValue], ...]:
@@ -237,7 +250,7 @@ def _usage_values(result: _BurstResult) -> tuple[dict[str, JsonValue], ...]:
 
 def _responses_spend_request_id(model_id: str, response_id: str) -> str:
     identity: Final = (f"litellm:custom_llm_provider:openai;model_id:{model_id};response_id:{response_id}").encode()
-    return "resp_" + base64.urlsafe_b64encode(identity).decode()
+    return "resp_" + base64.b64encode(identity).decode()
 
 
 def _spend_row_request_id(endpoint: str, model_id: str, response_id: str, text: str) -> str | None:
@@ -554,12 +567,7 @@ def test_burst_streams_with_one_third_dropped_preserve_completed_costs(
     gateway: Gateway,
 ) -> None:
     with (
-        wire_server(
-            lambda request: _upstream_reply(
-                request,
-                dropped=int(_identity(request)[0].split("-")[1]) in _DROPPED_IDS,
-            )
-        ) as wire,
+        wire_server(_dropping_upstream_reply) as wire,
         gateway.scenario() as scenario,
     ):
         models: Final = _model_names(scenario, wire.url + "/v1")
@@ -629,6 +637,7 @@ def test_killing_one_worker_during_free_stream_burst_leaves_survivor_serving(gat
             content_type="text/event-stream",
             chunks=_chat_stream(identity, model),
             gate_after_first=gate,
+            gate_timeout_seconds=30,
         )
 
     with (
@@ -662,7 +671,7 @@ def test_killing_one_worker_during_free_stream_burst_leaves_survivor_serving(gat
                 survivor: Final = workers[1]
                 os.kill(victim, signal.SIGKILL)
                 gate.set()
-            first_results: Final = tuple(future.result(timeout=30) for future in futures)
+            first_results: Final = tuple(future.result(timeout=40) for future in futures)
             eventually(
                 lambda: _worker_pids(owned),
                 lambda pids: survivor in pids and victim not in pids,

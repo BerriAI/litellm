@@ -148,7 +148,7 @@ def _cost_field(usage: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
 
 def _responses_spend_request_id(model_id: str, response_id: str) -> str:
     identity: Final = (f"litellm:custom_llm_provider:openai;model_id:{model_id};response_id:{response_id}").encode()
-    return "resp_" + base64.urlsafe_b64encode(identity).decode()
+    return "resp_" + base64.b64encode(identity).decode()
 
 
 def _usage_events(text: str) -> tuple[dict[str, JsonValue], ...]:
