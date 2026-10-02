@@ -991,3 +991,258 @@ class TestMessagesToSapTemplateWithFileContent:
         content = result[0]["content"]
         assert content[0]["type"] == "text"
         assert content[1]["type"] == "file"
+
+
+class TestProviderSpecificFields:
+    """Tests for provider_specific_fields propagation through normalize_choice,
+    _StreamParser, and transform_response (spec lines 1161 / 1181)."""
+
+    # ------------------------------------------------------------------
+    # normalize_choice
+    # ------------------------------------------------------------------
+
+    def test_normalize_choice_preserves_provider_specific_fields(self):
+        """provider_specific_fields present in a choice must survive normalize_choice."""
+        from litellm.llms.sap.chat.handler import normalize_choice
+
+        choice = {
+            "index": 0,
+            "message": {"role": "assistant", "content": "hi"},
+            "finish_reason": "stop",
+            "provider_specific_fields": {"raw_finish_reason": "end_turn", "extra": 42},
+        }
+        result = normalize_choice(choice)
+        assert result["provider_specific_fields"] == {"raw_finish_reason": "end_turn", "extra": 42}
+
+    def test_normalize_choice_no_provider_specific_fields_unchanged(self):
+        """When provider_specific_fields is absent the key must not be injected."""
+        from litellm.llms.sap.chat.handler import normalize_choice
+
+        choice = {"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}
+        result = normalize_choice(choice)
+        assert "provider_specific_fields" not in result
+
+    def test_normalize_choice_preserves_psf_alongside_reasoning_content(self):
+        """provider_specific_fields must survive even when reasoning_content is also normalized."""
+        from litellm.llms.sap.chat.handler import normalize_choice
+
+        choice = {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "answer",
+                "reasoning_content": [{"content": "thought", "signature": "s1"}],
+            },
+            "finish_reason": "stop",
+            "provider_specific_fields": {"raw_finish_reason": "end_turn"},
+        }
+        result = normalize_choice(choice)
+        assert result["provider_specific_fields"] == {"raw_finish_reason": "end_turn"}
+        # reasoning normalization must still have happened
+        assert result["message"]["reasoning_content"] == "thought"
+
+    # ------------------------------------------------------------------
+    # _StreamParser._from_orchestration_result
+    # ------------------------------------------------------------------
+
+    def test_stream_parser_passes_provider_specific_fields(self):
+        """_from_orchestration_result must forward provider_specific_fields per choice."""
+        from litellm.llms.sap.chat.handler import _StreamParser
+
+        evt = {
+            "orchestration_result": {
+                "id": "chunk-1",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": "gpt-4o",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": "hello"},
+                        "finish_reason": None,
+                        "provider_specific_fields": {"raw_finish_reason": None, "extra_flag": True},
+                    }
+                ],
+            }
+        }
+        chunk = _StreamParser.to_openai_chunk(evt)
+        assert chunk is not None
+        choice = chunk.choices[0]
+        assert hasattr(choice, "provider_specific_fields")
+        assert choice.provider_specific_fields == {"raw_finish_reason": None, "extra_flag": True}
+
+    def test_stream_parser_omits_key_when_absent(self):
+        """When provider_specific_fields is absent the key is not injected into the chunk."""
+        from litellm.llms.sap.chat.handler import _StreamParser
+
+        evt = {
+            "orchestration_result": {
+                "id": "chunk-2",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": "gpt-4o",
+                "choices": [{"index": 0, "delta": {"content": "world"}, "finish_reason": None}],
+            }
+        }
+        chunk = _StreamParser.to_openai_chunk(evt)
+        assert chunk is not None
+        choice = chunk.choices[0]
+        # either absent or None is acceptable — must not be a non-None populated dict
+        psf = getattr(choice, "provider_specific_fields", None)
+        assert not psf
+
+    # ------------------------------------------------------------------
+    # transform_response (non-streaming)
+    # ------------------------------------------------------------------
+
+    def test_transform_response_copies_provider_specific_fields(self):
+        """transform_response must attach provider_specific_fields from each raw choice
+        onto the corresponding ModelResponse choice."""
+        import json
+        from unittest.mock import MagicMock
+
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        config = GenAIHubOrchestrationConfig()
+
+        final_result = {
+            "id": "chatcmpl-psf-test",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4o",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hello!"},
+                    "finish_reason": "stop",
+                    "provider_specific_fields": {
+                        "finish_reason": "end_turn",
+                        "sap_extra": "metadata",
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        }
+
+        raw_response = MagicMock()
+        raw_response.text = json.dumps({"final_result": final_result})
+        raw_response.json.return_value = {"final_result": final_result}
+        raw_response.headers = {}
+
+        response = config.transform_response(
+            model="gpt-4o",
+            raw_response=raw_response,
+            model_response=MagicMock(),
+            logging_obj=MagicMock(),
+            api_key="test",
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        choice = response.choices[0]
+        assert hasattr(choice, "provider_specific_fields"), "provider_specific_fields missing from choice"
+        assert choice.provider_specific_fields == {
+            "finish_reason": "end_turn",
+            "sap_extra": "metadata",
+        }
+
+    def test_transform_response_no_provider_specific_fields_skipped(self):
+        """When provider_specific_fields is absent on raw choices, nothing is attached."""
+        import json
+        from unittest.mock import MagicMock
+
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        config = GenAIHubOrchestrationConfig()
+
+        final_result = {
+            "id": "chatcmpl-nopsf",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4o",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hi."},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+        }
+
+        raw_response = MagicMock()
+        raw_response.text = json.dumps({"final_result": final_result})
+        raw_response.json.return_value = {"final_result": final_result}
+        raw_response.headers = {}
+
+        response = config.transform_response(
+            model="gpt-4o",
+            raw_response=raw_response,
+            model_response=MagicMock(),
+            logging_obj=MagicMock(),
+            api_key="test",
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        choice = response.choices[0]
+        psf = getattr(choice, "provider_specific_fields", None)
+        assert not psf
+
+    def test_transform_response_multiple_choices_each_gets_own_psf(self):
+        """Each choice gets its own provider_specific_fields (different values per choice)."""
+        import json
+        from unittest.mock import MagicMock
+
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        config = GenAIHubOrchestrationConfig()
+
+        final_result = {
+            "id": "chatcmpl-multi",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4o",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "A"},
+                    "finish_reason": "stop",
+                    "provider_specific_fields": {"raw_finish_reason": "end_turn"},
+                },
+                {
+                    "index": 1,
+                    "message": {"role": "assistant", "content": "B"},
+                    "finish_reason": "length",
+                    "provider_specific_fields": {"raw_finish_reason": "max_tokens"},
+                },
+            ],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+        }
+
+        raw_response = MagicMock()
+        raw_response.text = json.dumps({"final_result": final_result})
+        raw_response.json.return_value = {"final_result": final_result}
+        raw_response.headers = {}
+
+        response = config.transform_response(
+            model="gpt-4o",
+            raw_response=raw_response,
+            model_response=MagicMock(),
+            logging_obj=MagicMock(),
+            api_key="test",
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert response.choices[0].provider_specific_fields == {"raw_finish_reason": "end_turn"}
+        assert response.choices[1].provider_specific_fields == {"raw_finish_reason": "max_tokens"}

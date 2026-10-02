@@ -99,6 +99,7 @@ class _StreamParser:
                     "index": c.get("index", 0),
                     "delta": c.get("delta") or {},  # mutable-ok: transient default, consumed by model_validate
                     "finish_reason": c.get("finish_reason"),
+                    **({"provider_specific_fields": c["provider_specific_fields"]} if "provider_specific_fields" in c else {}),
                 }
                 for c in (orc.get("choices") or [])  # mutable-ok: transient default for iteration
             ],

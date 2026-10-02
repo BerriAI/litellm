@@ -406,6 +406,15 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         final_result = normalize_reasoning_content(raw_response.json()["final_result"])
         response = ModelResponse.model_validate(final_result)
 
+        # Forward provider_specific_fields from each raw choice onto the
+        # corresponding ModelResponse choice so callers and middleware can
+        # access provider metadata that doesn't fit the OpenAI schema.
+        raw_choices: list[dict] = final_result.get("choices") or []
+        for raw_choice, model_choice in zip(raw_choices, response.choices or []):
+            psf = raw_choice.get("provider_specific_fields")
+            if psf is not None:
+                model_choice.provider_specific_fields = psf  # type: ignore[attr-defined]
+
         # Strip markdown code blocks if JSON response_format was used with Anthropic models
         # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```
         # based on prompt phrasing. GPT/Gemini models don't exhibit this behavior,
