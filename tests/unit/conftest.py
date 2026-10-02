@@ -168,7 +168,8 @@ async def _complete_test_logging() -> None:
 def _flush_completed_test_logging() -> None:
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-    if GLOBAL_LOGGING_WORKER._queue is None:
+    queue: Final = GLOBAL_LOGGING_WORKER._queue
+    if queue is None or queue._unfinished_tasks == 0:
         return
     worker_loop: Final = GLOBAL_LOGGING_WORKER._bound_loop
     if worker_loop is None or worker_loop.is_closed():

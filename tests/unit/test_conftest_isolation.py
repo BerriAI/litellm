@@ -60,6 +60,21 @@ def test_queued_logging_finishes_under_its_original_owner(loop_state: Literal["s
             loop.close()
 
 
+def test_dequeued_logging_finishes_under_its_original_owner() -> None:
+    owner: Final = _LoggingOwner()
+
+    async def enqueue() -> None:
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(owner.deliver())
+
+    asyncio.run(enqueue())
+    assert GLOBAL_LOGGING_WORKER._queue is not None
+    assert GLOBAL_LOGGING_WORKER._queue.empty()
+    assert owner.delivered == ()
+    unit_harness._flush_completed_test_logging()
+    owner.current = "next-test"
+    assert owner.delivered == ("original-test",)
+
+
 class _CanaryRouterHolder:
     router: Router | None = None
 

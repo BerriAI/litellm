@@ -10,6 +10,7 @@ Validates:
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -243,6 +244,7 @@ async def test_vertex_realtime_text_in_text_out():
     VertexAIRealtimeConfig for message translation.  All I/O is mocked.
     """
     from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
 
     cfg = VertexAIRealtimeConfig(
         access_token="fake-token",
@@ -292,7 +294,8 @@ async def test_vertex_realtime_text_in_text_out():
 
     backend_ws.send = AsyncMock(side_effect=_backend_send)
 
-    logging_obj = MagicMock()
+    logging_obj: Final = MagicMock(dispatch_success_handlers=AsyncMock(), dispatch_failure_handlers=AsyncMock())
+    logging_worker: Final = LoggingWorker()
     logging_obj.litellm_trace_id = "test-trace-id"
     logging_obj.pre_call = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
@@ -302,6 +305,7 @@ async def test_vertex_realtime_text_in_text_out():
         websocket=client_ws,
         backend_ws=backend_ws,
         logging_obj=logging_obj,
+        logging_worker=logging_worker,
         provider_config=cfg,
         model="gemini-2.0-flash-live-001",
     )
@@ -309,6 +313,9 @@ async def test_vertex_realtime_text_in_text_out():
     # Run backend→client forwarding for the three queued messages, then stop.
     # We don't run client_ack_messages here to avoid the blocking receive loop.
     await streaming.backend_to_client_send_messages()
+    await logging_worker.flush()
+    await logging_worker.stop()
+    logging_obj.dispatch_success_handlers.assert_awaited_once_with(streaming.messages, prefer_async_handlers=True)
 
     # --- Assertions ---
 
