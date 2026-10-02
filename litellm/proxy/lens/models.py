@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
 
 class Record(BaseModel):
@@ -233,6 +233,10 @@ class Claim(Record):
     lens_id: str
     job: Job
     findings: tuple[Finding, ...]
+
+    @field_serializer("job")
+    def _job_without_timeline(self, job: Job) -> dict[str, object]:
+        return job.model_dump(mode="json", exclude={"timeline"})
 
 
 class Progress(Record):
