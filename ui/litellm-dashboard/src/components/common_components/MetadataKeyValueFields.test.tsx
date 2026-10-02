@@ -52,6 +52,12 @@ describe("metadataObjectToPairs", () => {
       metadataObjectToPairs({ department: "research", logging: [{ callback_name: "langfuse" }] }, new Set(["logging"])),
     ).toEqual([{ key: "department", value: "research" }]);
   });
+
+  it("drops an empty key, which the form can never submit, so an API-written one does not block saving", () => {
+    expect(metadataObjectToPairs({ "": { displayName: "okta-push-group" }, scim_managed: true })).toEqual([
+      { key: "scim_managed", value: "true" },
+    ]);
+  });
 });
 
 describe("metadataPairsToObject", () => {
