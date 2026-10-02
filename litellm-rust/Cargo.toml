@@ -14,6 +14,8 @@ litellm-router = { path = "crates/router" }
 litellm-tracing = { path = "crates/tracing" }
 litellm-traces = { path = "crates/traces" }
 litellm-storage-clickhouse = { path = "crates/storage-clickhouse" }
+litellm-migrate = { path = "crates/migrate" }
+litellm-migrate-macros = { path = "crates/migrate-macros" }
 litellm-core = { path = "crates/core" }
 litellm-gateway-mcp = { path = "crates/gateway-mcp" }
 litellm-gateway = { path = "crates/gateway" }
@@ -93,7 +95,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 serde_with = { version = "=3.16.1", default-features = false, features = ["std", "macros"] }
 sha2 = "0.10"
+syn = { version = "2", default-features = false }
 sqlx = { version = "0.9.0", default-features = false, features = ["json", "macros", "postgres", "runtime-tokio", "chrono", "tls-rustls-ring-native-roots"] }
+proc-macro2 = "1"
+quote = "1"
 subtle = "2"
 thiserror = "2.0"
 tokenizers = { version = "0.23.1", default-features = false, features = ["onig"] }

@@ -4039,6 +4039,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-migrate"
+version = "0.1.0"
+dependencies = [
+ "litellm-migrate-macros",
+ "rstest",
+]
+
+[[package]]
+name = "litellm-migrate-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rstest",
+ "syn 2.0.119",
+ "tempfile",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "litellm-model-catalog"
 version = "0.1.0"
 dependencies = [
@@ -4388,6 +4408,7 @@ dependencies = [
  "criterion",
  "flate2",
  "litellm-http",
+ "litellm-migrate",
  "litellm-storage-clickhouse",
  "opentelemetry-proto",
  "prost",
