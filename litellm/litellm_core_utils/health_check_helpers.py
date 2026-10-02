@@ -259,8 +259,12 @@ class HealthCheckHelpers:
                 document=_ocr_health_check_document(model=model, custom_llm_provider=custom_llm_provider),
             ),
             "evaluation": lambda: litellm.adecisions(
-                state=prompt or "health check",
-                questions={"reachable": {"type": "noul", "instructions": "Is the service reachable?"}},
-                **DECISIONS_CALL_PARAMS.validate_python(_filter_model_params(model_params=model_params)),
+                **DECISIONS_CALL_PARAMS.validate_python(
+                    {
+                        "state": prompt or "health check",
+                        "questions": {"reachable": {"type": "noul", "instructions": "Is the service reachable?"}},
+                        **_filter_model_params(model_params=model_params),
+                    }
+                )
             ),
         }

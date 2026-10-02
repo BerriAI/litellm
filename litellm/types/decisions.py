@@ -65,6 +65,8 @@ class DecisionsRequest(DecisionsRequestBody):
 @with_config(ConfigDict(extra="allow"))
 class DecisionsCallParams(TypedDict, total=False):
     model: Required[ReadOnly[str]]
+    state: Required[ReadOnly[DecisionsJSON]]
+    questions: Required[ReadOnly[DecisionQuestionMap]]
     api_key: ReadOnly[str | None]
     api_base: ReadOnly[str | None]
     timeout: ReadOnly[float | None]
