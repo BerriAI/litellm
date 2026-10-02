@@ -257,3 +257,32 @@ def test_explicit_empty_content_is_not_replaced_by_parts(content: object):
 def test_named_text_blocks_do_not_create_tool_calls():
     raw = json.dumps({"role": "assistant", "parts": [{"type": "text", "name": "answer", "content": "done"}]})
     assert to_ui_content(raw) == {"kind": "messages", "messages": ({"role": "assistant", "content": "done"},)}
+
+
+@pytest.mark.parametrize("name", [None, 5, {"source": "exporter"}])
+def test_optional_text_name_does_not_hide_neighboring_calls(name: object):
+    raw = json.dumps(
+        {
+            "role": "assistant",
+            "parts": [
+                {"type": "text", "content": "Looking up", "name": name},
+                {"type": "tool_call", "name": "lookup", "arguments": {"id": 7}},
+            ],
+        }
+    )
+    assert to_ui_content(raw) == {
+        "kind": "messages",
+        "messages": (
+            {
+                "role": "assistant",
+                "content": "Looking up",
+                "tool_calls": ({"name": "lookup", "arguments": '{"id": 7}'},),
+            },
+        ),
+    }
+
+
+@pytest.mark.parametrize("parts", [[{"type": "text", "text": False}], {"text": "raw"}])
+def test_invalid_parts_shapes_stay_available_as_json(parts: object):
+    raw = json.dumps({"role": "user", "parts": parts})
+    assert to_ui_content(raw) == {"kind": "messages", "messages": ({"role": "user", "content": json.dumps(parts)},)}

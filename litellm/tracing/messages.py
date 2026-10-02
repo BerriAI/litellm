@@ -66,15 +66,13 @@ def _tool_arguments(block: _ContentBlock) -> JsonValue:
 def _is_tool_call(block: _ContentBlock) -> bool:
     if not isinstance(block.name, str) or not block.name:
         return False
-    match block.type:
-        case "tool_use":
-            return "input" in block.model_fields_set
-        case "function_call":
-            return "arguments" in block.model_fields_set
-        case "tool_call":
-            return "args" in block.model_fields_set or "arguments" in block.model_fields_set
-        case _:
-            return False
+    if block.type == "tool_use":
+        return "input" in block.model_fields_set
+    if block.type == "function_call":
+        return "arguments" in block.model_fields_set
+    if block.type == "tool_call":
+        return "args" in block.model_fields_set or "arguments" in block.model_fields_set
+    return False
 
 
 def _hidden_block(block: _ContentBlock) -> bool:

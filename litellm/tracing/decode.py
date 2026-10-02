@@ -14,6 +14,7 @@ from litellm.constants import OTLP_MAX_ATTRIBUTE_VALUE_BYTES, OTLP_MAX_BODY_BYTE
 from litellm.rust_bridge.traces import DecodedSpan
 from litellm.rust_bridge.traces import decode_otlp as native_decode_otlp
 from litellm.rust_bridge.traces import encode_error as native_encode_error
+from litellm.tracing.messages import content_text, content_tool_calls
 from litellm.tracing.types import SpanRow
 
 _MESSAGE_LIST: Final = TypeAdapter(tuple[dict[str, JsonValue], ...])
@@ -63,15 +64,36 @@ def _shrunk_message(message: Mapping[str, JsonValue], budget: int) -> str:
 
     Shortens `content` first; if other fields (e.g. huge tool_calls) still don't fit, keeps only role + content.
     """
-    content: Final = message.get("content")
+    normalized: Final = _parts_message(message)
+    content: Final = normalized.get("content")
     text: Final = content if isinstance(content, str) else json.dumps(content)
     role_only: Final = MappingProxyType({"role": message.get("role", "user")})
     attempts: Final = (
-        _cut_content(message, text, budget, 1),
+        _cut_content(normalized, text, budget, 1),
+        _cut_content(normalized, text, budget, _MAX_JSON_ESCAPE_BYTES),
         _cut_content(role_only, text, budget, 1),
         _cut_content(role_only, text, budget, _MAX_JSON_ESCAPE_BYTES),
     )
     return next((attempt for attempt in attempts if _size(attempt) <= budget), attempts[-1])
+
+
+def _parts_message(message: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    """Convert parts before shortening text, retaining calls that fit the existing budget."""
+    if "content" in message or "parts" not in message:
+        return message
+    calls: Final = content_tool_calls(message["parts"])
+    tool_fields: Final[Mapping[str, JsonValue]] = (
+        MappingProxyType({"tool_calls": [{"name": call.name, "args": call.arguments} for call in calls]})
+        if calls and not message.get("tool_calls")
+        else MappingProxyType({})
+    )
+    return MappingProxyType(
+        {
+            **{key: value for key, value in message.items() if key != "parts"},
+            "content": content_text(message["parts"]),
+            **tool_fields,
+        }
+    )
 
 
 def _cut_content(message: Mapping[str, JsonValue], text: str, budget: int, escape_factor: int) -> str:
@@ -100,7 +122,10 @@ def _truncate_payload(value: str) -> str:
         messages: Final = _MESSAGE_LIST.validate_json(value)
     except ValidationError:
         return _truncate(value)
-    if len(messages) < 2:
+    if len(messages) == 1:
+        single: Final = "[" + _shrunk_message(messages[0], OTLP_MAX_ATTRIBUTE_VALUE_BYTES - 2) + "]"
+        return single if _size(single) <= OTLP_MAX_ATTRIBUTE_VALUE_BYTES else "[" + _elided(1) + "]"
+    if not messages:
         return _truncate(value)
     encoded: Final = tuple(json.dumps(m) for m in messages)
     marker_budget: Final = _size(_elided(len(messages))) + 1
