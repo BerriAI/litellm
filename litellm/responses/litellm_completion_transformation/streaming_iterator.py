@@ -31,6 +31,7 @@ from litellm.types.llms.openai import (
     ReasoningSummaryTextDeltaEvent,
     ReasoningSummaryTextDoneEvent,
     ResponseCompletedEvent,
+    ResponseIncompleteEvent,
     ResponseCreatedEvent,
     ResponseInProgressEvent,
     ResponseInputParam,
@@ -1037,7 +1038,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         chat_completion_delta: ChatCompletionDelta = choice.delta
         return chat_completion_delta.content or ""
 
-    def _emit_response_completed_event(self, litellm_model_response: ModelResponse) -> ResponseCompletedEvent | None:
+    def _emit_response_completed_event(
+        self, litellm_model_response: ModelResponse
+    ) -> ResponseCompletedEvent | ResponseIncompleteEvent | None:
         if litellm_model_response:
             # Add cost to usage object if include_cost_in_streaming_usage is True
             if litellm.include_cost_in_streaming_usage and self.litellm_logging_obj is not None:
@@ -1069,6 +1072,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 litellm_metadata=self.litellm_metadata,
             )
 
+            if encoded_response.status == "incomplete":
+                return ResponseIncompleteEvent(
+                    type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                    response=encoded_response,
+                )
             return ResponseCompletedEvent(
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                 response=encoded_response,

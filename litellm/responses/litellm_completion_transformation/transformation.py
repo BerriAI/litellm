@@ -22,6 +22,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     ResponsesSessionHandler,
 )
 from litellm.types.llms.openai import (
+    IncompleteDetails,
     AllMessageValues,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
@@ -1483,6 +1484,14 @@ class LiteLLMCompletionResponsesConfig:
             return "completed"
 
     @staticmethod
+    def _incomplete_details_from_finish_reason(finish_reason: str | None) -> IncompleteDetails | None:
+        if finish_reason == "length":
+            return IncompleteDetails(reason="max_output_tokens")
+        if finish_reason in ("content_filter", "refusal"):
+            return IncompleteDetails(reason="content_filter")
+        return None
+
+    @staticmethod
     def _tool_call_id_from_responses_item(item_id: str | None, call_id: str | None) -> str:
         """Bedrock Mantle returns a non-unique, index-based ``call_id`` (``call_0``,
         ``call_1``, ... that resets every response) alongside a unique ``id``
@@ -1607,7 +1616,7 @@ class LiteLLMCompletionResponsesConfig:
             model=chat_completion_response.model,
             object="response",
             error=getattr(chat_completion_response, "error", None),
-            incomplete_details=getattr(chat_completion_response, "incomplete_details", None),
+            incomplete_details=LiteLLMCompletionResponsesConfig._incomplete_details_from_finish_reason(finish_reason),
             instructions=getattr(chat_completion_response, "instructions", None),
             metadata=getattr(chat_completion_response, "metadata", {}),
             output=LiteLLMCompletionResponsesConfig._transform_chat_completion_choices_to_responses_output(
@@ -1616,11 +1625,11 @@ class LiteLLMCompletionResponsesConfig:
                 responses_api_request=responses_api_request,
             ),
             parallel_tool_calls=getattr(chat_completion_response, "parallel_tool_calls", False),
-            temperature=getattr(chat_completion_response, "temperature", 0),
+            temperature=responses_api_request.get("temperature"),
             tool_choice=getattr(chat_completion_response, "tool_choice", "auto"),
             tools=getattr(chat_completion_response, "tools", []),
-            top_p=getattr(chat_completion_response, "top_p", None),
-            max_output_tokens=getattr(chat_completion_response, "max_output_tokens", None),
+            top_p=responses_api_request.get("top_p"),
+            max_output_tokens=responses_api_request.get("max_output_tokens"),
             previous_response_id=getattr(chat_completion_response, "previous_response_id", None),
             reasoning=None,
             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
