@@ -25,6 +25,10 @@ from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
     BasePassthroughLoggingHandler,
 )
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.typesafe_passthrough_logging_handler import (
+    DECISIONS_RESPONSE_ADAPTER,
+    decisions_usage,
+)
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
@@ -33,7 +37,13 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import EmbeddingResponse, ImageResponse, LlmProviders, PassthroughCallTypes
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ImageResponse,
+    LlmProviders,
+    PassthroughCallTypes,
+    StandardPassThroughResponseObject,
+)
 from litellm.utils import ModelResponse, TextCompletionResponse, convert_to_model_response_object
 
 # Hostnames that route to OpenAI-compatible APIs.
@@ -190,6 +200,14 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         parsed_url: Final = urlparse(url_route)
         return _is_openai_compatible_host(parsed_url.hostname) and "/v1/embeddings" in parsed_url.path
 
+    @staticmethod
+    def is_openai_decisions_route(url_route: str) -> bool:
+        """Check if the URL route is an OpenAI decisions endpoint."""
+        if not url_route:
+            return False
+        parsed_url: Final = urlparse(url_route)
+        return _is_openai_compatible_host(parsed_url.hostname) and parsed_url.path.rstrip("/").endswith("/decisions")
+
     def _get_user_from_metadata(
         self,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
@@ -338,15 +356,23 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
     ) -> PassThroughEndpointLoggingTypedDict:
         """
         Handle OpenAI passthrough logging with cost tracking for chat completions,
-        embeddings, image generation, image editing, and responses API.
+        embeddings, image generation, image editing, responses API, and decisions.
         """
         is_chat_completions: Final = OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route)
         is_embeddings: Final = OpenAIPassthroughLoggingHandler.is_openai_embeddings_route(url_route)
         is_image_generation: Final = OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
         is_image_editing: Final = OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
         is_responses: Final = OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+        is_decisions: Final = OpenAIPassthroughLoggingHandler.is_openai_decisions_route(url_route)
 
-        if not (is_chat_completions or is_embeddings or is_image_generation or is_image_editing or is_responses):
+        if not (
+            is_chat_completions
+            or is_embeddings
+            or is_image_generation
+            or is_image_editing
+            or is_responses
+            or is_decisions
+        ):
             return {
                 "result": None,
                 "kwargs": kwargs,
@@ -471,6 +497,18 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
                 )
+            elif is_decisions:
+                decisions_model: Final = model if isinstance(model, str) else ""
+                decisions_usage_object: Final = decisions_usage(
+                    DECISIONS_RESPONSE_ADAPTER.validate_python(response_body)
+                )
+                litellm_model_response = ModelResponse(model=decisions_model, usage=decisions_usage_object)
+                response_cost = litellm.completion_cost(
+                    completion_response=litellm_model_response,
+                    model=decisions_model,
+                    custom_llm_provider=custom_llm_provider,
+                )
+                kwargs["combined_usage_object"] = decisions_usage_object
 
             # Update kwargs with cost information
             kwargs["response_cost"] = response_cost
@@ -515,6 +553,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 if is_image_generation
                 else "image_editing"
                 if is_image_editing
+                else "decisions"
+                if is_decisions
                 else "responses"
             )
             verbose_proxy_logger.debug(
@@ -522,7 +562,11 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             )
 
             return {
-                "result": litellm_model_response,
+                "result": (
+                    StandardPassThroughResponseObject(response=httpx_response.text)
+                    if is_decisions
+                    else litellm_model_response
+                ),
                 "kwargs": kwargs,
             }
 

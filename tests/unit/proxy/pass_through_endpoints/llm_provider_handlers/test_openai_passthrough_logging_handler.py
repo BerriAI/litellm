@@ -238,6 +238,22 @@ class TestOpenAIPassthroughLoggingHandler:
             OpenAIPassthroughLoggingHandler.is_openai_embeddings_route("https://api.openai.com/v1/chat/completions")
             is False
         )
+
+    def test_is_openai_decisions_route(self):
+        assert OpenAIPassthroughLoggingHandler.is_openai_decisions_route("https://api.openai.com/v1/decisions") is True
+        assert OpenAIPassthroughLoggingHandler.is_openai_decisions_route("https://api.openai.com/v1/decisions/") is True
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_decisions_route("https://openai.azure.com/v1/decisions") is True
+        )
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_decisions_route("https://api.openai.com/v1/chat/completions")
+            is False
+        )
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_decisions_route("https://api.typesafe.ai/v1/decisions") is False
+        )
+        assert OpenAIPassthroughLoggingHandler.is_openai_decisions_route("http://localhost:4000/v1/decisions") is False
+        assert OpenAIPassthroughLoggingHandler.is_openai_decisions_route("") is False
         assert (
             OpenAIPassthroughLoggingHandler.is_openai_embeddings_route(
                 "http://localhost:4000/openai_passthrough/v1/embeddings"
@@ -1187,6 +1203,10 @@ class TestOpenAIPassthroughIntegration:
         assert self.handler._is_supported_openai_endpoint("https://api.openai.com/v1/embeddings") is True
         assert self.handler._is_supported_openai_endpoint("https://openai.azure.com/v1/embeddings") is True
 
+    def test_is_supported_openai_endpoint_includes_decisions(self):
+        assert self.handler._is_supported_openai_endpoint("https://api.openai.com/v1/decisions") is True
+        assert self.handler._is_supported_openai_endpoint("https://openai.azure.com/v1/decisions") is True
+
     def test_is_cohere_route_does_not_match_openai_embeddings(self):
         assert self.handler.is_cohere_route("https://api.cohere.com/v1/embed") is True
         assert self.handler.is_cohere_route("https://api.cohere.com/v2/chat") is True
@@ -1835,10 +1855,7 @@ class TestOpenAIPassthroughResponsesStreamingSpendLog:
 
     def _expected_spend(self) -> float:
         rates = litellm.model_cost[self.MODEL_MAP_KEY]
-        return (
-            self.INPUT_TOKENS * rates["input_cost_per_token"]
-            + self.OUTPUT_TOKENS * rates["output_cost_per_token"]
-        )
+        return self.INPUT_TOKENS * rates["input_cost_per_token"] + self.OUTPUT_TOKENS * rates["output_cost_per_token"]
 
     def _responses_stream_chunks(self) -> List[str]:
         """Usage arrives only on the terminal `response.completed` event, nested under
@@ -2039,6 +2056,129 @@ class TestOpenAIPassthroughEmbeddingsSpendLog:
         assert spend_log_row["model"] == self.MODEL
         assert spend_log_row["custom_llm_provider"] == "openai"
         assert spend_log_row["request_id"] == self.CALL_ID
+
+
+class TestOpenAIPassthroughDecisionsSpendLog:
+    """An OpenAI-passthrough `/v1/decisions` call must write a priced spend log row.
+
+    `_is_supported_openai_endpoint` never matched `/v1/decisions`, so the dispatcher skipped
+    the OpenAI handler and a response carrying `usage.input_tokens` landed as a zero-token,
+    zero-spend row under the right model.
+    """
+
+    DECISIONS_URL = "https://api.openai.com/v1/decisions"
+    MODEL = "gpt-6-luna"
+    INPUT_TOKENS = 124
+    OUTPUT_TOKENS = 9
+    CALL_ID = "4e0a1c6a-6d1f-4b7e-9a2c-0f3b5d7e9c11"
+
+    def setup_method(self):
+        self.start_time = datetime.now()
+        self.end_time = datetime.now()
+        self.response_body = {
+            "id": "dec_0b4c1d2e",
+            "object": "decision",
+            "model": self.MODEL,
+            "answers": {"should_escalate": "no"},
+            "usage": {"input_tokens": self.INPUT_TOKENS, "output_tokens": self.OUTPUT_TOKENS},
+        }
+        self.request_body = {
+            "model": self.MODEL,
+            "state": "Customer reports a login failure after the password reset email arrived.",
+            "questions": [{"id": "should_escalate", "type": "boolean"}],
+        }
+
+    def _expected_spend(self) -> float:
+        pricing = litellm.model_cost[self.MODEL]
+        return (
+            self.INPUT_TOKENS * pricing["input_cost_per_token"] + self.OUTPUT_TOKENS * pricing["output_cost_per_token"]
+        )
+
+    def _create_mock_httpx_response(self) -> httpx.Response:
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(self.response_body)
+        mock_response.json.return_value = self.response_body
+        mock_response.headers = {"content-type": "application/json"}
+        return mock_response
+
+    def _logging_obj(self) -> LiteLLMLoggingObj:
+        logging_obj = LiteLLMLoggingObj(
+            model=self.MODEL,
+            messages=[],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=self.start_time,
+            litellm_call_id=self.CALL_ID,
+            function_id="1234",
+        )
+        logging_obj.model_call_details["passthrough_logging_payload"] = PassthroughStandardLoggingPayload(
+            url=self.DECISIONS_URL,
+            request_body=self.request_body,
+            request_method="POST",
+        )
+        return logging_obj
+
+    def _dispatch(self) -> dict:
+        return PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
+            httpx_response=self._create_mock_httpx_response(),
+            response_body=self.response_body,
+            request_body=self.request_body,
+            logging_obj=self._logging_obj(),
+            url_route=self.DECISIONS_URL,
+            result=json.dumps(self.response_body),
+            start_time=self.start_time,
+            end_time=self.end_time,
+            cache_hit=False,
+            custom_llm_provider="openai",
+            litellm_call_id=self.CALL_ID,
+            litellm_params={},
+            call_type="pass_through_endpoint",
+        )
+
+    def test_decisions_passthrough_spend_log_is_priced(self, local_model_cost_map):
+        """The dispatched call books input and output tokens plus their cost onto the spend row."""
+        dispatched = self._dispatch()
+
+        assert dispatched["kwargs"]["response_cost"] == pytest.approx(self._expected_spend())
+
+        spend_log_row = get_logging_payload(
+            kwargs=dispatched["kwargs"],
+            response_obj=dispatched["standard_logging_response_object"],
+            start_time=self.start_time,
+            end_time=self.end_time,
+        )
+
+        assert spend_log_row["prompt_tokens"] == self.INPUT_TOKENS
+        assert spend_log_row["completion_tokens"] == self.OUTPUT_TOKENS
+        assert spend_log_row["total_tokens"] == self.INPUT_TOKENS + self.OUTPUT_TOKENS
+        assert spend_log_row["spend"] == pytest.approx(self._expected_spend())
+        assert spend_log_row["model"] == self.MODEL
+        assert spend_log_row["custom_llm_provider"] == "openai"
+        assert spend_log_row["request_id"] == self.CALL_ID
+
+    def test_decisions_passthrough_logs_the_upstream_response_as_sent(self, local_model_cost_map):
+        """The logged response stays the decisions payload the client received, not a chat completion shell."""
+        dispatched = self._dispatch()
+
+        logged_response = dispatched["standard_logging_response_object"]
+        assert json.loads(logged_response["response"]) == self.response_body
+
+    def test_decisions_passthrough_without_usage_is_a_zero_cost_row(self, local_model_cost_map):
+        """A decisions response with no usage block still books a row at zero tokens and zero spend."""
+        self.response_body = {"id": "dec_0b4c1d2e", "object": "decision", "model": self.MODEL, "answers": {}}
+        dispatched = self._dispatch()
+
+        spend_log_row = get_logging_payload(
+            kwargs=dispatched["kwargs"],
+            response_obj=dispatched["standard_logging_response_object"],
+            start_time=self.start_time,
+            end_time=self.end_time,
+        )
+
+        assert spend_log_row["total_tokens"] == 0
+        assert spend_log_row["spend"] == 0
+        assert spend_log_row["model"] == self.MODEL
 
 
 if __name__ == "__main__":

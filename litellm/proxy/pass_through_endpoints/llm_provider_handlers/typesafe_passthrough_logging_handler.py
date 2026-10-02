@@ -15,14 +15,14 @@ from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.types.utils import ModelResponse, StandardPassThroughResponseObject, Usage
 
 
-class _TypeSafeUsage(BaseModel):
+class DecisionsUsage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
 
 
-class _TypeSafeResponse(BaseModel):
+class DecisionsResponse(BaseModel):
     model: str | None = None
-    usage: _TypeSafeUsage | None = None
+    usage: DecisionsUsage | None = None
 
 
 class _RegistryPricing(BaseModel):
@@ -30,15 +30,24 @@ class _RegistryPricing(BaseModel):
     output_cost_per_token: float = 0.0
 
 
-_TYPESAFE_RESPONSE_ADAPTER: Final = TypeAdapter(_TypeSafeResponse)
+DECISIONS_RESPONSE_ADAPTER: Final = TypeAdapter(DecisionsResponse)
 _REGISTRY_PRICING_ADAPTER: Final = TypeAdapter(_RegistryPricing)
 
 
-def _parse_typesafe_response(response_body: Mapping[str, object]) -> _TypeSafeResponse:
+def _parse_typesafe_response(response_body: Mapping[str, object]) -> DecisionsResponse:
     try:
-        return _TYPESAFE_RESPONSE_ADAPTER.validate_python(response_body)
+        return DECISIONS_RESPONSE_ADAPTER.validate_python(response_body)
     except ValidationError:
-        return _TypeSafeResponse()
+        return DecisionsResponse()
+
+
+def decisions_usage(response: DecisionsResponse) -> Usage:
+    usage: Final = response.usage or DecisionsUsage()
+    return Usage(
+        prompt_tokens=usage.input_tokens,
+        completion_tokens=usage.output_tokens,
+        total_tokens=usage.input_tokens + usage.output_tokens,
+    )
 
 
 def _pricing_for(model_keys: tuple[str, ...]) -> _RegistryPricing:
@@ -77,20 +86,15 @@ class TypeSafePassthroughLoggingHandler:
         )
         logged_model: Final = response_model or request_model or "unknown"
         model_name: Final = f"{custom_llm_provider}/{logged_model}"
-        usage: Final = response.usage or _TypeSafeUsage()
-        input_tokens: Final = usage.input_tokens
-        output_tokens: Final = usage.output_tokens
+        usage_object: Final = decisions_usage(response)
+        input_tokens: Final = usage_object.prompt_tokens
+        output_tokens: Final = usage_object.completion_tokens
         candidate_model_keys: Final = tuple(
             f"{custom_llm_provider}/{model}" for model in (response_model, request_model) if model is not None
         )
         pricing: Final = _pricing_for(candidate_model_keys)
         response_cost: Final = (
             input_tokens * pricing.input_cost_per_token + output_tokens * pricing.output_cost_per_token
-        )
-        usage_object: Final = Usage(
-            prompt_tokens=input_tokens,
-            completion_tokens=output_tokens,
-            total_tokens=input_tokens + output_tokens,
         )
         updated_kwargs: Final = {
             **kwargs,
