@@ -251,7 +251,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if self._is_gpt_5_model(model=lookup_name):
             reasoning: Final = params.get("reasoning") or {}
             effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
-            unsupported_effort: Final = self._is_unsupported_reasoning_effort(lookup_name, effort)
+            unsupported_effort: Final = isinstance(effort, str) and self._is_unsupported_reasoning_effort(
+                lookup_name, effort
+            )
             should_drop_effort: Final = unsupported_effort and (drop_params or litellm.drop_params)
 
             if unsupported_effort:
