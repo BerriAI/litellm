@@ -56,8 +56,10 @@ REQUEST_LOG_INDEXES: Final = (
 )
 
 _IDENTIFIER_MAX_BYTES: Final = 63
-_PARENT_LOCK_TIMEOUT: Final = "2s"
-_PARENT_LOCK_ATTEMPTS: Final = 30
+_DDL_LOCK_TIMEOUT: Final = "200ms"
+_DDL_LOCK_ATTEMPTS: Final = 10
+_DDL_RETRY_BASE_SECONDS: Final = 0.25
+_DDL_RETRY_MAX_SECONDS: Final = 8.0
 _LOCK_HANDOVER_SECONDS: Final = 2.0
 _DIGEST_LENGTH: Final = 8
 _CREATE_INDEX_STATEMENT: Final = re.compile(
@@ -179,6 +181,32 @@ def _under_migration_lock(connection: "psycopg.Connection[tuple[object, ...]]", 
             )
             return False
         return step()
+
+
+def _with_bounded_lock(
+    connection: "psycopg.Connection[tuple[object, ...]]", step: Callable[[], bool], what: str
+) -> bool:
+    """Run `step` under the migration lock with a short lock_timeout, so a DDL statement that has to wait for open
+    transactions holds new writes back for at most that long; retry with capped exponential backoff, holding the
+    migration lock per attempt only and releasing it while sleeping. False when another process holds the migration
+    lock or every attempt timed out."""
+    import psycopg
+    from psycopg import sql
+
+    for attempt in range(_DDL_LOCK_ATTEMPTS):
+        if attempt:
+            time.sleep(min(_DDL_RETRY_MAX_SECONDS, _DDL_RETRY_BASE_SECONDS * 2.0**attempt) * random.uniform(0.5, 1.0))
+        connection.execute(sql.SQL("SET lock_timeout = {}").format(sql.Literal(_DDL_LOCK_TIMEOUT)))
+        try:
+            return _under_migration_lock(connection, step)
+        except psycopg.errors.LockNotAvailable:
+            logger.info("Waiting for open transactions before %s", what)
+        finally:
+            connection.execute("SET lock_timeout = 0")
+    logger.warning(
+        "Could not get the lock for %s without holding writes back, leaving it for the next index build", what
+    )
+    return False
 
 
 def _ensure_index(connection: "psycopg.Connection[tuple[object, ...]]", schema: str, index: RequestLogIndex) -> bool:
@@ -368,12 +396,13 @@ def build_index_on_partitioned_table(
             "Index %s already exists on %s rather than %s, leaving it alone", parent_index, existing.table, parent_table
         )
         return False
-    if existing is None and not _under_migration_lock(
+    if existing is None and not _with_bounded_lock(
         connection,
         lambda: (
             _adopt_equivalent_index(connection, schema, parent_table, parent_index, index)
             or _create_parent_index(connection, schema, parent_index, parent_table, index)
         ),
+        f"creating the parent index {parent_index}",
     ):
         return False
     children: Final = _children_without_the_index(connection, schema, parent_table, parent_index)
@@ -393,29 +422,15 @@ def _create_parent_index(
     table: str,
     index: RequestLogIndex,
 ) -> bool:
-    """Create the metadata-only parent index. Postgres takes a SHARE lock on the
-    parent for that statement, so it waits for in-flight writes and queues new ones
-    behind it; a short lock_timeout with retries keeps every such pause bounded."""
-    import psycopg
+    """Create the metadata-only parent index. The caller bounds Postgres's SHARE lock wait on the parent."""
     from psycopg import sql
 
     prefix: Final = sql.SQL("CREATE INDEX IF NOT EXISTS {} ON ONLY {} ").format(
         sql.Identifier(name), sql.Identifier(schema, table)
     )
     statement: Final = _create_index_statement(connection, prefix, index.definition)
-    connection.execute(sql.SQL("SET lock_timeout = {}").format(sql.Literal(_PARENT_LOCK_TIMEOUT)))
-    try:
-        for _ in range(_PARENT_LOCK_ATTEMPTS):
-            try:
-                connection.execute(statement)
-                return True
-            except psycopg.errors.LockNotAvailable:
-                logger.info("Waiting for in-flight writes to %s before creating the parent index %s", table, name)
-                time.sleep(random.uniform(0.1, 0.5))
-    finally:
-        connection.execute("SET lock_timeout = 0")
-    logger.warning("Could not get the parent lock on %s to create %s, leaving it for the next index build", table, name)
-    return False
+    connection.execute(statement)
+    return True
 
 
 def _attach_child_index(
@@ -445,4 +460,4 @@ def _attach_child_index(
         logger.info("Attached index %s on partition %s to %s", child_index, child.name, parent_index)
         return True
 
-    return _under_migration_lock(connection, attach)
+    return _with_bounded_lock(connection, attach, f"attaching {child_index}")
