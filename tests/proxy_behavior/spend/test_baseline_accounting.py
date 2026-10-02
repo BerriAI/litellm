@@ -151,6 +151,13 @@ async def test_late_replay_updates_all_projections_without_rebilling(db: Prisma,
     ):
         assert after_users["late-user"][field] == after[field]
     assert after_users["late-user"]["turns"] == 1 and after_users["late-user"]["spend"] == 0.17
+    days: Final = await db.query_raw(
+        'SELECT * FROM "LiteLLM_AutoRouterDailySpend" WHERE api_key=$1 ORDER BY user_id', late.api_key
+    )
+    assert [(day["date"], day["user_id"]) for day in days] == [("1970-01-01", "early-user"), ("1970-01-01", "late-user")]
+    assert days[0]["saved_spend"] == days[0]["savings_estimated_turns"] == 0
+    for field in ("saved_spend", "savings_estimated_turns", "savings_estimated_actual_spend", "savings_estimated_saved_spend"):
+        assert days[1][field] == after[field]
     for table in ("DailyUserSpend", "DailyTeamSpend", "DailyOrganizationSpend", "DailyEndUserSpend", "DailyAgentSpend", "DailyTagSpend"):
         rows: Final = await db.query_raw(f'SELECT spend,api_requests,autorouter_savings_spend FROM "LiteLLM_{table}" WHERE api_key=$1', late.api_key)
         assert rows[0]["spend"] == rows[0]["api_requests"] == 0
