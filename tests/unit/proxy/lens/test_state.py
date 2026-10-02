@@ -137,6 +137,16 @@ def test_timeline_records_when_each_stage_starts_not_each_heartbeat() -> None:
     ]
 
 
+def test_claim_payload_omits_timeline_so_workers_that_forbid_unknown_fields_still_parse_it() -> None:
+    from litellm.proxy.lens.models import Claim
+
+    claimed: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)
+    assert claimed.jobs[0].timeline
+    payload: Final = Claim(lens_id="lens", job=claimed.jobs[0], findings=()).model_dump(mode="json")
+    assert "timeline" not in payload["job"]
+    assert Claim.model_validate(payload).job.stage == "Collecting executions"
+
+
 def test_replaying_evidence_does_not_reopen_but_new_occurrence_does() -> None:
     from litellm.proxy.lens.state import snapshot_finding
 
