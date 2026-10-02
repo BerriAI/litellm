@@ -1,6 +1,6 @@
 #### Video Endpoints #####
 
-from typing import Any, Final, cast
+from typing import Any, Final, cast  # noqa: TID251  # request-body boundary needs Any and a checked-by-source cast
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
