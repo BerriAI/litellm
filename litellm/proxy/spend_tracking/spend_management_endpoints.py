@@ -4900,10 +4900,11 @@ def _read_scope_sql(scope: LogReadScope, next_param: int) -> tuple[str, tuple[ob
             return ("", ())
         case UserLogs(user_id=user_id):
             return (f'"user" = ${next_param}', (user_id,))
-        case UserAndTeamLogs(user_id=user_id, team_ids=team_ids):
+        case _:
+            team_scope: Final[UserAndTeamLogs] = scope
             return (
                 f'("user" = ${next_param} OR team_id = ANY(${next_param + 1}::text[]))',
-                (user_id, team_ids),
+                (team_scope.user_id, team_scope.team_ids),
             )
 
 
@@ -4913,8 +4914,9 @@ def _read_scope_where(scope: LogReadScope) -> Mapping[str, object]:
             return {}
         case UserLogs(user_id=user_id):
             return {"user": user_id}
-        case UserAndTeamLogs(user_id=user_id, team_ids=team_ids):
-            return {"OR": [{"user": user_id}, {"team_id": {"in": list(team_ids)}}]}
+        case _:
+            team_scope: Final[UserAndTeamLogs] = scope
+            return {"OR": [{"user": team_scope.user_id}, {"team_id": {"in": list(team_scope.team_ids)}}]}
 
 
 def _spend_log_payload_query(request_id: str, scope: LogReadScope) -> tuple[str, tuple[object, ...]]:
