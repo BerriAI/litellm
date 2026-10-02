@@ -60,7 +60,10 @@ VERTEX_PARTNER_BACKENDS: Final = (
             reason="the e2e Vertex project has no access to mistral-small-2503 (404 publisher model not found)"
         ),
     ),
-    "vertex_ai/openai/gpt-oss-120b-maas",
+    pytest.param(
+        "vertex_ai/openai/gpt-oss-120b-maas",
+        marks=pytest.mark.skip(reason="never served by the e2e Vertex project (60s read timeout, no headers)"),
+    ),
 )
 PDF_DOCUMENT_URL: Final = (
     "https://cdn.jsdelivr.net/gh/BerriAI/litellm"
