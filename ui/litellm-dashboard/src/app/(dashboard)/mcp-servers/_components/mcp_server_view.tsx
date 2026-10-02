@@ -77,6 +77,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   const networkAccess = getMCPNetworkAccess(mcpServer);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialTabIndex);
+  const editFormShowsStdioBanner = selectedTabIndex === 2 && editing && canEdit;
+  const showStdioBanner = mcpServer.transport === TRANSPORT.STDIO && !stdioEnabled && !editFormShowsStdioBanner;
   const canViewUserCredentials = userRole !== null && isProxyAdminTierRole(userRole);
   const canRevokeUserCredentials = userRole !== null && isProxyAdminRole(userRole) && !isViewOnly;
 
@@ -147,9 +149,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         {mcpServer.description && <p className="mt-2 text-sm text-muted-foreground">{mcpServer.description}</p>}
       </div>
 
-      {mcpServer.transport === TRANSPORT.STDIO && !stdioEnabled && !(selectedTabIndex === 2 && editing && canEdit) && (
-        <StdioDisabledBanner />
-      )}
+      {showStdioBanner && <StdioDisabledBanner />}
 
       <Tabs value={String(selectedTabIndex)} onValueChange={(v: unknown) => setSelectedTabIndex(Number(v))}>
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
