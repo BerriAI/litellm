@@ -8,21 +8,31 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from litellm.rust_bridge._native import NativeTraceStorage, trace_decode_otlp
-from litellm.rust_bridge.traces import ClickHouseStorage, NormalizedSpan, normalized_field_definitions
+from litellm.rust_bridge._native import NativeTraceConfig, NativeTraceStorage, trace_decode_otlp
+from litellm.rust_bridge.traces import (
+    ClickHouseStorage,
+    NormalizedSpan,
+    TraceStorageConfig,
+    normalized_field_definitions,
+)
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.decode import decode_otlp
 from litellm.tracing.store import TraceStore
+from litellm.tracing.types import TraceScope
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
 
 
+def _native_storage(database: str, url: str, retention_days: int = 14) -> NativeTraceStorage:
+    return NativeTraceStorage(NativeTraceConfig(database, url, retention_days))
+
+
 @pytest.mark.asyncio
 async def test_trace_reader_projects_connection_and_parameters(recording_server: RecordingServer) -> None:
     recording_server.enqueue(ResponseSpec(body={"data": [{"trace_id": "trace-1"}]}))
-    reader_url: Final = recording_server.base_url.replace("http://", "http://reader:p%40ss%2Fword%25@")
-    storage: Final = NativeTraceStorage("trace_test", recording_server.base_url, reader_url + "?database=wrong")
+    url: Final = recording_server.base_url.replace("http://", "http://reader:p%40ss%2Fword%25@")
+    storage: Final = _native_storage("trace_test", url + "?database=wrong")
     rows: Final = json.loads(await storage.query("trace_spans", {"trace_id": "trace-1"}))
     request: Final = recording_server.requests[0]
     parameters: Final = parse_qs(urlsplit(request.path).query)
@@ -39,7 +49,7 @@ async def test_trace_reader_projects_connection_and_parameters(recording_server:
 @pytest.mark.asyncio
 async def test_trace_reader_rejects_success_status_with_embedded_error(recording_server: RecordingServer) -> None:
     recording_server.enqueue(ResponseSpec(body={"data": [], "exception": "query failed"}))
-    storage: Final = NativeTraceStorage("trace_test", recording_server.base_url, recording_server.base_url)
+    storage: Final = _native_storage("trace_test", recording_server.base_url)
     with pytest.raises(RuntimeError, match="invalid or failed JSON"):
         await storage.query("trace_spans", {})
 
@@ -47,7 +57,7 @@ async def test_trace_reader_rejects_success_status_with_embedded_error(recording
 @pytest.mark.asyncio
 async def test_reader_rejects_arbitrary_sql_before_sending(recording_server: RecordingServer) -> None:
     recording_server.expected_requests = 0
-    storage: Final = NativeTraceStorage("trace_test", recording_server.base_url, recording_server.base_url)
+    storage: Final = _native_storage("trace_test", recording_server.base_url)
     with pytest.raises(ValueError, match="unknown ClickHouse read query"):
         await storage.query("SELECT 1", {})
 
@@ -55,14 +65,44 @@ async def test_reader_rejects_arbitrary_sql_before_sending(recording_server: Rec
 @pytest.mark.asyncio
 async def test_schema_binding_rejects_invalid_database() -> None:
     with pytest.raises(ValueError, match=r"database.*retention"):
-        NativeTraceStorage("db; DROP DATABASE default", "http://localhost:8123")
+        NativeTraceConfig("db; DROP DATABASE default", "http://localhost:8123", 14)
 
 
 @pytest.mark.asyncio
 async def test_schema_binding_rejects_non_positive_retention() -> None:
-    storage: Final = NativeTraceStorage("traces", "http://localhost:8123")
     with pytest.raises(ValueError, match=r"database.*retention"):
-        await storage.ensure_schema(0, 14)
+        NativeTraceConfig("traces", "http://localhost:8123", 0)
+
+
+def test_invalid_url_error_does_not_expose_credentials() -> None:
+    with pytest.raises(RuntimeError, match="invalid ClickHouse HTTP URL") as error:
+        NativeTraceConfig("traces", "secret://writer:password@example.com", 7)
+    assert "password" not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_from_env_reads_with_clickhouse_url(
+    recording_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recording_server.enqueue(ResponseSpec(body={"data": []}))
+    monkeypatch.setenv("CLICKHOUSE_URL", recording_server.base_url)
+    monkeypatch.delenv("CLICKHOUSE_READER_URL", raising=False)
+    scope: Final[TraceScope] = {"team_ids": (), "api_key_hash": ""}
+    page: Final = await TraceReceiver.from_env().list_traces(scope, 0, 1)
+    assert page == {"data": (), "next_cursor": None}
+    assert len(recording_server.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_schema_setup_uses_configured_retention(recording_server: RecordingServer) -> None:
+    recording_server.expected_requests = 8
+    storage: Final = _native_storage("trace_test", recording_server.base_url, 7)
+    await storage.ensure_schema()
+    ttl_statements: Final = tuple(
+        request.raw_body for request in recording_server.requests if b"MODIFY TTL" in request.raw_body
+    )
+    assert len(ttl_statements) == 3
+    assert all(b"INTERVAL 7 DAY" in statement for statement in ttl_statements)
 
 
 @pytest.mark.asyncio
@@ -73,9 +113,9 @@ async def test_schema_setup_uses_writer_credentials_and_rejects_failed_statement
     recording_server.enqueue(ResponseSpec(body=""))
     recording_server.enqueue(ResponseSpec(status=403, body="denied"))
     writer_url: Final = recording_server.base_url.replace("http://", "http://writer:p%40ss%2Fword%25@")
-    storage: Final = NativeTraceStorage("trace_test", writer_url + "?database=wrong&readonly=1")
+    storage: Final = _native_storage("trace_test", writer_url + "?database=wrong&readonly=1", 7)
     with pytest.raises(RuntimeError, match="schema setup failed with HTTP status 403"):
-        await storage.ensure_schema(7, 14)
+        await storage.ensure_schema()
     assert len(recording_server.requests) == 2
     assert recording_server.requests[0].raw_body.startswith(b"CREATE DATABASE IF NOT EXISTS")
     assert recording_server.requests[1].raw_body.startswith(b"CREATE TABLE IF NOT EXISTS")
@@ -89,7 +129,7 @@ async def test_schema_setup_uses_writer_credentials_and_rejects_failed_statement
 @pytest.mark.asyncio
 async def test_insert_encodes_and_sends_rows(recording_server: RecordingServer) -> None:
     recording_server.enqueue(ResponseSpec(body=""))
-    storage: Final = NativeTraceStorage("trace_test", recording_server.base_url)
+    storage: Final = _native_storage("trace_test", recording_server.base_url)
     before: Final = time.time_ns() // 1_000_000
     await storage.insert_rows("otel_traces", [{"Timestamp": 1_234_567_890, "Input": "hello", "EngineReceivedMs": -1}])
     after: Final = time.time_ns() // 1_000_000
@@ -169,7 +209,9 @@ def test_normalized_field_contract_matches_decoded_rust_span() -> None:
 @pytest.mark.asyncio
 async def test_resource_fanout_reaches_insert_with_identical_values(recording_server: RecordingServer) -> None:
     body: Final = _resource_export(16 * 1024, 1024)
-    receiver: Final = TraceReceiver(TraceStore(ClickHouseStorage("trace_test", recording_server.base_url)))
+    receiver: Final = TraceReceiver(
+        TraceStore(ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test")))
+    )
     tenant: Final = Tenant("team-a", "key-a", "org-a")
     assert await receiver.ingest(body, "application/json", None, tenant) == 1024
     encoded: Final = gzip.decompress(recording_server.requests[0].raw_body)
@@ -186,7 +228,9 @@ async def test_resource_fanout_reaches_insert_with_identical_values(recording_se
 async def test_shared_resource_still_hits_insert_limit_before_transport(recording_server: RecordingServer) -> None:
     recording_server.expected_requests = 0
     body: Final = _resource_export(64 * 1024, 1024)
-    receiver: Final = TraceReceiver(TraceStore(ClickHouseStorage("trace_test", recording_server.base_url)))
+    receiver: Final = TraceReceiver(
+        TraceStore(ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test")))
+    )
     with pytest.raises(TracingPayloadTooLargeError, match="encoded size limit"):
         await receiver.ingest(body, "application/json", None, Tenant("team-a", "key-a"))
     assert recording_server.requests == []
@@ -194,7 +238,7 @@ async def test_shared_resource_still_hits_insert_limit_before_transport(recordin
 
 @pytest.mark.asyncio
 async def test_insert_validates_values_without_pydantic_copy(recording_server: RecordingServer) -> None:
-    storage: Final = ClickHouseStorage("trace_test", recording_server.base_url)
+    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
     invalid: Final = object()
     with pytest.raises(ValueError, match=type(invalid).__name__):
         await storage.insert_rows("otel_traces", [{"ResourceAttributes": invalid}])
@@ -225,7 +269,7 @@ def test_trace_sql_endpoint_executes_for_admin_and_preserves_clickhouse_envelope
     for _ in range(11):
         recording_server.enqueue(ResponseSpec(body=""))
     recording_server.enqueue(ResponseSpec(body=envelope))
-    storage: Final = ClickHouseStorage("trace_test", recording_server.base_url, recording_server.base_url)
+    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
     app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[provide_trace_query_secret] = lambda: "test-master-secret"
@@ -260,7 +304,7 @@ def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(recording
         {"data": [{"key": "custom.resource"}]},
     ):
         recording_server.enqueue(ResponseSpec(body=response))
-    storage: Final = ClickHouseStorage("trace_test", recording_server.base_url, recording_server.base_url)
+    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
     app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[provide_trace_query_secret] = lambda: "test-master-secret"
@@ -299,7 +343,7 @@ def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
     recording_server.enqueue(ResponseSpec(status=clickhouse_status, body=b"ClickHouse rejected the query"))
     envelope: Final = {"meta": [{"name": "answer", "type": "UInt8"}], "data": [{"answer": 42}], "rows": 1}
     recording_server.enqueue(ResponseSpec(body=envelope))
-    storage: Final = ClickHouseStorage("trace_test", recording_server.base_url, recording_server.base_url)
+    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
     app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[provide_trace_query_secret] = lambda: "test-master-secret"

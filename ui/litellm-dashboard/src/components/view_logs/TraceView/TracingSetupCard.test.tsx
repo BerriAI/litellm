@@ -182,7 +182,8 @@ describe("TracingSetupCard", () => {
     const onCheck = vi.fn();
     const { card } = renderCard({ detail: "Agent tracing is not enabled", onCheck });
     expect(screen.getByRole("heading", { name: "Enable tracing" })).toBeVisible();
-    expect(card).toHaveTextContent("store: clickhouse");
+    expect(card).toHaveTextContent("type: clickhouse");
+    expect(card).toHaveTextContent("url: os.environ/CLICKHOUSE_URL");
     expect(screen.queryByRole("combobox", { name: "Your agent framework" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Send a test trace" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Check setup" }));

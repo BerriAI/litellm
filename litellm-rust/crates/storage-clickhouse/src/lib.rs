@@ -89,19 +89,17 @@ impl Connection {
 pub struct Storage {
     database: String,
     writer: Connection,
-    reader: Option<Connection>,
+    reader: Connection,
 }
 
 impl Storage {
-    pub fn new(database: String, url: &str, reader_url: Option<&str>) -> Result<Self, Error> {
+    pub fn new(database: String, url: &str) -> Result<Self, Error> {
         if !valid_identifier(&database) {
             return Err(Error::InvalidSchema);
         }
         Ok(Self {
             writer: Connection::writer(url)?,
-            reader: reader_url
-                .map(|value| Connection::reader(value, &database))
-                .transpose()?,
+            reader: Connection::reader(url, &database)?,
             database,
         })
     }
@@ -114,8 +112,8 @@ impl Storage {
         &self.writer
     }
 
-    pub fn reader(&self) -> Option<&Connection> {
-        self.reader.as_ref()
+    pub fn reader(&self) -> &Connection {
+        &self.reader
     }
 }
 

@@ -53,7 +53,8 @@ export default function AuditLogsPanel({
     return typeof entry?.value === "string" && entry.value.trim() ? entry.value.trim() : undefined;
   };
 
-  const canQueryAuditLogs = !!accessToken && !!token && !!userRole && !!userID && isActive && premiumUser;
+  const hasSession = [accessToken, token, userRole, userID].every(Boolean);
+  const canQueryAuditLogs = hasSession && isActive && premiumUser;
 
   const query = useQuery<AuditLogsResponse>({
     queryKey: ["audit_logs", pagination.pageIndex, pagination.pageSize, columnFilters, searchTerm],

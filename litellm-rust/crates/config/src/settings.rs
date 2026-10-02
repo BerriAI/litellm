@@ -5,6 +5,47 @@ use serde::Deserialize;
 
 use crate::{AdditionalFields, Flag, NumberOrString, Object, OneOrMany, Value};
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TracingStoreKind {
+    Clickhouse,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClickHouseStoreSettings {
+    #[serde(rename = "type")]
+    pub kind: TracingStoreKind,
+    pub url: Option<SecretValue>,
+    pub database: Option<String>,
+    pub retention_days: Option<NumberOrString>,
+}
+
+impl fmt::Debug for ClickHouseStoreSettings {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ClickHouseStoreSettings")
+            .field("kind", &self.kind)
+            .field("database", &self.database)
+            .field("retention_days", &self.retention_days)
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum TracingStoreSettings {
+    ClickHouse(ClickHouseStoreSettings),
+}
+
+#[derive(Clone, Default, Debug, Deserialize)]
+#[serde(default)]
+pub struct TracingSettings {
+    pub store: Option<TracingStoreSettings>,
+    #[serde(flatten)]
+    pub additional_fields: AdditionalFields,
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(default)]
 pub struct GeneralSettings {
@@ -14,6 +55,7 @@ pub struct GeneralSettings {
     pub admission_queue_timeout_seconds: f64,
     pub master_key: Option<SecretValue>,
     pub database_url: Option<SecretValue>,
+    pub tracing: Option<TracingSettings>,
     pub database_connection_pool_limit: Option<u64>,
     pub database_connection_timeout: Option<f64>,
     pub database_connect_timeout: Option<f64>,
@@ -50,6 +92,7 @@ impl Default for GeneralSettings {
             admission_queue_timeout_seconds: 1.0,
             master_key: None,
             database_url: None,
+            tracing: None,
             database_connection_pool_limit: Some(10),
             database_connection_timeout: Some(60.0),
             database_connect_timeout: None,
@@ -97,6 +140,7 @@ impl fmt::Debug for GeneralSettings {
             )
             .field("master_key", &self.master_key)
             .field("database_url", &self.database_url)
+            .field("tracing", &self.tracing)
             .field("store_model_in_db", &self.store_model_in_db)
             .field("additional_fields", &self.additional_fields.keys())
             .finish_non_exhaustive()

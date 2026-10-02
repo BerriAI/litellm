@@ -33,7 +33,7 @@ async fn database() -> Result<Database, Box<dyn std::error::Error>> {
         container.get_host_port_ipv4(8123).await?
     ))?;
     let client = Client::no_redirect_for_test();
-    ensure_schema(&client, &writer, "trace_test", 7, 7).await?;
+    ensure_schema(&client, &writer, "trace_test", 7).await?;
     for sql in [
         "INSERT INTO trace_test.otel_traces (TeamId, ApiKeyHash, TraceId, SpanId, Timestamp, SpanAttributes) VALUES ('team-a', 'key-a1', 'shared-trace', 'a1', now(), map('visible', 'a')), ('team-a', 'key-a2', 'shared-trace', 'a2', now(), map('visible', 'a')), ('team-b', 'key-b', 'shared-trace', 'b', now(), map('secret-b', 'b'))",
         "INSERT INTO trace_test.spend_logs (team_id, api_key, request_id, start_time, end_time, metadata) VALUES ('team-a', 'key-a1', 'a1', now(), now(), '{\"visible\":1}'), ('team-a', 'key-a2', 'a2', now(), now(), '{\"visible\":1}'), ('team-b', 'key-b', 'b', now(), now(), '{\"secret_b\":1}')",

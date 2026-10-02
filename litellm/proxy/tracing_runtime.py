@@ -1,4 +1,4 @@
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import asynccontextmanager
 from typing import Final
 
@@ -44,9 +44,12 @@ async def _start_receiver(factory: Callable[[], TraceReceiver]) -> TraceReceiver
 
 @asynccontextmanager
 async def manage_tracing(
-    enabled: bool, receiver_factory: Callable[[], TraceReceiver] = TraceReceiver.from_env
+    enabled: bool,
+    receiver_factory: Callable[[], TraceReceiver] | None = None,
+    settings: Mapping[str, object] | None = None,
 ) -> AsyncGenerator[TraceReceiver | None, None]:
-    tracing: Final = await _start_receiver(receiver_factory) if enabled else None
+    factory: Final = receiver_factory or (lambda: TraceReceiver.from_settings(settings or {}))
+    tracing: Final = await _start_receiver(factory) if enabled else None
     if tracing is None:
         yield tracing
         return

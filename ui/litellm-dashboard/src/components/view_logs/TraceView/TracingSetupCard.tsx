@@ -231,9 +231,10 @@ export const otlpEndpoints = (proxyUrl: string): readonly (readonly [string, str
 export const PROXY_CONFIG_SNIPPET = [
   "general_settings:",
   "  tracing:",
-  "    store: clickhouse",
-  "",
-  "# env: CLICKHOUSE_URL (writer) and CLICKHOUSE_READER_URL (read-only user)",
+  "    store:",
+  "      type: clickhouse",
+  "      url: os.environ/CLICKHOUSE_URL",
+  "      retention_days: 14",
 ].join("\n");
 
 function CodeBlock({
@@ -575,8 +576,8 @@ function EnableTracing({ checked, checking, onCheck }: { checked: boolean; check
     <>
       <Step title="Enable tracing on the proxy">
         <p className="mb-3 text-sm leading-6 text-muted-foreground">
-          Set your ClickHouse writer and read-only reader URLs, add this to config.yaml, then restart the proxy. Ask
-          your proxy administrator if you don’t manage this deployment.
+          Set your ClickHouse URL, add this to config.yaml, then restart the proxy. Ask your proxy administrator if you
+          don’t manage this deployment.
         </p>
         <CodeBlock code={PROXY_CONFIG_SNIPPET} tabs={<FileLabel>config.yaml</FileLabel>} />
         <a
