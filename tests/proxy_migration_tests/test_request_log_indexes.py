@@ -14,6 +14,7 @@ from typing import Final
 
 import psycopg
 import pytest
+from litellm_proxy_extras import request_log_indexes
 from litellm_proxy_extras.migration_lock import MIGRATION_LOCK_KEY, migration_lock
 from litellm_proxy_extras.migration_recovery import roll_back_failed_inert_migration
 from litellm_proxy_extras.request_log_indexes import (
@@ -646,6 +647,154 @@ def test_inserts_keep_flowing_while_the_partition_indexes_build(partitioned_data
             writer.commit()
             builder_thread.join()
     assert outcome == [True]
+    _assert_index_covers_every_partition(partitioned_database, CALL_ID_INDEX, "litellm_call_id_idx")
+
+
+def _insert_for(database_url: str, seconds: float) -> None:
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        conn.execute("SET lock_timeout = '1s'")
+        deadline: Final = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            _insert_spend_log(conn, f"lock-test-{uuid.uuid4().hex}", "2026-08-16")
+            time.sleep(0.05)
+
+
+def _wait_for_blocked_ddl(database_url: str, query_pattern: str) -> bool:
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        deadline: Final = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if conn.execute(
+                "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE %s",
+                (query_pattern,),
+            ).fetchone():
+                return True
+            time.sleep(0.01)
+    return False
+
+
+@requires_db
+def test_inserts_are_never_held_back_while_the_parent_index_waits_for_an_open_write(
+    partitioned_database: str,
+) -> None:
+    outcome: Final[list[bool]] = []  # mutable-ok: the builder thread hands its result back through it
+    with psycopg.connect(partitioned_database) as writer:
+        _insert_spend_log(writer, "parent-index-lock-owner", "2026-08-15")
+        builder_thread: Final = threading.Thread(
+            target=lambda: outcome.append(_build_in_its_own_session(partitioned_database, CALL_ID_INDEX_DEFINITION))
+        )
+        builder_thread.start()
+        try:
+            assert _wait_for_blocked_ddl(partitioned_database, "%CREATE INDEX%ON ONLY%")
+            _insert_for(partitioned_database, 3)
+        finally:
+            try:
+                writer.commit()
+            finally:
+                builder_thread.join()
+    assert outcome == [True]
+    _assert_index_covers_every_partition(partitioned_database, CALL_ID_INDEX, "litellm_call_id_idx")
+
+
+@requires_db
+def test_inserts_are_never_held_back_while_attach_partition_waits_for_a_reader_of_the_child_index(
+    partitioned_database: str,
+) -> None:
+    partition: Final = "LiteLLM_SpendLogs_p2026_08"
+    child_index: Final = CALL_ID_INDEX_DEFINITION.partition_index_name(partition)
+    assert child_index == "LiteLLM_SpendLogs_p2026_08_litellm_call_id_idx"
+    with psycopg.connect(partitioned_database, autocommit=True) as conn:
+        conn.execute(
+            'CREATE INDEX "LiteLLM_SpendLogs_litellm_call_id_idx" ON ONLY "LiteLLM_SpendLogs" ("litellm_call_id")'
+        )
+        conn.execute(
+            sql.SQL('CREATE INDEX {} ON {} ("litellm_call_id")').format(
+                sql.Identifier(CALL_ID_INDEX_DEFINITION.partition_index_name(partition)), sql.Identifier(partition)
+            )
+        )
+
+    outcome: Final[list[bool]] = []  # mutable-ok: the builder thread hands its result back through it
+    with psycopg.connect(partitioned_database) as reader:
+        reader.execute("SET enable_seqscan = off")
+        reader.execute(
+            sql.SQL('SELECT count(*) FROM {} WHERE "litellm_call_id" IS NULL').format(sql.Identifier(partition))
+        ).fetchone()
+        reader_pid: Final = reader.execute("SELECT pg_backend_pid()").fetchone()[0]
+        with psycopg.connect(partitioned_database, autocommit=True) as inspector:
+            child_lock: Final = inspector.execute(
+                "SELECT 1 FROM pg_locks WHERE pid = %s AND relation = to_regclass(%s) "
+                "AND mode = 'AccessShareLock' AND granted",
+                (reader_pid, f'"{child_index}"'),
+            ).fetchone()
+        assert child_lock is not None
+        builder_thread: Final = threading.Thread(
+            target=lambda: outcome.append(_build_in_its_own_session(partitioned_database, CALL_ID_INDEX_DEFINITION))
+        )
+        builder_thread.start()
+        try:
+            assert _wait_for_blocked_ddl(partitioned_database, "%ATTACH PARTITION%")
+            _insert_for(partitioned_database, 3)
+        finally:
+            try:
+                reader.commit()
+            finally:
+                builder_thread.join()
+    assert outcome == [True]
+    _assert_index_covers_every_partition(partitioned_database, CALL_ID_INDEX, "litellm_call_id_idx")
+
+
+@requires_db
+def test_a_parent_index_that_never_gets_its_lock_is_left_for_the_next_index_build(
+    partitioned_database: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(request_log_indexes, "_DDL_LOCK_ATTEMPTS", 2)
+    with psycopg.connect(partitioned_database) as writer:
+        _insert_spend_log(writer, "parent-index-lock-owner", "2026-08-15")
+        with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+            assert _build_in_its_own_session(partitioned_database, CALL_ID_INDEX_DEFINITION) is False
+        assert "leaving it for the next index build" in caplog.text
+        assert _indexed_table(partitioned_database, CALL_ID_INDEX) is None
+        writer.commit()
+        assert _build_in_its_own_session(partitioned_database, CALL_ID_INDEX_DEFINITION) is True
+    _assert_index_covers_every_partition(partitioned_database, CALL_ID_INDEX, "litellm_call_id_idx")
+
+
+@requires_db
+def test_an_attach_that_never_gets_its_lock_is_left_for_the_next_index_build(
+    partitioned_database: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    partition: Final = "LiteLLM_SpendLogs_p2026_08"
+    child_index: Final = CALL_ID_INDEX_DEFINITION.partition_index_name(partition)
+    assert child_index == "LiteLLM_SpendLogs_p2026_08_litellm_call_id_idx"
+    with psycopg.connect(partitioned_database, autocommit=True) as conn:
+        conn.execute(
+            'CREATE INDEX "LiteLLM_SpendLogs_litellm_call_id_idx" ON ONLY "LiteLLM_SpendLogs" ("litellm_call_id")'
+        )
+        conn.execute(
+            sql.SQL('CREATE INDEX {} ON {} ("litellm_call_id")').format(
+                sql.Identifier(child_index), sql.Identifier(partition)
+            )
+        )
+
+    monkeypatch.setattr(request_log_indexes, "_DDL_LOCK_ATTEMPTS", 2)
+    with psycopg.connect(partitioned_database) as reader:
+        reader.execute("SET enable_seqscan = off")
+        reader.execute(
+            sql.SQL('SELECT count(*) FROM {} WHERE "litellm_call_id" IS NULL').format(sql.Identifier(partition))
+        ).fetchone()
+        reader_pid: Final = reader.execute("SELECT pg_backend_pid()").fetchone()[0]
+        with psycopg.connect(partitioned_database, autocommit=True) as inspector:
+            child_lock: Final = inspector.execute(
+                "SELECT 1 FROM pg_locks WHERE pid = %s AND relation = to_regclass(%s) "
+                "AND mode = 'AccessShareLock' AND granted",
+                (reader_pid, f'"{child_index}"'),
+            ).fetchone()
+        assert child_lock is not None
+        with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+            assert _build_in_its_own_session(partitioned_database, CALL_ID_INDEX_DEFINITION) is False
+        assert "Could not get the lock for attaching" in caplog.text
+        reader.commit()
+
+    assert _build_in_its_own_session(partitioned_database, CALL_ID_INDEX_DEFINITION) is True
     _assert_index_covers_every_partition(partitioned_database, CALL_ID_INDEX, "litellm_call_id_idx")
 
 
