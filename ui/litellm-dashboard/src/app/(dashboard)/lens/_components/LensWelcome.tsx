@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Check, Loader2 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { LensPreviewButton } from "@/components/lens/LensPreviewButton";
 import { uiHref } from "@/utils/uiHref";
 
 export function LensWelcome({
@@ -40,11 +41,7 @@ export function LensWelcome({
   });
   return (
     <section aria-labelledby="lens-welcome" className="max-w-3xl pb-6">
-      {onDemo && (
-        <Button variant="outline" className="mb-6" onClick={onDemo}>
-          Preview sample
-        </Button>
-      )}
+      {onDemo && <LensPreviewButton onClick={onDemo} />}
       <h2 id="lens-welcome" className="text-xl font-semibold tracking-tight">
         Find what needs attention
       </h2>

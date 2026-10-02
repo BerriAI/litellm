@@ -222,6 +222,13 @@ export default function ROICalculatorView({
       <PageHeader
         icon={<Calculator />}
         title="ROI Calculator"
+        titleAction={
+          !liveSummary && showLiveStatus ? (
+            <Button variant="outline" onClick={() => void previewSample()}>
+              Preview sample report
+            </Button>
+          ) : undefined
+        }
         subtitle={
           <>
             {summary
@@ -238,11 +245,6 @@ export default function ROICalculatorView({
           </>
         }
       />
-      {!liveSummary && showLiveStatus && (
-        <Button variant="outline" onClick={() => void previewSample()}>
-          Preview sample report
-        </Button>
-      )}
       {sampleSummary && (
         <Alert>
           <AlertTitle>Sample report</AlertTitle>

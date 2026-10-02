@@ -8,6 +8,7 @@ import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LensDemoContext, useLensDemo } from "@/components/lens/LensDemoContext";
+import { LensPreviewTarget } from "@/components/lens/LensPreviewButton";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { LensView } from "./LensView";
 import { createLensDemo } from "./lensDemoData";
@@ -59,57 +60,67 @@ function LensContent({
   );
   const [lensId] = useQueryState("lens", parseAsString);
   const [demoTab, setDemoTab] = useState(initialTab);
+  const [previewTarget, setPreviewTarget] = useState<HTMLDivElement | null>(null);
   const defaultTab = lensId ? "investigations" : "traces";
   const activeTab = demo ? demoTab : tab ?? defaultTab;
   const openDemo = onDemo ? () => onDemo(activeTab) : undefined;
   return (
-    <main className="flex w-full min-w-0 flex-1 flex-col gap-5 p-6 md:p-8">
-      <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-        <Aperture aria-hidden="true" className="size-7" strokeWidth={1.75} />
-        Lens
-      </h1>
-      {demo && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/40 px-4 py-2">
-          <p role="status" className="text-sm">
-            You’re viewing demo data
-          </p>
-          <Button variant="outline" size="sm" onClick={onExit}>
-            Exit demo
-          </Button>
+    <LensPreviewTarget.Provider value={previewTarget}>
+      <main className="flex w-full min-w-0 flex-1 flex-col gap-5 p-6 md:p-8">
+        <div className="flex min-h-9 flex-wrap items-center justify-between gap-3">
+          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
+            <Aperture aria-hidden="true" className="size-7" strokeWidth={1.75} />
+            Lens
+          </h1>
+          <div ref={setPreviewTarget} />
         </div>
-      )}
-      <Tabs
-        value={activeTab}
-        onValueChange={(value) => (demo ? setDemoTab(value as Tab) : void setTab(value as Tab))}
-        className="min-h-0 flex-1 gap-4"
-      >
-        <TabsList variant="line" aria-label="Lens" className="w-full justify-start gap-6 border-b px-0">
-          <TabsTrigger value="traces" className="flex-none px-0">
-            Traces
-          </TabsTrigger>
-          <TabsTrigger value="investigations" className="flex-none px-0">
-            Investigations
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent value="traces" keepMounted className="min-h-0">
-          <AgentTracesPage
-            accessToken={accessToken}
-            isActive={activeTab === "traces"}
-            readOnly={readOnly}
-            canMintTracingKey={!demo && isProxyAdminRole(userRole)}
-            onDemo={openDemo}
-          />
-        </TabsContent>
-        <TabsContent value="investigations" keepMounted={!!demo}>
-          {demo || isProxyAdminTierRole(userRole) ? (
-            <LensView accessToken={accessToken} readOnly={readOnly || !isProxyAdminRole(userRole)} onDemo={openDemo} />
-          ) : (
-            <p className="py-6 text-sm text-muted-foreground">
-              Investigations require proxy administrator access. You can still view your traces.
+        {demo && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/40 px-4 py-2">
+            <p role="status" className="text-sm">
+              You’re viewing demo data
             </p>
-          )}
-        </TabsContent>
-      </Tabs>
-    </main>
+            <Button variant="outline" size="sm" onClick={onExit}>
+              Exit demo
+            </Button>
+          </div>
+        )}
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => (demo ? setDemoTab(value as Tab) : void setTab(value as Tab))}
+          className="min-h-0 flex-1 gap-4"
+        >
+          <TabsList variant="line" aria-label="Lens" className="w-full justify-start gap-6 border-b px-0">
+            <TabsTrigger value="traces" className="flex-none px-0">
+              Traces
+            </TabsTrigger>
+            <TabsTrigger value="investigations" className="flex-none px-0">
+              Investigations
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="traces" keepMounted className="min-h-0">
+            <AgentTracesPage
+              accessToken={accessToken}
+              isActive={activeTab === "traces"}
+              readOnly={readOnly}
+              canMintTracingKey={!demo && isProxyAdminRole(userRole)}
+              onDemo={activeTab === "traces" ? openDemo : undefined}
+            />
+          </TabsContent>
+          <TabsContent value="investigations" keepMounted={!!demo}>
+            {demo || isProxyAdminTierRole(userRole) ? (
+              <LensView
+                accessToken={accessToken}
+                readOnly={readOnly || !isProxyAdminRole(userRole)}
+                onDemo={activeTab === "investigations" ? openDemo : undefined}
+              />
+            ) : (
+              <p className="py-6 text-sm text-muted-foreground">
+                Investigations require proxy administrator access. You can still view your traces.
+              </p>
+            )}
+          </TabsContent>
+        </Tabs>
+      </main>
+    </LensPreviewTarget.Provider>
   );
 }
