@@ -226,23 +226,49 @@ export function AgentTracesSection({
         onOpenTrace={toggleRun}
         selectedKey={openTrace === null ? null : runKey(openTrace)}
       />
-      <footer
-        data-testid="runs-footer"
-        className="flex h-8 shrink-0 items-center border-t border-border bg-muted/40 px-3 font-mono text-[11px] text-muted-foreground"
-      >
-        {runs.length} {runs.length === 1 ? "run" : "runs"}
-        {zoom && (
-          <button
-            type="button"
-            onClick={() => setZoom(null)}
-            aria-label="Clear time zoom"
-            className="ml-3 rounded border border-info/40 bg-info/10 px-1.5 text-info hover:bg-info/20"
-          >
-            {moment(zoom.startMs).format("MMM DD, HH:mm")} to {moment(zoom.endMs).format("MMM DD, HH:mm")} ×
-          </button>
-        )}
-        <span className="ml-auto">{traces.isFetching ? "Updating…" : "Updated just now"}</span>
-      </footer>
+      <RunsFooter
+        count={runs.length}
+        zoom={zoom}
+        isFetching={traces.isFetching}
+        failed={!!traces.error}
+        onResetZoom={() => setZoom(null)}
+      />
     </div>
+  );
+}
+
+function RunsFooter({
+  count,
+  zoom,
+  isFetching,
+  failed,
+  onResetZoom,
+}: {
+  count: number;
+  zoom: TimeWindow | null;
+  isFetching: boolean;
+  failed: boolean;
+  onResetZoom: () => void;
+}) {
+  const settled = failed ? "Update failed" : "Updated just now";
+  const status = isFetching ? "Updating…" : settled;
+  return (
+    <footer
+      data-testid="runs-footer"
+      className="flex h-8 shrink-0 items-center border-t border-border bg-muted/40 px-3 font-mono text-[11px] text-muted-foreground"
+    >
+      {count} {count === 1 ? "run" : "runs"}
+      {zoom && (
+        <button
+          type="button"
+          onClick={() => onResetZoom()}
+          aria-label="Clear time zoom"
+          className="ml-3 rounded border border-info/40 bg-info/10 px-1.5 text-info hover:bg-info/20"
+        >
+          {moment(zoom.startMs).format("MMM DD, HH:mm")} to {moment(zoom.endMs).format("MMM DD, HH:mm")} ×
+        </button>
+      )}
+      <span className="ml-auto">{status}</span>
+    </footer>
   );
 }

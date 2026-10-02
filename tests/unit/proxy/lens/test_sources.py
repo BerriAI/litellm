@@ -61,3 +61,48 @@ async def test_sample_never_returns_authentication_attributes() -> None:
     assert sample.executions[0].metadata == (MetadataFilter(key="environment", value="production"),)
     assert "opaque-oauth-bearer" not in sample.model_dump_json()
     assert sample.eligible == 1
+
+
+@pytest.mark.asyncio
+async def test_agents_use_the_same_team_and_key_scope_as_samples() -> None:
+    class AgentStorage:
+        async def lens_agents(self, parameters):
+            assert parameters["all_teams"] == 0
+            assert parameters["team"] == "alpha"
+            assert parameters["key_hash"] == "key-hash"
+            return [{"agent_name": "research_agent"}, {"agent_name": "support_agent"}]
+
+    names: Final = await SourceReader(AgentStorage()).agents(Scope(team_id="alpha", api_key_hash="key-hash"))
+    assert names == ("research_agent", "support_agent")
+
+
+@pytest.mark.asyncio
+async def test_request_only_storage_is_available_for_investigation() -> None:
+    class RequestStorage:
+        async def lens_availability(self, parameters):
+            assert parameters["team"] == "alpha"
+            return [{"traces": 0, "requests": 1}]
+
+    available: Final = await SourceReader(RequestStorage()).availability(Scope(team_id="alpha"))
+    assert available.requests
+    assert not available.traces
+
+
+@pytest.mark.asyncio
+async def test_agent_filter_is_independent_of_service_and_metadata() -> None:
+    class SampleStorage:
+        async def lens_sample(self, parameters):
+            assert parameters["agent_name"] == "research_agent"
+            assert parameters["service"] == "shared-app"
+            assert parameters["filter_keys"] == ("enduser.id",)
+            assert parameters["filter_values"] == ("user-42",)
+            return []
+
+    settings: Final = lens().settings.model_copy(
+        update={
+            "agent_name": "research_agent",
+            "service": "shared-app",
+            "filters": (MetadataFilter(key="enduser.id", value="user-42"),),
+        }
+    )
+    assert not (await SourceReader(SampleStorage()).sample(Scope(all_teams=True), settings, 1, 2)).executions
