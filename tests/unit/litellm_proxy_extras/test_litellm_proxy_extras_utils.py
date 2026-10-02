@@ -1354,13 +1354,15 @@ class TestV1MigrationFailuresLogAtError:
     def test_a_failed_baseline_recovery_logs_its_stderr_at_error(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
+        database_url: Final = "postgresql://llmproxy:s3cr3t 'p\"w@db:5432/litellm"
+        monkeypatch.delenv("DIRECT_URL", raising=False)
         with caplog.at_level(logging.DEBUG, logger="litellm_proxy_extras"):
             succeeded, calls, _ = self._run_v1_migrations(
                 monkeypatch,
                 tmp_path,
                 deploy_stderr=_P3005_STDERR,
-                diff_stderr="baseline diff failed: XYZ-7731",
-                database_url="postgresql://llmproxy:s3cr3t 'p\"w@db:5432/litellm",
+                diff_stderr=f"baseline diff failed: XYZ-7731 for {database_url}",
+                database_url=database_url,
             )
 
         assert succeeded is False
@@ -1371,70 +1373,115 @@ class TestV1MigrationFailuresLogAtError:
             if "s3cr3t" in record.getMessage() or 'p"w' in record.getMessage()
         ] == []
         messages: Final = self._error_messages(caplog)
-        assert any(
-            "postgresql://llmproxy:****@db:5432/litellm" in message for message in messages
-        )
+        assert any("postgresql://REDACTED@db:5432/litellm" in message for message in messages)
         assert any("XYZ-7731" in message for message in messages)
 
 
 @pytest.mark.parametrize(
-    "raw,expected",
+    "database_url,direct_url,text,expected",
     (
         (
-            "postgresql://u:pw@db:5432/litellm",
-            "postgresql://u:****@db:5432/litellm",
+            "postgresql://u:pa ss@db:5432/litellm",
+            None,
+            'Error: P1000: Authentication failed against database server at "postgresql://u:pa ss@db:5432/litellm"',
+            'Error: P1000: Authentication failed against database server at "postgresql://REDACTED@db:5432/litellm"',
+        ),
+        (
+            "postgresql://u:pa'ss@db:5432/litellm",
+            None,
+            "postgresql://u:pa'ss@db:5432/litellm",
+            "postgresql://REDACTED@db:5432/litellm",
+        ),
+        (
+            'postgresql://u:pa"ss@db:5432/litellm',
+            None,
+            'postgresql://u:pa"ss@db:5432/litellm',
+            "postgresql://REDACTED@db:5432/litellm",
         ),
         (
             "postgresql://u:p@ss@db:5432/litellm",
-            "postgresql://u:****@db:5432/litellm",
+            None,
+            "postgresql://u:p@ss@db:5432/litellm",
+            "postgresql://REDACTED@db:5432/litellm",
         ),
         (
-            "postgresql://db/litellm?password=x&sslmode=require",
-            "postgresql://db/litellm?password=****&sslmode=require",
+            "postgresql://u:p%20ss@db:5432/litellm",
+            None,
+            "postgresql://u:p ss@db:5432/litellm",
+            "postgresql://REDACTED@db:5432/litellm",
         ),
         (
-            "postgresql://db/litellm?sslpassword=t0ps3cr3t",
-            "postgresql://db/litellm?sslpassword=****",
+            "postgresql://db/litellm?password=a b&sslmode=require",
+            None,
+            "postgresql://db/litellm?password=a b&sslmode=require",
+            "postgresql://db/litellm?REDACTED&sslmode=require",
         ),
         (
-            "postgresql://u@db:5432/litellm",
-            "postgresql://u@db:5432/litellm",
+            "postgresql://db/litellm?sslpassword=zq'7x",
+            None,
+            "postgresql://db/litellm?sslpassword=zq'7x",
+            "postgresql://db/litellm?REDACTED",
         ),
         (
+            None,
+            "postgresql://u:pa ss@db:5432/litellm",
+            "postgresql://u:pa ss@db:5432/litellm",
+            "postgresql://REDACTED@db:5432/litellm",
+        ),
+        (
+            None,
+            None,
+            "postgresql://u:pw@db/x",
+            "postgresql://REDACTED@db/x",
+        ),
+        (
+            "postgresql://u:p@db:5432/litellm",
+            None,
+            "Error: P1001: Can't reach database server at db:5432",
+            "Error: P1001: Can't reach database server at db:5432",
+        ),
+        (
+            "postgresql://u:p@db:5432/litellm",
+            None,
+            "Error:P1001: Can't reach database server at db:5432",
+            "Error:P1001: Can't reach database server at db:5432",
+        ),
+        (
+            None,
+            None,
             "plain text with no URL",
             "plain text with no URL",
-        ),
-        (
-            "postgresql://u:pa'ss@db/litellm",
-            "postgresql://u:****@db/litellm",
-        ),
-        (
-            'postgresql://u:pa"ss@db/litellm',
-            "postgresql://u:****@db/litellm",
-        ),
-        (
-            "postgresql://db/litellm?password=a'b&sslmode=require",
-            "postgresql://db/litellm?password=****&sslmode=require",
-        ),
-        (
-            "['prisma', '--to-url', 'postgresql://u:p@h/db']",
-            "['prisma', '--to-url', 'postgresql://u:****@h/db']",
         ),
     ),
 )
-def test_redact_credentials_masks_passwords_in_embedded_urls(raw: str, expected: str) -> None:
-    assert _redact_credentials(raw) == expected
+def test_redact_credentials_masks_passwords_in_embedded_urls(
+    database_url: str | None,
+    direct_url: str | None,
+    text: str,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if database_url is None:
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+    else:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+    if direct_url is None:
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+    else:
+        monkeypatch.setenv("DIRECT_URL", direct_url)
+    assert _redact_credentials(text) == expected
 
 
-@pytest.mark.parametrize("password", ("zq'7x", 'zq"7x', 'zq\'"7x', "zq 7x", "zq@7x"))
-def test_redact_command_error_masks_url_arguments(password: str) -> None:
-    error: Final = subprocess.CalledProcessError(
-        1, ["prisma", "migrate", "diff", "--to-url", f"postgresql://u:{password}@db:5432/litellm"]
-    )
+@pytest.mark.parametrize("password", ("zq'7x", 'zq"7x', "zq'\"7x", "zq 7x", "zq@7x"))
+def test_redact_command_error_masks_url_arguments(password: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    database_url: Final = f"postgresql://u:{password}@db:5432/litellm"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.delenv("DIRECT_URL", raising=False)
+    error: Final = subprocess.CalledProcessError(1, ["prisma", "migrate", "diff", "--to-url", database_url])
 
     message: Final = _redact_command_error(error)
 
     assert "zq" not in message
     assert "7x" not in message
-    assert "postgresql://u:****@db:5432/litellm" in message
+    assert "postgresql://REDACTED@db:5432/litellm" in message
     assert "returned non-zero exit status 1" in message

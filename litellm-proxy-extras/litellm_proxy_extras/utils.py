@@ -1,3 +1,4 @@
+import functools
 import glob
 import os
 import random
@@ -11,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Optional
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit
 
 from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
@@ -186,32 +187,60 @@ def _max_migration_timestamp(names) -> int:
     return max(_migration_timestamp(n) for n in names)
 
 
-_URL_USERINFO_PASSWORD: Final = re.compile(r"(?P<prefix>[A-Za-z][A-Za-z0-9+.\-]*://[^:/@\s'\"]*):[^\s]*@")
-_QUERY_PASSWORD: Final = re.compile(r"(?P<key>\b(?:ssl)?password=)[^&\s]*", re.IGNORECASE)
+_REDACTED: Final = "REDACTED"
+_PASSWORD_QUERY_KEYS: Final = frozenset(("password", "sslpassword"))
+
+
+@functools.cache
+def _secret_shape_redactor() -> Callable[[str], str]:
+    try:
+        from litellm._logging import redact_secrets
+    except ImportError:
+        return lambda text: text
+    return redact_secrets
+
+
+def _url_passwords(url: str) -> frozenset[str]:
+    try:
+        parts: Final = urlsplit(url)
+    except ValueError:
+        return frozenset()
+    query_pairs: Final = tuple(pair.partition("=") for pair in parts.query.split("&"))
+    raw_query_passwords: Final = tuple(
+        value for key, separator, value in query_pairs if separator and key.lower() in _PASSWORD_QUERY_KEYS
+    )
+    raw_passwords: Final = ((parts.password,) if parts.password else ()) + raw_query_passwords
+    return frozenset(password for password in raw_passwords + tuple(map(unquote, raw_passwords)) if password)
+
+
+def _configured_database_passwords() -> frozenset[str]:
+    database_url: Final = os.getenv("DATABASE_URL")
+    direct_url: Final = os.getenv("DIRECT_URL")
+    database_passwords: Final = _url_passwords(database_url) if database_url else frozenset()
+    direct_passwords: Final = _url_passwords(direct_url) if direct_url else frozenset()
+    return database_passwords | direct_passwords
 
 
 def _redact_credentials(text: str) -> str:
-    """Mask passwords in any connection URL embedded in text before it is logged."""
-    without_userinfo: Final = _URL_USERINFO_PASSWORD.sub(r"\g<prefix>:****@", text)
-    return _QUERY_PASSWORD.sub(r"\g<key>****", without_userinfo)
-
-
-def _redact_url_argument(argument: str) -> str:
-    try:
-        parts: Final = urlsplit(argument)
-    except ValueError:
-        return _redact_credentials(argument)
-    if parts.password is None:
-        return _redact_credentials(argument)
-    host: Final = parts.netloc.rpartition("@")[2]
-    return _redact_credentials(urlunsplit(parts._replace(netloc=f"{parts.username}:****@{host}")))
+    """Mask configured database passwords before passing the text to LiteLLM redaction."""
+    passwords: Final = _configured_database_passwords()
+    password_pattern: Final = (
+        re.compile(
+            rf"(?P<lead>:|password=)(?:{'|'.join(re.escape(password) for password in sorted(passwords, key=len, reverse=True))})(?=@|&|$|[\s'\"\]),])",
+            re.IGNORECASE,
+        )
+        if passwords
+        else None
+    )
+    result: Final = password_pattern.sub(rf"\g<lead>{_REDACTED}", text) if password_pattern is not None else text
+    return _secret_shape_redactor()(result)
 
 
 def _redact_command_error(error: subprocess.CalledProcessError) -> str:
     command: Final = (
         _redact_credentials(error.cmd)
         if isinstance(error.cmd, str)
-        else [_redact_url_argument(str(argument)) for argument in error.cmd]
+        else [_redact_credentials(str(argument)) for argument in error.cmd]
     )
     return str(subprocess.CalledProcessError(error.returncode, command))
 
