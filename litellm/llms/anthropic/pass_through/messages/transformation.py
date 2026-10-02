@@ -425,7 +425,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     ),
                     status_code=400,
                 )
-            existing_output_config: Final = optional_params.get("output_config")
+            existing_output_config: Final[object] = optional_params.get("output_config")
             explicit_effort: Final = AnthropicMessagesConfig._explicit_output_config_effort(existing_output_config)
             resolved_effort: Final = (
                 explicit_effort

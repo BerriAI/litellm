@@ -674,7 +674,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         normalize_bedrock_opus_output_config_effort(model=model, output_config=clamped)
         optional_params["reasoning_effort"] = clamped["effort"]
         explicit_effort: Final = AnthropicMessagesConfig._explicit_output_config_effort(
-            optional_params.get("output_config")
+            cast(object, optional_params.get("output_config"))  # cast-ok: optional_params is an untyped dict
         )
         if explicit_effort is None:
             return
