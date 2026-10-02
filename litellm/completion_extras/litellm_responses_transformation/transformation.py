@@ -81,29 +81,36 @@ _RESPONSES_API_ONLY_FIELDS: Final = frozenset((*Response.model_fields, *Response
 _CHAT_CONTENT_ITEM: Final = TypeAdapter(dict[str, object])
 
 
-def _strip_prompt_cache_breakpoints_from_value(value: object) -> object:
-    if isinstance(value, dict):
-        content: Final = cast(dict[str, object], value)  # cast-ok: isinstance narrows the recursive container
-        return {
-            key: _strip_prompt_cache_breakpoints_from_value(item)
-            for key, item in content.items()
-            if key != "prompt_cache_breakpoint"
-        }
+def _strip_prompt_cache_breakpoint_from_content_block(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    content_block: Final = cast(dict[str, object], value)
+    return {key: item for key, item in content_block.items() if key != "prompt_cache_breakpoint"}
+
+
+def _strip_prompt_cache_breakpoints_from_content(value: object) -> object:
     if isinstance(value, list):
-        return [
-            _strip_prompt_cache_breakpoints_from_value(item)
-            for item in cast(list[object], value)  # cast-ok: isinstance narrows the recursive container
-        ]
+        list_content: Final = cast(list[object], value)
+        return [_strip_prompt_cache_breakpoint_from_content_block(item) for item in list_content]
     if isinstance(value, tuple):
-        return tuple(
-            _strip_prompt_cache_breakpoints_from_value(item)
-            for item in cast(tuple[object, ...], value)  # cast-ok: isinstance narrows the recursive container
-        )
-    return value
+        tuple_content: Final = cast(tuple[object, ...], value)
+        return tuple(_strip_prompt_cache_breakpoint_from_content_block(item) for item in tuple_content)
+    return _strip_prompt_cache_breakpoint_from_content_block(value)
+
+
+def _strip_prompt_cache_breakpoints_from_item(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    input_item: Final = cast(dict[str, object], value)
+    return {
+        key: _strip_prompt_cache_breakpoints_from_content(item) if key in ("content", "output") else item
+        for key, item in input_item.items()
+        if key != "prompt_cache_breakpoint"
+    }
 
 
 def _strip_prompt_cache_breakpoints(input_items: list[object]) -> list[object]:
-    return [_strip_prompt_cache_breakpoints_from_value(item) for item in input_items]
+    return [_strip_prompt_cache_breakpoints_from_item(item) for item in input_items]
 
 
 def _provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:

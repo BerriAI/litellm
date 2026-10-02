@@ -2,7 +2,7 @@ import datetime
 import json
 import os
 import unittest
-from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, get_args
+from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
@@ -12,7 +12,7 @@ import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
-from litellm.types.llms.openai import REASONING_EFFORT
+from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseOutputItem
@@ -4287,6 +4287,48 @@ def test_prompt_cache_breakpoints_are_dropped_for_unsupported_models() -> None:
                     "prompt_cache_breakpoint": {"mode": "explicit"},
                 },
             ],
+        }
+    ]
+
+
+def test_prompt_cache_breakpoints_are_dropped_from_function_call_output_for_unsupported_models() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "text", "text": "Tool result", "prompt_cache_breakpoint": cache_breakpoint}],
+            }
+        ],
+    )
+
+    request: Final = cast(
+        dict[str, object],
+        handler.transform_request(
+            model="gpt-5.4-mini",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+            litellm_logging_obj=Mock(),
+        ),
+    )
+
+    assert request["input"] == [
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [{"type": "input_text", "text": "Tool result"}],
+        }
+    ]
+    assert messages == [
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "text", "text": "Tool result", "prompt_cache_breakpoint": {"mode": "explicit"}}],
         }
     ]
 
