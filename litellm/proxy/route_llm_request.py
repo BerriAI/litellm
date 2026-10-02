@@ -1,9 +1,10 @@
 import asyncio
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 from fastapi import HTTPException, status
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -424,6 +425,32 @@ RouteType = Literal[
 ]
 
 
+# Settings that the Router accepts as per-request kwargs. These override the
+# global router settings for this specific request.
+_PER_REQUEST_ROUTER_SETTINGS: Final = (
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+    "num_retries",
+    "timeout",
+    "model_group_retry_policy",
+    "routing_strategy",
+    "enable_tag_filtering",
+)
+
+
+_ROUTER_SETTINGS_OVERRIDE_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _router_settings_to_merge(override_settings: object) -> dict[str, object]:
+    """Key/team router settings that may be merged into request kwargs."""
+    try:
+        validated: Final = _ROUTER_SETTINGS_OVERRIDE_ADAPTER.validate_python(override_settings, strict=True)
+    except ValidationError:
+        return {}
+    return {key: validated[key] for key in _PER_REQUEST_ROUTER_SETTINGS if key in validated}
+
+
 async def route_request(
     data: dict,
     llm_router: LitellmRouter | None,
@@ -477,6 +504,15 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
 
     data.pop("enable_tag_filtering", None)
 
+    # Always remove ``router_settings_override`` from the body so it can't leak
+    # to the provider, and apply its settings on every routing branch.
+    has_router_settings_override: Final = "router_settings_override" in data
+    if has_router_settings_override:
+        override_settings: Final = cast("object", data.pop("router_settings_override"))  # cast-ok: untyped body
+        for key, value in _router_settings_to_merge(override_settings).items():
+            if key not in data:
+                data[key] = value
+
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.model_names if llm_router is not None else []
     is_proxy_admin_without_team: Final = team_id is None and _is_proxy_admin_request(data)
@@ -509,31 +545,8 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     elif "user_config" in data:
         return _route_user_config_request(data, route_type)
 
-    elif "router_settings_override" in data:
-        # Apply per-request router settings overrides from key/team config
-        # Instead of creating a new Router (expensive), merge settings into kwargs
-        # The Router already supports per-request overrides for these settings
-        override_settings: Final = data.pop("router_settings_override")
-
-        # Settings that the Router accepts as per-request kwargs
-        # These override the global router settings for this specific request
-        per_request_settings: Final = [
-            "fallbacks",
-            "context_window_fallbacks",
-            "content_policy_fallbacks",
-            "num_retries",
-            "timeout",
-            "model_group_retry_policy",
-            "routing_strategy",
-            "enable_tag_filtering",
-        ]
-
-        # Merge override settings into data (only if not already set in request)
-        for key in per_request_settings:
-            if key in override_settings and key not in data:
-                data[key] = override_settings[key]
-
-        # Use main router with overridden kwargs
+    elif has_router_settings_override:
+        # Settings were already merged into ``data`` above; use the main router
         if llm_router is not None:
             return getattr(llm_router, f"{route_type}")(**data)
         else:
