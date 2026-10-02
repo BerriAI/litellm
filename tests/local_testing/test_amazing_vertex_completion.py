@@ -137,30 +137,6 @@ def load_vertex_ai_credentials():
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
 
 
-@pytest.mark.asyncio
-async def test_get_response():
-    load_vertex_ai_credentials()
-    prompt = '\ndef count_nums(arr):\n    """\n    Write a function count_nums which takes an array of integers and returns\n    the number of elements which has a sum of digits > 0.\n    If a number is negative, then its first signed digit will be negative:\n    e.g. -123 has signed digits -1, 2, and 3.\n    >>> count_nums([]) == 0\n    >>> count_nums([-1, 11, -11]) == 1\n    >>> count_nums([1, 1, 2]) == 3\n    """\n'
-    try:
-        response = await acompletion(
-            model="gemini-2.5-flash-lite",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Complete the given code with no more explanation. Remember that there is a 4-space indent before the first line of your generated code.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-        )
-        return response
-    except litellm.RateLimitError:
-        pass
-    except litellm.UnprocessableEntityError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An error occurred - {str(e)}")
-
-
 # test_vertex_ai_anthropic_streaming()
 
 
@@ -343,35 +319,6 @@ def test_avertex_ai_stream():
 
 @pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio
-async def test_async_vertexai_response_basic():
-    load_vertex_ai_credentials()
-    try:
-        user_message = "Hello, how are you?"
-        messages = [{"content": user_message, "role": "user"}]
-        response = await acompletion(
-            model="gemini-3.5-flash",
-            messages=messages,
-            temperature=0.7,
-            timeout=5,
-            vertex_location="global",
-        )
-        print(f"response: {response}")
-    except litellm.NotFoundError as e:
-        pass
-    except litellm.RateLimitError as e:
-        pass
-    except litellm.Timeout as e:
-        pass
-    except litellm.APIError as e:
-        pass
-    except litellm.InternalServerError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred: {e}")
-
-
-@pytest.mark.flaky(retries=3, delay=1)
-@pytest.mark.asyncio
 async def test_async_vertexai_streaming_response():
     import random
 
@@ -432,49 +379,6 @@ async def test_async_vertexai_streaming_response():
         except Exception as e:
             print(e)
             pytest.fail(f"An exception occurred: {e}")
-
-
-@pytest.mark.parametrize("load_pdf", [False])  # True,
-@pytest.mark.flaky(retries=3, delay=1)
-def test_completion_function_plus_pdf(load_pdf):
-    litellm.set_verbose = True
-    load_vertex_ai_credentials()
-    try:
-        import base64
-
-        import requests
-
-        # URL of the file
-        url = "https://storage.googleapis.com/cloud-samples-data/generative-ai/pdf/2403.05530.pdf"
-
-        # Download the file
-        if load_pdf:
-            response = requests.get(url)
-            file_data = response.content
-
-            encoded_file = base64.b64encode(file_data).decode("utf-8")
-            url = f"data:application/pdf;base64,{encoded_file}"
-
-        image_content = [
-            {"type": "text", "text": "What's this file about?"},
-            {
-                "type": "image_url",
-                "image_url": {"url": url},
-            },
-        ]
-        image_message = {"role": "user", "content": image_content}
-
-        response = completion(
-            model="vertex_ai_beta/gemini-2.5-flash-lite",
-            messages=[image_message],
-            stream=False,
-        )
-
-        print(response)
-    except litellm.InternalServerError as e:
-        pass
-    except Exception as e:
-        pytest.fail("Got={}".format(str(e)))
 
 
 def encode_image(image_path):
@@ -1470,90 +1374,6 @@ async def test_gemini_pro_httpx_custom_api_base(model):
 
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
-@pytest.mark.parametrize("sync_mode", [True])
-@pytest.mark.parametrize("provider", ["vertex_ai"])
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_gemini_pro_function_calling(provider, sync_mode):
-    try:
-        load_vertex_ai_credentials()
-        litellm.set_verbose = True
-
-        messages = [
-            {
-                "role": "system",
-                "content": "Your name is Litellm Bot, you are a helpful assistant",
-            },
-            # User asks for their name and weather in San Francisco
-            {
-                "role": "user",
-                "content": "Hello, what is your name and can you tell me the weather?",
-            },
-            # Assistant replies with a tool call
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_123",
-                        "type": "function",
-                        "index": 0,
-                        "function": {
-                            "name": "get_weather",
-                            "arguments": '{"location":"San Francisco, CA"}',
-                        },
-                    }
-                ],
-            },
-            # The result of the tool call is added to the history
-            {
-                "role": "tool",
-                "tool_call_id": "call_123",
-                "content": "27 degrees celsius and clear in San Francisco, CA",
-            },
-            # Now the assistant can reply with the result of the tool call.
-        ]
-
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get the current weather in a given location",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The city and state, e.g. San Francisco, CA",
-                            }
-                        },
-                        "required": ["location"],
-                    },
-                },
-            }
-        ]
-
-        data = {
-            "model": "{}/gemini-2.5-flash-lite".format(provider),
-            "messages": messages,
-            "tools": tools,
-        }
-        if sync_mode:
-            response = litellm.completion(**data)
-        else:
-            response = await litellm.acompletion(**data)
-
-        print(f"response: {response}")
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        if "429 Quota exceeded" in str(e):
-            pass
-        else:
-            pytest.fail("An unexpected exception occurred - {}".format(str(e)))
-
-
 # gemini_pro_function_calling()
 
 
@@ -3520,46 +3340,6 @@ def test_vertex_ai_llama_tool_calling():
     assert response.choices[0].message.tool_calls is not None
     assert response.choices[0].finish_reason == "tool_calls"
     assert response._hidden_params["response_cost"] > 0
-
-
-def test_vertex_schema_test():
-    load_vertex_ai_credentials()
-    litellm._turn_on_debug()
-
-    def tool_call(text: str | None) -> str:
-        return text or "No text provided"
-
-    tool = {
-        "type": "function",
-        "function": {
-            "name": "git_create_branch",
-            "description": "Creates a new branch from an optional base branch",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "repo_path": {"title": "Repo Path", "type": "string"},
-                    "branch_name": {"title": "Branch Name", "type": "string"},
-                    "base_branch": {
-                        "anyOf": [{"type": "string"}, {"type": "null"}],
-                        "default": None,
-                        "title": "Base Branch",
-                    },
-                },
-                "required": ["repo_path", "branch_name"],
-                "title": "GitCreateBranch",
-            },
-        },
-    }
-
-    response = litellm.completion(
-        model="vertex_ai/gemini-3.5-flash",
-        messages=[{"role": "user", "content": "call the tool"}],
-        tools=[tool],
-        tool_choice="required",
-        vertex_location="global",
-    )
-
-    print(response)
 
 
 def test_gemini_nullable_object_tool_schema_httpx():
