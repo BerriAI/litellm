@@ -7659,8 +7659,8 @@ async def _run_spend_logs_job(
         )
 
     async with prisma_client._model_usage_transactions_lock:
-        model_usage_to_process: Final = prisma_client.model_usage_transactions[:MAX_LOGS_PER_INTERVAL]
-        prisma_client.model_usage_transactions = prisma_client.model_usage_transactions[len(model_usage_to_process) :]
+        model_usage_to_process: Final = prisma_client.model_usage_transactions
+        prisma_client.model_usage_transactions = []
     try:
         from litellm.proxy.db.model_usage_rollup import flush_model_usage_transactions
 
