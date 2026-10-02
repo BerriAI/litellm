@@ -22,6 +22,7 @@ from collections.abc import (
     Awaitable,
     Callable,
     Collection,
+    Iterable,
     Iterator,
     Mapping,
     MutableMapping,
@@ -18997,15 +18998,15 @@ async def delete_config_general_settings(
 _CALLBACK_LIST_KEYS: Final = ("success_callback", "failure_callback", "callbacks")
 
 
-def _configured_callback_names(value: object) -> tuple[object, ...]:
+def _configured_callback_names(value: object) -> tuple[JsonValue, ...]:
     if isinstance(value, str):
         return (value,)
     if isinstance(value, (list, tuple, dict)):
-        return tuple(value)
+        return tuple(cast(Iterable[JsonValue], value))  # cast-ok: config.yaml values are untyped
     return ()
 
 
-def _remaining_callback_names(settings: Mapping[str, object]) -> Iterator[object]:
+def _remaining_callback_names(settings: Mapping[str, object]) -> Iterator[JsonValue]:
     for key in _CALLBACK_LIST_KEYS:
         yield from _configured_callback_names(settings.get(key))
 
@@ -19049,11 +19050,17 @@ async def delete_callback(
 
     try:
         # Get current configuration
-        config: Final = await proxy_config.get_config()
+        config: Final[dict[str, object]] = cast(  # cast-ok: get_config returns an untyped config dict
+            dict[str, object],
+            await proxy_config.get_config(),
+        )
         callback_name: Final = data.callback_name.lower()
 
         # Check if callback exists in current configuration
-        litellm_settings: Final = config.get("litellm_settings", {})
+        litellm_settings: Final[Mapping[str, object]] = cast(  # cast-ok: the config dict's values are untyped
+            Mapping[str, object],
+            config.get("litellm_settings", {}),
+        )
         configured_lists: Final = {
             key: _configured_callback_names(litellm_settings.get(key)) for key in _CALLBACK_LIST_KEYS
         }
@@ -19069,12 +19076,13 @@ async def delete_callback(
                 detail={"error": f"Callback '{callback_name}' not found in active configuration"},
             )
 
-        before_callbacks: Final = {key: list(configured_lists[key]) for key in matching_keys}
-        after_callbacks: Final = {
+        before_callbacks: Final[dict[str, JsonValue]] = {key: list(configured_lists[key]) for key in matching_keys}
+        after_callbacks: Final[dict[str, JsonValue]] = {
             key: [entry for entry in configured_lists[key] if not _is_callback_name(entry, callback_name)]
             for key in matching_keys
         }
-        config["litellm_settings"] = {**litellm_settings, **after_callbacks}
+        updated_settings: Final = {**litellm_settings, **after_callbacks}
+        config["litellm_settings"] = updated_settings
 
         # Save the updated configuration
         await proxy_config.save_config(new_config=config)
@@ -19092,7 +19100,6 @@ async def delete_callback(
         # Restart the proxy to apply changes
         await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
 
-        updated_settings: Final = config["litellm_settings"]
         return {
             "message": f"Successfully deleted callback: {callback_name}",
             "removed_callback": callback_name,

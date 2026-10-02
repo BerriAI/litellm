@@ -978,7 +978,12 @@ def _delete_callback_roundtrip(
     return response, saved
 
 
-def test_config_callback_delete_from_failure_callback(client, auth_as, mock_prisma, monkeypatch):
+def test_config_callback_delete_from_failure_callback(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A callback configured only under litellm_settings.failure_callback is
     listed by GET /get/config/callbacks, so the delete route must remove it."""
     response, saved = _delete_callback_roundtrip(
@@ -995,7 +1000,12 @@ def test_config_callback_delete_from_failure_callback(client, auth_as, mock_pris
     assert response.json()["remaining_callbacks"] == ["slack", "sentry"]
 
 
-def test_config_callback_delete_from_callbacks_list(client, auth_as, mock_prisma, monkeypatch):
+def test_config_callback_delete_from_callbacks_list(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A callback configured only under litellm_settings.callbacks is deleted
     while unrelated lists pass through untouched."""
     response, saved = _delete_callback_roundtrip(
@@ -1012,7 +1022,12 @@ def test_config_callback_delete_from_callbacks_list(client, auth_as, mock_prisma
     assert response.json()["remaining_callbacks"] == ["langfuse"]
 
 
-def test_config_callback_delete_from_multiple_lists(client, auth_as, mock_prisma, monkeypatch):
+def test_config_callback_delete_from_multiple_lists(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A name present in both success_callback and callbacks is removed from
     both, and remaining_callbacks reports the leftovers of every list."""
     response, saved = _delete_callback_roundtrip(
@@ -1036,7 +1051,12 @@ def test_config_callback_delete_from_multiple_lists(client, auth_as, mock_prisma
     assert response.json()["remaining_callbacks"] == ["slack", "sentry", "langfuse"]
 
 
-def test_config_callback_delete_case_insensitive(client, auth_as, mock_prisma, monkeypatch):
+def test_config_callback_delete_case_insensitive(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A mixed-case request name still matches the configured lowercase entry."""
     response, saved = _delete_callback_roundtrip(
         client,
