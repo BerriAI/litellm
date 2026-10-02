@@ -2968,7 +2968,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     vector_store_deny_by_default: bool = Field(
         default=False,
-        description="When True, a virtual key may only use vector stores explicitly listed in its object_permission.vector_stores, and a key on a team also needs the team to list them. A missing permission record, an empty list, or an unresolved team grants nothing. Dashboard session keys and non-key callers are not yet covered",
+        description="When True, a vector store must be explicitly listed in object_permission.vector_stores: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing. Dashboard session keys are not yet covered",
     )
     missing_session_id: Literal["generate", "reject", "omit"] | None = Field(
         None,
@@ -4514,6 +4514,11 @@ class ProxyErrorTypes(str, enum.Enum):
     Organization does not have access to the vector store
     """
 
+    user_vector_store_access_denied = "user_vector_store_access_denied"
+    """
+    User does not have access to the vector store
+    """
+
     team_member_already_in_team = "team_member_already_in_team"
     """
     Team member is already in team
@@ -4546,7 +4551,7 @@ class ProxyErrorTypes(str, enum.Enum):
 
     @classmethod
     def get_vector_store_access_error_type_for_object(
-        cls, object_type: Literal["key", "team", "org"]
+        cls, object_type: Literal["key", "team", "org", "user"]
     ) -> "ProxyErrorTypes":
         """
         Get the vector store access error type for object_type
@@ -4557,6 +4562,8 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.team_vector_store_access_denied
         elif object_type == "org":
             return cls.org_vector_store_access_denied
+        elif object_type == "user":
+            return cls.user_vector_store_access_denied
 
 
 DB_CONNECTION_ERROR_TYPES: Final = (
