@@ -3682,7 +3682,7 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
         assert ended == released and all(a is b for a, b in zip(ended, released, strict=True))
 
     @staticmethod
-    def _finished_function_call(sequence_number, item_id, city):
+    def _finished_function_call(sequence_number: int, item_id: str, city: str) -> tuple[dict[str, object], ...]:
         arguments = json.dumps({"city": city})
         pending = {"type": "function_call", "id": item_id, "call_id": "call_" + item_id, "name": "get_weather"}
         return (

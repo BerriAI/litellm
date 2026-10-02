@@ -2198,7 +2198,13 @@ class _GatedToolCallGuardrail(_StreamingTextGuardrail):
 class _MarkerBlockingScanGuardrail(_ScanCountingGuardrail):
     """Scan-counting guardrail that blocks any scan whose text contains BLOCKME"""
 
-    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
         recorded = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
         if any("BLOCKME" in text for text in recorded.get("texts") or []):
             raise ModifyResponseException(
@@ -2210,7 +2216,13 @@ class _MarkerBlockingScanGuardrail(_ScanCountingGuardrail):
 class _MarkerHttpErrorScanGuardrail(_ScanCountingGuardrail):
     """Scan-counting guardrail that raises an HTTPException for any scan whose text contains BLOCKME"""
 
-    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
         recorded = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
         if any("BLOCKME" in text for text in recorded.get("texts") or []):
             raise unified_module.HTTPException(status_code=400, detail={"error": "Violated guardrail policy"})
@@ -2220,7 +2232,13 @@ class _MarkerHttpErrorScanGuardrail(_ScanCountingGuardrail):
 class _MarkerBlockingStreamingTextGuardrail(_StreamingTextGuardrail):
     """incremental_diff guardrail that blocks any round whose text contains BLOCKME"""
 
-    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
         transformed = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
         if any("BLOCKME" in text for text in inputs.get("texts") or []):
             raise ModifyResponseException(
@@ -2235,7 +2253,13 @@ class _DisconnectRewritingGuardrail(_ScanCountingGuardrail):
     def __init__(self) -> None:
         super().__init__(end_of_stream_only=True)
 
-    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
         recorded = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
         return {**recorded, "texts": ["REWRITTEN" for _ in recorded.get("texts") or []]}
 

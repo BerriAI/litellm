@@ -44,6 +44,7 @@ from typing import (
     Union,
     cast,
     overload,
+    runtime_checkable,
 )
 
 from typing_extensions import ReadOnly, TypedDict
@@ -519,6 +520,11 @@ class _UpstreamStreamBoundary(Generic[_T]):
         except Exception as e:
             self.failure = e
             raise
+
+
+@runtime_checkable
+class _ClosableAsyncIterator(Protocol):
+    async def aclose(self) -> object: ...
 
 
 class _StreamIteratorHook(Protocol[_T]):
@@ -2765,7 +2771,7 @@ class ProxyLogging:
                 async for chunk in guarded:
                     yield chunk
             finally:
-                if isinstance(guarded, AsyncGenerator):
+                if isinstance(guarded, _ClosableAsyncIterator):
                     await guarded.aclose()
         except Exception as e:
             if e is not upstream.failure:
