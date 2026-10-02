@@ -4,7 +4,7 @@ import json
 import re
 import sys
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Awaitable, Iterator, Mapping
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -61,6 +61,7 @@ from litellm.proxy.auth.auth_checks import (
     _check_agent_caller_model_access,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
+    common_checks,
     get_key_object,
     get_user_object,
     invalidate_team_member_spend_state,
@@ -74,6 +75,7 @@ from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.constants import (
     DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
+    LITELLM_PROXY_MASTER_KEY_ALIAS,
     PROXY_DB_LOOKUP_MAX_CONCURRENCY,
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
@@ -1784,6 +1786,138 @@ async def test_vector_store_access_check_enforces_team_allowlist_for_rag_query(
             )
 
     assert exc_info.value.type == expected_error_type
+
+
+
+def _virtual_key(
+    object_permission_id: str | None = None,
+    api_key: str = "sk-standalone",
+    user_role: LitellmUserRoles | None = None,
+    team_id: str | None = None,
+) -> UserAPIKeyAuth:
+    key = UserAPIKeyAuth(
+        api_key=api_key,
+        user_id="key-owner",
+        user_role=user_role,
+        team_id=team_id,
+        object_permission_id=object_permission_id,
+    )
+    key.via_virtual_key = True
+    return key
+
+
+async def _common_checks_for_rag_query(
+    general_settings: Mapping[str, object],
+    valid_token: UserAPIKeyAuth,
+    key_permission: SimpleNamespace | None,
+    team_object: LiteLLM_TeamTable | None = None,
+) -> bool:
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=key_permission)
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
+    request_body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "what is in this KB?"}],
+        "retrieval_config": {"vector_store_id": "KBSTOREA", "custom_llm_provider": "bedrock"},
+    }
+    with (
+        patch(  # test-quality-ok: production auth reads these module globals; no dependency injection seam exists
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+        ),
+        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.vector_store_registry", None
+        ),
+    ):
+        return await common_checks(
+            request_body=request_body,
+            team_object=team_object,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings=dict(general_settings),
+            route="/v1/rag/query",
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=valid_token,
+            request=MagicMock(spec=Request),
+        )
+
+
+async def _assert_rag_query_outcome(request: Awaitable[bool], allowed: bool) -> None:
+    if allowed:
+        assert await request is True
+        return
+    with pytest.raises(ProxyException) as exc_info:
+        await request
+    assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (
+        ProxyErrorTypes.key_vector_store_access_denied,
+        "vector_store",
+        "401",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("general_settings", "allowed"),
+    [({}, True), ({"vector_store_deny_by_default": False}, True), ({"vector_store_deny_by_default": True}, False)],
+    ids=["flag-omitted", "flag-false", "flag-true"],
+)
+async def test_standalone_key_without_vector_store_permission_follows_deny_by_default(
+    general_settings: Mapping[str, object], allowed: bool
+):
+    await _assert_rag_query_outcome(_common_checks_for_rag_query(general_settings, _virtual_key(), None), allowed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deny_by_default", "vector_stores", "allowed"),
+    [
+        (True, [], False),
+        (True, ["KBSTOREA"], True),
+        (True, ["KBSTOREB"], False),
+        (True, None, False),
+        (False, ["KBSTOREB"], False),
+    ],
+    ids=["enabled-empty", "enabled-contains", "enabled-excludes", "enabled-null", "disabled-excludes"],
+)
+async def test_standalone_key_vector_store_permission_record_under_deny_by_default(
+    deny_by_default: bool, vector_stores: list[str] | None, allowed: bool
+):
+    await _assert_rag_query_outcome(
+        _common_checks_for_rag_query(
+            {"vector_store_deny_by_default": deny_by_default},
+            _virtual_key(object_permission_id="key-permission"),
+            SimpleNamespace(vector_stores=vector_stores),
+        ),
+        allowed,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deny_by_default", [False, True], ids=["flag-false", "flag-true"])
+async def test_master_key_rag_query_is_unchanged_by_deny_by_default(deny_by_default: bool):
+    master_key = _virtual_key(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    await _assert_rag_query_outcome(
+        _common_checks_for_rag_query({"vector_store_deny_by_default": deny_by_default}, master_key, None), True
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("valid_token", "team_object", "allowed"),
+    [
+        (_virtual_key(user_role=LitellmUserRoles.PROXY_ADMIN), None, False),
+        (_virtual_key(team_id="team-1"), LiteLLM_TeamTable(team_id="team-1"), True),
+    ],
+    ids=["admin-owned-standalone-key-denied", "team-key-deferred"],
+)
+async def test_deny_by_default_scope_is_standalone_virtual_keys(
+    valid_token: UserAPIKeyAuth, team_object: LiteLLM_TeamTable | None, allowed: bool
+):
+    await _assert_rag_query_outcome(
+        _common_checks_for_rag_query({"vector_store_deny_by_default": True}, valid_token, None, team_object), allowed
+    )
 
 
 def test_can_object_call_model_with_alias():
