@@ -44,6 +44,62 @@ def test_tokenify_provider_keeps_explicit_credentials(monkeypatch: pytest.Monkey
     assert api_base == "https://tokenify.internal.example/v1"
 
 
+TOKENIFY_MODELS = tuple(sorted(name for name in litellm.model_cost if name.startswith("tokenify/")))
+
+# USD per 1M tokens (input, output), as published on https://www.tokenify.dev/pricing/
+TOKENIFY_PUBLISHED_PRICES: Final = {
+    "tokenify/deepseek/deepseek-v4-flash": (0.22, 0.66),
+    "tokenify/deepseek/deepseek-v4-pro": (0.66, 1.98),
+    "tokenify/deepseek/deepseek-v4.1-flash": (0.15, 0.6),
+    "tokenify/z-ai/glm-5.2": (0.7, 2.2),
+    "tokenify/z-ai/glm-5.3-flash": (0.15, 0.5),
+}
+
+
+def test_tokenify_models_are_priced():
+    assert TOKENIFY_MODELS == tuple(sorted(TOKENIFY_PUBLISHED_PRICES))
+
+
+@pytest.mark.parametrize("model", TOKENIFY_MODELS)
+def test_tokenify_model_cost_and_capabilities(model: str):
+    from litellm.cost_calculator import cost_per_token
+
+    prompt_cost, completion_cost = cost_per_token(
+        model=model,
+        prompt_tokens=1_000_000,
+        completion_tokens=1_000_000,
+        custom_llm_provider="tokenify",
+    )
+    model_info = litellm.get_model_info(model)
+
+    assert (prompt_cost, completion_cost) == pytest.approx(TOKENIFY_PUBLISHED_PRICES[model])
+    assert 0 < model_info["cache_read_input_token_cost"] < model_info["input_cost_per_token"]
+    assert model_info["max_tokens"] == model_info["max_output_tokens"] <= model_info["max_input_tokens"]
+    assert model_info["litellm_provider"] == "tokenify"
+    assert model_info["mode"] == "chat"
+    assert model_info["supports_function_calling"] is True
+    assert model_info["supports_reasoning"] is True
+    assert litellm.supports_vision(model) is model_info["supports_vision"]
+
+
+def test_tokenify_admin_placeholder_model_is_priced():
+    fields_path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
+    providers = json.loads(fields_path.read_text())
+    tokenify = next(provider for provider in providers if provider["litellm_provider"] == "tokenify")
+
+    assert tokenify["default_model_placeholder"] in TOKENIFY_MODELS
+
+
+def test_tokenify_backup_registry_mirrors_cost_map():
+    package_root = Path(litellm.__file__).parent
+    cost_map = json.loads((package_root.parent / "model_prices_and_context_window.json").read_text())
+    backup = json.loads((package_root / "model_prices_and_context_window_backup.json").read_text())
+    tokenify_entries = {name: entry for name, entry in cost_map.items() if name.startswith("tokenify/")}
+
+    assert tuple(sorted(tokenify_entries)) == TOKENIFY_MODELS
+    assert tokenify_entries == {name: backup[name] for name in tokenify_entries}
+
+
 def test_tokenify_is_available_in_add_model_form():
     fields_path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
     providers = json.loads(fields_path.read_text())
