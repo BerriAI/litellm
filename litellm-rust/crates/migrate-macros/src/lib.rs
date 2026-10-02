@@ -35,10 +35,12 @@ fn resolve(dir: &Path) -> Result<Vec<Entry>, Error> {
         let invalid = || Error::InvalidName { name: name.clone() };
         let stem = name
             .strip_suffix(".sql")
-            .filter(|_| path.is_file())
+            .filter(|_| file.file_type().is_ok_and(|kind| kind.is_file()))
             .and_then(|stem| stem.split_once('_'))
-            .filter(|(_, description)| {
-                !description.is_empty()
+            .filter(|(version, description)| {
+                !version.is_empty()
+                    && version.bytes().all(|b| b.is_ascii_digit())
+                    && !description.is_empty()
                     && description
                         .bytes()
                         .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
@@ -147,6 +149,7 @@ mod tests {
     #[case::non_digit_version(&["x_name.sql"])]
     #[case::uppercase_description(&["0001_Upper.sql"])]
     #[case::no_underscore(&["0001.sql"])]
+    #[case::plus_sign_version(&["+10_add.sql"])]
     fn rejects_invalid_names(#[case] files: &[&str]) {
         let dir = migrations_dir(files);
         assert!(matches!(
@@ -159,6 +162,20 @@ mod tests {
     fn rejects_subdirectories() {
         let dir = migrations_dir(&["0001_a.sql"]);
         fs::create_dir(dir.path().join("0002_b.sql")).expect("subdir");
+        assert!(matches!(
+            resolve(dir.path()),
+            Err(Error::InvalidName { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    fn rejects_symlinks() {
+        let dir = migrations_dir(&["0001_a.sql"]);
+        let target = TempDir::new().expect("tempdir");
+        let target_file = target.path().join("real.sql");
+        fs::write(&target_file, "SELECT 2").expect("write fixture");
+        std::os::unix::fs::symlink(&target_file, dir.path().join("0002_b.sql")).expect("symlink");
         assert!(matches!(
             resolve(dir.path()),
             Err(Error::InvalidName { .. })
