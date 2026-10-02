@@ -195,7 +195,6 @@ describe("provider_info_helpers", () => {
         Providers.PG_VECTOR,
         Providers.PREDIBASE,
         Providers.Sail,
-        Providers.Tencent,
         Providers.WANDB,
         Providers.ZAI,
       ];
@@ -209,6 +208,11 @@ describe("provider_info_helpers", () => {
     it("should resolve a provider to its own bundled logo via getProviderLogoAndName", () => {
       const { logo } = getProviderLogoAndName("openai");
       expect(logo).toContain("openai_small");
+    });
+
+    it("should resolve the Tencent provider to its bundled logo", () => {
+      const { logo } = getProviderLogoAndName("tencent");
+      expect(logo).toContain("tencent");
     });
   });
 
