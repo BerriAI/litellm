@@ -9,9 +9,12 @@ Run with:
     uvicorn gateway.main:app --host 0.0.0.0 --port 4000
 """
 
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 
+from fastapi import FastAPI
 from fastapi.routing import Mount
+from starlette.types import Lifespan
 
 # Assemble DATABASE_URL (+ DATABASE_URL_READ_REPLICA) from the discrete
 # DATABASE_* env vars before proxy_server imports spin up Prisma. Handles
@@ -23,13 +26,12 @@ from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 
 DatabaseURLSettings.from_env().apply_to_env()
 
-from litellm.proxy.proxy_server import app
-
 from gateway.routes.allowlist import (
     GATEWAY_EXACT_PATHS,
     GATEWAY_MOUNT_PATHS,
     GATEWAY_PATH_PREFIXES,
 )
+from litellm.proxy.proxy_server import app
 
 
 def _is_gateway_route(route) -> bool:
@@ -58,10 +60,12 @@ _proxy_lifespan = app.router.lifespan_context
 
 
 @asynccontextmanager
-async def _gateway_lifespan(app_):
-    async with _proxy_lifespan(app_):
+async def _gateway_lifespan(
+    app_: FastAPI, lifespan: Lifespan[FastAPI] = _proxy_lifespan
+) -> AsyncGenerator[Mapping[str, object], None]:
+    async with lifespan(app_) as state:
         app_.router.routes = [r for r in app_.router.routes if _is_gateway_route(r)]
-        yield
+        yield state if state is not None else {}
 
 
 app.router.lifespan_context = _gateway_lifespan

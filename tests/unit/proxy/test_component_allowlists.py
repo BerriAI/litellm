@@ -26,7 +26,15 @@ RDS IAM token when ``IAM_TOKEN_DB_AUTH`` is set).
 import json
 import os
 import sys
+from collections.abc import AsyncGenerator, Mapping
+from contextlib import asynccontextmanager
+from functools import partial
 from typing import Final
+
+import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
+from starlette.types import Lifespan
 
 # Importing ``litellm.proxy.proxy_server`` runs its module-level setup, which
 # reads ``DATABASE_URL`` (Prisma) and ``LITELLM_MASTER_KEY``. Tier-zero CI
@@ -74,7 +82,10 @@ _DB_ENV_KEYS = (
 )
 _PRE_DB_ENV = {_key: os.environ.pop(_key, None) for _key in _DB_ENV_KEYS}
 _PRE_COMPONENT_LIFESPAN = app.router.lifespan_context
-from gateway.main import _is_gateway_route
+from gateway.main import _gateway_lifespan, _is_gateway_route
+
+app.router.lifespan_context = _PRE_COMPONENT_LIFESPAN
+from backend.main import _backend_lifespan
 
 app.router.lifespan_context = _PRE_COMPONENT_LIFESPAN
 for _key, _previous in _PRE_DB_ENV.items():
@@ -110,6 +121,36 @@ json.dump({
     )),
 }, sys.stdout)
 """
+
+
+@pytest.mark.parametrize("component_lifespan", (_gateway_lifespan, _backend_lifespan), ids=("gateway", "backend"))
+@pytest.mark.parametrize("has_state", (True, False), ids=("stateful", "stateless"))
+def test_component_lifespan_preserves_state_for_trace_requests(
+    component_lifespan: Lifespan[FastAPI], has_state: bool
+) -> None:
+    marker: Final = object()
+
+    @asynccontextmanager
+    async def stateful_lifespan(application: FastAPI) -> AsyncGenerator[Mapping[str, object], None]:
+        yield {"tracing_receiver": marker}
+
+    @asynccontextmanager
+    async def stateless_lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
+        yield
+
+    component_app: Final = FastAPI(
+        lifespan=partial(component_lifespan, lifespan=stateful_lifespan if has_state else stateless_lifespan)
+    )
+
+    @component_app.get("/v1/traces")
+    async def trace_state(request: Request) -> dict[str, bool]:
+        return {"receiver_available": getattr(request.state, "tracing_receiver", None) is marker}
+
+    with TestClient(component_app) as client:
+        response: Final = client.get("/v1/traces")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"receiver_available": has_state}
 
 
 def test_gateway_plus_backend_covers_full_app():

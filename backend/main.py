@@ -8,9 +8,12 @@ Run with:
     uvicorn backend.main:app --host 0.0.0.0 --port 4001
 """
 
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 
+from fastapi import FastAPI
 from fastapi.routing import Mount
+from starlette.types import Lifespan
 
 # See gateway/main.py for why we assemble DATABASE_URL(s) here before
 # importing proxy_server.
@@ -18,13 +21,12 @@ from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 
 DatabaseURLSettings.from_env().apply_to_env()
 
-from litellm.proxy.proxy_server import app
-
 from backend.routes.allowlist import (
     BACKEND_EXACT_PATHS,
     BACKEND_MOUNT_PATHS,
     BACKEND_PATH_PREFIXES,
 )
+from litellm.proxy.proxy_server import app
 
 
 def _is_backend_route(route) -> bool:
@@ -47,10 +49,12 @@ _proxy_lifespan = app.router.lifespan_context
 
 
 @asynccontextmanager
-async def _backend_lifespan(app_):
-    async with _proxy_lifespan(app_):
+async def _backend_lifespan(
+    app_: FastAPI, lifespan: Lifespan[FastAPI] = _proxy_lifespan
+) -> AsyncGenerator[Mapping[str, object], None]:
+    async with lifespan(app_) as state:
         app_.router.routes = [r for r in app_.router.routes if _is_backend_route(r)]
-        yield
+        yield state if state is not None else {}
 
 
 app.router.lifespan_context = _backend_lifespan
