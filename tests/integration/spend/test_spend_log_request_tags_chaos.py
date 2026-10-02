@@ -136,7 +136,7 @@ def test_burst_across_routes_records_tags_once_per_response(gateway: Gateway, tm
                 )
 
             with ThreadPoolExecutor(max_workers=10) as pool:
-                responses: Final = chain.from_iterable(pool.map(burst, range(10)))
+                responses: Final = tuple(chain.from_iterable(pool.map(burst, range(10))))
             assert len(responses) == 50
             assert all(response.status_code == 200 for response in responses), [
                 (response.status_code, response.text[:200]) for response in responses
@@ -196,7 +196,7 @@ def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Pa
                 return _tagged_requests(candidate, key, anthropic_model, openai_model, stream=False, index=index)
 
             with ThreadPoolExecutor(max_workers=5) as pool:
-                first: Final = chain.from_iterable(pool.map(burst, range(3)))
+                first: Final = tuple(chain.from_iterable(pool.map(burst, range(3))))
             assert all(response.status_code == 200 for response in first), [
                 (response.status_code, response.text[:200]) for response in first
             ]
@@ -213,7 +213,7 @@ def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Pa
             eventually(lambda: events_for(first_ids), lambda found: found == first_ids, seconds=70)
             down.set()
             with ThreadPoolExecutor(max_workers=5) as pool:
-                second: Final = list(chain.from_iterable(pool.map(lambda i: burst(100 + i), range(3))))
+                second: Final = tuple(chain.from_iterable(pool.map(lambda i: burst(100 + i), range(3))))
             second_ids: Final = call_ids(second)
             outage_probe: Final = eventually(
                 lambda: (len(rejected), events_for(second_ids)),
@@ -262,7 +262,7 @@ def test_worker_kill_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_path: P
                 return _tagged_requests(candidate, key, anthropic_model, openai_model, stream=False, index=index)
 
             with ThreadPoolExecutor(max_workers=5) as pool:
-                first: Final = chain.from_iterable(pool.map(burst, range(3)))
+                first: Final = tuple(chain.from_iterable(pool.map(burst, range(3))))
 
             workers: Final = [
                 child
@@ -278,7 +278,7 @@ def test_worker_kill_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_path: P
             assert not workers[0].is_running()
 
             with ThreadPoolExecutor(max_workers=5) as pool:
-                second: Final = list(chain.from_iterable(pool.map(lambda i: burst(100 + i), range(3))))
+                second: Final = tuple(chain.from_iterable(pool.map(lambda i: burst(100 + i), range(3))))
             responses: Final = [*first, *second]
             for position in range(len(ROUTES)):
                 statuses: Final = {
