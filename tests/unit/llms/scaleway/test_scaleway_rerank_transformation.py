@@ -1,11 +1,12 @@
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 import respx
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 SCALEWAY_RERANK_BODY = {
     "id": "rerank-a89e6d7b8b97492ea81569c65fbfff49",
@@ -104,16 +105,32 @@ def test_scaleway_rerank_without_a_key_names_the_env_var(monkeypatch):
         litellm.rerank(model="scaleway/qwen3-embedding-8b", query="q", documents=DOCUMENTS)
 
 
+def test_scaleway_rerank_caller_headers_cannot_replace_the_provider_key(respx_mock: respx.MockRouter):
+    route = respx_mock.post("https://api.scaleway.ai/v1/rerank")
+    route.return_value = httpx.Response(200, json=SCALEWAY_RERANK_BODY)
+
+    litellm.rerank(
+        model="scaleway/qwen3-embedding-8b",
+        query="q",
+        documents=DOCUMENTS,
+        api_key="scw-key",
+        headers={"Authorization": "Bearer caller-key", "x-trace": "abc"},
+    )
+
+    request = route.calls[0].request
+    assert request.headers["authorization"] == "Bearer scw-key"
+    assert request.headers["x-trace"] == "abc"
+
+
 @pytest.mark.asyncio
 async def test_scaleway_arerank_posts_to_the_documented_endpoint():
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new=AsyncMock(return_value=httpx.Response(200, json=SCALEWAY_RERANK_BODY)),
-    ) as post:
-        response = await litellm.arerank(
-            model="scaleway/qwen3-embedding-8b", query="q", documents=DOCUMENTS, api_key="scw-key"
-        )
+    client = MagicMock(spec=AsyncHTTPHandler)
+    client.post = AsyncMock(return_value=httpx.Response(200, json=SCALEWAY_RERANK_BODY))
 
-    assert post.await_args.kwargs["url"] == "https://api.scaleway.ai/v1/rerank"
-    assert post.await_args.kwargs["headers"]["authorization"] == "Bearer scw-key"
+    response = await litellm.arerank(
+        model="scaleway/qwen3-embedding-8b", query="q", documents=DOCUMENTS, api_key="scw-key", client=client
+    )
+
+    assert client.post.await_args.kwargs["url"] == "https://api.scaleway.ai/v1/rerank"
+    assert client.post.await_args.kwargs["headers"]["authorization"] == "Bearer scw-key"
     assert [r["index"] for r in response.results] == [1, 0]

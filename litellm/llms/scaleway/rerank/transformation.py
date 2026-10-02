@@ -41,9 +41,11 @@ class ScalewayRerankConfig(JinaAIRerankConfig):
             raise ValueError(
                 "Scaleway API key not found. Pass `api_key=...` or set the SCW_SECRET_KEY environment variable."
             )
-        return {
+        provider_headers: Final = {
             "accept": "application/json",
             "content-type": "application/json",
             "authorization": f"Bearer {key}",
-            **headers,
         }
+        # Header names are case-insensitive, so match on the lowercase name.
+        caller_headers: Final = {name: value for name, value in headers.items() if name.lower() not in provider_headers}
+        return {**caller_headers, **provider_headers}
