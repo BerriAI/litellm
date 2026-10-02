@@ -1467,7 +1467,7 @@ def responses(
         )
 
         # get llm provider logic
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
         affinity_api_base: Final = (
             get_openai_credentials(api_base=litellm_params.api_base).api_base
             if custom_llm_provider == "openai"
