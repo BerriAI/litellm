@@ -645,3 +645,12 @@ class TestQualifyAgenticFollowUpModel:
 
     def test_a_patched_model_already_holding_the_request_provider_is_left_alone(self):
         assert qualify_agentic_followup_model("openai/gpt-4o", "gpt-4o", "openai") == "openai/gpt-4o"
+
+    @pytest.mark.parametrize("patched", ["", None])
+    def test_a_patch_without_a_model_falls_back_to_the_request_model(self, patched):
+        assert qualify_agentic_followup_model(patched, "gpt-4o", "openai") == "openai/gpt-4o"
+
+    def test_a_patched_sub_path_model_still_takes_the_request_provider(self):
+        assert qualify_agentic_followup_model("mantle/anthropic.claude-sonnet-5", "gpt-4o", "bedrock") == (
+            "bedrock/mantle/anthropic.claude-sonnet-5"
+        )
