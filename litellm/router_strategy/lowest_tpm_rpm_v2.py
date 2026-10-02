@@ -423,10 +423,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         for idx, key in enumerate(rpm_keys):
             rpm_dict[rpm_keys[idx].split(":")[0]] = rpm_values[idx]
 
+        deployments: Final = cast(Sequence[Mapping[str, object]], healthy_deployments)  # cast-ok: untyped dicts
         input_tokens = 0
-        deployments: Final = cast(
-            Sequence[Mapping[str, object]], healthy_deployments
-        )  # cast-ok: router deployments are untyped dicts at this boundary
         if any(_declares_tpm_limit(deployment) for deployment in deployments):
             try:
                 input_tokens = token_counter(messages=messages, text=input)
