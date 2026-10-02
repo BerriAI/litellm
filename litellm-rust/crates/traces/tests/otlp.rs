@@ -520,11 +520,9 @@ fn normalizes_claude_agent_sdk_fixture(#[case] fixture: &[u8]) {
             assert_eq!(llm.normalized.framework, "claude-agent-sdk");
         }
     }
-    assert!(
-        spans
-            .iter()
-            .all(|span| span.normalized.agent_name == "claude-code")
-    );
+    assert!(spans.iter().all(|span| {
+        span.normalized.agent_name == span.resource_attributes["service.name"].as_str()
+    }));
 }
 
 #[rstest]
@@ -606,4 +604,5 @@ fn claude_code_scope_takes_precedence_over_openinference_attributes(
     assert_eq!(spans[0].normalized.observation_type, ObservationType::Tool);
     assert_eq!(spans[0].name, "Grep");
     assert_eq!(spans[0].normalized.framework, "claude-code");
+    assert_eq!(spans[0].normalized.agent_name, "claude-code");
 }
