@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import importlib
+import logging
 import os
 from collections.abc import Coroutine, Iterator
 from dataclasses import dataclass, field
@@ -43,7 +44,7 @@ os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at import
 import litellm.router as litellm_router_module  # noqa: E402  # same import-time dependency
 import litellm.utils as litellm_utils_module  # noqa: E402  # same import-time dependency
-from litellm._logging import ALL_LOGGERS  # noqa: E402  # same import-time dependency
+from litellm._logging import ALL_LOGGERS, verbose_proxy_logger  # noqa: E402  # same import-time dependency
 from litellm.anthropic_beta_headers_manager import reload_beta_headers_config  # noqa: E402  # same import-time dependency
 from litellm.litellm_core_utils.prompt_templates import factory as prompt_factory_module  # noqa: E402  # same import-time dependency
 from litellm.litellm_core_utils.prompt_templates import (  # noqa: E402  # same import-time dependency
@@ -208,8 +209,15 @@ def isolate_host_environment(isolated_aws_config_files: tuple[Path, Path]) -> It
         environment.setenv("AWS_EC2_METADATA_DISABLED", "true")
         for name in AMBIENT_AWS_ENV_VARS:
             environment.delenv(name, raising=False)
-        environment.delenv("PROXY_BASE_URL", raising=False)
+        for name in ("PROXY_BASE_URL", "SERVER_ROOT_PATH", "SERVER_ROOT_PATHS", "LITELLM_LOG"):
+            environment.delenv(name, raising=False)
         environment.setenv("LITELLM_CLI_DISABLE_KEYRING", "1")
+        yield
+
+
+@pytest.fixture
+def debug_proxy_logging(caplog: pytest.LogCaptureFixture) -> Iterator[None]:
+    with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
         yield
 
 

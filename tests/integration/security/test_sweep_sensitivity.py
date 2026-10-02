@@ -10,16 +10,22 @@ from __future__ import annotations
 import base64
 import gzip
 import uuid
+from collections import Counter
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
-from integration._support.client import eventually, string_value
+from redis import Redis
+from integration._support.client import Gateway, eventually, string_value
 from integration.security._canary import DECODE_BUDGET_BYTES, MARKER, SLOTS, DecodeBudgetExceeded, canary, find_canary
 from integration.security._sinks import CONFIG_MODEL, GENERIC_SINK, Rig, canary_rig, settle, team_caller
-from integration._support.wire import Request
+from integration._support.wire import Reply, Request, wire_server
+from tests.integration._support.database import read_rows, write_rows
+from tests.integration._support.tls import server_context, write_self_signed_cert
+from tests.integration._support.workers import worker_services
 from integration.security._sweeps import (
     ADMIN_ONLY_ALLOWANCES,
     ALLOWANCE_SLOT_FAMILIES,
@@ -32,6 +38,7 @@ from integration.security._sweeps import (
     scoped_queries,
     sweep_all,
     sweep_redis,
+    sweep_routes,
     sweep_sink,
 )
 
@@ -178,3 +185,63 @@ def test_every_sweep_finds_the_stored_prompt_marker(rig: Rig, request: pytest.Fi
                 listed = rig.proxy.request("GET", route + query)
                 assert request_id in listed.text, f"{route}{query} does not list the scenario's row"
         assert report.credential_hits() == ()
+
+
+def test_security_worker_services_isolate_identical_database_and_cache_keys(tmp_path: Path) -> None:
+    with (
+        worker_services(tmp_path / "first", container_port=16500) as first,
+        worker_services(tmp_path / "second", container_port=16501) as second,
+    ):
+        for environment, marker in ((first, "first"), (second, "second")):
+            write_rows(
+                "CREATE TABLE IF NOT EXISTS isolation_probe (id text PRIMARY KEY, marker text NOT NULL)",
+                (),
+                database_url=environment["DATABASE_URL"],
+            )
+            write_rows(
+                "INSERT INTO isolation_probe VALUES (%s, %s) ON CONFLICT (id) DO UPDATE SET marker=EXCLUDED.marker",
+                ("same-id", marker),
+                database_url=environment["DATABASE_URL"],
+            )
+            with Redis(host=environment["REDIS_HOST"], port=int(environment["REDIS_PORT"])) as cache:
+                cache.set("same-key", marker)
+        for environment, marker in ((first, "first"), (second, "second")):
+            assert read_rows(
+                "SELECT marker FROM isolation_probe WHERE id=%s",
+                ("same-id",),
+                database_url=environment["DATABASE_URL"],
+            ) == [{"marker": marker}]
+            with Redis(
+                host=environment["REDIS_HOST"], port=int(environment["REDIS_PORT"]), decode_responses=True
+            ) as cache:
+                assert cache.get("same-key") == marker
+
+
+def test_route_sweep_keeps_connections_auth_and_response_cookies_isolated() -> None:
+    callers: Final = {"admin": "sk-sweep-admin", "internal_user": "sk-sweep-user"}
+    with wire_server(_response_with_cookie, keep_alive=True) as peer:
+        with httpx.Client(base_url=peer.url, trust_env=False) as client:
+            report: Final = sweep_routes(Gateway(client, callers["admin"], peer.url), (), {}, callers=callers)
+        requests: Final = peer.drain()
+        requested: Final = tuple(called.split(" ", 1) for called in report.called)
+        expected: Final = Counter((path, f"Bearer {callers[caller]}") for caller, path in requested)
+        assert report.called
+        assert len(requests) == len(report.called)
+        assert Counter((request.target, request.headers["authorization"]) for request in requests) == expected
+        assert all("cookie" not in request.headers for request in requests)
+        assert peer.connections() == len(requests)
+        assert report.errors == report.unreachable == ()
+
+
+def _response_with_cookie(_: Request) -> Reply:
+    return Reply(headers={"set-cookie": "session=another-caller; Path=/"})
+
+
+def test_route_sweep_rejects_an_untrusted_https_peer(tmp_path: Path) -> None:
+    cert, key = write_self_signed_cert(tmp_path)
+    with wire_server(_response_with_cookie, tls=server_context(cert, key), keep_alive=True) as peer:
+        with httpx.Client(base_url=peer.url, trust_env=False) as client:
+            report: Final = sweep_routes(Gateway(client, "sk-sweep-admin", peer.url), (), {})
+        assert report.called
+        assert len(report.unreachable) == len(report.called)
+        assert peer.drain() == ()

@@ -1,8 +1,9 @@
+from typing import Final
+
 # Test the following scenarios:
 # 1. Generate a Key, and use it to make a call
 
 
-import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -18,7 +19,6 @@ from fastapi import HTTPException, Request
 
 import litellm
 from litellm import Router
-from litellm._logging import verbose_proxy_logger
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
@@ -29,7 +29,7 @@ from litellm.proxy.anthropic_endpoints.endpoints import (
 from litellm.proxy.proxy_server import token_counter
 from litellm.types.utils import TokenCountResponse
 
-verbose_proxy_logger.setLevel(level=logging.DEBUG)
+pytestmark: Final = pytest.mark.usefixtures("debug_proxy_logging")
 
 
 @pytest.mark.asyncio

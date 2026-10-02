@@ -1,3 +1,5 @@
+from typing import Final
+
 # Test the following scenarios:
 # 1. Generate a Key, and use it to make a call
 # 2. Make a call with invalid key, expect it to fail
@@ -87,7 +89,7 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 
-verbose_proxy_logger.setLevel(level=logging.DEBUG)
+pytestmark: Final = pytest.mark.usefixtures("debug_proxy_logging")
 
 from starlette.datastructures import URL
 
