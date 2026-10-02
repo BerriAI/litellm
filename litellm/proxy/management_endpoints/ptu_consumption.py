@@ -9,7 +9,10 @@ from collections.abc import Callable
 from types import MappingProxyType
 from typing import Final
 
+from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabled
 from litellm.llms.azure.ptu_capacity import PTUCapacity, normalized_tokens, ptu_hours
+from litellm.router import Router
+from litellm.router_utils.ptu_shares import model_group_deployments, model_group_ptu_capacity
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendData,
     MetricWithMetadata,
@@ -92,4 +95,19 @@ def attach_ptu_hours(
                 ),
             }
         )
+    )
+
+
+def with_ptu_consumption(
+    activity: SpendAnalyticsPaginatedResponse, llm_router: Router | None
+) -> SpendAnalyticsPaginatedResponse:
+    """``activity`` with PTU-hours attached from the router's sized model groups, untouched while
+    PTU cost attribution is off or no router is loaded."""
+    if llm_router is None or not is_ptu_cost_attribution_enabled():
+        return activity
+    return attach_ptu_hours(
+        activity,
+        lambda model_group: model_group_ptu_capacity(
+            model_group_deployments(llm_router.get_model_list() or (), model_group)
+        ),
     )

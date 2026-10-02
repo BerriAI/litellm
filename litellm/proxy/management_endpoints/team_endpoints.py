@@ -40,7 +40,6 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.integrations.prometheus import PrometheusLogger
-from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabled
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     UI_TEAM_ID,
@@ -125,11 +124,6 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 )
 from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN, TeamRole, is_team_admin, team_access_denied
 from litellm.proxy.management.teams.dependencies import get_team_access
-from litellm.proxy.management_endpoints.common_daily_activity import (
-    daily_activity_repository,
-    daily_activity_scope,
-    get_daily_activity_aggregated,
-)
 from litellm.proxy.management_endpoints.common_utils import (
     _check_disable_global_guardrails_caller_permission,
     _check_passthrough_routes_caller_permission,
@@ -145,7 +139,7 @@ from litellm.proxy.management_endpoints.common_utils import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     add_member_to_organization,
 )
-from litellm.proxy.management_endpoints.ptu_consumption import attach_ptu_hours
+from litellm.proxy.management_endpoints.ptu_consumption import with_ptu_consumption
 from litellm.proxy.management_endpoints.router_weights import validate_router_settings_weights
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
@@ -197,7 +191,6 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router import Router
-from litellm.router_utils.ptu_shares import model_group_deployments, model_group_ptu_capacity
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -6526,7 +6519,7 @@ class _TeamDailyActivityScope(NamedTuple):
     api_key_filter: str | list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
 
 
-async def _resolve_team_daily_activity_scope(
+async def resolve_team_daily_activity_scope(
     *,
     team_ids: str | None,
     exclude_team_ids: str | None,
@@ -6609,11 +6602,14 @@ async def _resolve_team_daily_activity_scope(
             user_api_keys = [key.token for key in user_keys if key.token]
             # If user has no API keys, return empty result
             if not user_api_keys:
-                user_api_keys = [""]  # Use empty string to ensure no matches
+                user_api_keys = []
 
-    # If api_key parameter is provided, use it; otherwise use user_api_keys if set
-    final_api_key_filter: str | list[str] | None = api_key
-    if final_api_key_filter is None and user_api_keys is not None:
+    final_api_key_filter: str | list[str] | None
+    if user_api_keys is None:
+        final_api_key_filter = api_key
+    elif api_key:
+        final_api_key_filter = api_key if api_key in user_api_keys else []
+    else:
         final_api_key_filter = user_api_keys
 
     return _TeamDailyActivityScope(
@@ -6621,19 +6617,6 @@ async def _resolve_team_daily_activity_scope(
         exclude_team_ids=exclude_team_ids_list,
         team_alias_metadata=team_alias_metadata,
         api_key_filter=final_api_key_filter,
-    )
-
-
-def _with_ptu_consumption(
-    activity: SpendAnalyticsPaginatedResponse, llm_router: Router | None
-) -> SpendAnalyticsPaginatedResponse:
-    if llm_router is None or not is_ptu_cost_attribution_enabled():
-        return activity
-    return attach_ptu_hours(
-        activity,
-        lambda model_group: model_group_ptu_capacity(
-            model_group_deployments(llm_router.get_model_list() or (), model_group)
-        ),
     )
 
 
@@ -6678,7 +6661,7 @@ async def get_team_daily_activity(
     if prisma_client is None:
         raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    scope: Final = await _resolve_team_daily_activity_scope(
+    scope: Final = await resolve_team_daily_activity_scope(
         team_ids=team_ids,
         exclude_team_ids=exclude_team_ids,
         api_key=api_key,
@@ -6702,13 +6685,13 @@ async def get_team_daily_activity(
         page=page,
         page_size=page_size,
     )
-    return _with_ptu_consumption(activity, llm_router)
+    return with_ptu_consumption(activity, llm_router)
 
 
 _MAX_AGGREGATED_RANGE_DAYS: Final = 400
 
 
-def _aggregated_date_range_error(start_date: str | None, end_date: str | None) -> str | None:
+def aggregated_date_range_error(start_date: str | None, end_date: str | None) -> str | None:
     """The aggregated endpoint has no pagination to bound its work, so malformed
     dates and ranges wider than the UI ever requests are rejected before querying."""
     if start_date is None or end_date is None:
@@ -6723,84 +6706,6 @@ def _aggregated_date_range_error(start_date: str | None, end_date: str | None) -
     if (parsed_end - parsed_start).days > _MAX_AGGREGATED_RANGE_DAYS:
         return f"Date range must be at most {_MAX_AGGREGATED_RANGE_DAYS} days"
     return None
-
-
-@router.get(
-    "/team/daily/activity/aggregated",
-    response_model=SpendAnalyticsPaginatedResponse,
-    tags=["team management"],
-)
-async def get_team_daily_activity_aggregated(
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    team_ids: str | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    model: str | None = None,
-    api_key: str | None = None,
-    exclude_team_ids: str | None = None,
-    timezone: int | None = None,
-):
-    """
-    Aggregated daily activity for teams without pagination, including per-team breakdown.
-
-    One SQL GROUPING SETS pass returns every day in the range regardless of row
-    volume, so callers never reassemble pages. Same response shape as the
-    paginated endpoint with page metadata pinned to a single page.
-
-    Args:
-        team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
-        start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
-        end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
-        model (Optional[str]): Filter by model name.
-        api_key (Optional[str]): Filter by API key.
-        exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
-        timezone (Optional[int]): Timezone offset in minutes from UTC, matching JavaScript's Date.getTimezoneOffset() convention.
-    Returns:
-        SpendAnalyticsPaginatedResponse: Response containing all daily activity data for the range.
-    """
-    from litellm.proxy.proxy_server import (
-        llm_router,
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
-    if prisma_client is None:
-        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
-
-    range_error: Final = _aggregated_date_range_error(start_date, end_date)
-    if range_error is not None:
-        raise _daily_activity_error(status_code=400, message=range_error)
-
-    scope: Final = await _resolve_team_daily_activity_scope(
-        team_ids=team_ids,
-        exclude_team_ids=exclude_team_ids,
-        api_key=api_key,
-        user_api_key_dict=user_api_key_dict,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-
-    repository: Final = daily_activity_repository(prisma_client)
-    activity_scope: Final = daily_activity_scope(
-        "litellm_dailyteamspend",
-        "team_id",
-        scope.team_ids,
-        scope.exclude_team_ids,
-        scope.api_key_filter,
-        start_date,
-        end_date,
-        model,
-        timezone,
-    )
-    activity: Final = await get_daily_activity_aggregated(
-        repository,
-        activity_scope,
-        entity_metadata_field=scope.team_alias_metadata,
-        include_entity_breakdown=True,
-    )
-    return _with_ptu_consumption(activity, llm_router)
 
 
 def _team_user_spend_sql(*, team_count: int, restrict_to_user: bool) -> str:
@@ -6870,14 +6775,14 @@ async def get_team_spend_by_user(
     if prisma_client is None:
         raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    range_error: Final = aggregated_date_range_error(start_date, end_date)
     if range_error is not None or start_date is None or end_date is None:
         raise _daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
 
     if not team_ids:
         raise _daily_activity_error(status_code=400, message="Please provide team_ids")
 
-    scope: Final = await _resolve_team_daily_activity_scope(
+    scope: Final = await resolve_team_daily_activity_scope(
         team_ids=team_ids,
         exclude_team_ids=None,
         api_key=None,
