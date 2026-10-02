@@ -7,7 +7,7 @@ from typing import Dict, Final, List, Set
 def get_schema_from_branch(branch: str = "main") -> str:
     """Get the schema at the common ancestor with the comparison branch."""
     base: Final = subprocess.run(
-        ["git", "merge-base", "HEAD", branch], capture_output=True, text=True, check=True
+        ["git", "merge-base", "HEAD", f"origin/{branch}"], capture_output=True, text=True, check=True
     ).stdout.strip()
     result: Final = subprocess.run(["git", "show", f"{base}:schema.prisma"], capture_output=True, text=True, check=True)
     return result.stdout

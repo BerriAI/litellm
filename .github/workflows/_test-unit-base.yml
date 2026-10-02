@@ -109,6 +109,7 @@ jobs:
         timeout-minutes: 3
         with:
           persist-credentials: false
+          fetch-depth: ${{ (inputs.artifact-name == 'proxy-infra-root' || inputs.unit-flag == 'proxy-db-db-and-spend') && '0' || '1' }}
 
       - name: Detect relevant changes
         id: changes

@@ -4116,10 +4116,16 @@ async def test_ProxyConfig__update_general_settings_runtime_interval_job_carries
     pc = ProxyConfig()
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
     try:
-        await pc._update_general_settings({"maximum_daily_tag_spend_retention_period": "90d"})
+        await pc._update_general_settings(
+            {
+                "maximum_daily_tag_spend_retention_period": "90d",
+                "scheduled_job_stagger": {"offsets": {"spend_log_cleanup_job": 1}},
+            }
+        )
         jobs = real_scheduler.get_jobs()
         assert [job.id for job in jobs] == ["spend_log_cleanup_job"]
         assert isinstance(jobs[0].trigger, _OffsetTrigger), repr(jobs[0].trigger)
+        assert jobs[0].trigger.offset.total_seconds() == 1
     finally:
         real_scheduler.shutdown(wait=False)
 
