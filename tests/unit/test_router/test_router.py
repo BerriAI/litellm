@@ -13699,7 +13699,9 @@ def _anthropic_messages_make_wrapper() -> FallbackAwareAnthropicMessagesStream:
 
 
 def _anthropic_messages_make_router(**router_kwargs) -> Router:
+    """A fallback-only router: no same-group retries unless a test asks for them."""
     router_kwargs.setdefault("fallbacks", [{"primary": ["fallback"]}])
+    router_kwargs.setdefault("num_retries", 0)
     return Router(
         model_list=[
             {
@@ -14857,6 +14859,254 @@ async def test_anthropic_messages_hop_stream_failure_reaches_second_fallback_ent
     assert b"overloaded_error" not in body
 
 
+_ANTHROPIC_MESSAGES_RETRY_GROUP: Final = ("anthropic/glm-a", "anthropic/glm-b")
+
+
+def _anthropic_messages_retry_router(deployment_params: dict | None = None, **router_kwargs) -> Router:
+    """Two deployments in the group, so a same-group retry waits for no backoff; no fallbacks unless asked."""
+    router_kwargs.setdefault("fallbacks", None)
+    group_deployments = [
+        {"model_name": "glm", "litellm_params": {"model": model, "api_key": "sk-test", **(deployment_params or {})}}
+        for model in _ANTHROPIC_MESSAGES_RETRY_GROUP
+    ]
+    return Router(
+        model_list=[
+            *group_deployments,
+            {"model_name": "fb", "litellm_params": {"model": "anthropic/fb-model", "api_key": "sk-test"}},
+        ],
+        **router_kwargs,
+    )
+
+
+class _AnthropicMessagesScriptedProvider:
+    """Stands in for litellm.anthropic_messages: answers each call with the next scripted stream and records
+    the deployment it was routed to plus the retry counters the router stamped for that attempt."""
+
+    def __init__(self, *streams) -> None:
+        self._streams = list(streams)
+        self.calls: list[tuple[str, object, object]] = []
+
+    async def __call__(self, **kwargs):
+        litellm_metadata = kwargs.get("litellm_metadata") or {}
+        self.calls.append((kwargs["model"], litellm_metadata.get("attempted_retries"), litellm_metadata.get("max_retries")))
+        assert self._streams, "provider called more times than scripted"
+        return self._streams.pop(0)()
+
+
+def _anthropic_messages_transport_drop(original_exception: Exception | None = None) -> MidStreamFallbackError:
+    """What the completion bridge raises when the upstream closes the connection before any content."""
+    return MidStreamFallbackError(
+        message="Connection closed",
+        model="glm",
+        llm_provider="databricks",
+        original_exception=original_exception
+        or litellm.APIConnectionError(message="Connection closed", llm_provider="databricks", model="glm"),
+        is_pre_first_chunk=True,
+    )
+
+
+def _anthropic_messages_dropped_before_content():
+    return _AnthropicMessagesRaisingByteStream([_anthropic_messages_message_start_chunk()], _anthropic_messages_transport_drop())
+
+
+def _anthropic_messages_bridge_error_chunk() -> bytes:
+    from litellm.anthropic_interface.exceptions.exception_mapping_utils import anthropic_error_sse_frame
+
+    return anthropic_error_sse_frame(status_code=500, raw_message="Connection closed").encode()
+
+
+def _anthropic_messages_retried_stream():
+    return _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    )
+
+
+async def _anthropic_messages_drain_into(stream, received: list) -> None:
+    async for chunk in stream:
+        received.append(chunk)
+
+
+async def _anthropic_messages_stream_through_router(router: Router, provider, **request_kwargs):
+    return await router._aanthropic_messages_with_streaming_fallbacks(
+        original_function=provider,
+        model="glm",
+        stream=True,
+        messages=[{"role": "user", "content": "ping"}],
+        max_tokens=16,
+        **request_kwargs,
+    )
+
+
+_ANTHROPIC_MESSAGES_PRE_CONTENT_DROPS: Final = (
+    pytest.param(_anthropic_messages_dropped_before_content, id="bridge-raises-before-content"),
+    pytest.param(
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_bridge_error_chunk()]
+        ),
+        id="bridge-error-frame",
+    ),
+    pytest.param(
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_overloaded_error_chunk()]
+        ),
+        id="provider-overloaded-frame",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dropped_stream", _ANTHROPIC_MESSAGES_PRE_CONTENT_DROPS)
+async def test_anthropic_messages_stream_dropped_before_content_is_retried_within_the_group(dropped_stream):
+    """Issue #44238: a /v1/messages stream the provider dropped before any content was answered after a
+    single upstream attempt, num_retries never applied. The drop is retried within the model group, with
+    the retry counters continuing the request's count, and the client sees one message lifecycle."""
+    router = _anthropic_messages_retry_router(num_retries=2)
+    provider = _AnthropicMessagesScriptedProvider(dropped_stream, _anthropic_messages_retried_stream)
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert all(model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls)
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2)]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_stream_dropped_after_content_keeps_the_error_and_is_not_retried():
+    """A drop once content reached the client cannot be retried without a second overlapping message
+    lifecycle, so it keeps surfacing the provider's error after a single attempt."""
+    router = _anthropic_messages_retry_router(num_retries=2)
+    drop = _anthropic_messages_transport_drop()
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesRaisingByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("par")], drop
+        )
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    received = []
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        await _anthropic_messages_drain_into(stream, received)
+
+    assert raised.value is drop.original_exception
+    assert received == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("par")]
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retries_stop_at_num_retries_and_raise_the_last_drop():
+    """Every retry's own stream continues the same count, so a group that keeps dropping is tried
+    exactly 1 + num_retries times before the provider's error reaches the client."""
+    router = _anthropic_messages_retry_router(num_retries=2)
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_dropped_before_content,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    with pytest.raises(litellm.APIConnectionError):
+        [chunk async for chunk in stream]
+
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2), (2, 2)]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retries_run_out_before_the_fallback_chain_is_consulted():
+    """Same-group retries come first; the fallback group is reached only once num_retries is spent."""
+    router = _anthropic_messages_retry_router(num_retries=1, fallbacks=[{"glm": ["fb"]}])
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_dropped_before_content,
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+        ),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+    assert [model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls] == [True, True, False]
+    assert provider.calls[-1][0] == "anthropic/fb-model"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_request_num_retries_zero_opts_out_of_the_mid_stream_retry():
+    router = _anthropic_messages_retry_router(num_retries=2)
+    drop = _anthropic_messages_transport_drop()
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesRaisingByteStream([_anthropic_messages_message_start_chunk()], drop)
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider, num_retries=0)
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        [chunk async for chunk in stream]
+
+    assert raised.value is drop.original_exception
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured", [1, "1"], ids=["int", "config-string"])
+async def test_anthropic_messages_deployment_num_retries_sets_the_mid_stream_retry_budget(configured):
+    """A deployment's own num_retries litellm_param outranks the router's, as it does for a failure
+    raised before the stream opened."""
+    router = _anthropic_messages_retry_router(num_retries=0, deployment_params={"num_retries": configured})
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content, _anthropic_messages_retried_stream
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 0), (1, 1)]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_policy_sets_the_mid_stream_retry_budget_per_error_class():
+    router = _anthropic_messages_retry_router(num_retries=0, retry_policy=RetryPolicy(InternalServerErrorRetries=1))
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesRaisingByteStream(
+            [_anthropic_messages_message_start_chunk()],
+            _anthropic_messages_transport_drop(
+                litellm.InternalServerError(message="upstream reset", llm_provider="databricks", model="glm")
+            ),
+        ),
+        _anthropic_messages_retried_stream,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 0), (1, 1)]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_lifecycle_frames_wait_for_content_while_a_retry_remains():
+    """A retry can only restart cleanly while nothing reached the client, so with retries left a
+    fallback-less group holds message_start back until the first content frame, as a fallback does."""
+    router = _anthropic_messages_retry_router(num_retries=2)
+    content_released = asyncio.Event()
+
+    async def held_stream():
+        yield _anthropic_messages_message_start_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    provider = _AnthropicMessagesScriptedProvider(held_stream)
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+
+    pending = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.2)
+    assert not pending.done()
+    content_released.set()
+    assert await asyncio.wait_for(pending, timeout=1) == _anthropic_messages_message_start_chunk()
+    assert [chunk async for chunk in stream] == [_anthropic_messages_content_chunk("hi")]
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_attempt_strips_the_controls_carrier_and_wraps_every_hop_stream():
     """Each attempt of the chain, not only the primary's, comes back wrapped for mid-stream
@@ -15036,6 +15286,7 @@ def _mid_stream_opt_out_router() -> Router:
             {"model_name": "fallback", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "k2"}},
         ],
         fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
     )
 
 

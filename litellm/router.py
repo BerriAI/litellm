@@ -31,10 +31,11 @@ from collections.abc import (
     MutableMapping,
     Sequence,
 )
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, assert_never, cast
 
 import anyio
 import httpx
@@ -204,7 +205,9 @@ from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     AttemptedFallbackTargets,
     _check_non_standard_fallback_format,
+    attempted_retries_for_request,
     carry_over_pre_routing_selection,
+    carry_over_routed_deployment,
     clear_pre_routing_selection,
     fallback_lookup_groups,
     fallbacks_disabled_for_request,
@@ -212,14 +215,18 @@ from litellm.router_utils.fallback_event_handlers import (
     get_pre_routing_selection,
     has_unattempted_fallback_target,
     mid_stream_fallback_hop_kwargs,
+    mid_stream_retry_kwargs,
     per_request_fallback_controls,
     record_disable_fallbacks,
     record_pre_routing_selection,
+    record_retry_attempt,
+    routed_deployment_id,
     run_async_fallback,
 )
 from litellm.router_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
 )
+from litellm.router_utils.get_retry_from_policy import resolve_retry_policy
 from litellm.router_utils.handle_error import (
     async_raise_no_deployment_exception,
     send_llm_exception_alert,
@@ -593,6 +600,19 @@ def _anthropic_stream_fallback_error_for_raised(
     )
 
 
+def _deployment_num_retries(deployment: "Deployment | None") -> int | None:
+    """The deployment's own num_retries litellm_param, an int or a digit string the way the config loader leaves it."""
+    configured: Final = getattr(deployment.litellm_params, "num_retries", None) if deployment is not None else None
+    if isinstance(configured, bool) or not isinstance(configured, (int, str)):
+        return None
+    return int(configured) if str(configured).isdigit() else None
+
+
+def _mid_stream_retry_trigger(error: "MidStreamFallbackError") -> Exception:
+    """The provider's own error, which is what the retry policy and should_retry_this_error classify."""
+    return error.original_exception if error.original_exception is not None else error
+
+
 def _anthropic_stream_commits_now(chunk: object, has_generated_content: bool, buffered_chunk_count: int) -> bool:
     """
     Whether `chunk` should make Router._aanthropic_messages_streaming_iterator
@@ -607,6 +627,19 @@ def _anthropic_stream_commits_now(chunk: object, has_generated_content: bool, bu
     if has_generated_content:
         return False
     return is_anthropic_content_delta_chunk(chunk) or buffered_chunk_count >= MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS
+
+
+@dataclass(frozen=True, slots=True)
+class _AnthropicStreamRetryOpened:
+    response: object
+
+
+@dataclass(frozen=True, slots=True)
+class _AnthropicStreamRetriesExhausted:
+    error: "MidStreamFallbackError"
+
+
+_AnthropicStreamRetryOutcome: TypeAlias = _AnthropicStreamRetryOpened | _AnthropicStreamRetriesExhausted
 
 
 MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS: Final = 200
@@ -5530,8 +5563,9 @@ class Router:
             # to take over there is nothing to buffer for, so every frame,
             # including pings and provider error frames, is forwarded live.
             model: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
-            has_generated_content = not self._anthropic_messages_stream_can_fall_back(  # rebind-ok: set once real content is seen, the buffer cap is hit, or no fallback can take over
-                model, initial_kwargs
+            has_generated_content = not (  # rebind-ok: set once real content is seen, the buffer cap is hit, or neither a retry nor a fallback can take over
+                self._anthropic_messages_stream_can_retry(initial_kwargs)
+                or self._anthropic_messages_stream_can_fall_back(model, initial_kwargs)
             )
             buffered_lifecycle_chunks: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
             try:
@@ -5641,8 +5675,164 @@ class Router:
         )
         if fallback_error is None:
             raise stream_error
-        async for item in self._aanthropic_messages_fallback_attempt(fallback_error, initial_kwargs, wrapper):
-            yield item
+        outcome: Final = await self._aanthropic_messages_retry_same_group(fallback_error, initial_kwargs)
+        match outcome:
+            case _AnthropicStreamRetryOpened(response=retried):
+                async for item in self._aanthropic_messages_yield_recovered(retried, wrapper):
+                    yield item
+            case _AnthropicStreamRetriesExhausted(error=last_error):
+                async for item in self._aanthropic_messages_fallback_attempt(last_error, initial_kwargs, wrapper):
+                    yield item
+            case _:
+                assert_never(outcome)
+
+    def _anthropic_messages_retry_policy_in_force(self, kwargs: Mapping[str, Any]) -> bool:
+        """A retry policy resolves for this request's model group and the request did not opt out with num_retries=0."""
+        if kwargs.get("num_retries") == 0:
+            return False
+        resolved: Final = resolve_retry_policy(
+            retry_policy=self.retry_policy,
+            model_group=kwargs.get("model"),
+            model_group_retry_policy=kwargs.get("model_group_retry_policy", self.model_group_retry_policy),
+        )
+        return resolved is not None
+
+    def _anthropic_messages_plain_retry_budget(self, kwargs: Mapping[str, Any]) -> int:
+        """
+        The same precedence async_function_with_retries resolves for a failure raised before the
+        stream opened: the request's num_retries, then the routed deployment's, then the router's.
+        """
+        request_num_retries: Final = kwargs.get("num_retries")
+        if isinstance(request_num_retries, int):
+            return request_num_retries
+        deployment_id: Final = routed_deployment_id(kwargs)
+        deployment: Final = self.get_deployment(deployment_id) if deployment_id is not None else None
+        deployment_num_retries: Final = _deployment_num_retries(deployment)
+        if deployment_num_retries is not None:
+            return deployment_num_retries
+        return self.num_retries if self.num_retries is not None else 0
+
+    def _anthropic_messages_retry_budget(self, trigger: Exception, kwargs: Mapping[str, Any]) -> tuple[int, bool]:
+        """The retries this request still has per the retry policy when one names this error, else the plain budget."""
+        plain_budget: Final = self._anthropic_messages_plain_retry_budget(kwargs)
+        if not self._anthropic_messages_retry_policy_in_force(kwargs):
+            return plain_budget, False
+        policy_retries: Final = _get_num_retries_from_retry_policy(
+            exception=trigger,
+            model_group=kwargs.get("model"),
+            model_group_retry_policy=kwargs.get("model_group_retry_policy", self.model_group_retry_policy),
+            retry_policy=self.retry_policy,
+        )
+        if policy_retries is None:
+            return plain_budget, False
+        return policy_retries, True
+
+    def _anthropic_messages_stream_can_retry(self, kwargs: Mapping[str, Any]) -> bool:
+        """
+        Whether a pre-content failure of this stream would be retried within its own model group,
+        the other case where holding lifecycle frames back from the client buys a clean restart.
+        A retry policy names its budget per error class, so one in force counts as retries remaining.
+        """
+        if self._anthropic_messages_retry_policy_in_force(kwargs):
+            return True
+        return self._anthropic_messages_plain_retry_budget(kwargs) > attempted_retries_for_request(kwargs)
+
+    def _anthropic_messages_should_retry(
+        self,
+        trigger: Exception,
+        healthy_deployments: list[dict],  # mutable-ok: should_retry_this_error's own parameter type
+        all_deployments: list[dict],  # mutable-ok: should_retry_this_error's own parameter type
+        kwargs: Mapping[str, Any],
+    ) -> bool:
+        try:
+            self.should_retry_this_error(
+                error=trigger,
+                healthy_deployments=healthy_deployments,
+                all_deployments=all_deployments,
+                context_window_fallbacks=kwargs.get("context_window_fallbacks", self.context_window_fallbacks),
+                content_policy_fallbacks=kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks),
+                regular_fallbacks=kwargs.get("fallbacks", self.fallbacks),
+            )
+        except Exception:  # noqa: BLE001  # should_retry_this_error declines by raising the error it was given
+            return False
+        return True
+
+    async def _aanthropic_messages_retry_same_group(
+        self, e: "MidStreamFallbackError", initial_kwargs: Mapping[str, Any]
+    ) -> _AnthropicStreamRetryOutcome:
+        """
+        Re-runs the attempt within the request's own model group, the way async_function_with_retries
+        would have for a failure raised before the stream opened, until a retry opens a stream or the
+        budget runs out. Each retry's stream carries its own wrapper with the remaining budget, so a
+        retry that drops before content again continues the same count instead of starting over.
+        """
+        model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
+        retry_kwargs: Final = mid_stream_retry_kwargs(initial_kwargs)
+        healthy_deployments, all_deployments = await self._async_get_healthy_deployments(
+            model=model_group, parent_otel_span=_get_parent_otel_span_from_kwargs(retry_kwargs)
+        )
+        budget, policy_applies = self._anthropic_messages_retry_budget(_mid_stream_retry_trigger(e), initial_kwargs)
+        last_error = e  # rebind-ok: the newest failure is what the fallback chain and the caller see
+        for attempt in range(attempted_retries_for_request(initial_kwargs), budget):
+            trigger = _mid_stream_retry_trigger(last_error)
+            if not policy_applies and not self._anthropic_messages_should_retry(
+                trigger, healthy_deployments, all_deployments, initial_kwargs
+            ):
+                return _AnthropicStreamRetriesExhausted(last_error)
+            self.log_retry(kwargs=retry_kwargs, e=trigger)
+            await asyncio.sleep(
+                self._time_to_sleep_before_retry(
+                    e=trigger,
+                    remaining_retries=budget - attempt,
+                    num_retries=budget,
+                    healthy_deployments=healthy_deployments,
+                    all_deployments=all_deployments,
+                )
+            )
+            record_retry_attempt(retry_kwargs, attempted_retries=attempt + 1, max_retries=budget)
+            verbose_router_logger.debug(
+                "Retrying anthropic_messages stream dropped before content, attempt %s of %s", attempt + 1, budget
+            )
+            try:
+                response = await self._ageneric_api_call_with_fallbacks_anthropic_messages_attempt(**retry_kwargs)
+            except Exception as retry_error:  # noqa: BLE001  # a retry failing before its stream opens must reach the fallback gate
+                wrapped = _anthropic_stream_fallback_error_for_raised(retry_error, model_group, False)
+                if wrapped is None:
+                    raise
+                last_error = wrapped
+                continue
+            return _AnthropicStreamRetryOpened(response)
+        return _AnthropicStreamRetriesExhausted(last_error)
+
+    async def _aanthropic_messages_yield_recovered(
+        self, recovered: object, wrapper: "FallbackAwareAnthropicMessagesStream"
+    ) -> AsyncGenerator[bytes, None]:
+        """Hands a retry's or a fallback's response to the client through the wrapper, closing it afterwards."""
+        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+            aclose_if_supported,
+            anthropic_messages_response_as_sse_events,
+        )
+
+        hidden_params, headers = Router._prepare_fallback_hidden_params(recovered)
+        wrapper.merge_fallback_hidden_params(hidden_params, headers)
+        wrapper.adopt_fallback_source(recovered)
+        try:
+            if hasattr(recovered, "__aiter__"):
+                async for item in cast("AsyncIterator[bytes]", recovered):  # cast-ok: __aiter__ checked above
+                    yield item
+                return
+            # A recovery can resolve to a complete AnthropicMessagesResponse
+            # dict even for a streaming request (e.g. an agentic tool-use
+            # interception loop) - yielding it as-is would put a raw dict
+            # into a byte stream, so it's synthesized into the SSE
+            # lifecycle a real stream would have sent instead.
+            for event in anthropic_messages_response_as_sse_events(
+                cast("AnthropicMessagesResponse", recovered)  # cast-ok: non-streaming shape by elimination
+            ):
+                yield event
+        finally:
+            with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+                await aclose_if_supported(recovered)
 
     async def _aanthropic_messages_fallback_attempt(
         self,
@@ -5658,12 +5848,7 @@ class Router:
         budget.
         """
         from litellm.exceptions import MidStreamFallbackError
-        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
-            aclose_if_supported,
-            anthropic_messages_response_as_sse_events,
-        )
 
-        fallback_response = None  # rebind-ok: pre-init so finally can close it if a fallback was actually attempted
         try:
             model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: model group
             fallbacks: Final[list | None] = initial_kwargs.get(  # mutable-ok: matches the common_utils list|None param
@@ -5686,7 +5871,7 @@ class Router:
             fallback_trigger: Final[Exception] = (
                 e.original_exception if isinstance(e.original_exception, litellm.ContentPolicyViolationError) else e
             )
-            fallback_response = await self.async_function_with_fallbacks_common_utils(  # rebind-ok: set on success
+            fallback_response: Final = await self.async_function_with_fallbacks_common_utils(
                 e=fallback_trigger,
                 disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                 fallbacks=fallbacks,
@@ -5697,31 +5882,13 @@ class Router:
                 kwargs=initial_kwargs,
                 include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
             )
-            fallback_hidden_params, fallback_headers = Router._prepare_fallback_hidden_params(fallback_response)
-            wrapper.merge_fallback_hidden_params(fallback_hidden_params, fallback_headers)
-            wrapper.adopt_fallback_source(fallback_response)
-            if hasattr(fallback_response, "__aiter__"):
-                async for fallback_item in fallback_response:
-                    yield fallback_item
-            else:
-                # A fallback can resolve to a complete AnthropicMessagesResponse
-                # dict even for a streaming request (e.g. an agentic tool-use
-                # interception loop) - yielding it as-is would put a raw dict
-                # into a byte stream, so it's synthesized into the SSE
-                # lifecycle a real stream would have sent instead.
-                for event in anthropic_messages_response_as_sse_events(
-                    cast("AnthropicMessagesResponse", fallback_response)  # cast-ok: non-streaming shape by elimination
-                ):
-                    yield event
+            async for fallback_item in self._aanthropic_messages_yield_recovered(fallback_response, wrapper):
+                yield fallback_item
         except Exception as fallback_error:
             verbose_router_logger.error("Anthropic messages streaming fallback also failed: %s", fallback_error)
             if isinstance(fallback_error, MidStreamFallbackError) and fallback_error.original_exception is not None:
                 raise fallback_error.original_exception from fallback_error
             raise
-        finally:
-            if fallback_response is not None:
-                with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
-                    await aclose_if_supported(fallback_response)
 
     async def _aanthropic_messages_with_streaming_fallbacks(
         self,
@@ -5760,6 +5927,7 @@ class Router:
             model=model, original_generic_function=original_generic_function, **kwargs
         )
         carry_over_pre_routing_selection(live_kwargs=kwargs, snapshot=hop_kwargs)
+        carry_over_routed_deployment(live_kwargs=kwargs, snapshot=hop_kwargs)
         if kwargs.get("stream") and hasattr(response, "__aiter__"):
             return await self._aanthropic_messages_streaming_iterator(
                 response=cast("AsyncIterator[bytes]", response),  # cast-ok: stream=True always returns a byte iterator
