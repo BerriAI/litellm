@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.db.model_usage_rollup import increment_daily_model_usage
+from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction, flush_model_usage_transactions
 from litellm.proxy.management_endpoints.model_insights_endpoints import router
 
 
@@ -199,7 +199,7 @@ class _InMemoryUsageTable:
     def __init__(self) -> None:
         self.rows: dict[tuple[str, ...], dict[str, float]] = {}
 
-    async def upsert(self, where: dict, data: dict) -> None:
+    def upsert(self, where: dict, data: dict) -> None:
         key_fields = where["date_model_group_model_custom_llm_provider_task_type"]
         key = tuple(key_fields.values())
         if key not in self.rows:
@@ -221,11 +221,23 @@ class _InMemoryUsageTable:
         return list(grouped.values())
 
 
+class _InMemoryBatcher:
+    def __init__(self, table: _InMemoryUsageTable) -> None:
+        self.litellm_dailymodelusage = table
+
+    async def __aenter__(self) -> "_InMemoryBatcher":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
 @pytest.mark.asyncio
 async def test_model_insights_reads_back_what_the_rollup_wrote() -> None:
     table = _InMemoryUsageTable()
     prisma = MagicMock()
     prisma.db.litellm_dailymodelusage = table
+    prisma.db.batch_ = MagicMock(return_value=_InMemoryBatcher(table))
     payload = {
         "call_type": "acompletion",
         "spend": 0.5,
@@ -240,8 +252,11 @@ async def test_model_insights_reads_back_what_the_rollup_wrote() -> None:
         "status": "success",
     }
 
-    await increment_daily_model_usage(prisma, payload)
-    await increment_daily_model_usage(prisma, {**payload, "request_tags": "[]"})
+    transactions = (
+        build_model_usage_transaction(payload),
+        build_model_usage_transaction({**payload, "request_tags": "[]"}),
+    )
+    await flush_model_usage_transactions(prisma, [t for t in transactions if t is not None])
 
     body = _call(table, "metric=requests").json()
 
