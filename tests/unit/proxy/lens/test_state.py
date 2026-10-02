@@ -4,7 +4,15 @@ from typing import Final
 import pytest
 
 from litellm.proxy.lens.models import Check, Lens, LensSettings, Evidence, FindingDraft, Scope, Worker
-from litellm.proxy.lens.state import can_access, claim_job, current_job, merge_finding, queue_job, renew_budget
+from litellm.proxy.lens.state import (
+    advance_timeline,
+    can_access,
+    claim_job,
+    current_job,
+    merge_finding,
+    queue_job,
+    renew_budget,
+)
 
 NOW: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
 
@@ -86,7 +94,15 @@ def test_behavior_description_is_sufficient_without_separate_checks() -> None:
 
 
 @pytest.mark.parametrize(
-    "field,value", (("sample_percent", 0), ("sample_percent", 101), ("sample_size", 0), ("concurrency", 0), ("lookback_hours", 0), ("lookback_hours", 8761))
+    "field,value",
+    (
+        ("sample_percent", 0),
+        ("sample_percent", 101),
+        ("sample_size", 0),
+        ("concurrency", 0),
+        ("lookback_hours", 0),
+        ("lookback_hours", 8761),
+    ),
 )
 def test_invalid_selection_and_parallelism_are_rejected(field: str, value: int) -> None:
     from pydantic import ValidationError
@@ -107,6 +123,18 @@ def test_lease_prevents_double_claim_and_expires_with_bounded_retries() -> None:
     assert current_job(exhausted) is None
     assert exhausted.jobs[0].status == "failed"
     assert exhausted.next_run_at > NOW + timedelta(minutes=18)
+
+
+def test_timeline_records_when_each_stage_starts_not_each_heartbeat() -> None:
+    claimed: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)
+    started: Final = claimed.jobs[0].timeline
+    reading: Final = advance_timeline(started, "Reading executions", NOW + timedelta(seconds=5))
+    heartbeat: Final = advance_timeline(reading, "Reading executions", NOW + timedelta(seconds=40))
+    assert heartbeat is reading
+    assert [(m.stage, m.started_at - NOW) for m in heartbeat] == [
+        ("Collecting executions", timedelta(0)),
+        ("Reading executions", timedelta(seconds=5)),
+    ]
 
 
 def test_replaying_evidence_does_not_reopen_but_new_occurrence_does() -> None:
