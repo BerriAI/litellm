@@ -83,25 +83,39 @@ def _aws_str_header(name: str, value: str) -> bytes:
     )
 
 
+def _aws_int_header(name: str, value: int) -> bytes:
+    name_bytes: Final = name.encode()
+    return struct.pack("!B", len(name_bytes)) + name_bytes + struct.pack("!B", 4) + struct.pack("!i", value)
+
+
+def aws_event_stream_frame(headers: Mapping[str, str | int], payload: bytes) -> bytes:
+    """One AWS event-stream frame: a string header is wire type 7, an int header wire type 4 (int32)."""
+    headers_bytes: Final = b"".join(
+        _aws_str_header(name, value) if isinstance(value, str) else _aws_int_header(name, value)
+        for name, value in headers.items()
+    )
+    total_length: Final = 12 + len(headers_bytes) + len(payload) + 4
+    prelude: Final = struct.pack("!II", total_length, len(headers_bytes))
+    prelude_crc: Final = struct.pack("!I", zlib.crc32(prelude) & 0xFFFFFFFF)
+    message: Final = prelude + prelude_crc + headers_bytes + payload
+    return message + struct.pack("!I", zlib.crc32(message) & 0xFFFFFFFF)
+
+
 def _aws_event_frame(
     event_type: str,
     payload: Mapping[str, JsonValue],
     scenario_id: str,
     unique_id: str,
 ) -> bytes:
-    payload_bytes: Final = json.dumps(payload, separators=(",", ":")).replace(
-        "$REQUEST_ID", scenario_id
-    ).replace("$UNIQUE_ID", unique_id).encode()
-    headers_bytes: Final = (
-        _aws_str_header(":event-type", event_type)
-        + _aws_str_header(":content-type", "application/json")
-        + _aws_str_header(":message-type", "event")
+    payload_bytes: Final = (
+        json.dumps(payload, separators=(",", ":"))
+        .replace("$REQUEST_ID", scenario_id)
+        .replace("$UNIQUE_ID", unique_id)
+        .encode()
     )
-    total_length: Final = 12 + len(headers_bytes) + len(payload_bytes) + 4
-    prelude: Final = struct.pack("!II", total_length, len(headers_bytes))
-    prelude_crc: Final = struct.pack("!I", zlib.crc32(prelude) & 0xFFFFFFFF)
-    message: Final = prelude + prelude_crc + headers_bytes + payload_bytes
-    return message + struct.pack("!I", zlib.crc32(message) & 0xFFFFFFFF)
+    return aws_event_stream_frame(
+        {":event-type": event_type, ":content-type": "application/json", ":message-type": "event"}, payload_bytes
+    )
 
 
 class ScenarioStore:
@@ -147,7 +161,13 @@ class Provider:
             status: Final = script.popleft()
             if status != 200:
                 return JSONResponse(
-                    {"error": {"message": "Controlled provider failure", "type": error_type(status), "code": str(status)}},
+                    {
+                        "error": {
+                            "message": "Controlled provider failure",
+                            "type": error_type(status),
+                            "code": str(status),
+                        }
+                    },
                     status_code=status,
                 )
         return await chat_completions(request)
@@ -244,9 +264,7 @@ class Provider:
             if raw_body:
                 body: Final = JSON_OBJECT.validate_json(raw_body)
                 if isinstance(body, dict):
-                    self.observations.put(
-                        Observation(request.url.path, request.headers.get("authorization", ""), body)
-                    )
+                    self.observations.put(Observation(request.url.path, request.headers.get("authorization", ""), body))
         if isinstance(response, RoutedResponse):
             route_key: Final = f"{request.method} /{'/'.join(segments[1:])}"
             route: Final = next(
@@ -300,11 +318,10 @@ class Provider:
         match response:
             case JsonResponse():
                 return Response(
-                    content=json.dumps(response.body, separators=(",", ":")).replace(
-                        "$REQUEST_ID", scenario_id
-                    ).replace(
-                        "$UNIQUE_ID", unique_id
-                    ).encode(),
+                    content=json.dumps(response.body, separators=(",", ":"))
+                    .replace("$REQUEST_ID", scenario_id)
+                    .replace("$UNIQUE_ID", unique_id)
+                    .encode(),
                     media_type=response.content_type,
                     status_code=response.status,
                 )
@@ -321,6 +338,7 @@ class Provider:
                 )
             case SseResponse():
                 if response.frame_delay_ms > 0:
+
                     async def stream() -> AsyncIterator[bytes]:
                         for frame in response.frames:
                             yield (
@@ -329,9 +347,11 @@ class Provider:
                             await asyncio.sleep(response.frame_delay_ms / 1000)
 
                     return StreamingResponse(stream(), media_type=response.content_type)
-                stream_body: Final = ("\n\n".join(response.frames) + "\n\n").replace(
-                    "$REQUEST_ID", scenario_id
-                ).replace("$UNIQUE_ID", unique_id)
+                stream_body: Final = (
+                    ("\n\n".join(response.frames) + "\n\n")
+                    .replace("$REQUEST_ID", scenario_id)
+                    .replace("$UNIQUE_ID", unique_id)
+                )
                 return Response(content=stream_body.encode(), media_type=response.content_type)
             case EventStreamResponse():
                 events: Final = (
