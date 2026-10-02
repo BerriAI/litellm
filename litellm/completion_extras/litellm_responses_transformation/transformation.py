@@ -19,13 +19,15 @@ from openai.types.responses.response_input_param import (
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
+from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
+    with_prompt_cache_breakpoint,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
@@ -76,6 +78,32 @@ _CHAT_COMPLETION_FIELDS: Final = frozenset((*ModelResponse.model_fields, "usage"
 _RESPONSES_API_ONLY_FIELDS: Final = frozenset((*Response.model_fields, *ResponsesAPIResponse.model_fields)) - frozenset(
     ChatCompletion.model_fields
 )
+_CHAT_CONTENT_ITEM: Final = TypeAdapter(dict[str, object])
+
+
+def _strip_prompt_cache_breakpoints_from_value(value: object) -> object:
+    if isinstance(value, dict):
+        content: Final = cast(dict[str, object], value)  # cast-ok: isinstance narrows the recursive container
+        return {
+            key: _strip_prompt_cache_breakpoints_from_value(item)
+            for key, item in content.items()
+            if key != "prompt_cache_breakpoint"
+        }
+    if isinstance(value, list):
+        return [
+            _strip_prompt_cache_breakpoints_from_value(item)
+            for item in cast(list[object], value)  # cast-ok: isinstance narrows the recursive container
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            _strip_prompt_cache_breakpoints_from_value(item)
+            for item in cast(tuple[object, ...], value)  # cast-ok: isinstance narrows the recursive container
+        )
+    return value
+
+
+def _strip_prompt_cache_breakpoints(input_items: list[object]) -> list[object]:
+    return [_strip_prompt_cache_breakpoints_from_value(item) for item in input_items]
 
 
 def _provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -588,24 +616,32 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: object | None = None,
     ) -> dict:
-        (
-            input_items,
-            instructions,
-        ) = self.convert_chat_completion_messages_to_responses_api(messages)
-
+        converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(messages)
+        supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model)
+        input_items_without_unsupported_markers: Final = (
+            converted_input_items
+            if supports_prompt_cache_breakpoint
+            else _strip_prompt_cache_breakpoints(converted_input_items)
+        )
         # OpenAI's Responses API rejects an empty input. For a system-only
         # request, carry the system message as a system-role input item instead
         # of instructions, mirroring how non-string system content is already
         # handled in convert_chat_completion_messages_to_responses_api.
-        if not input_items and instructions is not None:
-            input_items = [
+        is_system_only_request: Final = (
+            not input_items_without_unsupported_markers and converted_instructions is not None
+        )
+        input_items: Final = (
+            [
                 {
                     "type": "message",
                     "role": "system",
-                    "content": [{"type": "input_text", "text": instructions}],
+                    "content": [{"type": "input_text", "text": converted_instructions}],
                 }
             ]
-            instructions = None
+            if is_system_only_request
+            else input_items_without_unsupported_markers
+        )
+        instructions: Final = None if is_system_only_request else converted_instructions
 
         optional_params = self._extract_extra_body_params(optional_params)
 
@@ -1060,16 +1096,22 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     # Handle multimodal content
                     original_type = item.get("type")
                     if original_type == "text":
-                        converted = self._convert_content_str_to_input_text(item.get("text", ""), role)
+                        converted = with_prompt_cache_breakpoint(
+                            self._convert_content_str_to_input_text(item.get("text", ""), role),
+                            _CHAT_CONTENT_ITEM.validate_python(item).get("prompt_cache_breakpoint"),
+                        )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   text -> %s", converted)
                     elif original_type == "image_url":
                         # Map to responses API image format
-                        converted = cast(
-                            dict,
-                            self._convert_content_to_responses_format_image(
-                                cast(ChatCompletionImageObject, item), role
+                        converted = with_prompt_cache_breakpoint(
+                            dict(
+                                self._convert_content_to_responses_format_image(
+                                    cast(ChatCompletionImageObject, item),  # cast-ok: image_url type tag was checked
+                                    role,
+                                )
                             ),
+                            _CHAT_CONTENT_ITEM.validate_python(item).get("prompt_cache_breakpoint"),
                         )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   image_url -> %s", converted)
@@ -1081,8 +1123,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   image -> %s", converted)
                         elif item_type == "file":
-                            converted = _input_file_from_file_value(
-                                cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
+                            converted = with_prompt_cache_breakpoint(
+                                _input_file_from_file_value(
+                                    cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
+                                ),
+                                _CHAT_CONTENT_ITEM.validate_python(item).get("prompt_cache_breakpoint"),
                             )
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   file -> %s", converted)
