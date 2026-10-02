@@ -21,6 +21,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -49,6 +50,32 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
 @pytest.mark.parametrize(
     "category,changed,expected",
     [
+        ("mcp-integration", ["litellm/proxy/_experimental/mcp_server/operations.py"], "run"),
+        ("mcp-integration", ["litellm/experimental_mcp_client/client.py"], "run"),
+        ("mcp-integration", ["litellm/proxy/auth/auth_checks.py"], "run"),
+        ("mcp-integration", ["litellm/caching/caching.py"], "run"),
+        ("mcp-integration", ["enterprise/litellm_enterprise/proxy/auth/user_api_key_auth.py"], "run"),
+        ("mcp-integration", ["pyproject.toml", "uv.lock"], "run"),
+        ("mcp-integration", [".circleci/config.yml"], "run"),
+        ("mcp-integration", [".github/workflows/test-unit.yml"], "run"),
+        ("mcp-integration", ["tests/integration/_support/process.py"], "run"),
+        ("mcp-integration", ["tests/integration/conformance_coverage.toml"], "run"),
+        ("mcp-integration", ["tests/conftest.py"], "run"),
+        ("mcp-integration", ["tests/unit/conftest.py"], "run"),
+        ("mcp-integration", ["tests/unit/integration_support/test_process.py"], "run"),
+        ("mcp-integration", ["tests/unit/test_circleci_path_filter.py"], "run"),
+        ("mcp-integration", ["tests/shared_auth.py"], "run"),
+        ("mcp-integration", ["tests/test_litellm/helpers.py"], "run"),
+        ("mcp-integration", ["tests/__init__.py"], "run"),
+        ("mcp-integration", ["tests/e2e/fixtures/policy.json"], "run"),
+        ("mcp-integration", ["tests/e2e/mcp/test_authorization.py"], "run"),
+        ("mcp-integration", ["ui/litellm-dashboard/src/components/mcp_servers.tsx"], "run"),
+        ("mcp-integration", ["new_runtime/adapter.py"], "run"),
+        ("mcp-integration", DOCS, "skip"),
+        ("mcp-integration", CLIENT, "skip"),
+        ("mcp-integration", ["tests/test_litellm/llms/anthropic/test_chat.py"], "skip"),
+        ("mcp-integration", DOCS + ["tests/unit/test_router.py"], "skip"),
+        ("mcp-integration", CLIENT + ["litellm/proxy/proxy_server.py"], "run"),
         ("mcp-dependencies", ["pyproject.toml"], "run"),
         ("mcp-dependencies", ["uv.lock"], "run"),
         ("mcp-dependencies", ["litellm/experimental_mcp_client/client.py"], "run"),
@@ -207,7 +234,7 @@ def _run_path_filter(work: Path, tmp_path: Path, category: str, scripts_dir: Pat
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     stub = bin_dir / "circleci-agent"
-    stub.write_text("#!/usr/bin/env bash\necho \"[stub] circleci-agent $*\"\nexit 0\n")
+    stub.write_text('#!/usr/bin/env bash\necho "[stub] circleci-agent $*"\nexit 0\n')
     stub.chmod(0o755)
     env = dict(os.environ)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
@@ -223,30 +250,34 @@ def _run_path_filter(work: Path, tmp_path: Path, category: str, scripts_dir: Pat
     )
 
 
-def test_path_filter_halts_docs_only_pr(tmp_path: Path) -> None:
+@pytest.mark.parametrize("category", ("backend", "mcp-integration"))
+def test_path_filter_halts_docs_only_pr(tmp_path: Path, category: str) -> None:
     work = _pr_repo(tmp_path, {"README.md": "# docs\n"})
-    result = _run_path_filter(work, tmp_path, "backend", SCRIPTS_DIR)
+    result = _run_path_filter(work, tmp_path, category, SCRIPTS_DIR)
     assert result.returncode == 0
     assert "circleci-agent step halt" in result.stdout
 
 
-def test_path_filter_runs_backend_pr(tmp_path: Path) -> None:
+@pytest.mark.parametrize("category", ("backend", "mcp-integration"))
+def test_path_filter_runs_backend_pr(tmp_path: Path, category: str) -> None:
     work = _pr_repo(tmp_path, {"litellm/new.py": "y\n"})
-    result = _run_path_filter(work, tmp_path, "backend", SCRIPTS_DIR)
+    result = _run_path_filter(work, tmp_path, category, SCRIPTS_DIR)
     assert result.returncode == 0
     assert "running job" in result.stdout
     assert "halt" not in result.stdout
 
 
-def test_path_filter_fails_open_when_not_a_pr(tmp_path: Path) -> None:
+@pytest.mark.parametrize("category", ("backend", "mcp-integration"))
+def test_path_filter_fails_open_when_not_a_pr(tmp_path: Path, category: str) -> None:
     work = _pr_repo(tmp_path, {"README.md": "# docs\n"})
-    result = _run_path_filter(work, tmp_path, "backend", SCRIPTS_DIR, is_pr=False)
+    result = _run_path_filter(work, tmp_path, category, SCRIPTS_DIR, is_pr=False)
     assert result.returncode == 0
     assert "not a pull request" in result.stdout
     assert "halt" not in result.stdout
 
 
-def test_path_filter_fails_open_when_classifier_errors(tmp_path: Path) -> None:
+@pytest.mark.parametrize("category", ("backend", "mcp-integration"))
+def test_path_filter_fails_open_when_classifier_errors(tmp_path: Path, category: str) -> None:
     """Regression: a broken classifier must run the job, never silently halt it."""
     broken_scripts = tmp_path / "broken_scripts"
     broken_scripts.mkdir()
@@ -255,7 +286,44 @@ def test_path_filter_fails_open_when_classifier_errors(tmp_path: Path) -> None:
     (broken_scripts / "classify_changes.sh").chmod(0o755)
 
     work = _pr_repo(tmp_path, {"README.md": "# docs\n"})
-    result = _run_path_filter(work, tmp_path, "backend", broken_scripts)
+    result = _run_path_filter(work, tmp_path, category, broken_scripts)
     assert result.returncode == 0
     assert "classify_changes.sh failed" in result.stdout
+    assert "halt" not in result.stdout
+
+
+@pytest.mark.parametrize("decision", ("", "unexpected"))
+def test_path_filter_runs_when_classifier_output_is_invalid(tmp_path: Path, decision: str) -> None:
+    scripts: Final = tmp_path / "scripts"
+    scripts.mkdir()
+    shutil.copy(PATH_FILTER, scripts / "path_filter.sh")
+    (scripts / "classify_changes.sh").write_text(f"#!/usr/bin/env bash\nprintf '%s' '{decision}'\n")
+    work: Final = _pr_repo(tmp_path, {"README.md": "# docs\n"})
+    result: Final = _run_path_filter(work, tmp_path, "mcp-integration", scripts)
+    assert result.returncode == 0
+    assert "running job" in result.stdout
+    assert "halt" not in result.stdout
+
+
+@pytest.mark.parametrize("uncertainty", ("missing_remote", "empty_diff"))
+def test_mcp_path_filter_runs_when_changed_files_are_unavailable(tmp_path: Path, uncertainty: str) -> None:
+    work: Final = _pr_repo(tmp_path, {"README.md": "# docs\n"})
+    if uncertainty == "missing_remote":
+        _git(work, "remote", "remove", "origin")
+    else:
+        _git(work, "push", "-q", "origin", "HEAD:main")
+    result: Final = _run_path_filter(work, tmp_path, "mcp-integration", SCRIPTS_DIR)
+    assert result.returncode == 0
+    assert "running job" in result.stdout
+    assert "halt" not in result.stdout
+
+
+def test_mcp_path_filter_includes_deleted_side_of_rename(tmp_path: Path) -> None:
+    work: Final = _pr_repo(tmp_path, {"litellm/experimental_mcp_client/client.py": "original client\n"})
+    _git(work, "push", "-q", "origin", "HEAD:main")
+    _git(work, "mv", "litellm/experimental_mcp_client/client.py", "README.md")
+    _git(work, "commit", "-qm", "move client out of runtime")
+    result: Final = _run_path_filter(work, tmp_path, "mcp-integration", SCRIPTS_DIR)
+    assert result.returncode == 0
+    assert "running job" in result.stdout
     assert "halt" not in result.stdout

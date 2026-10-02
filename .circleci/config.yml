@@ -38,7 +38,7 @@ commands:
     parameters:
       category:
         type: enum
-        enum: ["backend", "client", "provider-harness"]
+        enum: ["backend", "client", "provider-harness", "mcp-integration"]
         default: "backend"
     steps:
       - run:
@@ -3162,6 +3162,13 @@ jobs:
     environment:
       MCP_CONFORMANCE_CODECOV_FLAG: mcp-conformance
     steps:
+      - when:
+          condition:
+            equal: [mcp, << parameters.suite >>]
+          steps:
+            - checkout
+            - skip_if_unrelated_changes:
+                category: mcp-integration
       - setup_litellm_test_deps
       - when:
           condition:

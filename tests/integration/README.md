@@ -128,3 +128,12 @@ status in the existing main ruleset. Close LIT-7744 after this baseline is merge
 required. LIT-7745 can be developed alongside gate completion; its shared-path changes must pass
 the baseline and their added legacy/modern tests before merging. Later coverage extensions belong
 to their implementation tickets rather than keeping LIT-7744 open indefinitely
+
+The `ci/circleci: integration-mcp` status is published for every normal PR pipeline. Before installing
+dependencies or starting services, its `mcp-integration` path filter completes the job successfully
+as "not applicable" for changes confined to documentation, frontend files unrelated to MCP, or
+unrelated tests. MCP files, shared test fixtures and integration helpers always run the full gate.
+Runtime code, dependencies, CI configuration and unrecognized paths also run it conservatively.
+Non-PR pipelines, unavailable merge bases, empty diffs and failed or invalid classification run the
+suite. Renames include both old and new paths. Filtering selects whether to run the entire job;
+it never reduces the 181 required cases for an applicable run
