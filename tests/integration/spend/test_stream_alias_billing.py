@@ -80,7 +80,7 @@ def _deployment(scenario: Scenario, model_name: str, litellm_params: dict[str, J
     return model_name
 
 
-def _streamed_spend(gateway: Gateway, scenario: Scenario, model: str, content: str) -> float:
+def _streamed_spend(gateway: Gateway, scenario: Scenario, model: str, content: str) -> dict[str, JsonValue]:
     key: Final = scenario.key(models=[model])
     response: Final = gateway.request(
         "POST",
@@ -96,12 +96,20 @@ def _streamed_spend(gateway: Gateway, scenario: Scenario, model: str, content: s
     assert response.status_code == 200, response.text
     rows: Final = eventually(
         lambda: read_rows(
-            'SELECT spend FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (sha256(key.encode()).hexdigest(),)
+            'SELECT spend, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
+            (sha256(key.encode()).hexdigest(),),
         ),
         lambda values: len(values) == 1,
         seconds=70,
     )
-    return float(str(rows[0]["spend"]))
+    return rows[0]
+
+
+def _deployment_pricing(gateway: Gateway, model_name: str) -> dict[str, JsonValue]:
+    entries: Final = gateway.get("/model/info")["data"]
+    assert isinstance(entries, list)
+    target: Final = next(object_value(entry) for entry in entries if object_value(entry)["model_name"] == model_name)
+    return object_value(target["model_info"])
 
 
 @pytest.mark.parametrize(
@@ -127,14 +135,20 @@ def test_streamed_alias_matching_a_capability_rule_bills_the_deployment_price(
 ) -> None:
     with wire_server(_anthropic_stream) as wire, gateway.scenario() as scenario:
         content: Final = f"alias billing {uuid4().hex}"
-        exact_spend: Final = _streamed_spend(
+        exact_row: Final = _streamed_spend(
             gateway, scenario, _deployment(scenario, EXACT_KEY_ALIAS, litellm_params(wire.url)), content
         )
-        alias_spend: Final = _streamed_spend(
+        alias_row: Final = _streamed_spend(
             gateway, scenario, _deployment(scenario, CAPABILITY_RULE_ALIAS, litellm_params(wire.url)), content
         )
 
-    assert exact_spend > 0, exact_spend
-    assert alias_spend == pytest.approx(exact_spend), (
-        f"{CAPABILITY_RULE_ALIAS} billed {alias_spend}, {EXACT_KEY_ALIAS} billed {exact_spend}"
-    )
+        for model_name, row in ((EXACT_KEY_ALIAS, exact_row), (CAPABILITY_RULE_ALIAS, alias_row)):
+            pricing: Final = _deployment_pricing(gateway, model_name)
+            input_rate: Final = float(str(pricing["input_cost_per_token"]))
+            output_rate: Final = float(str(pricing["output_cost_per_token"]))
+            uplift: Final = float(str(pricing["regional_endpoint_uplift_multiplier"] or 1))
+            assert input_rate > 0 and output_rate > 0, pricing
+            assert float(str(row["spend"])) == pytest.approx(
+                uplift
+                * (float(str(row["prompt_tokens"])) * input_rate + float(str(row["completion_tokens"])) * output_rate)
+            ), (model_name, row, pricing)
