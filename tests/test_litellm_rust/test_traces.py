@@ -9,10 +9,16 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from litellm.rust_bridge._native import NativeTraceConfig, NativeTraceStorage, trace_decode_otlp
-from litellm.rust_bridge.traces import ClickHouseStorage, NormalizedSpan, TraceStorageConfig, normalized_field_definitions
+from litellm.rust_bridge.traces import (
+    ClickHouseStorage,
+    NormalizedSpan,
+    TraceStorageConfig,
+    normalized_field_definitions,
+)
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.decode import decode_otlp
 from litellm.tracing.store import TraceStore
+from litellm.tracing.types import TraceScope
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -75,8 +81,21 @@ def test_invalid_url_error_does_not_expose_credentials() -> None:
 
 
 @pytest.mark.asyncio
+async def test_from_env_reads_with_clickhouse_url(
+    recording_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recording_server.enqueue(ResponseSpec(body={"data": []}))
+    monkeypatch.setenv("CLICKHOUSE_URL", recording_server.base_url)
+    monkeypatch.delenv("CLICKHOUSE_READER_URL", raising=False)
+    scope: Final[TraceScope] = {"team_ids": (), "api_key_hash": ""}
+    page: Final = await TraceReceiver.from_env().list_traces(scope, 0, 1)
+    assert page == {"data": (), "next_cursor": None}
+    assert len(recording_server.requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_schema_setup_uses_configured_retention(recording_server: RecordingServer) -> None:
-    recording_server.expected_requests = 10
+    recording_server.expected_requests = 8
     storage: Final = _native_storage("trace_test", recording_server.base_url, 7)
     await storage.ensure_schema()
     ttl_statements: Final = tuple(

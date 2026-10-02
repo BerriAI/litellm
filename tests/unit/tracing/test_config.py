@@ -1,7 +1,6 @@
 import pytest
 
 from litellm import constants
-from litellm.tracing import config as tracing_config
 from litellm.tracing.config import is_clickhouse_tracing_enabled, trace_storage_config
 
 
@@ -41,15 +40,33 @@ def test_yaml_values_override_defaults_and_resolve_nested_references() -> None:
     assert "password" not in repr(config)
 
 
-def test_omitted_fields_use_environment_and_constants(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(tracing_config, "CLICKHOUSE_DATABASE", "env_database")
-    monkeypatch.setattr(tracing_config, "AGENT_TRACING_RETENTION_DAYS", 11)
-    config = trace_storage_config({}, {"CLICKHOUSE_URL": "http://localhost:8123"})
+def test_omitted_fields_use_environment() -> None:
+    config = trace_storage_config(
+        {},
+        {
+            "CLICKHOUSE_URL": "http://localhost:8123",
+            "CLICKHOUSE_DATABASE": "env_database",
+            "AGENT_TRACING_RETENTION_DAYS": "11",
+        },
+    )
     assert (config.url, config.database, config.retention_days) == ("http://localhost:8123", "env_database", 11)
 
 
-def test_constant_defaults_match_unified_store() -> None:
-    assert (constants.CLICKHOUSE_DATABASE, constants.AGENT_TRACING_RETENTION_DAYS) == ("litellm", 14)
+def test_environment_is_read_when_config_is_resolved(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLICKHOUSE_URL", "http://localhost:8123")
+    monkeypatch.setenv("CLICKHOUSE_DATABASE", "late_database")
+    monkeypatch.setenv("AGENT_TRACING_RETENTION_DAYS", "9")
+    config = trace_storage_config({})
+    assert (config.database, config.retention_days) == ("late_database", 9)
+
+
+def test_omitted_fields_without_environment_use_constant_defaults() -> None:
+    config = trace_storage_config({}, {"CLICKHOUSE_URL": "http://localhost:8123"})
+    assert (config.database, config.retention_days) == (
+        constants.DEFAULT_CLICKHOUSE_DATABASE,
+        constants.DEFAULT_AGENT_TRACING_RETENTION_DAYS,
+    )
+    assert (config.database, config.retention_days) == ("litellm", 14)
 
 
 @pytest.mark.parametrize("field", ["url", "database", "retention_days"])

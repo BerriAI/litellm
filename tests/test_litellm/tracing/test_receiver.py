@@ -16,7 +16,6 @@ from opentelemetry.proto.trace.v1.trace_pb2 import ResourceSpans, ScopeSpans, Sp
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing import receiver as receiver_module
 from litellm.tracing.types import TraceScope
-from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -42,18 +41,6 @@ def _spoofed_export() -> bytes:
         ]
     )
     return ExportTraceServiceRequest(resource_spans=[resource_spans]).SerializeToString()
-
-
-@pytest.mark.asyncio
-async def test_from_env_reads_with_clickhouse_url_without_reader_url(monkeypatch: pytest.MonkeyPatch):
-    with recording_service() as server:
-        server.enqueue(ResponseSpec(body={"data": []}))
-        monkeypatch.setenv("CLICKHOUSE_URL", server.base_url)
-        monkeypatch.delenv("CLICKHOUSE_READER_URL", raising=False)
-        scope: TraceScope = {"team_ids": (), "api_key_hash": ""}
-        page = await TraceReceiver.from_env().list_traces(scope, 0, 1)
-        assert page == {"data": (), "next_cursor": None}
-        assert len(server.requests) == 1
 
 
 @pytest.mark.asyncio

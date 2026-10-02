@@ -4,7 +4,7 @@ from typing import Final
 
 from pydantic import TypeAdapter
 
-from litellm.constants import AGENT_TRACING_RETENTION_DAYS, CLICKHOUSE_DATABASE
+from litellm.constants import DEFAULT_AGENT_TRACING_RETENTION_DAYS, DEFAULT_CLICKHOUSE_DATABASE
 from litellm.rust_bridge.traces import TraceStorageConfig
 
 STORE_SETTINGS: Final = TypeAdapter(dict[str, object])
@@ -63,7 +63,9 @@ def trace_storage_config(settings: Mapping[str, object], environ: Mapping[str, s
     if unknown:
         raise ValueError(f"unsupported tracing.store settings: {', '.join(sorted(unknown))}")
     url: Final = _value(store, "url", environ, environ.get("CLICKHOUSE_URL"))
-    database: Final = _value(store, "database", environ, CLICKHOUSE_DATABASE)
+    database: Final = _value(
+        store, "database", environ, environ.get("CLICKHOUSE_DATABASE", DEFAULT_CLICKHOUSE_DATABASE)
+    )
     if not isinstance(url, str) or not url:
         raise ValueError("tracing.store.url or CLICKHOUSE_URL is required")
     if not isinstance(database, str):
@@ -71,5 +73,12 @@ def trace_storage_config(settings: Mapping[str, object], environ: Mapping[str, s
     return TraceStorageConfig(
         url=url,
         database=database,
-        retention_days=_retention_days(_value(store, "retention_days", environ, AGENT_TRACING_RETENTION_DAYS)),
+        retention_days=_retention_days(
+            _value(
+                store,
+                "retention_days",
+                environ,
+                environ.get("AGENT_TRACING_RETENTION_DAYS", DEFAULT_AGENT_TRACING_RETENTION_DAYS),
+            )
+        ),
     )
