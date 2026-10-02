@@ -23,4 +23,5 @@ class ObjectPermissionDict(TypedDict, total=False):
     models: list[str] | None
     search_tools: list[str] | None
     mcp_tool_search_enabled: bool | None
+    mcp_data_boundaries: tuple[str, ...] | None
     skills: ReadOnly[list[str] | None]

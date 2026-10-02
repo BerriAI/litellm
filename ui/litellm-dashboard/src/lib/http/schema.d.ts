@@ -34922,6 +34922,8 @@ export interface components {
             /** Created By */
             created_by?: string | null;
             credentials?: components["schemas"]["MCPCredentials"] | null;
+            /** Data Boundary */
+            data_boundary?: string | null;
             /** Dcr Bridge */
             dcr_bridge?: boolean | null;
             /**
@@ -35203,6 +35205,8 @@ export interface components {
             blocked_tools?: string[] | null;
             /** Mcp Access Groups */
             mcp_access_groups?: string[] | null;
+            /** Mcp Data Boundaries */
+            mcp_data_boundaries?: string[] | null;
             /** Mcp Servers */
             mcp_servers?: string[] | null;
             /** Mcp Tool Permissions */
@@ -35247,6 +35251,8 @@ export interface components {
              * @default []
              */
             mcp_access_groups: string[] | null;
+            /** Mcp Data Boundaries */
+            mcp_data_boundaries?: string[] | null;
             /**
              * Mcp Servers
              * @default []
@@ -38965,6 +38971,8 @@ export interface components {
             /** Command */
             command?: string | null;
             credentials?: components["schemas"]["MCPCredentials"] | null;
+            /** Data Boundary */
+            data_boundary?: string | null;
             /** Dcr Bridge */
             dcr_bridge?: boolean | null;
             /**
@@ -48263,6 +48271,8 @@ export interface components {
             /** Command */
             command?: string | null;
             credentials?: components["schemas"]["MCPCredentials"] | null;
+            /** Data Boundary */
+            data_boundary?: string | null;
             /** Dcr Bridge */
             dcr_bridge?: boolean | null;
             /**

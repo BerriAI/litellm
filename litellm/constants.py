@@ -190,6 +190,8 @@ MCP_SSO_ASSERTION_CACHE_TTL_SECONDS: Final = int(os.getenv("MCP_SSO_ASSERTION_CA
 # mcp_tool_permissions entry that grants every current and future tool on a server
 MCP_ALL_TOOLS_WILDCARD: Final = "*"
 
+MCP_DATA_BOUNDARY_VIOLATION_CODE: Final = "mcp_data_boundary_violation"
+
 # Default npm cache directory for STDIO MCP servers.
 # npm/npx needs a writable cache dir; in containers the default (~/.npm)
 # may not exist or be read-only. /tmp is always writable.

@@ -23,4 +23,5 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     blocked_tools: list[str] | None = []
     search_tools: list[str] | None = []
     mcp_tool_search_enabled: bool | None = None
+    mcp_data_boundaries: tuple[str, ...] | None = None
     skills: list[str] | None = None

@@ -149,6 +149,32 @@ async def test_set_object_permission_persists_skills():
     assert created_data["skills"] == ["private-skill"]
 
 
+@pytest.mark.asyncio
+async def test_set_object_permission_converts_data_boundaries_for_prisma():
+    mock_prisma_client = _make_ambiguity_prisma()
+    data_json = {
+        "object_permission": LiteLLM_ObjectPermissionBase(mcp_data_boundaries=["eu", "us"]).model_dump(),
+    }
+
+    await _set_object_permission(data_json=data_json, prisma_client=mock_prisma_client)
+
+    created_data = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+    assert created_data["mcp_data_boundaries"] == ["eu", "us"]
+
+
+@pytest.mark.asyncio
+async def test_prepare_object_permission_upsert_converts_data_boundaries_for_prisma():
+    mock_prisma_client = _make_ambiguity_prisma()
+
+    upsert = await prepare_object_permission_upsert(
+        new_object_permission=LiteLLM_ObjectPermissionBase(mcp_data_boundaries=["eu", "us"]).model_dump(),
+        existing_object_permission_id=None,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert upsert.record["mcp_data_boundaries"] == ["eu", "us"]
+
+
 # ---- Tests for _extract_requested_mcp_server_ids ----
 
 

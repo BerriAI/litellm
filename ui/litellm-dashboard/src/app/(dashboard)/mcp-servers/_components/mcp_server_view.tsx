@@ -305,6 +305,12 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-4 py-3">
+                  <p className="text-sm font-medium text-muted-foreground">Data Boundary</p>
+                  <div className="col-span-2 font-mono text-sm">
+                    {mcpServer.data_boundary || <span className="text-muted-foreground">Not set</span>}
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-4 py-3">
                   <p className="text-sm font-medium text-muted-foreground">Authentication</p>
                   <div className="col-span-2">{getAuthBadge(handleAuth(mcpServer.auth_type))}</div>
                 </div>
