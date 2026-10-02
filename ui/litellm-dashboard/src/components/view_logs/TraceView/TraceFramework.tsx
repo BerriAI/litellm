@@ -23,5 +23,9 @@ export const traceFramework = (summary: Pick<TraceSummary, "frameworks">): Trace
   FRAMEWORKS.find((framework) => summary.frameworks?.includes(framework.id)) ?? null;
 
 export function FrameworkLogo({ framework, className }: { framework: TraceFramework; className?: string }) {
-  return <Logo src={framework.logo} label={framework.label} className={cn("size-3.5 shrink-0", className)} />;
+  return (
+    <span aria-hidden className="contents">
+      <Logo src={framework.logo} label={framework.label} className={cn("size-3.5 shrink-0", className)} />
+    </span>
+  );
 }
