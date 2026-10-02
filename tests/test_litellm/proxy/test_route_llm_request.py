@@ -1,6 +1,4 @@
-
 import pytest
-
 
 
 from typing import Final
@@ -472,6 +470,45 @@ async def test_route_request_with_router_settings_override_preserves_existing():
     assert call_kwargs["num_retries"] == 10
     # Key/team timeout should be applied since not in request
     assert call_kwargs["timeout"] == 30
+
+
+@pytest.mark.asyncio
+async def test_route_request_with_router_settings_override_and_api_key():
+    """
+    Test that router_settings_override is merged and stripped from data
+    even when the request carries api_key or api_base.
+    """
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "api_key": "sk-user-test-key",
+        "api_base": "https://api.example.com/v1",
+        "router_settings_override": {
+            "fallbacks": [{"gpt-3.5-turbo": ["gpt-4"]}],
+            "num_retries": 5,
+            "timeout": 30,
+            "model_group_retry_policy": {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}},
+            "routing_strategy": "least-busy",
+            "model_group_alias": {"alias": "real_model"},
+        },
+    }
+
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "success"
+
+    response = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "success"
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert call_kwargs["api_key"] == "sk-user-test-key"
+    assert call_kwargs["api_base"] == "https://api.example.com/v1"
+    assert "router_settings_override" not in call_kwargs
+    assert call_kwargs["fallbacks"] == [{"gpt-3.5-turbo": ["gpt-4"]}]
+    assert call_kwargs["num_retries"] == 5
+    assert call_kwargs["timeout"] == 30
+    assert call_kwargs["model_group_retry_policy"] == {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}}
+    assert call_kwargs["routing_strategy"] == "least-busy"
+    assert "model_group_alias" not in call_kwargs
 
 
 def test_gated_mock_params_cover_mock_router_testing_params():
@@ -1256,6 +1293,7 @@ async def test_route_request_read_through_disabled_without_store_model_in_db(mon
         )
 
     assert table.find_many_wheres == []
+
 
 @pytest.mark.asyncio
 async def test_route_request_routing_group_name_passes_model_gate():

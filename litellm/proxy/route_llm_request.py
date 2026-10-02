@@ -485,6 +485,33 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         # Map generationConfig to config parameter for Google GenAI compatibility
         if "generationConfig" in data and "config" not in data:
             data["config"] = data.pop("generationConfig")
+
+    has_router_settings_override: Final = "router_settings_override" in data
+    if has_router_settings_override:
+        # Apply per-request router settings overrides from key/team config
+        # Instead of creating a new Router (expensive), merge settings into kwargs
+        # The Router already supports per-request overrides for these settings
+        override_settings: Final = data.pop("router_settings_override")
+
+        # Settings that the Router accepts as per-request kwargs
+        # These override the global router settings for this specific request
+        per_request_settings: Final = (
+            "fallbacks",
+            "context_window_fallbacks",
+            "content_policy_fallbacks",
+            "num_retries",
+            "timeout",
+            "model_group_retry_policy",
+            "routing_strategy",
+            "enable_tag_filtering",
+        )
+
+        if isinstance(override_settings, dict):
+            # Merge override settings into data (only if not already set in request)
+            for key in per_request_settings:
+                if key in override_settings and key not in data:
+                    data[key] = override_settings[key]
+
     if "api_key" in data or "api_base" in data:
         if llm_router is not None:
             return getattr(llm_router, f"{route_type}")(**data)
@@ -508,30 +535,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     elif "user_config" in data:
         return _route_user_config_request(data, route_type)
 
-    elif "router_settings_override" in data:
-        # Apply per-request router settings overrides from key/team config
-        # Instead of creating a new Router (expensive), merge settings into kwargs
-        # The Router already supports per-request overrides for these settings
-        override_settings: Final = data.pop("router_settings_override")
-
-        # Settings that the Router accepts as per-request kwargs
-        # These override the global router settings for this specific request
-        per_request_settings: Final = [
-            "fallbacks",
-            "context_window_fallbacks",
-            "content_policy_fallbacks",
-            "num_retries",
-            "timeout",
-            "model_group_retry_policy",
-            "routing_strategy",
-            "enable_tag_filtering",
-        ]
-
-        # Merge override settings into data (only if not already set in request)
-        for key in per_request_settings:
-            if key in override_settings and key not in data:
-                data[key] = override_settings[key]
-
+    elif has_router_settings_override:
         # Use main router with overridden kwargs
         if llm_router is not None:
             return getattr(llm_router, f"{route_type}")(**data)
