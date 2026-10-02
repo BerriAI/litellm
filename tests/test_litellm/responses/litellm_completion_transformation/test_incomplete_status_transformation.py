@@ -8,6 +8,7 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.responses.streaming_iterator import _build_synthetic_response_events
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
@@ -70,3 +71,23 @@ def test_stream_terminal_event_follows_status(finish_reason, event_type):
     event = iterator._emit_response_completed_event(_chat_response(finish_reason))
     assert event is not None
     assert event.type == event_type
+
+
+@pytest.mark.parametrize(
+    "finish_reason, event_type",
+    [
+        ("length", ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE),
+        ("stop", ResponsesAPIStreamEvents.RESPONSE_COMPLETED),
+    ],
+)
+def test_replayed_stream_terminal_event_follows_status(finish_reason, event_type):
+    events = _build_synthetic_response_events(
+        transformed=_transform(finish_reason, {}),
+        logging_obj=None,
+        chunk_size=10,
+    )
+    assert events[-1].type == event_type
+
+
+def test_omitted_temperature_defaults_to_zero():
+    assert _transform("stop", {}).temperature == 0

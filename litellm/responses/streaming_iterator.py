@@ -1253,6 +1253,14 @@ def _build_synthetic_response_events(
             )
         )
 
+    if transformed.status == "incomplete":
+        events.append(
+            openai_types.ResponseIncompleteEvent(
+                type=openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                response=transformed,
+            )
+        )
+        return events
     events.append(
         openai_types.ResponseCompletedEvent(
             type=openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
