@@ -237,13 +237,25 @@ def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Pa
                 lambda found: recovery_probe in found,
                 seconds=70,
             )
-            second_delivered: Final = eventually(
+            eventually(
                 lambda: events_for(second_ids),
                 lambda found: len(found) == len(second_ids),
                 seconds=30,
                 return_last_on_timeout=True,
             )
-            assert second_delivered == second_ids
+            second_occurrences: Final = [
+                event["litellm_call_id"]
+                for batch in delivered
+                for event in json.loads(batch.body)
+                if event.get("litellm_call_id") in second_ids
+            ]
+            assert len(second_occurrences) == len(set(second_occurrences)), (
+                "duplicate burst-2 delivery after the outage"
+            )
+            assert events_for(second_ids) < second_ids, (
+                "events flushed during the outage should be dropped, not redelivered"
+            )
+
             _landed_tags(key, lambda values: len(values) == len(responses))
 
 
