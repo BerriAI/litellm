@@ -78,7 +78,14 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
             if has_entity_array
             else ()
         ),
-        *((f'NOT ("{scope.entity_id_field}" = ANY(${exclusion_index}::text[]))',) if scope.exclude_entity_ids else ()),
+        *(
+            (
+                f'("{scope.entity_id_field}" IS NULL '
+                f'OR NOT ("{scope.entity_id_field}" = ANY(${exclusion_index}::text[])))',
+            )
+            if scope.exclude_entity_ids
+            else ()
+        ),
         *((f"model = ${model_index}",) if scope.model else ()),
         *(
             ("FALSE",)

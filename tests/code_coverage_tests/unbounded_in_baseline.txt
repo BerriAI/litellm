@@ -138,7 +138,7 @@ litellm/proxy/utils.py PrismaClient.get_data prisma budget_id.in `budget_id_list
 litellm/proxy/utils.py PrismaClient.get_data prisma team_id.in `team_id_list` 0
 litellm/proxy/utils.py PrismaClient.get_data prisma user_id.in `user_id_list` 0
 litellm/proxy/utils.py prefetch_config_params prisma param_name.in `param_names` 0
-litellm/repositories/daily_activity_repository.py DailyActivityRepository.daily_rows prisma ?.in `list(scope.entity_ids)` 0
+litellm/repositories/daily_activity_repository.py DailyActivityRepository.daily_rows prisma [scope.entity_id_field].in `list(scope.entity_ids)` 0
 litellm/repositories/daily_activity_repository.py DailyActivityRepository.daily_rows prisma api_key.in `list(scope.api_keys)` 0
 litellm/repositories/daily_activity_repository.py DailyActivityRepository.daily_rows prisma not.in `list(scope.exclude_entity_ids)` 0
 litellm/router_utils/auto_router_model_naming.py <module> raw-sql classifier_type.IN `IN ({_LLM_CLASSIFIER_TYPES_SQL})` 0

@@ -282,13 +282,20 @@ class DailyActivityRepository:
             scope.timezone_offset_minutes,
             include_current_utc_day=scope.include_current_utc_day,
         )
-        entity_filter: Final = {
-            **({"in": list(scope.entity_ids)} if scope.entity_ids is not None else {}),
-            **({"not": {"in": list(scope.exclude_entity_ids)}} if scope.exclude_entity_ids else {}),
-        }
+        exclusion_filter: Final = (
+            {
+                "OR": [
+                    {scope.entity_id_field: None},
+                    {scope.entity_id_field: {"not": {"in": list(scope.exclude_entity_ids)}}},
+                ]
+            }
+            if scope.exclude_entity_ids
+            else {}
+        )
         conditions: Final = {
             "date": {"gte": adjusted_start, "lte": adjusted_end},
-            **({scope.entity_id_field: entity_filter} if entity_filter else {}),
+            **({scope.entity_id_field: {"in": list(scope.entity_ids)}} if scope.entity_ids is not None else {}),
+            **exclusion_filter,
             **({"model": scope.model} if scope.model else {}),
             **({"api_key": {"in": list(scope.api_keys)}} if scope.api_keys is not None else {}),
         }
