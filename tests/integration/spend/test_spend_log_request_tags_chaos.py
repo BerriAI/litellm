@@ -1,7 +1,7 @@
 import json
 import threading
 import uuid
-from collections.abc import AbstractSet, Mapping, Sequence
+from collections.abc import Set, Mapping, Sequence
 from itertools import chain
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
@@ -201,12 +201,12 @@ def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Pa
                 (response.status_code, response.text[:200]) for response in first
             ]
 
-            def call_ids(responses: Sequence) -> AbstractSet[str]:
+            def call_ids(responses: Sequence) -> Set[str]:
                 return {response.headers["x-litellm-call-id"] for response in responses}
 
             first_ids: Final = call_ids(first)
 
-            def events_for(ids: AbstractSet[str]) -> AbstractSet[str]:
+            def events_for(ids: Set[str]) -> Set[str]:
                 events: Final = chain.from_iterable(json.loads(batch.body) for batch in delivered)
                 return {event["litellm_call_id"] for event in events if event.get("litellm_call_id") in ids}
 
