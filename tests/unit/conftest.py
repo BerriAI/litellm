@@ -266,6 +266,8 @@ def isolate_router_model_cost_state() -> Iterator[None]:
         for model_key, model_value in litellm_utils_module._runtime_registered_model_cost.items()
     }
     litellm_utils_module._invalidate_model_cost_lowercase_map()
+    litellm_router_module._live_routers.clear()
+    litellm_utils_module._runtime_registered_model_cost.clear()
     yield
     for router in tuple(litellm_router_module._live_routers):
         litellm_router_module._live_routers.discard(router)

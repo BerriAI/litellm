@@ -1,4 +1,5 @@
 import sys
+from collections.abc import Iterator
 from typing import Final
 
 import pytest
@@ -74,3 +75,35 @@ def test_aws_cache_reset_sees_a_replaced_module(monkeypatch: pytest.MonkeyPatch)
     cache.set_cache("unit-reset-key", "module-secret")
     unit_harness._reset_aws_auth_caches()
     assert cache.get_cache("unit-reset-key") is None
+
+
+@pytest.fixture(scope="module", autouse=True)
+def registered_collection_models() -> Iterator[None]:
+    original_registrations: Final = dict(litellm_utils_module._runtime_registered_model_cost)
+    original_routers: Final = frozenset(litellm_router_module._live_routers)
+    litellm.register_model(
+        {"collection-isolation-ledger": {"litellm_provider": "openai", "input_cost_per_token": 0.001}}
+    )
+    collection_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "collection-isolation-router",
+                "litellm_params": {"model": "openai/collection-isolation-backend", "api_key": "sk-canary"},
+            }
+        ]
+    )
+    yield
+    litellm_utils_module._runtime_registered_model_cost.clear()
+    litellm_utils_module._runtime_registered_model_cost.update(original_registrations)
+    litellm_router_module._live_routers.discard(collection_router)
+    litellm_router_module._live_routers.update(original_routers)
+
+
+def test_collection_model_metadata_is_not_replayed_into_a_test_catalog() -> None:
+    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
+
+    catalog: Final = {"unit-test-catalog-model": {"litellm_provider": "openai", "input_cost_per_token": 0.001}}
+    adopt_model_cost_map(catalog)
+    assert "collection-isolation-ledger" not in litellm.model_cost
+    assert "collection-isolation-router" not in litellm.model_cost
+    assert "unit-test-catalog-model" in litellm.model_cost
