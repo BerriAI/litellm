@@ -85,14 +85,14 @@ class ZTDSGuardrail(CustomGuardrail):
         Tracks token provenance: only tokens created from caller-visible fields are marked reversible.
         """
         if not text or not isinstance(text, str):
-            return text, {}  # mutable-ok: [LIT002] empty token map for non-string input
+            return text, {}
 
         if session_id not in self._session_maps:
-            self._session_maps[session_id] = {}  # mutable-ok: [LIT002] session token map initialization
+            self._session_maps[session_id] = {}
         if session_id not in self._entity_maps:
-            self._entity_maps[session_id] = {}  # mutable-ok: [LIT002] session entity map initialization
+            self._entity_maps[session_id] = {}
         if session_id not in self._caller_tokens:
-            self._caller_tokens[session_id] = set()  # mutable-ok: [LIT002] session token provenance set initialization
+            self._caller_tokens[session_id] = set()
 
         token_map = self._session_maps[session_id]
         entity_map = self._entity_maps[session_id]
@@ -113,7 +113,7 @@ class ZTDSGuardrail(CustomGuardrail):
             # Per-entity surrogate counter to eliminate quadratic scans over token_map
             entity_counter = sum(1 for k in token_map if k.startswith(f"[{entity_type}_TOKEN_"))
 
-            def _replace_match(match: re.Match, et: str = entity_type) -> str:
+            def _replace_match(match: re.Match[str], et: str = entity_type) -> str:
                 nonlocal entity_counter
                 original = match.group(0)
                 if original in entity_map:
@@ -210,7 +210,7 @@ class ZTDSGuardrail(CustomGuardrail):
         # 1. Sanitize messages array (chat completions)
         messages = data.get("messages")
         if isinstance(messages, list):
-            self._sanitize_messages(messages, session_id)
+            self._sanitize_messages(messages, session_id)  # pyright: ignore[reportUnknownArgumentType]  # dynamic messages payload inspection
 
         # 2. Sanitize prompt field (legacy completions: caller-visible)
         if "prompt" in data:
@@ -218,7 +218,7 @@ class ZTDSGuardrail(CustomGuardrail):
             if isinstance(prompt, str):
                 data["prompt"], _ = self.sanitize_text(prompt, session_id, is_caller_visible=True)
             elif isinstance(prompt, list):
-                data["prompt"] = [  # mutable-ok: [LIT002] prompt list payload required by LiteLLM schema
+                data["prompt"] = [
                     self.sanitize_text(p, session_id, is_caller_visible=True)[0] if isinstance(p, str) else p
                     for p in prompt
                 ]
@@ -229,7 +229,7 @@ class ZTDSGuardrail(CustomGuardrail):
             if isinstance(raw_input, str):
                 data["input"], _ = self.sanitize_text(raw_input, session_id, is_caller_visible=True)
             elif isinstance(raw_input, list):
-                data["input"] = [  # mutable-ok: [LIT002] input list payload required by LiteLLM schema
+                data["input"] = [
                     self.sanitize_text(item, session_id, is_caller_visible=True)[0] if isinstance(item, str) else item
                     for item in raw_input
                 ]
@@ -237,7 +237,7 @@ class ZTDSGuardrail(CustomGuardrail):
         # Attach ZTDS audit receipt to metadata
         metadata = data.get("metadata")
         if not isinstance(metadata, dict):
-            metadata = {}  # mutable-ok: [LIT002] dictionary metadata required by LiteLLM schema
+            metadata = {}
             data["metadata"] = metadata
         metadata["ztds_sanitized"] = True
         metadata["ztds_standard"] = "RFC v1.0 (IETF draft-sibiryakov-ztds-protocol-02)"
