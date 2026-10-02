@@ -2467,6 +2467,47 @@ async def _apply_soft_budget_update(
     return remaining
 
 
+async def _write_guarded_project_assignment(
+    table: "TableActions[prisma_models.LiteLLM_VerificationToken]",
+    hashed_token: str,
+    data: Mapping[str, object],
+) -> "prisma_models.LiteLLM_VerificationToken | None":
+    updated_count: Final = await table.update_many(
+        where={"token": hashed_token, "project_id": None},
+        data=data,
+    )
+    if updated_count == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Project reassignment is not supported. Use null to detach the key.",
+        )
+    return await table.find_unique(
+        where={"token": hashed_token},
+        include={"object_permission": True},
+    )
+
+
+async def _update_key_row_assigning_project(
+    prisma_client: PrismaClient,
+    key: str,
+    update_values: Mapping[str, object],
+) -> _KeyUpdateResult:
+    """Write a key update that assigns a project only while the row still has none."""
+    hashed_token: Final = _hash_token_if_needed(key)
+    updated_row: Final = await _write_guarded_project_assignment(
+        table=_prisma_table(VerificationTokenRepository(prisma_client)),
+        hashed_token=hashed_token,
+        data=with_settings_updated_at(
+            prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
+        ),
+    )
+    updated_data: Final[Mapping[str, object]] = (
+        updated_row.model_dump() if updated_row is not None else MappingProxyType({})
+    )
+    result: Final[_KeyUpdateResult] = {"token": hashed_token, "data": updated_data}
+    return result
+
+
 async def _update_key_row_with_soft_budget(
     prisma_client: PrismaClient,
     key: str,
@@ -2474,6 +2515,7 @@ async def _update_key_row_with_soft_budget(
     non_default_values: Mapping[str, object],
     existing_key_row: LiteLLM_VerificationToken,
     changed_by: str,
+    expect_unassigned_project: bool,
 ) -> _KeyUpdateResult:
     hashed_token: Final = _hash_token_if_needed(key)
     key_where: Final[_KeyRowWhere] = {"token": hashed_token}
@@ -2487,12 +2529,21 @@ async def _update_key_row_with_soft_budget(
             changed_by=changed_by,
         )
         include_object_permission: Final[prisma.types.LiteLLM_VerificationTokenInclude] = {"object_permission": True}
-        updated_row: Final = await tx.litellm_verificationtoken.update(
-            where=key_where,
-            data=with_settings_updated_at(
-                prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
-            ),
-            include=include_object_permission,
+        update_payload: Final = with_settings_updated_at(
+            prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
+        )
+        updated_row: Final = (
+            await _write_guarded_project_assignment(
+                table=tx.litellm_verificationtoken,
+                hashed_token=hashed_token,
+                data=update_payload,
+            )
+            if expect_unassigned_project
+            else await tx.litellm_verificationtoken.update(
+                where=key_where,
+                data=update_payload,
+                include=include_object_permission,
+            )
         )
     updated_data: Final[Mapping[str, object]] = (
         updated_row.model_dump() if updated_row is not None else MappingProxyType({})
@@ -3576,6 +3627,7 @@ async def update_key_fn(
             prisma_client=prisma_client,
         )
         changed_by: Final = user_api_key_dict.user_id or litellm_proxy_admin_name
+        is_project_assignment: Final = data.project_id is not None and existing_key_row.project_id is None
         response: Final = (
             await _update_key_row_with_soft_budget(
                 prisma_client=prisma_client,
@@ -3584,8 +3636,15 @@ async def update_key_fn(
                 non_default_values=update_values,
                 existing_key_row=existing_key_row,
                 changed_by=changed_by,
+                expect_unassigned_project=is_project_assignment,
             )
             if "soft_budget" in data.model_fields_set
+            else await _update_key_row_assigning_project(
+                prisma_client=prisma_client,
+                key=key,
+                update_values=update_values,
+            )
+            if is_project_assignment
             else await prisma_client.update_data(token=key, data=MappingProxyType({**update_values, "token": key}))
         )
 

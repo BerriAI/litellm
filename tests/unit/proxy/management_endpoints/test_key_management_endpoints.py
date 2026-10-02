@@ -61,6 +61,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _requested_end_user_budget_id,
     _save_deleted_verification_token_records,
     _transform_verification_tokens_to_deleted_records,
+    _update_key_row_assigning_project,
     _validate_end_user_budget_id_change,
     _validate_max_budget,
     _validate_reset_spend_value,
@@ -20593,6 +20594,41 @@ async def test_prepare_key_update_data_includes_new_project_assignment():
     )
 
     assert result["project_id"] == "project-orbit"
+
+
+@pytest.mark.asyncio
+async def test_project_assignment_write_requires_row_still_unassigned():
+    database = MagicMock()
+    database.jsonify_object = lambda data: dict(data)
+    database.db.litellm_verificationtoken.update_many = AsyncMock(return_value=1)
+    row = MagicMock()
+    row.model_dump = MagicMock(return_value={"project_id": "project-orbit"})
+    database.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=row)
+
+    result: Final = await _update_key_row_assigning_project(
+        prisma_client=database, key="sk-assign", update_values={"project_id": "project-orbit"}
+    )
+
+    update_where: Final = database.db.litellm_verificationtoken.update_many.await_args.kwargs["where"]
+    assert update_where["project_id"] is None
+    assert update_where["token"] == result["token"]
+    assert result["data"] == {"project_id": "project-orbit"}
+
+
+@pytest.mark.asyncio
+async def test_project_assignment_write_rejects_when_row_gained_project():
+    database = MagicMock()
+    database.jsonify_object = lambda data: dict(data)
+    database.db.litellm_verificationtoken.update_many = AsyncMock(return_value=0)
+
+    with pytest.raises(HTTPException) as exc:
+        await _update_key_row_assigning_project(
+            prisma_client=database, key="sk-assign", update_values={"project_id": "project-orbit"}
+        )
+
+    assert exc.value.status_code == 400
+    assert "reassignment" in str(exc.value.detail)
+    database.db.litellm_verificationtoken.find_unique.assert_not_called()
 
 
 @pytest.mark.asyncio
