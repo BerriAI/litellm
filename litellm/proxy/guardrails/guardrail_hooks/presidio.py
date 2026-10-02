@@ -200,6 +200,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_score_thresholds: dict[PiiEntityType | str, float] | None = None,
         presidio_entities_deny_list: list[PiiEntityType | str] | None = None,
         presidio_analyze_chunk_size_bytes: int | None = None,
+        _callback_role: Literal["scan", "restore"] | None = None,
         **kwargs,
     ):
         if logging_only is True:
@@ -214,11 +215,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self.mock_redacted_text = mock_redacted_text
         self.output_parse_pii = output_parse_pii or False
         self.apply_to_output = apply_to_output
+        self._callback_role = _callback_role
 
         # When output_parse_pii or apply_to_output is enabled, the guardrail must
         # also run on post_call to unmask/mask the response.  Expand the event_hook
         # so should_run_guardrail returns True for both pre_call and post_call.
-        if (self.output_parse_pii or self.apply_to_output) and not logging_only:
+        if _callback_role is None and (self.output_parse_pii or self.apply_to_output) and not logging_only:
             current_hook: Final = self.event_hook
             if isinstance(current_hook, str) and current_hook != "post_call":
                 self.event_hook = cast(list[GuardrailEventHooks], [current_hook, "post_call"])
@@ -458,6 +460,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     analyze_url,
                     json=analyze_payload,
                     headers={"Accept": "application/json"},
+                    timeout=(
+                        aiohttp.ClientTimeout(total=self.timeout)
+                        if isinstance(self.timeout, (int, float))
+                        else aiohttp.client.DEFAULT_TIMEOUT
+                    ),
                 ) as response:
                     # Validate HTTP status
                     if response.status >= 400:
@@ -743,6 +750,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 anonymize_url,
                 json=anonymize_payload,
                 headers={"Accept": "application/json"},
+                timeout=(
+                    aiohttp.ClientTimeout(total=self.timeout)
+                    if isinstance(self.timeout, (int, float))
+                    else aiohttp.client.DEFAULT_TIMEOUT
+                ),
             ) as response:
                 if response.status >= 400:
                     error_body = await response.text()
@@ -1490,7 +1502,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def _mask_anthropic_sse_stream(
         self, first_chunk: bytes, rest: AsyncIterator[object], request_data: dict
     ) -> tuple[object, ...]:
-        rest_chunks: Final = [chunk async for chunk in rest]  # mutable-ok: tuple() cannot consume an async iterator
+        rest_chunks: Final = [chunk async for chunk in rest]
         chunks: Final = (first_chunk, *rest_chunks)
         assembled: Final = assemble_anthropic_sse_stream(chunks, restore_identity=True)
         if assembled is None:
@@ -1710,13 +1722,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         texts: Final = inputs.get("texts", [])
 
-        # When input_type is "response" and pii_tokens are available,
-        # unmask the text instead of masking it.
         metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
         pii_tokens: Final = metadata.get("pii_tokens", {})
 
         new_texts: Final = []
-        if input_type == "response" and pii_tokens:
+        if input_type == "response" and (
+            self._callback_role == "restore"
+            or (self._callback_role is None and not self.apply_to_output and pii_tokens)
+        ):
             for text in texts:
                 new_texts.append(self._unmask_pii_text(text, pii_tokens))
         else:

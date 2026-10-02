@@ -12,10 +12,10 @@ use crate::base_llm::ocr::{
     error::Error,
     handler::OcrClient,
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrRequestContext, OcrResponseFormat,
-        PreparedOcrRequest, decode_and_normalize_response,
+        BaseOcrConfig, OcrRequestContext, PreparedOcrRequest, decode_and_normalize_response,
     },
 };
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 const DEFAULT_FEATURE_TYPES: [FeatureType; 2] = [FeatureType::Layout, FeatureType::Tables];
 

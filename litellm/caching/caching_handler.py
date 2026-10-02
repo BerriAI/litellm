@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
+from litellm._internal_context import post_response_phase
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.caching.caching import S3Cache
@@ -51,7 +52,7 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+    from litellm.llms.anthropic.pass_through.messages.response_cache import (
         AnthropicMessagesStreamCacheWriter,
     )
     from litellm.types.utils import PromptTokensDetailsWrapper
@@ -126,7 +127,7 @@ def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> boo
     spend and callback records. A plain (non-stream) replay logs here, since nothing
     else will.
     """
-    from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+    from litellm.llms.anthropic.pass_through.messages.response_cache import (
         CachedAnthropicMessagesStreamIterator,
     )
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -158,7 +159,8 @@ async def _complete_cache_write_despite_cancellation(write_factory: Callable[[],
 
 
 def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "asyncio.Task[None]":
-    task: Final = asyncio.create_task(_complete_cache_write_despite_cancellation(write_factory))
+    with post_response_phase():
+        task: Final = asyncio.create_task(_complete_cache_write_despite_cancellation(write_factory))
     _PENDING_CACHE_WRITES.add(task)
     task.add_done_callback(_PENDING_CACHE_WRITES.discard)
     return task
@@ -700,14 +702,14 @@ class LLMCachingHandler:
         )
         merged: Final = EmbeddingResponse(
             model=cached.model,
-            data=[  # mutable-ok: EmbeddingResponse.data is a pydantic list field
+            data=[
                 item
                 if item is not None
                 else Embedding(embedding=next(fresh_items)["embedding"], index=position, object="embedding")
                 for position, item in enumerate(cached.data)
             ],
             usage=merged_usage,
-            hidden_params={  # mutable-ok: EmbeddingResponse._hidden_params is a mutable dict field
+            hidden_params={
                 **cached._hidden_params,
                 "cache_hit": True,
             },
@@ -928,7 +930,7 @@ class LLMCachingHandler:
         elif (
             call_type == CallTypes.anthropic_messages.value or call_type == CallTypes.aanthropic_messages.value
         ) and isinstance(cached_result, dict):
-            from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+            from litellm.llms.anthropic.pass_through.messages.response_cache import (
                 convert_cached_anthropic_messages_result,
             )
 
@@ -1127,11 +1129,8 @@ class LLMCachingHandler:
         Returns:
             bool: True if the result should be stored in the cache, False otherwise.
         """
-        return (
-            (litellm.cache is not None)
-            and litellm.cache.supported_call_types is not None
-            and (str(original_function.__name__) in litellm.cache.supported_call_types)
-            and (kwargs.get("cache", {}).get("no-store", False) is not True)
+        return self._is_call_type_supported_by_cache(original_function=original_function) and (
+            kwargs.get("cache", {}).get("no-store", False) is not True
         )
 
     def wrap_streaming_result_for_cache(
@@ -1148,7 +1147,7 @@ class LLMCachingHandler:
             return result
         if not isinstance(result, AsyncIterator):
             return result
-        from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+        from litellm.llms.anthropic.pass_through.messages.response_cache import (
             AnthropicMessagesStreamCacheWriter,
         )
 
@@ -1168,13 +1167,11 @@ class LLMCachingHandler:
         Returns:
             bool: True if the call type is supported by the cache, False otherwise.
         """
-        if (
-            litellm.cache is not None
-            and litellm.cache.supported_call_types is not None
-            and str(original_function.__name__) in litellm.cache.supported_call_types
-        ):
-            return True
-        return False
+        if litellm.cache is None or litellm.cache.supported_call_types is None:
+            return False
+        call_type: Final = str(original_function.__name__)
+        covering_call_types: Final = ("aresponses", "responses") if call_type == "aresponses" else (call_type,)
+        return any(name in litellm.cache.supported_call_types for name in covering_call_types)
 
     async def _add_streaming_response_to_cache(self, processed_chunk: ModelResponse):
         """

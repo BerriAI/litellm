@@ -13,7 +13,7 @@ import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.anthropic.count_tokens import handler as count_handler
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import DEFAULT_ANTHROPIC_API_VERSION
+from litellm.llms.anthropic.pass_through.messages.transformation import DEFAULT_ANTHROPIC_API_VERSION
 from litellm.llms.anthropic.prompt_cache_prediction import (
     CountedPromptCachePlan,
     NativePredictionTarget,
