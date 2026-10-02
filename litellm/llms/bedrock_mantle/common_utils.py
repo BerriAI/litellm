@@ -167,7 +167,9 @@ _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS: Final = frozenset({"search_content_types"})
 def _strip_one_web_search_tool(tool: object) -> object:
     if not isinstance(tool, dict):
         return tool
-    typed_tool: Final = cast(dict[str, object], tool)  # cast-ok: OpenAI tool JSON; isinstance(dict) does not bind key/value types
+    typed_tool: Final = cast(
+        dict[str, object], tool
+    )  # cast-ok: OpenAI tool JSON; isinstance(dict) does not bind key/value types
     tool_type: Final = typed_tool.get("type")
     if not isinstance(tool_type, str) or not tool_type.startswith(_WEB_SEARCH_TOOL_TYPE_PREFIX):
         return tool
@@ -189,7 +191,9 @@ def strip_unsupported_web_search_tool_fields(tools: object) -> object:
     """
     if not isinstance(tools, (list, tuple)):
         return tools
-    tools_seq: Final = cast(Sequence[object], tools)  # cast-ok: isinstance(list|tuple) does not bind element types for basedpyright
+    tools_seq: Final = cast(
+        Sequence[object], tools
+    )  # cast-ok: isinstance(list|tuple) does not bind element types for basedpyright
     rewritten: Final = tuple(_strip_one_web_search_tool(tool) for tool in tools_seq)
     if all(new is old for new, old in zip(rewritten, tools_seq, strict=True)):
         return tools
