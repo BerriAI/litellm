@@ -4859,6 +4859,54 @@ export const deleteMCPServer = async (accessToken: string, serverId: string) => 
   }
 };
 
+export type MCPToolVersion = components["schemas"]["MCPToolVersion"];
+export type MCPToolDeprecationRequest = components["schemas"]["MCPToolDeprecationRequest"];
+export type PinMCPServerToolsRequest = components["schemas"]["PinMCPServerToolsRequest"];
+export type MCPToolVersionIdentity = {
+  serverId: string;
+  toolName: string;
+  version: number;
+};
+
+export const getMCPToolVersions = async (accessToken: string, serverId: string): Promise<MCPToolVersion[]> =>
+  apiClient.get<MCPToolVersion[]>(`/v1/mcp/server/${encodeURIComponent(serverId)}/tool-versions`, { accessToken });
+
+export const pinMCPServerTools = async (
+  accessToken: string,
+  serverId: string,
+  changelog?: string,
+  customHeaders?: Record<string, string>,
+): Promise<Record<string, components["schemas"]["PinnedMCPTool"]>> => {
+  const body: PinMCPServerToolsRequest = changelog?.trim() ? { changelog: changelog.trim() } : {};
+  return apiClient.post<Record<string, components["schemas"]["PinnedMCPTool"]>>(
+    `/v1/mcp/server/${encodeURIComponent(serverId)}/pin`,
+    { accessToken, body, headers: customHeaders },
+  );
+};
+
+export const setMCPToolVersionDeprecation = async (
+  accessToken: string,
+  identity: MCPToolVersionIdentity,
+  deprecation: MCPToolDeprecationRequest,
+): Promise<MCPToolVersion> => {
+  const { serverId, toolName, version } = identity;
+  return apiClient.put<MCPToolVersion>(
+    `/v1/mcp/server/${encodeURIComponent(serverId)}/tools/${encodeURIComponent(toolName)}/versions/${version}/deprecation`,
+    { accessToken, body: deprecation },
+  );
+};
+
+export const clearMCPToolVersionDeprecation = async (
+  accessToken: string,
+  identity: MCPToolVersionIdentity,
+): Promise<MCPToolVersion> => {
+  const { serverId, toolName, version } = identity;
+  return apiClient.delete<MCPToolVersion>(
+    `/v1/mcp/server/${encodeURIComponent(serverId)}/tools/${encodeURIComponent(toolName)}/versions/${version}/deprecation`,
+    { accessToken },
+  );
+};
+
 export const fetchMCPToolsets = async (accessToken: string): Promise<any[]> => {
   try {
     return await apiClient.get(`/v1/mcp/toolset`, { accessToken });

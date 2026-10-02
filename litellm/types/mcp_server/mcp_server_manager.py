@@ -78,6 +78,47 @@ class PinnedMCPTool(BaseModel):
     input_schema: dict[str, object] = Field(default_factory=dict)
 
 
+MCPToolChangeKind = Literal["initial", "non_breaking", "breaking", "removed"]
+
+
+class MCPToolChange(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    breaking: bool
+    summary: str
+
+
+class MCPToolVersion(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    server_id: str
+    tool_name: str
+    version: int
+    description: str = ""
+    input_schema: dict[str, object] = Field(default_factory=dict)
+    change_kind: MCPToolChangeKind
+    changes: tuple[MCPToolChange, ...] = ()
+    changelog: str | None = None
+    deprecated_at: datetime | None = None
+    sunset_date: datetime | None = None
+    deprecation_note: str | None = None
+    created_at: datetime
+    created_by: str | None = None
+
+
+class PinMCPServerToolsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    changelog: str | None = None
+
+
+class MCPToolDeprecationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sunset_date: datetime | None = None
+    deprecation_note: str | None = None
+
+
 _PINNED_TOOLS: Final[TypeAdapter[dict[str, PinnedMCPTool] | None]] = TypeAdapter(dict[str, PinnedMCPTool] | None)
 
 

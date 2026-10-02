@@ -155,6 +155,7 @@ if MCP_AVAILABLE:
         get_user_env_vars,
         get_user_env_vars_bulk,
         get_user_oauth_credential,
+        list_mcp_tool_versions,
         list_server_user_credentials,
         list_user_oauth_credentials,
         mcp_oauth_token_identity,
@@ -162,6 +163,7 @@ if MCP_AVAILABLE:
         purge_user_oauth_credentials_for_server,
         reject_mcp_server,
         set_mcp_server_pinned_tools,
+        set_mcp_tool_version_deprecation,
         store_user_credential,
         store_user_oauth_credential,
         update_mcp_server,
@@ -181,6 +183,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.server_resolution import (
         MCPServerTargetCatalog,
+        ResolvedMCPServer,
         authorize_mcp_server,
         resolve_mcp_server,
     )
@@ -244,7 +247,24 @@ if MCP_AVAILABLE:
         normalize_upstream_header_name,
         validate_mcp_protocol_transport,
     )
-    from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
+    from litellm.types.mcp_server.mcp_server_manager import (
+        MCPServer,
+        MCPToolDeprecationRequest,
+        MCPToolVersion,
+        PinMCPServerToolsRequest,
+        PinnedMCPTool,
+    )
+
+    async def _get_allowed_tool_names_for_server(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> list[str] | None:
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+        return await MCPRequestHandler.get_allowed_tools_for_server(
+            server_id=server_id,
+            user_api_key_auth=user_api_key_dict,
+        )
 
     @dataclass
     class _TemporaryMCPServerEntry:
@@ -1553,7 +1573,8 @@ if MCP_AVAILABLE:
     async def pin_mcp_server_tools(
         server_id: str,
         request: Request,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
+        user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+        payload: PinMCPServerToolsRequest | None = None,
     ) -> dict[str, PinnedMCPTool]:
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
@@ -1578,7 +1599,8 @@ if MCP_AVAILABLE:
                     "error": f"MCP server '{server_id}' exposes no tools that pass the guardrails; nothing to pin."
                 },
             )
-        await _store_pinned_tools(server_id, snapshot, user_api_key_dict)
+        changelog: Final = (payload.changelog or "").strip() if payload is not None else ""
+        await _store_pinned_tools(server_id, snapshot, user_api_key_dict, changelog=changelog or None)
         return snapshot
 
     @router.delete(
@@ -1607,15 +1629,30 @@ if MCP_AVAILABLE:
         return {"server_id": server_id, "status": "unpinned"}
 
     async def _store_pinned_tools(
-        server_id: str, pinned_tools: Mapping[str, PinnedMCPTool] | None, user_api_key_dict: UserAPIKeyAuth
+        server_id: str,
+        pinned_tools: Mapping[str, PinnedMCPTool] | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        changelog: str | None = None,
     ) -> None:
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
-        record: Final = await set_mcp_server_pinned_tools(
-            prisma_client,
-            server_id,
-            pinned_tools,
-            touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
-        )
+        touched_by: Final = user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
+        try:
+            record: Final = await set_mcp_server_pinned_tools(
+                prisma_client,
+                server_id,
+                pinned_tools,
+                touched_by=touched_by,
+                changelog=changelog,
+            )
+        except Exception as e:
+            if not isinstance(e, UniqueViolationError):
+                raise
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": f"Another pin of MCP server '{server_id}' recorded tool versions at the same time; retry the pin."
+                },
+            ) from e
         if record is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1715,32 +1752,12 @@ if MCP_AVAILABLE:
             await global_mcp_server_manager.reload_servers_from_database()
         return _redact_mcp_credentials(rejected)
 
-    @router.get(
-        "/server/{server_id}",
-        description="Returns the mcp server info",
-        dependencies=[Depends(user_api_key_auth)],
-        response_model=LiteLLM_MCPServerTable,
-    )
-    async def fetch_mcp_server(
+    async def _resolve_and_authorize_mcp_server(
         request: Request,
         server_id: str,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-        include_reachability: Annotated[
-            bool,
-            Query(description="Allow the 'reachable' status for responding servers whose authentication is unchecked."),
-        ] = False,
-    ):
-        """
-        Get the info on the mcp server specified by the `server_id`
-        Parameters:
-        - server_id: str - Required. The unique identifier of the mcp server to get info on.
-        ```
-        curl --location 'http://localhost:4000/v1/mcp/server/server_id' \
-        --header 'Authorization: Bearer your_api_key_here'
-        ```
-        """
-        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
-
+        user_api_key_dict: UserAPIKeyAuth,
+        prisma_client: "PrismaClient",
+    ) -> tuple[ResolvedMCPServer, bool]:
         from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
         client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
@@ -1775,6 +1792,139 @@ if MCP_AVAILABLE:
                 and global_mcp_server_manager.get_mcp_server_by_id(resolved.table.server_id) is not None
             ),
         )
+        return authorized, is_restricted_virtual_key
+
+    @router.get(
+        "/server/{server_id}/tool-versions",
+        description="Returns the version history of the tools recorded for an MCP server.",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=list[MCPToolVersion],
+    )
+    async def fetch_mcp_server_tool_versions(
+        request: Request,
+        server_id: str,
+        user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    ) -> list[MCPToolVersion]:
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        authorized: Final[tuple[ResolvedMCPServer, bool]] = await _resolve_and_authorize_mcp_server(
+            request,
+            server_id,
+            user_api_key_dict,
+            prisma_client,
+        )
+        if authorized[0].source != "db":
+            return []
+        resolved_server_id: Final = authorized[0].table.server_id
+        allowed: Final = await _get_allowed_tool_names_for_server(
+            server_id=resolved_server_id,
+            user_api_key_dict=user_api_key_dict,
+        )
+        versions: Final = await list_mcp_tool_versions(prisma_client, resolved_server_id)
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+        return [version for version in versions if MCPRequestHandler.tool_is_granted(version.tool_name, allowed)]
+
+    @router.put(
+        "/server/{server_id}/tools/{tool_name}/versions/{version}/deprecation",
+        description="Set deprecation and sunset metadata for an MCP tool version.",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPToolVersion,
+    )
+    @management_endpoint_wrapper
+    async def set_tool_version_deprecation(
+        server_id: str,
+        tool_name: str,
+        version: int,
+        payload: MCPToolDeprecationRequest,
+        user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    ) -> MCPToolVersion:
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Admin access required to update MCP tool version deprecation."},
+            )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        result: Final[MCPToolVersion | None] = await set_mcp_tool_version_deprecation(
+            prisma_client,
+            server_id,
+            tool_name,
+            version,
+            payload,
+        )
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP tool '{tool_name}' version {version} not found for server '{server_id}'."},
+            )
+        return result
+
+    @router.delete(
+        "/server/{server_id}/tools/{tool_name}/versions/{version}/deprecation",
+        description="Clear deprecation and sunset metadata for an MCP tool version.",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPToolVersion,
+    )
+    @management_endpoint_wrapper
+    async def clear_tool_version_deprecation(
+        server_id: str,
+        tool_name: str,
+        version: int,
+        user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    ) -> MCPToolVersion:
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Admin access required to update MCP tool version deprecation."},
+            )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        result: Final[MCPToolVersion | None] = await set_mcp_tool_version_deprecation(
+            prisma_client,
+            server_id,
+            tool_name,
+            version,
+            None,
+        )
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP tool '{tool_name}' version {version} not found for server '{server_id}'."},
+            )
+        return result
+
+    @router.get(
+        "/server/{server_id}",
+        description="Returns the mcp server info",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=LiteLLM_MCPServerTable,
+    )
+    async def fetch_mcp_server(
+        request: Request,
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        include_reachability: Annotated[
+            bool,
+            Query(description="Allow the 'reachable' status for responding servers whose authentication is unchecked."),
+        ] = False,
+    ):
+        """
+        Get the info on the mcp server specified by the `server_id`
+        Parameters:
+        - server_id: str - Required. The unique identifier of the mcp server to get info on.
+        ```
+        curl --location 'http://localhost:4000/v1/mcp/server/server_id' \
+        --header 'Authorization: Bearer your_api_key_here'
+        ```
+        """
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+
+        authorized_result: Final[tuple[ResolvedMCPServer, bool]] = await _resolve_and_authorize_mcp_server(
+            request,
+            server_id,
+            user_api_key_dict,
+            prisma_client,
+        )
+        authorized: Final = authorized_result[0]
+        is_restricted_virtual_key: Final = authorized_result[1]
         mcp_server: Final = authorized.table
         from_db: Final = authorized.source == "db"
 
