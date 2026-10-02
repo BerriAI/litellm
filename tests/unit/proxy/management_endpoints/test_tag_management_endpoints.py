@@ -1689,6 +1689,7 @@ class FakeTagOwnershipDb:
         self.litellm_dailytagspend = _EmptyGroupBy()
         self.litellm_verificationtoken = _EmptyFindMany(LiteLLM_VerificationTokenActions.find_many)
         self.litellm_budgettable = FakeBudgetTable()
+        self.query_raw = AsyncMock(return_value=[])
 
 
 @contextmanager
@@ -2449,3 +2450,67 @@ async def test_proxy_admin_sets_tag_models(models, expected):
         assert response.status_code == 200, response.text
         assert response.json()["tag"]["models"] == expected
         assert _persisted_tag_row(fake_db, "team-tag")["models"] == expected
+
+
+@pytest.mark.asyncio
+async def test_new_tag_owned_rejects_name_used_by_foreign_keys():
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
+    fake_db.query_raw.return_value = [{"used": 1}]
+    with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
+        response = client.post(
+            "/tag/new",
+            json={"name": "squatted-tag", "team_id": "team-a"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 409, response.text
+        assert "squatted-tag" in response.text
+        assert "team-a" in response.text
+        assert "squatted-tag" not in fake_db.tag_rows
+        assert fake_db.litellm_budgettable.created == []
+        fake_db.query_raw.assert_awaited_once()
+        (sql, *params), _ = fake_db.query_raw.await_args
+        assert params == ["squatted-tag", "team-a"]
+        assert "$1" in sql and "$2" in sql
+
+
+@pytest.mark.asyncio
+async def test_new_tag_owned_allows_name_with_only_owner_usage():
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
+    with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
+        response = client.post(
+            "/tag/new",
+            json={"name": "clean-tag", "team_id": "team-a"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        fake_db.query_raw.assert_awaited_once()
+        assert fake_db.query_raw.await_args[0][1:] == ("clean-tag", "team-a")
+
+
+@pytest.mark.asyncio
+async def test_new_tag_unowned_skips_foreign_usage_check():
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
+    fake_db.query_raw.return_value = [{"used": 1}]
+    with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
+        response = client.post(
+            "/tag/new",
+            json={"name": "shared-tag"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        fake_db.query_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_new_tag_forbidden_caller_skips_foreign_usage_check():
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
+    fake_db.query_raw.return_value = [{"used": 1}]
+    with _tag_ownership_gateway(fake_db, _internal_user_auth()):
+        response = client.post(
+            "/tag/new",
+            json={"name": "foreign-tag", "team_id": "team-a"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 403, response.text
+        assert "foreign-tag" not in fake_db.tag_rows
+        fake_db.query_raw.assert_not_awaited()

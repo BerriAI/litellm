@@ -438,7 +438,7 @@ def test_failed_owner_mutation_keeps_existing_authorization(gateway: Gateway) ->
         assert _upstream_marker_chats(upstream, marker) == [(f"{marker}-a",)]
 
 
-def test_registering_a_used_tag_name_starts_enforcing_ownership(gateway: Gateway) -> None:
+def test_registering_a_tag_used_only_by_its_owner_starts_enforcing_ownership(gateway: Gateway) -> None:
     with (
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
@@ -452,8 +452,9 @@ def test_registering_a_used_tag_name_starts_enforcing_ownership(gateway: Gateway
         marker: Final = f"lit8516 {uuid.uuid4().hex}"
         upstream.get("/__observations").raise_for_status()
 
-        before: Final = _chat_with_tag(gateway, model, f"{marker}-before", key=key_b, metadata_tags=[tag])
+        before: Final = _chat_with_tag(gateway, model, f"{marker}-before", key=key_a, metadata_tags=[tag])
         assert before.status_code == 200, before.text
+        _wait_for_daily_tag_spend(tag)
 
         _create_tag(scenario, tag, team_id=team_a)
 
@@ -466,3 +467,101 @@ def test_registering_a_used_tag_name_starts_enforcing_ownership(gateway: Gateway
             (f"{marker}-after-a",),
             (f"{marker}-before",),
         ]
+
+
+def _wait_for_daily_tag_spend(tag: str) -> None:
+    eventually(
+        lambda: read_rows('SELECT api_key FROM "LiteLLM_DailyTagSpend" WHERE tag = %s', (tag,)),
+        lambda rows: len(rows) >= 1,
+        seconds=30,
+    )
+
+
+def test_owned_tag_create_rejects_name_used_by_another_team(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        team_a: Final = scenario.team()
+        team_b: Final = scenario.team()
+        key_b: Final = scenario.key(team_id=team_b)
+        tag: Final = _tag_name()
+
+        used: Final = _chat_with_tag(gateway, model, f"lit8516 {uuid.uuid4().hex}", key=key_b, metadata_tags=[tag])
+        assert used.status_code == 200, used.text
+        _wait_for_daily_tag_spend(tag)
+
+        create: Final = gateway.request("POST", "/tag/new", {"name": tag, "team_id": team_a})
+        assert create.status_code == 409, create.text
+        assert tag in create.text and team_a in create.text
+        assert _tag_rows(tag) == []
+
+        still_ok: Final = _chat_with_tag(
+            gateway, model, f"lit8516 {uuid.uuid4().hex}", key=key_b, metadata_tags=[tag]
+        )
+        assert still_ok.status_code == 200, still_ok.text
+
+
+def test_owned_tag_create_allows_name_used_only_by_the_owner(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        admin_id: Final = scenario.user()
+        team_a: Final = scenario.team(members_with_roles=[{"role": "admin", "user_id": admin_id}])
+        admin_key: Final = scenario.key(user_id=admin_id, team_id=team_a)
+        key_a: Final = scenario.key(team_id=team_a)
+        tag: Final = _tag_name()
+
+        used: Final = _chat_with_tag(gateway, model, f"lit8516 {uuid.uuid4().hex}", key=key_a, metadata_tags=[tag])
+        assert used.status_code == 200, used.text
+        _wait_for_daily_tag_spend(tag)
+
+        create: Final = gateway.request("POST", "/tag/new", {"name": tag, "team_id": team_a}, key=admin_key)
+        assert create.status_code == 200, create.text
+        scenario.cleanups.callback(lambda: gateway.request("POST", "/tag/delete", {"name": tag}))
+        assert _tag_rows(tag) == [{"tag_name": tag, "team_id": team_a}]
+
+
+def test_owned_tag_create_rejects_name_used_by_the_master_key(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        team_a: Final = scenario.team()
+        tag: Final = _tag_name()
+
+        used: Final = _chat_with_tag(gateway, model, f"lit8516 {uuid.uuid4().hex}", metadata_tags=[tag])
+        assert used.status_code == 200, used.text
+        _wait_for_daily_tag_spend(tag)
+
+        create: Final = gateway.request("POST", "/tag/new", {"name": tag, "team_id": team_a})
+        assert create.status_code == 409, create.text
+        assert _tag_rows(tag) == []
+
+
+def test_unowned_tag_create_ignores_foreign_usage(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        team_b: Final = scenario.team()
+        key_b: Final = scenario.key(team_id=team_b)
+        tag: Final = _tag_name()
+
+        used: Final = _chat_with_tag(gateway, model, f"lit8516 {uuid.uuid4().hex}", key=key_b, metadata_tags=[tag])
+        assert used.status_code == 200, used.text
+        _wait_for_daily_tag_spend(tag)
+
+        _create_tag(scenario, tag)
+        assert _tag_rows(tag) == [{"tag_name": tag, "team_id": None}]
+
+
+def test_owned_tag_create_rejects_name_used_by_a_deleted_key(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        team_a: Final = scenario.team()
+        team_b: Final = scenario.team()
+        key_b: Final = string_value(gateway.post("/key/generate", {"team_id": team_b})["key"])
+        tag: Final = _tag_name()
+
+        used: Final = _chat_with_tag(gateway, model, f"lit8516 {uuid.uuid4().hex}", key=key_b, metadata_tags=[tag])
+        assert used.status_code == 200, used.text
+        _wait_for_daily_tag_spend(tag)
+        gateway.post("/key/delete", {"keys": [key_b]})
+
+        create: Final = gateway.request("POST", "/tag/new", {"name": tag, "team_id": team_b})
+        assert create.status_code == 409, create.text
+        assert _tag_rows(tag) == []

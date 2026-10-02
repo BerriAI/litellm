@@ -195,6 +195,30 @@ async def _require_tag_create_permission(
         raise HTTPException(status_code=403, detail="Only proxy admins can attach deployments to a tag")
 
 
+async def _require_no_foreign_tag_usage(
+    prisma_client: "PrismaClient",
+    tag_name: str,
+    team_id: str,
+) -> None:
+    used: Final = await prisma_client.db.query_raw(
+        """
+        SELECT 1 AS used
+        FROM "LiteLLM_DailyTagSpend" d
+        LEFT JOIN "LiteLLM_VerificationToken" v ON v.token = d.api_key
+        WHERE d.tag = $1
+          AND (v.token IS NULL OR v.team_id IS DISTINCT FROM $2)
+        LIMIT 1
+        """,
+        tag_name,
+        team_id,
+    )
+    if used:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Tag {tag_name} already has usage from keys outside team {team_id}; create it without an owner or choose another name",
+        )
+
+
 async def _require_tag_update_permission(
     tag: TagUpdateRequest,
     existing_tag: "_TagRecord",
@@ -393,6 +417,13 @@ async def new_tag(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
         )
+
+        if tag.team_id is not None:
+            await _require_no_foreign_tag_usage(
+                prisma_client=prisma_client,
+                tag_name=tag.name,
+                team_id=tag.team_id,
+            )
 
         # Handle budget creation/assignment using common helper
         budget_id: Final = await handle_budget_for_entity(
