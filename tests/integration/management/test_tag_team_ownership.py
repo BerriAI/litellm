@@ -6,11 +6,12 @@ and the proxy-admin-only guard for assigning or releasing an owner.
 import uuid
 from typing import Final
 
+import httpx
 import psycopg.errors
 import pytest
 from pydantic import JsonValue
 
-from tests.integration._support.client import Gateway, Scenario, object_value, string_value
+from tests.integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from tests.integration._support.database import read_rows, write_rows
 
 
@@ -213,3 +214,255 @@ def test_deleting_two_owning_teams_nulls_all_their_tags(gateway: Gateway) -> Non
         assert _tag_info(gateway, tag_a)["team_id"] is None
         assert _tag_info(gateway, tag_b)["team_id"] is None
         assert _tag_info(gateway, tag_c)["team_id"] == team_c
+
+
+def _chat_with_tag(
+    gateway: Gateway,
+    model: str,
+    marker: str,
+    *,
+    key: str | None = None,
+    metadata_tags: list[str] | None = None,
+    root_tags: list[str] | None = None,
+    headers: dict[str, str] | None = None,
+    base: Gateway | None = None,
+) -> httpx.Response:
+    body: dict[str, JsonValue] = {"model": model, "messages": [{"role": "user", "content": marker}]}
+    if metadata_tags is not None:
+        body["metadata"] = {"tags": metadata_tags}
+    if root_tags is not None:
+        body["tags"] = root_tags
+    return (base or gateway).request("POST", "/v1/chat/completions", body, key=key, headers=headers)
+
+
+def _upstream_marker_chats(upstream: httpx.Client, marker: str) -> list[tuple[str, ...]]:
+    observed: Final = upstream.get("/__observations")
+    observed.raise_for_status()
+    requests: Final = object_value(observed.json())["requests"]
+    assert isinstance(requests, list), observed.text
+    tagged: Final = [
+        object_value(value)
+        for value in requests
+        if marker in str(object_value(value)["body"]) and object_value(value)["path"] == "/v1/chat/completions"
+    ]
+    return sorted(
+        tuple(
+            str(object_value(message)["content"]) for message in object_value(object_value(entry)["body"])["messages"]
+        )
+        for entry in tagged
+    )
+
+
+def _assert_tag_ownership_denied(response: httpx.Response, tag: str, team_id: str) -> None:
+    assert response.status_code == 403, response.text
+    assert "tag_ownership_denied" in response.text, response.text
+    assert tag in response.text, response.text
+    assert team_id in response.text, response.text
+
+
+def test_owned_tag_gates_inference_requests(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model()
+        team_a: Final = scenario.team()
+        team_b: Final = scenario.team()
+        key_a: Final = scenario.key(team_id=team_a)
+        key_b: Final = scenario.key(team_id=team_b)
+        tag: Final = _tag_name()
+        _create_tag(scenario, tag, team_id=team_a)
+        unowned: Final = _tag_name()
+        _create_tag(scenario, unowned)
+        unregistered: Final = f"unregistered-{uuid.uuid4().hex}"
+        marker: Final = f"lit8516 {uuid.uuid4().hex}"
+        upstream.get("/__observations").raise_for_status()
+
+        allowed: Final = _chat_with_tag(gateway, model, f"{marker}-owner", key=key_a, metadata_tags=[tag])
+        assert allowed.status_code == 200, allowed.text
+
+        denied_body: Final = _chat_with_tag(gateway, model, f"{marker}-foreign", key=key_b, metadata_tags=[tag])
+        _assert_tag_ownership_denied(denied_body, tag, team_a)
+
+        denied_header: Final = _chat_with_tag(
+            gateway, model, f"{marker}-header", key=key_b, headers={"x-litellm-tags": tag}
+        )
+        _assert_tag_ownership_denied(denied_header, tag, team_a)
+
+        denied_root: Final = _chat_with_tag(gateway, model, f"{marker}-root", key=key_b, root_tags=[tag])
+        _assert_tag_ownership_denied(denied_root, tag, team_a)
+
+        unowned_ok: Final = _chat_with_tag(gateway, model, f"{marker}-unowned", key=key_b, metadata_tags=[unowned])
+        assert unowned_ok.status_code == 200, unowned_ok.text
+
+        unregistered_ok: Final = _chat_with_tag(
+            gateway, model, f"{marker}-unregistered", key=key_b, metadata_tags=[unregistered]
+        )
+        assert unregistered_ok.status_code == 200, unregistered_ok.text
+
+        master_denied: Final = _chat_with_tag(gateway, model, f"{marker}-master", metadata_tags=[tag])
+        _assert_tag_ownership_denied(master_denied, tag, team_a)
+
+        assert _upstream_marker_chats(upstream, marker) == [
+            (f"{marker}-owner",),
+            (f"{marker}-unowned",),
+            (f"{marker}-unregistered",),
+        ]
+
+
+def test_owned_tag_denies_inherited_and_mixed_sources(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model()
+        team_a: Final = scenario.team()
+        team_b: Final = scenario.team()
+        team_c: Final = scenario.team(metadata={"tags": []})
+        tag: Final = _tag_name()
+        _create_tag(scenario, tag, team_id=team_a)
+        unowned: Final = _tag_name()
+        _create_tag(scenario, unowned)
+        key_b_inherited: Final = scenario.key(team_id=team_b, metadata={"tags": [tag]})
+        key_b_plain: Final = scenario.key(team_id=team_b)
+        gateway.post("/team/update", {"team_id": team_c, "metadata": {"tags": [tag]}})
+        key_c: Final = scenario.key(team_id=team_c)
+        marker: Final = f"lit8516 {uuid.uuid4().hex}"
+        upstream.get("/__observations").raise_for_status()
+
+        inherited_key: Final = _chat_with_tag(gateway, model, f"{marker}-key-inherited", key=key_b_inherited)
+        _assert_tag_ownership_denied(inherited_key, tag, team_a)
+
+        inherited_team: Final = _chat_with_tag(gateway, model, f"{marker}-team-inherited", key=key_c)
+        _assert_tag_ownership_denied(inherited_team, tag, team_a)
+
+        mixed: Final = _chat_with_tag(
+            gateway, model, f"{marker}-mixed", key=key_b_plain, metadata_tags=[unowned, tag]
+        )
+        _assert_tag_ownership_denied(mixed, tag, team_a)
+
+        assert _upstream_marker_chats(upstream, marker) == []
+
+
+def test_tag_ownership_transitions_take_effect_with_warm_cache(gateway: Gateway, peer: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model()
+        team_a: Final = _new_team(gateway)
+        team_b: Final = scenario.team()
+        key_a: Final = string_value(gateway.post("/key/generate", {"team_id": team_a})["key"])
+        key_b: Final = scenario.key(team_id=team_b)
+        tag: Final = _tag_name()
+        _create_tag(scenario, tag, team_id=team_a)
+        marker: Final = f"lit8516 {uuid.uuid4().hex}"
+
+        warm: Final = _chat_with_tag(gateway, model, f"{marker}-warm", key=key_a, metadata_tags=[tag])
+        assert warm.status_code == 200, warm.text
+        warm_peer: Final = _chat_with_tag(
+            gateway, model, f"{marker}-warm-peer", key=key_a, metadata_tags=[tag], base=peer
+        )
+        assert warm_peer.status_code == 200, warm_peer.text
+
+        gateway.post("/tag/update", {"name": tag, "team_id": team_b})
+        denied_a: Final = _chat_with_tag(gateway, model, f"{marker}-transfer-a", key=key_a, metadata_tags=[tag])
+        _assert_tag_ownership_denied(denied_a, tag, team_b)
+        allowed_b: Final = _chat_with_tag(gateway, model, f"{marker}-transfer-b", key=key_b, metadata_tags=[tag])
+        assert allowed_b.status_code == 200, allowed_b.text
+
+        converged: Final = eventually(
+            lambda: _chat_with_tag(
+                gateway, model, f"{marker}-peer-converge", key=key_a, metadata_tags=[tag], base=peer
+            ).status_code,
+            lambda status: status == 403,
+            seconds=15,
+        )
+        assert converged == 403
+
+        gateway.post("/tag/update", {"name": tag, "team_id": None})
+        released_a: Final = _chat_with_tag(gateway, model, f"{marker}-release-a", key=key_a, metadata_tags=[tag])
+        assert released_a.status_code == 200, released_a.text
+        released_b: Final = _chat_with_tag(gateway, model, f"{marker}-release-b", key=key_b, metadata_tags=[tag])
+        assert released_b.status_code == 200, released_b.text
+
+        gateway.post("/tag/update", {"name": tag, "team_id": team_a})
+        gateway.post("/team/delete", {"team_ids": [team_a]})
+        assert _tag_rows(tag) == [{"tag_name": tag, "team_id": None}]
+        assert _tag_info(gateway, tag)["team_id"] is None
+        after_delete: Final = _chat_with_tag(gateway, model, f"{marker}-after-delete", key=key_b, metadata_tags=[tag])
+        assert after_delete.status_code == 200, after_delete.text
+
+        allowed_markers: Final = {
+            f"{marker}-warm",
+            f"{marker}-warm-peer",
+            f"{marker}-transfer-b",
+            f"{marker}-release-a",
+            f"{marker}-release-b",
+            f"{marker}-after-delete",
+        }
+        seen: Final = {content[0] for content in _upstream_marker_chats(upstream, marker) if content}
+        allowed_seen: Final = {content for content in seen if content in allowed_markers}
+        denied_seen: Final = seen - allowed_markers
+        assert allowed_seen == allowed_markers, seen
+        assert denied_seen <= {f"{marker}-peer-converge"}, denied_seen
+
+
+def test_failed_owner_mutation_keeps_existing_authorization(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model()
+        team_a: Final = scenario.team()
+        admin_id: Final = scenario.user()
+        team_b: Final = scenario.team(members_with_roles=[{"role": "admin", "user_id": admin_id}])
+        admin_b_key: Final = scenario.key(user_id=admin_id, team_id=team_b)
+        key_a: Final = scenario.key(team_id=team_a)
+        key_b: Final = scenario.key(team_id=team_b)
+        tag: Final = _tag_name()
+        _create_tag(scenario, tag, team_id=team_a)
+        marker: Final = f"lit8516 {uuid.uuid4().hex}"
+        upstream.get("/__observations").raise_for_status()
+
+        forbidden: Final = gateway.request(
+            "POST", "/tag/update", {"name": tag, "team_id": team_b}, key=admin_b_key
+        )
+        assert forbidden.status_code == 403, forbidden.text
+
+        denied_b: Final = _chat_with_tag(gateway, model, f"{marker}-b", key=key_b, metadata_tags=[tag])
+        _assert_tag_ownership_denied(denied_b, tag, team_a)
+        allowed_a: Final = _chat_with_tag(gateway, model, f"{marker}-a", key=key_a, metadata_tags=[tag])
+        assert allowed_a.status_code == 200, allowed_a.text
+
+        assert _upstream_marker_chats(upstream, marker) == [(f"{marker}-a",)]
+
+
+def test_registering_a_used_tag_name_starts_enforcing_ownership(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model()
+        team_a: Final = scenario.team()
+        team_b: Final = scenario.team()
+        key_a: Final = scenario.key(team_id=team_a)
+        key_b: Final = scenario.key(team_id=team_b)
+        tag: Final = _tag_name()
+        marker: Final = f"lit8516 {uuid.uuid4().hex}"
+        upstream.get("/__observations").raise_for_status()
+
+        before: Final = _chat_with_tag(gateway, model, f"{marker}-before", key=key_b, metadata_tags=[tag])
+        assert before.status_code == 200, before.text
+
+        _create_tag(scenario, tag, team_id=team_a)
+
+        denied_b: Final = _chat_with_tag(gateway, model, f"{marker}-after-b", key=key_b, metadata_tags=[tag])
+        _assert_tag_ownership_denied(denied_b, tag, team_a)
+        allowed_a: Final = _chat_with_tag(gateway, model, f"{marker}-after-a", key=key_a, metadata_tags=[tag])
+        assert allowed_a.status_code == 200, allowed_a.text
+
+        assert _upstream_marker_chats(upstream, marker) == [
+            (f"{marker}-after-a",),
+            (f"{marker}-before",),
+        ]
