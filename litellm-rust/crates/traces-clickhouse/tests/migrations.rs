@@ -1964,8 +1964,8 @@ async fn agent_final_answer_preserves_visibility_and_trace_ownership(
         assert!(details.is_empty());
     } else {
         assert_eq!(details.len(), 1);
-        assert_eq!(details[0].0.input, "prompt");
-        assert_eq!(details[0].0.output, expected);
+        assert_eq!(details[0].input, "prompt");
+        assert_eq!(details[0].output, expected);
     }
     Ok(())
 }
