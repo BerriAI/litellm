@@ -181,14 +181,15 @@ class TestBedrockGuardrail:
             lambda: client.chat_stream_raw(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=128)
         )
         _assert_policy_block(blocked, "streamed /chat/completions")
-        frames = _sse_data_frames(blocked.body)
-        assert len(frames) == 1, f"a blocked stream must carry exactly one error frame, got: {blocked.body[:400]}"
-        error_frame = _JSON.validate_json(frames[0])
-        assert isinstance(error_frame, dict) and set(error_frame) == {"error"}, (
-            f"the only frame of a blocked stream must be an error, not model content: {frames[0][:400]}"
+        error = _blocked_stream_error(blocked)
+        assert isinstance(error, dict) and set(error) == {"error"}, (
+            f"a blocked stream must return only an error, not model content: {blocked.body[:400]}"
         )
-        assert blocked_word not in json.dumps(_without_assessments(error_frame)), (
-            f"the blocked model output must not leak into the error frame; got: {frames[0][:400]}"
+        assert "violated guardrail policy" in json.dumps(error["error"]).lower(), (
+            f"the error must name the guardrail verdict; got: {blocked.body[:400]}"
+        )
+        assert blocked_word not in json.dumps(_without_assessments(error)), (
+            f"the blocked model output must not leak into the error; got: {blocked.body[:400]}"
         )
 
         clean = client.chat_stream_raw(
@@ -209,9 +210,13 @@ def _register_pre_call(client: GuardrailsClient, resources: ResourceManager, pre
     return name
 
 
-def _sse_data_frames(body: str) -> tuple[str, ...]:
-    payloads = (line.removeprefix("data:").strip() for line in body.splitlines() if line.startswith("data:"))
-    return tuple(payload for payload in payloads if payload != "[DONE]")
+def _blocked_stream_error(result: StreamingResponse) -> JsonValue:
+    if not result.is_streaming:
+        return _JSON.validate_json(result.body)
+    payloads = (line.removeprefix("data:").strip() for line in result.body.splitlines() if line.startswith("data:"))
+    frames = tuple(payload for payload in payloads if payload != "[DONE]")
+    assert len(frames) == 1, f"a blocked SSE response must carry exactly one error frame, got: {result.body[:400]}"
+    return _JSON.validate_json(frames[0])
 
 
 def _assert_policy_block(result: StreamingResponse, surface: str) -> None:
