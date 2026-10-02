@@ -30,6 +30,7 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy
+from litellm.repositories.base_repository import record_to_dict
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -768,26 +769,36 @@ async def update_project(
                     detail={"error": "Cannot reassign project to a team you are not an admin of"},
                 )
 
-        if data.team_id is not None and data.team_id != existing_project.team_id:
-            mismatched_key_count: Final = await bounded_db_lookup(
-                prisma_client.writer_db.litellm_verificationtoken.count(
-                    where={
-                        "project_id": data.project_id,
-                        "OR": [{"team_id": {"not": data.team_id}}, {"team_id": None}],
-                    }
-                ),
-                name="project_key_ownership",
+        if data.team_id is not None:
+            current_project_record: Final = await bounded_db_lookup(
+                prisma_client.writer_db.litellm_projecttable.find_unique(where={"project_id": data.project_id}),
+                name="project",
             )
-            if mismatched_key_count > 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": (
-                            f"Project {data.project_id} has {mismatched_key_count} key(s) that do not belong to "
-                            f"team {data.team_id}. Detach or delete them before moving the project."
-                        )
-                    },
+            current_project: Final = (
+                LiteLLM_ProjectTable.model_validate(record_to_dict(current_project_record))
+                if current_project_record is not None
+                else None
+            )
+            if current_project is not None and data.team_id != current_project.team_id:
+                mismatched_key_count: Final = await bounded_db_lookup(
+                    prisma_client.writer_db.litellm_verificationtoken.count(
+                        where={
+                            "project_id": data.project_id,
+                            "OR": [{"team_id": {"not": data.team_id}}, {"team_id": None}],
+                        }
+                    ),
+                    name="project_key_ownership",
                 )
+                if mismatched_key_count > 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": (
+                                f"Project {data.project_id} has {mismatched_key_count} key(s) that do not belong to "
+                                f"team {data.team_id}. Detach or delete them before moving the project."
+                            )
+                        },
+                    )
 
         # Validate project limits against team limits
         if target_team_obj is not None:

@@ -37,6 +37,7 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
+    LiteLLM_ProjectTable,
     LiteLLM_TeamTable,
     NewProjectRequest,
     UpdateProjectRequest,
@@ -1236,7 +1237,11 @@ def _project_update_mocks(monkeypatch, stored_metadata: dict) -> mock.MagicMock:
     mock_prisma.jsonify_object = lambda data: data
     mock_prisma.db.litellm_projecttable.find_unique = mock.AsyncMock(return_value=existing_row)
     mock_prisma.db.litellm_projecttable.update = mock.AsyncMock(return_value=mock.MagicMock())
-    mock_prisma.writer_db = mock_prisma.db
+    mock_prisma.writer_db = mock.MagicMock()
+    mock_prisma.writer_db.litellm_projecttable.find_unique = mock.AsyncMock(
+        return_value={"project_id": "project-update-test", "team_id": None}
+    )
+    mock_prisma.writer_db.litellm_verificationtoken.count = mock.AsyncMock(return_value=0)
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
     monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
@@ -1273,6 +1278,9 @@ async def test_update_project_rejects_move_when_attached_teamless_key_exists(
     )
     mock_prisma.db.litellm_verificationtoken.count = mock.AsyncMock(return_value=0)
     mock_prisma.writer_db = mock.MagicMock()
+    mock_prisma.writer_db.litellm_projecttable.find_unique = mock.AsyncMock(
+        return_value=LiteLLM_ProjectTable(project_id=project_id, team_id="team-a")
+    )
 
     async def count_teamless_keys(*, where: Mapping[str, object]) -> int:
         conditions: Final = where.get("OR")
@@ -1297,6 +1305,37 @@ async def test_update_project_rejects_move_when_attached_teamless_key_exists(
 
 
 @pytest.mark.asyncio
+async def test_update_project_rejects_move_when_writer_team_differs_from_stale_reader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id: Final = "project-replica-lag"
+    destination_team_id: Final = "team-a"
+    mock_prisma: Final = _project_update_mocks(monkeypatch, {})
+    mock_prisma.db.litellm_projecttable.find_unique.return_value.team_id = destination_team_id
+    mock_prisma.db.litellm_teamtable.find_unique = mock.AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id=destination_team_id)
+    )
+    mock_prisma.db.litellm_verificationtoken.count = mock.AsyncMock(return_value=0)
+    mock_prisma.writer_db.litellm_projecttable.find_unique = mock.AsyncMock(
+        return_value=LiteLLM_ProjectTable(project_id=project_id, team_id="team-b")
+    )
+    mock_prisma.writer_db.litellm_verificationtoken.count = mock.AsyncMock(return_value=1)
+
+    with pytest.raises(ProxyException) as error:
+        await _run_project_update(project_id, team_id=destination_team_id)
+
+    assert error.value.code == "400"
+    assert (
+        f"Project {project_id} has 1 key(s) that do not belong to team {destination_team_id}. "
+        "Detach or delete them before moving the project."
+    ) in error.value.message
+    mock_prisma.writer_db.litellm_projecttable.find_unique.assert_awaited_once()
+    mock_prisma.writer_db.litellm_verificationtoken.count.assert_awaited_once()
+    mock_prisma.db.litellm_verificationtoken.count.assert_not_awaited()
+    mock_prisma.db.litellm_projecttable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_update_project_allows_move_when_no_attached_keys_exist(monkeypatch: pytest.MonkeyPatch) -> None:
     project_id: Final = "project-without-keys"
     destination_team_id: Final = "team-b"
@@ -1306,10 +1345,14 @@ async def test_update_project_allows_move_when_no_attached_keys_exist(monkeypatc
         return_value=LiteLLM_TeamTable(team_id=destination_team_id)
     )
     mock_prisma.db.litellm_verificationtoken.count = mock.AsyncMock(return_value=0)
+    mock_prisma.writer_db.litellm_projecttable.find_unique = mock.AsyncMock(
+        return_value=LiteLLM_ProjectTable(project_id=project_id, team_id="team-a")
+    )
 
     await _run_project_update(project_id, team_id=destination_team_id)
 
-    mock_prisma.db.litellm_verificationtoken.count.assert_awaited_once()
+    mock_prisma.writer_db.litellm_verificationtoken.count.assert_awaited_once()
+    mock_prisma.db.litellm_verificationtoken.count.assert_not_awaited()
     mock_prisma.db.litellm_projecttable.update.assert_awaited_once()
 
 

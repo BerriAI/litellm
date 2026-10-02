@@ -1823,9 +1823,7 @@ async def _check_key_project_team(
         name="project",
     )
     project_obj: Final = (
-        LiteLLM_ProjectTable.model_validate(record_to_dict(project_record))
-        if project_record is not None
-        else None
+        LiteLLM_ProjectTable.model_validate(record_to_dict(project_record)) if project_record is not None else None
     )
 
     if project_obj is None:
