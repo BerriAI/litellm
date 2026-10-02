@@ -1318,7 +1318,7 @@ def responses(
         )
         reasoning_effort: Final = local_vars.get("reasoning_effort")
         request_reasoning: Final = (
-            LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
+            LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort, custom_llm_provider)
             if current_reasoning is None and reasoning_effort is not None
             else current_reasoning
         )
@@ -2295,7 +2295,9 @@ def _build_litellm_metadata_for_ws(kwargs: dict) -> dict:
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object] | None)
 
 
-def _deployment_reasoning_default(kwargs: Mapping[str, object]) -> Reasoning | dict[str, object] | None:
+def _deployment_reasoning_default(
+    kwargs: Mapping[str, object], custom_llm_provider: str | None = None
+) -> Reasoning | dict[str, object] | None:
     if kwargs.get("reasoning") is not None:
         return None
     reasoning_effort: Final = kwargs.get("reasoning_effort")
@@ -2303,7 +2305,7 @@ def _deployment_reasoning_default(kwargs: Mapping[str, object]) -> Reasoning | d
         return None
     if isinstance(reasoning_effort, Mapping):
         return _JSON_OBJECT_ADAPTER.validate_python(reasoning_effort)
-    return LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
+    return LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort, custom_llm_provider)
 
 
 _RESPONSES_WS_ROUTING_HINT_KEYS: Final = frozenset({"input", "previous_response_id"})
@@ -2327,8 +2329,10 @@ def _first_ws_frame_with_routed_input(first_message: str, routed_input: object) 
     return json.dumps({**frame, "input": routed_input})
 
 
-def _build_responses_websocket_request_defaults(kwargs: Mapping[str, object]) -> ResponsesWebSocketRequestDefaults:
-    default_reasoning: Final = _deployment_reasoning_default(kwargs)
+def _build_responses_websocket_request_defaults(
+    kwargs: Mapping[str, object], custom_llm_provider: str | None = None
+) -> ResponsesWebSocketRequestDefaults:
+    default_reasoning: Final = _deployment_reasoning_default(kwargs, custom_llm_provider)
     candidate_params: Final[dict[str, object]] = {
         **kwargs,
         **({"reasoning": default_reasoning} if default_reasoning is not None else {}),
@@ -2440,6 +2444,6 @@ async def _aresponses_websocket(
         user_api_key_dict=kwargs.get("user_api_key_dict"),
         litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
         custom_llm_provider=_custom_llm_provider,
-        request_defaults=_build_responses_websocket_request_defaults(deployment_kwargs),
+        request_defaults=_build_responses_websocket_request_defaults(deployment_kwargs, _custom_llm_provider),
         **remaining_kwargs,
     )

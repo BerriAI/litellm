@@ -10,7 +10,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -1022,7 +1021,9 @@ class TestTranslateThinkingToReasoning:
         original = litellm.reasoning_auto_summary
         try:
             litellm.reasoning_auto_summary = True
-            result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000})
+            result = _ADAPTER.translate_thinking_to_reasoning(
+                {"type": "enabled", "budget_tokens": 10000}, custom_llm_provider="openai"
+            )
             assert result == {"effort": "high", "summary": "detailed"}
         finally:
             litellm.reasoning_auto_summary = original
@@ -1039,12 +1040,33 @@ class TestTranslateThinkingToReasoning:
                 {
                     "type": "enabled",
                     "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-                }
+                },
+                custom_llm_provider="openai",
             )
             assert result == {"effort": "medium", "summary": "detailed"}
         finally:
             litellm.reasoning_auto_summary = original
             os.environ.pop("LITELLM_REASONING_AUTO_SUMMARY", None)
+
+    @pytest.mark.parametrize(
+        "provider,expected",
+        [
+            ("openai", {"effort": "high", "summary": "detailed"}),
+            ("openrouter", {"effort": "high"}),
+        ],
+    )
+    def test_auto_summary_only_applies_to_openai_responses(
+        self, monkeypatch: pytest.MonkeyPatch, provider: str, expected: dict[str, str]
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "reasoning_auto_summary", False)
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+        request = _make_request(thinking={"type": "enabled", "budget_tokens": 10000})
+
+        result = _ADAPTER.translate_request(request, custom_llm_provider=provider)
+
+        assert result["reasoning"] == expected
 
 
 # ---------------------------------------------------------------------------

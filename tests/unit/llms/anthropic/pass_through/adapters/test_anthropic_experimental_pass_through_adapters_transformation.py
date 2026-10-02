@@ -5,9 +5,6 @@ from typing import Any, Final, cast
 import pytest
 
 import litellm
-
-
-
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     encrypted_reasoning_signature,
@@ -29,6 +26,7 @@ from litellm.llms.anthropic.pass_through.messages.mid_conversation_system import
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.anthropic import (
     AnthopicMessagesAssistantMessageParam,
+    AnthropicMessagesRequest,
     AnthropicMessagesUserMessageParam,
 )
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
@@ -43,6 +41,33 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
+
+
+@pytest.mark.parametrize(
+    "model,provider,expected_effort",
+    [
+        ("openai/gpt-5.2", "openai", {"effort": "high", "summary": "detailed"}),
+        ("openrouter/deepseek/deepseek-v4.1-flash", "openrouter", "high"),
+        ("fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash", "fireworks_ai", "high"),
+    ],
+)
+def test_auto_summary_only_wraps_openai_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch, model: str, provider: str, expected_effort: str | dict[str, str]
+) -> None:
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", False)
+    monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+    request: Final = AnthropicMessagesRequest(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=1024,
+        thinking={"type": "enabled", "budget_tokens": 5000},
+    )
+
+    result, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        request, custom_llm_provider=provider
+    )
+
+    assert result["reasoning_effort"] == expected_effort
 
 
 def test_translate_openai_response_to_anthropic_empty_choices() -> None:

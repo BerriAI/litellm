@@ -1271,6 +1271,26 @@ def _deployment_defaults():
 class TestNativeWebSocketDeploymentDefaults:
     """The native relay merges deployment litellm_params into every response.create like HTTP does."""
 
+    @pytest.mark.parametrize(
+        "provider,expected",
+        [
+            ("openai", {"effort": "high", "summary": "detailed"}),
+            ("openrouter", {"effort": "high"}),
+        ],
+    )
+    def test_auto_summary_only_applies_to_openai_provider(self, monkeypatch, provider, expected):
+        import litellm
+        from litellm.responses.main import _build_responses_websocket_request_defaults
+
+        monkeypatch.setattr(litellm, "reasoning_auto_summary", False)
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+
+        defaults = _build_responses_websocket_request_defaults(
+            {"reasoning_effort": "high"}, custom_llm_provider=provider
+        )
+
+        assert dict(defaults.fill_missing)["reasoning"] == expected
+
     def test_builder_maps_router_kwargs_like_the_http_path(self):
         from litellm.responses.main import _build_responses_websocket_request_defaults
 

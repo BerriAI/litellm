@@ -460,6 +460,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_thinking_to_reasoning(
         thinking: dict[str, object],
         output_config: dict[str, object] | None = None,
+        custom_llm_provider: str | None = None,
     ) -> dict[str, object] | None:
         """
         Convert Anthropic thinking param to Responses API reasoning param.
@@ -467,7 +468,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         ``thinking.budget_tokens`` is bucketed via the shared
         ``reasoning_effort_from_thinking_budget`` thresholds. For adaptive
         thinking, uses ``output_config.effort`` if available, otherwise defaults
-        to medium.
+        to medium. Automatic summaries are only added for OpenAI.
         """
         if not isinstance(thinking, dict):
             return None
@@ -486,7 +487,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         else:
             return None
 
-        auto_summary: Final = is_reasoning_auto_summary_enabled()
+        auto_summary: Final = custom_llm_provider == "openai" and is_reasoning_auto_summary_enabled()
         result: Final[dict[str, object]] = {"effort": effort}
         summary: Final = thinking.get("summary")
         if summary:
@@ -499,6 +500,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         self,
         anthropic_request: AnthropicMessagesRequest,
         include_encrypted_reasoning: bool = True,
+        custom_llm_provider: str | None = None,
     ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
@@ -580,6 +582,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             reasoning: Final = self.translate_thinking_to_reasoning(
                 thinking,
                 output_config=cast(dict[str, Any] | None, output_config),
+                custom_llm_provider=custom_llm_provider,
             )
             if reasoning:
                 responses_kwargs["reasoning"] = reasoning

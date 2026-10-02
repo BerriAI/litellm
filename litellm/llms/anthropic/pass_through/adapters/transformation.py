@@ -703,6 +703,7 @@ class LiteLLMAnthropicMessagesAdapter:
     def translate_thinking_for_model(
         thinking: AnthropicThinkingParam,
         model: str,
+        custom_llm_provider: str | None = None,
     ) -> dict[str, object]:
         """
         Translate Anthropic thinking parameter based on the target model.
@@ -731,7 +732,7 @@ class LiteLLMAnthropicMessagesAdapter:
             if reasoning_effort:
                 return {
                     "reasoning_effort": LiteLLMAnthropicMessagesAdapter._apply_reasoning_summary_wrapping(
-                        reasoning_effort, thinking
+                        reasoning_effort, thinking, custom_llm_provider or model.partition("/")[0]
                     )
                 }
             return {}
@@ -740,14 +741,14 @@ class LiteLLMAnthropicMessagesAdapter:
     def _apply_reasoning_summary_wrapping(
         reasoning_effort: str,
         thinking: Mapping[str, object],
-    ) -> Any:
+        custom_llm_provider: str | None,
+    ) -> str | dict[str, object]:
         """
         Apply the reasoning_effort/summary wrapping rules shared by every
         thinking->reasoning_effort translation path.
 
-        Disabled thinking always stays a plain string - there's no reasoning
-        trace to summarize, and non-Claude providers (e.g. Fireworks) expect
-        reasoning_effort as a plain string, not a summary dict.
+        Disabled thinking stays a plain string. Automatic summaries are only
+        added for OpenAI; other chat providers require a string effort.
         """
         thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
         if thinking_type == "disabled":
@@ -756,7 +757,7 @@ class LiteLLMAnthropicMessagesAdapter:
         summary: Final = thinking.get("summary") if isinstance(thinking, dict) else None
         if summary:
             return {"effort": reasoning_effort, "summary": summary}
-        if is_reasoning_auto_summary_enabled():
+        if custom_llm_provider == "openai" and is_reasoning_auto_summary_enabled():
             return {"effort": reasoning_effort, "summary": "detailed"}
         return reasoning_effort
 
@@ -1169,7 +1170,9 @@ class LiteLLMAnthropicMessagesAdapter:
         new_kwargs["reasoning_effort"] = (
             reasoning_effort
             if is_claude_target
-            else self._apply_reasoning_summary_wrapping(reasoning_effort, cast(dict[str, object], thinking))
+            else self._apply_reasoning_summary_wrapping(
+                reasoning_effort, cast(dict[str, object], thinking), custom_llm_provider
+            )
         )
 
     def _translate_output_format_to_openai(

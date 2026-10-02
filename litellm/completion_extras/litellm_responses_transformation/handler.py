@@ -187,6 +187,7 @@ class ResponsesToCompletionBridgeHandler:
             headers=headers,
             litellm_logging_obj=logging_obj,
             client=kwargs.get("client"),
+            custom_llm_provider=custom_llm_provider,
         )
 
         # Set on request_data rather than passed as explicit kwargs: the spread of
@@ -280,6 +281,7 @@ class ResponsesToCompletionBridgeHandler:
                 litellm_params=litellm_params,
                 headers=headers,
                 litellm_logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
             )
         except Exception as e:
             raise e

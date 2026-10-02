@@ -1568,7 +1568,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
 
         for effort in effort_levels:
-            result = handler._map_reasoning_effort(effort)
+            result = handler._map_reasoning_effort(effort, "openai")
 
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
@@ -1584,7 +1584,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         litellm.reasoning_auto_summary = True
 
         for effort in effort_levels:
-            result = handler._map_reasoning_effort(effort)
+            result = handler._map_reasoning_effort(effort, "openai")
 
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
@@ -1600,7 +1600,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         litellm.reasoning_auto_summary = False
         monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
 
-        result = handler._map_reasoning_effort("high")
+        result = handler._map_reasoning_effort("high", "openai")
         assert (
             result["summary"] == "detailed"
         ), "Summary should be 'detailed' when env var is enabled"
@@ -1612,7 +1612,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
 
         dict_input = {"effort": "high", "summary": "custom_summary"}
-        result_dict = handler._map_reasoning_effort(dict_input)
+        result_dict = handler._map_reasoning_effort(dict_input, "openai")
         assert result_dict["effort"] == "high"
         assert result_dict["summary"] == "custom_summary"
         print("✓ Dict input is passed through without modification")
@@ -1628,6 +1628,22 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
             monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", original_env)
         elif "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
+
+
+@pytest.mark.parametrize(
+    "provider,expected",
+    [
+        ("openai", {"effort": "high", "summary": "detailed"}),
+        ("openrouter", {"effort": "high"}),
+    ],
+)
+def test_auto_summary_only_applies_to_openai_responses_provider(monkeypatch, provider, expected):
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", False)
+    monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+
+    result = LiteLLMResponsesTransformationHandler()._map_reasoning_effort("high", provider)
+
+    assert result == expected
 
 
 def test_transform_response_preserves_annotations():
