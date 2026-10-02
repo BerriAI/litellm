@@ -11,17 +11,7 @@ VIRTUAL_ENV="$repo_root/.venv" uvx --from maturin==1.15.0 maturin develop \
   --release --manifest-path litellm-rust/crates/python-bridge/Cargo.toml --features extension-module
 
 config_file="$(mktemp "${TMPDIR:-/tmp}/litellm-tracing-local.XXXXXX.yaml")"
-dashboard_pid=""
-cleanup() {
-  if [[ -n "$dashboard_pid" ]]; then
-    kill "$dashboard_pid" 2>/dev/null || true
-    wait "$dashboard_pid" 2>/dev/null || true
-  fi
-  rm -f "$config_file"
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'rm -f "$config_file"' EXIT
 cat > "$config_file" <<'EOF'
 model_list:
   - model_name: claude-sonnet
@@ -45,14 +35,13 @@ export CLICKHOUSE_URL=http://default:local-tracing@127.0.0.1:18123
 export CLICKHOUSE_DATABASE=litellm
 export LITELLM_LOCAL_MODEL_COST_MAP=True
 
-npm --prefix "$repo_root/ui/litellm-dashboard" ci
 (
   cd "$repo_root/ui/litellm-dashboard"
-  export NEXT_PUBLIC_BASE_URL=http://127.0.0.1:4002
-  exec node node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3000
-) &
-dashboard_pid=$!
+  "$repo_root/scripts/with_dashboard_node.sh" npm ci
+  NEXT_PUBLIC_BASE_URL= "$repo_root/scripts/with_dashboard_node.sh" npm run build
+)
+export LITELLM_UI_PATH="$repo_root/ui/litellm-dashboard/out"
 
-printf 'Dashboard: http://127.0.0.1:3000\nProxy: http://127.0.0.1:4002\nMaster key: %s\n' "$LITELLM_MASTER_KEY"
+printf 'Dashboard: http://127.0.0.1:4002/ui/\nProxy: http://127.0.0.1:4002\nMaster key: %s\n' "$LITELLM_MASTER_KEY"
 "$repo_root/.venv/bin/python" litellm/proxy/proxy_cli.py \
   --config "$config_file" --host 127.0.0.1 --port 4002
