@@ -81,6 +81,7 @@ from litellm.constants import (
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import check_api_key_for_custom_headers_or_pass_through_endpoints
 from litellm.proxy import proxy_server
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_bearer_token, encrypt_value_helper
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from prisma.errors import DataError
@@ -3160,9 +3161,6 @@ async def test_tag_max_budget_check_still_enforces_registered_tag_over_budget():
 @pytest.mark.asyncio
 async def test_tag_cache_round_trip_preserves_team_ownership():
     """A db tag row with team_id must survive the same CacheCodec path auth uses to serve it."""
-    from litellm.proxy._types import LiteLLM_TagTable
-    from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
-
     db_row = {
         "tag_name": "owned-tag",
         "description": None,

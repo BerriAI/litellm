@@ -1,6 +1,7 @@
 import inspect
 import json
 from collections.abc import Sequence
+from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Mapping, Optional
 
@@ -21,6 +22,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
 from litellm.types.tag_management import TagDeleteRequest, TagInfoRequest, TagNewRequest
 
@@ -1533,8 +1535,6 @@ async def test_add_tag_to_deployment_model_not_found():
 
 
 def _new_tag_row(**fields: object) -> dict[str, object]:
-    from datetime import datetime
-
     now = datetime.now()
     return {
         "tag_name": "",
@@ -1628,8 +1628,6 @@ class FakeTagOwnershipDb:
 
 @contextmanager
 def _tag_ownership_gateway(fake_db: FakeTagOwnershipDb, auth: UserAPIKeyAuth):
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-
     app.dependency_overrides[user_api_key_auth] = lambda: auth
     mock_prisma = SimpleNamespace(db=fake_db, jsonify_object=lambda data: dict(data))
     try:
@@ -1740,11 +1738,11 @@ async def test_update_tag_with_unknown_team_is_rejected():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "update_body",
-    [{"description": None}, {"description": "changed"}],
+    ("update_body", "expected_description"),
+    [({}, None), ({"description": "changed"}, "changed")],
     ids=["name-only", "unrelated-description-update"],
 )
-async def test_update_tag_omitting_team_id_preserves_owner(update_body):
+async def test_update_tag_omitting_team_id_preserves_owner(update_body, expected_description):
     fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
     fake_db.tag_rows["owned-tag"] = _new_tag_row(tag_name="owned-tag", team_id="team-a")
     with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
@@ -1757,8 +1755,7 @@ async def test_update_tag_omitting_team_id_preserves_owner(update_body):
         assert response.json()["tag"]["team_id"] == "team-a"
         assert _tag_info("owned-tag")["team_id"] == "team-a"
         assert _persisted_tag_row(fake_db, "owned-tag")["team_id"] == "team-a"
-        if "description" in update_body and update_body["description"] is not None:
-            assert response.json()["tag"]["description"] == "changed"
+        assert response.json()["tag"]["description"] == expected_description
 
 
 @pytest.mark.asyncio

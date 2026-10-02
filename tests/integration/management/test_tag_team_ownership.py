@@ -62,9 +62,7 @@ def test_tag_team_id_foreign_key_and_index(gateway: Gateway) -> None:
             (name, [], "no-such-team"),
         )
 
-    indexes: Final = read_rows(
-        "SELECT indexdef FROM pg_indexes WHERE tablename = 'LiteLLM_TagTable'", ()
-    )
+    indexes: Final = read_rows("SELECT indexdef FROM pg_indexes WHERE tablename = 'LiteLLM_TagTable'", ())
     assert any("team_id" in str(index["indexdef"]) for index in indexes)
 
 
@@ -93,23 +91,17 @@ def test_non_admin_key_cannot_set_tag_team_ownership(gateway: Gateway) -> None:
         key: Final = scenario.key(user_id=user_id, allowed_routes=["/tag/new", "/tag/update"])
         name: Final = _tag_name()
 
-        create: Final = gateway.request(
-            "POST", "/tag/new", {"name": name, "team_id": team_id}, key=key
-        )
+        create: Final = gateway.request("POST", "/tag/new", {"name": name, "team_id": team_id}, key=key)
         assert create.status_code == 403, create.text
         assert _tag_rows(name) == []
 
         _create_tag(scenario, name, team_id=team_id)
 
-        assign: Final = gateway.request(
-            "POST", "/tag/update", {"name": name, "team_id": scenario.team()}, key=key
-        )
+        assign: Final = gateway.request("POST", "/tag/update", {"name": name, "team_id": scenario.team()}, key=key)
         assert assign.status_code == 403, assign.text
         assert _tag_rows(name) == [{"tag_name": name, "team_id": team_id}]
 
-        release: Final = gateway.request(
-            "POST", "/tag/update", {"name": name, "team_id": None}, key=key
-        )
+        release: Final = gateway.request("POST", "/tag/update", {"name": name, "team_id": None}, key=key)
         assert release.status_code == 403, release.text
         assert _tag_rows(name) == [{"tag_name": name, "team_id": team_id}]
 
