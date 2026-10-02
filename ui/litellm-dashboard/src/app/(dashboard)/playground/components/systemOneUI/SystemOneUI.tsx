@@ -29,6 +29,7 @@ interface SystemOneSendVariables {
 }
 
 const EXAMPLE_PAYLOAD = JSON.stringify(SYSTEM_ONE_EXAMPLE, null, 2);
+const DECISION_MODELS_DISCUSSION_URL = "https://github.com/BerriAI/litellm/discussions/44231";
 
 function getCustomProxyBaseUrl(): string | undefined {
   return typeof window === "undefined" ? undefined : window.sessionStorage.getItem("customProxyBaseUrl") || undefined;
@@ -152,7 +153,10 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
           <AlertTitle>Beta: TypeSafe Jev only for now</AlertTitle>
           <AlertDescription>
             Sends System One requests (choice, noul, score) through /typesafe/v1/systemone and requires TYPESAFE_API_KEY
-            on the proxy. Support for more System One-compatible models is in progress.
+            on the proxy. Support for more System One-compatible models is in progress.{" "}
+            <a href={DECISION_MODELS_DISCUSSION_URL} target="_blank" rel="noopener noreferrer" className="underline">
+              Tell us which decision models you want next
+            </a>
           </AlertDescription>
         </Alert>
       </section>
