@@ -1,5 +1,7 @@
 use litellm_http::Client;
-use litellm_traces::{Connection, Error, Parameter, execute_read};
+use litellm_traces_clickhouse::{
+    Connection, Error, Parameter, QueryReaders, QueryScope, execute_read,
+};
 use rstest::{fixture, rstest};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -23,11 +25,6 @@ async fn database() -> Result<Database, Box<dyn std::error::Error>> {
     let container = ClickHouse::default()
         .with_tag(CLICKHOUSE_TAG)
         .with_env_var("CLICKHOUSE_SKIP_USER_SETUP", "1")
-        .with_env_var("LITELLM_TRACES_READER_PASSWORD", "test_password")
-        .with_copy_to(
-            "/etc/clickhouse-server/users.d/litellm-traces-reader.xml",
-            include_bytes!("../config/reader.xml").to_vec(),
-        )
         .start()
         .await?;
     let admin_url = format!(
@@ -54,10 +51,11 @@ async fn database() -> Result<Database, Box<dyn std::error::Error>> {
             .await?
             .error_for_status()?;
     }
-    let url = format!(
-        "{}?database=litellm",
-        admin_url.replacen("http://", "http://litellm_traces_reader:test_password@", 1)
-    );
+    let readers = QueryReaders::new(Connection::writer(&admin_url)?, "litellm".into());
+    let connection = readers
+        .connection(&client, &QueryScope::Admin, "test-secret")
+        .await?;
+    let url = connection.url().to_string();
     Ok(Database {
         _container: container,
         url,
@@ -120,7 +118,15 @@ async fn reader_rejects_writes_and_privilege_escalation(
 
     let result = read(&database.client, &connection, sql).await;
 
-    assert!(matches!(result, Err(Error::QueryFailed(_))), "{result:?}");
+    assert!(
+        matches!(
+            result,
+            Err(Error::Storage(
+                litellm_storage_clickhouse::Error::QueryFailed(_)
+            ))
+        ),
+        "{result:?}"
+    );
     let rows = read(&database.client, &connection, "SELECT n FROM otel_traces").await?;
     let json: Value = serde_json::from_str(&rows)?;
     assert_eq!(json["data"], serde_json::json!([{ "n": 1 }]));
@@ -147,7 +153,12 @@ async fn admin_sql_rejects_errors_after_output_starts(
     .await;
 
     assert!(
-        matches!(result, Err(Error::InvalidResponse)),
+        matches!(
+            result,
+            Err(Error::Storage(
+                litellm_storage_clickhouse::Error::InvalidResponse
+            ))
+        ),
         "expected an error embedded in a successful HTTP response: {result:?}"
     );
     Ok(())
@@ -171,7 +182,15 @@ async fn admin_sql_enforces_result_row_limit(
     )
     .await;
 
-    assert!(matches!(result, Err(Error::QueryFailed(_))), "{result:?}");
+    assert!(
+        matches!(
+            result,
+            Err(Error::Storage(
+                litellm_storage_clickhouse::Error::QueryFailed(_)
+            ))
+        ),
+        "{result:?}"
+    );
     Ok(())
 }
 
@@ -190,7 +209,15 @@ async fn admin_sql_enforces_response_byte_limit(
     )
     .await;
 
-    assert!(matches!(result, Err(Error::ResponseTooLarge)), "{result:?}");
+    assert!(
+        matches!(
+            result,
+            Err(Error::Storage(
+                litellm_storage_clickhouse::Error::ResponseTooLarge
+            ))
+        ),
+        "{result:?}"
+    );
     Ok(())
 }
 

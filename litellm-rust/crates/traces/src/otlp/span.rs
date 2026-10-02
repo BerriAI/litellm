@@ -10,9 +10,9 @@ use super::{
     attributes::attributes,
     limits::{Budget, MAX_ATTRIBUTES, MAX_DECODED_SPAN_BYTES, MAX_EVENTS, MAX_SPANS},
 };
-use crate::{DecodeError, Shared, normalize::normalize};
+use crate::{Error, Shared, normalize::normalize};
 
-pub(super) fn flatten(request: ExportTraceServiceRequest) -> Result<Vec<DecodedSpan>, DecodeError> {
+pub(super) fn flatten(request: ExportTraceServiceRequest) -> Result<Vec<DecodedSpan>, Error> {
     let mut budget = Budget::new(MAX_DECODED_SPAN_BYTES);
     let mut spans = Vec::new();
     for resource in request.resource_spans {
@@ -25,7 +25,7 @@ fn append_resource(
     resource: ResourceSpans,
     budget: &mut Budget,
     spans: &mut Vec<DecodedSpan>,
-) -> Result<(), DecodeError> {
+) -> Result<(), Error> {
     let attributes = Shared::new(attributes(
         resource
             .resource
@@ -44,17 +44,17 @@ fn append_scope(
     resource: &Shared<BTreeMap<String, String>>,
     budget: &mut Budget,
     spans: &mut Vec<DecodedSpan>,
-) -> Result<(), DecodeError> {
+) -> Result<(), Error> {
     let scope = scope_spans.scope.unwrap_or_default();
     if scope.attributes.len() > MAX_ATTRIBUTES {
-        return Err(DecodeError::TooLarge);
+        return Err(Error::TooLarge);
     }
     budget.consume(scope.name.len() + scope.version.len())?;
     let scope_name: Shared<String> = scope.name.into();
     let scope_version: Shared<String> = scope.version.into();
     for span in scope_spans.spans {
         if spans.len() >= MAX_SPANS {
-            return Err(DecodeError::TooLarge);
+            return Err(Error::TooLarge);
         }
         validate_span(&span)?;
         budget.consume(
@@ -82,7 +82,7 @@ fn valid_id(value: &[u8], length: usize) -> bool {
     value.len() == length && value.iter().any(|byte| *byte != 0)
 }
 
-fn validate_span(span: &Span) -> Result<(), DecodeError> {
+fn validate_span(span: &Span) -> Result<(), Error> {
     if !valid_id(&span.trace_id, 16)
         || !valid_id(&span.span_id, 8)
         || (!span.parent_span_id.is_empty() && !valid_id(&span.parent_span_id, 8))
@@ -94,7 +94,7 @@ fn validate_span(span: &Span) -> Result<(), DecodeError> {
             .iter()
             .any(|link| !valid_id(&link.trace_id, 16) || !valid_id(&link.span_id, 8))
     {
-        return Err(DecodeError::InvalidPayload);
+        return Err(Error::InvalidPayload);
     }
     if span.events.len() > MAX_EVENTS
         || span.links.len() > MAX_EVENTS
@@ -108,7 +108,7 @@ fn validate_span(span: &Span) -> Result<(), DecodeError> {
             .iter()
             .any(|event| event.attributes.len() > MAX_ATTRIBUTES)
     {
-        return Err(DecodeError::TooLarge);
+        return Err(Error::TooLarge);
     }
     Ok(())
 }
@@ -123,7 +123,7 @@ fn decoded_span(
     scope_name: &Shared<String>,
     scope_version: &Shared<String>,
     budget: &mut Budget,
-) -> Result<DecodedSpan, DecodeError> {
+) -> Result<DecodedSpan, Error> {
     let status = span.status.unwrap_or_default();
     let parent_span_id = hex_bytes(&span.parent_span_id);
     let span_attributes = attributes(span.attributes, budget)?;
@@ -177,7 +177,7 @@ fn decoded_span(
                     attributes: attributes(event.attributes, budget)?,
                 })
             })
-            .collect::<Result<Vec<_>, DecodeError>>()?,
+            .collect::<Result<Vec<_>, Error>>()?,
         normalized,
         consumed_attributes: normalization.consumed_attributes,
     })

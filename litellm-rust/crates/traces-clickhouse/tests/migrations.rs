@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use litellm_http::Client;
-use litellm_traces::{
+use litellm_traces_clickhouse::{
     Connection, Error, InsertTable, NORMALIZED_FIELD_DEFINITIONS, Parameter, ReadQuery,
     encode_rows, ensure_schema, execute_named_read, execute_read, schema_statements,
 };
@@ -126,6 +126,24 @@ async fn schema_supports_span_rollups_and_spend_joins(
     insert_rows(&database, "otel_traces", vec![span]).await?;
     insert_rows(&database, "spend_logs", vec![spend]).await?;
     let reader = Connection::reader(&database.url, "trace_test")?;
+    let detail =
+        litellm_storage_clickhouse::fetch::<litellm_traces_clickhouse::query::named::SpanDetail>(
+            &database.client,
+            &reader,
+            &litellm_traces_clickhouse::query::named::SpanDetailParams {
+                access: litellm_traces_clickhouse::query::named::ReadAccessParams {
+                    team_ids: vec!["team-1".into()],
+                    api_key_hash: String::new(),
+                },
+                trace_id: "trace-1".into(),
+                trace_ref: String::new(),
+                span_id: "span-1".into(),
+            },
+        )
+        .await?;
+    assert_eq!(detail.len(), 1);
+    assert_eq!(detail[0].input, "hello world");
+    assert_eq!(detail[0].attributes["gen_ai.response.id"], "response-1");
     let list_parameters = BTreeMap::from([
         ("team_ids".into(), Parameter::Strings(vec!["team-1".into()])),
         ("api_key_hash".into(), Parameter::Text(String::new())),
@@ -269,7 +287,7 @@ async fn insert_rejects_unknown_columns_even_if_url_requests_skipping_them(
     ]);
 
     assert!(matches!(
-        litellm_traces::insert_rows(
+        litellm_traces_clickhouse::insert_rows(
             &database.client,
             &writer,
             "trace_test",
@@ -277,7 +295,9 @@ async fn insert_rejects_unknown_columns_even_if_url_requests_skipping_them(
             vec![row]
         )
         .await,
-        Err(Error::InsertFailed(_))
+        Err(Error::Storage(
+            litellm_storage_clickhouse::Error::InsertFailed(_)
+        ))
     ));
     assert_eq!(table_rows(&database, "otel_traces").await?, 0);
     Ok(())
@@ -297,7 +317,7 @@ async fn retried_trace_insert_does_not_inflate_rollup(
         "TeamId": "team-1", "ApiKeyHash": "key-1", "SpanName": "root", "InputTokens": 7
     }))?;
     for _ in 0..2 {
-        litellm_traces::insert_rows(
+        litellm_traces_clickhouse::insert_rows(
             &database.client,
             &writer,
             "trace_test",
@@ -553,7 +573,10 @@ async fn schema_statement_timeout_maps_to_transport_error() -> TestResult {
     )
     .await;
     server.abort();
-    assert!(matches!(result, Ok(Err(Error::Transport))), "{result:?}");
+    assert!(
+        matches!(result, Ok(Err(Error::SchemaTransport))),
+        "{result:?}"
+    );
     Ok(())
 }
 
@@ -570,7 +593,7 @@ fn schema_rejects_invalid_configuration(#[case] database: &str, #[case] retentio
 async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
-    use litellm_traces::{LensQuery, Parameter};
+    use litellm_traces_clickhouse::{Parameter, ReadQuery};
     let database = database?;
     let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
@@ -616,10 +639,10 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
         ("execution_ids".into(), Parameter::Strings(vec![])),
     ]);
     let sample: serde_json::Value = serde_json::from_str(
-        &execute_read(
+        &execute_named_read(
             &database.client,
             &connection,
-            LensQuery::Sample.sql(),
+            ReadQuery::Sample,
             &parameters,
         )
         .await?,
@@ -640,10 +663,10 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
         ])
         .collect();
     let content: serde_json::Value = serde_json::from_str(
-        &execute_read(
+        &execute_named_read(
             &database.client,
             &connection,
-            LensQuery::Content.sql(),
+            ReadQuery::Content,
             &read_parameters,
         )
         .await?,
@@ -660,10 +683,10 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
         .chain([("quote".into(), Parameter::Text(opposite.into()))])
         .collect();
     let evidence: serde_json::Value = serde_json::from_str(
-        &execute_read(
+        &execute_named_read(
             &database.client,
             &connection,
-            LensQuery::Evidence.sql(),
+            ReadQuery::Evidence,
             &evidence_parameters,
         )
         .await?,
@@ -677,7 +700,7 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
 async fn lens_request_sample_does_not_trust_caller_tags(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
-    use litellm_traces::{LensQuery, Parameter};
+    use litellm_traces_clickhouse::{Parameter, ReadQuery};
     let database = database?;
     let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
@@ -712,10 +735,10 @@ async fn lens_request_sample_does_not_trust_caller_tags(
         ("execution_ids".into(), Parameter::Strings(vec![])),
     ]);
     let sample: serde_json::Value = serde_json::from_str(
-        &execute_read(
+        &execute_named_read(
             &database.client,
             &connection,
-            LensQuery::Sample.sql(),
+            ReadQuery::Sample,
             &parameters,
         )
         .await?,
@@ -742,7 +765,7 @@ async fn lens_selection_pages_without_losing_or_repeating_runs(
     #[case] page_size: usize,
     #[case] changing: bool,
 ) -> TestResult {
-    use litellm_traces::LensQuery;
+    use litellm_traces_clickhouse::ReadQuery;
     let database = database?;
     ensure_schema(
         &database.client,
@@ -781,10 +804,10 @@ async fn lens_selection_pages_without_losing_or_repeating_runs(
             ("selected_team".into(), Parameter::Text(String::new())),
             ("execution_ids".into(), Parameter::Strings(vec![])),
         ]);
-        let body = execute_read(
+        let body = execute_named_read(
             &database.client,
             &connection,
-            LensQuery::Sample.sql(),
+            ReadQuery::Sample,
             &parameters,
         )
         .await?;
@@ -822,7 +845,7 @@ async fn lens_content_keeps_output_visible_after_long_input(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
     #[case] input_length: usize,
 ) -> TestResult {
-    use litellm_traces::LensQuery;
+    use litellm_traces_clickhouse::ReadQuery;
     let database = database?;
     ensure_schema(
         &database.client,
@@ -846,10 +869,10 @@ async fn lens_content_keeps_output_visible_after_long_input(
         ("cursor".into(), Parameter::Text(String::new())),
         ("offset".into(), Parameter::Integer(1)),
     ]);
-    let body = execute_read(
+    let body = execute_named_read(
         &database.client,
         &connection,
-        LensQuery::Content.sql(),
+        ReadQuery::Content,
         &parameters,
     )
     .await?;
@@ -868,10 +891,10 @@ async fn lens_content_keeps_output_visible_after_long_input(
     let mut recovered = String::new();
     for offset in (2..original.len() + 2).step_by(8000) {
         parameters.insert("offset".into(), Parameter::Integer(offset as i64));
-        let body = execute_read(
+        let body = execute_named_read(
             &database.client,
             &connection,
-            LensQuery::Content.sql(),
+            ReadQuery::Content,
             &parameters,
         )
         .await?;
@@ -1042,7 +1065,7 @@ fn schema_includes_every_migration_file() -> TestResult {
 async fn lens_agent_discovery_and_selection_preserve_scope(
     #[future] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
-    use litellm_traces::LensQuery;
+    use litellm_traces_clickhouse::ReadQuery;
     let database = database.await?;
     let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
@@ -1073,10 +1096,10 @@ async fn lens_agent_discovery_and_selection_preserve_scope(
         ("key_hash".into(), Parameter::Text("one".into())),
     ]);
     let agents: serde_json::Value = serde_json::from_str(
-        &execute_read(
+        &execute_named_read(
             &database.client,
             &connection,
-            LensQuery::Agents.sql(),
+            ReadQuery::Agents,
             &scope_parameters,
         )
         .await?,
@@ -1117,10 +1140,10 @@ async fn lens_agent_discovery_and_selection_preserve_scope(
         ])
         .collect::<BTreeMap<_, _>>();
     let sample: serde_json::Value = serde_json::from_str(
-        &execute_read(
+        &execute_named_read(
             &database.client,
             &connection,
-            LensQuery::Sample.sql(),
+            ReadQuery::Sample,
             &parameters,
         )
         .await?,
@@ -1129,10 +1152,10 @@ async fn lens_agent_discovery_and_selection_preserve_scope(
     assert_eq!(sample["data"][0]["trace_id"], "research");
     assert_eq!(sample["data"][0]["span_count"], 2);
     let available: serde_json::Value = serde_json::from_str(
-        &execute_read(
+        &execute_named_read(
             &database.client,
             &connection,
-            LensQuery::Availability.sql(),
+            ReadQuery::Availability,
             &parameters,
         )
         .await?,
@@ -1207,8 +1230,9 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
         )
         .await?;
     }
-    let help: serde_json::Value =
-        serde_json::from_str(&litellm_traces::query_help(&database.client, &reader).await?)?;
+    let help: serde_json::Value = serde_json::from_str(
+        &litellm_traces_clickhouse::query_help(&database.client, &reader).await?,
+    )?;
     let keys: std::collections::BTreeSet<_> = help
         .as_object()
         .ok_or("missing help object")?
@@ -1318,7 +1342,8 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
                 "missing plain-text expression: {expression}"
             );
             let sql = format!("SELECT {expression} AS value FROM spend_logs FINAL");
-            let body = litellm_traces::query_sql(&database.client, &reader, &sql).await?;
+            let body =
+                litellm_traces_clickhouse::query_sql(&database.client, &reader, &sql).await?;
             let values: serde_json::Value = serde_json::from_str(&body)?;
             assert_ne!(values["data"][0]["value"], "");
         }
@@ -1336,7 +1361,7 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
                 .collect::<std::collections::BTreeSet<_>>(),
             std::collections::BTreeSet::from(["name", "sql"])
         );
-        let body = litellm_traces::query_sql(&database.client, &reader, sql).await?;
+        let body = litellm_traces_clickhouse::query_sql(&database.client, &reader, sql).await?;
         let values: serde_json::Value = serde_json::from_str(&body)?;
         assert_eq!(
             values["data"].as_array().ok_or("missing data")?.is_empty(),
@@ -1392,8 +1417,9 @@ async fn query_help_preserves_schema_and_guide_when_discovery_hits_reader_limits
     }))).collect::<Result<Vec<_>, _>>()?;
     insert_rows(&database, "otel_traces", spans).await?;
     let reader = Connection::configured(&database.url, "trace_test", "help_reader", "")?;
-    let help: serde_json::Value =
-        serde_json::from_str(&litellm_traces::query_help(&database.client, &reader).await?)?;
+    let help: serde_json::Value = serde_json::from_str(
+        &litellm_traces_clickhouse::query_help(&database.client, &reader).await?,
+    )?;
     assert_eq!(help["tables"].as_array().ok_or("tables")?.len(), 3);
     assert!(!help["examples"].as_array().ok_or("examples")?.is_empty());
     assert_eq!(
@@ -1426,4 +1452,28 @@ async fn query_help_preserves_schema_and_guide_when_discovery_hits_reader_limits
         );
     }
     Ok(())
+}
+
+#[rstest]
+fn field_definitions_match_serialized_normalized_span() {
+    use litellm_traces::decode_otlp;
+    use std::collections::BTreeSet;
+    let spans = decode_otlp(
+        br#"{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"11111111111111111111111111111111","spanId":"2222222222222222","name":"root"}]}]}]}"#,
+        Some("application/json"),
+    )
+    .expect("valid OTLP");
+    let fields = &spans[0].normalized;
+    let serialized = serde_json::to_value(fields).expect("serializable fields");
+    let keys: BTreeSet<_> = serialized
+        .as_object()
+        .expect("field object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let mapped: BTreeSet<_> = NORMALIZED_FIELD_DEFINITIONS
+        .iter()
+        .map(|field| field.name)
+        .collect();
+    assert_eq!(keys, mapped);
 }

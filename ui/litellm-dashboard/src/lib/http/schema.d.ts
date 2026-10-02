@@ -46838,10 +46838,162 @@ export interface components {
              */
             truncated: boolean;
         };
+        /** TraceQueryAttributeField */
+        TraceQueryAttributeField: {
+            /** Expression */
+            expression: string;
+            /** Key */
+            key: string;
+            /** Type */
+            type: string;
+        };
+        /** TraceQueryAttributes */
+        TraceQueryAttributes: {
+            /** Column */
+            column: string;
+            /** Discovery Sql */
+            discovery_sql: string;
+            /** Error */
+            error?: string | null;
+            /** Fields */
+            fields: components["schemas"]["TraceQueryAttributeField"][];
+            /** Scope */
+            scope: string;
+            /** Table */
+            table: string;
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** TraceQueryColumn */
+        TraceQueryColumn: {
+            /** Name */
+            name: string;
+            /** Type */
+            type: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** TraceQueryExample */
+        TraceQueryExample: {
+            /** Name */
+            name: string;
+            /** Sql */
+            sql: string;
+        };
+        /** TraceQueryHelp */
+        TraceQueryHelp: {
+            /** Access */
+            access: string;
+            /** Attributes */
+            attributes: components["schemas"]["TraceQueryAttributes"][];
+            /** Dialect */
+            dialect: string;
+            /** Examples */
+            examples: components["schemas"]["TraceQueryExample"][];
+            /** Gotchas */
+            gotchas: string[];
+            /** Guide */
+            guide: string;
+            metadata: components["schemas"]["TraceQueryMetadata"];
+            /** Normalized Fields */
+            normalized_fields: components["schemas"]["TraceQueryNormalizedField"][];
+            /** Relationships */
+            relationships: components["schemas"]["TraceQueryRelationship"][];
+            /** Response */
+            response: string;
+            /** Tables */
+            tables: components["schemas"]["TraceQueryTable"][];
+        };
+        /** TraceQueryMetadata */
+        TraceQueryMetadata: {
+            /** Column */
+            column: string;
+            /** Error */
+            error?: string | null;
+            /** Fields */
+            fields: components["schemas"]["TraceQueryMetadataField"][];
+            /** Invalid Json Rows */
+            invalid_json_rows: number;
+            /** Sample Sql */
+            sample_sql: string;
+            /** Sampled Rows */
+            sampled_rows: number;
+            /** Scope */
+            scope: string;
+            /** Table */
+            table: string;
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** TraceQueryMetadataField */
+        TraceQueryMetadataField: {
+            /** Expression */
+            expression: string;
+            /** Path */
+            path: (string | number)[];
+            /** Types */
+            types: string[];
+        };
+        /** TraceQueryNormalizedField */
+        TraceQueryNormalizedField: {
+            /** Column */
+            column: string;
+            /** Meaning */
+            meaning: string;
+            /** Name */
+            name: string;
+            /** Table */
+            table: string;
+            /** Type */
+            type: string;
+        };
+        /** TraceQueryRelationship */
+        TraceQueryRelationship: {
+            /** Additional Predicates */
+            additional_predicates: string;
+            /** Left */
+            left: string;
+            /** Meaning */
+            meaning: string;
+            /** Right */
+            right: string;
+        };
         /** TraceQueryRequest */
         TraceQueryRequest: {
             /** Sql */
             sql: string;
+        };
+        /** TraceQueryStatistics */
+        TraceQueryStatistics: {
+            /** Bytes Read */
+            bytes_read: number | string;
+            /** Elapsed */
+            elapsed: number;
+            /** Rows Read */
+            rows_read: number | string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** TraceQueryTable */
+        TraceQueryTable: {
+            /** Columns */
+            columns: components["schemas"]["TraceQueryColumn"][];
+            /** Name */
+            name: string;
+        };
+        /** TraceSQLResponse */
+        TraceSQLResponse: {
+            /** Data */
+            data: {
+                [key: string]: components["schemas"]["JsonValue"];
+            }[];
+            /** Meta */
+            meta: components["schemas"]["TraceQueryColumn"][];
+            /** Rows */
+            rows: number | string;
+            statistics: components["schemas"]["TraceQueryStatistics"];
+        } & {
+            [key: string]: unknown;
         };
         /** TraceSummary */
         TraceSummary: {
@@ -79702,7 +79854,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TraceSQLResponse"];
                 };
             };
             /** @description Validation Error */
@@ -79731,7 +79883,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TraceQueryHelp"];
                 };
             };
         };

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from litellm.rust_bridge.trace_queries import SPAN_ERROR, SpanErrorParams, SpanErrorRow, SpendRow
 from litellm.tracing.store import (
     TraceStore,
     agent_nodes,
@@ -292,11 +293,11 @@ async def test_list_traces_sets_next_cursor_on_full_page():
     assert page["next_cursor"] is not None
     assert decode_cursor(page["next_cursor"]) == (900, "ref1")
     params = client.query.call_args.args[1]
-    assert params["team_ids"] == ("team-a",) and params["limit"] == 2 and params["cursor_ms"] == 0
+    assert params.team_ids == ("team-a",) and params.limit == 2 and params.cursor_ms == 0
 
     page = await store.list_traces(scope, 0, 2000, cursor=page["next_cursor"], limit=3)
     assert page["next_cursor"] is None
-    assert client.query.call_args.args[1]["cursor_trace_id"] == "ref1"
+    assert client.query.call_args.args[1].cursor_trace_id == "ref1"
 
 
 @pytest.mark.asyncio
@@ -354,7 +355,7 @@ async def test_trace_cost_is_scoped_and_counts_repeated_request_once():
             "start_ms": T0 // MS,
         },
     ]
-    client.query = AsyncMock(side_effect=[spans, spend])
+    client.query = AsyncMock(side_effect=[spans, tuple(SpendRow.model_validate(row) for row in spend)])
     store = TraceStore(client)
     scope: TraceScope = {"team_ids": ("team-a",), "api_key_hash": ""}
 
@@ -364,7 +365,7 @@ async def test_trace_cost_is_scoped_and_counts_repeated_request_once():
     assert trace["summary"]["spend"] == 0.25
     assert trace["agents"][0]["spend"] == 0.25
     assert [span["spend"] for span in trace["spans"]] == [None, 0.25, 0.25]
-    assert [call.args[0] for call in client.query.await_args_list] == ["trace_spans", "spend_by_response_ids"]
+    assert [call.args[0].name for call in client.query.await_args_list] == ["trace_spans", "spend_by_response_ids"]
 
 
 @pytest.mark.asyncio
@@ -403,13 +404,13 @@ async def test_run_list_uses_matching_spend_and_leaves_missing_cost_unavailable(
             "start_ms": 1000,
         }
     ]
-    client.query = AsyncMock(side_effect=[rows, spend])
+    client.query = AsyncMock(side_effect=[rows, tuple(SpendRow.model_validate(row) for row in spend)])
     scope: TraceScope = {"team_ids": ("team-a",), "api_key_hash": ""}
 
     page = await TraceStore(client).list_traces(scope, 0, 2000)
 
     assert [run["spend"] for run in page["data"]] == [0.25, None]
-    assert [call.args[0] for call in client.query.await_args_list] == ["list_traces", "spend_by_response_ids"]
+    assert [call.args[0].name for call in client.query.await_args_list] == ["list_traces", "spend_by_response_ids"]
 
 
 @pytest.mark.asyncio
@@ -427,7 +428,7 @@ async def test_ambiguous_cache_response_id_keeps_cost_unavailable():
         }
         for request_id, cost in (("response-1", 0.25), ("response-1_cache_hit123", 0.0))
     ]
-    client.query = AsyncMock(side_effect=[[span], spend])
+    client.query = AsyncMock(side_effect=[[span], tuple(SpendRow.model_validate(row) for row in spend)])
     store = TraceStore(client)
     scope: TraceScope = {"team_ids": ("",), "api_key_hash": "key-a"}
 
@@ -447,8 +448,8 @@ async def test_diagnostic_continuation_preserves_content_version_scope_and_unico
     client = MagicMock()
     client.query = AsyncMock(
         side_effect=[
-            [{"span_id": "span-1", "message": "first 🧪", "total_chars": len(message), "version": version}],
-            [{"span_id": "span-1", "message": "\nlast", "total_chars": len(message), "version": version}],
+            [SpanErrorRow(span_id="span-1", message="first 🧪", total_chars=len(message), version=version)],
+            [SpanErrorRow(span_id="span-1", message="\nlast", total_chars=len(message), version=version)],
         ]
     )
     store = TraceStore(client)
@@ -460,15 +461,15 @@ async def test_diagnostic_continuation_preserves_content_version_scope_and_unico
     assert first["message"] + last["message"] == message
     assert last["next_cursor"] is None
     client.query.assert_awaited_with(
-        "span_error",
-        {
+        SPAN_ERROR,
+        SpanErrorParams(
             **scope,
-            "trace_id": "trace-1",
-            "span_id": "span-1",
-            "trace_ref": "scoped-run",
-            "error_offset": len(first["message"]),
-            "error_version": version,
-        },
+            trace_id="trace-1",
+            span_id="span-1",
+            trace_ref="scoped-run",
+            error_offset=len(first["message"]),
+            error_version=version,
+        ),
     )
 
 

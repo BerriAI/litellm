@@ -1,4 +1,5 @@
-use litellm_storage_clickhouse::{Error, Storage};
+use crate::Error;
+use litellm_storage_clickhouse::Storage;
 
 #[derive(Clone)]
 pub struct Config {
@@ -8,7 +9,7 @@ pub struct Config {
 
 impl Config {
     pub fn new(database: String, url: &str, retention_days: u32) -> Result<Self, Error> {
-        crate::schema_statements(&database, retention_days)?;
+        super::schema_statements(&database, retention_days)?;
         Ok(Self {
             storage: Storage::new(database, url)?,
             retention_days,

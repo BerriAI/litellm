@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Annotated, Final, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -15,6 +15,21 @@ from litellm._logging import verbose_logger
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE
 from litellm.integrations.clickhouse.schema import (
     OTEL_TRACES_TABLE,
+)
+from litellm.rust_bridge.trace_queries import (
+    LIST_TRACES,
+    SPAN_DETAIL,
+    SPAN_ERROR,
+    SPEND_BY_RESPONSE_IDS,
+    TRACE_SPANS,
+    ListTracesParams,
+    ListTracesRow,
+    SpanDetailParams,
+    SpanErrorParams,
+    SpendByResponseIdsParams,
+    SpendRow,
+    TraceSpansParams,
+    TraceSpansRow,
 )
 from litellm.rust_bridge.traces import ClickHouseStorage
 from litellm.tracing.types import (
@@ -33,7 +48,11 @@ from litellm.tracing.ui_format import to_ui_content
 
 NANOS_PER_MS: Final = 1_000_000
 SPEND_WINDOW_MS: Final = 30 * 60 * 1000
-_STATUS: Final = MappingProxyType({"STATUS_CODE_OK": "ok", "STATUS_CODE_ERROR": "error"})
+_STATUS: Final[Mapping[str, SpanStatus]] = MappingProxyType({"STATUS_CODE_OK": "ok", "STATUS_CODE_ERROR": "error"})
+
+
+TraceCursorParts: TypeAlias = tuple[Annotated[int, Field(gt=0)], Annotated[str, Field(min_length=1)]]
+_TRACE_CURSOR: Final[TypeAdapter[TraceCursorParts]] = TypeAdapter(TraceCursorParts)
 
 
 class _ErrorCursor(BaseModel):
@@ -42,38 +61,14 @@ class _ErrorCursor(BaseModel):
     version: str = Field(pattern=r"^[A-F0-9]{64}$")
 
 
-class _ErrorRow(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    span_id: str
-    message: str
-    total_chars: int
-    version: str
-
-
-class _SpendRow(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    request_id: str
-    response_id: str
-    team_id: str
-    api_key: str
-    spend: float
-    start_ms: int
-
-
-_SPEND_ROWS: Final = TypeAdapter(tuple[_SpendRow, ...])
-
-
-def _spend_for(request_id: str, team_id: str, api_key_hash: str, rows: Sequence[_SpendRow]) -> float | None:
+def _spend_for(request_id: str, team_id: str, api_key_hash: str, rows: Sequence[SpendRow]) -> float | None:
     matches: Final = tuple(
         row for row in rows if row.response_id == request_id and row.team_id == team_id and row.api_key == api_key_hash
     )
     return matches[0].spend if len(matches) == 1 else None
 
 
-def _trace_spend(
-    request_ids: Sequence[str], team_id: str, api_key_hash: str, rows: Sequence[_SpendRow]
-) -> float | None:
+def _trace_spend(request_ids: Sequence[str], team_id: str, api_key_hash: str, rows: Sequence[SpendRow]) -> float | None:
     ids: Final = frozenset(request_id for request_id in request_ids if request_id)
     costs: Final = tuple(_spend_for(request_id, team_id, api_key_hash, rows) for request_id in ids)
     return (
@@ -89,18 +84,7 @@ def decode_cursor(cursor: str | None) -> tuple[int, str]:
     if not cursor:
         return 0, ""
     try:
-        value: Final = json.loads(base64.b64decode(cursor, altchars=b"-_", validate=True))
-        if (
-            not isinstance(value, list)
-            or len(value) != 2
-            or not isinstance(value[0], int)
-            or isinstance(value[0], bool)
-            or value[0] <= 0
-            or not isinstance(value[1], str)
-            or not value[1]
-        ):
-            raise ValueError("Invalid trace cursor")
-        return value[0], value[1]
+        return _TRACE_CURSOR.validate_json(base64.b64decode(cursor, altchars=b"-_", validate=True), strict=True)
     except (ValueError, UnicodeError, binascii.Error) as error:
         raise ValueError("Invalid trace cursor") from error
 
@@ -113,7 +97,7 @@ def _status(code: str) -> SpanStatus:
     return _STATUS.get(code, "unset")
 
 
-def trace_summary_from_row(row: dict[str, Any], spend_rows: Sequence[_SpendRow] = ()) -> TraceSummary:
+def trace_summary_from_row(row: ListTracesRow, spend_rows: Sequence[SpendRow] = ()) -> TraceSummary:
     return TraceSummary(
         trace_id=row["trace_id"],
         trace_ref=row.get("trace_ref", ""),
@@ -138,7 +122,7 @@ def trace_summary_from_row(row: dict[str, Any], spend_rows: Sequence[_SpendRow] 
     )
 
 
-def span_from_row(row: dict[str, Any], trace_start_ns: int, spend_rows: Sequence[_SpendRow] = ()) -> Span:
+def span_from_row(row: TraceSpansRow, trace_start_ns: int, spend_rows: Sequence[SpendRow] = ()) -> Span:
     return Span(
         span_id=row["span_id"],
         parent_span_id=row["parent_span_id"] or None,
@@ -234,7 +218,7 @@ def _agent_spend(spans: Sequence[Span], agent_name: str) -> float | None:
 
 
 def trace_from_rows(
-    trace_id: str, rows: list[dict[str, Any]], trace_ref: str = "", spend_rows: Sequence[_SpendRow] = ()
+    trace_id: str, rows: Sequence[TraceSpansRow], trace_ref: str = "", spend_rows: Sequence[SpendRow] = ()
 ) -> Trace | None:
     if not rows:
         return None
@@ -286,26 +270,24 @@ class TraceStore:
 
     async def _spend_rows(
         self, scope: TraceScope, request_ids: Sequence[str], start_ms: int, end_ms: int
-    ) -> tuple[_SpendRow, ...]:
+    ) -> tuple[SpendRow, ...]:
         ids: Final = tuple(sorted(frozenset(request_id for request_id in request_ids if request_id)))
         if not ids:
             return ()
         try:
             rows: Final = await self.storage.query(
-                "spend_by_response_ids",
-                MappingProxyType(
-                    {
-                        **scope,
-                        "response_ids": ids,
-                        "start_ms": start_ms - SPEND_WINDOW_MS,
-                        "end_ms": end_ms + SPEND_WINDOW_MS,
-                    }
+                SPEND_BY_RESPONSE_IDS,
+                SpendByResponseIdsParams(
+                    **scope,
+                    response_ids=ids,
+                    start_ms=start_ms - SPEND_WINDOW_MS,
+                    end_ms=end_ms + SPEND_WINDOW_MS,
                 ),
             )
         except RuntimeError as error:
             verbose_logger.warning("Trace spend lookup unavailable: %s", error)
             return ()
-        return _SPEND_ROWS.validate_python(rows)
+        return tuple(rows)
 
     async def list_traces(
         self,
@@ -316,17 +298,15 @@ class TraceStore:
         limit: int = AGENT_TRACING_LIST_PAGE_SIZE,
     ) -> TracePage:
         cursor_ms, cursor_trace_id = decode_cursor(cursor)
-        rows = await self.storage.query(
-            "list_traces",
-            MappingProxyType(
-                {
-                    **scope,
-                    "start_ms": start_ms,
-                    "end_ms": end_ms,
-                    "cursor_ms": cursor_ms,
-                    "cursor_trace_id": cursor_trace_id,
-                    "limit": limit,
-                }
+        rows: Final = await self.storage.query(
+            LIST_TRACES,
+            ListTracesParams(
+                **scope,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                cursor_ms=cursor_ms,
+                cursor_trace_id=cursor_trace_id,
+                limit=limit,
             ),
         )
         spend_rows: Final = await self._spend_rows(
@@ -335,12 +315,14 @@ class TraceStore:
             min((int(row["start_ms"]) for row in rows), default=start_ms),
             max((int(row["start_ms"]) + int(row["duration_ms"]) for row in rows), default=end_ms),
         )
-        next_cursor = encode_cursor(int(rows[-1]["start_ms"]), rows[-1]["trace_ref"]) if len(rows) == limit else None
+        next_cursor: Final = (
+            encode_cursor(int(rows[-1]["start_ms"]), rows[-1]["trace_ref"]) if len(rows) == limit else None
+        )
         return TracePage(data=tuple(trace_summary_from_row(r, spend_rows) for r in rows), next_cursor=next_cursor)
 
     async def get_trace(self, trace_id: str, scope: TraceScope, trace_ref: str = "") -> Trace | None:
-        rows = await self.storage.query(
-            "trace_spans", MappingProxyType({**scope, "trace_id": trace_id, "trace_ref": trace_ref})
+        rows: Final = await self.storage.query(
+            TRACE_SPANS, TraceSpansParams(**scope, trace_id=trace_id, trace_ref=trace_ref)
         )
         spend_rows: Final = await self._spend_rows(
             scope,
@@ -351,9 +333,9 @@ class TraceStore:
         return trace_from_rows(trace_id, rows, trace_ref, spend_rows)
 
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
-        rows = await self.storage.query(
-            "span_detail",
-            MappingProxyType({**scope, "trace_id": trace_id, "span_id": span_id, "trace_ref": trace_ref}),
+        rows: Final = await self.storage.query(
+            SPAN_DETAIL,
+            SpanDetailParams(**scope, trace_id=trace_id, span_id=span_id, trace_ref=trace_ref),
         )
         if not rows:
             return None
@@ -363,7 +345,7 @@ class TraceStore:
             output=rows[0]["output"],
             input_ui=to_ui_content(rows[0]["input"]),
             output_ui=to_ui_content(rows[0]["output"]),
-            attributes=rows[0]["attributes"],
+            attributes=dict(rows[0]["attributes"]),
         )
 
     async def get_span_error(
@@ -378,21 +360,19 @@ class TraceStore:
         except (ValueError, binascii.Error) as error:
             raise ValueError("Invalid diagnostic cursor") from error
         rows: Final = await self.storage.query(
-            "span_error",
-            MappingProxyType(
-                {
-                    **scope,
-                    "trace_id": trace_id,
-                    "span_id": span_id,
-                    "trace_ref": trace_ref,
-                    "error_offset": position.offset if position else 0,
-                    "error_version": position.version if position else "",
-                }
+            SPAN_ERROR,
+            SpanErrorParams(
+                **scope,
+                trace_id=trace_id,
+                span_id=span_id,
+                trace_ref=trace_ref,
+                error_offset=position.offset if position else 0,
+                error_version=position.version if position else "",
             ),
         )
         if not rows:
             return None
-        row: Final = _ErrorRow.model_validate(rows[0])
+        row: Final = rows[0]
         offset: Final = (position.offset if position else 0) + len(row.message)
         continuation: Final = _ErrorCursor(offset=offset, version=row.version) if offset < row.total_chars else None
         return SpanErrorPage(

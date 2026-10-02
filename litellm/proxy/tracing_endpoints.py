@@ -23,6 +23,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
+from litellm.rust_bridge.trace_query_responses import TraceQueryHelp, TraceSQLResponse
 from litellm.rust_bridge.traces import ClickHouseStorage, QueryScope
 from litellm.tracing import (
     Tenant,
@@ -182,15 +183,13 @@ async def provide_trace_query_access(
     return TraceQueryAccess(require_receiver(tracing).store.storage, trace_query_scope(auth), secret)
 
 
-@router.post("/v1/traces/query")
+@router.post("/v1/traces/query", response_model=TraceSQLResponse, response_model_exclude_unset=True)
 async def query_agent_traces(
     body: TraceQueryRequest,
     access: Annotated[TraceQueryAccess, Depends(provide_trace_query_access)],
-) -> Response:
+) -> TraceSQLResponse:
     try:
-        return Response(
-            content=await access.storage.query_sql(body.sql, access.scope, access.secret), media_type="application/json"
-        )
+        return await access.storage.query_sql(body.sql, access.scope, access.secret)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error:
@@ -198,14 +197,12 @@ async def query_agent_traces(
         raise HTTPException(status_code=503, detail="Trace SQL query failed or exceeded reader limits") from error
 
 
-@router.get("/v1/traces/query/help")
+@router.get("/v1/traces/query/help", response_model=TraceQueryHelp, response_model_exclude_unset=True)
 async def help_agent_trace_queries(
     access: Annotated[TraceQueryAccess, Depends(provide_trace_query_access)],
-) -> Response:
+) -> TraceQueryHelp:
     try:
-        return Response(
-            content=await access.storage.query_help(access.scope, access.secret), media_type="application/json"
-        )
+        return await access.storage.query_help(access.scope, access.secret)
     except RuntimeError as error:
         verbose_proxy_logger.warning("Trace query help unavailable: %s", error)
         raise HTTPException(status_code=503, detail="Trace query help is temporarily unavailable") from error

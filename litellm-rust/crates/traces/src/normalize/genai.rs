@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::{NormalizedSpan, ObservationType, SpanNormalizer, attr, first, usage_tokens};
-use crate::DecodeError;
+use crate::Error;
 
 pub(super) struct GenAiNormalizer;
 
@@ -30,7 +30,7 @@ impl SpanNormalizer for GenAiNormalizer {
         _name: &str,
         parent_span_id: &str,
         attributes: &BTreeMap<String, String>,
-    ) -> Result<NormalizedSpan, DecodeError> {
+    ) -> Result<NormalizedSpan, Error> {
         let (input_tokens, output_tokens) = usage_tokens(attributes)?;
         let observation_type = match attr(attributes, "gen_ai.operation.name") {
             "invoke_agent" => ObservationType::Agent,

@@ -5,8 +5,9 @@ use std::{
 
 use flate2::read::GzDecoder;
 use litellm_http::Client;
-use litellm_traces::{
-    Connection, Error, InsertRow, InsertTable, Shared, encode_rows, insert_shared_rows,
+use litellm_traces::Shared;
+use litellm_traces_clickhouse::{
+    Connection, Error, InsertRow, InsertTable, encode_rows, insert_shared_rows,
 };
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};

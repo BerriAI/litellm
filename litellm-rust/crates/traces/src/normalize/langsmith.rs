@@ -5,7 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Value, ser::Formatter};
 
 use super::{NormalizedSpan, ObservationType, SpanNormalizer, attr, usage_tokens};
-use crate::DecodeError;
+use crate::Error;
 
 pub(super) struct LangSmithNormalizer;
 
@@ -404,7 +404,7 @@ impl SpanNormalizer for LangSmithNormalizer {
         name: &str,
         parent_span_id: &str,
         attributes: &BTreeMap<String, String>,
-    ) -> Result<NormalizedSpan, DecodeError> {
+    ) -> Result<NormalizedSpan, Error> {
         let (input_tokens, output_tokens) = usage_tokens(attributes)?;
         let observation_type = span_type(name, parent_span_id, attributes);
         let io = span_io(observation_type, attributes);

@@ -12,7 +12,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::{Connection, Error, Shared};
+use super::{Connection, Error};
+use litellm_traces::Shared;
 
 const MAX_INSERT_BYTES: usize = 64 * 1024 * 1024;
 
@@ -71,6 +72,7 @@ pub async fn insert_shared_rows(
         body,
     )
     .await
+    .map_err(Error::from)
 }
 
 fn shared_rows(rows: Vec<BTreeMap<String, Value>>) -> Vec<InsertRow> {
@@ -226,8 +228,8 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
+    use super::Error;
     use super::{shared_rows, write_rows};
-    use crate::Error;
 
     #[rstest]
     fn encoded_limit_counts_utf8_bytes_across_rows() {

@@ -133,7 +133,7 @@ fn rejects_ids_and_timestamps_that_cannot_be_stored(
     };
     assert!(matches!(
         decode_otlp(&request_with(span).encode_to_vec(), None),
-        Err(litellm_traces::DecodeError::InvalidPayload)
+        Err(litellm_traces::Error::InvalidPayload)
     ));
 }
 
@@ -216,7 +216,7 @@ fn nested_values_are_serialized_once(span: opentelemetry_proto::tonic::trace::v1
 fn rejects_json_structure_before_building_a_tree(#[case] body: Vec<u8>) {
     assert!(matches!(
         decode_otlp(&body, Some("application/json")),
-        Err(litellm_traces::DecodeError::TooLarge)
+        Err(litellm_traces::Error::TooLarge)
     ));
 }
 
@@ -252,7 +252,7 @@ fn protobuf_preflight_rejects_expansion_before_prost_allocates(
     let body = request.encode_to_vec();
     assert!(matches!(
         decode_otlp(&body, None),
-        Err(litellm_traces::DecodeError::TooLarge)
+        Err(litellm_traces::Error::TooLarge)
     ));
 }
 
@@ -310,7 +310,7 @@ fn unique_attribute_expansion_still_respects_decoded_budget(
     assert!(body.len() < 16 * 1024 * 1024);
     assert!(matches!(
         decode_otlp(&body, None),
-        Err(litellm_traces::DecodeError::TooLarge)
+        Err(litellm_traces::Error::TooLarge)
     ));
 }
 
@@ -338,7 +338,7 @@ fn escaped_attribute_expansion_is_bounded_below_four_mib(
     assert!(body.len() < 4 * 1024 * 1024);
     assert!(matches!(
         decode_otlp(&body, None),
-        Err(litellm_traces::DecodeError::TooLarge)
+        Err(litellm_traces::Error::TooLarge)
     ));
 }
 

@@ -2,10 +2,8 @@ use std::collections::BTreeMap;
 
 use litellm_host_python::{FromPythonCache, ToPythonCache};
 use litellm_http::ClientVariant;
-use litellm_traces::{
-    Config, Error, InsertTable, Parameter, QueryAccessError, QueryReaders, QueryScope, ReadQuery,
-    Shared,
-};
+use litellm_traces::{QueryScope, ReadQuery, Shared};
+use litellm_traces_clickhouse::{Config, Error, InsertTable, Parameter, QueryReaders};
 use prost::Message;
 use pyo3::{
     exceptions::{PyOverflowError, PyRuntimeError, PyValueError},
@@ -31,35 +29,53 @@ pub fn trace_encode_error<'py>(py: Python<'py>, message: &str) -> Bound<'py, PyB
 }
 
 fn map_error(error: Error) -> PyErr {
+    map_error_ref(&error)
+}
+
+fn map_error_ref(error: &Error) -> PyErr {
+    use litellm_storage_clickhouse::Error as StorageError;
+
     match error {
         Error::InvalidRow
         | Error::InvalidTable
         | Error::InvalidSchema
-        | Error::EmptySql
-        | Error::InvalidQuery => PyValueError::new_err(error.to_string()),
+        | Error::InvalidQuery
+        | Error::InvalidParameters
+        | Error::InvalidScope => PyValueError::new_err(error.to_string()),
         Error::InsertTooLarge => PyOverflowError::new_err(error.to_string()),
-        Error::InvalidUrl
-        | Error::QueryFailed(_)
-        | Error::InsertFailed(_)
-        | Error::SchemaFailed(_)
-        | Error::ResponseTooLarge
-        | Error::InvalidResponse
-        | Error::Transport => PyRuntimeError::new_err(error.to_string()),
+        Error::SchemaFailed(_)
+        | Error::SchemaTransport
+        | Error::MissingSecret
+        | Error::Busy
+        | Error::ProvisionFailed(_)
+        | Error::ProvisionTransport
+        | Error::InvalidResponse => PyRuntimeError::new_err(error.to_string()),
+        Error::Cached(source) => map_error_ref(source),
+        Error::Storage(source) => match source {
+            StorageError::InvalidRow
+            | StorageError::InvalidTable
+            | StorageError::InvalidSchema
+            | StorageError::EmptySql
+            | StorageError::InvalidParameters
+            | StorageError::InvalidQuery => PyValueError::new_err(error.to_string()),
+            StorageError::InsertTooLarge => PyOverflowError::new_err(error.to_string()),
+            StorageError::InvalidUrl
+            | StorageError::QueryFailed(_)
+            | StorageError::InsertFailed(_)
+            | StorageError::SchemaFailed(_)
+            | StorageError::ResponseTooLarge
+            | StorageError::InvalidResponse
+            | StorageError::Transport => PyRuntimeError::new_err(error.to_string()),
+        },
     }
 }
 
 fn map_sql_error(error: Error) -> PyErr {
     match error {
-        Error::QueryFailed(400 | 404) => PyValueError::new_err(error.to_string()),
+        Error::Storage(litellm_storage_clickhouse::Error::QueryFailed(400 | 404)) => {
+            PyValueError::new_err(error.to_string())
+        }
         error => map_error(error),
-    }
-}
-
-fn map_query_access_error(error: QueryAccessError) -> PyErr {
-    match error {
-        QueryAccessError::Storage(error) => map_sql_error(error),
-        QueryAccessError::InvalidScope => PyValueError::new_err(error.to_string()),
-        error => PyRuntimeError::new_err(error.to_string()),
     }
 }
 
@@ -105,7 +121,13 @@ impl NativeTraceStorage {
         crate::execution::run_async(
             py,
             async move {
-                litellm_traces::ensure_schema(&client, &connection, &database, retention_days).await
+                litellm_traces_clickhouse::ensure_schema(
+                    &client,
+                    &connection,
+                    &database,
+                    retention_days,
+                )
+                .await
             },
             map_error,
         )
@@ -115,7 +137,7 @@ impl NativeTraceStorage {
         &self,
         py: Python<'py>,
         table: &str,
-        #[pyo3(from_py_with = insert_rows_from_py)] rows: Vec<litellm_traces::InsertRow>,
+        #[pyo3(from_py_with = insert_rows_from_py)] rows: Vec<litellm_traces_clickhouse::InsertRow>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let table = InsertTable::parse(table).map_err(map_error)?;
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
@@ -124,8 +146,14 @@ impl NativeTraceStorage {
         crate::execution::run_async(
             py,
             async move {
-                litellm_traces::insert_shared_rows(&client, &connection, &database, table, rows)
-                    .await
+                litellm_traces_clickhouse::insert_shared_rows(
+                    &client,
+                    &connection,
+                    &database,
+                    table,
+                    rows,
+                )
+                .await
             },
             map_error,
         )
@@ -139,7 +167,9 @@ impl NativeTraceStorage {
         secret: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         if sql.trim().is_empty() {
-            return Err(map_error(Error::EmptySql));
+            return Err(map_error(
+                litellm_storage_clickhouse::Error::EmptySql.into(),
+            ));
         }
         let readers = self.query_readers.clone();
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
@@ -148,11 +178,9 @@ impl NativeTraceStorage {
             async move {
                 let _permit = readers.acquire()?;
                 let connection = readers.connection(&client, &scope, &secret).await?;
-                litellm_traces::query_sql(&client, &connection, &sql)
-                    .await
-                    .map_err(QueryAccessError::Storage)
+                litellm_traces_clickhouse::query_sql(&client, &connection, &sql).await
             },
-            map_query_access_error,
+            map_sql_error,
         )
     }
 
@@ -169,32 +197,9 @@ impl NativeTraceStorage {
             async move {
                 let _permit = readers.acquire()?;
                 let connection = readers.connection(&client, &scope, &secret).await?;
-                litellm_traces::query_help(&client, &connection)
-                    .await
-                    .map_err(QueryAccessError::Storage)
+                litellm_traces_clickhouse::query_help(&client, &connection).await
             },
-            map_query_access_error,
-        )
-    }
-
-    fn lens_query<'py>(
-        &self,
-        py: Python<'py>,
-        name: &str,
-        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] parameters: BTreeMap<
-            String,
-            Parameter,
-        >,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let query = litellm_traces::LensQuery::parse(name).map_err(map_error)?;
-        let connection = self.config.storage().reader().clone();
-        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
-        crate::execution::run_async(
-            py,
-            async move {
-                litellm_traces::execute_read(&client, &connection, query.sql(), &parameters).await
-            },
-            map_error,
+            map_sql_error,
         )
     }
 
@@ -207,13 +212,20 @@ impl NativeTraceStorage {
             Parameter,
         >,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let query = ReadQuery::parse(query).map_err(map_error)?;
+        let query =
+            ReadQuery::parse(query).map_err(|error| PyValueError::new_err(error.to_string()))?;
         let connection = self.config.storage().reader().clone();
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         crate::execution::run_async(
             py,
             async move {
-                litellm_traces::execute_named_read(&client, &connection, query, &parameters).await
+                litellm_traces_clickhouse::execute_named_read(
+                    &client,
+                    &connection,
+                    query,
+                    &parameters,
+                )
+                .await
             },
             map_error,
         )
@@ -229,13 +241,15 @@ pub fn trace_decode_otlp<'py>(
     let spans = py
         .detach(|| litellm_traces::decode_otlp(body, content_type))
         .map_err(|error| match error {
-            litellm_traces::DecodeError::TooLarge => PyOverflowError::new_err(error.to_string()),
+            litellm_traces::Error::TooLarge => PyOverflowError::new_err(error.to_string()),
             _ => PyValueError::new_err(error.to_string()),
         })?;
     spans_to_py(py, &spans).map(Bound::into_any)
 }
 
-fn insert_rows_from_py(value: &Bound<'_, PyAny>) -> PyResult<Vec<litellm_traces::InsertRow>> {
+fn insert_rows_from_py(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Vec<litellm_traces_clickhouse::InsertRow>> {
     let mut resources = FromPythonCache::default();
     value
         .try_iter()?
@@ -321,6 +335,54 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
+    #[case::row(Error::InvalidRow, "ValueError")]
+    #[case::insert_budget(Error::InsertTooLarge, "OverflowError")]
+    #[case::scope(Error::InvalidScope, "ValueError")]
+    #[case::schema(Error::SchemaFailed(503), "RuntimeError")]
+    #[case::reader(Error::MissingSecret, "RuntimeError")]
+    #[case::storage(
+        Error::Storage(litellm_storage_clickhouse::Error::InvalidUrl),
+        "RuntimeError"
+    )]
+    #[case::cached_scope(Error::Cached(std::sync::Arc::new(Error::InvalidScope)), "ValueError")]
+    fn trace_failures_preserve_public_exception_types(
+        #[case] error: Error,
+        #[case] exception_name: &str,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let message = error.to_string();
+            let exception = map_error(error);
+            assert_eq!(exception.get_type(py).name().unwrap(), exception_name);
+            assert_eq!(
+                exception.value(py).str().unwrap().to_str().unwrap(),
+                message
+            );
+        });
+    }
+
+    #[rstest]
+    #[case::invalid_sql(400, "ValueError")]
+    #[case::missing_table(404, "ValueError")]
+    #[case::unavailable(503, "RuntimeError")]
+    fn wrapped_query_status_preserves_public_exception_type(
+        #[case] status: u16,
+        #[case] exception_name: &str,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = Error::Storage(litellm_storage_clickhouse::Error::QueryFailed(status));
+            let message = error.to_string();
+            let exception = map_sql_error(error);
+            assert_eq!(exception.get_type(py).name().unwrap(), exception_name);
+            assert_eq!(
+                exception.value(py).str().unwrap().to_str().unwrap(),
+                message
+            );
+        });
+    }
+
+    #[rstest]
     fn insert_projection_preserves_identity_without_merging_equal_resources() {
         Python::initialize();
         Python::attach(|py| {
@@ -365,5 +427,6 @@ mod tests {
 
 #[pyfunction]
 pub fn trace_normalized_field_definitions<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-    litellm_host_python::Pythonized(litellm_traces::NORMALIZED_FIELD_DEFINITIONS).into_pyobject(py)
+    litellm_host_python::Pythonized(litellm_traces_clickhouse::NORMALIZED_FIELD_DEFINITIONS)
+        .into_pyobject(py)
 }
