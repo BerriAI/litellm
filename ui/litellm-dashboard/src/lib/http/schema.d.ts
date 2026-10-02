@@ -44275,6 +44275,11 @@ export interface components {
              * @default false
              */
             is_control_plane: boolean;
+            /**
+             * Mcp Stdio Enabled
+             * @default false
+             */
+            mcp_stdio_enabled: boolean;
             /** Proxy Base Url */
             proxy_base_url: string | null;
             /** Server Root Path */
