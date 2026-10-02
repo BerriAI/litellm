@@ -3432,6 +3432,53 @@
           "title": "BreakdownMetrics",
           "type": "object"
         },
+        "DailyActivityKeyPageResponse": {
+          "properties": {
+            "api_keys": {
+              "items": {
+                "$ref": "#/components/schemas/KeySpendActivityRow"
+              },
+              "title": "Api Keys",
+              "type": "array"
+            },
+            "limit": {
+              "title": "Limit",
+              "type": "integer"
+            },
+            "offset": {
+              "title": "Offset",
+              "type": "integer"
+            },
+            "total_api_keys": {
+              "title": "Total Api Keys",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "api_keys",
+            "total_api_keys",
+            "offset",
+            "limit"
+          ],
+          "title": "DailyActivityKeyPageResponse",
+          "type": "object"
+        },
+        "DailyActivityKeySearchResponse": {
+          "properties": {
+            "api_keys": {
+              "items": {
+                "$ref": "#/components/schemas/KeyActivityRow"
+              },
+              "title": "Api Keys",
+              "type": "array"
+            }
+          },
+          "required": [
+            "api_keys"
+          ],
+          "title": "DailyActivityKeySearchResponse",
+          "type": "object"
+        },
         "DailySpendData": {
           "properties": {
             "breakdown": {
@@ -3455,6 +3502,33 @@
         },
         "DailySpendMetadata": {
           "properties": {
+            "api_key_limit": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.",
+              "title": "Api Key Limit"
+            },
+            "entity_total_api_keys": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distinct API keys per entity over the requested range, set when the entity breakdown is included. When an entity's count exceeds api_key_limit, its api_key_breakdown lists only its keys among the top api_key_limit keys overall.",
+              "title": "Entity Total Api Keys"
+            },
             "has_more": {
               "default": false,
               "title": "Has More",
@@ -3464,6 +3538,18 @@
               "default": 1,
               "title": "Page",
               "type": "integer"
+            },
+            "total_api_keys": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.",
+              "title": "Total Api Keys"
             },
             "total_api_requests": {
               "default": 0,
@@ -3614,6 +3700,16 @@
           "title": "EntraIdentityConfig",
           "type": "object"
         },
+        "ExportType": {
+          "enum": [
+            "daily",
+            "daily_with_keys",
+            "daily_with_models",
+            "daily_with_users"
+          ],
+          "title": "ExportType",
+          "type": "string"
+        },
         "HTTPAuthSecurityScheme": {
           "description": "Defines a security scheme using HTTP authentication.",
           "properties": {
@@ -3667,6 +3763,27 @@
             }
           },
           "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "KeyActivityRow": {
+          "properties": {
+            "api_key": {
+              "title": "Api Key",
+              "type": "string"
+            },
+            "metadata": {
+              "$ref": "#/components/schemas/KeyMetadata"
+            },
+            "metrics": {
+              "$ref": "#/components/schemas/SpendMetrics"
+            }
+          },
+          "required": [
+            "api_key",
+            "metrics",
+            "metadata"
+          ],
+          "title": "KeyActivityRow",
           "type": "object"
         },
         "KeyMetadata": {
@@ -3745,6 +3862,78 @@
             "metrics"
           ],
           "title": "KeyMetricWithMetadata",
+          "type": "object"
+        },
+        "KeySpendActivityRow": {
+          "properties": {
+            "api_key": {
+              "title": "Api Key",
+              "type": "string"
+            },
+            "metadata": {
+              "$ref": "#/components/schemas/KeyMetadata"
+            },
+            "metrics": {
+              "$ref": "#/components/schemas/KeySpendMetrics"
+            }
+          },
+          "required": [
+            "api_key",
+            "metrics",
+            "metadata"
+          ],
+          "title": "KeySpendActivityRow",
+          "type": "object"
+        },
+        "KeySpendMetrics": {
+          "properties": {
+            "api_requests": {
+              "default": 0,
+              "title": "Api Requests",
+              "type": "integer"
+            },
+            "cache_creation_input_tokens": {
+              "default": 0,
+              "title": "Cache Creation Input Tokens",
+              "type": "integer"
+            },
+            "cache_read_input_tokens": {
+              "default": 0,
+              "title": "Cache Read Input Tokens",
+              "type": "integer"
+            },
+            "completion_tokens": {
+              "default": 0,
+              "title": "Completion Tokens",
+              "type": "integer"
+            },
+            "failed_requests": {
+              "default": 0,
+              "title": "Failed Requests",
+              "type": "integer"
+            },
+            "prompt_tokens": {
+              "default": 0,
+              "title": "Prompt Tokens",
+              "type": "integer"
+            },
+            "spend": {
+              "default": 0.0,
+              "title": "Spend",
+              "type": "number"
+            },
+            "successful_requests": {
+              "default": 0,
+              "title": "Successful Requests",
+              "type": "integer"
+            },
+            "total_tokens": {
+              "default": 0,
+              "title": "Total Tokens",
+              "type": "integer"
+            }
+          },
+          "title": "KeySpendMetrics",
           "type": "object"
         },
         "MakeAgentsPublicRequest": {
@@ -3833,6 +4022,32 @@
             "metrics"
           ],
           "title": "MetricWithMetadata",
+          "type": "object"
+        },
+        "ModelTopKeysResponse": {
+          "properties": {
+            "api_keys": {
+              "items": {
+                "$ref": "#/components/schemas/KeySpendActivityRow"
+              },
+              "title": "Api Keys",
+              "type": "array"
+            },
+            "by_model_group": {
+              "title": "By Model Group",
+              "type": "boolean"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            }
+          },
+          "required": [
+            "model",
+            "by_model_group",
+            "api_keys"
+          ],
+          "title": "ModelTopKeysResponse",
           "type": "object"
         },
         "MutualTLSSecurityScheme": {
@@ -4431,6 +4646,876 @@
             }
           ],
           "summary": "Get Agent Daily Activity",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/aggregated": {
+        "get": {
+          "operationId": "get_agent_daily_activity_aggregated_agent_daily_activity_aggregated_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "api_key_limit",
+              "required": false,
+              "schema": {
+                "default": 100,
+                "maximum": 1000,
+                "minimum": 1,
+                "title": "Api Key Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            },
+            {
+              "in": "query",
+              "name": "api_key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Api Key"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SpendAnalyticsPaginatedResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Aggregated",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/aggregated/keys": {
+        "get": {
+          "operationId": "get_agent_daily_activity_aggregated_keys_agent_daily_activity_aggregated_keys_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "offset",
+              "required": false,
+              "schema": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 50,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            },
+            {
+              "in": "query",
+              "name": "api_key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Api Key"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/DailyActivityKeyPageResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Aggregated Keys",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/aggregated/model_top_keys": {
+        "get": {
+          "operationId": "get_agent_daily_activity_model_top_keys_agent_daily_activity_aggregated_model_top_keys_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "model_group",
+              "required": true,
+              "schema": {
+                "minLength": 1,
+                "title": "Model Group",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "by_model_group",
+              "required": false,
+              "schema": {
+                "default": true,
+                "title": "By Model Group",
+                "type": "boolean"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 5,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            },
+            {
+              "in": "query",
+              "name": "api_key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Api Key"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ModelTopKeysResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Model Top Keys",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/aggregated/search": {
+        "get": {
+          "operationId": "get_agent_daily_activity_aggregated_search_agent_daily_activity_aggregated_search_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "search",
+              "required": true,
+              "schema": {
+                "minLength": 1,
+                "title": "Search",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 100,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            },
+            {
+              "in": "query",
+              "name": "api_key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Api Key"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/DailyActivityKeySearchResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Aggregated Search",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/export": {
+        "get": {
+          "operationId": "get_agent_daily_activity_export_agent_daily_activity_export_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "export_type",
+              "required": false,
+              "schema": {
+                "$ref": "#/components/schemas/ExportType",
+                "default": "daily"
+              }
+            },
+            {
+              "in": "query",
+              "name": "format",
+              "required": false,
+              "schema": {
+                "default": "csv",
+                "enum": [
+                  "csv",
+                  "json"
+                ],
+                "title": "Format",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            },
+            {
+              "in": "query",
+              "name": "api_key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Api Key"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "text/csv": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Streamed daily activity export"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Export",
           "tags": [
             "agents"
           ]
@@ -33651,6 +34736,18 @@
         "Worker": {
           "additionalProperties": false,
           "properties": {
+            "analysis_key_id": {
+              "anyOf": [
+                {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Analysis Key Id"
+            },
             "id": {
               "title": "Id",
               "type": "string"
@@ -33702,6 +34799,11 @@
         },
         "WorkerName": {
           "properties": {
+            "analysis_key_id": {
+              "pattern": "^[a-f0-9]{64}$",
+              "title": "Analysis Key Id",
+              "type": "string"
+            },
             "name": {
               "default": "Lens worker",
               "maxLength": 100,
@@ -33710,6 +34812,9 @@
               "type": "string"
             }
           },
+          "required": [
+            "analysis_key_id"
+          ],
           "title": "WorkerName",
           "type": "object"
         }
@@ -34646,52 +35751,6 @@
           ]
         }
       },
-      "/engine/workers/register": {
-        "post": {
-          "operationId": "register_worker_engine_workers_register_post",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkerName"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/WorkerCreated"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Register Worker",
-          "tags": [
-            "mcp_discoverable"
-          ]
-        }
-      },
       "/guardrails/register": {
         "post": {
           "description": "Register a guardrail for onboarding (team submission).\n\nAccepts a guardrail config in the\n[Generic Guardrail API](https://docs.litellm.ai/docs/adding_provider/generic_guardrail_api) format.\nThe submission is stored with status `pending_review` until an admin approves it.",
@@ -34779,6 +35838,52 @@
             }
           ],
           "summary": "Introspect Endpoint",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/lens/workers/register": {
+        "post": {
+          "operationId": "register_worker_lens_workers_register_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerName"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WorkerCreated"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Register Worker",
           "tags": [
             "mcp_discoverable"
           ]
@@ -41264,6 +42369,39 @@
           "title": "ModelInsightDailyMetric",
           "type": "object"
         },
+        "ModelInsightDailyTotal": {
+          "properties": {
+            "completion_tokens": {
+              "title": "Completion Tokens",
+              "type": "integer"
+            },
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "prompt_tokens": {
+              "title": "Prompt Tokens",
+              "type": "integer"
+            },
+            "requests": {
+              "title": "Requests",
+              "type": "integer"
+            },
+            "spend": {
+              "title": "Spend",
+              "type": "number"
+            }
+          },
+          "required": [
+            "date",
+            "spend",
+            "prompt_tokens",
+            "completion_tokens",
+            "requests"
+          ],
+          "title": "ModelInsightDailyTotal",
+          "type": "object"
+        },
         "ModelInsightMetric": {
           "properties": {
             "completion_tokens": {
@@ -41395,6 +42533,13 @@
               "title": "Daily",
               "type": "array"
             },
+            "daily_totals": {
+              "items": {
+                "$ref": "#/components/schemas/ModelInsightDailyTotal"
+              },
+              "title": "Daily Totals",
+              "type": "array"
+            },
             "end_date": {
               "title": "End Date",
               "type": "string"
@@ -41415,6 +42560,7 @@
             "start_date",
             "end_date",
             "daily",
+            "daily_totals",
             "top_models"
           ],
           "title": "ModelInsightsResponse",
@@ -52061,6 +53207,16 @@
               ],
               "title": "Updated By"
             },
+            "user": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ToolDiscoveryUser"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "user_agent": {
               "anyOf": [
                 {
@@ -52097,6 +53253,41 @@
             "tool"
           ],
           "title": "ToolDetailResponse",
+          "type": "object"
+        },
+        "ToolDiscoveryUser": {
+          "properties": {
+            "user_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Alias"
+            },
+            "user_email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Email"
+            },
+            "user_id": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "user_id"
+          ],
+          "title": "ToolDiscoveryUser",
           "type": "object"
         },
         "ToolListResponse": {

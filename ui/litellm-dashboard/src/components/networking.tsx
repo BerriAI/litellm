@@ -115,13 +115,25 @@ import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
 import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
-import type { SpanDetail, Trace, TracePage } from "./view_logs/TraceView/traceTypes";
+import type { SpanDetail, SpanErrorPage, Trace, TracePage } from "./view_logs/TraceView/traceTypes";
 import {
   createApiClient,
   deriveErrorMessage,
   extractProxyErrorMessage,
   unwrapProxyErrorMessage,
+  type QueryParams,
 } from "@/lib/http/client";
+import type {
+  CacheLeakageKeysResponse,
+  DailyActivityAggregatedResponse,
+  DailyActivityEntity,
+  DailyActivityKeyPageResponse,
+  DailyActivityKeySearchResponse,
+  DailyActivityRequest,
+  ExportFormat,
+  ExportType,
+  ModelTopKeysResponse,
+} from "./UsagePage/dailyActivityApi";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
 import {
   registerAuthHeaderNameGetter,
@@ -1281,192 +1293,110 @@ export const transformRequestCall = async (accessToken: string, request: object)
   }
 };
 
-type DailyActivityQueryValue = string | number | string[] | null | undefined;
-
-const DEFAULT_DAILY_ACTIVITY_PAGE_SIZE = "1000";
-
-const appendDailyActivityQueryParam = (params: URLSearchParams, key: string, value: DailyActivityQueryValue) => {
-  if (value === null || value === undefined) {
-    return;
-  }
-
-  if (Array.isArray(value)) {
-    if (value.length > 0) {
-      params.append(key, value.join(","));
-    }
-    return;
-  }
-
-  params.append(key, `${value}`);
+const ENTITY_ID_QUERY_PARAM: Record<DailyActivityEntity, string> = {
+  user: "user_id",
+  team: "team_ids",
+  tag: "tags",
+  organization: "organization_ids",
+  customer: "end_user_ids",
+  agent: "agent_ids",
 };
 
-const buildDailyActivityUrl = (
-  endpoint: string,
-  startTime: Date,
-  endTime: Date,
-  page: number,
-  extraQueryParams?: Record<string, DailyActivityQueryValue>,
-) => {
-  const resolvedEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
-  const baseUrl = proxyBaseUrl ? `${proxyBaseUrl}${resolvedEndpoint}` : resolvedEndpoint;
-
-  const params = new URLSearchParams();
-  params.append("start_date", formatDate(startTime));
-  params.append("end_date", formatDate(endTime));
-  params.append("page_size", DEFAULT_DAILY_ACTIVITY_PAGE_SIZE);
-  params.append("page", page.toString());
-  // Send timezone offset so backend can adjust date range for UTC storage
-  params.append("timezone", new Date().getTimezoneOffset().toString());
-
-  if (extraQueryParams) {
-    Object.entries(extraQueryParams).forEach(([key, value]) => {
-      appendDailyActivityQueryParam(params, key, value);
-    });
-  }
-
-  const queryString = params.toString();
-  return queryString ? `${baseUrl}?${queryString}` : baseUrl;
+const EXCLUDE_ENTITY_ID_QUERY_PARAM: Partial<Record<DailyActivityEntity, string>> = {
+  team: "exclude_team_ids",
+  organization: "exclude_organization_ids",
+  customer: "exclude_end_user_ids",
+  agent: "exclude_agent_ids",
 };
 
-type DailyActivityCallOptions = {
-  accessToken: string;
-  endpoint: string;
-  startTime: Date;
-  endTime: Date;
-  page?: number;
-  extraQueryParams?: Record<string, DailyActivityQueryValue>;
+const dailyActivityQuery = (
+  entity: DailyActivityEntity,
+  req: DailyActivityRequest,
+  extra: QueryParams = {},
+): QueryParams => {
+  const entityIds = req.entityIds ?? undefined;
+  const excludeEntityIds = req.excludeEntityIds;
+  const joinedEntityIds = entityIds && entityIds.length > 0 ? entityIds.join(",") : undefined;
+  const entityIdValue = entity === "user" ? entityIds?.[0] : joinedEntityIds;
+  const excludeParam = EXCLUDE_ENTITY_ID_QUERY_PARAM[entity];
+  return {
+    start_date: formatDate(req.startTime),
+    end_date: formatDate(req.endTime),
+    model: req.model,
+    api_key: req.apiKey,
+    [ENTITY_ID_QUERY_PARAM[entity]]: entityIdValue,
+    ...(excludeParam
+      ? { [excludeParam]: excludeEntityIds && excludeEntityIds.length > 0 ? excludeEntityIds.join(",") : undefined }
+      : {}),
+    timezone: new Date().getTimezoneOffset().toString(),
+    include_current_utc_day: entity === "user" && req.includeCurrentUtcDay ? "true" : undefined,
+    ...extra,
+  };
 };
 
-const fetchDailyActivity = async ({
-  accessToken,
-  endpoint,
-  startTime,
-  endTime,
-  page = 1,
-  extraQueryParams,
-}: DailyActivityCallOptions) => {
-  try {
-    const url = buildDailyActivityUrl(endpoint, startTime, endTime, page, extraQueryParams);
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error(`Failed to fetch daily activity (${endpoint}):`, error);
-    throw error;
-  }
-};
-
-export const userDailyActivityCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  page: number = 1,
-  userId: string | null = null,
-  includeCurrentUtcDay: boolean = false,
-  apiKey: string | null = null,
-) => {
-  /**
-   * Get daily user activity on proxy
-   */
-  return fetchDailyActivity({
-    accessToken,
-    endpoint: "/user/daily/activity",
-    startTime,
-    endTime,
-    page,
-    extraQueryParams: {
-      user_id: userId,
-      include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
-      api_key: apiKey,
-    },
+export const dailyActivityAggregatedCall = (
+  entity: DailyActivityEntity,
+  req: DailyActivityRequest,
+): Promise<DailyActivityAggregatedResponse> =>
+  apiClient.get<DailyActivityAggregatedResponse>(`/${entity}/daily/activity/aggregated`, {
+    accessToken: req.accessToken,
+    query: dailyActivityQuery(entity, req, req.apiKeyLimit === undefined ? {} : { api_key_limit: req.apiKeyLimit }),
   });
-};
 
-export const tagDailyActivityCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  page: number = 1,
-  tags: string[] | null = null,
-) => {
-  /**
-   * Get daily user activity on proxy
-   */
-  return fetchDailyActivity({
-    accessToken,
-    endpoint: "/tag/daily/activity",
-    startTime,
-    endTime,
-    page,
-    extraQueryParams: {
-      tags,
-    },
+export const dailyActivityKeyPageCall = (
+  entity: DailyActivityEntity,
+  req: DailyActivityRequest,
+  offset: number,
+  limit: number,
+): Promise<DailyActivityKeyPageResponse> =>
+  apiClient.get<DailyActivityKeyPageResponse>(`/${entity}/daily/activity/aggregated/keys`, {
+    accessToken: req.accessToken,
+    query: dailyActivityQuery(entity, req, { offset, limit }),
   });
-};
 
-export const teamDailyActivityCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  page: number = 1,
-  teamIds: string[] | null = null,
-) => {
-  /**
-   * Get daily user activity on proxy
-   */
-  return fetchDailyActivity({
-    accessToken,
-    endpoint: "/team/daily/activity",
-    startTime,
-    endTime,
-    page,
-    extraQueryParams: {
-      team_ids: teamIds,
-      exclude_team_ids: "litellm-dashboard",
-    },
+export const dailyActivityKeySearchCall = (
+  entity: DailyActivityEntity,
+  req: DailyActivityRequest,
+  search: string,
+  limit?: number,
+): Promise<DailyActivityKeySearchResponse> =>
+  apiClient.get<DailyActivityKeySearchResponse>(`/${entity}/daily/activity/aggregated/search`, {
+    accessToken: req.accessToken,
+    query: dailyActivityQuery(entity, req, { search, ...(limit === undefined ? {} : { limit }) }),
   });
-};
 
-export const teamDailyActivityAggregatedCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  teamIds: string[] | null = null,
-) => {
-  /**
-   * Get aggregated daily team activity with per-team breakdown (no pagination)
-   */
-  try {
-    return await apiClient.get(`/team/daily/activity/aggregated`, {
-      accessToken,
-      query: {
-        start_date: formatDate(startTime),
-        end_date: formatDate(endTime),
-        timezone: new Date().getTimezoneOffset().toString(),
-        team_ids: teamIds && teamIds.length > 0 ? teamIds.join(",") : undefined,
-        exclude_team_ids: "litellm-dashboard",
-      },
-    });
-  } catch (error) {
-    console.error("Failed to fetch aggregated team daily activity:", error);
-    throw error;
-  }
-};
+export const dailyActivityModelTopKeysCall = (
+  entity: DailyActivityEntity,
+  req: DailyActivityRequest,
+  model: string,
+  byModelGroup: boolean,
+  limit?: number,
+): Promise<ModelTopKeysResponse> =>
+  apiClient.get<ModelTopKeysResponse>(`/${entity}/daily/activity/aggregated/model_top_keys`, {
+    accessToken: req.accessToken,
+    query: dailyActivityQuery(entity, req, {
+      model_group: model,
+      by_model_group: byModelGroup ? "true" : "false",
+      ...(limit === undefined ? {} : { limit }),
+    }),
+  });
+
+export const dailyActivityExportCall = (
+  entity: DailyActivityEntity,
+  req: DailyActivityRequest,
+  exportType: ExportType,
+  format: ExportFormat,
+): Promise<Blob> =>
+  apiClient.getBlob(`/${entity}/daily/activity/export`, {
+    accessToken: req.accessToken,
+    query: dailyActivityQuery(entity, req, { export_type: exportType, format }),
+  });
+
+export const cacheLeakageKeysCall = (req: DailyActivityRequest, limit?: number): Promise<CacheLeakageKeysResponse> =>
+  apiClient.get<CacheLeakageKeysResponse>(`/user/daily/activity/aggregated/cache_leakage_keys`, {
+    accessToken: req.accessToken,
+    query: dailyActivityQuery("user", req, limit === undefined ? {} : { limit }),
+  });
 
 export type TeamUserSpendResponse = components["schemas"]["TeamUserSpendResponse"];
 
@@ -1484,63 +1414,6 @@ export const teamSpendByUserCall = async (
       team_ids: teamIds.join(","),
     },
   });
-
-export const organizationDailyActivityCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  page: number = 1,
-  organizationIds: string[] | null = null,
-) => {
-  return fetchDailyActivity({
-    accessToken,
-    endpoint: "/organization/daily/activity",
-    startTime,
-    endTime,
-    page,
-    extraQueryParams: {
-      organization_ids: organizationIds,
-    },
-  });
-};
-
-export const customerDailyActivityCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  page: number = 1,
-  customerIds: string[] | null = null,
-) => {
-  return fetchDailyActivity({
-    accessToken,
-    endpoint: "/customer/daily/activity",
-    startTime,
-    endTime,
-    page,
-    extraQueryParams: {
-      end_user_ids: customerIds,
-    },
-  });
-};
-
-export const agentDailyActivityCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  page: number = 1,
-  agentIds: string[] | null = null,
-) => {
-  return fetchDailyActivity({
-    accessToken,
-    endpoint: "/agent/daily/activity",
-    startTime,
-    endTime,
-    page,
-    extraQueryParams: {
-      agent_ids: agentIds,
-    },
-  });
-};
 
 export const getOnboardingCredentials = async (inviteUUID: string) => {
   /**
@@ -2122,6 +1995,9 @@ export const agentTraceListCall = async ({
   return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
 };
 
+export const sendOtlpTraceCall = async (accessToken: string, exportRequest: object): Promise<void> =>
+  apiClient.post(`/v1/traces`, { accessToken, body: exportRequest });
+
 export const agentTraceCall = async (accessToken: string, traceId: string, traceRef?: string): Promise<Trace> =>
   apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
     accessToken,
@@ -2137,6 +2013,17 @@ export const agentTraceSpanCall = async (
   apiClient.get<SpanDetail>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}`, {
     accessToken,
     query: { trace_ref: traceRef || undefined },
+  });
+
+export const agentTraceSpanErrorCall = async (
+  accessToken: string,
+  traceId: string,
+  spanId: string,
+  options: { traceRef?: string; cursor?: string | null },
+): Promise<SpanErrorPage> =>
+  apiClient.get<SpanErrorPage>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}/error`, {
+    accessToken,
+    query: { trace_ref: options.traceRef || undefined, cursor: options.cursor || undefined },
   });
 
 export const adminSpendLogsCall = async (accessToken: string) => {
@@ -2553,43 +2440,6 @@ export const keyAliasesCall = async (
     });
   } catch (error) {
     console.error("Failed to fetch key aliases:", error);
-    throw error;
-  }
-};
-
-export const userDailyActivityAggregatedCall = async (
-  accessToken: string,
-  startTime: Date,
-  endTime: Date,
-  ...options: [userId?: string | null, includeCurrentUtcDay?: boolean, apiKey?: string | null]
-) => {
-  /**
-   * Get aggregated daily user activity (no pagination)
-   */
-  const [userId = null, includeCurrentUtcDay = false, apiKey = null] = options;
-  try {
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, "0");
-      const day = String(date.getDate()).padStart(2, "0");
-      return `${year}-${month}-${day}`;
-    };
-    return await apiClient.get(`/user/daily/activity/aggregated`, {
-      accessToken,
-      query: {
-        start_date: formatDate(startTime),
-        end_date: formatDate(endTime),
-        timezone: new Date().getTimezoneOffset().toString(),
-        // Passed raw, matching the paginated caller: both serializers drop null and undefined,
-        // and both keep "". An empty filter must not vanish, or a request scoped to one user or
-        // key would silently widen into an unscoped, proxy-wide read.
-        user_id: userId,
-        include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
-        api_key: apiKey,
-      },
-    });
-  } catch (error) {
-    console.error("Failed to fetch aggregated user daily activity:", error);
     throw error;
   }
 };
@@ -7614,6 +7464,11 @@ export interface ToolRow {
   created_by?: string;
   updated_by?: string;
   user_agent?: string;
+  user?: {
+    user_id: string;
+    user_email: string | null;
+    user_alias: string | null;
+  } | null;
   last_used_at?: string;
 }
 

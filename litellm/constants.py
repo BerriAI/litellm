@@ -52,10 +52,10 @@ CLICKHOUSE_MAX_BUFFERED_ROWS: Final = get_env_int("CLICKHOUSE_MAX_BUFFERED_ROWS"
 CLICKHOUSE_MAX_RETRIES: Final = get_env_int("CLICKHOUSE_MAX_RETRIES", 3)
 AGENT_TRACING_RETENTION_DAYS: Final = get_env_int("AGENT_TRACING_RETENTION_DAYS", 30)
 AGENT_TRACING_SPEND_LOG_RETENTION_DAYS: Final = get_env_int("AGENT_TRACING_SPEND_LOG_RETENTION_DAYS", 90)
-OTLP_MAX_BODY_BYTES: Final = get_env_int("OTLP_MAX_BODY_BYTES", 8 * 1024 * 1024)
+OTLP_MAX_BODY_BYTES: Final = get_env_int("OTLP_MAX_BODY_BYTES", 16 * 1024 * 1024)
 OTLP_MAX_ATTRIBUTE_VALUE_BYTES: Final = get_env_int("OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 64 * 1024)
 OTLP_RETRY_AFTER_SECONDS: Final = get_env_int("OTLP_RETRY_AFTER_SECONDS", 2)
-OTLP_OFFLOAD_DECODE_BYTES: Final = get_env_int("OTLP_OFFLOAD_DECODE_BYTES", 256 * 1024)
+OTLP_MAX_CONCURRENT_INGESTS: Final = get_env_int("OTLP_MAX_CONCURRENT_INGESTS", 2)
 AGENT_TRACING_INPUT_PREVIEW_CHARS: Final = get_env_int("AGENT_TRACING_INPUT_PREVIEW_CHARS", 240)
 AGENT_TRACING_LIST_PAGE_SIZE: Final = get_env_int("AGENT_TRACING_LIST_PAGE_SIZE", 50)
 DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
@@ -69,6 +69,7 @@ S3_PREFIX_DIGEST_CHARS: Final = 16
 # s3 allows 2048 bytes of combined metadata headers, which Content-Disposition counts against
 MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 S3_LOG_PROMPTS_ONLY_ENV_VAR: Final = "S3_LOG_PROMPTS_ONLY"
+S3_PARTITION_GRANULARITY_ENV_VAR: Final = "S3_PARTITION_GRANULARITY"
 MAX_FILE_LIST_LIMIT: Final = 10000
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
@@ -2161,6 +2162,17 @@ MCP_SPEND_LOG_MODEL_PREFIX: Final[str] = "MCP: "
 PTU_SENTINEL_API_KEY: Final[str] = "__ptu_flat_cost__"
 PTU_ROLLUP_JOB_ID: Final[str] = "ptu_flat_cost_rollup_job"
 PTU_ROLLUP_LOCK_TTL_SECONDS: Final[int] = 900
+USAGE_TOP_API_KEYS_DEFAULT: Final[int] = 100
+USAGE_TOP_API_KEYS_MAX: Final[int] = 1000
+USAGE_KEY_PAGE_DEFAULT: Final[int] = 50
+USAGE_KEY_PAGE_MAX: Final[int] = 100
+USAGE_KEY_SEARCH_DEFAULT: Final[int] = 100
+USAGE_KEY_SEARCH_MAX: Final[int] = 100
+USAGE_MODEL_TOP_KEYS_DEFAULT: Final[int] = 5
+USAGE_MODEL_TOP_KEYS_MAX: Final[int] = 100
+USAGE_CACHE_LEAKAGE_KEYS_DEFAULT: Final[int] = 20
+USAGE_CACHE_LEAKAGE_KEYS_MAX: Final[int] = 100
+USAGE_EXPORT_BATCH_SIZE: Final[int] = 1000
 # Furthest back the catch-up pass looks for unpriced PTU days when a deployment
 # declares no ptu_effective_from, bounding the scan for an open-ended window.
 PTU_ROLLUP_MAX_BACKFILL_DAYS: Final[int] = 90
@@ -2198,3 +2210,26 @@ EMPTY_MAPPING: Final = MappingProxyType({})
 
 # API endpoint for breached password k-anonymity search
 HIBP_RANGE_API_BASE: Final = "https://api.pwnedpasswords.com/range"
+
+# litellm.harness defaults
+HARNESS_ENDPOINT_HOST: Final = "127.0.0.1"
+HARNESS_ENDPOINT_STARTUP_TIMEOUT_SECONDS: Final = 10.0
+HARNESS_ENDPOINT_REQUEST_TIMEOUT_SECONDS: Final = 600.0
+HARNESS_SESSION_TOKEN_BYTES: Final = 32
+HARNESS_MAX_DIFF_BYTES: Final = 256 * 1024
+HARNESS_STDERR_TAIL_LINES: Final = 40
+HARNESS_STREAM_READ_CHUNK_BYTES: Final = 64 * 1024
+HARNESS_EVENT_QUEUE_MAX_SIZE: Final = 1024
+HARNESS_PROCESS_KILL_GRACE_SECONDS: Final = 5.0
+HARNESS_SNAPSHOT_SKIP_DIRS: Final = frozenset(
+    {
+        ".git",
+        "node_modules",
+        ".venv",
+        "venv",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+    }
+)

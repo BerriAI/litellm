@@ -95,9 +95,21 @@ jobs:
           version: "0.10.9"
 
       - name: Cache uv dependencies
-        if: steps.changes.outputs.decision != 'skip'
+        if: steps.changes.outputs.decision != 'skip' && github.ref == 'refs/heads/main'
         timeout-minutes: 5
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-uv-postgres-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-postgres-
+
+      - name: Cache uv dependencies
+        if: steps.changes.outputs.decision != 'skip' && github.ref != 'refs/heads/main'
+        timeout-minutes: 5
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cache/uv
@@ -135,7 +147,7 @@ jobs:
         env:
           TEST_PATH: ${{ matrix.test-path }}
           WORKERS: ${{ matrix.workers }}
-          PYTEST_ADDOPTS: ${{ matrix.shard == 'proxy-behavior' && '--cov=litellm/proxy/engine --cov-report=xml:coverage-lens-postgres.xml' || '' }}
+          PYTEST_ADDOPTS: ${{ matrix.shard == 'proxy-behavior' && '--cov=./litellm --cov-report=xml:coverage-lens-postgres.xml' || '' }}
         run: |
           if [ "${WORKERS}" = "0" ]; then
             uv run --no-sync pytest ${TEST_PATH:?} -vv --tb=short --durations=10
@@ -145,9 +157,11 @@ jobs:
 
       - name: Upload Lens database coverage
         if: steps.changes.outputs.decision != 'skip' && matrix.shard == 'proxy-behavior' && !cancelled()
-        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           use_oidc: true
+          version: v11.3.1
+          root_dir: ${{ github.workspace }}
           files: coverage-lens-postgres.xml
           flags: lens-postgres
           fail_ci_if_error: true

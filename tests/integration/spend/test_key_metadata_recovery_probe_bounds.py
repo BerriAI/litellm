@@ -1,12 +1,11 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Final
 
-import litellm_proxy_extras
 import psycopg
 import pytest
+from litellm_proxy_extras.request_log_indexes import REQUEST_LOG_INDEXES
 from psycopg.types.json import Jsonb
 from pydantic import JsonValue
 
@@ -29,11 +28,8 @@ _SPEND_LOGS_DDL: Final = """
     )
 """
 
-_API_KEY_START_TIME_INDEX_MIGRATION: Final = (
-    Path(litellm_proxy_extras.__file__).parent
-    / "migrations"
-    / "20260823000000_add_spend_logs_api_key_starttime_index"
-    / "migration.sql"
+_API_KEY_START_TIME_INDEX: Final = next(
+    index for index in REQUEST_LOG_INDEXES if index.name == "LiteLLM_SpendLogs_api_key_startTime_idx"
 )
 
 _STATS_SQL: Final = """
@@ -56,7 +52,12 @@ class _Settle:
 
 def _create_spend_logs_table(database_url: str) -> None:
     write_rows(_SPEND_LOGS_DDL, (), database_url=database_url)
-    write_rows(_API_KEY_START_TIME_INDEX_MIGRATION.read_text(), (), database_url=database_url)
+    write_rows(
+        f'CREATE INDEX "{_API_KEY_START_TIME_INDEX.name}" ON "{_API_KEY_START_TIME_INDEX.table}" '  # pyright: ignore[reportArgumentType]  # DDL from the migration job index list
+        f"{_API_KEY_START_TIME_INDEX.definition}",
+        (),
+        database_url=database_url,
+    )
 
 
 def _spend_log_stats(database_url: str) -> dict[str, int]:

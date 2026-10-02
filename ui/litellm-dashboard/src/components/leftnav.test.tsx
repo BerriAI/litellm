@@ -496,6 +496,7 @@ describe("Sidebar (leftnav)", () => {
 
       expect(screen.queryByText("Guardrails Monitor")).not.toBeInTheDocument();
       expect(screen.getByText("Usage")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Lens Beta" })).toHaveAttribute("href", "/ui/lens");
       expect(screen.getByText("Cost Optimization")).toBeInTheDocument();
     });
 
@@ -607,13 +608,13 @@ describe("Sidebar (leftnav)", () => {
     expect(label).toHaveClass("group-data-[collapsed=true]/sidebar:hidden");
   });
 
-  it("shows Cost Optimization with a Beta badge and no feature-flag gate", () => {
+  it("shows Cost Optimization without a Beta badge and no feature-flag gate", () => {
     const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI={false} />);
 
     const costOptimization = container.querySelector('a[href*="cost-optimization"]');
     expect(costOptimization).not.toBeNull();
-    expect(costOptimization!).toHaveTextContent(/Cost Optimization/);
-    expect(costOptimization!).toHaveTextContent(/Beta/);
+    expect(costOptimization!).toHaveTextContent("Cost Optimization");
+    expect(costOptimization!).not.toHaveTextContent("Beta");
 
     expect(container.querySelector('a[href*="projects"]')).toBeNull();
   });
