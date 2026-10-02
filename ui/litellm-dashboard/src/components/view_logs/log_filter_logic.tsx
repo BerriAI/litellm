@@ -21,8 +21,10 @@ export interface PaginatedResponse {
 
 export const LOG_FILTER_IDS = {
   TEAM_ID: "team_id",
+  SPAN_TYPE: "span_type",
   STATUS: "status",
   CACHE_STATUS: "cache_hit",
+  CREDENTIAL: "used_client_oauth_token",
   KEY_ALIAS: "key_alias",
   END_USER: "end_user",
   ERROR_CODE: "error_code",
@@ -33,12 +35,15 @@ export const LOG_FILTER_IDS = {
   PUBLIC_MODEL_OR_SEARCH_TOOL: "model",
   REQUEST_ID: "request_id",
   USER_ID: "user_id",
+  SEARCH: "search",
 } as const;
 
 export const LOG_FILTER_LABELS: Record<string, string> = {
   [LOG_FILTER_IDS.TEAM_ID]: "Team ID",
+  [LOG_FILTER_IDS.SPAN_TYPE]: "Span Type",
   [LOG_FILTER_IDS.STATUS]: "Status",
   [LOG_FILTER_IDS.CACHE_STATUS]: "Cache",
+  [LOG_FILTER_IDS.CREDENTIAL]: "Credential",
   [LOG_FILTER_IDS.KEY_ALIAS]: "Key Alias",
   [LOG_FILTER_IDS.USER_ID]: "User ID",
   [LOG_FILTER_IDS.END_USER]: "End User",
@@ -48,6 +53,7 @@ export const LOG_FILTER_LABELS: Record<string, string> = {
   [LOG_FILTER_IDS.SESSION_ID]: "Session ID",
   [LOG_FILTER_IDS.MODEL_ID]: "Model",
   [LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL]: "Public model / search tool",
+  [LOG_FILTER_IDS.SEARCH]: "Search",
 };
 
 export interface LogsWindow {
@@ -175,11 +181,14 @@ export function useLogFilterLogic({
           api_key: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_HASH),
           team_id: getFilterValue(columnFilters, LOG_FILTER_IDS.TEAM_ID),
           request_id: getFilterValue(columnFilters, LOG_FILTER_IDS.REQUEST_ID),
+          search: getFilterValue(columnFilters, LOG_FILTER_IDS.SEARCH),
           session_id: getFilterValue(columnFilters, LOG_FILTER_IDS.SESSION_ID),
           user_id: userIdFilter,
           end_user: getFilterValue(columnFilters, LOG_FILTER_IDS.END_USER),
           status_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.STATUS),
           cache_hit_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.CACHE_STATUS),
+          used_client_oauth_token: getFilterValue(columnFilters, LOG_FILTER_IDS.CREDENTIAL),
+          span_type: getFilterValue(columnFilters, LOG_FILTER_IDS.SPAN_TYPE),
           model_id: getFilterValue(columnFilters, LOG_FILTER_IDS.MODEL_ID),
           model: getFilterValue(columnFilters, LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL),
           key_alias: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_ALIAS),

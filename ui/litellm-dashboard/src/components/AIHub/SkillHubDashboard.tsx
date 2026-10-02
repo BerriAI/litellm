@@ -162,6 +162,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
         </div>
         <DataTable
           data={filteredSkills}
+          paginationMode="client"
           columns={columns}
           getRowId={(skill, index) => skill.id || String(index)}
           sortingMode="client"

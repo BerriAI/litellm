@@ -6,20 +6,12 @@ import io
 import json
 import mimetypes
 import re
-from collections.abc import Iterable, Mapping, Sequence
-from itertools import groupby
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from itertools import groupby, islice
 from os import PathLike
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
-
-from openai.types.chat.chat_completion_custom_tool_param import (
-    CustomFormatGrammar,
-    CustomFormatGrammarGrammar,
-)
-from openai.types.shared_params.custom_tool_input_format import (
-    Grammar as ResponsesGrammarFormat,
-)
 
 import litellm
 from litellm import verbose_logger
@@ -59,7 +51,7 @@ if TYPE_CHECKING:
 
 
 def handle_any_messages_to_chat_completion_str_messages_conversion(
-    messages: Any,
+    messages: object,
 ) -> list[dict[str, str]]:
     """
     Handles any messages to chat completion str messages conversion
@@ -216,7 +208,7 @@ def _content_parts_contain_image(parts: Sequence[object]) -> bool:
     for _ in range(_IMAGE_SCAN_MAX_DEPTH):
         if any(isinstance(part, Mapping) and part.get("type") in _IMAGE_CONTENT_PART_TYPES for part in frontier):
             return True
-        frontier = tuple(  # rebind-ok: depth-bounded frontier walk
+        frontier = tuple(
             nested
             for part in frontier
             if isinstance(part, Mapping)
@@ -227,6 +219,45 @@ def _content_parts_contain_image(parts: Sequence[object]) -> bool:
         if not frontier:
             return False
     return False
+
+
+def anthropic_image_source_to_openai_url(image_source: Mapping[str, object]) -> str | None:
+    """Data or remote URL for an Anthropic ``source`` block, in the form chat completions expects."""
+    source_type: Final = image_source.get("type")
+    if source_type == "base64":
+        media_type: Final = image_source.get("media_type") or "image/jpeg"
+        image_data: Final = image_source.get("data") or ""
+        return f"data:{media_type};base64,{image_data}" if image_data else None
+    if source_type == "url":
+        url: Final = image_source.get("url")
+        return url if isinstance(url, str) else ""
+    return None
+
+
+def _image_part_url(part: Mapping[str, object]) -> str | None:
+    """The image URL carried by one content part, whichever of the three dialects wrote it."""
+    part_type: Final = part.get("type")
+    if part_type == "image_url":
+        image_url: Final = part.get("image_url")
+        if isinstance(image_url, str):
+            return image_url
+        return image_url.get("url") if isinstance(image_url, Mapping) else None
+    if part_type == "input_image":
+        responses_url: Final = part.get("image_url")
+        return responses_url if isinstance(responses_url, str) else None
+    if part_type == "image":
+        source: Final = part.get("source")
+        return anthropic_image_source_to_openai_url(source) if isinstance(source, Mapping) else None
+    return None
+
+
+def as_openai_image_part(part: Mapping[str, object]) -> ChatCompletionImageObject | None:
+    """One image content part rewritten into chat-completions dialect, or None when it is not one.
+
+    Rebuilt rather than forwarded so no caller-controlled key beyond the URL rides along.
+    """
+    url: Final = _image_part_url(part)
+    return {"type": "image_url", "image_url": {"url": url}} if url else None
 
 
 def request_contains_image_content(messages: Sequence[Mapping[str, object]]) -> bool:
@@ -765,7 +796,7 @@ def extract_file_metadata(file_data: FileTypes) -> tuple[str | None, str | None]
     """
     filename: str | None = None
     content_type: str | None = None
-    file_content: Any = None
+    file_content: object = None
 
     if isinstance(file_data, tuple):
         if len(file_data) == 2:
@@ -963,7 +994,7 @@ def unpack_defs(
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
-    queue: Final[deque[tuple[Any, dict | list | None, str | int | None, dict, set]]] = deque(
+    queue: Final[deque[tuple[object, dict | list | None, str | int | None, dict, set]]] = deque(
         [(schema, None, None, root_defs, set())]
     )
     inlined_bytes = 0
@@ -1243,7 +1274,7 @@ def _flatten_schema_against_root(
     if not is_object_schema:
         return schema
 
-    merged_properties: Final = {  # mutable-ok: tool parameters are JSON dicts
+    merged_properties: Final = {
         name: value for source in (*reversed(branches), schema) for name, value in _schema_properties(source).items()
     }
     required_names: Final = _schema_required_names(schema).union(
@@ -1251,7 +1282,7 @@ def _flatten_schema_against_root(
     )
     kept: Final = MappingProxyType({key: value for key, value in schema.items() if key not in dropped})
     required_update: Final = MappingProxyType({"required": sorted(required_names)}) if required_names else _EMPTY_SCHEMA
-    return {  # mutable-ok: tool parameters are JSON dicts
+    return {
         **kept,
         "type": "object",
         "properties": merged_properties,
@@ -1278,20 +1309,131 @@ def flatten_top_level_schema_combinators(schema: Mapping[str, object]) -> Mappin
     OpenAI's own validation still applies. Non-object schemas pass through
     unchanged and the input is never mutated.
     """
-    return _flatten_schema_against_root(schema, schema, frozenset(), 0, {})  # mutable-ok: fresh per-call $ref memo
+    return _flatten_schema_against_root(schema, schema, frozenset(), 0, {})
 
 
-def tool_with_flattened_parameters(tool: Mapping[str, object]) -> Mapping[str, object]:
+_SUBSCHEMA_KEYWORDS: Final = frozenset(
+    {
+        "additionalItems",
+        "additionalProperties",
+        "contains",
+        "else",
+        "if",
+        "items",
+        "not",
+        "propertyNames",
+        "then",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+    }
+)
+_SUBSCHEMA_LIST_KEYWORDS: Final = frozenset({"allOf", "anyOf", "items", "oneOf", "prefixItems"})
+_SUBSCHEMA_MAP_KEYWORDS: Final = frozenset(
+    {"$defs", "definitions", "dependentSchemas", "patternProperties", "properties"}
+)
+
+_MAX_SCHEMA_NESTING: Final = 1024
+
+
+def drop_non_python_regex_patterns(schema: Mapping[str, object]) -> Mapping[str, object]:
+    """Drop every regex in a schema position that Python's ``re`` cannot compile.
+
+    OpenAI validates tool ``parameters`` against the 2020-12 metaschema with
+    ``jsonschema``'s format checker, which hands each ``pattern`` value and each
+    ``patternProperties`` key to ``re.compile``, so a regex written for an
+    ECMA-262 engine (Unicode property escapes such as ``\\p{Cc}``, as in Claude
+    Code's ``Artifact`` tool) is refused with "'...' is not a 'regex'" by every
+    model family on both the chat and Responses wires. Only schema positions are
+    walked (properties, items, combinators, ``$defs`` and the other applicators),
+    so a ``pattern`` key inside ``default``, ``examples``, ``const`` or vendor
+    extensions is data and stays. Outside strict mode the keyword is only a
+    hint, so dropping it costs the model a constraint and the caller nothing.
+    Compilable regexes and everything else pass through, the input is never
+    mutated, and the same object comes back when nothing was dropped. The walk
+    is level-order rather than recursive, rebuilt deepest level first, and stops
+    at more schema levels than a JSON parser admits, so a cyclic schema built in
+    code cannot spin it.
+    """
+    rebuilt: dict[int, Mapping[str, object]] = {}  # mutable-ok: per-call memo of rewritten nodes, deepest level first
+    for level in reversed(tuple(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))):
+        rebuilt.update(
+            (id(node), rewritten)
+            for node in level
+            if (rewritten := _node_without_non_python_regex(node, rebuilt)) is not node
+        )
+    return rebuilt.get(id(schema), schema)
+
+
+def _schema_levels(schema: Mapping[str, object]) -> Iterator[tuple[Mapping[str, object], ...]]:
+    frontier: tuple[Mapping[str, object], ...] = (schema,)  # rebind-ok: level-order cursor, one level a round
+    while frontier:
+        yield frontier
+        frontier = tuple(child for node in frontier for child in _subschemas(node))
+
+
+def _subschemas(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+    for key, value in node.items():
+        if key in _SUBSCHEMA_MAP_KEYWORDS and isinstance(value, dict):
+            yield from (sub for sub in value.values() if isinstance(sub, dict))
+        elif key in _SUBSCHEMA_LIST_KEYWORDS and isinstance(value, list):
+            yield from (sub for sub in value if isinstance(sub, dict))
+        elif key in _SUBSCHEMA_KEYWORDS and isinstance(value, dict):
+            yield value
+
+
+def _node_without_non_python_regex(
+    node: Mapping[str, object], rebuilt: Mapping[int, Mapping[str, object]]
+) -> Mapping[str, object]:
+    kept: Final = {
+        key: _keyword_value_rebuilt(key, value, rebuilt)
+        for key, value in node.items()
+        if key != "pattern" or not isinstance(value, str) or _is_python_regex(value)
+    }
+    return node if len(kept) == len(node) and all(kept[key] is node[key] for key in kept) else kept
+
+
+def _keyword_value_rebuilt(key: str, value: object, rebuilt: Mapping[int, Mapping[str, object]]) -> object:
+    if key in _SUBSCHEMA_MAP_KEYWORDS and isinstance(value, dict):
+        kept: Final = {
+            name: rebuilt.get(id(sub), sub)
+            for name, sub in value.items()
+            if key != "patternProperties" or not isinstance(name, str) or _is_python_regex(name)
+        }
+        return value if len(kept) == len(value) and all(kept[name] is value[name] for name in kept) else kept
+    if key in _SUBSCHEMA_LIST_KEYWORDS and isinstance(value, list):
+        items: Final = [rebuilt.get(id(sub), sub) for sub in value]
+        return value if all(new is old for new, old in zip(items, value, strict=True)) else items
+    if key in _SUBSCHEMA_KEYWORDS and isinstance(value, dict):
+        return rebuilt.get(id(value), value)
+    return value
+
+
+def _is_python_regex(pattern: str) -> bool:
+    try:
+        re.compile(pattern)
+    except (re.error, RecursionError):
+        return False
+    return True
+
+
+def flatten_combinators_and_drop_non_python_regex_patterns(schema: Mapping[str, object]) -> Mapping[str, object]:
+    return flatten_top_level_schema_combinators(drop_non_python_regex_patterns(schema))
+
+
+def tool_with_sanitized_parameters(
+    tool: Mapping[str, object],
+    sanitize: Callable[[Mapping[str, object]], Mapping[str, object]],
+) -> Mapping[str, object]:
     function: Final = tool.get("function")
     if not isinstance(function, dict):
         return tool
     parameters: Final = function.get("parameters")
     if not isinstance(parameters, dict):
         return tool
-    flattened: Final = flatten_top_level_schema_combinators(parameters)
-    if flattened is parameters:
+    sanitized: Final = sanitize(parameters)
+    if sanitized is parameters:
         return tool
-    return {**tool, "function": {**function, "parameters": flattened}}  # mutable-ok: request tools are JSON dicts
+    return {**tool, "function": {**function, "parameters": sanitized}}
 
 
 def _get_image_mime_type_from_url(url: str) -> str | None:
@@ -1474,7 +1616,10 @@ def is_function_call(optional_params: dict) -> bool:
     return False
 
 
-def convert_custom_tool_format_to_chat_shape(format_obj: Mapping[str, Any]) -> Mapping[str, Any]:
+_CUSTOM_GRAMMAR_FIELDS: Final = ("definition", "syntax")
+
+
+def convert_custom_tool_format_to_chat_shape(format_obj: Mapping[str, object]) -> Mapping[str, object]:
     """
     Responses API grammar formats are flat ({"type": "grammar", "definition", "syntax"});
     Chat Completions wraps the same fields in a "grammar" object. Text formats are
@@ -1482,15 +1627,11 @@ def convert_custom_tool_format_to_chat_shape(format_obj: Mapping[str, Any]) -> M
     """
     if format_obj.get("type") != "grammar" or "grammar" in format_obj:
         return format_obj
-    grammar: Final = CustomFormatGrammarGrammar()
-    if "definition" in format_obj:
-        grammar["definition"] = format_obj["definition"]
-    if "syntax" in format_obj:
-        grammar["syntax"] = format_obj["syntax"]
-    return CustomFormatGrammar(type="grammar", grammar=grammar)
+    grammar: Final[Mapping[str, object]] = {key: format_obj[key] for key in _CUSTOM_GRAMMAR_FIELDS if key in format_obj}
+    return {"type": "grammar", "grammar": grammar}
 
 
-def convert_custom_tool_format_to_responses_shape(format_obj: Mapping[str, Any]) -> Mapping[str, Any]:
+def convert_custom_tool_format_to_responses_shape(format_obj: Mapping[str, object]) -> Mapping[str, object]:
     """
     Inverse of convert_custom_tool_format_to_chat_shape: unwrap the Chat Completions
     "grammar" object into the flat Responses API grammar shape.
@@ -1498,12 +1639,10 @@ def convert_custom_tool_format_to_responses_shape(format_obj: Mapping[str, Any])
     grammar: Final = format_obj.get("grammar")
     if format_obj.get("type") != "grammar" or not isinstance(grammar, dict):
         return format_obj
-    flat: Final = ResponsesGrammarFormat(type="grammar")
-    if "definition" in grammar:
-        flat["definition"] = grammar["definition"]
-    if "syntax" in grammar:
-        flat["syntax"] = grammar["syntax"]
-    return flat
+    return {
+        "type": "grammar",
+        **{key: grammar[key] for key in _CUSTOM_GRAMMAR_FIELDS if key in grammar},
+    }
 
 
 def get_file_ids_from_messages(messages: list[AllMessageValues]) -> list[str]:
@@ -1518,7 +1657,7 @@ def get_file_ids_from_messages(messages: list[AllMessageValues]) -> list[str]:
                 if isinstance(content, str):
                     continue
                 for c in content:
-                    if c["type"] == "file":
+                    if isinstance(c, dict) and c["type"] == "file":
                         file_object = cast(ChatCompletionFileObject, c)
                         file_object_file_field = file_object.get("file")
                         if not isinstance(file_object_file_field, dict):
@@ -1550,7 +1689,7 @@ _MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
 def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
     if marker is None:
         return target
-    marked: Final = {**target, "prompt_cache_breakpoint": marker}  # mutable-ok: API message payload
+    marked: Final = {**target, "prompt_cache_breakpoint": marker}
     return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
 
 
@@ -1564,9 +1703,7 @@ def strip_litellm_internal_message_fields(message: AllMessageValues) -> AllMessa
         return message
     return cast(  # cast-ok: same TypedDict minus internal keys
         AllMessageValues,
-        {  # mutable-ok: provider transforms mutate message dicts in place downstream
-            key: value for key, value in message.items() if key not in LITELLM_INTERNAL_MESSAGE_FIELDS
-        },
+        {key: value for key, value in message.items() if key not in LITELLM_INTERNAL_MESSAGE_FIELDS},
     )
 
 
@@ -1784,14 +1921,11 @@ def _extract_reasoning_content(message: dict) -> tuple[str | None, str | None]:
     return None, message_content
 
 
-def _readable_thinking_text(
-    block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
-) -> str:
+def _readable_thinking_text(block: Mapping[str, object]) -> str:
     """The text a chat model can read back, empty for redacted blocks and malformed ones."""
     if block.get("type") != "thinking":
         return ""
-    thinking: Final = cast(ChatCompletionThinkingBlock, block).get("thinking")  # cast-ok: narrowed by the type tag
-    return str(thinking or "")
+    return str(block.get("thinking") or "")
 
 
 def reasoning_content_from_thinking_blocks(
@@ -1804,22 +1938,162 @@ def reasoning_content_from_thinking_blocks(
     return "\n".join(text for block in thinking_blocks if (text := _readable_thinking_text(block)))
 
 
-def responses_reasoning_item_from_thinking_blocks(
-    thinking_blocks: Iterable[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
-) -> ChatCompletionReasoningItem | None:
-    """Build a Responses API `reasoning` input item from Anthropic thinking blocks.
+ENCRYPTED_REASONING_SIGNATURE_PREFIX: Final = "litellm_encrypted_reasoning:"
 
-    The item carries no `id`: the Responses API rejects an empty one and 404s on any id it
-    did not mint itself, while an item without an id is always accepted.
+
+def encrypted_reasoning_signature(encrypted_content: str) -> str:
+    """The opaque value a Responses API reasoning item's `encrypted_content` travels in.
+
+    Anthropic clients echo a thinking block's `signature` and a redacted block's `data`
+    back verbatim, so either field can carry the encrypted reasoning across turns; the
+    prefix tells the two apart from a signature Anthropic minted.
     """
+    return f"{ENCRYPTED_REASONING_SIGNATURE_PREFIX}{encrypted_content}"
+
+
+def _carries_encrypted_reasoning(signature: object) -> bool:
+    return isinstance(signature, str) and signature.startswith(ENCRYPTED_REASONING_SIGNATURE_PREFIX)
+
+
+def encrypted_content_from_signature(signature: object) -> str | None:
+    if not isinstance(signature, str) or not _carries_encrypted_reasoning(signature):
+        return None
+    return signature.removeprefix(ENCRYPTED_REASONING_SIGNATURE_PREFIX) or None
+
+
+def _encrypted_reasoning_field(block: Mapping[str, object]) -> object:
+    match block.get("type"):
+        case "thinking":
+            return block.get("signature")
+        case "redacted_thinking":
+            return block.get("data")
+        case _:
+            return None
+
+
+def encrypted_content_of_block(block: Mapping[str, object]) -> str | None:
+    return encrypted_content_from_signature(_encrypted_reasoning_field(block))
+
+
+def is_encrypted_reasoning_block(block: object) -> bool:
+    """A thinking or redacted_thinking block carrying Responses API encrypted reasoning.
+
+    Only the Responses API that minted the content can read it back, so an Anthropic
+    backend has to drop such a block rather than fail signature verification on it.
+    """
+    if not isinstance(block, Mapping):
+        return False
+    mapping: Final = cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance
+    return _carries_encrypted_reasoning(_encrypted_reasoning_field(mapping))
+
+
+def is_unsignable_thinking_block(block: object) -> bool:
+    """A thinking block Anthropic cannot accept on input.
+
+    Anthropic verifies the signature cryptographically, so a block with a null,
+    empty, or missing signature (e.g. from an open-source reasoning model) is
+    rejected with a 400, and so is a block whose signature or data carries
+    another provider's encrypted reasoning. It also rejects a `thinking` block
+    whose text is empty or whitespace-only ("each thinking block must contain
+    thinking"), regardless of signature, e.g. when a `thinking_blocks` history
+    item from a non-Anthropic reasoning provider is replayed through this path.
+    `redacted_thinking` blocks carry no signature and are always kept.
+    """
+    if is_encrypted_reasoning_block(block):
+        return True
+    if not isinstance(block, Mapping):
+        return False
+    mapping: Final = cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance
+    if mapping.get("type") != "thinking":
+        return False
+    signature: Final = mapping.get("signature")
+    if not (isinstance(signature, str) and len(signature) > 0):
+        return True
+    thinking_text: Final = mapping.get("thinking")
+    return not (isinstance(thinking_text, str) and len(thinking_text.strip()) > 0)
+
+
+def strip_encrypted_reasoning_from_messages(
+    messages: object,
+    *,
+    should_strip: Callable[[Mapping[str, object]], bool] | None = None,
+) -> None:
+    """Drop the bridge-tagged reasoning blocks a routed deployment cannot decrypt from
+    Anthropic-shaped history.
+
+    The whole block goes, the way #40280 drops undecryptable Responses ``input`` items: a
+    provider that did not mint the block rejects it signed (a foreign signature) and unsigned
+    (a missing signature) alike, so keeping its text as an unsigned thinking block only moves
+    the 400 from the router to the provider.
+
+    Mutates the content lists in place: the router's fallback snapshot shares these
+    message objects, so a rebound list would replay the stripped blocks on the fallback hop.
+    """
+    if not isinstance(messages, list):
+        return
+    for content in anthropic_content_lists(cast(list[object], messages)):  # cast-ok: untyped client json
+        _strip_encrypted_reasoning_from_blocks(content, should_strip=should_strip)
+
+
+def anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
+    return (
+        cast(list[object], content)  # cast-ok: narrowed by isinstance
+        for message in messages
+        if isinstance(message, Mapping)
+        for content in (cast(Mapping[str, object], message).get("content"),)  # cast-ok: narrowed by isinstance
+        if isinstance(content, list)
+    )
+
+
+def _strip_encrypted_reasoning_from_blocks(
+    content: object,
+    *,
+    should_strip: Callable[[Mapping[str, object]], bool] | None = None,
+) -> None:
+    blocks: Final = cast(list[object], content)  # cast-ok: narrowed by the caller's isinstance
+    kept: Final = tuple(
+        block
+        for block in blocks
+        if not is_encrypted_reasoning_block(block)
+        or (should_strip is not None and not should_strip(cast(Mapping[str, object], block)))
+    )
+    blocks[:] = kept
+
+
+def _reasoning_replay_group_key(indexed_block: tuple[int, Mapping[str, object]]) -> str:
+    index, block = indexed_block
+    return f"encrypted:{index}" if is_encrypted_reasoning_block(block) else "summary"
+
+
+def _reasoning_item_from_block_group(group: tuple[Mapping[str, object], ...]) -> ChatCompletionReasoningItem | None:
     summary: Final[list[ChatCompletionReasoningSummaryTextBlock]] = [  # mutable-ok: API message payload
         ChatCompletionReasoningSummaryTextBlock(type="summary_text", text=text)
-        for block in thinking_blocks
+        for block in group
         if (text := _readable_thinking_text(block))
     ]
+    encrypted_content: Final = encrypted_content_of_block(group[0])
+    if encrypted_content is not None:
+        return ChatCompletionReasoningItem(type="reasoning", summary=summary, encrypted_content=encrypted_content)
     if not summary:
         return None
     return ChatCompletionReasoningItem(type="reasoning", summary=summary)
+
+
+def responses_reasoning_items_from_thinking_blocks(
+    thinking_blocks: Iterable[Mapping[str, object]],
+) -> tuple[ChatCompletionReasoningItem, ...]:
+    """Build Responses API `reasoning` input items from Anthropic thinking blocks.
+
+    A block carrying encrypted reasoning replays the item it came from byte for byte;
+    a run of plain thinking blocks collapses into one summary-only item. No item carries
+    an `id`: the Responses API 404s on any id it did not mint itself and rejects an empty
+    one, while an item without an id is always accepted.
+    """
+    return tuple(
+        item
+        for _, group in groupby(enumerate(thinking_blocks), key=_reasoning_replay_group_key)
+        if (item := _reasoning_item_from_block_group(tuple(block for _, block in group))) is not None
+    )
 
 
 def _parse_content_for_reasoning(
@@ -1918,11 +2192,9 @@ def _split_images_from_tool_message(
     )
     if not image_parts:
         return message, ()
-    remaining_parts = [  # mutable-ok: tool message content must stay a json list
-        part for part in content if not _is_image_url_part(part)
-    ]
+    remaining_parts = [part for part in content if not _is_image_url_part(part)]
     new_content = remaining_parts if remaining_parts else TOOL_RESULT_IMAGE_PLACEHOLDER
-    rewritten = {**message, "content": new_content}  # mutable-ok: chat messages are plain json dicts
+    rewritten = {**message, "content": new_content}
     return cast(AllMessageValues, rewritten), image_parts  # cast-ok: dict spread keeps keys like cache_control
 
 
@@ -1930,14 +2202,12 @@ def _hoist_images_in_tool_message_run(
     run: Iterable[AllMessageValues],
 ) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
     split_results = tuple(_split_images_from_tool_message(message) for message in run)
-    hoisted_images = [  # mutable-ok: user message content must be a json list
-        image for _, images in split_results for image in images
-    ]
-    rewritten_messages = [message for message, _ in split_results]  # mutable-ok: pipelines mutate message lists
+    hoisted_images = [image for _, images in split_results for image in images]
+    rewritten_messages = [message for message, _ in split_results]
     if not hoisted_images:
         return rewritten_messages
     boundary_part = ChatCompletionTextObject(type="text", text=TOOL_RESULT_IMAGE_BOUNDARY)
-    hoisted_content = [boundary_part, *hoisted_images]  # mutable-ok: user message content must be a json list
+    hoisted_content = [boundary_part, *hoisted_images]
     rewritten_messages.append(ChatCompletionUserMessage(role="user", content=hoisted_content))
     return rewritten_messages
 
@@ -1961,7 +2231,7 @@ def hoist_images_from_tool_messages(
     """
     if not any(_tool_message_carries_image(message) for message in messages):
         return messages
-    return [  # mutable-ok: pipelines mutate message lists
+    return [
         rewritten_message
         for is_tool_run, run in groupby(messages, key=lambda message: message.get("role") == "tool")
         for rewritten_message in (_hoist_images_in_tool_message_run(run) if is_tool_run else run)
@@ -1983,11 +2253,9 @@ def _drop_tool_reference_parts(message: AllMessageValues) -> AllMessageValues:
     if not _tool_message_carries_tool_reference(message):
         return message
     content = cast(list, message.get("content"))  # cast-ok: shape checked by _tool_message_carries_tool_reference
-    remaining_parts = [  # mutable-ok: tool message content must stay a json list
-        part for part in content if not _is_tool_reference_part(part)
-    ]
+    remaining_parts = [part for part in content if not _is_tool_reference_part(part)]
     new_content = remaining_parts if remaining_parts else ""
-    rewritten = {**message, "content": new_content}  # mutable-ok: chat messages are plain json dicts
+    rewritten = {**message, "content": new_content}
     return cast(AllMessageValues, rewritten)  # cast-ok: dict spread keeps keys like cache_control
 
 
@@ -2005,7 +2273,52 @@ def drop_tool_reference_parts_from_tool_messages(
     """
     if not any(_tool_message_carries_tool_reference(message) for message in messages):
         return messages
-    return [_drop_tool_reference_parts(message) for message in messages]  # mutable-ok: pipelines mutate message lists
+    return [_drop_tool_reference_parts(message) for message in messages]
+
+
+INSTRUCTION_MESSAGE_ROLES: Final = frozenset({"system", "developer"})
+
+
+def _is_instruction_message(message: AllMessageValues) -> bool:
+    return message.get("role") in INSTRUCTION_MESSAGE_ROLES
+
+
+def system_messages_first(
+    messages: list[AllMessageValues],  # mutable-ok: message pipelines type messages as mutable lists
+) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
+    return [
+        *(message for message in messages if _is_instruction_message(message)),
+        *(message for message in messages if not _is_instruction_message(message)),
+    ]
+
+
+def _system_content_as_text_parts(content: object) -> tuple[object, ...]:
+    if isinstance(content, str):
+        return (ChatCompletionTextObject(type="text", text=content),)
+    return tuple(cast(Sequence[object], content))  # cast-ok: non-str system content is a list of content parts
+
+
+def _merge_system_message_run(run: Sequence[AllMessageValues]) -> AllMessageValues:
+    if len(run) == 1:
+        return run[0]
+    contents: Final = tuple(content for content in (message.get("content") for message in run) if content is not None)
+    if not contents:
+        return run[0]
+    if all(isinstance(content, str) for content in contents):
+        joined_text: Final = "\n\n".join(cast(tuple[str, ...], contents))  # cast-ok: every content is a str
+        return cast(AllMessageValues, {**run[0], "content": joined_text})  # cast-ok: dict spread keeps message shape
+    merged_parts: Final = [part for content in contents for part in _system_content_as_text_parts(content)]
+    return cast(AllMessageValues, {**run[0], "content": merged_parts})  # cast-ok: dict spread keeps message shape
+
+
+def merge_consecutive_system_messages(
+    messages: list[AllMessageValues],  # mutable-ok: message pipelines type messages as mutable lists
+) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
+    return [
+        merged
+        for is_system_run, run in groupby(messages, key=lambda message: message.get("role") == "system")
+        for merged in ((_merge_system_message_run(tuple(run)),) if is_system_run else run)
+    ]
 
 
 def _attempt_json_repair(s: str) -> object | None:
@@ -2191,6 +2504,61 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
         idx = end_idx
 
     return results
+
+
+MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS: Final = 8
+
+
+def salvage_concatenated_tool_arguments(raw: str) -> tuple[dict[str, object], ...]:
+    """Return complete concatenated JSON objects that are safe to expand.
+
+    Identical objects collapse to the first one and are not capped. More than
+    ``MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS`` objects that are not all identical
+    returns an empty tuple. Anything that is not a full concatenation of JSON
+    objects returns an empty tuple. Repeated copies of the first object are not
+    retained, and once the cap is passed the rest of the string is only checked.
+    """
+    stripped: Final = raw.strip()
+    if not stripped:
+        return ()
+    decoder: Final = json.JSONDecoder()
+    length: Final = len(stripped)
+    idx = 0  # rebind-ok: cursor walks the concatenated JSON string
+    count = 0  # rebind-ok: counts complete objects without retaining duplicates
+    kept = ()  # rebind-ok: holds at most one object past the salvage cap
+    exceeded = False  # rebind-ok: cap already passed, the tail is only validated
+    while idx < length:
+        while idx < length and stripped[idx] in " \t\n\r":
+            idx += 1
+        if idx >= length:
+            break
+        try:
+            obj, end_idx = decoder.raw_decode(stripped, idx)
+        except json.JSONDecodeError:
+            return ()
+        if not isinstance(obj, dict):
+            return ()
+        idx = end_idx
+        if exceeded:
+            continue
+        count += 1
+        if not kept:
+            kept = (obj,)
+            continue
+        if obj == kept[0] and len(kept) == 1:
+            continue
+        if len(kept) == 1 and count > 2 and count - 1 > MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS:
+            exceeded = True
+            continue
+        if len(kept) == 1 and count > 2:
+            kept = (kept[0],) * (count - 1)
+        if len(kept) >= MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS:
+            exceeded = True
+            continue
+        kept = (*kept, obj)
+    if exceeded:
+        return ()
+    return kept
 
 
 def text_completion_prompt_to_messages(prompt: object) -> tuple[AllMessageValues, ...]:

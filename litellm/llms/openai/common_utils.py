@@ -12,7 +12,7 @@ import ssl
 import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Optional
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Optional
 from urllib.parse import urlsplit
 
 import httpx
@@ -34,6 +34,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AsyncHTTPHandler,
     get_ssl_configuration,
+    http2_enabled,
 )
 
 
@@ -89,8 +90,8 @@ class OpenAIError(BaseLLMException):
 ###################################################################
 def drop_params_from_unprocessable_entity_error(
     e: openai.UnprocessableEntityError | httpx.HTTPStatusError,
-    data: dict[str, Any],
-) -> dict[str, Any]:
+    data: Mapping[str, object],
+) -> dict[str, object]:
     """
     Helper function to read OpenAI UnprocessableEntityError and drop the params that raised an error from the error message.
 
@@ -329,6 +330,7 @@ class BaseOpenAILLM:
             transport=transport,
             mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport, verify=ssl_config, cert=None),
             follow_redirects=True,
+            http2=http2_enabled(),
         )
 
     @staticmethod
@@ -349,6 +351,7 @@ class BaseOpenAILLM:
         return httpx.Client(
             verify=ssl_config,
             follow_redirects=True,
+            http2=http2_enabled(),
         )
 
 
