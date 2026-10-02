@@ -171,7 +171,7 @@ async def _execute_chat_completion_agentic_plan(
         raise ValueError("Agentic loop plan missing patched messages")
 
     full_model_name = patch.model or model
-    if "/" not in full_model_name:
+    if custom_llm_provider and not full_model_name.startswith(f"{custom_llm_provider}/"):
         full_model_name = f"{custom_llm_provider}/{full_model_name}"
 
     optional_params_for_followup: Final = {**optional_params, **patch.optional_params}
