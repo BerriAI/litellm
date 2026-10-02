@@ -428,3 +428,14 @@ def test_azure_gpt6_astra_row_turns_none_and_minimal_off():
     assert row["supports_none_reasoning_effort"] is False
     assert row["supports_minimal_reasoning_effort"] is False
     assert row["supports_max_reasoning_effort"] is False
+
+
+@pytest.mark.parametrize("key", ["azure/gpt-6.1-sol", "azure/gpt-6.1-sol-2026-09-29", "azure_ai/gpt-6.1-sol"])
+def test_azure_gpt61_sol_rows_turn_none_off(key: str):
+    """Pinned on purpose, as the astra row above: a Foundry gpt-6.1-sol deployment (model
+    gpt-6.1-sol-2026-09-29) refused none on chat and on Responses on 2026-10-02 (400 unsupported_value
+    naming low, medium, high, xhigh, and max on Responses), and minimal the same way, while these rows
+    still said none was on. When Azure adds a level, flip the row and this assertion together."""
+    row = litellm.model_cost[key]
+    assert row["supports_none_reasoning_effort"] is False
+    assert row["supports_minimal_reasoning_effort"] is False

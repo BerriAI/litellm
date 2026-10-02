@@ -684,25 +684,26 @@ def test_azure_responses_gpt6_astra_rejects_temperature_while_reasoning(local_mo
         )
 
 
+@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6.1-sol"])
 @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
-def test_azure_responses_gpt6_astra_effort_levels_follow_the_azure_row(local_model_cost_map: None, level: str):
+def test_azure_responses_gpt6_effort_levels_follow_the_azure_row(local_model_cost_map: None, model: str, level: str):
     """A bare deployment name reads the azure/ row, opt-out for every level but max, so the none
-    and minimal Foundry refuses on this route (live 400s on 2026-10-01) are dropped or refused here
-    while the max it honors goes through whatever the route-blind flag says."""
+    and minimal Foundry refuses on this route (live 400s on 2026-10-01 for gpt-6-astra and 2026-10-02
+    for gpt-6.1-sol) are dropped or refused here while the max it honors goes through whatever the
+    route-blind flag says."""
     forwarded = (
-        level == "max"
-        or litellm.model_cost["azure/gpt-6-astra"].get(f"supports_{level}_reasoning_effort") is not False
+        level == "max" or litellm.model_cost[f"azure/{model}"].get(f"supports_{level}_reasoning_effort") is not False
     )
     dropped = AzureOpenAIResponsesAPIConfig().map_openai_params(
         response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": level}),
-        model="gpt-6-astra",
+        model=model,
         drop_params=True,
     )
     assert ("reasoning" in dropped) is forwarded
     if forwarded:
         kept = AzureOpenAIResponsesAPIConfig().map_openai_params(
             response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": level}),
-            model="gpt-6-astra",
+            model=model,
             drop_params=False,
         )
         assert kept["reasoning"] == {"effort": level}
@@ -710,7 +711,7 @@ def test_azure_responses_gpt6_astra_effort_levels_follow_the_azure_row(local_mod
         with pytest.raises(litellm.UnsupportedParamsError):
             AzureOpenAIResponsesAPIConfig().map_openai_params(
                 response_api_optional_params=ResponsesAPIOptionalRequestParams(reasoning={"effort": level}),
-                model="gpt-6-astra",
+                model=model,
                 drop_params=False,
             )
 
