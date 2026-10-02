@@ -423,6 +423,7 @@ const teamUpdateFieldsSchema = z.object({
     })
     .optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
+  object_permission_mcp_data_boundaries: z.array(z.string()).optional(),
   agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
   object_permission_search_tools: z.array(z.string()).optional(),
   object_permission_skills: z.array(z.string()).optional(),
@@ -475,6 +476,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   allowed_passthrough_routes: [],
   mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
   mcp_tool_permissions: {},
+  object_permission_mcp_data_boundaries: [],
   agents_and_groups: { agents: [], accessGroups: [] },
   object_permission_search_tools: [],
   object_permission_skills: [],
@@ -541,6 +543,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
     toolsets: info.object_permission?.mcp_toolsets || [],
   },
   mcp_tool_permissions: info.object_permission?.mcp_tool_permissions || {},
+  object_permission_mcp_data_boundaries: info.object_permission?.mcp_data_boundaries || [],
   agents_and_groups: {
     agents: info.object_permission?.agents || [],
     accessGroups: info.object_permission?.agent_access_groups || [],
@@ -1177,6 +1180,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       if (Array.isArray(values.object_permission_search_tools)) {
         updateData.object_permission.search_tools = values.object_permission_search_tools;
+      }
+
+      if (Array.isArray(values.object_permission_mcp_data_boundaries)) {
+        updateData.object_permission.mcp_data_boundaries = values.object_permission_mcp_data_boundaries;
       }
 
       if (Array.isArray(values.object_permission_skills)) {
@@ -2063,6 +2070,25 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
                     />
                   </div>
+
+                  <FormField
+                    control={form.control}
+                    name="object_permission_mcp_data_boundaries"
+                    label={labelWithHint(
+                      "Allowed MCP Data Boundaries",
+                      "Only MCP servers whose data boundary is in this list can be called. Leave empty to allow every boundary.",
+                    )}
+                  >
+                    {({ value, onChange, id }) => (
+                      <TagsInput
+                        id={id}
+                        value={value ?? []}
+                        onValueChange={onChange}
+                        placeholder="e.g. eu (optional, empty = all boundaries)"
+                        tokenSeparators={[","]}
+                      />
+                    )}
+                  </FormField>
 
                   <FormField control={form.control} name="agents_and_groups" label="Agents / Access Groups">
                     {({ value, onChange }) => (

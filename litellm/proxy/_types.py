@@ -1272,6 +1272,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     models: list[str] | None = None
     search_tools: list[str] | None = None
     mcp_tool_search_enabled: bool | None = None
+    mcp_data_boundaries: list[str] | None = None
     skills: list[str] | None = None
 
 
@@ -1631,6 +1632,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     source_url: str | None = None
     timeout: float | None = None
     max_concurrent_requests: int | None = None
+    data_boundary: str | None = None
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: str | None = Field(
@@ -1744,6 +1746,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     source_url: str | None = None
     timeout: float | None = None
     max_concurrent_requests: int | None = None
+    data_boundary: str | None = None
 
     @model_validator(mode="before")
     @classmethod

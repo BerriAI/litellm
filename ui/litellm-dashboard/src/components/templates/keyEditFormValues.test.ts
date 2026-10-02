@@ -25,6 +25,26 @@ describe("tpd_limit round trip", () => {
   });
 });
 
+describe("mcp_data_boundaries round trip", () => {
+  const keyData = {
+    token: "tok",
+    models: [],
+    object_permission: { mcp_data_boundaries: ["eu"] },
+  } as unknown as KeyResponse;
+
+  it("hydrates and submits the stored MCP data boundary allowlist", () => {
+    const values = toKeyEditFormValues(keyData);
+    expect(values.mcp_data_boundaries).toStrictEqual(["eu"]);
+    const submitted = toSubmittedValues(values, { canViewPolicies: true, canViewPrompts: true });
+    expect(submitted.mcp_data_boundaries).toStrictEqual(["eu"]);
+  });
+
+  it("hydrates an empty list when the key has no boundary policy", () => {
+    const unrestricted = { token: "tok", models: [] } as unknown as KeyResponse;
+    expect(toKeyEditFormValues(unrestricted).mcp_data_boundaries).toStrictEqual([]);
+  });
+});
+
 describe("keyEditFormSchema", () => {
   it("accepts an empty form", () => {
     expect(parse({}).success).toBe(true);

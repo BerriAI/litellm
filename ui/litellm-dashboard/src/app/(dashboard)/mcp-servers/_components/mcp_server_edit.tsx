@@ -955,6 +955,20 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   )}
                 </MountedFormField>
 
+                <MountedFormField
+                  label={
+                    <span className="text-sm font-medium text-foreground flex items-center">
+                      Data Boundary (optional)
+                      <SimpleTooltip content="Region or residency zone this server's data lives in, for example eu or us. Keys and teams with an MCP data boundary policy can only call servers inside their allowed boundaries.">
+                        <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                      </SimpleTooltip>
+                    </span>
+                  }
+                  name="data_boundary"
+                >
+                  {(control) => <Input {...textControl(control)} placeholder="e.g. eu" className="w-full rounded-lg" />}
+                </MountedFormField>
+
                 {/* Authentication - for HTTP, SSE, and OpenAPI */}
                 {!isStdioTransport && (
                   <>

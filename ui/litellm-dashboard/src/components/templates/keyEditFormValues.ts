@@ -46,6 +46,7 @@ export interface KeyEditFormValues {
   vector_stores?: string[];
   mcp_servers_and_groups?: McpServersAndGroups;
   mcp_tool_permissions?: Record<string, string[]>;
+  mcp_data_boundaries?: string[];
   agents_and_groups?: AgentsAndGroups;
   skills?: string[];
   organization_id?: string | null;
@@ -102,6 +103,7 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
     toolsets: keyData.object_permission?.mcp_toolsets || [],
   },
   mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
+  mcp_data_boundaries: keyData.object_permission?.mcp_data_boundaries || [],
   agents_and_groups: {
     agents: keyData.object_permission?.agents || [],
     accessGroups: keyData.object_permission?.agent_access_groups || [],
@@ -154,6 +156,7 @@ export const keyEditFormSchema = z.object({
   vector_stores: z.custom<string[] | undefined>(),
   mcp_servers_and_groups: z.custom<McpServersAndGroups | undefined>(),
   mcp_tool_permissions: z.custom<Record<string, string[]> | undefined>(),
+  mcp_data_boundaries: z.custom<string[] | undefined>(),
   agents_and_groups: z.custom<AgentsAndGroups | undefined>(),
   skills: z.custom<string[] | undefined>(),
   organization_id: z.custom<string | null | undefined>(),
@@ -205,6 +208,7 @@ export const toSubmittedValues = (
   vector_stores: values.vector_stores,
   mcp_servers_and_groups: values.mcp_servers_and_groups,
   mcp_tool_permissions: values.mcp_tool_permissions,
+  mcp_data_boundaries: values.mcp_data_boundaries,
   agents_and_groups: values.agents_and_groups,
   skills: values.skills,
   organization_id: values.organization_id,

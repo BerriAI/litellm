@@ -40,6 +40,7 @@ describe("edit root: transport gates", () => {
       "description",
       "transport",
       "max_concurrent_requests",
+      "data_boundary",
       "command",
       "args",
       "env_json",
@@ -210,7 +211,7 @@ describe("create root: where it diverges from edit", () => {
   });
 });
 
-const ALWAYS = ["server_name", "alias", "description", "transport", "max_concurrent_requests"];
+const ALWAYS = ["server_name", "alias", "description", "transport", "max_concurrent_requests", "data_boundary"];
 const PERMS = [
   "allow_all_keys",
   "available_on_public_internet",

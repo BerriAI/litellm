@@ -285,6 +285,14 @@ export default function KeyInfoView({
         delete formValues.agents_and_groups;
       }
 
+      if (formValues.mcp_data_boundaries !== undefined) {
+        formValues.object_permission = {
+          ...formValues.object_permission,
+          mcp_data_boundaries: formValues.mcp_data_boundaries || [],
+        };
+        delete formValues.mcp_data_boundaries;
+      }
+
       if (formValues.skills !== undefined) {
         formValues.object_permission = {
           ...formValues.object_permission,

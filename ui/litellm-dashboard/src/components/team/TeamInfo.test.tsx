@@ -2215,6 +2215,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     mcp_access_groups: [],
     mcp_tool_permissions: {},
     mcp_toolsets: [],
+    mcp_data_boundaries: [],
     agents: [],
     agent_access_groups: [],
     vector_stores: ["vs-1"],

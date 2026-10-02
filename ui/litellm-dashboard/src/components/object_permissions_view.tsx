@@ -27,6 +27,7 @@ export function ObjectPermissionsView({
   const mcpAccessGroups = objectPermission?.mcp_access_groups || [];
   const mcpToolPermissions = objectPermission?.mcp_tool_permissions || {};
   const mcpToolsets = objectPermission?.mcp_toolsets || [];
+  const mcpDataBoundaries = objectPermission?.mcp_data_boundaries || [];
   const agents = objectPermission?.agents || [];
   const agentAccessGroups = objectPermission?.agent_access_groups || [];
   const searchTools = objectPermission?.search_tools || [];
@@ -49,6 +50,16 @@ export function ObjectPermissionsView({
         inheritedAgents={inheritedAgents}
         accessToken={accessToken}
       />
+      <div className="min-w-0 rounded-md border border-border p-4">
+        <p className="text-sm font-medium text-foreground">MCP data boundaries</p>
+        {mcpDataBoundaries.length === 0 ? (
+          <p className="mt-1 block text-xs text-muted-foreground">
+            No restriction, MCP servers in any data boundary are allowed.
+          </p>
+        ) : (
+          <p className="mt-1 block text-xs break-words text-foreground">{mcpDataBoundaries.join(", ")}</p>
+        )}
+      </div>
       <div className="min-w-0 rounded-md border border-border p-4">
         <p className="text-sm font-medium text-foreground">Search tools</p>
         {searchTools.length === 0 ? (

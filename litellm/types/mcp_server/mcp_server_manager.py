@@ -231,6 +231,7 @@ class MCPServer(BaseModel):
     # Max concurrent outbound tool calls to this server; excess calls queue.
     # None or a value <= 0 means unlimited.
     max_concurrent_requests: int | None = None
+    data_boundary: str | None = None
     # Resolved short-ID tool prefix when LITELLM_USE_SHORT_MCP_TOOL_PREFIX is
     # enabled.  Set by ``MCPServerManager._assign_unique_short_prefix`` at
     # registration time so that natural-hash collisions between two

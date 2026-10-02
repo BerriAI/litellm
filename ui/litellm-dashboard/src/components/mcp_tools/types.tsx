@@ -453,6 +453,7 @@ export interface MCPServer {
   oauth_passthrough?: boolean;
   dcr_bridge?: boolean | null;
   max_concurrent_requests?: number | null;
+  data_boundary?: string | null;
   /** Redacted to null in server responses; present when constructing a server locally. */
   credentials?: Record<string, unknown> | null;
 
