@@ -567,7 +567,9 @@ class _Observations:
 
     def read(self) -> tuple[dict[str, JsonValue], ...]:
         with httpx.Client(timeout=10, trust_env=False) as client:
-            payload: Final = JSON_OBJECT.validate_python(client.get(f"{self.url}/__observations").json())
+            payload: Final = JSON_OBJECT.validate_python(
+                client.get(f"{self.url}/__observations?include_method=true").json()
+            )
         requests: Final = payload.get("requests")
         assert isinstance(requests, list)
         self.items = (*self.items, *(object_value(item) for item in requests if isinstance(item, dict)))
@@ -575,6 +577,14 @@ class _Observations:
 
     def for_scenario(self, identity: str) -> tuple[dict[str, JsonValue], ...]:
         return tuple(item for item in self.items if f"/{identity}/" in str(item.get("path")))
+
+    def provider_calls(self, identity: str) -> tuple[dict[str, JsonValue], ...]:
+        calls: Final = tuple(
+            item
+            for item in self.for_scenario(identity)
+            if not (item.get("method") == "GET" and str(item.get("path", "")).endswith(("/v1/models", "/models")))
+        )
+        return calls
 
 
 def _response(
@@ -891,7 +901,7 @@ def test_added_required_fields_return_exact_400(gateway: Gateway, route: str) ->
             assert response.status_code == 400, f"{route}.{field}: {response.text}"
             assert response.json() == expected, response.text
             observations.read()
-            assert observations.for_scenario(identity) == ()
+            assert observations.provider_calls(identity) == ()
 
 
 @pytest.mark.parametrize(
@@ -931,7 +941,7 @@ def test_fine_tuning_missing_training_file_returns_422_without_upstream_call(gat
         assert object_value(detail[0]).get("loc") == ["body", "training_file"], response.text
         observations: Final = _Observations(gateway.upstream_url)
         observations.read()
-        assert observations.for_scenario(identity) == ()
+        assert observations.provider_calls(identity) == ()
 
 
 @pytest.mark.parametrize(
@@ -1133,7 +1143,7 @@ def test_openai_sdk_missing_moderations_input_returns_bad_request(gateway: Gatew
         assert raised.value.response.json() == _error("/moderations", "input")
         observations: Final = _Observations(gateway.upstream_url)
         observations.read()
-        assert observations.for_scenario(identity) == ()
+        assert observations.provider_calls(identity) == ()
 
 
 def test_default_search_model_uses_query_without_model(gateway: Gateway, tmp_path: Path) -> None:
@@ -1251,6 +1261,13 @@ def _workers(process: subprocess.Popen[bytes]) -> tuple[psutil.Process, ...]:
     return tuple(psutil.Process(process.pid).children(recursive=True))
 
 
+def _process_tree_line(process: psutil.Process) -> str:
+    try:
+        return f"{process.pid} {' '.join(process.cmdline())}"
+    except psutil.Error:
+        return f"{process.pid} <exited>"
+
+
 def _worker_alive(worker: psutil.Process) -> bool:
     try:
         return worker.is_running() and worker.status() != psutil.STATUS_ZOMBIE
@@ -1314,13 +1331,10 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
                 seconds=30,
             )
             assert probe.status_code == 200, probe.text
-            tree: Final = subprocess.run(
-                ["pstree", "-ap", str(owned.process.pid)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            record_property("owned_proxy_process_tree", tree.stdout)
+            process_root: Final = psutil.Process(owned.process.pid)
+            processes: Final = (process_root, *process_root.children(recursive=True))
+            process_tree: Final = "\n".join(_process_tree_line(process) for process in processes)
+            record_property("owned_proxy_process_tree", process_tree)
             workers: Final = eventually(
                 lambda: _workers(owned.process),
                 lambda children: len(children) >= 2,
@@ -1395,7 +1409,7 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
                 seconds=30,
             )
             missing_observations: Final = {
-                identity: len(observations.for_scenario(identity))
+                identity: len(observations.provider_calls(identity))
                 for _path, _body, _expected, identity in missing_calls
             }
             assert all(count == 0 for count in missing_observations.values()), missing_observations
@@ -1403,7 +1417,7 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
                 "chaos_missing_split",
                 str(tuple(f"{route}:{parameter}" for route, parameter in missing_routes)),
             )
-            record_property("chaos_missing_upstream_observation_counts", str(missing_observations))
+            record_property("chaos_missing_upstream_provider_call_counts", str(missing_observations))
             request_ids: Final = tuple(str(JSON_OBJECT.validate_python(response.json())["id"]) for response in valid)
             spend_rows: Final = tuple(
                 eventually(partial(_spend_rows, request_id), lambda values: len(values) == 1, seconds=60)
