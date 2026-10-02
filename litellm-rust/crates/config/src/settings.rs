@@ -35,7 +35,6 @@ impl fmt::Debug for ClickHouseStoreSettings {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
 pub enum TracingStoreSettings {
-    Legacy(String),
     ClickHouse(ClickHouseStoreSettings),
 }
 
