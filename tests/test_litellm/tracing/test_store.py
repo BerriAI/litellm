@@ -227,6 +227,23 @@ def test_agent_nodes_ignores_spans_of_unknown_agents():
     assert agent_nodes(spans) == ()
 
 
+def test_trace_groups_normalized_names_and_preserves_span_labels():
+    rows = [
+        _row("root", "", "invoke_agent research_agent", "agent", "research_agent"),
+        _row("r1", "root", "researcher._execute_core", "agent", "researcher"),
+        _row("r2", "r1", "invoke_agent researcher", "agent", "researcher"),
+        _row("llm", "r2", "chat", "llm", "researcher"),
+    ]
+    result = trace_from_rows("t1", rows)
+    assert result is not None
+    assert result["summary"]["agent_names"] == ("research_agent", "researcher")
+    assert result["summary"]["name"] == "invoke_agent research_agent"
+    agents = {agent["name"]: agent for agent in result["agents"]}
+    assert agents["researcher"]["parent_agent"] == "research_agent"
+    assert agents["researcher"]["invocations"] == 2
+    assert agents["researcher"]["llm_calls"] == 1
+
+
 # ---------------------------------------------------------------- list helpers
 
 

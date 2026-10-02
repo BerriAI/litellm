@@ -8,7 +8,7 @@ import { cn } from "@/lib/cva.config";
 
 import { StatusMark } from "./StatusMark";
 import type { TraceSummary } from "./traceTypes";
-import { fmtMs, previewText, traceDisplayName } from "./traceUtils";
+import { fmtMs, previewText, traceDisplayName, traceAgentNames } from "./traceUtils";
 
 interface AgentTracesTableProps {
   traces: TraceSummary[];
@@ -83,8 +83,8 @@ export function AgentTracesTable({
               >
                 {formatActivityTimestamp(run.start_time)}
               </td>
-              <td className="truncate px-3 text-muted-foreground" title={run.service}>
-                {run.service}
+              <td className="truncate px-3 text-muted-foreground" title={traceAgentNames(run).join(", ")}>
+                {traceAgentNames(run).join(", ") || "—"}
               </td>
               <td className="px-3">
                 <div className="flex min-w-0 items-center gap-2">

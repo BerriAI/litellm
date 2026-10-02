@@ -56,6 +56,7 @@ class TraceSummary(TypedDict):
     trace_ref: ReadOnly[NotRequired[str]]
     name: ReadOnly[str]
     service: ReadOnly[str]
+    agent_names: ReadOnly[NotRequired[tuple[str, ...]]]
     input_preview: ReadOnly[str]
     start_time: ReadOnly[str]  # ISO 8601
     duration_ms: ReadOnly[float]
