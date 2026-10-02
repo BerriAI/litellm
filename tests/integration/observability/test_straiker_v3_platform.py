@@ -783,7 +783,7 @@ def test_v1_post_call_sends_response_envelope(rig: Rig) -> None:
     assert "synthetic answer " + marker in json.dumps(calls[0].body.get("response"))
 
 
-# E: explicit api_version v1 with a v3-shaped key follows the configuration, not the key
+# E: a saved api_version v1 with an sk_agt_ key routes to v3; the key prefix decides, not the saved version
 def test_saved_api_version_v1_with_v3_key_routes_to_v3_not_the_v1_webhook(rig: Rig) -> None:
     allowed_marker: Final = rig.marker()
     allowed: Final = _chat(rig, "saved v1 " + allowed_marker, guardrails=["straiker-v3-as-v1"])
