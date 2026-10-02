@@ -207,6 +207,12 @@ it("should render VirtualKeysTable component", () => {
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
 });
 
+it("right-aligns the Spend / Budget column", async () => {
+  renderWithProviders(<VirtualKeysTable />);
+  expect(await screen.findByRole("columnheader", { name: /^Spend/ })).toHaveClass("text-right");
+  expect(screen.getByRole("columnheader", { name: /^Key$/ })).not.toHaveClass("text-right");
+});
+
 it("shows the Budget Reset column by default", async () => {
   renderWithProviders(<VirtualKeysTable />);
   await waitFor(() => {

@@ -1,21 +1,27 @@
 #!/usr/bin/env bash
 # Daily Claude Code compatibility-matrix populator.
 #
-# Runs from the GCP VM `litellm-compatibility-matrix-populator` via the
-# systemd timer in this directory. The flow is:
+# Runs daily as the Render cron job `litellm-compat-matrix`, built from
+# the Dockerfile in this directory (see README.md). The flow is:
 #
 #   1. Resolve the latest LiteLLM final release tag from the GitHub
 #      Releases API.
 #   2. Update a long-lived worktree at $WORKTREE to that tag and `uv sync` it.
-#   3. Boot the proxy as a background subprocess on $PROXY_PORT (default
+#   3. Resolve the Claude Code CLI version under test (the newest npm
+#      release at least 3 days old, via pr_gate_version_resolver.py, or
+#      $CLAUDE_CODE_VERSION when set) and download that release's
+#      linux-x64 binary into the run's scratch dir, checksum-verified
+#      against the vendor's release manifest (install_claude_code.sh).
+#   4. Boot the proxy as a background subprocess on $PROXY_PORT (default
 #      4100; a separate port from the human-tended :4000 proxy).
-#   4. Run `pytest tests/e2e/claude_code/` against the proxy. Test
-#      failures become `fail` cells in the JSON, not script errors.
-#   5. Hand the per-test results artifact + manifest to a small Python
+#   5. Run `pytest tests/e2e/claude_code/` against the proxy with that
+#      CLI first on PATH. Test failures become `fail` cells in the JSON,
+#      not script errors.
+#   6. Hand the per-test results artifact + manifest to a small Python
 #      CLI (`build_matrix.py`) that wraps the existing
 #      `matrix_builder.build_from_paths` to produce the published
 #      compatibility-matrix.json.
-#   6. `gh repo clone` litellm-docs, write the JSON to a deterministic
+#   7. `gh repo clone` litellm-docs, write the JSON to a deterministic
 #      branch (`compat-matrix/<litellm>-<claude>-<UTC-date>`), commit,
 #      push the branch straight to BerriAI/litellm-docs (mateo-berri has
 #      write access), `gh pr create`, then — *only if no cell regressed
@@ -23,7 +29,7 @@
 #      auto-merge so the PR merges itself once required checks pass. A
 #      green→red regression leaves auto-merge off for human review; an
 #      already-red cell (red→red) does not block.
-#   7. Sweep stale compat-matrix PRs: once today's PR exists, close any
+#   8. Sweep stale compat-matrix PRs: once today's PR exists, close any
 #      other open `compat-matrix/*` PR (and delete its bot-owned branch)
 #      so at most ONE compat-matrix PR is ever open — the newest. A
 #      gate-withheld PR that nobody triages is superseded by the next
@@ -33,12 +39,12 @@
 # rather than spawning a new one. If the JSON is byte-identical to the
 # docs branch, we skip the push entirely.
 #
-# Required commands on $PATH: git, uv, gh, jq, curl, claude, npm.
+# Required commands on $PATH: git, uv, gh, jq, curl.
 # Required state: a litellm checkout at $LITELLM_REPO (this file lives in
-# it), $WORKTREE is created on first run, gh is already authenticated.
+# it); $WORKTREE is created on first run.
 #
-# Override any default by setting the matching env var; see the systemd
-# unit for the production wiring.
+# Override any default by setting the matching env var; see README.md
+# for the production wiring.
 
 set -Eeuo pipefail
 
@@ -51,13 +57,16 @@ DOCS_BRANCH="${DOCS_BRANCH:-main}"
 DOCS_TARGET_PATH="${DOCS_TARGET_PATH:-src/data/compatibility-matrix.json}"
 SKIP_PUBLISH="${SKIP_PUBLISH:-0}"
 PYTEST_K="${PYTEST_K:-}"
+# Empty means "resolve it": the newest @anthropic-ai/claude-code npm
+# release published at least 3 days ago. Set it to pin a manual run.
+CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-}"
 # The e2e suite uses PEP 695 `type` aliases, so the venv needs Python
-# >= 3.12 (also what repo CI runs) even when the VM's system python is
+# >= 3.12 (also what repo CI runs) even when the host's system python is
 # older. uv fetches a managed CPython of this version on first use --
 # checksum-verified against the manifest baked into the pinned uv
 # binary -- and installs it under ${WORKTREE}/.uv-python (see
-# UV_PYTHON_INSTALL_DIR below) so it lives inside the one tree the
-# systemd sandbox lets us write to.
+# UV_PYTHON_INSTALL_DIR below) so everything the run writes lives inside
+# the worktree.
 CRON_PYTHON_VERSION="${CRON_PYTHON_VERSION:-3.12}"
 # Merge method for auto-merge. BerriAI/litellm-docs only allows squash
 # merges (merge-commit and rebase are disabled at the repo level), so
@@ -108,14 +117,14 @@ trap cleanup EXIT INT TERM
 log() { printf '==> %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-for cmd in git uv gh jq curl claude; do
+for cmd in git uv gh jq curl; do
   command -v "${cmd}" >/dev/null 2>&1 || die "missing required command: ${cmd}"
 done
 
 # Publishing pushes the branch straight to BerriAI/litellm-docs and opens
-# the PR as mateo-berri, who has write access on the docs repo. Under
-# systemd the PAT arrives as a file via LoadCredential=, NOT via the
-# EnvironmentFile: several suite cells let the model-driven claude CLI
+# the PR as mateo-berri, who has write access on the docs repo. On
+# Render the PAT arrives as a secret file under ${CREDENTIALS_DIRECTORY},
+# NOT via an env var: several suite cells let the model-driven claude CLI
 # read arbitrary files as this user, and /proc/<pid>/environ of the
 # script, pytest, and the proxy would hand an env-borne token to any
 # same-UID reader. Kept as an unexported shell variable and passed per
@@ -125,13 +134,18 @@ done
 # quota.
 if [[ -z "${GITHUB_TOKEN:-}" && -n "${CREDENTIALS_DIRECTORY:-}" && -f "${CREDENTIALS_DIRECTORY}/github-token" ]]; then
   GITHUB_TOKEN="$(<"${CREDENTIALS_DIRECTORY}/github-token")"
-  log "publish token source: systemd credential store"
+  log "publish token source: ${CREDENTIALS_DIRECTORY}/github-token"
 elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
   log "publish token source: process environment"
 fi
 if [[ "${SKIP_PUBLISH}" != "1" ]]; then
   [[ -n "${GITHUB_TOKEN:-}" ]] \
-    || die "publish token required: /etc/litellm-compat-matrix-github-token via LoadCredential under systemd, or an exported GITHUB_TOKEN for manual runs (or set SKIP_PUBLISH=1)"
+    || die "publish token required: the github-token secret file under CREDENTIALS_DIRECTORY, or an exported GITHUB_TOKEN for manual runs (or set SKIP_PUBLISH=1)"
+  # The stale-PR sweep below closes only PRs this account opened, so the
+  # login is resolved from the token once rather than hardcoded.
+  PUBLISH_LOGIN="$(GH_TOKEN="${GITHUB_TOKEN}" gh api user --jq .login)" \
+    || die "could not resolve the publishing account from the github token"
+  log "publishing as ${PUBLISH_LOGIN}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -194,10 +208,6 @@ LITELLM_VERSION="$(
 [[ -n "${LITELLM_VERSION}" ]] || die "could not resolve latest PEP 440 final release (vX.Y.Z) in 5 pages of releases"
 log "resolved litellm: ${LITELLM_VERSION}"
 
-CLAUDE_CODE_VERSION="$(claude --version 2>/dev/null | awk '{print $1}')"
-[[ -n "${CLAUDE_CODE_VERSION}" ]] || die "could not read 'claude --version'"
-log "local claude code: ${CLAUDE_CODE_VERSION}"
-
 # ---------------------------------------------------------------------------
 # 2. Update the worktree to that tag
 # ---------------------------------------------------------------------------
@@ -205,7 +215,7 @@ log "local claude code: ${CLAUDE_CODE_VERSION}"
 if [[ ! -d "${WORKTREE}/.git" ]]; then
   log "first run: cloning litellm into ${WORKTREE}"
   mkdir -p "$(dirname "${WORKTREE}")"
-  git clone https://github.com/BerriAI/litellm.git "${WORKTREE}"
+  git clone --filter=blob:none https://github.com/BerriAI/litellm.git "${WORKTREE}"
 fi
 
 log "updating worktree to ${LITELLM_VERSION}"
@@ -221,40 +231,27 @@ git -C "${WORKTREE}" clean -fdx -e .venv -e .uv-bin -e .uv-python
 git -C "${WORKTREE}" checkout --force "${LITELLM_VERSION}"
 
 # Always rebuild tests/e2e/ in the worktree from the dev checkout,
-# regardless of what the resolved ${LITELLM_VERSION} tag ships. Two
-# reasons:
+# regardless of what the resolved ${LITELLM_VERSION} tag ships: the
+# matrix populator's job is to exercise *today's* tests against the
+# latest stable proxy, and the dev checkout carries the most recent
+# test fixes that haven't yet rolled into a stable release.
 #
-#   * The matrix populator's job is to exercise *today's* tests against
-#     the latest stable proxy. The dev checkout carries the most recent
-#     test fixes that haven't yet rolled into a stable release, and we
-#     want every cron run to pick those up the moment they land on
-#     ${LITELLM_REPO}, not whenever the next stable release happens.
-#   * The tag's own tests/e2e/ ships the full EKS e2e harness, whose
-#     top-level conftest.py imports modules (e2e_db, lifecycle,
-#     otel_client, ...) that the stable venv does not install. Copying
-#     the whole tree would make pytest collection blow up on those
-#     imports.
-#
-# So the shim is a fresh `rm -rf` of tests/e2e/ followed by copying ONLY
-# the claude_code suite plus the shared transport helpers it imports.
+# The whole tree is copied rather than an allowlist of the helpers the
+# suite imports: the helpers import each other (proxy_client ->
+# e2e_config -> fixture_mode -> ...), so a new edge in that graph turned
+# an allowlist into a ModuleNotFoundError at conftest load. The tree's
+# top-level conftest.py pulls in the full EKS harness (e2e_db,
+# lifecycle, ...), which the stable venv does not install, so the pytest
+# run below points --confcutdir at claude_code/ and never loads it.
 # pytest puts tests/e2e/ itself on sys.path (it has no __init__.py, while
 # claude_code/ does), which is what resolves both the `claude_code.*`
 # and the bare `proxy_client` / `e2e_http` imports inside the suite.
-E2E_HELPER_FILES=(proxy_client.py e2e_http.py models.py e2e_config.py transport.py)
-if [[ ! -d "${LITELLM_REPO}/tests/e2e/claude_code" ]]; then
-  die "no shim source at ${LITELLM_REPO}/tests/e2e/claude_code"
-fi
-for helper in "${E2E_HELPER_FILES[@]}"; do
-  [[ -f "${LITELLM_REPO}/tests/e2e/${helper}" ]] \
-    || die "missing shim helper: ${LITELLM_REPO}/tests/e2e/${helper}"
-done
-log "shimming tests/e2e/claude_code/ + helpers from ${LITELLM_REPO} (always-overwrite)"
+[[ -d "${LITELLM_REPO}/tests/e2e/claude_code" ]] \
+  || die "no shim source at ${LITELLM_REPO}/tests/e2e/claude_code"
+log "shimming tests/e2e/ from ${LITELLM_REPO} (always-overwrite)"
 rm -rf "${WORKTREE}/tests/e2e"
 mkdir -p "${WORKTREE}/tests/e2e"
-cp -r "${LITELLM_REPO}/tests/e2e/claude_code" "${WORKTREE}/tests/e2e/"
-for helper in "${E2E_HELPER_FILES[@]}"; do
-  cp "${LITELLM_REPO}/tests/e2e/${helper}" "${WORKTREE}/tests/e2e/"
-done
+cp -r "${LITELLM_REPO}/tests/e2e/." "${WORKTREE}/tests/e2e/"
 
 # litellm pins an exact uv version in pyproject.toml's [tool.uv]
 # `required-version` field, so a system uv that's newer or older
@@ -305,26 +302,54 @@ fi
 # actually serve. `--group proxy-dev` brings in pytest and the rest of
 # what tests/e2e/claude_code/ needs. `--python` pins the venv to
 # ${CRON_PYTHON_VERSION}; the first run after a version bump recreates
-# the venv from scratch (a one-time cold sync).
+# the venv from scratch (a one-time cold sync). `--no-install-project`
+# leaves litellm itself out: the tag builds a Rust extension through
+# maturin, which needs a C and Rust toolchain the image does not carry,
+# so the published PyPI wheel (what users install) goes in right after,
+# and every later `uv run` passes `--no-sync` so uv never tries to put
+# the source build back.
 export UV_PYTHON_INSTALL_DIR="${WORKTREE}/.uv-python"
-log "uv sync --frozen --group proxy-dev --extra proxy --python ${CRON_PYTHON_VERSION} (uv ${PINNED_UV_VERSION:-system})"
-(cd "${WORKTREE}" && "${WORKTREE_UV}" sync --frozen --group proxy-dev --extra proxy --python "${CRON_PYTHON_VERSION}")
+log "uv sync --frozen --group proxy-dev --extra proxy --no-install-project --python ${CRON_PYTHON_VERSION} (uv ${PINNED_UV_VERSION:-system})"
+(cd "${WORKTREE}" && "${WORKTREE_UV}" sync --frozen --group proxy-dev --extra proxy --no-install-project --python "${CRON_PYTHON_VERSION}")
+LITELLM_WHEEL_VERSION="${LITELLM_VERSION#v}"
+log "installing the published litellm==${LITELLM_WHEEL_VERSION} wheel from PyPI"
+"${WORKTREE_UV}" pip install --python "${WORKTREE}/.venv/bin/python" --no-deps --no-build "litellm==${LITELLM_WHEEL_VERSION}"
 
 PROXY_CONFIG="${WORKTREE}/tests/e2e/claude_code/test_config.yaml"
 [[ -f "${PROXY_CONFIG}" ]] || die "proxy config not found at ${PROXY_CONFIG} (shim incomplete?)"
 
 # ---------------------------------------------------------------------------
-# 3. Boot the proxy
+# 3. Resolve and install the Claude Code CLI under test
+# ---------------------------------------------------------------------------
+
+# The resolver is stdlib-only, but the image ships no python of its
+# own, so it runs on the venv the sync above just built. Its 3-day
+# publish-age buffer (PRD #26476) keeps a release that gets pulled or
+# patched within days from ever driving the published matrix.
+if [[ -z "${CLAUDE_CODE_VERSION}" ]]; then
+  CLAUDE_CODE_VERSION="$(
+    cd "${WORKTREE}" \
+      && "${WORKTREE_UV}" run --no-sync python "${POPULATOR_DIR}/../pr_gate_version_resolver.py"
+  )" || die "could not resolve the Claude Code version to test"
+  log "resolved claude code: ${CLAUDE_CODE_VERSION}"
+else
+  log "CLAUDE_CODE_VERSION set; testing claude code ${CLAUDE_CODE_VERSION}"
+fi
+CLAUDE_CLI_DIR="${WORKDIR}/claude-cli"
+"${POPULATOR_DIR}/install_claude_code.sh" "${CLAUDE_CODE_VERSION}" "${CLAUDE_CLI_DIR}"
+
+# ---------------------------------------------------------------------------
+# 4. Boot the proxy
 # ---------------------------------------------------------------------------
 
 log "starting proxy on 127.0.0.1:${PROXY_PORT}"
 # Bind the proxy to loopback only. The populator proxy is talked to
 # exclusively by the pytest run on the same host (the health check and
 # the test env set `LITELLM_PROXY_URL=http://127.0.0.1:...`),
-# so there's no reason to expose it on the VM's external interfaces.
+# so there's no reason to expose it on the container's external interfaces.
 # Without `--host`, `litellm` defaults to 0.0.0.0, which combined with
 # the predictable default `LITELLM_MASTER_KEY=sk-cron-matrix` would
-# allow anything that can reach :${PROXY_PORT} on the VM to authenticate
+# allow anything that can reach :${PROXY_PORT} on the host to authenticate
 # and burn upstream provider credentials.
 #
 # `setsid` puts the proxy in its own session+pgroup so cleanup() can
@@ -334,7 +359,7 @@ log "starting proxy on 127.0.0.1:${PROXY_PORT}"
 setsid env LITELLM_MASTER_KEY="${PROXY_API_KEY}" bash -c '
   echo "$$" > "$0"
   cd "$1"
-  exec "$2" run litellm --config "$3" --host 127.0.0.1 --port "$4"
+  exec "$2" run --no-sync litellm --config "$3" --host 127.0.0.1 --port "$4"
 ' "${PROXY_PID_FILE}" "${WORKTREE}" "${WORKTREE_UV}" "${PROXY_CONFIG}" "${PROXY_PORT}" \
   >"${WORKDIR}/proxy.log" 2>&1 &
 disown
@@ -350,7 +375,7 @@ curl -fsS "${HEALTH_URL}" >/dev/null \
   || { tail -50 "${WORKDIR}/proxy.log" >&2; die "proxy did not become healthy"; }
 
 # ---------------------------------------------------------------------------
-# 4. Run pytest
+# 5. Run pytest
 # ---------------------------------------------------------------------------
 
 RESULTS_JSON="${WORKDIR}/compat-results.json"
@@ -359,6 +384,7 @@ RESULTS_JSON="${WORKDIR}/compat-results.json"
 # the cron skips them if/when they land in the suite.
 PYTEST_ARGS=(
   tests/e2e/claude_code/
+  --confcutdir=tests/e2e/claude_code
   "--ignore-glob=*_unit_tests*"
 )
 if [[ -n "${PYTEST_K}" ]]; then
@@ -373,7 +399,8 @@ set +e
     && LITELLM_PROXY_URL="http://127.0.0.1:${PROXY_PORT}" \
        LITELLM_MASTER_KEY="${PROXY_API_KEY}" \
        COMPAT_RESULTS_PATH="${RESULTS_JSON}" \
-       "${WORKTREE_UV}" run pytest "${PYTEST_ARGS[@]}"
+       PATH="${CLAUDE_CLI_DIR}:${PATH}" \
+       "${WORKTREE_UV}" run --no-sync pytest "${PYTEST_ARGS[@]}"
 )
 PYTEST_EXIT=$?
 set -e
@@ -385,14 +412,14 @@ log "pytest exit code: ${PYTEST_EXIT} (failures become 'fail' cells, not script 
 [[ -f "${RESULTS_JSON}" ]] || die "pytest did not produce ${RESULTS_JSON}"
 
 # ---------------------------------------------------------------------------
-# 5. Build the matrix JSON
+# 6. Build the matrix JSON
 # ---------------------------------------------------------------------------
 
 MATRIX_JSON="${WORKDIR}/compatibility-matrix.json"
 log "building ${MATRIX_JSON}"
 (
   cd "${WORKTREE}" \
-    && "${WORKTREE_UV}" run python "${POPULATOR_DIR}/build_matrix.py" \
+    && "${WORKTREE_UV}" run --no-sync python "${POPULATOR_DIR}/build_matrix.py" \
        --manifest "${WORKTREE}/tests/e2e/claude_code/manifest.yaml" \
        --results "${RESULTS_JSON}" \
        --output "${MATRIX_JSON}" \
@@ -401,12 +428,13 @@ log "building ${MATRIX_JSON}"
 )
 
 # ---------------------------------------------------------------------------
-# 6. Open a docs-repo PR
+# 7. Open a docs-repo PR
 # ---------------------------------------------------------------------------
 
 if [[ "${SKIP_PUBLISH}" == "1" ]]; then
-  cp "${MATRIX_JSON}" "${LITELLM_REPO}/compatibility-matrix.json"
-  log "SKIP_PUBLISH=1; matrix written to ${LITELLM_REPO}/compatibility-matrix.json"
+  cp "${MATRIX_JSON}" "${HOME}/compatibility-matrix.json"
+  log "SKIP_PUBLISH=1; matrix saved to ${HOME}/compatibility-matrix.json and printed below"
+  cat "${MATRIX_JSON}"
   exit 0
 fi
 
@@ -415,7 +443,7 @@ BRANCH_NAME="compat-matrix/${LITELLM_VERSION}-${CLAUDE_CODE_VERSION}-${DATE_UTC}
 DOCS_CLONE="${WORKDIR}/litellm-docs"
 
 log "cloning ${DOCS_REPO}@${DOCS_BRANCH}"
-gh repo clone "${DOCS_REPO}" "${DOCS_CLONE}" -- --depth 1 --branch "${DOCS_BRANCH}"
+GH_TOKEN="${GITHUB_TOKEN}" gh repo clone "${DOCS_REPO}" "${DOCS_CLONE}" -- --depth 1 --branch "${DOCS_BRANCH}"
 
 cd "${DOCS_CLONE}"
 git config user.email "litellm-bot@berri.ai"
@@ -452,7 +480,7 @@ log "checking for green->red regressions vs the published matrix"
 set +e
 REGRESSION_REPORT="$(
   cd "${WORKTREE}" \
-    && "${WORKTREE_UV}" run python "${POPULATOR_DIR}/check_regressions.py" \
+    && "${WORKTREE_UV}" run --no-sync python "${POPULATOR_DIR}/check_regressions.py" \
        --old "${PUBLISHED_MATRIX}" \
        --new "${MATRIX_JSON}"
 )"
@@ -492,7 +520,7 @@ git commit -m "${COMMIT_MSG}"
 #
 # Plain --force (not --force-with-lease) is acceptable here: the
 # compat-matrix/* branch is bot-owned, only this script ever writes to
-# it, and runs are serialized by the systemd timer. --force-with-lease
+# it, and runs are serialized by the cron schedule. --force-with-lease
 # would require a fetch to populate the remote-tracking ref before each
 # push and adds no safety in this single-writer setup.
 PUBLISH_PUSH_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${DOCS_REPO}.git"
@@ -553,7 +581,7 @@ Generated by \`tests/e2e/claude_code/cron_vm/run_daily.sh\`. Close without mergi
 EOF
 )"
 
-log "opening PR from ${BRANCH_NAME} -> ${DOCS_REPO}:${DOCS_BRANCH} (as mateo-berri)"
+log "opening PR from ${BRANCH_NAME} -> ${DOCS_REPO}:${DOCS_BRANCH} (as ${PUBLISH_LOGIN})"
 # GH_TOKEN is mateo-berri's write-scoped token, the same identity used
 # for release-listing above. The branch lives on ${DOCS_REPO} itself, so
 # --head is a bare branch name (a same-repo PR), not `OWNER:BRANCH`.
@@ -632,7 +660,9 @@ else
     || die "auto-merge still armed on ${BRANCH_NAME} (enabled ${AUTOMERGE_ARMED}) after --disable-auto"
 fi
 
-# --- Stale-PR sweep ----------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 8. Sweep stale compat-matrix PRs
+# ---------------------------------------------------------------------------
 # Keep at most ONE compat-matrix PR open: today's. Any other open
 # `compat-matrix/*` PR is a leftover from a day whose regression gate
 # withheld auto-merge and nobody triaged it; the PR we just opened or
@@ -644,15 +674,25 @@ fi
 #
 # Non-fatal: a sweep failure (rate limit, transient API error) leaves
 # stale PRs for the next run to retry; it must not fail the pipeline.
+#
+# The docs repo carries a few hundred open PRs, so the list has to page
+# past gh's default 30 (and the earlier 100, which never reached a
+# week-old compat-matrix PR and left it open for good).
+#
+# `compat-matrix/` is only a naming convention, so the prefix alone does
+# not make a PR this job's: a contributor can open a fork PR under that
+# name. Only PRs the publishing account itself opened from a branch on
+# the docs repo qualify; anything else stays untouched.
 log "sweeping stale compat-matrix PRs (keeping ${BRANCH_NAME})"
 set +e
 STALE_PRS="$(
   GH_TOKEN="${GITHUB_TOKEN}" gh pr list \
     --repo "${DOCS_REPO}" \
     --state open \
-    --limit 100 \
-    --json number,headRefName \
-    --jq '.[] | select(.headRefName | startswith("compat-matrix/")) | "\(.number)\t\(.headRefName)"'
+    --author "${PUBLISH_LOGIN}" \
+    --limit 1000 \
+    --json number,headRefName,isCrossRepository \
+    --jq '.[] | select((.headRefName | startswith("compat-matrix/")) and (.isCrossRepository | not)) | "\(.number)\t\(.headRefName)"'
 )"
 while IFS=$'\t' read -r stale_pr stale_head; do
   [[ -z "${stale_pr}" ]] && continue
@@ -660,7 +700,7 @@ while IFS=$'\t' read -r stale_pr stale_head; do
   GH_TOKEN="${GITHUB_TOKEN}" gh pr close "${stale_pr}" \
     --repo "${DOCS_REPO}" \
     --delete-branch \
-    --comment "Superseded by the newer daily compat-matrix PR from \`${BRANCH_NAME}\`; the populator keeps only the most recent compat-matrix PR open." 2>&1 | sed 's/^/  /'
+    --comment "Superseded by the newer daily compat-matrix PR from \`${BRANCH_NAME}\`; the populator keeps only the most recent compat-matrix PR open" 2>&1 | sed 's/^/  /'
   if [[ ${PIPESTATUS[0]} -eq 0 ]]; then
     log "closed stale compat-matrix PR #${stale_pr} (${stale_head})"
   else

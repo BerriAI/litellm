@@ -1,3 +1,6 @@
+import { AgentIdentityFields } from "./AgentIdentityFields";
+import { AgentIdentityDetails } from "./AgentIdentityDetails";
+import { withAgentIdentity } from "./agent_identity";
 import React, { useState, useEffect, useMemo } from "react";
 import { cx } from "@/lib/cva.config";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
@@ -22,6 +25,7 @@ import KeyInfoView from "@/components/templates/key_info_view";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 import AgentVirtualKeys from "./agent_virtual_keys";
+import AgentKillSwitchDangerZone from "./AgentKillSwitchDangerZone";
 import AgentFormFields, { unmountedA2AFieldNames } from "./agent_form_fields";
 import DynamicAgentFormFields, { buildDynamicAgentData, unmountedDynamicFieldNames } from "./dynamic_agent_form_fields";
 import {
@@ -228,15 +232,20 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       );
 
       const built: AgentRequestPayload = usesDynamicFields
-        ? { ...buildDynamicAgentData(values, selectedAgentTypeInfo), agent_name: values.agent_name }
+        ? { ...buildDynamicAgentData(values, selectedAgentTypeInfo, agent), agent_name: values.agent_name }
         : buildAgentDataFromForm(values, agent);
 
       const updateData = appliedDiscoveredSelection
         ? overlayDiscoveredCardParams(built, appliedDiscoveredSelection.selected_card)
         : built;
+      const cardEdited =
+        Boolean(appliedDiscoveredSelection) ||
+        [AGENT_FORM_CONFIG.basic, AGENT_FORM_CONFIG.skills, AGENT_FORM_CONFIG.capabilities, AGENT_FORM_CONFIG.optional]
+          .flatMap((section) => section.fields)
+          .some((field) => form.getFieldState(field.name).isDirty);
 
       await patchAgentCall(accessToken, agentId, {
-        ...updateData,
+        ...withAgentIdentity(updateData, values, agent, cardEdited),
         object_permission: buildMcpObjectPermission(values),
         access_group_ids: values.access_group_ids ?? [],
       });
@@ -336,6 +345,12 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
         <div>
           {/* Overview Panel */}
           <TabsContent value="overview" keepMounted>
+            <AgentIdentityDetails
+              agentId={agentId}
+              identity={agent.identity}
+              accessToken={accessToken}
+              isAdmin={isAdmin}
+            />
             <DetailList>
               <DetailItem label="Agent ID">{agent.agent_id}</DetailItem>
               <DetailItem label="Agent Name">{agent.agent_name}</DetailItem>
@@ -459,6 +474,14 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                 </DetailList>
               </div>
             )}
+
+            <AgentKillSwitchDangerZone
+              agentId={agent.agent_id}
+              agentName={agent.agent_name}
+              killSwitch={agent.kill_switch}
+              accessToken={accessToken}
+              isAdmin={isAdmin}
+            />
           </TabsContent>
 
           {/* Settings Panel (only for admins) */}
@@ -495,6 +518,8 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                         ) : (
                           <AgentFormFields showAgentName={true} panels={panels} />
                         )}
+
+                        <AgentIdentityFields accessToken={accessToken} />
 
                         {discoveryRequest && (
                           <div className="mt-4">

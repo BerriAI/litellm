@@ -174,9 +174,7 @@ class MCPAuthDiagnostics:
             {
                 "x-mcp-debug-auth-resolution": AuthResolution.multiple.value,
                 "x-mcp-debug-auth-resolutions": json.dumps(
-                    {
-                        server_id: source.value for server_id, source in self._outcomes[:32]
-                    },  # mutable-ok: JSON encoder requires a concrete dict
+                    {server_id: source.value for server_id, source in self._outcomes[:32]},
                     separators=(",", ":"),
                     ensure_ascii=True,
                 ),
@@ -205,7 +203,7 @@ class _DiagnosticSend:
             self._start = None
             headers: Final = MappingProxyType({**self._headers, **self._resolution()})
             await self._send(
-                {  # mutable-ok: ASGI send consumes a mutable message mapping
+                {
                     **start,
                     "headers": tuple(start.get("headers", ()))
                     + tuple((key.encode(), value.encode()) for key, value in headers.items()),
@@ -434,9 +432,7 @@ def _sensitive_field(key: str) -> bool:
 def _redact_object(
     fields: Mapping[str, JsonValue],
 ) -> dict[str, JsonValue]:  # mutable-ok: the standard JSON encoder requires dict objects
-    return {  # mutable-ok: construct the JSON object once for the standard parser and encoder
-        key: REDACTED if _sensitive_field(key) else value for key, value in fields.items()
-    }
+    return {key: REDACTED if _sensitive_field(key) else value for key, value in fields.items()}
 
 
 def _header_secret_values(name: str, value: str) -> tuple[str, ...]:
@@ -597,9 +593,7 @@ async def capture_upstream_error_response(response: httpx.Response | httpx2.Resp
         )
     except (asyncio.TimeoutError, httpx.HTTPError, httpx.StreamError, httpx2.HTTPError, httpx2.StreamError):
         response._content = b""  # pyright: ignore[reportPrivateUsage]  # rebind-ok: httpx auth retries must survive diagnostic read failures
-        response.extensions[_CAPTURE_EXTENSION] = (
-            "(unavailable: error body read failed)"  # rebind-ok: httpx response hooks communicate through extensions
-        )
+        response.extensions[_CAPTURE_EXTENSION] = "(unavailable: error body read failed)"
         return
     response.extensions[_CAPTURE_EXTENSION] = preview  # rebind-ok: httpx response hooks communicate through extensions
 

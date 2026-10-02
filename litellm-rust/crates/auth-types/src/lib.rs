@@ -50,8 +50,8 @@ pub use credential::{
     CredentialFileRef, CredentialLookup, CredentialLookupFuture, CredentialPlan,
     CredentialPlanResolution, CredentialRef, CredentialResolver, CredentialResolverHandle,
 };
-pub use error::Error;
-pub use http::{CredentialPlacement, RequestAuth};
+pub use error::{Error, ErrorDetail, ErrorSource};
+pub use http::CredentialPlacement;
 pub use policy::{CredentialPlanKind, CredentialRule, ExistingHeaderBehavior, ProviderAuthPolicy};
 pub use secret::SecretValue;
 pub use token::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};

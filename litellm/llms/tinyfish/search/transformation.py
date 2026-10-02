@@ -251,7 +251,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
         return self._wrap_error(
             error_message=error.response.text,
             status_code=error.response.status_code,
-            headers=dict(error.response.headers),  # mutable-ok: existing error wrapper requires dict headers
+            headers=dict(error.response.headers),
         )
 
     def _wrap_error(

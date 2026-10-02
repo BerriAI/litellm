@@ -457,6 +457,24 @@
         "interactions": true
       }
     },
+    "nadir": {
+      "display_name": "Nadir (`nadir`)",
+      "url": "https://docs.litellm.ai/docs/providers/nadir",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "cerebras": {
       "display_name": "Cerebras (`cerebras`)",
       "url": "https://docs.litellm.ai/docs/providers/cerebras",
@@ -651,6 +669,24 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "cortecs": {
+      "display_name": "Cortecs (`cortecs`)",
+      "url": "https://docs.litellm.ai/docs/providers/cortecs",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
       }
     },
     "crusoe": {
@@ -2057,6 +2093,23 @@
         "interactions": true
       }
     },
+    "sail": {
+      "display_name": "Sail (`sail`)",
+      "url": "https://docs.litellm.ai/docs/providers/sail",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "meta": {
       "display_name": "Meta Model API (`meta`)",
       "url": "https://docs.litellm.ai/docs/providers/meta",
@@ -2158,6 +2211,23 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "prism": {
+      "display_name": "Prism (`prism`)",
+      "url": "https://docs.litellm.ai/docs/providers/prism",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
       }
     },
     "recraft": {

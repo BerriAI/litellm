@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 from collections.abc import Iterable, Mapping, Sequence
@@ -241,7 +242,7 @@ async def build_model_max_budget_usage(
 
 async def _current_window_spends(cache: DualCache, spend_keys: Sequence[str]) -> tuple[float, ...]:
     """Redis holds the window total across replicas; the in-memory copy is one replica's share."""
-    keys: Final = list(spend_keys)  # mutable-ok: both batch readers annotate their key argument as list
+    keys: Final = list(spend_keys)
     redis_cache: Final = cache.redis_cache
     if redis_cache is not None:
         shared: Final = await redis_cache.async_batch_get_cache(key_list=keys)
@@ -297,6 +298,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     def __init__(self, dual_cache: DualCache):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue = []
+        self._redis_increment_queue_lock = asyncio.Lock()
+        self._redis_increment_flush_lock = asyncio.Lock()
+        self._detached_increment_operations = None
         self.deployment_budget_config = None
 
     async def is_key_within_model_budget(

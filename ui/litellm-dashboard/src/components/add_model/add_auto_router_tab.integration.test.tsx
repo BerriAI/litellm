@@ -1660,10 +1660,6 @@ describe("AddAutoRouterTab", () => {
 
     const ALL_RENAMED_DEPLOYMENTS = getAllPresets().flatMap((preset) => renamedDeploymentsFor(preset.key));
 
-    const renamedGroupFor = (model: string): string =>
-      ALL_RENAMED_DEPLOYMENTS.find((deployment) => deployment.litellm_params.model === `someprovider/${model}`)!
-        .model_name;
-
     it("enables a preset whose models exist only under renamed deployments, labeling the match", async () => {
       mockFetchAvailableModels.mockResolvedValue(groupsFor(ALL_RENAMED_DEPLOYMENTS));
       mockFetchAllModelDeployments.mockResolvedValue(ALL_RENAMED_DEPLOYMENTS);
@@ -1677,10 +1673,23 @@ describe("AddAutoRouterTab", () => {
       expect(optionByLabel("Anthropic Family")!).toHaveTextContent(/Matches your deployments/);
     });
 
-    it("keeps detailed configuration open and prefills the admin's group names on apply", async () => {
+    it("keeps detailed configuration open and submits native group names when cloud twins are available", async () => {
       const user = userEvent.setup();
-      mockFetchAvailableModels.mockResolvedValue(groupsFor(ALL_RENAMED_DEPLOYMENTS));
-      mockFetchAllModelDeployments.mockResolvedValue(ALL_RENAMED_DEPLOYMENTS);
+      const nativeDeployments = renamedDeploymentsFor("anthropic_family").map((deployment) => ({
+        ...deployment,
+        litellm_params: { model: deployment.litellm_params.model.replace("someprovider/", "anthropic/") },
+      }));
+      const nativeGroupFor = (model: string): string =>
+        nativeDeployments.find((deployment) => deployment.litellm_params.model === `anthropic/${model}`)!.model_name;
+      const cloudDeployments = nativeDeployments.map((deployment) => ({
+        model_name: `a-cloud-${deployment.model_name}`,
+        litellm_params: {
+          model: `bedrock/us.anthropic.${deployment.litellm_params.model.split("/")[1]}-v1:0`,
+        },
+      }));
+      const deployments = [...cloudDeployments, ...nativeDeployments];
+      mockFetchAvailableModels.mockResolvedValue(groupsFor(deployments));
+      mockFetchAllModelDeployments.mockResolvedValue(deployments);
 
       renderWithProviders(<Harness />);
       openTemplateDropdown();
@@ -1688,6 +1697,7 @@ describe("AddAutoRouterTab", () => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
       await selectTemplate("Anthropic Family");
+      expectTierModel("Complex", nativeGroupFor(ANTHROPIC_TIERS.COMPLEX[0]));
 
       openAutoRouterAdvanced("Keyword/Semantic Matching");
 
@@ -1701,10 +1711,10 @@ describe("AddAutoRouterTab", () => {
       expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
         complexity_router_config: {
           tiers: {
-            SIMPLE: ANTHROPIC_TIERS.SIMPLE.map(renamedGroupFor),
-            MEDIUM: ANTHROPIC_TIERS.MEDIUM.map(renamedGroupFor),
-            COMPLEX: ANTHROPIC_TIERS.COMPLEX.map(renamedGroupFor),
-            REASONING: ANTHROPIC_TIERS.REASONING.map(renamedGroupFor),
+            SIMPLE: ANTHROPIC_TIERS.SIMPLE.map(nativeGroupFor),
+            MEDIUM: ANTHROPIC_TIERS.MEDIUM.map(nativeGroupFor),
+            COMPLEX: ANTHROPIC_TIERS.COMPLEX.map(nativeGroupFor),
+            REASONING: ANTHROPIC_TIERS.REASONING.map(nativeGroupFor),
           },
         },
       });
