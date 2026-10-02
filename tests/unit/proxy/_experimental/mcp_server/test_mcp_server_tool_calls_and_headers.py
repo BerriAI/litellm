@@ -9084,6 +9084,57 @@ class TestConnectPreflightRoutesLikeTheScopedRouter:
         assert exc.value.status_code == 401
         assert preflight.await_count == 0
 
+    @pytest.mark.asyncio
+    async def test_access_group_named_like_an_ungranted_server_connects_like_the_merge_base(self):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        member: Final = MCPServer(
+            server_id="w-id",
+            name="wiki_obo",
+            server_name="wiki_obo",
+            url="https://wiki-obo.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.test/token",
+            client_id="cid",
+            client_secret="csecret",
+        )
+        shadow: Final = MCPServer(
+            server_id="s-id",
+            name="wiki",
+            server_name="wiki",
+            url="https://wiki.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+        mcp_operations.global_mcp_server_manager.registry.update({"w-id": member, "s-id": shadow})
+        group_members: Final = {"wiki": ["w-id"]}
+        with (
+            patch.object(  # test-quality-ok: the key's grant list lives in the DB; the real router runs on it
+                mcp_operations.global_mcp_server_manager, "get_allowed_mcp_servers", AsyncMock(return_value=["w-id"])
+            ),
+            patch(  # test-quality-ok: access group membership lives in the DB; the real scoped router runs on it
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+                "MCPRequestHandler._get_mcp_servers_from_access_groups",
+                new_callable=AsyncMock,
+                side_effect=lambda names: [sid for name in names for sid in group_members.get(name, [])],
+            ),
+        ):
+            outcome = await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": "/mcp/wiki", "headers": [(b"host", b"testserver")]},
+                mcp_servers=["wiki"],
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-group", user_id="u-1"),
+                client_ip=None,
+                raw_headers={"x-litellm-api-key": "sk-group"},
+            )
+
+        assert outcome is None, (
+            "a key granted only the access group named like an ungranted plain server must connect without a "
+            "sign-in challenge, as at the merge base; the challenge would advertise the plain server's metadata"
+        )
+
 
 @pytest.mark.asyncio
 async def test_get_allowed_mcp_servers_from_mcp_server_names_mixed_known_and_unknown():
