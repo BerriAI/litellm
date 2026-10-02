@@ -459,7 +459,7 @@ async def test_cloudflare_requires_account_id_or_api_base_before_http(
     monkeypatch.delenv("CLOUDFLARE_API_BASE", raising=False)
     monkeypatch.setenv("CLOUDFLARE_API_KEY", "cloudflare-key")
 
-    with pytest.raises(litellm.BadRequestError, match="CLOUDFLARE_ACCOUNT_ID|api_base"):
+    with pytest.raises(litellm.BadRequestError, match=r"CLOUDFLARE_ACCOUNT_ID|api_base"):
         await litellm.adecisions(
             model="cloudflare/clef",
             state="review",
