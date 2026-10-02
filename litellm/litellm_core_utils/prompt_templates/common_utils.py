@@ -1354,12 +1354,32 @@ def drop_non_python_regex_patterns(schema: Mapping[str, object]) -> Mapping[str,
     at more schema levels than a JSON parser admits, so a cyclic schema built in
     code cannot spin it.
     """
+    return _schema_without_rejected_regex(schema, _is_not_python_regex)
+
+
+def drop_lookaround_regex_patterns(schema: Mapping[str, object]) -> Mapping[str, object]:
+    """Drop every regex in a schema position that uses a lookaround assertion.
+
+    Some Bedrock Converse families compile tool schema regexes with an engine that
+    has no lookahead or lookbehind and refuse the whole request over one. The ``(?=``,
+    ``(?!``, ``(?<=`` and ``(?<!`` openers are matched textually, so an escaped literal
+    that spells one is dropped too, trading a hint for a request that goes through.
+    Dropping a ``patternProperties`` key next to ``additionalProperties: false`` forbids
+    the names it allowed, as in :func:`drop_non_python_regex_patterns`, whose walk this
+    shares.
+    """
+    return _schema_without_rejected_regex(schema, _uses_regex_lookaround)
+
+
+def _schema_without_rejected_regex(
+    schema: Mapping[str, object], rejected: Callable[[str], bool]
+) -> Mapping[str, object]:
     rebuilt: dict[int, Mapping[str, object]] = {}  # mutable-ok: per-call memo of rewritten nodes, deepest level first
     for level in reversed(tuple(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))):
         rebuilt.update(
             (id(node), rewritten)
             for node in level
-            if (rewritten := _node_without_non_python_regex(node, rebuilt)) is not node
+            if (rewritten := _node_without_rejected_regex(node, rebuilt, rejected)) is not node
         )
     return rebuilt.get(id(schema), schema)
 
@@ -1381,23 +1401,30 @@ def _subschemas(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
             yield value
 
 
-def _node_without_non_python_regex(
-    node: Mapping[str, object], rebuilt: Mapping[int, Mapping[str, object]]
+def _node_without_rejected_regex(
+    node: Mapping[str, object],
+    rebuilt: Mapping[int, Mapping[str, object]],
+    rejected: Callable[[str], bool],
 ) -> Mapping[str, object]:
     kept: Final = {
-        key: _keyword_value_rebuilt(key, value, rebuilt)
+        key: _keyword_value_rebuilt(key, value, rebuilt, rejected)
         for key, value in node.items()
-        if key != "pattern" or not isinstance(value, str) or _is_python_regex(value)
+        if key != "pattern" or not isinstance(value, str) or not rejected(value)
     }
     return node if len(kept) == len(node) and all(kept[key] is node[key] for key in kept) else kept
 
 
-def _keyword_value_rebuilt(key: str, value: object, rebuilt: Mapping[int, Mapping[str, object]]) -> object:
+def _keyword_value_rebuilt(
+    key: str,
+    value: object,
+    rebuilt: Mapping[int, Mapping[str, object]],
+    rejected: Callable[[str], bool],
+) -> object:
     if key in _SUBSCHEMA_MAP_KEYWORDS and isinstance(value, dict):
         kept: Final = {
             name: rebuilt.get(id(sub), sub)
             for name, sub in value.items()
-            if key != "patternProperties" or not isinstance(name, str) or _is_python_regex(name)
+            if key != "patternProperties" or not isinstance(name, str) or not rejected(name)
         }
         return value if len(kept) == len(value) and all(kept[name] is value[name] for name in kept) else kept
     if key in _SUBSCHEMA_LIST_KEYWORDS and isinstance(value, list):
@@ -1408,12 +1435,19 @@ def _keyword_value_rebuilt(key: str, value: object, rebuilt: Mapping[int, Mappin
     return value
 
 
-def _is_python_regex(pattern: str) -> bool:
+def _is_not_python_regex(pattern: str) -> bool:
     try:
         re.compile(pattern)
     except (re.error, RecursionError):
-        return False
-    return True
+        return True
+    return False
+
+
+_REGEX_LOOKAROUND_RE: Final = re.compile(r"\(\?<?[=!]")
+
+
+def _uses_regex_lookaround(pattern: str) -> bool:
+    return _REGEX_LOOKAROUND_RE.search(pattern) is not None
 
 
 def flatten_combinators_and_drop_non_python_regex_patterns(schema: Mapping[str, object]) -> Mapping[str, object]:

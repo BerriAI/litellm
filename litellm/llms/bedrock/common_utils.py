@@ -10,7 +10,7 @@ import json
 import os
 import re
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict
 
 if TYPE_CHECKING:
     from botocore.model import Shape
@@ -968,6 +968,7 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
 
 
 _BEDROCK_MODEL_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
+_DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(dict[str, object])
 
 
 def bedrock_converse_supports_strict_tools(model: str) -> bool:
@@ -985,12 +986,41 @@ def bedrock_converse_supports_strict_tools(model: str) -> bool:
     base: Final = get_bedrock_base_model(model)
     if not base.startswith("anthropic"):
         return False
-    flag: Final = _get_bedrock_converse_strict_tools_flag(base)
+    flag: Final = _bedrock_converse_model_flag(base, "bedrock_converse_supports_strict_tools")
     return flag if flag is not None else True
 
 
-def _get_bedrock_converse_strict_tools_flag(base_model: str) -> bool | None:
-    candidates: Final = dict.fromkeys((base_model, _BEDROCK_MODEL_VERSION_SUFFIX_RE.sub("", base_model)))
+def bedrock_converse_supports_regex_lookaround(model: str, litellm_params: Mapping[str, object] | None = None) -> bool:
+    """
+    Whether ``model`` accepts lookahead and lookbehind assertions in tool schema regexes.
+
+    The deployment's ``model_info.bedrock_converse_supports_regex_lookaround`` wins, then
+    the ``model_prices_and_context_window.json`` entry of its ``base_model``, then the
+    entry of ``model`` itself. A model nobody flagged keeps its schema as sent.
+    """
+    params: Final = litellm_params or {}
+    model_info: Final = _DEPLOYMENT_MODEL_INFO.validate_python(params.get("model_info") or {})
+    deployment_flag: Final = model_info.get("bedrock_converse_supports_regex_lookaround")
+    if isinstance(deployment_flag, bool):
+        return deployment_flag
+    base_model: Final = params.get("base_model")
+    candidates: Final = (*((base_model,) if isinstance(base_model, str) else ()), model)
+    flags: Final = (
+        _bedrock_converse_model_flag(candidate, "bedrock_converse_supports_regex_lookaround")
+        for candidate in candidates
+    )
+    return next((flag for flag in flags if flag is not None), True)
+
+
+_BedrockConverseModelFlag: TypeAlias = Literal[
+    "bedrock_converse_supports_strict_tools",
+    "bedrock_converse_supports_regex_lookaround",
+]
+
+
+def _bedrock_converse_model_flag(model: str, key: _BedrockConverseModelFlag) -> bool | None:
+    base: Final = get_bedrock_base_model(model)
+    candidates: Final = dict.fromkeys((model, base, _BEDROCK_MODEL_VERSION_SUFFIX_RE.sub("", base)))
     for candidate in candidates:
         with contextlib.suppress(Exception):
             model_info = get_cached_model_info()(
@@ -998,15 +1028,13 @@ def _get_bedrock_converse_strict_tools_flag(base_model: str) -> bool | None:
                 custom_llm_provider="bedrock",
             )
 
-            flag = model_info.get("bedrock_converse_supports_strict_tools")
+            flag = model_info.get(key)
             if isinstance(flag, bool):
                 return flag
 
             model_cost_key = model_info.get("key")
             if isinstance(model_cost_key, str):
-                local_flag = (
-                    _get_local_model_cost_map().get(model_cost_key, {}).get("bedrock_converse_supports_strict_tools")
-                )
+                local_flag = _get_local_model_cost_map().get(model_cost_key, {}).get(key)
                 if isinstance(local_flag, bool):
                     return local_flag
     return None

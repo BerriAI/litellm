@@ -637,6 +637,44 @@ def test_output_config_effort_forwarded_into_additional_request_fields(model):
     assert additional.get("output_config") == {"effort": "high"}
 
 
+_LOOKAROUND_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "ArtifactData",
+        "description": "Read a shared database",
+        "parameters": {
+            "type": "object",
+            "properties": {"doc_id": {"type": "string", "pattern": r"^(?!\.\.?(?:\/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"}},
+        },
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "expected_doc_id"),
+    [
+        (
+            {"model_info": {"bedrock_converse_supports_regex_lookaround": False}},
+            {"type": "string"},
+        ),
+        ({}, _LOOKAROUND_TOOL["function"]["parameters"]["properties"]["doc_id"]),
+    ],
+    ids=["deployment-opts-in", "unflagged-model-keeps-the-regex"],
+)
+def test_transform_request_reads_the_lookaround_flag_from_the_deployment_model_info(litellm_params, expected_doc_id):
+    """The deployment's ``model_info`` reaches the tool transform through ``litellm_params``, cost map or not."""
+    result = AmazonConverseConfig()._transform_request(
+        model="us.moonshotai.kimi-k4",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"tools": [copy.deepcopy(_LOOKAROUND_TOOL)]},
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+    tool_schema = result["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"]
+    assert tool_schema["properties"]["doc_id"] == expected_doc_id
+
+
 def test_reasoning_effort_requests_summarized_display_converse():
     """Regression LIT-5714: adaptive thinking synthesized from reasoning_effort must
     request the summarized display, otherwise the provider returns a blank thinking

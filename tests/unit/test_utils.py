@@ -996,6 +996,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "enum": ["low", "medium", "high", "max", "xhigh"],
                 },
                 "bedrock_converse_supports_strict_tools": {"type": "boolean"},
+                "bedrock_converse_supports_regex_lookaround": {"type": "boolean"},
                 "tpm": {"type": "number"},
                 "supported_endpoints": {
                     "type": "array",

@@ -1689,6 +1689,7 @@ class AmazonConverseConfig(BaseConfig):
         model: str,
         headers: dict | None,
         additional_request_params: dict,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> tuple[list[ToolBlock], list]:
         """Process tools and collect anthropic_beta values."""
         bedrock_tools: list[ToolBlock] = []
@@ -1729,7 +1730,7 @@ class AmazonConverseConfig(BaseConfig):
             computer_use_tools, regular_tools = self._separate_computer_use_tools(filtered_tools, model)
 
             # Process regular function tools using existing logic
-            bedrock_tools = _bedrock_tools_pt(regular_tools, model=model)
+            bedrock_tools = _bedrock_tools_pt(regular_tools, model=model, litellm_params=litellm_params)
 
             # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
             if computer_use_tools:
@@ -1793,7 +1794,7 @@ class AmazonConverseConfig(BaseConfig):
                 additional_request_params["tools"] = transformed_computer_tools
         else:
             # No computer use tools, process all tools as regular tools
-            bedrock_tools = _bedrock_tools_pt(filtered_tools, model=model)
+            bedrock_tools = _bedrock_tools_pt(filtered_tools, model=model, litellm_params=litellm_params)
 
         # Append pre-formatted tools (systemTool etc.) after transformation
         bedrock_tools.extend(pre_formatted_tools)
@@ -1905,7 +1906,7 @@ class AmazonConverseConfig(BaseConfig):
 
         # Process tools and collect beta values
         bedrock_tools, anthropic_beta_list = self._process_tools_and_beta(
-            original_tools, model, headers, additional_request_params
+            original_tools, model, headers, additional_request_params, litellm_params
         )
 
         # Append cachePoint to tools if cache_control_injection_points has tool_config

@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
+from pydantic import TypeAdapter
 
 import litellm
 import litellm.types
@@ -5033,7 +5034,12 @@ def _is_bedrock_tool_block(tool: dict) -> bool:
     return isinstance(tool, dict) and ("systemTool" in tool or "toolSpec" in tool or "cachePoint" in tool)
 
 
-def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockToolBlock]:
+_TOOL_PARAMETERS: Final = TypeAdapter(dict[str, object])
+
+
+def _bedrock_tools_pt(
+    tools: list, model: str | None = None, litellm_params: Mapping[str, object] | None = None
+) -> list[BedrockToolBlock]:
     """
     OpenAI tools looks like:
     tools = [
@@ -5082,8 +5088,12 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
         }
     ]
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        drop_lookaround_regex_patterns,
+        unpack_defs,
+    )
     from litellm.llms.bedrock.common_utils import (
+        bedrock_converse_supports_regex_lookaround,
         bedrock_converse_supports_strict_tools,
         normalize_json_schema_custom_types_to_object,
     )
@@ -5111,11 +5121,15 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
 
         # OpenAI function tools, or Anthropic Messages / Claude Code ({name, input_schema, type, ...})
         if isinstance(tool, dict) and "input_schema" in tool and "function" not in tool:
-            parameters = copy.deepcopy(tool.get("input_schema") or {"type": "object", "properties": {}})
+            parameters = _TOOL_PARAMETERS.validate_python(
+                copy.deepcopy(tool.get("input_schema") or {"type": "object", "properties": {}})
+            )
             raw_name = tool.get("name", "") or ""
             _tool_description = tool.get("description", None)
         else:
-            parameters = copy.deepcopy(tool.get("function", {}).get("parameters", {"type": "object", "properties": {}}))
+            parameters = _TOOL_PARAMETERS.validate_python(
+                copy.deepcopy(tool.get("function", {}).get("parameters", {"type": "object", "properties": {}}))
+            )
             raw_name = tool.get("function", {}).get("name", "") or ""
             _tool_description = tool.get("function", {}).get("description", None)
 
@@ -5140,12 +5154,20 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
         normalize_json_schema_custom_types_to_object(parameters)
         if parameters.get("type") not in _valid_json_schema_root_types:
             parameters["type"] = "object"
+        lookaround_free_parameters = drop_lookaround_regex_patterns(parameters)
+        tool_parameters = (
+            parameters
+            if lookaround_free_parameters is parameters
+            or model is None
+            or bedrock_converse_supports_regex_lookaround(model, litellm_params)
+            else dict(lookaround_free_parameters)
+        )
         tool_block = cast(
             BedrockToolBlock,
             BedrockToolSpec(
                 name=name,
                 description=description,
-                parameters=parameters,
+                parameters=tool_parameters,
                 strict=tool.get("function", {}).get("strict", None),
                 supports_strict_tools=supports_strict_tools,
             ),
