@@ -188,3 +188,91 @@ async def test_clearing_without_a_default_preserves_null_metadata(
     saved: Final = await teams.find_unique(where={"team_id": team})
     assert saved is not None and saved.metadata is None
     assert _BODY.validate_json(response.content)["member_budgets_updated"] == 0
+
+
+@pytest.mark.parametrize("shared", (False, True))
+async def test_clearing_amount_preserves_tpd_only_override(
+    proxy_client: httpx.AsyncClient,
+    prisma: PrismaClient,
+    scratch: Scratch,
+    shared: bool,
+) -> None:
+    default: Final = await _budget(prisma, scratch.tag("tpd-default"), 75, None)
+    user: Final = scratch.tag("tpd-user")
+    team: Final = await create_scratch_team(
+        prisma, scratch.tag("tpd-team"), member_user_ids=(user,), metadata={"team_member_budget_id": default}
+    )
+    budget: Final = await BudgetRepository(prisma).table.create(
+        data={
+            "budget_id": scratch.tag("tpd-budget"),
+            "max_budget": 50,
+            "tpd_limit": 400,
+            "created_by": "test",
+            "updated_by": "test",
+        }
+    )
+    await _attach(prisma, team, user, budget.budget_id)
+    if shared:
+        other: Final = await create_scratch_team(prisma, scratch.tag("tpd-other"))
+        await _attach(prisma, other, scratch.tag("tpd-other-user"), budget.budget_id)
+    response: Final = await proxy_client.post(
+        "/team/update",
+        headers=_HEADERS,
+        json={
+            "team_id": team,
+            "team_member_budget": 100,
+            "team_member_budget_duration": None,
+            "team_member_budget_update_mode": "raise",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert _BODY.validate_json(response.content)["member_budgets_updated"] == 1
+    current: Final = await TeamMembershipRepository(prisma).table.find_unique(
+        where={"user_id_team_id": {"user_id": user, "team_id": team}}, include={"litellm_budget_table": True}
+    )
+    assert current is not None and current.spend == 23
+    assert current.litellm_budget_table is not None
+    assert current.litellm_budget_table.max_budget is None
+    assert current.litellm_budget_table.tpd_limit == budget.tpd_limit
+    source: Final = await BudgetRepository(prisma).table.find_unique(where={"budget_id": budget.budget_id})
+    assert source is not None and source.max_budget == (50 if shared else None)
+
+
+async def test_amount_only_budget_with_null_model_list_disconnects_after_reset(
+    proxy_client: httpx.AsyncClient,
+    prisma: PrismaClient,
+    scratch: Scratch,
+) -> None:
+    default: Final = await _budget(prisma, scratch.tag("null-model-default"), 75, None)
+    user: Final = scratch.tag("null-model-user")
+    team: Final = await create_scratch_team(
+        prisma, scratch.tag("null-model-team"), member_user_ids=(user,), metadata={"team_member_budget_id": default}
+    )
+    budget: Final = await BudgetRepository(prisma).table.create(
+        data={
+            "budget_id": scratch.tag("null-model-budget"),
+            "max_budget": 50,
+            "created_by": "test",
+            "updated_by": "test",
+        }
+    )
+    await _attach(prisma, team, user, budget.budget_id)
+    await prisma.db.execute_raw(
+        'UPDATE "LiteLLM_BudgetTable" SET allowed_models=NULL WHERE budget_id=$1', budget.budget_id
+    )
+    response: Final = await proxy_client.post(
+        "/team/update",
+        headers=_HEADERS,
+        json={
+            "team_id": team,
+            "team_member_budget": 100,
+            "team_member_budget_duration": None,
+            "team_member_budget_update_mode": "raise",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert _BODY.validate_json(response.content)["member_budgets_updated"] == 1
+    current: Final = await TeamMembershipRepository(prisma).table.find_unique(
+        where={"user_id_team_id": {"user_id": user, "team_id": team}}
+    )
+    assert current is not None and current.budget_id is None and current.spend == 23

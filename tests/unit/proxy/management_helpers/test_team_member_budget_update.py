@@ -2,7 +2,7 @@ from typing import Final, Literal
 
 import pytest
 
-from litellm.proxy.management_helpers.team_member_budget_update import matches_member_budget_update
+from litellm.proxy.management_helpers.team_member_budget_reset import matches_member_budget_update
 
 
 @pytest.mark.parametrize(

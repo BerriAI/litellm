@@ -2,9 +2,10 @@ import asyncio
 import json
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol, cast  # noqa: TID251  # Redis pipeline boundary
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 from litellm.proxy.common_utils.config_sync_pubsub import (
     _ConfigSyncPubSub,
     _pubsub_capable_client,
@@ -12,6 +13,8 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 )
 
 if TYPE_CHECKING:
+    from redis.asyncio.client import Pipeline
+
     from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.caching.redis_cache import RedisCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -20,10 +23,15 @@ AUTH_CACHE_INVALIDATION_CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 _POLL_TIMEOUT_SECONDS: Final = 1.0
 _MAX_PENDING_PUBLISHES: Final = 1024
 _MAX_IN_FLIGHT_PUBLISHES: Final = 16
+_BATCH_PUBLISH_TIMEOUT_SECONDS: Final = 5.0
 _pending_publishes: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs keep background publishes alive
 _in_flight_publishes: Final = asyncio.Semaphore(_MAX_IN_FLIGHT_PUBLISHES)
 _BACKOFF_INITIAL_SECONDS: Final = 5.0
 _BACKOFF_MAX_SECONDS: Final = 60.0
+
+
+class _PipelinePublishClient(Protocol):
+    def pipeline(self, transaction: bool = True) -> "Pipeline[bytes]": ...
 
 
 def auth_cache_invalidation_channel(redis_cache: "RedisCache") -> str:
@@ -142,6 +150,48 @@ async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "Us
                 e,
             )
         await publish_auth_cache_invalidation(cache_key=cache_key)
+
+
+async def _publish_invalidation_chunk(client: _PipelinePublishClient, channel: str, cache_keys: Sequence[str]) -> None:
+    async with _in_flight_publishes, client.pipeline(transaction=False) as pipeline:
+        for cache_key in cache_keys:
+            _ = pipeline.publish(channel, _cache_invalidation_message_json(cache_key))
+        _ = await pipeline.execute()
+
+
+async def _publish_invalidation_batch(redis_cache: "RedisCache", cache_keys: Sequence[str]) -> None:
+    try:
+        client: Final = cast(  # cast-ok: init_pubsub_client returns a plain Redis client with pipeline support
+            _PipelinePublishClient, _pubsub_capable_client(redis_cache)
+        )
+        for start in range(0, len(cache_keys), DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE):
+            await asyncio.wait_for(
+                _publish_invalidation_chunk(
+                    client,
+                    auth_cache_invalidation_channel(redis_cache),
+                    cache_keys[start : start + DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE],
+                ),
+                timeout=_BATCH_PUBLISH_TIMEOUT_SECONDS,
+            )
+    except asyncio.TimeoutError:
+        verbose_proxy_logger.warning(
+            "auth cache invalidation batch timed out; other workers keep their cached copies until their TTL expires"
+        )
+    except Exception as exc:  # noqa: BLE001  # best-effort publication after the database mutation commits
+        verbose_proxy_logger.warning("auth cache invalidation batch publish failed: %s", exc)
+
+
+async def evict_many_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
+    if not cache_keys:
+        return
+    try:
+        await user_api_key_cache.async_delete_cache_keys(cache_keys)
+    except Exception as exc:  # noqa: BLE001  # local eviction and broadcasts must survive a Redis delete failure
+        verbose_proxy_logger.warning("Failed to evict cached entries in bulk: %s", exc)
+    redis_cache: Final = coordination_redis_cache()
+    if redis_cache is None:
+        return
+    await _publish_invalidation_batch(redis_cache, cache_keys)
 
 
 class AuthCacheInvalidationSubscriber:

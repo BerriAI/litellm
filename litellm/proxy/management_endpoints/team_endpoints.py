@@ -106,6 +106,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_membership,
     get_team_object,
     get_user_object,
+    invalidate_team_member_budget_caches,
     invalidate_team_member_spend_state,
 )
 from litellm.proxy.auth.auth_utils import (
@@ -2534,7 +2535,7 @@ async def update_team(
                     user_api_key_cache=user_api_key_cache,
                     cache_keys=(f"team_member_default_budget:{budget_update.budget_id}",),
                 )
-            await _evict_created_membership_caches(
+            await invalidate_team_member_budget_caches(
                 user_ids=budget_update.member_user_ids,
                 team_id=data.team_id,
                 user_api_key_cache=user_api_key_cache,
