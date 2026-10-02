@@ -15,10 +15,6 @@ if TYPE_CHECKING:
 _DURATION: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 
 
-# from litellm._v2 import RedisCache
-# litellm.ssl_som = <>
-# litellm.cache = <>
-
 class NativeBackend(BaseCache):
     def __init__(self, handle: NativeCacheHandle) -> None:
         self.native_handle = handle
