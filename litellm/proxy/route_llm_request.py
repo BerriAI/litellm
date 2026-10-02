@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from fastapi import HTTPException, status
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -426,7 +427,7 @@ RouteType = Literal[
 
 # Settings that the Router accepts as per-request kwargs. These override the
 # global router settings for this specific request.
-_PER_REQUEST_ROUTER_SETTINGS: Final = [
+_PER_REQUEST_ROUTER_SETTINGS: Final = (
     "fallbacks",
     "context_window_fallbacks",
     "content_policy_fallbacks",
@@ -435,16 +436,19 @@ _PER_REQUEST_ROUTER_SETTINGS: Final = [
     "model_group_retry_policy",
     "routing_strategy",
     "enable_tag_filtering",
-]
+)
 
 
-def _apply_router_settings_override(data: dict, override_settings: object) -> None:
-    """Merge key/team router settings into ``data`` (request values win)."""
-    if not isinstance(override_settings, dict):
-        return
-    for key in _PER_REQUEST_ROUTER_SETTINGS:
-        if key in override_settings and key not in data:
-            data[key] = override_settings[key]
+_ROUTER_SETTINGS_OVERRIDE_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _router_settings_to_merge(override_settings: object) -> dict[str, object]:
+    """Key/team router settings that may be merged into request kwargs."""
+    try:
+        validated: Final = _ROUTER_SETTINGS_OVERRIDE_ADAPTER.validate_python(override_settings, strict=True)
+    except ValidationError:
+        return {}
+    return {key: validated[key] for key in _PER_REQUEST_ROUTER_SETTINGS if key in validated}
 
 
 async def route_request(
@@ -504,7 +508,10 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     # to the provider, and apply its settings on every routing branch.
     has_router_settings_override: Final = "router_settings_override" in data
     if has_router_settings_override:
-        _apply_router_settings_override(data, data.pop("router_settings_override"))
+        override_settings: Final[object] = data.pop("router_settings_override")
+        for key, value in _router_settings_to_merge(override_settings).items():
+            if key not in data:
+                data[key] = value
 
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.model_names if llm_router is not None else []
