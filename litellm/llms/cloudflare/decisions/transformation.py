@@ -1,11 +1,15 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final, cast
+from typing import Final
+
+from pydantic import TypeAdapter
 
 from litellm.secret_managers.main import (
     get_secret_str,
     normalize_nonempty_secret_str,
 )
+
+_RESPONSE_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +43,7 @@ class CloudflareDecisionsEndpoint:
     def unwrap_response(self, payload: object) -> object:
         if not isinstance(payload, Mapping):
             return payload
-        response_mapping: Final = cast(Mapping[str, object], payload)
+        response_mapping: Final = _RESPONSE_MAPPING_ADAPTER.validate_python(payload)
         if "answers" in response_mapping:
             return payload
         result: Final = response_mapping.get("result")
