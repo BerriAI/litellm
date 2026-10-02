@@ -424,3 +424,31 @@ def test_two_entries_for_the_same_index_stay_one_call():
     ]
 
     assert [(name, args) for name, _, args in _tool_blocks(chunks)] == [("Read", {"file_path": "a.md"})]
+
+
+def test_an_opening_chunk_over_the_bound_is_not_held(monkeypatch):
+    from litellm.llms.anthropic.pass_through.adapters import streaming_iterator
+
+    monkeypatch.setattr(streaming_iterator, "_MAX_PENDING_ARGUMENT_CHARS", 10)
+    splitter = _CombinedChunkSplitter(iter(()))
+    oversized = _tool_chunk(
+        [_tool_call(0, "call_a", "Read", '{"file_path": "' + "a" * 50), _tool_call(1, "call_b", "Glob", "")]
+    )
+
+    assert splitter._expand(oversized) == (oversized,)
+    assert not splitter._pending
+
+
+def test_fragments_that_push_held_calls_over_the_bound_flush_them(monkeypatch):
+    from litellm.llms.anthropic.pass_through.adapters import streaming_iterator
+
+    monkeypatch.setattr(streaming_iterator, "_MAX_PENDING_ARGUMENT_CHARS", 10)
+    splitter = _CombinedChunkSplitter(iter(()))
+    opening = _tool_chunk([_tool_call(0, "call_a", "Read", ""), _tool_call(1, "call_b", "Glob", "")])
+    fragment = _tool_chunk([_tool_call(0, None, None, '{"file_path": "' + "a" * 50)])
+
+    assert splitter._expand(opening) == ()
+    flushed = splitter._expand(fragment)
+
+    assert [c.choices[0].delta.tool_calls[0].function.name for c in flushed] == ["Read", "Glob"]
+    assert not splitter._pending

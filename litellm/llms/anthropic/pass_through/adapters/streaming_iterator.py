@@ -345,6 +345,9 @@ class _CombinedChunkSplitter:
         # Fewer than two distinct calls, or a fragment with no call to attach to: leave it alone.
         if len(groups) < 2 or any(first is None for first in opened):
             return (chunk,)
+        # An opening chunk over the bound is not held at all.
+        if sum(len(self._call_arguments(c)) for c in calls) > _MAX_PENDING_ARGUMENT_CHARS:
+            return (chunk,)
         if all(self._is_complete_json("".join(self._call_arguments(c) for c in group)) for group in groups):
             return tuple(self._chunk_with_calls(chunk, group, keep_finish=True) for group in groups)
         self._pending = {
