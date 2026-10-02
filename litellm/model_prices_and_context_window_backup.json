@@ -3642,7 +3642,7 @@
         "prompt_cache_min_tokens": 1024
     },
     "azure_ai/claude-sonnet-4-5": {
-        "deprecation_date": "2026-11-15",
+        "deprecation_date": "2026-11-30",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -11531,7 +11531,7 @@
         "max_tokens": 5000,
         "mode": "image_generation",
         "output_cost_per_image": 0.04,
-        "source": "https://marketplace.microsoft.com/pt-br/marketplace/apps/cohere.cohere-embed-4-offer?tab=PlansAndPrice",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/black-forest-labs/",
         "supported_endpoints": [
             "/v1/images/generations"
         ]
