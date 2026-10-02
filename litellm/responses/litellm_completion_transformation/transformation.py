@@ -448,7 +448,7 @@ class LiteLLMCompletionResponsesConfig:
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),
             "user": responses_api_request.get("user"),
-            "temperature": responses_api_request.get("temperature", 0),
+            "temperature": responses_api_request.get("temperature"),
             "parallel_tool_calls": responses_api_request.get("parallel_tool_calls"),
             "max_tokens": responses_api_request.get("max_output_tokens"),
             "stream": stream,
