@@ -69,7 +69,7 @@ function IssueList({ id, validation }: { id: string; validation: SystemOnePayloa
   );
 }
 
-function renderLines(rootBlocks: RootBlock[]) {
+function renderLines(rootBlocks: readonly RootBlock[]) {
   return function LineRows({ rows, stylesheet, useInlineStyles }: LineRendererProps) {
     return rows.map((row, line) => {
       const lineElement = { node: row, stylesheet, useInlineStyles, key: line };

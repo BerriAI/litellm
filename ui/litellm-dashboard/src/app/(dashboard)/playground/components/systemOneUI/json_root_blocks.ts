@@ -1,79 +1,65 @@
 export type RootBlockKey = "model" | "state" | "questions";
 
 export interface RootBlock {
-  key: RootBlockKey;
-  startLine: number;
-  endLine: number;
+  readonly key: RootBlockKey;
+  readonly startLine: number;
+  readonly endLine: number;
 }
 
-export const ROOT_BLOCK_STYLES: Record<RootBlockKey, { band: string; accent: string }> = {
+export const ROOT_BLOCK_STYLES: Readonly<Record<RootBlockKey, { band: string; accent: string }>> = {
   model: { band: "bg-blue-500/10 before:bg-blue-500/60", accent: "border-l-blue-500/60" },
   state: { band: "bg-green-500/10 before:bg-green-500/60", accent: "border-l-green-500/60" },
   questions: { band: "bg-orange-500/10 before:bg-orange-500/60", accent: "border-l-orange-500/60" },
 };
 
+interface Token {
+  readonly text: string;
+  readonly line: number;
+}
+
+interface ScanState {
+  readonly depth: number;
+  readonly previous?: Token;
+  readonly open?: { readonly key: RootBlockKey; readonly startLine: number };
+  readonly blocks: readonly RootBlock[];
+}
+
+const JSON_TOKEN = /"(?:[^"\\\n]|\\.)*"?|[{}[\],:]|[^\s{}[\],:"]+/g;
+
 const isRootBlockKey = (key: string): key is RootBlockKey => Object.hasOwn(ROOT_BLOCK_STYLES, key);
 
-export function findRootBlocks(text: string): RootBlock[] {
-  const blocks: RootBlock[] = [];
-  let depth = 0;
-  let line = 0;
-  let lastContentLine = 0;
-  let inString = false;
-  let escaped = false;
-  let stringStart = 0;
-  let stringStartLine = 0;
-  let lastString = { value: "", line: 0 };
-  let open: { key: RootBlockKey; startLine: number } | undefined;
+const tokenize = (text: string): Token[] =>
+  text
+    .split("\n")
+    .flatMap((lineText, line) => Array.from(lineText.matchAll(JSON_TOKEN), ([match]) => ({ text: match, line })));
 
-  const close = (endLine: number) => {
-    if (open) {
-      blocks.push({ ...open, endLine });
-      open = undefined;
-    }
-  };
+const closeOpenBlock = ({ open, previous, blocks }: ScanState): readonly RootBlock[] =>
+  open && previous ? [...blocks, { ...open, endLine: previous.line }] : blocks;
 
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    if (character === "\n") {
-      line += 1;
-      continue;
+function step(state: ScanState, token: Token): ScanState {
+  const next = { ...state, previous: token };
+  switch (token.text) {
+    case "{":
+    case "[":
+      return { ...next, depth: state.depth + 1 };
+    case "}":
+    case "]":
+      return state.depth === 1
+        ? { ...next, depth: 0, open: undefined, blocks: closeOpenBlock(state) }
+        : { ...next, depth: state.depth - 1 };
+    case ",":
+      return state.depth === 1 ? { ...next, open: undefined, blocks: closeOpenBlock(state) } : next;
+    case ":": {
+      const key = state.previous?.text.slice(1, -1) ?? "";
+      return state.depth === 1 && state.previous?.text.startsWith('"') && isRootBlockKey(key)
+        ? { ...next, open: { key, startLine: state.previous.line } }
+        : next;
     }
-    if (inString) {
-      lastContentLine = line;
-      if (escaped) {
-        escaped = false;
-      } else if (character === "\\") {
-        escaped = true;
-      } else if (character === '"') {
-        inString = false;
-        lastString = { value: text.slice(stringStart + 1, index), line: stringStartLine };
-      }
-      continue;
-    }
-    if (/\s/.test(character)) {
-      continue;
-    }
-
-    const previousContentLine = lastContentLine;
-    lastContentLine = line;
-    if (character === '"') {
-      inString = true;
-      stringStart = index;
-      stringStartLine = line;
-    } else if (character === ":" && depth === 1 && isRootBlockKey(lastString.value)) {
-      open = { key: lastString.value, startLine: lastString.line };
-    } else if (character === "," && depth === 1) {
-      close(previousContentLine);
-    } else if (character === "{" || character === "[") {
-      depth += 1;
-    } else if (character === "}" || character === "]") {
-      depth -= 1;
-      if (depth === 0) {
-        close(previousContentLine);
-      }
-    }
+    default:
+      return next;
   }
-  close(lastContentLine);
-  return blocks;
+}
+
+export function findRootBlocks(text: string): readonly RootBlock[] {
+  return closeOpenBlock(tokenize(text).reduce(step, { depth: 0, blocks: [] }));
 }

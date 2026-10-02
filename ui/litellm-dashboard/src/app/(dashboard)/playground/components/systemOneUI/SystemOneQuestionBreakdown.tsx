@@ -26,21 +26,17 @@ function QuestionCriteria({ question }: { question: SystemOneQuestion }) {
   }
 
   if (question.type === "noul") {
-    const criteria = question.criteria;
-    return criteria && (criteria.true || criteria.false) ? (
+    const criteria = Object.entries(question.criteria ?? {}).filter(([, description]) => description !== undefined);
+    return criteria.length > 0 ? (
       <dl className="grid gap-2">
-        {criteria.true && (
-          <div className="grid gap-0.5 sm:grid-cols-[minmax(7rem,auto)_1fr] sm:gap-3">
-            <dt className="text-xs font-medium">true</dt>
-            <dd className="text-xs text-muted-foreground">{criteria.true}</dd>
+        {criteria.map(([label, description]) => (
+          <div key={label} className="grid gap-0.5 sm:grid-cols-[minmax(7rem,auto)_1fr] sm:gap-3">
+            <dt className="text-xs font-medium">{label}</dt>
+            <dd className="text-xs text-muted-foreground">
+              {typeof description === "string" ? description : JSON.stringify(description)}
+            </dd>
           </div>
-        )}
-        {criteria.false && (
-          <div className="grid gap-0.5 sm:grid-cols-[minmax(7rem,auto)_1fr] sm:gap-3">
-            <dt className="text-xs font-medium">false</dt>
-            <dd className="text-xs text-muted-foreground">{criteria.false}</dd>
-          </div>
-        )}
+        ))}
       </dl>
     ) : (
       <p className="text-xs text-muted-foreground">No criteria defined</p>
