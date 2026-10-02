@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 from fastapi import HTTPException, status
@@ -508,7 +508,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     # to the provider, and apply its settings on every routing branch.
     has_router_settings_override: Final = "router_settings_override" in data
     if has_router_settings_override:
-        override_settings: Final[object] = data.pop("router_settings_override")
+        override_settings: Final = cast("object", data.pop("router_settings_override"))  # cast-ok: untyped body
         for key, value in _router_settings_to_merge(override_settings).items():
             if key not in data:
                 data[key] = value
