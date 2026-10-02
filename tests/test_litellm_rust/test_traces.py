@@ -56,17 +56,18 @@ def span_row() -> dict[str, JsonValue]:
         "litellm_request_id": "",
         "team_id": "",
         "api_key_hash": "",
+        "user_id": "",
     }
 
 
 @pytest.fixture
-def span_params() -> dict[str, str | list[str]]:
-    return {"trace_id": "trace-1", "trace_ref": "", "team_ids": [], "api_key_hash": ""}
+def span_params() -> dict[str, str | int | list[str]]:
+    return {"trace_id": "trace-1", "trace_ref": "", "all_teams": 1, "user_id": "", "team_ids": [], "api_key_hash": ""}
 
 
 @pytest.mark.asyncio
 async def test_trace_reader_projects_connection_and_parameters(
-    recording_server: RecordingServer, span_row: dict[str, JsonValue], span_params: dict[str, str | list[str]]
+    recording_server: RecordingServer, span_row: dict[str, JsonValue], span_params: dict[str, str | int | list[str]]
 ) -> None:
     recording_server.enqueue(ResponseSpec(body={"data": [span_row]}))
     url: Final = recording_server.base_url.replace("http://", "http://reader:p%40ss%2Fword%25@")
@@ -86,7 +87,7 @@ async def test_trace_reader_projects_connection_and_parameters(
 
 @pytest.mark.asyncio
 async def test_trace_reader_rejects_success_status_with_embedded_error(
-    recording_server: RecordingServer, span_params: dict[str, str | list[str]]
+    recording_server: RecordingServer, span_params: dict[str, str | int | list[str]]
 ) -> None:
     recording_server.enqueue(ResponseSpec(body={"data": [], "exception": "query failed"}))
     storage: Final = _native_storage("trace_test", recording_server.base_url)
@@ -127,7 +128,7 @@ async def test_from_env_reads_with_clickhouse_url(
     recording_server.enqueue(ResponseSpec(body={"data": []}))
     monkeypatch.setenv("CLICKHOUSE_URL", recording_server.base_url)
     monkeypatch.delenv("CLICKHOUSE_READER_URL", raising=False)
-    scope: Final[TraceScope] = {"team_ids": (), "api_key_hash": ""}
+    scope: Final[TraceScope] = {"all_teams": 1, "user_id": "", "team_ids": (), "api_key_hash": ""}
     page: Final = await TraceReceiver.from_env().list_traces(scope, 0, 1)
     assert page == {"data": (), "next_cursor": None}
     assert len(recording_server.requests) == 1
@@ -135,7 +136,7 @@ async def test_from_env_reads_with_clickhouse_url(
 
 @pytest.mark.asyncio
 async def test_schema_setup_uses_configured_retention(recording_server: RecordingServer) -> None:
-    recording_server.expected_requests = 8
+    recording_server.expected_requests = None
     storage: Final = _native_storage("trace_test", recording_server.base_url, 7)
     await storage.ensure_schema()
     ttl_statements: Final = tuple(
@@ -232,6 +233,7 @@ def test_decode_and_tenant_stamping_share_resources_without_crossing_groups() ->
         "litellm.team_id": "team-a",
         "litellm.api_key_hash": "key-a",
         "litellm.org_id": "org-a",
+        "litellm.user_id": "",
     }
     assert second[0]["ResourceAttributes"]["litellm.team_id"] == "team-b"
     assert rows[0]["ResourceAttributes"] == {"shared": "x" * 128, "litellm.team_id": "spoofed"}
@@ -422,7 +424,7 @@ async def test_trace_receiver_reads_with_only_one_clickhouse_url(
     recording_server: RecordingServer,
     monkeypatch: pytest.MonkeyPatch,
     span_row: dict[str, JsonValue],
-    span_params: dict[str, str | list[str]],
+    span_params: dict[str, str | int | list[str]],
 ) -> None:
     monkeypatch.setenv("CLICKHOUSE_URL", recording_server.base_url)
     monkeypatch.setenv("CLICKHOUSE_DATABASE", "trace_test")

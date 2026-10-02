@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ReadAccessParams {
+    pub all_teams: u8,
+    pub user_id: String,
     pub team_ids: Vec<String>,
     pub api_key_hash: String,
 }
@@ -24,6 +26,7 @@ pub struct ListTracesRow {
     pub trace_ref: String,
     pub team_id: String,
     pub api_key_hash: String,
+    pub user_id: String,
     pub name: String,
     pub service: String,
     pub input_preview: String,
@@ -71,6 +74,7 @@ pub struct TraceSpansRow {
     pub litellm_request_id: String,
     pub team_id: String,
     pub api_key_hash: String,
+    pub user_id: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -124,6 +128,19 @@ pub struct SpendByResponseIdsRow {
     pub response_id: String,
     pub team_id: String,
     pub api_key: String,
+    pub user: String,
     pub spend: f64,
     pub start_ms: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TraceIdentityParams {
+    #[serde(flatten)]
+    pub access: ReadAccessParams,
+    pub trace_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TraceIdentityRow {
+    pub trace_ref: String,
 }

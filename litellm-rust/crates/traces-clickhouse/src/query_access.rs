@@ -148,6 +148,33 @@ fn predicate(scope: &QueryScope, table: TraceTable) -> String {
     };
     match scope {
         QueryScope::Admin => "1".to_owned(),
+        QueryScope::Logs {
+            user_id,
+            team_ids,
+            api_key_hash,
+        } => {
+            let owner = literal(user_id);
+            let user_clause = match table {
+                TraceTable::OtelTraces => format!("UserId = {owner}"),
+                TraceTable::AgentTracesByKey => format!("UserIds = [{owner}]"),
+                TraceTable::SpendLogs => format!("user = {owner}"),
+            };
+            let teams = team_ids
+                .iter()
+                .map(|value| literal(value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let team_clause = if team_ids.is_empty() {
+                "0".to_owned()
+            } else {
+                format!("{team} IN ({teams})")
+            };
+            format!(
+                "({owner} != '' AND {user_clause}) OR ({team_clause}) OR ({hash} != '' AND {key} = {hash})",
+                owner = owner,
+                hash = literal(api_key_hash),
+            )
+        }
         QueryScope::Team { team_id } => format!("{team} = {}", literal(team_id)),
         QueryScope::Key {
             team_id,

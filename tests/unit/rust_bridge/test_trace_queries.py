@@ -12,6 +12,8 @@ def test_named_query_rejects_offsets_outside_the_native_integer_range(offset: in
     with pytest.raises(ValidationError) as error:
         SPAN_ERROR.parameters.model_validate(
             {
+                "all_teams": 0,
+                "user_id": "",
                 "team_ids": ["team"],
                 "api_key_hash": "key",
                 "trace_id": "trace",
@@ -26,7 +28,13 @@ def test_named_query_rejects_offsets_outside_the_native_integer_range(offset: in
 
 def test_named_query_rejects_parameters_for_a_different_query() -> None:
     detail: Final = SpanDetailParams(
-        team_ids=("team",), api_key_hash="key", trace_id="trace", trace_ref="ref", span_id="span"
+        all_teams=0,
+        user_id="",
+        team_ids=("team",),
+        api_key_hash="key",
+        trace_id="trace",
+        trace_ref="ref",
+        span_id="span",
     )
     with pytest.raises(ValidationError) as error:
         SPAN_ERROR.parameters.model_validate(detail)

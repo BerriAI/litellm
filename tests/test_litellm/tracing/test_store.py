@@ -2,7 +2,7 @@
 Tests for the pure read-side helpers in litellm/tracing/store.py (no ClickHouse needed).
 """
 
-from typing import Any
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -49,6 +49,11 @@ def _row(
         "input_tokens": 0,
         "output_tokens": 0,
         "litellm_request_id": "",
+        "team_id": "",
+        "api_key_hash": "",
+        "user_id": "",
+        "status_message": "",
+        "error_truncated": False,
         **extra,
     }
 
@@ -286,7 +291,7 @@ async def test_list_traces_sets_next_cursor_on_full_page():
     }
     client.query = AsyncMock(return_value=[row, {**row, "trace_id": "t1", "trace_ref": "ref1", "start_ms": 900}])
     store = TraceStore(client)
-    scope: TraceScope = {"team_ids": ("team-a",), "api_key_hash": ""}
+    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": ""}
 
     page = await store.list_traces(scope, 0, 2000, limit=2)
     assert [t["trace_id"] for t in page["data"]] == ["t2", "t1"]
@@ -305,13 +310,13 @@ async def test_get_span_not_found_and_found():
     client = MagicMock()
     client.query = AsyncMock(return_value=[])
     store = TraceStore(client)
-    scope: TraceScope = {"team_ids": (), "api_key_hash": ""}
-    assert await store.get_span("t", "s", scope) is None
+    scope: TraceScope = {"all_teams": 1, "user_id": "", "team_ids": (), "api_key_hash": ""}
+    assert await store.get_span("t", "s", scope, "ref") is None
     stored_input = '[{"role": "user", "content": "hi"}]'
     client.query = AsyncMock(
         return_value=[{"span_id": "s", "input": stored_input, "output": '{"ok": true}', "attributes": {"k": "v"}}]
     )
-    assert await store.get_span("t", "s", scope) == {
+    assert await store.get_span("t", "s", scope, "ref") == {
         "span_id": "s",
         "input": stored_input,
         "output": '{"ok": true}',
@@ -348,18 +353,18 @@ async def test_trace_cost_is_scoped_and_counts_repeated_request_once():
         },
         {
             "request_id": "request-other-key",
-            "response_id": "response-1",
+            "response_id": "unrelated-response",
             "team_id": "team-a",
             "api_key": "key-c",
             "spend": 50.0,
             "start_ms": T0 // MS,
         },
     ]
-    client.query = AsyncMock(side_effect=[spans, tuple(SpendRow.model_validate(row) for row in spend)])
+    client.query = AsyncMock(side_effect=[spans, tuple(SpendRow.model_validate({**row, "user": ""}) for row in spend)])
     store = TraceStore(client)
-    scope: TraceScope = {"team_ids": ("team-a",), "api_key_hash": ""}
+    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": ""}
 
-    trace = await store.get_trace("trace-1", scope)
+    trace = await store.get_trace("trace-1", scope, "ref")
 
     assert trace is not None
     assert trace["summary"]["spend"] == 0.25
@@ -404,8 +409,8 @@ async def test_run_list_uses_matching_spend_and_leaves_missing_cost_unavailable(
             "start_ms": 1000,
         }
     ]
-    client.query = AsyncMock(side_effect=[rows, tuple(SpendRow.model_validate(row) for row in spend)])
-    scope: TraceScope = {"team_ids": ("team-a",), "api_key_hash": ""}
+    client.query = AsyncMock(side_effect=[rows, tuple(SpendRow.model_validate({**row, "user": ""}) for row in spend)])
+    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": ""}
 
     page = await TraceStore(client).list_traces(scope, 0, 2000)
 
@@ -428,11 +433,11 @@ async def test_ambiguous_cache_response_id_keeps_cost_unavailable():
         }
         for request_id, cost in (("response-1", 0.25), ("response-1_cache_hit123", 0.0))
     ]
-    client.query = AsyncMock(side_effect=[[span], tuple(SpendRow.model_validate(row) for row in spend)])
+    client.query = AsyncMock(side_effect=[[span], tuple(SpendRow.model_validate({**row, "user": ""}) for row in spend)])
     store = TraceStore(client)
-    scope: TraceScope = {"team_ids": ("",), "api_key_hash": "key-a"}
+    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": (), "api_key_hash": "key-a"}
 
-    trace = await store.get_trace("trace-1", scope)
+    trace = await store.get_trace("trace-1", scope, "ref")
 
     assert trace is not None
     assert trace["summary"]["spend"] is None
@@ -453,7 +458,7 @@ async def test_diagnostic_continuation_preserves_content_version_scope_and_unico
         ]
     )
     store = TraceStore(client)
-    scope = {"team_ids": ("team-a",), "api_key_hash": "key-a"}
+    scope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": "key-a"}
     first = await store.get_span_error("trace-1", "span-1", scope, "scoped-run")
     assert first is not None and first["next_cursor"] is not None
     last = await store.get_span_error("trace-1", "span-1", scope, "scoped-run", first["next_cursor"])
@@ -479,5 +484,122 @@ async def test_malformed_diagnostic_cursor_never_reaches_storage(cursor):
     client = MagicMock()
     client.query = AsyncMock()
     with pytest.raises(ValueError, match="Invalid diagnostic cursor"):
-        await TraceStore(client).get_span_error("trace", "span", {"team_ids": (), "api_key_hash": ""}, cursor=cursor)
+        await TraceStore(client).get_span_error(
+            "trace", "span", {"all_teams": 1, "user_id": "", "team_ids": (), "api_key_hash": ""}, cursor=cursor
+        )
     client.query.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("trace_team", "trace_user", "trace_key", "spend_team", "spend_user", "spend_key", "known"),
+    (
+        ("team", "", "export", "team", "", "request", True),
+        ("", "user", "export", "", "user", "request", True),
+        ("", "", "key", "", "", "key", True),
+        ("team", "user", "key", "other-team", "user", "key", False),
+        ("", "user", "export", "", "other-user", "request", False),
+        ("", "", "export", "", "", "request", False),
+        ("", "", "", "", "", "", False),
+        ("", "", "master", "", "", "", False),
+    ),
+)
+def test_cost_attribution_requires_shared_ownership_after_visibility(
+    trace_team: str,
+    trace_user: str,
+    trace_key: str,
+    spend_team: str,
+    spend_user: str,
+    spend_key: str,
+    known: bool,
+) -> None:
+    rows: Final = (
+        _row("agent", "", "agent", "agent", "agent", team_id=trace_team, user_id=trace_user, api_key_hash=trace_key),
+        _llm_row("llm", "agent", "agent", "response", team_id=trace_team, user_id=trace_user, api_key_hash=trace_key),
+    )
+    spend: Final = SpendRow(
+        request_id="request",
+        response_id="response",
+        team_id=spend_team,
+        user=spend_user,
+        api_key=spend_key,
+        spend=0.25,
+        start_ms=T0 // MS,
+    )
+    trace: Final = trace_from_rows("trace", rows, "visible-reference", (spend,))
+    assert trace is not None
+    expected: Final = spend.spend if known else None
+    assert trace["summary"]["spend"] == expected
+    assert trace["agents"][0]["spend"] == expected
+    assert trace["spans"][1]["spend"] == expected
+    summary: Final = trace_summary_from_row(
+        {
+            "trace_id": "trace",
+            "team_id": trace_team,
+            "user_id": trace_user,
+            "api_key_hash": trace_key,
+            "request_ids": ("response",),
+            "name": "agent",
+            "service": "service",
+            "input_preview": "",
+            "start_ms": T0 // MS,
+            "duration_ms": 10,
+            "status": "STATUS_CODE_OK",
+            "span_count": 2,
+            "agent_count": 1,
+            "llm_calls": 1,
+            "tool_calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "models": (),
+        },
+        (spend,),
+    )
+    assert summary["spend"] == expected
+
+
+@pytest.mark.parametrize("failure", ("missing_id", "missing_spend", "duplicate_spend"))
+def test_incomplete_llm_cost_never_becomes_a_partial_trace_or_agent_total(failure: str) -> None:
+    second_id: Final = "" if failure == "missing_id" else "second"
+    rows: Final = (
+        _row("agent", "", "agent", "agent", "agent", team_id="team", api_key_hash="export"),
+        _llm_row("first", "agent", "agent", "first", team_id="team", api_key_hash="export"),
+        _llm_row("second", "agent", "agent", second_id, team_id="team", api_key_hash="export"),
+    )
+    first: Final = SpendRow(
+        request_id="first",
+        response_id="first",
+        team_id="team",
+        user="",
+        api_key="request",
+        spend=0.25,
+        start_ms=0,
+    )
+    second: Final = first.model_copy(update={"request_id": "second", "response_id": "second"})
+    spend: Final = (
+        (first, second, second.model_copy(update={"request_id": "duplicate"}))
+        if failure == "duplicate_spend"
+        else (first,)
+    )
+    trace: Final = trace_from_rows("trace", rows, "ref", spend)
+    assert trace is not None
+    assert trace["spans"][1]["spend"] == first.spend
+    assert trace["spans"][2]["spend"] is None
+    assert trace["summary"]["spend"] is None
+    assert trace["agents"][0]["spend"] is None
+
+
+@pytest.mark.asyncio
+async def test_trace_id_collision_requires_a_visible_reference_before_reading_content() -> None:
+    from litellm.rust_bridge.trace_queries import TraceIdentityRow
+    from litellm.tracing.store import AmbiguousTraceError
+
+    storage: Final = MagicMock()
+    storage.query = AsyncMock(return_value=(TraceIdentityRow(trace_ref="first"), TraceIdentityRow(trace_ref="second")))
+    store: Final = TraceStore(storage)
+    scope: Final[TraceScope] = {"all_teams": 1, "user_id": "", "team_ids": (), "api_key_hash": ""}
+    with pytest.raises(AmbiguousTraceError, match="provide trace_ref"):
+        await store.get_trace("shared-id", scope)
+    with pytest.raises(AmbiguousTraceError, match="provide trace_ref"):
+        await store.get_span("shared-id", "span", scope)
+    with pytest.raises(AmbiguousTraceError, match="provide trace_ref"):
+        await store.get_span_error("shared-id", "span", scope)

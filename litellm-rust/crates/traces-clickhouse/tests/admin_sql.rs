@@ -5,16 +5,12 @@ use litellm_traces_clickhouse::{
 use rstest::{fixture, rstest};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use testcontainers_modules::{
-    clickhouse::ClickHouse,
-    testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner},
-};
+mod support;
 
-const CLICKHOUSE_TAG: &str =
-    "26.9.6.6@sha256:eb4870e7ca7ed70c259eebfcfbee6cf797017f6b5436c2926bbbfe3d4d28486e";
+use support::{ClickHouseDatabase, database as start_database};
 
 struct Database {
-    _container: ContainerAsync<ClickHouse>,
+    _database: ClickHouseDatabase,
     url: String,
     admin_url: String,
     client: Client,
@@ -22,17 +18,9 @@ struct Database {
 
 #[fixture]
 async fn database() -> Result<Database, Box<dyn std::error::Error>> {
-    let container = ClickHouse::default()
-        .with_tag(CLICKHOUSE_TAG)
-        .with_env_var("CLICKHOUSE_SKIP_USER_SETUP", "1")
-        .start()
-        .await?;
-    let admin_url = format!(
-        "http://{}:{}",
-        container.get_host().await?,
-        container.get_host_port_ipv4(8123).await?,
-    );
-    let client = Client::no_redirect_for_test();
+    let instance = start_database().await?;
+    let admin_url = instance.url.clone();
+    let client = instance.client.clone();
     for sql in [
         "CREATE DATABASE litellm",
         "CREATE TABLE litellm.otel_traces (n UInt8) ENGINE = Memory",
@@ -57,7 +45,7 @@ async fn database() -> Result<Database, Box<dyn std::error::Error>> {
         .await?;
     let url = connection.url().to_string();
     Ok(Database {
-        _container: container,
+        _database: instance,
         url,
         admin_url,
         client,

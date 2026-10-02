@@ -6,13 +6,12 @@ use litellm_traces_clickhouse::{
 };
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
-use testcontainers_modules::{
-    clickhouse::ClickHouse,
-    testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner},
-};
+mod support;
+
+use support::{ClickHouseDatabase, database as start_database};
 
 struct Database {
-    _container: ContainerAsync<ClickHouse>,
+    _database: ClickHouseDatabase,
     client: Client,
     writer: Connection,
     readers: QueryReaders,
@@ -20,23 +19,14 @@ struct Database {
 
 #[fixture]
 async fn database() -> Result<Database, Box<dyn std::error::Error>> {
-    let container = ClickHouse::default()
-        .with_tag(
-            "26.9.6.6@sha256:eb4870e7ca7ed70c259eebfcfbee6cf797017f6b5436c2926bbbfe3d4d28486e",
-        )
-        .with_env_var("CLICKHOUSE_SKIP_USER_SETUP", "1")
-        .start()
-        .await?;
-    let writer = Connection::parse(&format!(
-        "http://{}:{}",
-        container.get_host().await?,
-        container.get_host_port_ipv4(8123).await?
-    ))?;
-    let client = Client::no_redirect_for_test();
+    let instance = start_database().await?;
+    let url = instance.url.clone();
+    let client = instance.client.clone();
+    let writer = Connection::parse(&url)?;
     ensure_schema(&client, &writer, "trace_test", 7).await?;
     for sql in [
-        "INSERT INTO trace_test.otel_traces (TeamId, ApiKeyHash, TraceId, SpanId, Timestamp, SpanAttributes) VALUES ('team-a', 'key-a1', 'shared-trace', 'a1', now(), map('visible', 'a')), ('team-a', 'key-a2', 'shared-trace', 'a2', now(), map('visible', 'a')), ('team-b', 'key-b', 'shared-trace', 'b', now(), map('secret-b', 'b')), ('', 'key-teamless', 'shared-trace', 'teamless', now(), map('visible', 'teamless')), ('', 'key-other', 'shared-trace', 'other-teamless', now(), map('visible', 'other'))",
-        "INSERT INTO trace_test.spend_logs (team_id, api_key, request_id, start_time, end_time, metadata) VALUES ('team-a', 'key-a1', 'a1', now(), now(), '{\"visible\":1}'), ('team-a', 'key-a2', 'a2', now(), now(), '{\"visible\":1}'), ('team-b', 'key-b', 'b', now(), now(), '{\"secret_b\":1}'), ('', 'key-teamless', 'teamless', now(), now(), '{}'), ('', 'key-other', 'other-teamless', now(), now(), '{}')",
+        "INSERT INTO trace_test.otel_traces (TeamId, ApiKeyHash, TraceId, SpanId, Timestamp, SpanAttributes, UserId) VALUES ('team-a', 'key-a1', 'shared-trace', 'a1', now(), map('visible', 'a'), 'owner'), ('team-a', 'key-a2', 'shared-trace', 'a2', now(), map('visible', 'a'), 'other'), ('team-b', 'key-b', 'shared-trace', 'b', now(), map('secret-b', 'b'), 'owner'), ('', 'key-teamless', 'shared-trace', 'teamless', now(), map('visible', 'teamless'), ''), ('', 'key-other', 'shared-trace', 'other-teamless', now(), map('visible', 'other'), '')",
+        "INSERT INTO trace_test.spend_logs (team_id, api_key, request_id, start_time, end_time, metadata, user) VALUES ('team-a', 'key-a1', 'a1', now(), now(), '{\"visible\":1}', 'owner'), ('team-a', 'key-a2', 'a2', now(), now(), '{\"visible\":1}', 'other'), ('team-b', 'key-b', 'b', now(), now(), '{\"secret_b\":1}', 'owner'), ('', 'key-teamless', 'teamless', now(), now(), '{}', ''), ('', 'key-other', 'other-teamless', now(), now(), '{}', '')",
         "CREATE TABLE trace_test.private_data (secret String) ENGINE = Memory",
         "INSERT INTO trace_test.private_data VALUES ('hidden')",
     ] {
@@ -45,7 +35,7 @@ async fn database() -> Result<Database, Box<dyn std::error::Error>> {
     }
     let readers = QueryReaders::new(writer.clone(), "trace_test".to_owned());
     Ok(Database {
-        _container: container,
+        _database: instance,
         client,
         writer,
         readers,
@@ -53,6 +43,10 @@ async fn database() -> Result<Database, Box<dyn std::error::Error>> {
 }
 
 #[rstest]
+#[case::own_user(QueryScope::Logs { user_id: "owner".into(), team_ids: vec![], api_key_hash: "".into() }, vec!["a1", "b"])]
+#[case::own_user_and_permitted_team(QueryScope::Logs { user_id: "owner".into(), team_ids: vec!["team-a".into()], api_key_hash: "".into() }, vec!["a1", "a2", "b"])]
+#[case::key_only_logs(QueryScope::Logs { user_id: "".into(), team_ids: vec![], api_key_hash: "key-teamless".into() }, vec!["teamless"])]
+#[case::quoted_user(QueryScope::Logs { user_id: "owner' OR 1=1 --".into(), team_ids: vec![], api_key_hash: "".into() }, vec![])]
 #[case::team(QueryScope::Team { team_id: "team-a".to_owned() }, vec!["a1", "a2"])]
 #[case::project_key(QueryScope::Key { team_id: "team-a".to_owned(), api_key_hash: "key-a1".to_owned() }, vec!["a1"])]
 #[case::teamless_key(QueryScope::Key { team_id: "".to_owned(), api_key_hash: "key-teamless".to_owned() }, vec!["teamless"])]
@@ -74,7 +68,7 @@ async fn queries_and_help_are_scoped_by_the_database(
         "SELECT SpanId AS id FROM trace_test.otel_traces WHERE 1 = 1 ORDER BY id",
         "SELECT SpanId AS id FROM merge('trace_test', '^otel_traces$') ORDER BY id",
         "WITH source AS (SELECT * FROM trace_test.otel_traces) SELECT SpanId AS id FROM source ORDER BY id",
-        "SELECT SpanId AS id FROM otel_traces UNION DISTINCT SELECT SpanId AS id FROM trace_test.otel_traces ORDER BY id",
+        "SELECT id FROM (SELECT SpanId AS id FROM otel_traces UNION DISTINCT SELECT SpanId AS id FROM trace_test.otel_traces) ORDER BY id",
         "SELECT t.SpanId AS id FROM otel_traces t INNER JOIN spend_logs s ON t.SpanId = s.request_id ORDER BY id",
         "SELECT request_id AS id FROM spend_logs FINAL ORDER BY id",
     ];

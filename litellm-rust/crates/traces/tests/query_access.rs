@@ -9,6 +9,11 @@ use serde_json::{Value, json};
 #[case::key(json!({"kind": "key", "team_id": "team", "api_key_hash": "key"}), true)]
 #[case::teamless_key(json!({"kind": "key", "team_id": "", "api_key_hash": "key"}), true)]
 #[case::empty_key(json!({"kind": "key", "team_id": "team", "api_key_hash": ""}), false)]
+#[case::user_logs(json!({"kind": "logs", "user_id": "user", "team_ids": [], "api_key_hash": ""}), true)]
+#[case::permitted_teams(json!({"kind": "logs", "user_id": "", "team_ids": ["team"], "api_key_hash": ""}), true)]
+#[case::key_logs(json!({"kind": "logs", "user_id": "", "team_ids": [], "api_key_hash": "key"}), true)]
+#[case::anonymous_logs(json!({"kind": "logs", "user_id": "", "team_ids": [], "api_key_hash": ""}), false)]
+#[case::empty_permitted_team(json!({"kind": "logs", "user_id": "user", "team_ids": [""], "api_key_hash": ""}), false)]
 #[case::empty_teamless_key(json!({"kind": "key", "team_id": "", "api_key_hash": ""}), false)]
 fn scope_validation_preserves_authorization_and_wire_shape(
     #[case] wire: Value,

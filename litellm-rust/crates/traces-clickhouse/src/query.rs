@@ -290,7 +290,7 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Stri
     };
     Ok(json!({
         "dialect": "ClickHouse SQL",
-        "access": "Authenticated team scope enforced by ClickHouse row policies; proxy admins can read all teams, while project-bound and teamless keys can read only their own rows",
+        "access": "Request-log visibility enforced by ClickHouse row policies; proxy admins see all rows, users see their own rows and permitted teams, and callers without user identity see their own key rows",
         "response": "ClickHouse JSON envelope: meta, data, rows, statistics; 64-bit integers may be strings",
         "tables": tables,
         "normalized_fields": NORMALIZED_FIELD_DEFINITIONS.iter().map(|field| json!({
@@ -301,7 +301,7 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Stri
         "attributes": attributes,
         "relationships": [{
             "left": "otel_traces.LiteLLMRequestId", "right": "spend_logs.response_id",
-            "additional_predicates": "otel_traces.TeamId = spend_logs.team_id AND otel_traces.ApiKeyHash = spend_logs.api_key",
+            "additional_predicates": "otel_traces.TeamId = spend_logs.team_id AND (otel_traces.TeamId != '' OR (otel_traces.UserId != '' AND otel_traces.UserId = spend_logs.user) OR (otel_traces.ApiKeyHash != '' AND otel_traces.ApiKeyHash = spend_logs.api_key))",
             "meaning": "The normalized ID is the response ID, not request_id. Cached requests can share response_id; joins may return multiple spend rows"
         }],
         "examples": guide.examples()?,

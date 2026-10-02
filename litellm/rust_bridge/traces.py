@@ -91,7 +91,14 @@ class KeyQueryScope(TypedDict):
     api_key_hash: ReadOnly[str]
 
 
-QueryScope = AdminQueryScope | TeamQueryScope | KeyQueryScope
+class LogQueryScope(TypedDict):
+    kind: ReadOnly[Literal["logs"]]
+    user_id: ReadOnly[str]
+    team_ids: ReadOnly[tuple[str, ...]]
+    api_key_hash: ReadOnly[str]
+
+
+QueryScope = AdminQueryScope | TeamQueryScope | KeyQueryScope | LogQueryScope
 
 
 class NativeStore(Protocol):

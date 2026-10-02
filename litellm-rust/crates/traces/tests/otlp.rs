@@ -7,6 +7,29 @@ const FIXTURE: &[u8] = include_bytes!(
 );
 
 #[rstest]
+#[case::root(include_bytes!("fixtures/query_root.json"), ObservationType::Agent, 0, 0)]
+#[case::children(include_bytes!("fixtures/query_children.json"), ObservationType::Llm, 12, 6)]
+#[case::alternate(include_bytes!("fixtures/query_alternate.json"), ObservationType::Agent, 0, 0)]
+#[case::other_team(include_bytes!("fixtures/query_other_team.json"), ObservationType::Agent, 0, 0)]
+fn query_fixtures_decode_and_normalize(
+    #[case] body: &[u8],
+    #[case] observation_type: ObservationType,
+    #[case] input_tokens: u32,
+    #[case] output_tokens: u32,
+) {
+    let spans = decode_otlp(body, Some("application/json")).unwrap();
+    let first = &spans[0];
+    assert_eq!(first.normalized.observation_type, observation_type);
+    assert_eq!(first.normalized.input_tokens, input_tokens);
+    assert_eq!(first.normalized.output_tokens, output_tokens);
+    assert!(
+        spans
+            .iter()
+            .all(|span| span.resource_attributes["service.name"] == "fixture")
+    );
+}
+
+#[rstest]
 #[case::json(FIXTURE, Some("application/json"))]
 fn decodes_neutral_spans(#[case] body: &[u8], #[case] content_type: Option<&str>) {
     let spans = decode_otlp(body, content_type).expect("valid OTLP export");

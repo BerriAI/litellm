@@ -15,6 +15,9 @@ pub async fn execute_named_read(
 ) -> Result<String, Error> {
     match query {
         ReadQuery::ListTraces => named_json::<ListTraces>(client, connection, parameters).await,
+        ReadQuery::TraceIdentity => {
+            named_json::<TraceIdentity>(client, connection, parameters).await
+        }
         ReadQuery::TraceSpans => named_json::<TraceSpans>(client, connection, parameters).await,
         ReadQuery::SpanDetail => named_json::<SpanDetail>(client, connection, parameters).await,
         ReadQuery::SpanError => named_json::<SpanError>(client, connection, parameters).await,
@@ -61,7 +64,7 @@ mod tests {
         #[case] specific: serde_json::Value,
     ) {
         let common = serde_json::json!({
-            "team_ids": [], "api_key_hash": "", "trace_id": "trace", "trace_ref": ""
+            "all_teams": 1, "user_id": "", "team_ids": [], "api_key_hash": "", "trace_id": "trace", "trace_ref": ""
         });
         let parameters: BTreeMap<String, Parameter> = common
             .as_object()

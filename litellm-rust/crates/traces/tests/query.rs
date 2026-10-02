@@ -6,6 +6,7 @@ use rstest::rstest;
 #[case::trace_spans("trace_spans", ReadQuery::TraceSpans)]
 #[case::span_detail("span_detail", ReadQuery::SpanDetail)]
 #[case::span_error("span_error", ReadQuery::SpanError)]
+#[case::identity("trace_identity", ReadQuery::TraceIdentity)]
 #[case::spend("spend_by_response_ids", ReadQuery::SpendByResponseIds)]
 #[case::availability("availability", ReadQuery::Availability)]
 #[case::agents("agents", ReadQuery::Agents)]

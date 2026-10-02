@@ -8,6 +8,7 @@ from typing_extensions import ReadOnly, TypedDict
 ReadQueryName: TypeAlias = Literal[
     "list_traces",
     "trace_spans",
+    "trace_identity",
     "span_detail",
     "span_error",
     "spend_by_response_ids",
@@ -26,6 +27,8 @@ _PARAMETERS_CONFIG: Final = ConfigDict(frozen=True, extra="forbid")
 
 class ListTracesParams(BaseModel):
     model_config = _PARAMETERS_CONFIG
+    all_teams: Literal[0, 1]
+    user_id: str
     team_ids: tuple[str, ...]
     api_key_hash: str
     start_ms: Int64
@@ -37,6 +40,8 @@ class ListTracesParams(BaseModel):
 
 class TraceSpansParams(BaseModel):
     model_config = _PARAMETERS_CONFIG
+    all_teams: Literal[0, 1]
+    user_id: str
     team_ids: tuple[str, ...]
     api_key_hash: str
     trace_id: str
@@ -45,6 +50,8 @@ class TraceSpansParams(BaseModel):
 
 class SpanDetailParams(BaseModel):
     model_config = _PARAMETERS_CONFIG
+    all_teams: Literal[0, 1]
+    user_id: str
     team_ids: tuple[str, ...]
     api_key_hash: str
     trace_id: str
@@ -54,6 +61,8 @@ class SpanDetailParams(BaseModel):
 
 class SpanErrorParams(BaseModel):
     model_config = _PARAMETERS_CONFIG
+    all_teams: Literal[0, 1]
+    user_id: str
     team_ids: tuple[str, ...]
     api_key_hash: str
     trace_id: str
@@ -65,6 +74,8 @@ class SpanErrorParams(BaseModel):
 
 class SpendByResponseIdsParams(BaseModel):
     model_config = _PARAMETERS_CONFIG
+    all_teams: Literal[0, 1]
+    user_id: str
     team_ids: tuple[str, ...]
     api_key_hash: str
     response_ids: tuple[str, ...]
@@ -127,11 +138,26 @@ class LensEvidenceParams(BaseModel):
     quote: str
 
 
+class TraceIdentityParams(BaseModel):
+    model_config = _PARAMETERS_CONFIG
+    all_teams: Literal[0, 1]
+    user_id: str
+    team_ids: tuple[str, ...]
+    api_key_hash: str
+    trace_id: str
+
+
+class TraceIdentityRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    trace_ref: str
+
+
 class ListTracesRow(TypedDict):
     trace_id: ReadOnly[str]
     trace_ref: ReadOnly[str]
     team_id: ReadOnly[str]
     api_key_hash: ReadOnly[str]
+    user_id: ReadOnly[str]
     name: ReadOnly[str]
     service: ReadOnly[str]
     input_preview: ReadOnly[str]
@@ -169,6 +195,7 @@ class TraceSpansRow(TypedDict):
     litellm_request_id: ReadOnly[str]
     team_id: ReadOnly[str]
     api_key_hash: ReadOnly[str]
+    user_id: ReadOnly[str]
 
 
 class SpanDetailRow(TypedDict):
@@ -192,6 +219,7 @@ class SpendRow(BaseModel):
     response_id: str
     team_id: str
     api_key: str
+    user: str
     spend: float
     start_ms: int
 
@@ -285,3 +313,5 @@ LENS_CONTENT: Final[ReadQuery[LensContentParams, PartRow]] = ReadQuery(
 LENS_EVIDENCE: Final[ReadQuery[LensEvidenceParams, CountRow]] = ReadQuery(
     "evidence", LensEvidenceParams, TypeAdapter(QueryResponse[CountRow])
 )
+
+TRACE_IDENTITY: Final = ReadQuery("trace_identity", TraceIdentityParams, TypeAdapter(QueryResponse[TraceIdentityRow]))

@@ -542,6 +542,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/traces/query/help",
         "/v1/traces/{trace_id}",
         "/v1/traces/{trace_id}/spans/{span_id}",
+        "/v1/traces/{trace_id}/spans/{span_id}/error",
     ]
 
     anthropic_routes = [
