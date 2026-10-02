@@ -183,11 +183,24 @@ class _ChunkRecorder:
             self.chunks = (*self.chunks, chunk)
 
 
+_SEA_DELTAS = ("The sea ", "is wide ", "and deep.")
+_SEA_PROMPT = "Write a 300 word story about the sea."
+_UNREACHABLE_IMAGE_INPUT = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "Describe this picture."},
+            {"type": "input_image", "image_url": "http://images.invalid/photo.png", "detail": "high"},
+        ],
+    }
+]
+
+
 class _UpstreamThatTimesOutAfterThreeDeltas:
     headers: dict = {}
 
     async def aiter_bytes(self):
-        for sequence_number, delta in enumerate(("The sea ", "is wide ", "and deep.")):
+        for sequence_number, delta in enumerate(_SEA_DELTAS):
             event = {
                 "type": "response.output_text.delta",
                 "item_id": "msg_1",
@@ -200,8 +213,7 @@ class _UpstreamThatTimesOutAfterThreeDeltas:
         raise httpx.ReadTimeout("Timeout on reading data from socket")
 
 
-@pytest.mark.asyncio
-async def test_mid_stream_read_timeout_logs_failure_with_partial_usage_and_no_success(monkeypatch):
+async def _failure_payload_after_mid_stream_timeout(monkeypatch, request_input) -> tuple[FailureRecorder, dict]:
     recorder = FailureRecorder()
     monkeypatch.setattr(litellm, "failure_callback", [recorder])
     monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
@@ -219,17 +231,50 @@ async def test_mid_stream_read_timeout_logs_failure_with_partial_usage_and_no_su
         responses_api_provider_config=OpenAIResponsesAPIConfig(),
         logging_obj=logging_obj,
         custom_llm_provider="openai",
+        request_data={"model": "gpt-5.4-nano", "input": request_input, "stream": True},
     )
     received = _ChunkRecorder()
 
     with pytest.raises(httpx.ReadTimeout, match="Timeout on reading data from socket"):
         await received.drain(iterator)
-    assert [chunk.delta for chunk in received.chunks] == ["The sea ", "is wide ", "and deep."]
+    assert [chunk.delta for chunk in received.chunks] == list(_SEA_DELTAS)
 
     await iterator._await_pending_logging()
     (payload,) = recorder.failure_payloads
+    return recorder, payload
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_read_timeout_logs_failure_with_partial_usage_and_no_success(monkeypatch):
+    recorder, payload = await _failure_payload_after_mid_stream_timeout(monkeypatch, _SEA_PROMPT)
+
     assert payload["status"] == "failure"
-    assert payload["prompt_tokens"] > 0
-    assert payload["completion_tokens"] > 0
+    assert payload["prompt_tokens"] == litellm.token_counter(
+        model="gpt-5.4-nano", messages=[{"role": "user", "content": _SEA_PROMPT}]
+    )
+    assert payload["completion_tokens"] == litellm.token_counter(
+        model="gpt-5.4-nano", text="".join(_SEA_DELTAS), count_response_tokens=True
+    )
     assert payload["response_cost"] > 0
     assert recorder.success_payloads == ()
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_failure_usage_estimate_never_fetches_image_dimensions(monkeypatch):
+    _, payload = await _failure_payload_after_mid_stream_timeout(monkeypatch, _UNREACHABLE_IMAGE_INPUT)
+
+    assert payload["status"] == "failure"
+    assert payload["prompt_tokens"] == litellm.token_counter(
+        model="gpt-5.4-nano",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this picture."},
+                    {"type": "image_url", "image_url": {"url": "http://images.invalid/photo.png", "detail": "high"}},
+                ],
+            }
+        ],
+        use_default_image_token_count=True,
+    )
+    assert payload["completion_tokens"] > 0

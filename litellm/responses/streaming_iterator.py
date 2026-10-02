@@ -498,6 +498,7 @@ class BaseResponsesAPIStreamingIterator:
                                     self.request_data.get("input"),
                                     self.request_data,
                                     self._generated_content + self._generated_tool_arguments,
+                                    use_default_image_token_count=False,
                                 )
                                 if _estimate_wanted
                                 else None
@@ -888,7 +889,11 @@ class BaseResponsesAPIStreamingIterator:
         if not generated_text or self.logging_obj.model_call_details.get("combined_usage_object") is not None:
             return
         estimate: Final = _estimate_usage_safely(
-            self.model or "", self.request_data.get("input"), self.request_data, generated_text
+            self.model or "",
+            self.request_data.get("input"),
+            self.request_data,
+            generated_text,
+            use_default_image_token_count=True,
         )
         if estimate is None:
             return
@@ -1558,13 +1563,15 @@ def _estimate_usage_from_text(
     request_input: object,
     responses_api_request: Mapping[str, object],
     generated_text: str,
+    *,
+    use_default_image_token_count: bool,
 ) -> ResponseAPIUsage:
     messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
         input=request_input,  # pyright: ignore[reportArgumentType]  # the raw Responses API input is a str or ResponseInputParam list, matching the helper's declared union
         responses_api_request=dict(responses_api_request),
     )
     input_tokens: Final = litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is untyped
-        model=model, messages=messages
+        model=model, messages=messages, use_default_image_token_count=use_default_image_token_count
     )
     output_tokens: Final = litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is untyped
         model=model, text=generated_text, count_response_tokens=True
@@ -1581,6 +1588,8 @@ def _estimate_usage_safely(
     request_input: object,
     responses_api_request: Mapping[str, object],
     generated_text: str,
+    *,
+    use_default_image_token_count: bool,
 ) -> ResponseAPIUsage | None:
     try:
         return _estimate_usage_from_text(
@@ -1588,6 +1597,7 @@ def _estimate_usage_safely(
             request_input=request_input,
             responses_api_request=responses_api_request,
             generated_text=generated_text,
+            use_default_image_token_count=use_default_image_token_count,
         )
     except Exception as e:
         verbose_logger.debug("Could not estimate usage from stream text, billing $0: %s", e)

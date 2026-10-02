@@ -658,10 +658,6 @@ def _collect_with_logging(stream, logging_obj: LitellmLogging) -> list:
 
 
 class TestUpstreamFailureReachesTheProxyFailureHook:
-    """The ``error`` event alone leaves the proxy unaware the stream failed, so the wrapper also hands
-    the failure to the hook the proxy arms on the logging object, the one that writes the failure
-    spend row and releases the budget reservation."""
-
     def test_raised_upstream_failure_reaches_the_hook_unwrapped_before_the_error_event(self):
         rate_limit = litellm.RateLimitError(message="You have no credits remaining.", llm_provider="openai", model="m")
         wrapped = MidStreamFallbackError(
