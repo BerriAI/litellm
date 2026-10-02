@@ -159,9 +159,79 @@ def test_rows_keyed_by_an_alias_a_deployment_id_or_a_provider_model_are_sized_li
     names: Final = ("gpt-4.1-ptu", "ptu-alias", "shared-ptu", "azure/gpt-4.1")
     one_hour_each: Final = {name: _bucket(_metrics(prompt=_ONE_PTU_HOUR_OF_INPUT, completion=0)) for name in names}
 
-    attached: Final = with_ptu_consumption(_response(_day("2026-09-23", one_hour_each)), _shared_ptu_router())
+    attached: Final = with_ptu_consumption(_response(_day("2026-09-23", one_hour_each)), _shared_ptu_router(), "team-a")
 
     groups: Final = attached.results[0].breakdown.model_groups
     assert [groups[name].metrics.ptu_hours for name in names] == [pytest.approx(1.0)] * len(names)
     assert attached.results[0].metrics.ptu_hours == pytest.approx(float(len(names)))
     assert attached.metadata.total_ptu_hours == pytest.approx(float(len(names)))
+
+
+def _mixed_ptu_router() -> Router:
+    """One group split between team-a on a gpt-4.1 PTU deployment and team-b on a gpt-5.5 one,
+    beside an open pay-as-you-go deployment of gpt-4.1 in its own group."""
+    return Router(
+        model_list=[
+            {
+                "model_name": "ptu",
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-ptu", "api_base": "https://ptu.example"},
+                "model_info": {
+                    "id": "ptu-41",
+                    "base_model": "azure/gpt-4.1",
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2026-01-01T00:00:00Z",
+                    "ptu_shares": {"team-a": 50},
+                },
+            },
+            {
+                "model_name": "ptu",
+                "litellm_params": {"model": "azure/gpt-5.5", "api_key": "sk-ptu", "api_base": "https://ptu.example"},
+                "model_info": {
+                    "id": "ptu-55",
+                    "base_model": "azure/gpt-5.5",
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2026-01-01T00:00:00Z",
+                    "ptu_shares": {"team-b": 50},
+                },
+            },
+            {
+                "model_name": "gpt-4.1",
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-payg", "api_base": "https://payg.example"},
+                "model_info": {"id": "payg"},
+            },
+        ]
+    )
+
+
+_ONE_GPT_41_PTU_HOUR_ON_GPT_55: Final = _ONE_PTU_HOUR_OF_INPUT / AZURE_PTU_CAPACITY["gpt-5.5"].normalized_tokens_per_ptu_hour
+
+
+@pytest.mark.parametrize(
+    ("team_id", "expected_on_the_group", "expected_on_the_provider_model"),
+    [
+        ("team-a", 1.0, 1.0),
+        ("team-b", _ONE_GPT_41_PTU_HOUR_ON_GPT_55, 0.0),
+        ("team-c", 0.0, 0.0),
+        (None, 1.0, 1.0),
+    ],
+)
+def test_a_teams_rows_are_sized_by_the_deployment_it_is_served_from(
+    monkeypatch, team_id: str | None, expected_on_the_group: float, expected_on_the_provider_model: float
+):
+    """A team's page converts its tokens through the deployment the ceiling served it from: team-b's
+    share is on the gpt-5.5 deployment so its group row counts at that rate, its provider-model row
+    reached only the open deployment so it counts nothing, team-c holds no share so it counts nothing,
+    and a page spanning teams keeps the group's first sized deployment."""
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    one_hour_each: Final = {
+        name: _bucket(_metrics(prompt=_ONE_PTU_HOUR_OF_INPUT, completion=0)) for name in ("ptu", "azure/gpt-4.1")
+    }
+
+    attached: Final = with_ptu_consumption(_response(_day("2026-09-23", one_hour_each)), _mixed_ptu_router(), team_id)
+
+    groups: Final = attached.results[0].breakdown.model_groups
+    assert groups["ptu"].metrics.ptu_hours == pytest.approx(expected_on_the_group)
+    assert groups["azure/gpt-4.1"].metrics.ptu_hours == pytest.approx(expected_on_the_provider_model)
+    assert attached.metadata.total_ptu_hours == pytest.approx(expected_on_the_group + expected_on_the_provider_model)

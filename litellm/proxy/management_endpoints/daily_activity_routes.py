@@ -34,7 +34,7 @@ from litellm.proxy.management_endpoints.daily_activity_scopes import (
     EntityScopeResolver,
     ResolvedScope,
 )
-from litellm.proxy.management_endpoints.ptu_consumption import with_ptu_consumption
+from litellm.proxy.management_endpoints.ptu_consumption import single_team_id, with_ptu_consumption
 from litellm.proxy.management_endpoints.team_endpoints import aggregated_date_range_error
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import PrismaClient, get_prisma_client_or_throw
@@ -272,7 +272,9 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
                 include_entity_breakdown=resolver.include_entity_breakdown,
                 api_key_limit=api_key_limit,
             )
-            return with_ptu_consumption(activity, llm_router) if resolver.entity == "team" else activity
+            if resolver.entity != "team":
+                return activity
+            return with_ptu_consumption(activity, llm_router, single_team_id(resolved.scope.entity_ids))
         except HTTPException:
             raise
         except Exception as exc:

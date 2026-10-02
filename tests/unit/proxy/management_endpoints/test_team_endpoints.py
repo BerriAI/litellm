@@ -16964,6 +16964,39 @@ async def test_team_daily_activity_sizes_a_team_scoped_deployment_by_its_public_
     assert result.results[0].breakdown.model_groups["gpt-4.1-ptu"].metrics.ptu_hours == 1.0
 
 
+@pytest.mark.asyncio
+async def test_team_daily_activity_reports_no_ptu_hours_to_a_team_holding_no_share(
+    mock_db_client, mock_admin_auth, monkeypatch
+):
+    """The deployment is split between team-a and team-b, so team-c's page alone converts none of
+    its tokens on the group even though the group is sized."""
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_daily_activity
+
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    page = _ptu_activity_page()
+
+    with (
+        patch("litellm.proxy.management_endpoints.team_endpoints.get_daily_activity", AsyncMock(return_value=page)),
+        patch("litellm.proxy.proxy_server.llm_router", _shared_ptu_router()),
+    ):
+        result = await get_team_daily_activity(
+            team_ids="team-c",
+            start_date="2026-09-23",
+            end_date="2026-09-24",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_team_ids=None,
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert result.metadata.total_ptu_hours == 0.0
+    assert result.results[0].breakdown.model_groups["gpt-4.1-ptu"].metrics.ptu_hours == 0.0
+    assert result.results[0].metrics.total_tokens == _ONE_PTU_HOUR_OF_INPUT
+
+
 @pytest.mark.parametrize(
     ("start_date", "end_date"),
     (

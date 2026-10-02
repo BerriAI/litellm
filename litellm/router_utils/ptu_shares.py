@@ -150,13 +150,17 @@ def _model_group_of(
 ) -> str:
     """The group of the deployment behind ``requested_model`` this team can be served from, one
     holding its share first."""
-    routed: Final = routed_deployments(listed_rows, deployments, requested_model)
-    servable: Final = filter_ptu_shared_deployments(routed, team_id).deployments
-    shared_first: Final = sorted(servable, key=lambda deployment: _deployment_shares(deployment) is None)
+    servable: Final = team_servable_deployments(routed_deployments(listed_rows, deployments, requested_model), team_id)
     return next(
-        (group for deployment in shared_first if (group := _deployment_model_group(deployment)) is not None),
+        (group for deployment in servable if (group := _deployment_model_group(deployment)) is not None),
         requested_model,
     )
+
+
+def team_servable_deployments(deployments: Sequence[_DeploymentT], team_id: str) -> tuple[_DeploymentT, ...]:
+    """The deployments ``team_id`` can be served from, the ones it holds a share on first."""
+    servable: Final = filter_ptu_shared_deployments(deployments, team_id).deployments
+    return tuple(sorted(servable, key=lambda deployment: _deployment_shares(deployment) is None))
 
 
 def model_group_ptu_capacity(deployments: Sequence[Mapping[str, object]]) -> PTUCapacity | None:

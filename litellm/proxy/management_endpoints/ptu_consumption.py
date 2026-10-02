@@ -5,7 +5,7 @@ cached, and completion tokens a team sent to a PTU model group convert back to t
 a PTU-hour it consumed, reported next to the raw token counts.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from types import MappingProxyType
 from typing import Final
 
@@ -13,7 +13,11 @@ from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabl
 from litellm.llms.azure.ptu_capacity import PTUCapacity, normalized_tokens, ptu_hours
 from litellm.router import Router
 from litellm.router_utils.common_utils import resolve_model_group_alias
-from litellm.router_utils.ptu_shares import model_group_ptu_capacity, routed_deployments
+from litellm.router_utils.ptu_shares import (
+    model_group_ptu_capacity,
+    routed_deployments,
+    team_servable_deployments,
+)
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendData,
     MetricWithMetadata,
@@ -99,31 +103,38 @@ def attach_ptu_hours(
     )
 
 
-def capacity_by_requested_name(llm_router: Router) -> Callable[[str], PTUCapacity | None]:
+def capacity_by_requested_name(llm_router: Router, team_id: str | None) -> Callable[[str], PTUCapacity | None]:
     """The sizing row behind the name a usage row is keyed by, resolved the way the ceiling
     resolves a request: an alias to its group, then a group, a routing group, a deployment id,
-    or a provider model to the deployments it is served from."""
+    or a provider model to the deployments it is served from. For one team those are narrowed
+    to the deployments it can be served from, its shared one first, so a team with no share on
+    a name reads no PTU-hours for it; a page spanning teams keeps every deployment behind the name."""
     listed_rows: Final = llm_router.get_model_list() or ()
     aliases: Final = llm_router.model_group_alias
 
     def capacity_for(requested_model: str) -> PTUCapacity | None:
         model_group: Final = resolve_model_group_alias(aliases, requested_model) or requested_model
-        return model_group_ptu_capacity(
-            routed_deployments(
-                listed_rows,
-                llm_router.model_list,  # pyright: ignore[reportUnknownArgumentType]  # Router.model_list is a bare list
-                model_group,
-            )
+        routed: Final = routed_deployments(
+            listed_rows,
+            llm_router.model_list,  # pyright: ignore[reportUnknownArgumentType]  # Router.model_list is a bare list
+            model_group,
         )
+        return model_group_ptu_capacity(routed if team_id is None else team_servable_deployments(routed, team_id))
 
     return capacity_for
 
 
+def single_team_id(team_ids: Sequence[str] | None) -> str | None:
+    """The one team a usage page is scoped to, else None for a page spanning several or all teams."""
+    return team_ids[0] if team_ids is not None and len(team_ids) == 1 else None
+
+
 def with_ptu_consumption(
-    activity: SpendAnalyticsPaginatedResponse, llm_router: Router | None
+    activity: SpendAnalyticsPaginatedResponse, llm_router: Router | None, team_id: str | None
 ) -> SpendAnalyticsPaginatedResponse:
-    """``activity`` with PTU-hours attached from the router's sized deployments, untouched while
-    PTU cost attribution is off or no router is loaded."""
+    """``activity`` with PTU-hours attached from the deployments ``team_id`` is served from (every
+    sized deployment when the page spans teams), untouched while PTU cost attribution is off or no
+    router is loaded."""
     if llm_router is None or not is_ptu_cost_attribution_enabled():
         return activity
-    return attach_ptu_hours(activity, capacity_by_requested_name(llm_router))
+    return attach_ptu_hours(activity, capacity_by_requested_name(llm_router, team_id))

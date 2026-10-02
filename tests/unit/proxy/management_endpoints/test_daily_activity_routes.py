@@ -3,7 +3,7 @@ import io
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass, fields
 from itertools import chain
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock
 
@@ -578,7 +578,7 @@ def test_aggregated_routes_return_scoped_results(
     assert len(body["results"]) == 2, response.text
 
 
-def _ptu_sized_router(model_group: str) -> Router:
+def _ptu_sized_router(model_group: str, shares: Mapping[str, int] = MappingProxyType({"team-a": 30, "team-b": 20})) -> Router:
     return Router(
         model_list=[
             {
@@ -590,7 +590,7 @@ def _ptu_sized_router(model_group: str) -> Router:
                     "ptu_count": 50,
                     "cost_per_ptu_per_hour": 1.0,
                     "ptu_effective_from": "2024-01-01T00:00:00Z",
-                    "ptu_shares": {"team-a": 30, "team-b": 20},
+                    "ptu_shares": dict(shares),
                 },
             }
         ]
@@ -634,6 +634,26 @@ def test_team_aggregated_route_reports_ptu_hours_for_the_sized_model_group_only_
     assert rare_day["breakdown"]["model_groups"]["rare-group"]["metrics"]["ptu_hours"] == pytest.approx(expected)
     assert rare_day["breakdown"]["model_groups"]["popular-group"]["metrics"]["ptu_hours"] == 0, response.text
     assert by_date["2025-01-02"]["metrics"]["ptu_hours"] == 0, response.text
+    assert body["metadata"]["total_tokens"] == 90, response.text
+
+
+def test_team_aggregated_route_reports_no_ptu_hours_to_a_team_holding_no_share(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """rare-group is split between team-b and team-c, so team-a's page alone converts none of its
+    rare-group tokens even though the group is sized."""
+    client, _ = daily_activity_client
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    _inject_llm_router(client, _ptu_sized_router("rare-group", shares=MappingProxyType({"team-b": 30, "team-c": 20})))
+
+    response: Final = client.get("/team/daily/activity/aggregated", params=_entity_params("team_ids", "team-a"))
+
+    assert response.status_code == 200, response.text
+    body: Final = response.json()
+    rare_day: Final = {day["date"]: day for day in body["results"]}["2025-01-01"]
+    assert body["metadata"]["total_ptu_hours"] == 0, response.text
+    assert rare_day["breakdown"]["model_groups"]["rare-group"]["metrics"]["ptu_hours"] == 0, response.text
     assert body["metadata"]["total_tokens"] == 90, response.text
 
 

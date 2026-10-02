@@ -143,7 +143,7 @@ from litellm.proxy.management_endpoints.common_utils import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     add_member_to_organization,
 )
-from litellm.proxy.management_endpoints.ptu_consumption import with_ptu_consumption
+from litellm.proxy.management_endpoints.ptu_consumption import single_team_id, with_ptu_consumption
 from litellm.proxy.management_endpoints.router_weights import validate_router_settings_weights
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
@@ -6689,7 +6689,7 @@ async def get_team_daily_activity(
         page=page,
         page_size=page_size,
     )
-    return with_ptu_consumption(activity, llm_router)
+    return with_ptu_consumption(activity, llm_router, single_team_id(scope.team_ids))
 
 
 _MAX_AGGREGATED_RANGE_DAYS: Final = 400
