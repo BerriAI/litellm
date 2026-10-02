@@ -1,15 +1,17 @@
 import json
 import threading
-from hashlib import sha256
 from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
 import psutil
 from integration._support.client import Gateway, eventually
-from integration._support.process import owned_proxy, owned_proxy_process
+from integration._support.database import read_rows
+from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from integration.spend._request_tag_helpers import (
+    MODEL,
     OPENAI_MODEL,
     T3,
     provider_env,
@@ -17,12 +19,16 @@ from integration.spend._request_tag_helpers import (
     write_config,
 )
 
-from tests.integration._support.database import read_rows
-
-MODEL: Final = "claude-sonnet-4-5-20250929"
 HEADERS: Final = {"user-agent": "claude-cli/2.0.0", "x-tenant-id": "tenant-a"}
 ANTHROPIC_HEADERS: Final = {**HEADERS, "anthropic-version": "2023-06-01"}
 EXPECTED: Final = T3
+ROUTES: Final = (
+    "/anthropic/v1/messages",
+    "/openai/v1/chat/completions",
+    "/v1/chat/completions",
+    "/v1/messages",
+    "/v1/responses",
+)
 
 
 def _ids(response) -> str:
@@ -32,77 +38,118 @@ def _ids(response) -> str:
     raise AssertionError(f"no upstream id in {response.text[:200]}")
 
 
-def _tagged_requests(candidate: Gateway, key: str, model: str, stream: bool, index: int) -> tuple:
-    """One call per route shape, all with the same client headers; returns (response, request_id)."""
+def _tagged_requests(
+    candidate: Gateway, key: str, anthropic_model: str, openai_model: str, stream: bool, index: int
+) -> tuple:
+    """One call per route in ROUTES order with the same client headers."""
     marker: Final = f"burst {index}"
-    anthropic: Final = candidate.request(
-        "POST",
-        "/anthropic/v1/messages",
-        {"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": marker}], "stream": stream},
-        key=key,
-        headers=ANTHROPIC_HEADERS,
+    return (
+        candidate.request(
+            "POST",
+            "/anthropic/v1/messages",
+            {"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": marker}], "stream": stream},
+            key=key,
+            headers=ANTHROPIC_HEADERS,
+        ),
+        candidate.request(
+            "POST",
+            "/openai/v1/chat/completions",
+            {"model": OPENAI_MODEL, "messages": [{"role": "user", "content": marker}], "stream": stream},
+            key=key,
+            headers=HEADERS,
+        ),
+        candidate.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": openai_model, "messages": [{"role": "user", "content": marker}]},
+            key=key,
+            headers=HEADERS,
+        ),
+        candidate.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": anthropic_model,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": marker}],
+            },
+            key=key,
+            headers=ANTHROPIC_HEADERS,
+        ),
+        candidate.request("POST", "/v1/responses", {"model": openai_model, "input": marker}, key=key, headers=HEADERS),
     )
-    openai: Final = candidate.request(
-        "POST",
-        "/openai/v1/chat/completions",
-        {"model": OPENAI_MODEL, "messages": [{"role": "user", "content": marker}], "stream": stream},
-        key=key,
-        headers=HEADERS,
-    )
-    unified: Final = candidate.request(
-        "POST",
-        "/v1/chat/completions",
-        {"model": model, "messages": [{"role": "user", "content": marker}]},
-        key=key,
-        headers=HEADERS,
-    )
-    return anthropic, openai, unified
 
 
-# C1: 10 concurrent bursts x 3 routes; each response id lands exactly one spend row with the tags
+def _deployments(scenario, url: str) -> tuple[str, str]:
+    return (
+        scenario.model(model=f"anthropic/{MODEL}", api_base=url, api_key="synthetic-anthropic-key"),
+        scenario.model(model=f"openai/{OPENAI_MODEL}", api_base=f"{url}/v1"),
+    )
+
+
+def _landed_tags(key: str, count: int) -> list[dict]:
+    digest: Final = sha256(key.encode()).hexdigest()
+    landed: Final = eventually(
+        lambda: read_rows('SELECT request_id, request_tags FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (digest,)),
+        lambda values: len(values) == count,
+        seconds=70,
+    )
+    assert len({row["request_id"] for row in landed}) == count
+    for row in landed:
+        value: Final = row["request_tags"]
+        assert (json.loads(value) if isinstance(value, str) else value) == EXPECTED
+    return landed
+
+
+def _worker_pids(owned) -> tuple[int, ...]:
+    workers: Final = tuple(
+        child
+        for child in psutil.Process(owned.process.pid).children(recursive=True)
+        if any(marker in " ".join(child.cmdline()) for marker in ("spawn_main", "integration._support.proxy"))
+    )
+    return tuple(worker.pid for worker in workers)
+
+
 def test_burst_across_routes_records_tags_once_per_response(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(provider_reply) as wire:
         config: Final = write_config(tmp_path, {"litellm_settings": {"extra_spend_tag_headers": ["x-tenant-id"]}})
         with (
-            owned_proxy(gateway, tmp_path, provider_env(wire.url), config=config, workers=2) as candidate,
-            candidate.scenario() as scenario,
+            owned_proxy_process(gateway, tmp_path, provider_env(wire.url), config=config, workers=2) as owned,
+            owned.gateway.scenario() as scenario,
         ):
-            model: Final = scenario.model(model=f"openai/{OPENAI_MODEL}", api_base=f"{wire.url}/v1")
+            candidate: Final = owned.gateway
+            anthropic_model, openai_model = _deployments(scenario, wire.url)
             key: Final = scenario.key()
 
             def burst(index: int) -> tuple:
-                return _tagged_requests(candidate, key, model, stream=index % 2 == 1, index=index)
+                return _tagged_requests(
+                    candidate, key, anthropic_model, openai_model, stream=index % 2 == 1, index=index
+                )
 
             with ThreadPoolExecutor(max_workers=10) as pool:
                 responses: Final = [response for group in pool.map(burst, range(10)) for response in group]
-            assert len(responses) == 30
+            assert len(responses) == 50
             assert all(response.status_code == 200 for response in responses), [
                 (response.status_code, response.text[:200]) for response in responses
             ]
             ids: Final = [_ids(response) for response in responses]
-            assert len(set(ids)) == 30, "duplicate upstream id in burst"
-            assert len(wire.drain()) == 30
-            digest: Final = sha256(key.encode()).hexdigest()
-            landed: Final = eventually(
-                lambda: read_rows(
-                    'SELECT request_id, request_tags FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (digest,)
-                ),
-                lambda values: len(values) == 30,
-                seconds=70,
-            )
-            assert len({row["request_id"] for row in landed}) == 30
-            for row in landed:
-                value: Final = row["request_tags"]
-                assert (json.loads(value) if isinstance(value, str) else value) == EXPECTED
+            assert len(set(ids)) == 50, "duplicate upstream id in burst"
+            assert len(wire.drain()) == 50
+            pids: Final = _worker_pids(owned)
+            assert len(set(pids)) == 2, f"expected two uvicorn workers, found {pids}"
+            assert all(worker.is_running() for worker in psutil.process_iter(pids))
+            _landed_tags(key, 50)
 
 
-# C2: generic_api sink down mid burst; spend rows still land exactly once with the tags
 def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Path) -> None:
-    stopped: Final = threading.Event()
+    down: Final = threading.Event()
+    delivered: Final = []  # mutable-ok: sink thread appends between drains
 
     def stoppable_sink(request: Request) -> Reply:
-        stopped.wait(timeout=30)
-        return Reply(status=503)
+        if down.is_set():
+            return Reply(status=503)
+        delivered.append(request)
+        return Reply()
 
     with wire_server(provider_reply) as wire, wire_server(stoppable_sink) as endpoint:
         config: Final = write_config(
@@ -116,7 +163,7 @@ def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Pa
             },
         )
         with (
-            owned_proxy(
+            owned_proxy_process(
                 gateway,
                 tmp_path,
                 {
@@ -126,45 +173,65 @@ def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Pa
                 },
                 config=config,
                 workers=2,
-            ) as candidate,
-            candidate.scenario() as scenario,
+            ) as owned,
+            owned.gateway.scenario() as scenario,
         ):
-            model: Final = scenario.model(model=f"openai/{OPENAI_MODEL}", api_base=f"{wire.url}/v1")
+            candidate: Final = owned.gateway
+            anthropic_model, openai_model = _deployments(scenario, wire.url)
             key: Final = scenario.key()
 
             def burst(index: int) -> tuple:
-                return _tagged_requests(candidate, key, model, stream=False, index=index)
+                return _tagged_requests(candidate, key, anthropic_model, openai_model, stream=False, index=index)
 
-            with ThreadPoolExecutor(max_workers=6) as pool:
-                first: Final = [response for group in pool.map(burst, range(6)) for response in group]
-            stopped.set()  # sink goes down: the peer now returns 503 to every flush
+            with ThreadPoolExecutor(max_workers=5) as pool:
+                first: Final = [response for group in pool.map(burst, range(4)) for response in group]
+            assert all(response.status_code == 200 for response in first), [
+                (response.status_code, response.text[:200]) for response in first
+            ]
 
-            def second_burst(index: int) -> tuple:
-                return _tagged_requests(candidate, key, model, stream=False, index=100 + index)
+            def call_ids(responses: list) -> set:
+                return {response.headers["x-litellm-call-id"] for response in responses}
 
-            with ThreadPoolExecutor(max_workers=6) as pool:
-                second: Final = [response for group in pool.map(second_burst, range(6)) for response in group]
-            responses: Final = [*first, *second]
+            first_ids: Final = call_ids(first)
+
+            def events_for(ids: set) -> set:
+                return {
+                    event["litellm_call_id"]
+                    for batch in delivered
+                    for event in json.loads(batch.body)
+                    if event.get("litellm_call_id") in ids
+                }
+
+            eventually(lambda: events_for(first_ids), lambda found: found == first_ids, seconds=70)
+            down.set()
+            with ThreadPoolExecutor(max_workers=5) as pool:
+                second: Final = [
+                    response for group in pool.map(lambda i: burst(100 + i), range(4)) for response in group
+                ]
+            down.clear()
+            third: Final = _tagged_requests(candidate, key, anthropic_model, openai_model, False, 200)
+            responses: Final = [*first, *second, *third]
             assert all(response.status_code == 200 for response in responses), [
                 (response.status_code, response.text[:200]) for response in responses
             ]
-            ids: Final = [_ids(response) for response in responses]
-            assert len(set(ids)) == len(ids), "duplicate upstream id in burst"
-            digest: Final = sha256(key.encode()).hexdigest()
-            landed: Final = eventually(
-                lambda: read_rows(
-                    'SELECT request_id, request_tags FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (digest,)
-                ),
-                lambda values: len(values) == 36,
+            second_ids: Final = call_ids(second)
+            third_ids: Final = call_ids(list(third))
+            recovery_probe: Final = next(iter(third_ids))
+            eventually(
+                lambda: events_for(third_ids),
+                lambda found: recovery_probe in found,
                 seconds=70,
             )
-            assert len({row["request_id"] for row in landed}) == 36
-            for row in landed:
-                value: Final = row["request_tags"]
-                assert (json.loads(value) if isinstance(value, str) else value) == EXPECTED
+            second_delivered: Final = eventually(
+                lambda: events_for(second_ids),
+                lambda found: len(found) == len(second_ids),
+                seconds=30,
+                return_last_on_timeout=True,
+            )
+            assert second_delivered == second_ids
+            _landed_tags(key, len(responses))
 
 
-# C3: killing one proxy worker mid burst loses no spend row
 def test_worker_kill_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(provider_reply) as wire:
         config: Final = write_config(tmp_path, {"litellm_settings": {"extra_spend_tag_headers": ["x-tenant-id"]}})
@@ -173,41 +240,38 @@ def test_worker_kill_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_path: P
             owned.gateway.scenario() as scenario,
         ):
             candidate: Final = owned.gateway
-            model: Final = scenario.model(model=f"openai/{OPENAI_MODEL}", api_base=f"{wire.url}/v1")
+            anthropic_model, openai_model = _deployments(scenario, wire.url)
             key: Final = scenario.key()
 
             def burst(index: int) -> tuple:
-                return _tagged_requests(candidate, key, model, stream=False, index=index)
+                return _tagged_requests(candidate, key, anthropic_model, openai_model, stream=False, index=index)
 
-            with ThreadPoolExecutor(max_workers=6) as pool:
-                first: Final = [response for group in pool.map(burst, range(6)) for response in group]
+            with ThreadPoolExecutor(max_workers=5) as pool:
+                first: Final = [response for group in pool.map(burst, range(4)) for response in group]
 
             workers: Final = [
                 child
                 for child in psutil.Process(owned.process.pid).children(recursive=True)
-                if child.status() != psutil.STATUS_ZOMBIE
+                if any(marker in " ".join(child.cmdline()) for marker in ("spawn_main", "integration._support.proxy"))
             ]
-            assert len(workers) >= 2, f"expected two proxy workers, found {[w.pid for w in workers]}"
+            assert len(workers) == 2, (
+                f"expected two uvicorn workers, found {[(w.pid, w.cmdline()[:3]) for w in workers]}"
+            )
             workers[0].kill()
+            psutil.wait_procs(workers[:1], timeout=10)
+            assert not workers[0].is_running()
 
-            def second_burst(index: int) -> tuple:
-                return _tagged_requests(candidate, key, model, stream=False, index=100 + index)
-
-            with ThreadPoolExecutor(max_workers=6) as pool:
-                second: Final = [response for group in pool.map(second_burst, range(6)) for response in group]
+            with ThreadPoolExecutor(max_workers=5) as pool:
+                second: Final = [
+                    response for group in pool.map(lambda i: burst(100 + i), range(4)) for response in group
+                ]
             responses: Final = [*first, *second]
+            for position in range(len(ROUTES)):
+                statuses: Final = {
+                    responses[offset + position].status_code for offset in range(0, len(responses), len(ROUTES))
+                }
+                assert 200 in statuses, f"no surviving 200 for route {ROUTES[position]}: {statuses}"
             ok: Final = [response for response in responses if response.status_code == 200]
             ids: Final = [_ids(response) for response in ok]
             assert len(set(ids)) == len(ids), "duplicate upstream id in burst"
-            digest: Final = sha256(key.encode()).hexdigest()
-            landed: Final = eventually(
-                lambda: read_rows(
-                    'SELECT request_id, request_tags FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (digest,)
-                ),
-                lambda values: len(values) == len(ids),
-                seconds=70,
-            )
-            assert len({row["request_id"] for row in landed}) == len(ids)
-            for row in landed:
-                value: Final = row["request_tags"]
-                assert (json.loads(value) if isinstance(value, str) else value) == EXPECTED
+            _landed_tags(key, len(ok))
