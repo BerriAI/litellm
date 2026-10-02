@@ -50,6 +50,7 @@ const span = (overrides: SpanOverrides): Span => ({
   input_tokens: 0,
   output_tokens: 0,
   litellm_request_id: null,
+  spend: null,
   ...overrides,
 });
 

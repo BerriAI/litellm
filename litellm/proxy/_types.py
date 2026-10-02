@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
+from litellm.proxy._experimental.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
 from litellm.types.agents import AgentCaller, AgentResponse
 from litellm.types.integrations.compression_interception import (
     CompressionSavingsMetadata,
@@ -506,6 +507,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vllm",
         "/mistral",
         "/typesafe",
+        "/laya",
         "/openrouter",
         "/milvus",
         "/gigachat",
@@ -537,6 +539,8 @@ class LiteLLMRoutes(enum.Enum):
         "/lens/workers/register",
         "/lens/workers/{worker_id}",
         "/v1/traces",
+        "/v1/traces/query",
+        "/v1/traces/query/help",
         "/v1/traces/{trace_id}",
         "/v1/traces/{trace_id}/spans/{span_id}",
     ]
@@ -699,6 +703,10 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED.value,
+        "/team/daily/activity/aggregated/keys",
+        "/team/daily/activity/aggregated/search",
+        "/team/daily/activity/aggregated/model_top_keys",
+        "/team/daily/activity/export",
         KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.SPEND_LOGS_V2.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
@@ -725,6 +733,11 @@ class LiteLLMRoutes(enum.Enum):
             "/user/list",
             "/user/daily/activity",
             "/user/daily/activity/aggregated",
+            "/user/daily/activity/aggregated/keys",
+            "/user/daily/activity/aggregated/search",
+            "/user/daily/activity/aggregated/model_top_keys",
+            "/user/daily/activity/export",
+            "/user/daily/activity/aggregated/cache_leakage_keys",
             # team
             "/team/new",
             "/team/update",
@@ -742,6 +755,10 @@ class LiteLLMRoutes(enum.Enum):
             "/team/permissions_bulk_update",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
+            "/team/daily/activity/aggregated/keys",
+            "/team/daily/activity/aggregated/search",
+            "/team/daily/activity/aggregated/model_top_keys",
+            "/team/daily/activity/export",
             "/team/spend/by_user",
             # gateway request counts (SGR); deployment-wide, admin-only
             "/gateway/daily/activity",
@@ -870,6 +887,11 @@ class LiteLLMRoutes(enum.Enum):
             # Tag usage endpoints scope internal users to tags produced by
             # their own keys in tag_management_endpoints.py.
             "/tag/daily/activity",
+            "/tag/daily/activity/aggregated",
+            "/tag/daily/activity/aggregated/keys",
+            "/tag/daily/activity/aggregated/search",
+            "/tag/daily/activity/aggregated/model_top_keys",
+            "/tag/daily/activity/export",
             "/tag/list",
             "/v1/models/{model_id}",
             "/models/{model_id}",
@@ -894,6 +916,11 @@ class LiteLLMRoutes(enum.Enum):
             # Tag usage endpoints scope internal viewers to tags produced by
             # their own keys in tag_management_endpoints.py.
             "/tag/daily/activity",
+            "/tag/daily/activity/aggregated",
+            "/tag/daily/activity/aggregated/keys",
+            "/tag/daily/activity/aggregated/search",
+            "/tag/daily/activity/aggregated/model_top_keys",
+            "/tag/daily/activity/export",
             "/tag/list",
         ]
     )
@@ -913,6 +940,10 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_update",
         "/team/daily/activity",
         "/team/daily/activity/aggregated",
+        "/team/daily/activity/aggregated/keys",
+        "/team/daily/activity/aggregated/search",
+        "/team/daily/activity/aggregated/model_top_keys",
+        "/team/daily/activity/export",
         "/team/spend/by_user",
         "/team/{team_id}/members/me",
         # POST/GET the team's logging callbacks, and DELETE one of them. Every
@@ -928,9 +959,19 @@ class LiteLLMRoutes(enum.Enum):
         "/model/delete",
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
+        "/user/daily/activity/aggregated/keys",
+        "/user/daily/activity/aggregated/search",
+        "/user/daily/activity/aggregated/model_top_keys",
+        "/user/daily/activity/export",
+        "/user/daily/activity/aggregated/cache_leakage_keys",
         # Endpoint restricts results to organizations the caller is ORG_ADMIN
         # of; a caller who administers none gets an empty result set.
         "/organization/daily/activity",
+        "/organization/daily/activity/aggregated",
+        "/organization/daily/activity/aggregated/keys",
+        "/organization/daily/activity/aggregated/search",
+        "/organization/daily/activity/aggregated/model_top_keys",
+        "/organization/daily/activity/export",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         # Claude Code gateway: the signed-in CLI fetches its managed settings and posts its own telemetry
         "/claude_code_gateway/managed/settings",
@@ -1009,9 +1050,24 @@ class LiteLLMRoutes(enum.Enum):
             "/user/available_users",
             "/user/available_roles",
             "/user/daily/activity",
+            "/user/daily/activity/aggregated",
+            "/user/daily/activity/aggregated/keys",
+            "/user/daily/activity/aggregated/search",
+            "/user/daily/activity/aggregated/model_top_keys",
+            "/user/daily/activity/export",
+            "/user/daily/activity/aggregated/cache_leakage_keys",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
+            "/team/daily/activity/aggregated/keys",
+            "/team/daily/activity/aggregated/search",
+            "/team/daily/activity/aggregated/model_top_keys",
+            "/team/daily/activity/export",
             "/tag/daily/activity",
+            "/tag/daily/activity/aggregated",
+            "/tag/daily/activity/aggregated/keys",
+            "/tag/daily/activity/aggregated/search",
+            "/tag/daily/activity/aggregated/model_top_keys",
+            "/tag/daily/activity/export",
             "/tag/list",
             "/audit",
             "/audit/{id}",
@@ -1529,6 +1585,30 @@ def _reject_unsupported_per_server_oauth_discovery(values: object, require_auth_
     raise _per_server_oauth_discovery_error()
 
 
+def _validate_mcp_transport_fields(values: object) -> None:
+    if not isinstance(values, dict):
+        return
+    transport: Final = values.get("transport")
+    if transport in (MCPTransport.http, MCPTransport.sse):
+        if not values.get("url") and not values.get("spec_path"):
+            raise ValueError("url or spec_path is required for HTTP/SSE transport")
+        return
+    if transport != MCPTransport.stdio:
+        return
+    if not is_mcp_stdio_enabled():
+        raise ValueError(MCP_STDIO_DISABLED_MESSAGE)
+    command: Final = values.get("command")
+    if not command:
+        raise ValueError("command is required for stdio transport")
+    if not values.get("args"):
+        raise ValueError("args is required for stdio transport")
+    if os.path.basename(str(command)) not in MCP_STDIO_ALLOWED_COMMANDS:
+        raise ValueError(
+            f"Command '{command}' is not in the allowed commands list "
+            f"for stdio transport. Allowed commands: {sorted(MCP_STDIO_ALLOWED_COMMANDS)}"
+        )
+
+
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str | None = None
     server_name: str | None = None
@@ -1595,23 +1675,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     @model_validator(mode="before")
     @classmethod
     def validate_transport_fields(cls, values):
-        if isinstance(values, dict):
-            transport: Final = values.get("transport")
-            if transport == MCPTransport.stdio:
-                if not values.get("command"):
-                    raise ValueError("command is required for stdio transport")
-                if not values.get("args"):
-                    raise ValueError("args is required for stdio transport")
-                # Validate command against allowlist to prevent arbitrary execution
-                base_command: Final = os.path.basename(values["command"])
-                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
-                    raise ValueError(
-                        f"Command '{values['command']}' is not in the allowed commands list "
-                        f"for stdio transport. Allowed commands: {sorted(MCP_STDIO_ALLOWED_COMMANDS)}"
-                    )
-            elif transport in [MCPTransport.http, MCPTransport.sse]:
-                if not values.get("url") and not values.get("spec_path"):
-                    raise ValueError("url or spec_path is required for HTTP/SSE transport")
+        _validate_mcp_transport_fields(values)
         return values
 
     @model_validator(mode="before")
@@ -1694,23 +1758,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     @model_validator(mode="before")
     @classmethod
     def validate_transport_fields(cls, values):
-        if isinstance(values, dict):
-            transport: Final = values.get("transport")
-            if transport == MCPTransport.stdio:
-                if not values.get("command"):
-                    raise ValueError("command is required for stdio transport")
-                if not values.get("args"):
-                    raise ValueError("args is required for stdio transport")
-                # Validate command against allowlist to prevent arbitrary execution
-                base_command: Final = os.path.basename(values["command"])
-                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
-                    raise ValueError(
-                        f"Command '{values['command']}' is not in the allowed commands list "
-                        f"for stdio transport. Allowed commands: {sorted(MCP_STDIO_ALLOWED_COMMANDS)}"
-                    )
-            elif transport in [MCPTransport.http, MCPTransport.sse]:
-                if not values.get("url") and not values.get("spec_path"):
-                    raise ValueError("url or spec_path is required for HTTP/SSE transport")
+        _validate_mcp_transport_fields(values)
         return values
 
     @model_validator(mode="before")

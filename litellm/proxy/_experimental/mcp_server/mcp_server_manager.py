@@ -142,6 +142,12 @@ from litellm.proxy._experimental.mcp_server.result_conversion import (
 from litellm.proxy._experimental.mcp_server.sampling_handler import (
     MCP_SAMPLING_AVAILABLE,
 )
+from litellm.proxy._experimental.mcp_server.stdio_gate import (
+    MCP_STDIO_DISABLED_MESSAGE,
+    is_mcp_stdio_blocked,
+    is_mcp_stdio_enabled,
+    warn_if_mcp_stdio_blocked,
+)
 from litellm.proxy._experimental.mcp_server.tool_catalog_guard import (
     CatalogAlert,
     apply_description_overrides,
@@ -1754,7 +1760,7 @@ def _create_elicitation_callback():
 
 
 def _record_mcp_guardrail_evaluations(
-    synthetic_llm_data: dict[str, Any],  # mutable-ok: `_sync_guardrail_info_to_logging_obj` takes a concrete dict
+    synthetic_llm_data: dict[str, object],  # mutable-ok: `_sync_guardrail_info_to_logging_obj` takes a concrete dict
     litellm_logging_obj: "LiteLLMLoggingObj | None",
 ) -> None:
     """Bridge guardrail decision records off an MCP synthetic request onto the request's logger.
@@ -2541,6 +2547,7 @@ class MCPServerManager:
                 alias=alias,
                 server_name=server_name,
             )
+            warn_if_mcp_stdio_blocked(server_name, server_config.get("transport"))
 
             auth_type = server_config.get("auth_type", None)
             manual_issuer = _blank_to_none(server_config.get("issuer"))
@@ -3359,6 +3366,7 @@ class MCPServerManager:
                 # `credentials` field is the only one still encrypted here).
                 # Re-decrypting plaintext would zero the values, so build with
                 # env_vars_are_encrypted=False.
+                self._warn_if_newly_blocked_stdio(mcp_server, None)
                 new_server: Final = await self.build_mcp_server_from_table(mcp_server, env_vars_are_encrypted=False)
                 self._assign_unique_short_prefix(new_server)
                 self._invalidate_server_definition_caches(mcp_server.server_id)
@@ -4350,6 +4358,8 @@ class MCPServerManager:
 
         # Handle stdio transport
         if transport == MCPTransport.stdio:
+            if not is_mcp_stdio_enabled():
+                raise HTTPException(status_code=403, detail=MCP_STDIO_DISABLED_MESSAGE)
             resolved_env: Final = (
                 stdio_env
                 if stdio_env is not None
@@ -4515,6 +4525,9 @@ class MCPServerManager:
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,
         )
+
+        if self._skip_blocked_stdio_listing(server, "tool"):
+            return []
 
         verbose_logger.debug("Connecting to url: %s", server.url)
         verbose_logger.info("_get_tools_from_server for %s...", server.name)
@@ -4802,6 +4815,19 @@ class MCPServerManager:
         )
         return server.server_id, hashlib.sha256(material.encode()).hexdigest()
 
+    @staticmethod
+    def _warn_if_newly_blocked_stdio(row: LiteLLM_MCPServerTable, previous: MCPServer | None) -> None:
+        if previous is None or previous.transport != row.transport:
+            warn_if_mcp_stdio_blocked(row.alias or row.server_name, row.transport)
+
+    def _skip_blocked_stdio_listing(self, server: MCPServer, listing: str) -> bool:
+        if not is_mcp_stdio_blocked(server.transport):
+            return False
+        verbose_logger.debug(
+            "Skipping %s listing for MCP server %s: %s", listing, server.name, MCP_STDIO_DISABLED_MESSAGE
+        )
+        return True
+
     async def get_prompts_from_server(
         self,
         server: MCPServer,
@@ -4812,6 +4838,8 @@ class MCPServerManager:
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
     ) -> list[Prompt]:
+        if self._skip_blocked_stdio_listing(server, "prompt"):
+            return []
         try:
             headers: Final = (
                 dict(
@@ -4858,6 +4886,8 @@ class MCPServerManager:
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
     ) -> list[Resource]:
+        if self._skip_blocked_stdio_listing(server, "resource"):
+            return []
         try:
             headers: Final = (
                 dict(
@@ -4904,6 +4934,8 @@ class MCPServerManager:
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
     ) -> list[ResourceTemplate]:
+        if self._skip_blocked_stdio_listing(server, "resource template"):
+            return []
         try:
             headers: Final = (
                 dict(
@@ -6492,6 +6524,8 @@ class MCPServerManager:
                 mcp_server = fallback
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
+        if is_mcp_stdio_blocked(mcp_server.transport):
+            raise HTTPException(status_code=403, detail=MCP_STDIO_DISABLED_MESSAGE)
 
         if resolved_by_server_name_only and not self.server_exposes_tool(mcp_server, name):
             raise ValueError(f"Tool {name} not found")
@@ -6886,7 +6920,10 @@ class MCPServerManager:
         if matched is not None:
             matched_prefix, original_tool_name = matched
             matched_server: Final = prefix_to_server.get(matched_prefix)
-            if matched_server is not None and self.server_exposes_tool(matched_server, original_tool_name):
+            if matched_server is not None and (
+                self.server_exposes_tool(matched_server, original_tool_name)
+                or is_mcp_stdio_blocked(matched_server.transport)
+            ):
                 return matched_server
 
         return None
@@ -6948,6 +6985,7 @@ class MCPServerManager:
                     alias=getattr(server, "alias", None),
                     server_name=getattr(server, "server_name", None),
                 )
+                self._warn_if_newly_blocked_stdio(server, existing_server)
                 verbose_logger.debug("Building server from DB: %s (%s)", server.server_id, server.server_name)
                 # raw_rows come straight from the DB, so their global env var
                 # values (like credentials) are still encrypted here, unlike the

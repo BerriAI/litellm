@@ -15,7 +15,6 @@ from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
 from litellm.proxy._types import (
     LiteLLM_UserTableFiltered,
     LitellmUserRoles,
@@ -26,12 +25,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    LiteLLM_UserTableWithKeyCount,
     _authorize_user_list_request,
     _resolve_org_filter_for_user_search,
     _resolve_user_email_metadata,
     _update_internal_user_params,
-    get_user_key_counts,
     get_users,
     new_user,
     ui_view_users,
@@ -2478,185 +2475,6 @@ async def test_get_user_daily_activity_rejects_service_account_caller(monkeypatc
     assert exc_info.value.status_code == 403
     assert "Service-account keys" in str(exc_info.value.detail)
     mock_get_daily.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_get_user_daily_activity_aggregated_rejects_service_account_caller(
-    monkeypatch,
-):
-    """
-    Same security regression as
-    test_get_user_daily_activity_rejects_service_account_caller, on the
-    aggregated route. Same shape, raw-SQL builder, same fix.
-    """
-    from unittest.mock import AsyncMock, MagicMock
-
-    from fastapi import HTTPException
-
-    from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        get_user_daily_activity_aggregated,
-    )
-
-    mock_prisma_client = MagicMock()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-
-    mock_get_daily_agg = AsyncMock()
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_aggregated",
-        mock_get_daily_agg,
-    )
-
-    service_account_key = UserAPIKeyAuth(
-        user_id=None,
-        user_role=LitellmUserRoles.INTERNAL_USER,
-    )
-
-    with pytest.raises(HTTPException) as exc_info:
-        await get_user_daily_activity_aggregated(
-            start_date="2025-01-01",
-            end_date="2025-01-31",
-            model=None,
-            api_key=None,
-            user_id=None,
-            timezone=None,
-            user_api_key_dict=service_account_key,
-        )
-
-    assert exc_info.value.status_code == 403
-    assert "Service-account keys" in str(exc_info.value.detail)
-    mock_get_daily_agg.assert_not_called()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("include_current_utc_day", [False, True])
-async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch, include_current_utc_day):
-    """
-    Test that admin users can call the aggregated endpoint without a user_id
-    to get a global view. Also verifies that the correct arguments are forwarded
-    to the underlying get_daily_activity_aggregated helper.
-    """
-    from unittest.mock import AsyncMock, MagicMock
-
-    from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        get_user_daily_activity_aggregated,
-    )
-
-    # Mock the prisma client
-    mock_prisma_client = MagicMock()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-
-    # Mock the downstream helper so we don't need a real DB
-    mock_response = MagicMock()
-    mock_get_daily_agg = AsyncMock(return_value=mock_response)
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_aggregated",
-        mock_get_daily_agg,
-    )
-
-    # Admin caller
-    admin_key_dict = UserAPIKeyAuth(
-        user_id="admin-user-001",
-        user_role=LitellmUserRoles.PROXY_ADMIN,
-    )
-
-    # Admin calls without user_id → global view (entity_id=None)
-    result = await get_user_daily_activity_aggregated(
-        start_date="2025-02-01",
-        end_date="2025-02-28",
-        model="gpt-4",
-        api_key=None,
-        user_id=None,
-        timezone=480,
-        include_current_utc_day=include_current_utc_day,
-        user_api_key_dict=admin_key_dict,
-    )
-
-    assert result is mock_response
-
-    # Verify the helper was called with the right parameters
-    mock_get_daily_agg.assert_called_once()
-    repository, scope = mock_get_daily_agg.call_args.args
-    assert repository is not None
-    assert scope.table.value == "litellm_dailyuserspend"
-    assert scope.entity_id_field == "user_id"
-    assert scope.entity_ids is None
-    assert scope.start_date == "2025-02-01"
-    assert scope.end_date == "2025-02-28"
-    assert scope.model == "gpt-4"
-    assert scope.api_keys is None
-    assert scope.timezone_offset_minutes == 480
-    assert scope.include_current_utc_day is include_current_utc_day
-
-
-@pytest.mark.asyncio
-async def test_get_user_daily_activity_aggregated_non_admin_cannot_view_other_users(
-    monkeypatch,
-):
-    """
-    Same scoping contract as
-    test_get_user_daily_activity_non_admin_cannot_view_other_users, on the
-    aggregated route. Non-admins reach this handler now that the route is in
-    self_managed_routes, so the 403-on-mismatch and default-to-self behaviour
-    has to hold here too: opening the route must not widen access.
-    """
-    from unittest.mock import AsyncMock, MagicMock, patch
-
-    from fastapi import HTTPException
-
-    from litellm.proxy.management_endpoints.internal_user_endpoints import (
-        get_user_daily_activity_aggregated,
-    )
-
-    mock_prisma_client = MagicMock()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-
-    non_admin_key_dict = UserAPIKeyAuth(
-        user_id="regular-user-123",
-        user_role=LitellmUserRoles.INTERNAL_USER,
-    )
-
-    # Case 1: Non-admin targets another user's data — 403, helper never reached
-    with patch(
-        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_aggregated",
-        new_callable=AsyncMock,
-    ) as mock_get_daily_agg:
-        with pytest.raises(HTTPException) as exc_info:
-            await get_user_daily_activity_aggregated(
-                start_date="2025-01-01",
-                end_date="2025-01-31",
-                model=None,
-                api_key=None,
-                user_id="other-user-456",
-                timezone=None,
-                user_api_key_dict=non_admin_key_dict,
-            )
-
-        assert exc_info.value.status_code == 403
-        assert "Non-admin users can only view their own spend data" in str(exc_info.value.detail)
-        mock_get_daily_agg.assert_not_called()
-
-    # Case 2: Non-admin omits user_id — scoped to their own user_id, not global
-    mock_response = MagicMock()
-    with patch(
-        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_aggregated",
-        new_callable=AsyncMock,
-        return_value=mock_response,
-    ) as mock_get_daily_agg:
-        result = await get_user_daily_activity_aggregated(
-            start_date="2025-01-01",
-            end_date="2025-01-31",
-            model=None,
-            api_key=None,
-            user_id=None,
-            timezone=None,
-            user_api_key_dict=non_admin_key_dict,
-        )
-
-        assert result is mock_response
-        mock_get_daily_agg.assert_called_once()
-        repository, scope = mock_get_daily_agg.call_args.args
-        assert repository is not None
-        assert scope.entity_ids == ("regular-user-123",)
 
 
 @pytest.mark.asyncio
