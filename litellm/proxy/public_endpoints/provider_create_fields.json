@@ -3684,5 +3684,33 @@
       }
     ],
     "default_model_placeholder": "cursor/claude-4-sonnet"
+  },
+  {
+    "provider": "API_ROUTE",
+    "provider_display_name": "API Route",
+    "litellm_provider": "api_route",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://global.api-route.com/v1",
+        "tooltip": "Optional override for the API Route endpoint",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "api_route/deepseek-v4.1-flash"
   }
 ]

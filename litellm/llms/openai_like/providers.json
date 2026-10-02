@@ -1,4 +1,9 @@
 {
+  "api_route": {
+    "base_url": "https://global.api-route.com/v1",
+    "api_key_env": "API_ROUTE_API_KEY",
+    "api_base_env": "API_ROUTE_BASE_URL"
+  },
   "publicai": {
     "base_url": "https://api.publicai.co/v1",
     "api_key_env": "PUBLICAI_API_KEY",
