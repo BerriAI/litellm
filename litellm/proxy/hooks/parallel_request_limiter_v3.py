@@ -1028,7 +1028,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def _estimate_tokens_for_request(
         self,
-        data: dict,
+        data: dict[str, object],
         model: str | None = None,
         min_configured_tpm_limit: int | None = None,
         call_type: str | None = None,
@@ -1054,8 +1054,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         floor entirely, so the reservation reflects what this tenant's model
         actually emits rather than one constant shared by every tenant.
         """
+        reservation_data: Final = (
+            {
+                **data,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Tool: {data.get('mcp_tool_name')}\nArguments: {data.get('mcp_arguments')}",
+                    }
+                ],
+            }
+            if call_type == CallTypes.call_mcp_tool.value and "mcp_tool_name" in data and "mcp_arguments" in data
+            else data
+        )
         estimated_input_tokens, max_tokens_estimate = self._estimate_input_and_output_tokens(
-            data=data,
+            data=reservation_data,
             min_configured_tpm_limit=min_configured_tpm_limit,
             call_type=call_type,
             configured_output_tokens=configured_output_tokens,
