@@ -475,6 +475,7 @@ _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _UNCONSTRAINED_RESPONSE_FORMAT: Final[Mapping[str, str]] = MappingProxyType({"type": "text"})
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
+_CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 
 
 def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
@@ -2997,12 +2998,13 @@ class Router:
                             getattr(complete_response_object_usage, "completion_tokens", 0) or 0
                         )
                         reduced_ceilings: Final = self._continuation_output_ceilings(initial_kwargs, emitted_tokens)
-                        if reduced_ceilings is None:
-                            self._raise_original_mid_stream_error(e)
-                        initial_kwargs.update(reduced_ceilings)
-                        initial_kwargs["messages"] = self._build_completion_continuation_input(
+                        continuation_messages: Final = self._build_completion_continuation_input(
                             messages, e.generated_content
                         )
+                        if reduced_ceilings is None or continuation_messages is None:
+                            self._raise_original_mid_stream_error(e)
+                        initial_kwargs.update(reduced_ceilings)
+                        initial_kwargs["messages"] = continuation_messages
                         initial_kwargs[MID_STREAM_CONTINUATION_KWARG] = MID_STREAM_CONTINUATION_MARKER
                     else:
                         initial_kwargs["messages"] = messages
@@ -3243,17 +3245,23 @@ class Router:
 
     @staticmethod
     def _build_completion_continuation_input(
-        messages: Sequence[Mapping[str, str]],
+        messages: Sequence[Mapping[str, object]],
         generated_content: str,
-    ) -> Sequence[Mapping[str, object]]:
+    ) -> Sequence[Mapping[str, object]] | None:
         """Append the partial output as an assistant prefill, or extend a trailing assistant turn in place so the
-        request never ends in two assistant messages."""
+        request never ends in two assistant messages. None when that turn's content has a shape this cannot extend."""
         last: Final = messages[-1] if messages else None
-        if last is not None and last.get("role") == "assistant":
-            merged: Final = {**last, "content": str(last.get("content") or "") + generated_content, "prefix": True}
-            return [*messages[:-1], merged]
-        prefill: Final = {"role": "assistant", "content": generated_content, "prefix": True}
-        return [*messages, prefill]
+        if last is None or last.get("role") != "assistant":
+            return [*messages, {"role": "assistant", "content": generated_content, "prefix": True}]
+        content: Final = last.get("content")
+        if content is None or isinstance(content, str):
+            return [*messages[:-1], {**last, "content": f"{content or ''}{generated_content}", "prefix": True}]
+        try:
+            blocks: Final = _CONTENT_BLOCKS_ADAPTER.validate_python(content)
+        except ValidationError:
+            return None
+        extended: Final = [*blocks, {"type": "text", "text": generated_content}]
+        return [*messages[:-1], {**last, "content": extended, "prefix": True}]
 
     @staticmethod
     def _build_responses_continuation_input(

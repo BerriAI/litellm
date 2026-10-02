@@ -2901,6 +2901,21 @@ def test_build_completion_continuation_input_folds_into_trailing_plain_assistant
     assert built[-1] == {"role": "assistant", "content": "Sure, here it is", "prefix": True}
 
 
+def test_build_completion_continuation_input_keeps_structured_assistant_content():
+    """Content blocks on a trailing assistant turn stay blocks: the partial lands as one more text
+    block instead of a stringified list, and a content shape that cannot be extended declines."""
+    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": [{"type": "text", "text": "Sure, "}]}]
+    built = litellm.Router._build_completion_continuation_input(messages, "here it is")
+    assert built is not None
+    assert [m["role"] for m in built] == ["user", "assistant"]
+    assert built[-1] == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Sure, "}, {"type": "text", "text": "here it is"}],
+        "prefix": True,
+    }
+    assert litellm.Router._build_completion_continuation_input([{"role": "assistant", "content": 42}], "x") is None
+
+
 def test_continuation_output_ceilings_reduces_by_emitted_tokens():
     """A continuation must complete within the caller's original allowance, so each
     output ceiling is reduced by the tokens already emitted."""
