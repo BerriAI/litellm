@@ -5367,6 +5367,87 @@ async def test_team_key_vector_store_access_when_team_cannot_be_resolved(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_lookup", "denied"),
+    [
+        ({"team-1": "team-1-grants-a"}, False),
+        (RuntimeError("team cache unavailable"), True),
+        ({"team-1": "team-1-grants-none", "team-2": "team-2-grants-a"}, True),
+    ],
+    ids=["resolved-team-grants", "team-lookup-swallowed-no-personal-fallback", "other-member-team-grants-ignored"],
+)
+async def test_keyless_team_member_vector_store_access_uses_only_the_resolved_team(
+    monkeypatch: pytest.MonkeyPatch, team_lookup: dict[str, str] | Exception, denied: bool
+):
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(
+        user_id="user-1",
+        team_id="team-1",
+        team_models=["gpt-4o-mini"],
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/v1/rag/query")
+    grants = {
+        "team-1-grants-a": ["KBSTOREA"],
+        "team-1-grants-none": [],
+        "team-2-grants-a": ["KBSTOREA"],
+        "user-grants-a": ["KBSTOREA"],
+    }
+    database = MagicMock()
+    database.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        side_effect=lambda where: SimpleNamespace(vector_stores=grants[where["object_permission_id"]])
+    )
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": database,
+        "general_settings": {"vector_store_deny_by_default": True},
+    }
+    for name, value in attrs.items():
+        monkeypatch.setattr(litellm.proxy.proxy_server, name, value)
+    monkeypatch.setattr(litellm, "vector_store_registry", None)
+
+    async def get_team(team_id: str, **_: object) -> LiteLLM_TeamTableCachedObj:
+        if isinstance(team_lookup, Exception):
+            raise team_lookup
+        return LiteLLM_TeamTableCachedObj(team_id=team_id, models=["gpt-4o-mini"], object_permission_id=team_lookup[team_id])
+
+    monkeypatch.setattr("litellm.proxy.auth.user_api_key_auth.get_team_object", get_team)
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_membership", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "litellm.proxy.auth.user_api_key_auth.get_user_object",
+        AsyncMock(
+            return_value=LiteLLM_UserTable(
+                user_id="user-1", teams=["team-1", "team-2"], object_permission_id="user-grants-a"
+            )
+        ),
+    )
+
+    checks = _run_centralized_common_checks(
+        user_api_key_auth_obj=token,
+        request=request,
+        request_data={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what is in this KB?"}],
+            "retrieval_config": {"vector_store_id": "KBSTOREA", "custom_llm_provider": "bedrock"},
+        },
+        route="/v1/rag/query",
+    )
+    if not denied:
+        await checks
+        return
+    with pytest.raises(ProxyException) as exc_info:
+        await checks
+    assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (
+        ProxyErrorTypes.team_vector_store_access_denied,
+        "vector_store",
+        "401",
+    )
+
+
+@pytest.mark.asyncio
 async def test_centralized_common_checks_propagates_end_user_budget_error():
     """Regression: ``get_end_user_object`` raises ``litellm.BudgetExceededError``
     internally when an end user is over budget. ``_safe_fetch`` must

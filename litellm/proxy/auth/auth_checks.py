@@ -1356,6 +1356,7 @@ async def common_checks(
             request_body=request_body,
             team_object=team_object,
             valid_token=valid_token,
+            user_object=user_object,
             deny_by_default=ConfigGeneralSettings.model_validate(
                 MappingProxyType(
                     {
@@ -6804,17 +6805,16 @@ def _get_rag_query_vector_store_id(request_body: Mapping[str, object]) -> str | 
     return vector_store_id if isinstance(vector_store_id, str) and vector_store_id else None
 
 
-def _is_strict_vector_store_virtual_key(valid_token: UserAPIKeyAuth | None) -> bool:
+def _is_strict_vector_store_identity(valid_token: UserAPIKeyAuth | None) -> bool:
     return (
         valid_token is not None
-        and valid_token.via_virtual_key
         and valid_token.api_key != LITELLM_PROXY_MASTER_KEY_ALIAS
         and valid_token.team_id != UI_TEAM_ID
     )
 
 
 def _require_vector_store_grant(
-    object_type: Literal["key", "team"],
+    object_type: Literal["key", "team", "user"],
     vector_store_ids_to_run: Sequence[str],
     object_permission: _VectorStorePermissionsRow | None,
 ) -> None:
@@ -6837,6 +6837,7 @@ async def vector_store_access_check(
     team_object: LiteLLM_TeamTable | None,
     valid_token: UserAPIKeyAuth | None,
     *,
+    user_object: LiteLLM_UserTable | None = None,
     deny_by_default: bool = False,
 ):
     """
@@ -6878,7 +6879,11 @@ async def vector_store_access_check(
         if valid_token is not None and valid_token.object_permission_id is not None
         else None
     )
-    strict_key: Final = deny_by_default and _is_strict_vector_store_virtual_key(valid_token)
+    strict_identity: Final = deny_by_default and _is_strict_vector_store_identity(valid_token)
+    strict_key: Final = (
+        strict_identity and valid_token is not None and valid_token.via_virtual_key and not valid_token.is_session_token
+    )
+    has_team: Final = team_object is not None or (valid_token is not None and valid_token.team_id is not None)
     if strict_key:
         _require_vector_store_grant("key", vector_store_ids_to_run, key_object_permission)
     elif key_object_permission is not None:
@@ -6896,7 +6901,7 @@ async def vector_store_access_check(
         if team_object is not None and team_object.object_permission_id is not None
         else None
     )
-    if strict_key and (team_object is not None or (valid_token is not None and valid_token.team_id is not None)):
+    if strict_identity and has_team:
         _require_vector_store_grant("team", vector_store_ids_to_run, team_object_permission)
     elif team_object_permission is not None:
         _can_object_call_vector_stores(
@@ -6904,11 +6909,21 @@ async def vector_store_access_check(
             vector_store_ids_to_run=vector_store_ids_to_run,
             object_permissions=team_object_permission,
         )
+
+    if strict_identity and not strict_key and not has_team:
+        user_object_permission: Final = (
+            await _object_permission_table(ObjectPermissionRepository(prisma_client)).find_unique(
+                where={"object_permission_id": user_object.object_permission_id},
+            )
+            if user_object is not None and user_object.object_permission_id is not None
+            else None
+        )
+        _require_vector_store_grant("user", vector_store_ids_to_run, user_object_permission)
     return True
 
 
 def _can_object_call_vector_stores(
-    object_type: Literal["key", "team", "org"],
+    object_type: Literal["key", "team", "org", "user"],
     vector_store_ids_to_run: Sequence[str],
     object_permissions: _VectorStorePermissionsRow | None,
 ):
