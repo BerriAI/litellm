@@ -4,7 +4,7 @@ import { useDeleteAccessGroup } from "@/app/(dashboard)/hooks/accessGroups/useDe
 import { Boxes, Plus, SearchIcon, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
@@ -61,19 +61,21 @@ export function AccessGroupsPage() {
 
   return (
     <Page>
-      <PageHeader
-        icon={<Boxes />}
-        title="Access Groups"
-        subtitle="Manage resource permissions for your organization"
-        primaryAction={
-          canModify ? (
+      <PageHeader>
+        <PageHeaderTitle>
+          <Boxes />
+          Access Groups
+        </PageHeaderTitle>
+        <PageHeaderDescription>Manage resource permissions for your organization</PageHeaderDescription>
+        {canModify && (
+          <PageHeaderControls>
             <Button onClick={() => setIsCreateModalVisible(true)}>
               <Plus className="size-4" />
               Create Access Group
             </Button>
-          ) : undefined
-        }
-      />
+          </PageHeaderControls>
+        )}
+      </PageHeader>
 
       <PageContent className="gap-3">
         <div className="flex items-center">

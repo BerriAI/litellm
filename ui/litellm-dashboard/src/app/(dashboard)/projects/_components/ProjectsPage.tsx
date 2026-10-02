@@ -4,7 +4,7 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Folder, Plus, SearchIcon, X } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import { useMemo, useState } from "react";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { CreateProjectModal } from "./ProjectModals/CreateProjectModal";
@@ -58,17 +58,19 @@ export function ProjectsPage() {
 
   return (
     <Page>
-      <PageHeader
-        icon={<Folder />}
-        title="Projects"
-        subtitle="Manage projects within your teams"
-        primaryAction={
+      <PageHeader>
+        <PageHeaderTitle>
+          <Folder />
+          Projects
+        </PageHeaderTitle>
+        <PageHeaderDescription>Manage projects within your teams</PageHeaderDescription>
+        <PageHeaderControls>
           <Button onClick={() => setIsCreateModalVisible(true)}>
             <Plus className="size-4" />
             Create Project
           </Button>
-        }
-      />
+        </PageHeaderControls>
+      </PageHeader>
 
       <PageContent className="gap-3">
         <div className="flex items-center">
