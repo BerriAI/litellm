@@ -7,6 +7,9 @@ metadata:
     {{- include "litellm.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: backend
 spec:
+  {{- if and (not .Values.backend.hpa.enabled) (not (kindIs "invalid" .Values.backend.replicaCount)) }}
+  replicas: {{ .Values.backend.replicaCount }}
+  {{- end }}
   {{- with .Values.backend.strategy }}
   strategy:
     {{- toYaml . | nindent 4 }}

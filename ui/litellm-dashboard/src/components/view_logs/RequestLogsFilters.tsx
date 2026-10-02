@@ -21,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import type { Team } from "../key_team_helpers/key_list";
-import { ERROR_CODE_OPTIONS } from "./constants";
+import { CREDENTIAL_LABELS, ERROR_CODE_OPTIONS } from "./constants";
 import { LOG_FILTER_IDS, type LogsWindow } from "./log_filter_logic";
 
 const ALL_VALUE = "all";
@@ -36,6 +36,19 @@ const CACHE_FILTER_ITEMS = [
   { value: ALL_VALUE, label: "All Requests" },
   { value: "hit", label: "Cache Hit" },
   { value: "miss", label: "Cache Miss" },
+] as const;
+
+const CREDENTIAL_FILTER_ITEMS = [
+  { value: ALL_VALUE, label: "All Credentials" },
+  ...Object.entries(CREDENTIAL_LABELS).map(([value, label]) => ({ value, label })),
+] as const;
+
+const SPAN_TYPE_FILTER_ITEMS = [
+  { value: ALL_VALUE, label: "All Types" },
+  { value: "llm", label: "LLM" },
+  { value: "agent", label: "Agent" },
+  { value: "mcp", label: "MCP" },
+  { value: "batch", label: "Batch" },
 ] as const;
 const PAGE_SIZE = 50;
 
@@ -68,7 +81,7 @@ function TeamFilterField({
       <SearchSelect
         options={options}
         value={value}
-        onValueChange={(next) => onChange(emptyToUndefined(next))}
+        onValueChange={(next) => onChange(next ?? undefined)}
         placeholder="Search or select a team"
         emptyText="No teams found"
       />
@@ -108,7 +121,7 @@ function KeyAliasFilterField({
       <PaginatedSearchSelect
         options={options}
         value={value}
-        onValueChange={(next) => onChange(emptyToUndefined(next))}
+        onValueChange={(next) => onChange(next ?? undefined)}
         onSearchChange={setSearch}
         onLoadMore={() => void fetchNextPage()}
         hasNextPage={hasNextPage}
@@ -146,7 +159,7 @@ function ModelFilterField({ value, onChange }: { value: string; onChange: (value
       <PaginatedSearchSelect
         options={options}
         value={value}
-        onValueChange={(next) => onChange(emptyToUndefined(next))}
+        onValueChange={(next) => onChange(next ?? undefined)}
         onSearchChange={setSearch}
         onLoadMore={() => void fetchNextPage()}
         hasNextPage={hasNextPage}
@@ -191,7 +204,7 @@ function UserIdFilterField({
       <PaginatedSearchSelect
         options={options}
         value={value}
-        onValueChange={(next) => onChange(emptyToUndefined(next))}
+        onValueChange={(next) => onChange(next ?? undefined)}
         onSearchChange={setSearch}
         onLoadMore={() => void fetchNextPage()}
         hasNextPage={hasNextPage}
@@ -236,7 +249,7 @@ function EndUserFilterField({
       <PaginatedSearchSelect
         options={options}
         value={value}
-        onValueChange={(next) => onChange(emptyToUndefined(next))}
+        onValueChange={(next) => onChange(next ?? undefined)}
         onSearchChange={setSearch}
         onLoadMore={() => void fetchNextPage()}
         hasNextPage={hasNextPage}
@@ -328,6 +341,27 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
         teams={teams}
       />
 
+      <DataTableFilterField label="Span Type">
+        <Select
+          items={SPAN_TYPE_FILTER_ITEMS}
+          value={valueOf(LOG_FILTER_IDS.SPAN_TYPE) === "" ? ALL_VALUE : valueOf(LOG_FILTER_IDS.SPAN_TYPE)}
+          onValueChange={(next) =>
+            set(LOG_FILTER_IDS.SPAN_TYPE, next === null || next === ALL_VALUE ? undefined : next)
+          }
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="All Types" />
+          </SelectTrigger>
+          <SelectContent>
+            {SPAN_TYPE_FILTER_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </DataTableFilterField>
+
       <DataTableFilterField label="Status">
         <Select
           items={STATUS_FILTER_ITEMS}
@@ -360,6 +394,27 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
           </SelectTrigger>
           <SelectContent>
             {CACHE_FILTER_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </DataTableFilterField>
+
+      <DataTableFilterField label="Credential">
+        <Select
+          items={CREDENTIAL_FILTER_ITEMS}
+          value={valueOf(LOG_FILTER_IDS.CREDENTIAL) === "" ? ALL_VALUE : valueOf(LOG_FILTER_IDS.CREDENTIAL)}
+          onValueChange={(next) =>
+            set(LOG_FILTER_IDS.CREDENTIAL, next === null || next === ALL_VALUE ? undefined : next)
+          }
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="All Credentials" />
+          </SelectTrigger>
+          <SelectContent>
+            {CREDENTIAL_FILTER_ITEMS.map((item) => (
               <SelectItem key={item.value} value={item.value}>
                 {item.label}
               </SelectItem>
