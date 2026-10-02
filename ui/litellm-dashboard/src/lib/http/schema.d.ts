@@ -27097,39 +27097,6 @@ export interface components {
              */
             target_storage: string;
         };
-        /** Body_image_edit_api_images_edits_post */
-        Body_image_edit_api_images_edits_post: {
-            /** Image */
-            image?: string[] | null;
-            /** Image[] */
-            "image[]"?: string[] | null;
-            /** Mask */
-            mask?: string[] | null;
-            /** Mask[] */
-            "mask[]"?: string[] | null;
-        };
-        /** Body_image_edit_api_openai_deployments__model__images_edits_post */
-        Body_image_edit_api_openai_deployments__model__images_edits_post: {
-            /** Image */
-            image?: string[] | null;
-            /** Image[] */
-            "image[]"?: string[] | null;
-            /** Mask */
-            mask?: string[] | null;
-            /** Mask[] */
-            "mask[]"?: string[] | null;
-        };
-        /** Body_image_edit_api_v1_images_edits_post */
-        Body_image_edit_api_v1_images_edits_post: {
-            /** Image */
-            image?: string[] | null;
-            /** Image[] */
-            "image[]"?: string[] | null;
-            /** Mask */
-            mask?: string[] | null;
-            /** Mask[] */
-            "mask[]"?: string[] | null;
-        };
         /** Body_introspect_endpoint_introspect_post */
         Body_introspect_endpoint_introspect_post: {
             /** Token */
@@ -60414,11 +60381,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_image_edit_api_images_edits_post"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -64904,11 +64867,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_image_edit_api_openai_deployments__model__images_edits_post"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -76874,11 +76833,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_image_edit_api_v1_images_edits_post"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

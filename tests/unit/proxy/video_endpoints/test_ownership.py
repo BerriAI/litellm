@@ -30,6 +30,10 @@ ADMIN = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
 
 def _matches(row: SimpleNamespace, where: dict) -> bool:
     for field, condition in where.items():
+        if field == "AND":
+            if not all(_matches(row, clause) for clause in condition):
+                return False
+            continue
         value = getattr(row, field, None)
         if isinstance(condition, dict):
             if value not in condition["in"]:
