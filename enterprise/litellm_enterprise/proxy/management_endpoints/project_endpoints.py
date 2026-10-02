@@ -767,6 +767,24 @@ async def update_project(
                     detail={"error": "Cannot reassign project to a team you are not an admin of"},
                 )
 
+        if data.team_id is not None and data.team_id != existing_project.team_id:
+            mismatched_key_count: Final = await _verification_token_table(prisma_client).count(
+                where={
+                    "project_id": data.project_id,
+                    "OR": [{"team_id": {"not": data.team_id}}, {"team_id": None}],
+                }
+            )
+            if mismatched_key_count > 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": (
+                            f"Project {data.project_id} has {mismatched_key_count} key(s) that do not belong to "
+                            f"team {data.team_id}. Detach or delete them before moving the project."
+                        )
+                    },
+                )
+
         # Validate project limits against team limits
         if target_team_obj is not None:
             _check_team_project_limits(
