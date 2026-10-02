@@ -150,9 +150,11 @@ def test_burst_across_routes_records_tags_once_per_response(gateway: Gateway, tm
 def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Path) -> None:
     down: Final = threading.Event()
     delivered: Final = []  # mutable-ok: sink thread appends between drains
+    rejected: Final = []  # mutable-ok: sink thread appends between drains
 
     def stoppable_sink(request: Request) -> Reply:
         if down.is_set():
+            rejected.append(request)
             return Reply(status=503)
         delivered.append(request)
         return Reply()
@@ -214,13 +216,20 @@ def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Pa
                 second: Final = [
                     response for group in pool.map(lambda i: burst(100 + i), range(3)) for response in group
                 ]
+            second_ids: Final = call_ids(second)
+            outage_probe: Final = eventually(
+                lambda: (len(rejected), events_for(second_ids)),
+                lambda state: state[0] >= 1 and state[1] == set(),
+                seconds=30,
+            )
+            assert outage_probe[0] >= 1, "sink saw no rejection during the outage window"
+            assert outage_probe[1] == set(), "burst-2 event delivered to a down sink"
             down.clear()
             third: Final = _tagged_requests(candidate, key, anthropic_model, openai_model, False, 200)
             responses: Final = [*first, *second, *third]
             assert all(response.status_code == 200 for response in responses), [
                 (response.status_code, response.text[:200]) for response in responses
             ]
-            second_ids: Final = call_ids(second)
             third_ids: Final = call_ids(list(third))
             recovery_probe: Final = next(iter(third_ids))
             eventually(

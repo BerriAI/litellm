@@ -13,7 +13,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy
+from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from integration.spend._request_tag_helpers import (
     GEMINI_MODEL,
@@ -115,7 +115,7 @@ def test_pass_through_anthropic_sdk_records_header_tags(gateway: Gateway, tmp_pa
             assert message.id.startswith("msg_")
             assert len(wire.drain()) == 1
             assert eventually(lambda: tags_by_key(key), lambda tags: len(tags) == 1, seconds=70) == [
-                ["User-Agent: Anthropic", "User-Agent: Anthropic/Python 0.84.0", TENANT_TAG]
+                ["User-Agent: Anthropic", f"User-Agent: Anthropic/Python {anthropic.__version__}", TENANT_TAG]
             ]
 
 
@@ -137,7 +137,7 @@ def test_pass_through_anthropic_sdk_stream_records_header_tags(gateway: Gateway,
             assert message.id.startswith("msg_")
             assert len(wire.drain()) == 1
             assert eventually(lambda: tags_by_key(key), lambda tags: len(tags) == 1, seconds=70) == [
-                ["User-Agent: Anthropic", "User-Agent: Anthropic/Python 0.84.0", TENANT_TAG]
+                ["User-Agent: Anthropic", f"User-Agent: Anthropic/Python {anthropic.__version__}", TENANT_TAG]
             ]
 
 
@@ -191,7 +191,7 @@ def test_pass_through_openai_sdk_records_header_tags(gateway: Gateway, tmp_path:
             assert request_id.startswith("chatcmpl_")
             assert len(wire.drain()) == 1
             assert eventually(lambda: tags_by_key(key), lambda tags: len(tags) == 1, seconds=70) == [
-                ["User-Agent: OpenAI", "User-Agent: OpenAI/Python 2.33.0", TENANT_TAG]
+                ["User-Agent: OpenAI", f"User-Agent: OpenAI/Python {openai.__version__}", TENANT_TAG]
             ]
 
 
@@ -284,7 +284,7 @@ def test_pass_through_openai_async_sdk_stream_records_header_tags(gateway: Gatew
             assert request_id.startswith("chatcmpl_")
             assert len(wire.drain()) == 1
             assert eventually(lambda: tags_by_key(key), lambda tags: len(tags) == 1, seconds=70) == [
-                ["User-Agent: AsyncOpenAI", "User-Agent: AsyncOpenAI/Python 2.33.0", TENANT_TAG]
+                ["User-Agent: AsyncOpenAI", f"User-Agent: AsyncOpenAI/Python {openai.__version__}", TENANT_TAG]
             ]
 
 
@@ -903,9 +903,9 @@ def test_repeated_requests_each_record_tags(gateway: Gateway, tmp_path: Path, ro
                 model=f"anthropic/{MODEL}", api_base=wire.url, api_key="synthetic-anthropic-key"
             )
             key: Final = scenario.key()
-            ids: Final = []
-            for _ in range(3):
-                response: Final = candidate.request(
+
+            def repeat(_: int):
+                return candidate.request(
                     "POST",
                     route,
                     {
@@ -916,8 +916,12 @@ def test_repeated_requests_each_record_tags(gateway: Gateway, tmp_path: Path, ro
                     key=key,
                     headers={**SENT_HEADERS, "anthropic-version": "2023-06-01"},
                 )
-                assert response.status_code == 200, response.text
-                ids.append(response.json()["id"])
+
+            responses: Final = tuple(repeat(index) for index in range(3))
+            assert all(response.status_code == 200 for response in responses), [
+                (response.status_code, response.text) for response in responses
+            ]
+            ids: Final = tuple(response.json()["id"] for response in responses)
             assert len(wire.drain()) == 3
             for identity in ids:
                 assert eventually(
@@ -959,9 +963,10 @@ def test_guardrail_mode_tag_decider_is_unchanged_on_pass_through(gateway: Gatewa
             },
         )
         with (
-            owned_proxy(gateway, tmp_path, provider_env(wire.url), config=config, workers=2) as candidate,
-            candidate.scenario() as scenario,
+            owned_proxy_process(gateway, tmp_path, provider_env(wire.url), config=config, workers=2) as owned,
+            owned.gateway.scenario() as scenario,
         ):
+            candidate: Final = owned.gateway
             model: Final = scenario.model(model=f"openai/{OPENAI_MODEL}", api_base=f"{wire.url}/v1")
             key: Final = scenario.key(allowed_passthrough_routes=["/custom-anthropic"])
             body: Final = {"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "bananablock"}]}
@@ -977,3 +982,22 @@ def test_guardrail_mode_tag_decider_is_unchanged_on_pass_through(gateway: Gatewa
             )
             assert control.status_code != 200, control.text
             assert len(wire.drain()) == 0, "tag-matched guardrail should have blocked before the upstream"
+            call_id: Final = control.headers["x-litellm-call-id"]
+
+            def blocked_rows() -> list[dict]:
+                return read_rows(
+                    'SELECT metadata FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s',
+                    (call_id,),
+                )
+
+            spend_row: Final = eventually(
+                blocked_rows,
+                lambda rows: len(rows) == 1 and "bananablock" in json.dumps(rows[0]["metadata"]),
+                seconds=30,
+                return_last_on_timeout=True,
+            )
+            if not (len(spend_row) == 1 and "bananablock" in json.dumps(spend_row[0]["metadata"])):
+                log_text: Final = owned.log.read_text()
+                assert "Content blocked: keyword 'bananablock' detected" in log_text, (
+                    "guardrail block text not in spend row or proxy log"
+                )
