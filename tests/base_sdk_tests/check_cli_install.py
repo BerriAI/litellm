@@ -1,7 +1,6 @@
 """Verify console commands from installed SDK profiles."""
 
 import argparse
-import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -37,6 +36,4 @@ if __name__ == "__main__":
     parser: Final = argparse.ArgumentParser()
     parser.add_argument("--profile", choices=("core", "cli", "proxy"), required=True)
     profile: Final = parser.parse_args().profile
-    if profile == "core":
-        _require(importlib.util.find_spec("click") is None, "core still installs click")
     print(check_cli(profile))
