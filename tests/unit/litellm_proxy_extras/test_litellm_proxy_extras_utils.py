@@ -1328,16 +1328,48 @@ class TestV1MigrationFailuresLogAtError:
         monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(migration_dir))
         monkeypatch.delenv("DATABASE_URL", raising=False)
         monkeypatch.delenv("DIRECT_URL", raising=False)
+        monkeypatch.setenv("PRISMA_OFFLINE_MODE", "true")
+        monkeypatch.setenv("PRISMA_CLI_PATH", sys.executable)
         monkeypatch.setattr(utils_module.time, "sleep", lambda seconds: None)
         calls: Final[list[None]] = []
 
-        def fail_run(*args: object, **kwargs: object) -> NoReturn:
-            calls.append(None)
-            raise subprocess.CalledProcessError(1, None, stderr="Error: P3018 unclassified")
+        class _FakePrismaPopen:
+            def __init__(
+                self,
+                argv: tuple[str, ...],
+                *,
+                env: Optional[dict[str, str]] = None,
+                stdout: object = None,
+                stderr: object = None,
+                text: object = None,
+                start_new_session: object = None,
+            ) -> None:
+                self.args: Final = None
+                self.returncode: Final = 1
+                calls.append(None)
 
-        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fail_run)
+            def __enter__(self) -> "_FakePrismaPopen":
+                return self
 
-        succeeded: Final = ProxyExtrasDBManager._run_migrations(use_migrate=True, use_v2_resolver=False)
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def communicate(self, timeout: Optional[float] = None) -> tuple[str, str]:
+                return "", "Error: P3018 unclassified"
+
+        monkeypatch.setattr(
+            utils_module.prisma_toolchain.subprocess, "Popen", _FakePrismaPopen
+        )
+
+        try:
+            succeeded: Final = ProxyExtrasDBManager._run_migrations(
+                use_migrate=True, use_v2_resolver=False
+            )
+        except TypeError as error:
+            pytest.fail(
+                f"_run_migrations raised TypeError after {len(calls)} Popen calls: {error}",
+                pytrace=False,
+            )
 
         assert succeeded is False
         assert len(calls) == 4
