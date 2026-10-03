@@ -1,13 +1,13 @@
 //! The common message format normalizers emit for span input and output: a JSON array of
 //! `{role, content, tool_calls?, name?}` that the UI renders as a conversation.
 
+use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, ser::Formatter};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
 };
-use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, ser::Formatter};
 
 use litellm_llms_types::{formats::chat_completions::ChatMessageContent, recognized::Recognized};
 
@@ -512,11 +512,26 @@ pub(super) fn state_preview(input: &str, key: &str) -> Option<String> {
     Some(preview(&conversation))
 }
 
+pub(super) fn state_conversation(input: &str) -> Option<Vec<Message>> {
+    let value: Value = serde_json::from_str(input).ok()?;
+    let items = value.get("messages")?.as_array()?;
+    if items.first().is_some_and(Value::is_array) {
+        return None;
+    }
+    let conversation: Vec<Message> = items
+        .iter()
+        .filter_map(|item| serde_json::from_value::<RawMessage>(item.clone()).ok())
+        .map(|message| message.normalized())
+        .collect();
+    (!conversation.is_empty()).then_some(conversation)
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
 
-    use super::state_preview;
+    use super::{state_conversation, state_preview};
+    use serde_json::Value;
 
     #[rstest]
     #[case::latest_user(r#"{"messages":[{"role":"user","content":"first"},{"role":"assistant","content":"reply"},{"role":"user","content":"last"}]}"#, Some("last"))]
@@ -528,5 +543,22 @@ mod tests {
         #[case] expected: Option<&str>,
     ) {
         assert_eq!(state_preview(input, "messages").as_deref(), expected);
+    }
+
+    #[rstest]
+    #[case::lenient_flat(
+        r#"{"messages":[null,{"type":"human","content":"hello"}]}"#,
+        Some(r#"[{"role":"user","content":"hello"}]"#)
+    )]
+    #[case::nested(r#"{"messages":[[{"role":"user","content":"hello"}]]}"#, None)]
+    #[case::empty(r#"{"messages":[]}"#, None)]
+    fn state_conversation_preserves_flat_batch_semantics(
+        #[case] input: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        let observed =
+            state_conversation(input).map(|messages| serde_json::to_value(messages).unwrap());
+        let expected_value = expected.map(|value| serde_json::from_str::<Value>(value).unwrap());
+        assert_eq!(observed, expected_value);
     }
 }

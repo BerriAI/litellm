@@ -4,23 +4,16 @@ use std::collections::BTreeMap;
 
 use crate::ui::UiContent;
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(wire_type)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SpanStatus {
+    #[serde(alias = "STATUS_CODE_OK")]
     Ok,
+    #[serde(alias = "STATUS_CODE_ERROR")]
     Error,
+    #[serde(other)]
     Unset,
-}
-
-impl SpanStatus {
-    pub fn from_code(code: &str) -> Self {
-        match code {
-            "STATUS_CODE_OK" => Self::Ok,
-            "STATUS_CODE_ERROR" => Self::Error,
-            _ => Self::Unset,
-        }
-    }
 }
 
 #[macro_rules_attribute::apply(response_type)]
@@ -30,8 +23,7 @@ pub struct Span {
     pub parent_span_id: Option<String>,
     pub name: String,
     #[serde(rename = "type")]
-    #[cfg_attr(feature = "schema", schemars(with = "crate::ObservationType"))]
-    pub kind: String,
+    pub kind: crate::ObservationType,
     pub agent: String,
     pub framework: String,
     pub start_offset_ms: f64,

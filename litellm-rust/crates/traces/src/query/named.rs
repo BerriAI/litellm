@@ -5,9 +5,12 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "schema", schemars(rename = "TraceScope"))]
 pub struct ReadAccessParams {
-    #[serde(deserialize_with = "crate::wire::flag")]
+    #[serde(
+        deserialize_with = "crate::wire::flag",
+        serialize_with = "crate::wire::serialize_flag"
+    )]
     #[cfg_attr(feature = "schema", schemars(schema_with = "crate::schema::flag"))]
-    pub all_teams: u8,
+    pub all_teams: bool,
     pub user_id: String,
     pub team_ids: Vec<String>,
 }
@@ -33,7 +36,8 @@ pub struct ListTracesRow {
     pub name: String,
     pub service: String,
     pub input_preview: String,
-    pub status: String,
+    #[serde(serialize_with = "crate::wire::serialize_status")]
+    pub status: crate::SpanStatus,
     pub start_ms: i64,
     pub duration_ms: i64,
     pub span_count: u64,
@@ -67,16 +71,25 @@ pub struct TraceSpansRow {
     pub span_id: String,
     pub parent_span_id: String,
     pub name: String,
-    #[serde(rename = "type", deserialize_with = "crate::wire::span_type")]
-    pub kind: String,
-    #[serde(default)]
-    pub wrapper_candidate: u8,
+    #[serde(rename = "type")]
+    pub kind: crate::ObservationType,
+    #[serde(
+        default,
+        deserialize_with = "crate::wire::flag",
+        serialize_with = "crate::wire::serialize_flag"
+    )]
+    pub wrapper_candidate: bool,
     pub agent: String,
     #[serde(default)]
     pub framework: String,
-    pub status: String,
+    #[serde(serialize_with = "crate::wire::serialize_status")]
+    pub status: crate::SpanStatus,
     pub status_message: String,
-    pub error_truncated: u8,
+    #[serde(
+        deserialize_with = "crate::wire::flag",
+        serialize_with = "crate::wire::serialize_flag"
+    )]
+    pub error_truncated: bool,
     pub start_ns: i64,
     pub duration_ns: u64,
     pub service: String,
@@ -86,9 +99,13 @@ pub struct TraceSpansRow {
     pub output_tokens: u32,
     pub litellm_request_id: String,
     #[serde(default)]
-    pub call_keys: Vec<String>,
-    #[serde(default)]
-    pub call_evidence: String,
+    pub call_keys: Vec<crate::CallKey>,
+    #[serde(
+        default,
+        deserialize_with = "crate::wire::evidence",
+        serialize_with = "crate::wire::serialize_evidence"
+    )]
+    pub call_evidence: Option<crate::CallEvidenceKind>,
     #[serde(default)]
     pub tool_call_id: String,
     pub team_id: String,

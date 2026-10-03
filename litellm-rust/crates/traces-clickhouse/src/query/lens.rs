@@ -29,12 +29,15 @@ pub enum ContentSource {
 #[derive(Debug)]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct LensAccessParams {
-    #[serde(deserialize_with = "super::number::flag")]
+    #[serde(
+        deserialize_with = "super::number::boolean",
+        serialize_with = "litellm_traces::wire::serialize_flag"
+    )]
     #[cfg_attr(
         feature = "schema",
         schemars(schema_with = "litellm_traces::schema::flag")
     )]
-    pub all_teams: u8,
+    pub all_teams: bool,
     pub team: String,
     pub key_hash: String,
 }

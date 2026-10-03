@@ -102,7 +102,7 @@ fn traceloop_extracts_entity_payloads_and_role(
     assert_eq!(decoded.normalized.input, "query");
     assert_eq!(decoded.normalized.output, "result");
     assert_eq!(
-        decoded.normalized.model,
+        decoded.normalized.model.as_deref().unwrap_or_default(),
         decoded.attributes["gen_ai.request.model"]
     );
     assert_eq!(
@@ -152,7 +152,10 @@ fn vercel_preserves_messages_and_tool_calls(span: Span, #[case] operation: &str)
             "id": calls[0]["toolCallId"], "name": calls[0]["toolName"], "arguments": calls[0]["args"],
         }])
     );
-    assert_eq!(decoded.normalized.model, decoded.attributes["ai.model.id"]);
+    assert_eq!(
+        decoded.normalized.model.as_deref().unwrap_or_default(),
+        decoded.attributes["ai.model.id"]
+    );
     assert_eq!(
         (
             decoded.normalized.input_tokens,
@@ -178,7 +181,7 @@ fn vercel_tool_records_arguments_result_and_identity(span: Span) {
     )
     .unwrap();
     assert_eq!(decoded.normalized.observation_type, ObservationType::Tool);
-    assert_eq!(decoded.normalized.tool_call_id, "call-1");
+    assert_eq!(decoded.normalized.tool_call_id.as_deref(), Some("call-1"));
     assert_eq!(decoded.name, "lookup");
     assert_eq!(
         decoded.normalized.input,
@@ -519,4 +522,17 @@ fn traceloop_request_type_is_used_without_entity_kind(
     )
     .unwrap();
     assert_eq!(decoded.normalized.observation_type, expected);
+}
+
+#[rstest]
+fn absent_normalized_identity_fields_stay_absent(span: Span) {
+    let decoded = decode(span, "custom", &[], vec![]).unwrap();
+    assert_eq!(decoded.normalized.agent_name, None);
+    assert_eq!(decoded.normalized.framework, None);
+    assert_eq!(decoded.normalized.model, None);
+    assert_eq!(decoded.normalized.tool_call_id, None);
+    assert_eq!(
+        decoded.normalized.calls,
+        litellm_traces::CallEvidence::Unknown
+    );
 }

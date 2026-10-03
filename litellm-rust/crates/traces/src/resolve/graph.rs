@@ -1,5 +1,7 @@
-use crate::query::named::TraceSpansRow;
 use std::collections::{HashMap, HashSet};
+
+use crate::query::named::TraceSpansRow;
+
 pub(super) struct Graph<'a> {
     pub(super) rows: &'a [TraceSpansRow],
     by_id: HashMap<&'a str, usize>,
@@ -90,7 +92,7 @@ mod tests {
             "name": id,
             "type": "chain",
             "agent": "",
-            "status": "ok",
+            "status": "STATUS_CODE_OK",
             "status_message": "",
             "error_truncated": 0,
             "start_ns": 0,

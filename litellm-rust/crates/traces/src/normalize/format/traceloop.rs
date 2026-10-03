@@ -37,27 +37,21 @@ impl Format for Traceloop {
         let output = select_attribute(context.attributes, &["traceloop.entity.output"]);
         Ok(Extraction {
             facts: SpanFacts {
-                role: role.map(RoleEvidence::Declared).or(base.facts.role),
+                role: role.map(RoleEvidence::Declared),
                 input: input
                     .as_ref()
-                    .map_or(base.facts.input, |value| messages::canonical(value.text)),
+                    .map_or(String::new(), |value| messages::canonical(value.text)),
                 output: output
                     .as_ref()
-                    .map_or(base.facts.output, |value| messages::canonical(value.text)),
-                ..base.facts
-            },
+                    .map_or(String::new(), |value| messages::canonical(value.text)),
+                ..SpanFacts::default()
+            }
+            .or(base.facts),
             display_name: present(context.attributes, &["traceloop.entity.name"])
                 .or(base.display_name),
-            consumed_attributes: base
-                .consumed_attributes
-                .into_iter()
-                .chain(
-                    [input, output]
-                        .into_iter()
-                        .flatten()
-                        .map(|value| value.source),
-                )
-                .collect(),
-        })
+            consumed_attributes: base.consumed_attributes,
+        }
+        .consuming(input)
+        .consuming(output))
     }
 }

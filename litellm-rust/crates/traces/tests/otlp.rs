@@ -372,16 +372,23 @@ fn normalizes_langsmith_fixture() {
         .find(|span| span.name == "ChatOpenAI")
         .expect("LLM span");
     assert_eq!(llm.normalized.observation_type, ObservationType::Llm);
-    assert_eq!(llm.normalized.agent_name, "deep_research_agent");
-    assert_eq!(llm.normalized.model, "claude-sonnet-4-5");
+    assert_eq!(
+        llm.normalized.agent_name.as_deref().unwrap_or_default(),
+        "deep_research_agent"
+    );
+    assert_eq!(
+        llm.normalized.model.as_deref().unwrap_or_default(),
+        "claude-sonnet-4-5"
+    );
     assert_eq!(
         (llm.normalized.input_tokens, llm.normalized.output_tokens),
         (3332, 467)
     );
-    assert_eq!(
-        llm.normalized.litellm_request_id,
-        "chatcmpl-4077bb36-9380-4a3b-9481-245700cef09a"
-    );
+    assert!(llm.normalized.calls.key_set().unwrap().contains(
+        &litellm_traces::CallKey::ProviderResponse(
+            "chatcmpl-4077bb36-9380-4a3b-9481-245700cef09a".to_owned()
+        )
+    ));
     let input: serde_json::Value =
         serde_json::from_str(&llm.normalized.input).expect("message input");
     assert_eq!(input[0]["role"], "system");
@@ -414,15 +421,38 @@ fn decode_normalization(
     scope: &str,
     attributes: &[(&str, &str)],
 ) -> Result<litellm_traces::DecodedSpan, litellm_traces::Error> {
+    decode_normalization_with_resources(span, scope, attributes, &[])
+}
+
+fn decode_normalization_with_resources(
+    span: Span,
+    scope: &str,
+    attributes: &[(&str, &str)],
+    resources: &[(&str, &str)],
+) -> Result<litellm_traces::DecodedSpan, litellm_traces::Error> {
     use opentelemetry_proto::tonic::{
         collector::trace::v1::ExportTraceServiceRequest,
         common::v1::{AnyValue, InstrumentationScope, KeyValue, any_value::Value},
+        resource::v1::Resource,
         trace::v1::{ResourceSpans, ScopeSpans},
     };
     use prost::Message;
 
     let request = ExportTraceServiceRequest {
         resource_spans: vec![ResourceSpans {
+            resource: Some(Resource {
+                attributes: resources
+                    .iter()
+                    .map(|(key, value)| KeyValue {
+                        key: (*key).to_owned(),
+                        value: Some(AnyValue {
+                            value: Some(Value::StringValue((*value).to_owned())),
+                        }),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            }),
             scope_spans: vec![ScopeSpans {
                 scope: Some(InstrumentationScope {
                     name: scope.to_owned(),
@@ -515,7 +545,10 @@ fn openinference_preserves_operation_and_payload_at_any_depth(
     assert!(!decoded.normalized.wrapper_candidate);
     assert_eq!(decoded.normalized.input, input);
     assert_eq!(decoded.normalized.output, output);
-    assert_eq!(decoded.normalized.call_evidence, "unknown");
+    assert_eq!(
+        serde_json::to_value(decoded.normalized.calls.kind()).unwrap(),
+        "unknown"
+    );
 }
 
 #[rstest]
@@ -547,11 +580,34 @@ fn coding_identity_is_independent_of_model_operation(
     )
     .unwrap();
     assert_eq!(decoded.normalized.observation_type, ObservationType::Llm);
-    assert_eq!(decoded.normalized.framework, integration);
-    assert_eq!(decoded.normalized.model, "test-model");
-    assert_eq!(decoded.normalized.agent_name, "researcher");
-    assert_eq!(decoded.normalized.call_evidence, "unknown");
-    assert!(decoded.normalized.call_keys.is_empty());
+    assert_eq!(
+        decoded
+            .normalized
+            .framework
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        integration
+    );
+    assert_eq!(
+        decoded.normalized.model.as_deref().unwrap_or_default(),
+        "test-model"
+    );
+    assert_eq!(
+        decoded.normalized.agent_name.as_deref().unwrap_or_default(),
+        "researcher"
+    );
+    assert_eq!(
+        serde_json::to_value(decoded.normalized.calls.kind()).unwrap(),
+        "unknown"
+    );
+    assert!(
+        decoded
+            .normalized
+            .calls
+            .key_set()
+            .is_none_or(|keys| keys.is_empty())
+    );
     let metadata = &decoded.normalized.agent_metadata;
     assert_eq!(metadata.ls_integration, Some(expected));
     assert_eq!(metadata.ls_agent_type, Some(AgentType::Subagent));
@@ -614,7 +670,15 @@ fn metadata_sources_merge_with_flattened_values_taking_precedence(span: Span) {
     assert_eq!(metadata.ls_agent_version.as_deref(), Some("version"));
     assert_eq!(decoded.name, "shell");
     assert_eq!(decoded.normalized.observation_type, ObservationType::Tool);
-    assert_eq!(decoded.normalized.framework, "cursor");
+    assert_eq!(
+        decoded
+            .normalized
+            .framework
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        "cursor"
+    );
 }
 
 #[rstest]
@@ -744,14 +808,22 @@ fn genai_fields_and_consumed_attributes_follow_the_same_fallback(
     let fields = &decoded.normalized;
     assert_eq!(
         [
-            fields.model.as_str(),
+            fields.model.as_deref().unwrap_or_default(),
             fields.input.as_str(),
             fields.output.as_str()
         ],
         expected
     );
-    assert_eq!(fields.agent_name, "test-agent");
-    assert_eq!(fields.litellm_request_id, "response-1");
+    assert_eq!(fields.agent_name.as_deref(), Some("test-agent"));
+    assert!(
+        fields
+            .calls
+            .key_set()
+            .unwrap()
+            .contains(&litellm_traces::CallKey::ProviderResponse(
+                "response-1".to_owned()
+            ))
+    );
     assert_eq!(
         fields.input,
         decoded.attributes[decoded.consumed_attributes[0]]
@@ -794,8 +866,8 @@ fn openinference_fields_override_genai_and_usage_falls_back_per_field(
     let decoded = decode_normalization(span, "", &combined).unwrap();
     let fields = &decoded.normalized;
     assert_eq!(fields.observation_type, ObservationType::Llm);
-    assert_eq!(fields.model, "inference-model");
-    assert_eq!(fields.agent_name, "inference-agent");
+    assert_eq!(fields.model.as_deref(), Some("inference-model"));
+    assert_eq!(fields.agent_name.as_deref(), Some("inference-agent"));
     assert_eq!(fields.input, "inference-input");
     assert_eq!(fields.output, "inference-output");
     assert_eq!(
@@ -832,12 +904,17 @@ fn openinference_llm_output_records_call_evidence(
     .unwrap();
     let recorded: Vec<String> = decoded
         .normalized
-        .call_keys
-        .iter()
+        .calls
+        .key_set()
+        .into_iter()
+        .flatten()
         .map(ToString::to_string)
         .collect();
     assert_eq!(recorded, keys);
-    assert_eq!(decoded.normalized.call_evidence, evidence);
+    assert_eq!(
+        serde_json::to_value(decoded.normalized.calls.kind()).unwrap(),
+        evidence
+    );
 }
 
 #[rstest]
@@ -851,7 +928,15 @@ fn openinference_scope_names_the_framework(
 ) {
     let decoded =
         decode_normalization(span, scope, &[("openinference.span.kind", "AGENT")]).unwrap();
-    assert_eq!(decoded.normalized.framework, framework);
+    assert_eq!(
+        decoded
+            .normalized
+            .framework
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        framework
+    );
 }
 
 #[rstest]
@@ -881,7 +966,10 @@ fn langsmith_dispatch_overrides_other_conventions(
         .collect::<Vec<_>>();
     let decoded = decode_normalization(span, scope, &combined).unwrap();
     assert_eq!(decoded.normalized.observation_type, observation_type);
-    assert_eq!(decoded.normalized.agent_name, "test-agent");
+    assert_eq!(
+        decoded.normalized.agent_name.as_deref().unwrap_or_default(),
+        "test-agent"
+    );
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&decoded.normalized.input).unwrap(),
         serde_json::json!([{"role": "user", "content": "hello"}]),
@@ -937,7 +1025,9 @@ fn langsmith_llm_messages_preserve_visible_content_and_tool_calls(
             "tool_calls": [{"name": "search", "args": {"query": "hello"}, "id": "call-1"}],
         })
     );
-    assert_eq!(decoded.normalized.litellm_request_id, "response-1");
+    assert!(decoded.normalized.calls.key_set().unwrap().contains(
+        &litellm_traces::CallKey::ProviderResponse("response-1".to_owned())
+    ));
 }
 
 #[rstest]
@@ -1095,13 +1185,24 @@ fn normalizes_claude_agent_sdk_fixture(#[case] fixture: &[u8]) {
             u64::from(llm.normalized.output_tokens),
             raw_int(raw_llm, "output_tokens")
         );
-        assert_eq!(llm.normalized.model, raw_string(raw_llm, "model"));
+        assert_eq!(
+            llm.normalized.model.as_deref().unwrap_or_default(),
+            raw_string(raw_llm, "model")
+        );
         if raw_string(raw_llm, "query_source_safe") == "sdk" {
-            assert_eq!(llm.normalized.framework, "claude-agent-sdk");
+            assert_eq!(
+                llm.normalized
+                    .framework
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default(),
+                "claude-agent-sdk"
+            );
         }
     }
     assert!(spans.iter().all(|span| {
-        span.normalized.agent_name == span.resource_attributes["service.name"].as_str()
+        span.normalized.agent_name.as_deref().unwrap_or_default()
+            == span.resource_attributes["service.name"].as_str()
     }));
 }
 
@@ -1153,36 +1254,69 @@ fn claude_agent_sdk_detailed_fixture_keeps_full_tool_arguments_and_llm_messages(
                 == Some("generate_session_title")
         })
         .expect("side query");
-    assert_eq!(title.normalized.framework, "claude-agent-sdk");
+    assert_eq!(
+        title
+            .normalized
+            .framework
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        "claude-agent-sdk"
+    );
 }
 
 #[rstest]
-fn claude_code_scope_takes_precedence_over_openinference_attributes(
-    mut span: opentelemetry_proto::tonic::trace::v1::Span,
+fn claude_code_scope_takes_precedence_over_other_conventions(span: Span) {
+    let decoded = decode_normalization(
+        span,
+        "com.anthropic.claude_code.tracing",
+        &[
+            ("span.type", "tool"),
+            ("tool_name", "Grep"),
+            ("openinference.span.kind", "LLM"),
+            ("langsmith.span.kind", "LLM"),
+        ],
+    )
+    .expect("valid span");
+    assert_eq!(decoded.normalized.observation_type, ObservationType::Tool);
+    assert_eq!(decoded.name, "Grep");
+    assert_eq!(
+        decoded
+            .normalized
+            .framework
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        "claude-code"
+    );
+    assert_eq!(
+        decoded.normalized.agent_name.as_deref().unwrap_or_default(),
+        "claude-code"
+    );
+}
+
+#[rstest]
+#[case::sdk_wrapper("openinference.instrumentation.claude_agent_sdk", &[("openinference.span.kind", "AGENT"), ("agent.name", "Agent")], &[("gen_ai.agent.name", "worker")], "worker")]
+#[case::generic_fallback("custom", &[], &[("gen_ai.agent.name", "worker")], "worker")]
+#[case::generic_explicit("custom", &[("gen_ai.agent.name", "explicit")], &[("gen_ai.agent.name", "worker")], "explicit")]
+#[case::generic_service("custom", &[], &[("service.name", "worker")], "")]
+#[case::hermes_default("hermes-otel-plugin", &[("gen_ai.agent.name", "hermes-agent")], &[("gen_ai.agent.name", "worker")], "worker")]
+#[case::hermes_explicit("hermes-otel-plugin", &[("gen_ai.agent.name", "explicit")], &[("gen_ai.agent.name", "worker")], "explicit")]
+#[case::claude_default("com.anthropic.claude_code.tracing", &[], &[("gen_ai.agent.name", "worker"), ("service.name", "service")], "worker")]
+#[case::claude_service("com.anthropic.claude_code.tracing", &[], &[("service.name", "service")], "service")]
+#[case::claude_empty_resource_name("com.anthropic.claude_code.tracing", &[], &[("gen_ai.agent.name", ""), ("service.name", "service")], "service")]
+#[case::claude_subagent("com.anthropic.claude_code.tracing", &[("span.type", "llm_request"), ("query_source", "agent:custom:delegate")], &[("gen_ai.agent.name", "worker"), ("service.name", "service")], "delegate")]
+fn resource_identity_preserves_explicit_names_and_sdk_fallbacks(
+    span: Span,
+    #[case] scope: &str,
+    #[case] attributes: &[(&str, &str)],
+    #[case] resources: &[(&str, &str)],
+    #[case] expected: &str,
 ) {
-    use opentelemetry_proto::tonic::common::v1::{
-        AnyValue, InstrumentationScope, KeyValue, any_value::Value,
-    };
-    let string = |key: &str, value: &str| KeyValue {
-        key: key.to_owned(),
-        value: Some(AnyValue {
-            value: Some(Value::StringValue(value.to_owned())),
-        }),
-        ..Default::default()
-    };
-    span.attributes = vec![
-        string("span.type", "tool"),
-        string("tool_name", "Grep"),
-        string("openinference.span.kind", "LLM"),
-    ];
-    let mut request = request_with(span);
-    request.resource_spans[0].scope_spans[0].scope = Some(InstrumentationScope {
-        name: "com.anthropic.claude_code.tracing".to_owned(),
-        ..Default::default()
-    });
-    let spans = decode_otlp(&prost::Message::encode_to_vec(&request), None).expect("valid span");
-    assert_eq!(spans[0].normalized.observation_type, ObservationType::Tool);
-    assert_eq!(spans[0].name, "Grep");
-    assert_eq!(spans[0].normalized.framework, "claude-code");
-    assert_eq!(spans[0].normalized.agent_name, "claude-code");
+    let decoded = decode_normalization_with_resources(span, scope, attributes, resources)
+        .expect("valid span");
+    assert_eq!(
+        decoded.normalized.agent_name.as_deref().unwrap_or_default(),
+        expected
+    );
 }

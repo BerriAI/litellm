@@ -40,38 +40,24 @@ impl Format for Logfire {
             .filter_map(|value| messages::event_message(value.get("event.name")?.as_str()?, value))
             .collect();
         Ok(Extraction {
-            facts: SpanFacts {
-                input: if base.facts.input.is_empty() {
-                    input
-                        .as_ref()
-                        .map(|value| messages::canonical(value.text))
-                        .or_else(|| messages::event_payload(&events, false))
-                        .unwrap_or_default()
-                } else {
-                    base.facts.input
-                },
-                output: if base.facts.output.is_empty() {
-                    output
-                        .as_ref()
-                        .map(|value| value.text.to_owned())
-                        .or_else(|| messages::event_payload(&events, true))
-                        .unwrap_or_default()
-                } else {
-                    base.facts.output
-                },
-                ..base.facts
-            },
+            facts: base.facts.or(SpanFacts {
+                input: input
+                    .as_ref()
+                    .map(|value| messages::canonical(value.text))
+                    .or_else(|| messages::event_payload(&events, false))
+                    .unwrap_or_default(),
+                output: output
+                    .as_ref()
+                    .map(|value| value.text.to_owned())
+                    .or_else(|| messages::event_payload(&events, true))
+                    .unwrap_or_default(),
+                ..SpanFacts::default()
+            }),
             display_name: base.display_name,
-            consumed_attributes: base
-                .consumed_attributes
-                .into_iter()
-                .chain(
-                    [input, output, recorded]
-                        .into_iter()
-                        .flatten()
-                        .map(|value| value.source),
-                )
-                .collect(),
-        })
+            consumed_attributes: base.consumed_attributes,
+        }
+        .consuming(input)
+        .consuming(output)
+        .consuming(recorded))
     }
 }

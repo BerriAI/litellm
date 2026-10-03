@@ -9,28 +9,11 @@ use crate::{
     normalize::{
         CallEvidence, ObservationType, RoleEvidence, SpanContext, attr,
         messages::{RawMessage, encode, langchain_result},
-        present,
     },
 };
 
 /// LangSmith's OpenTelemetry exporter: spans carry `langsmith.span.kind`.
 pub(crate) struct LangSmith;
-
-const MIDDLEWARE_SUFFIXES: [&str; 6] = [
-    ".wrap_model_call",
-    ".wrap_tool_call",
-    ".before_agent",
-    ".after_agent",
-    ".before_model",
-    ".after_model",
-];
-
-/// LangChain agent middleware hooks, which run around the agent's steps rather than being one.
-pub(crate) fn is_langchain_middleware(name: &str) -> bool {
-    MIDDLEWARE_SUFFIXES
-        .iter()
-        .any(|suffix| name.ends_with(suffix))
-}
 
 enum MessageBatch {
     Flat(Vec<RawMessage>),
@@ -77,13 +60,6 @@ impl MessageBatch {
             Self::Nested(batches) => batches.first().map(Vec::as_slice).unwrap_or_default(),
         }
     }
-
-    fn agent_messages(&self) -> &[RawMessage] {
-        match self {
-            Self::Flat(messages) => messages,
-            Self::Nested(_) => &[],
-        }
-    }
 }
 
 #[derive(Default, Deserialize)]
@@ -122,23 +98,6 @@ fn normalized_messages(messages: &[RawMessage]) -> String {
     )
 }
 
-fn span_type(
-    name: &str,
-    parent_span_id: &str,
-    attributes: &BTreeMap<String, String>,
-) -> ObservationType {
-    match ObservationType::try_from(attr(attributes, "langsmith.span.kind")) {
-        Ok(kind) if kind != ObservationType::Chain => kind,
-        _ if parent_span_id.is_empty()
-            || name == attr(attributes, "langsmith.metadata.lc_agent_name") =>
-        {
-            ObservationType::Agent
-        }
-        _ if is_langchain_middleware(name) => ObservationType::Framework,
-        _ => ObservationType::Chain,
-    }
-}
-
 fn tool_output(raw_completion: &str) -> String {
     let completion = serde_json::from_str::<Value>(raw_completion).unwrap_or(Value::Null);
     let raw = completion.get("output").cloned().unwrap_or(completion);
@@ -159,7 +118,6 @@ fn span_io(kind: ObservationType, attributes: &BTreeMap<String, String>) -> Span
     let raw_prompt = attr(attributes, "gen_ai.prompt");
     let raw_completion = attr(attributes, "gen_ai.completion");
     let prompt = serde_json::from_str::<Payload>(raw_prompt).unwrap_or_default();
-    let completion = serde_json::from_str::<Payload>(raw_completion).unwrap_or_default();
     if kind == ObservationType::Llm
         && serde_json::from_str::<Value>(raw_completion).is_ok_and(|value| value.is_object())
     {
@@ -190,29 +148,7 @@ fn span_io(kind: ObservationType, attributes: &BTreeMap<String, String>) -> Span
             calls: CallEvidence::Unknown,
         };
     }
-    if kind == ObservationType::Agent {
-        let input = prompt
-            .messages
-            .as_ref()
-            .filter(|messages| !messages.agent_messages().is_empty())
-            .map_or_else(
-                || raw_prompt.to_owned(),
-                |messages| normalized_messages(messages.agent_messages()),
-            );
-        let output = completion
-            .messages
-            .as_ref()
-            .and_then(|messages| messages.agent_messages().last())
-            .map_or_else(
-                || raw_completion.to_owned(),
-                |message| encode(&message.normalized()),
-            );
-        return SpanIo {
-            input,
-            output,
-            calls: CallEvidence::Unknown,
-        };
-    }
+
     SpanIo {
         input: raw_prompt.to_owned(),
         output: raw_completion.to_owned(),
@@ -228,25 +164,26 @@ impl Format for LangSmith {
     fn extract(&self, context: &SpanContext<'_>) -> Result<Extraction, Error> {
         let attributes = context.attributes;
         let base = GenAi.extract(context)?;
-        let observation_type = span_type(context.name, context.parent_span_id, attributes);
+        let observation_type = ObservationType::try_from(attr(attributes, "langsmith.span.kind"))
+            .unwrap_or(ObservationType::Chain);
         let io = span_io(observation_type, attributes);
         Ok(Extraction {
             facts: SpanFacts {
                 role: Some(RoleEvidence::Declared(observation_type)),
-                agent_name: present(attributes, &["langsmith.metadata.lc_agent_name"]),
                 input: if attr(attributes, "gen_ai.prompt").is_empty() {
-                    base.facts.input
+                    String::new()
                 } else {
                     io.input
                 },
                 output: if attr(attributes, "gen_ai.completion").is_empty() {
-                    base.facts.output
+                    String::new()
                 } else {
                     io.output
                 },
                 calls: io.calls,
-                ..base.facts
-            },
+                ..SpanFacts::default()
+            }
+            .or(base.facts),
             display_name: None,
             consumed_attributes: base.consumed_attributes,
         })

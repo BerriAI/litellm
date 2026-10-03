@@ -14,71 +14,118 @@ const OPENINFERENCE_PREFIX: &str = "openinference.instrumentation.";
 pub(super) mod claude_agent_sdk;
 pub(super) mod claude_code;
 pub(super) mod google_adk;
+pub(super) mod hermes;
 pub(super) mod http_client;
 pub(super) mod langchain;
 pub(super) mod llama_index;
 pub(super) mod pydantic_ai;
-pub(super) mod strands;
-pub(super) mod vercel;
 
-pub(super) enum Instrumentation {
-    ClaudeCode,
-    /// `openinference.instrumentation.<name>`.
-    OpenInference(Integration),
-    PydanticAi,
-    /// SDKs whose own tracer is known only by its scope.
-    Named(Integration),
-    HttpClient,
-    Unknown,
+pub(super) trait Rule: Sync {
+    fn matches(&self, context: &SpanContext<'_>) -> bool;
+    fn integration(&self, context: &SpanContext<'_>) -> Option<Integration>;
+    fn agent_name(&self, _: &SpanContext<'_>, recorded: Option<String>) -> Option<String> {
+        recorded
+    }
+    fn adjust(&self, _: &SpanContext<'_>, extraction: Extraction) -> Extraction {
+        extraction
+    }
 }
 
-impl Instrumentation {
-    pub(super) fn detect(context: &SpanContext<'_>) -> Self {
-        let scope = context.scope;
-        if scope == claude_code::SCOPE {
-            return Self::ClaudeCode;
-        }
-        if let Some(name) = scope.strip_prefix(OPENINFERENCE_PREFIX) {
-            return Self::OpenInference(Integration::from(name.replace('_', "-")));
-        }
-        if http_client::matches(context) {
-            return Self::HttpClient;
-        }
-        match scope {
-            pydantic_ai::SCOPE => Self::PydanticAi,
-            google_adk::SCOPE => Self::Named(Integration::GoogleAdk),
-            // `@ai-sdk/otel` uses `gen_ai`; the SDK's built-in telemetry used `ai`.
-            _ if vercel::matches(context) => Self::Named(Integration::VercelAiSdk),
-            _ if strands::matches(context) => Self::Named(Integration::Strands),
-            _ => Self::Unknown,
+struct Scoped {
+    scope: &'static str,
+    integration: Integration,
+    prefix: bool,
+}
+
+impl Rule for Scoped {
+    fn matches(&self, context: &SpanContext<'_>) -> bool {
+        if self.prefix {
+            context.scope.starts_with(self.scope)
+        } else {
+            context.scope == self.scope
         }
     }
 
-    fn framework(&self, context: &SpanContext<'_>) -> String {
-        match self {
-            Self::ClaudeCode => claude_code::framework(context.attributes).to_owned(),
-            Self::OpenInference(name) | Self::Named(name) => name.to_string(),
-            Self::PydanticAi => Integration::PydanticAi.to_string(),
-            Self::HttpClient | Self::Unknown => String::new(),
-        }
+    fn integration(&self, _: &SpanContext<'_>) -> Option<Integration> {
+        Some(self.integration.clone())
+    }
+}
+
+struct OpenInference;
+
+impl Rule for OpenInference {
+    fn matches(&self, context: &SpanContext<'_>) -> bool {
+        context.scope.starts_with(OPENINFERENCE_PREFIX)
+    }
+
+    fn integration(&self, context: &SpanContext<'_>) -> Option<Integration> {
+        context
+            .scope
+            .strip_prefix(OPENINFERENCE_PREFIX)
+            .filter(|name| !name.is_empty())
+            .map(|name| Integration::from(name.replace('_', "-")))
+    }
+
+    fn agent_name(&self, context: &SpanContext<'_>, recorded: Option<String>) -> Option<String> {
+        recorded.filter(|name| {
+            name != "Agent" || self.integration(context) != Some(Integration::ClaudeAgentSdk)
+        })
     }
 
     fn adjust(&self, context: &SpanContext<'_>, extraction: Extraction) -> Extraction {
-        match self {
-            Self::ClaudeCode => extraction.map_facts(|facts| claude_code::adjust(context, facts)),
-            Self::OpenInference(Integration::Langchain) => {
+        match self.integration(context) {
+            Some(Integration::Langchain) => {
                 extraction.map_facts(|facts| langchain::adjust(context, facts))
             }
-            Self::OpenInference(Integration::LlamaIndex) => {
+            Some(Integration::LlamaIndex) => {
                 extraction.map_facts(|facts| llama_index::adjust(context, facts))
             }
-            Self::OpenInference(Integration::ClaudeAgentSdk) => {
-                extraction.map_facts(claude_agent_sdk::adjust)
-            }
-            Self::OpenInference(Integration::GoogleAdk) => extraction.map_facts(google_adk::adjust),
-            Self::PydanticAi => pydantic_ai::adjust(context, extraction),
-            Self::HttpClient => extraction.map_facts(http_client::adjust),
-            Self::OpenInference(_) | Self::Named(_) | Self::Unknown => extraction,
+            Some(Integration::ClaudeAgentSdk) => extraction.map_facts(claude_agent_sdk::adjust),
+            Some(Integration::GoogleAdk) => extraction.map_facts(google_adk::adjust),
+            _ => extraction,
+        }
+    }
+}
+
+const RULES: [&dyn Rule; 9] = [
+    &claude_code::ClaudeCode,
+    &hermes::Hermes,
+    &OpenInference,
+    &http_client::HttpClient,
+    &pydantic_ai::PydanticAi,
+    &Scoped {
+        scope: google_adk::SCOPE,
+        integration: Integration::GoogleAdk,
+        prefix: false,
+    },
+    &Scoped {
+        scope: "gen_ai",
+        integration: Integration::VercelAiSdk,
+        prefix: false,
+    },
+    &Scoped {
+        scope: "ai",
+        integration: Integration::VercelAiSdk,
+        prefix: false,
+    },
+    &Scoped {
+        scope: "strands.",
+        integration: Integration::Strands,
+        prefix: true,
+    },
+];
+
+pub(super) struct Instrumentation(Option<&'static dyn Rule>);
+
+impl Instrumentation {
+    pub(super) fn detect(context: &SpanContext<'_>) -> Self {
+        Self(RULES.into_iter().find(|rule| rule.matches(context)))
+    }
+
+    fn adjust(&self, context: &SpanContext<'_>, extraction: Extraction) -> Extraction {
+        match self.0 {
+            Some(rule) => rule.adjust(context, extraction),
+            None => extraction,
         }
     }
 
@@ -88,13 +135,21 @@ impl Instrumentation {
         extraction: Extraction,
         metadata: AgentMetadata,
     ) -> Normalization {
+        let prepared = if context.scope != claude_code::SCOPE
+            && (context.scope == "langsmith"
+                || context.attributes.contains_key("langsmith.span.kind"))
+        {
+            extraction.map_facts(|facts| langchain::langsmith(context, facts))
+        } else {
+            extraction
+        };
         let Extraction {
             facts,
             display_name,
             consumed_attributes,
         } = self.adjust(
             context,
-            extraction.map_facts(|facts| with_response_id(context, facts)),
+            prepared.map_facts(|facts| with_response_id(context, facts)),
         );
         let role = match (facts.role, metadata.ls_agent_type) {
             (
@@ -118,28 +173,24 @@ impl Instrumentation {
             }
             RoleEvidence::Unspecified => (ObservationType::Chain, false),
         };
-        let agent_name =
+        let recorded_name =
             recorded_agent_name(context, facts.agent_name, observation_type, &metadata);
+        let sdk_name = match self.0 {
+            Some(rule) => rule.agent_name(context, recorded_name),
+            None => recorded_name,
+        };
+        let agent_name =
+            sdk_name.or_else(|| present(context.resource_attributes, &["gen_ai.agent.name"]));
         let framework = metadata
             .ls_integration
-            .as_ref()
-            .map_or_else(|| self.framework(context), ToString::to_string);
-        let model = facts
-            .model
-            .or_else(|| metadata.ls_model_name.clone())
-            .unwrap_or_default();
+            .clone()
+            .or_else(|| self.0.and_then(|rule| rule.integration(context)));
+        let model = facts.model.or_else(|| metadata.ls_model_name.clone());
         let display_name = if observation_type == ObservationType::Tool {
             display_name.or_else(|| metadata.ls_tool_name.clone())
         } else {
             display_name
         };
-        let keys: Vec<CallKey> = facts
-            .calls
-            .key_set()
-            .into_iter()
-            .flatten()
-            .cloned()
-            .collect();
         let input_preview = facts
             .input_preview
             .unwrap_or_else(|| messages::input_preview(&facts.input));
@@ -150,24 +201,14 @@ impl Instrumentation {
                 agent_name,
                 framework,
                 agent_metadata: metadata,
-                litellm_request_id: keys
-                    .iter()
-                    .find_map(|key| match key {
-                        CallKey::LiteLlmRequest(id) | CallKey::ProviderResponse(id) => {
-                            Some(id.clone())
-                        }
-                        CallKey::Transport => None,
-                    })
-                    .unwrap_or_default(),
-                call_keys: keys,
-                call_evidence: facts.calls.label(),
+                calls: facts.calls,
                 model,
                 input_tokens: facts.input_tokens,
                 output_tokens: facts.output_tokens,
                 input: facts.input,
                 input_preview,
                 output: facts.output,
-                tool_call_id: facts.tool_call_id.unwrap_or_default(),
+                tool_call_id: facts.tool_call_id,
             },
             display_name,
             consumed_attributes: consumed_attributes.into_boxed_slice(),
@@ -191,9 +232,9 @@ fn recorded_agent_name(
     extracted: Option<String>,
     observation_type: ObservationType,
     metadata: &AgentMetadata,
-) -> String {
+) -> Option<String> {
     if let Some(name) = extracted {
-        return name;
+        return Some(name);
     }
     let attributes = context.attributes;
     let explicit = [
@@ -204,17 +245,17 @@ fn recorded_agent_name(
     .into_iter()
     .find(|value| !value.is_empty());
     if let Some(value) = explicit {
-        return value.to_owned();
+        return Some(value.to_owned());
     }
     if let Some(name) = metadata
         .lc_agent_name
         .as_ref()
         .or(metadata.ls_subagent_type.as_ref())
     {
-        return name.clone();
+        return Some(name.clone());
     }
     if observation_type == ObservationType::Agent {
-        return langchain::agent_name(context, metadata).unwrap_or_default();
+        return langchain::agent_name(context, metadata);
     }
-    String::new()
+    None
 }

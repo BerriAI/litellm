@@ -6,13 +6,11 @@ use super::{Extraction, Format, SpanFacts};
 use crate::{
     Error,
     normalize::{
-        CallEvidence, CallKey, ObservationType, RoleEvidence, SpanContext, attr, present, tokens,
+        CLAUDE_CODE_AGENT, CLAUDE_CODE_SCOPE, CallEvidence, CallKey, ObservationType, RoleEvidence,
+        SpanContext, attr, present, tokens,
     },
     otlp::DecodedEvent,
 };
-
-pub(crate) const CLAUDE_CODE_SCOPE: &str = "com.anthropic.claude_code.tracing";
-pub(crate) const CLAUDE_CODE_AGENT: &str = "claude-code";
 
 /// Claude Code's built-in tracing, identified by its instrumentation scope.
 pub(crate) struct ClaudeCode;
@@ -245,7 +243,14 @@ mod tests {
         attributes: &BTreeMap<String, String>,
         events: &[DecodedEvent],
     ) -> Result<Normalization, Error> {
-        crate::normalize::normalize(CLAUDE_CODE_SCOPE, name, "parent", attributes, events)
+        crate::normalize::normalize(&crate::normalize::SpanContext {
+            scope: CLAUDE_CODE_SCOPE,
+            name,
+            parent_span_id: "parent",
+            attributes,
+            events,
+            resource_attributes: &BTreeMap::new(),
+        })
     }
 
     fn normalize(
@@ -345,7 +350,7 @@ mod tests {
         assert_eq!(input[0]["role"], "tool");
         assert_eq!(input[0]["content"], "1\timport os");
         assert_eq!(span.output, "");
-        assert_eq!(span.framework, "claude-code");
+        assert_eq!(span.framework, Some(crate::Integration::ClaudeCode));
     }
 
     #[rstest]

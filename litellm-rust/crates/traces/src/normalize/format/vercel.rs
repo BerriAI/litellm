@@ -131,12 +131,9 @@ impl Format for Vercel {
                 .map_or(String::new(), |value| value.text.to_owned()),
         };
         Ok(Extraction {
-            facts: SpanFacts {
-                role: base.facts.role.or(role.map(RoleEvidence::Declared)),
-                model: base
-                    .facts
-                    .model
-                    .or_else(|| present(context.attributes, &["ai.model.id"])),
+            facts: base.facts.or(SpanFacts {
+                role: role.map(RoleEvidence::Declared),
+                model: present(context.attributes, &["ai.model.id"]),
                 input_tokens: token_alias(
                     context.attributes,
                     &[
@@ -154,38 +151,21 @@ impl Format for Vercel {
                         "ai.usage.completionTokens",
                     ],
                 )?,
-                input: if base.facts.input.is_empty() {
-                    input
-                        .as_ref()
-                        .map_or(String::new(), |value| match value.source {
-                            "ai.prompt" | "ai.prompt.messages" => prompt(value.text),
-                            _ => value.text.to_owned(),
-                        })
-                } else {
-                    base.facts.input
-                },
-                output: if base.facts.output.is_empty() {
-                    legacy_output
-                } else {
-                    base.facts.output
-                },
-                tool_call_id: base
-                    .facts
-                    .tool_call_id
-                    .or_else(|| present(context.attributes, &["ai.toolCall.id"])),
-                ..base.facts
-            },
+                input: input
+                    .as_ref()
+                    .map_or(String::new(), |value| match value.source {
+                        "ai.prompt" | "ai.prompt.messages" => prompt(value.text),
+                        _ => value.text.to_owned(),
+                    }),
+                output: legacy_output,
+                tool_call_id: present(context.attributes, &["ai.toolCall.id"]),
+                ..SpanFacts::default()
+            }),
             display_name: present(context.attributes, &["ai.toolCall.name"]).or(base.display_name),
-            consumed_attributes: base
-                .consumed_attributes
-                .into_iter()
-                .chain(
-                    [input, output, calls]
-                        .into_iter()
-                        .flatten()
-                        .map(|value| value.source),
-                )
-                .collect(),
-        })
+            consumed_attributes: base.consumed_attributes,
+        }
+        .consuming(input)
+        .consuming(output)
+        .consuming(calls))
     }
 }

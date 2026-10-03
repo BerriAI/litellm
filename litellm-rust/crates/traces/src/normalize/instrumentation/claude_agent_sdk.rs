@@ -6,7 +6,7 @@ pub(super) fn adjust(facts: SpanFacts) -> SpanFacts {
     }
     SpanFacts {
         role: Some(RoleEvidence::WrapperCandidate(ObservationType::Agent)),
-        agent_name: Some(String::new()),
+        agent_name: None,
         ..facts
     }
 }

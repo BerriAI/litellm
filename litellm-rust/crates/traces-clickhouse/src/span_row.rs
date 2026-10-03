@@ -4,7 +4,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use litellm_traces::{
-    DecodedEvent, DecodedSpan, Shared, SharedIdentity, Tenant, truncate_messages, truncate_value,
+    CallEvidence, CallKey, DecodedEvent, DecodedSpan, Shared, SharedIdentity, Tenant,
+    truncate_messages, truncate_value,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -140,19 +141,40 @@ pub fn span_rows(
                     "WrapperCandidate",
                     Value::Bool(normalized.wrapper_candidate),
                 ),
-                ("AgentName", Value::String(normalized.agent_name)),
-                ("Framework", Value::String(normalized.framework)),
+                (
+                    "AgentName",
+                    Value::String(normalized.agent_name.unwrap_or_default()),
+                ),
+                (
+                    "Framework",
+                    Value::String(
+                        normalized
+                            .framework
+                            .map(|integration| integration.to_string())
+                            .unwrap_or_default(),
+                    ),
+                ),
                 (
                     "AgentMetadata",
                     Value::String(present_fields(&normalized.agent_metadata)),
                 ),
                 (
                     "LiteLLMRequestId",
-                    Value::String(normalized.litellm_request_id),
+                    Value::String(request_id(&normalized.calls).to_owned()),
                 ),
-                ("CallKeys", json(&normalized.call_keys)),
-                ("CallEvidence", Value::from(normalized.call_evidence)),
-                ("Model", Value::String(normalized.model)),
+                (
+                    "CallKeys",
+                    json(
+                        normalized
+                            .calls
+                            .key_set()
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>(),
+                    ),
+                ),
+                ("CallEvidence", json(normalized.calls.kind())),
+                ("Model", Value::String(normalized.model.unwrap_or_default())),
                 ("InputTokens", Value::from(normalized.input_tokens)),
                 ("OutputTokens", Value::from(normalized.output_tokens)),
                 (
@@ -164,7 +186,10 @@ pub fn span_rows(
                     "Output",
                     Value::String(truncate_value(normalized.output, max_value_bytes)),
                 ),
-                ("ToolCallId", Value::String(normalized.tool_call_id)),
+                (
+                    "ToolCallId",
+                    Value::String(normalized.tool_call_id.unwrap_or_default()),
+                ),
             ];
             shared
                 .into_iter()
@@ -177,4 +202,16 @@ pub fn span_rows(
                 .collect()
         })
         .collect()
+}
+
+fn request_id(evidence: &CallEvidence) -> &str {
+    evidence
+        .key_set()
+        .into_iter()
+        .flatten()
+        .find_map(|key| match key {
+            CallKey::LiteLlmRequest(id) | CallKey::ProviderResponse(id) => Some(id.as_str()),
+            CallKey::Transport => None,
+        })
+        .unwrap_or_default()
 }

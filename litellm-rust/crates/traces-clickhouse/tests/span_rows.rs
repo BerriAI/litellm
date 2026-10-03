@@ -185,3 +185,32 @@ fn rows_carry_every_normalized_column(tenant: Tenant) {
     assert_eq!(row["Duration"], 4000);
     assert_eq!(row["AgentMetadata"], "{}");
 }
+
+#[rstest]
+fn absent_identity_fields_are_empty_only_in_storage(tenant: Tenant) {
+    let body = export(vec![(
+        vec![],
+        vec![span(&"02".repeat(8), vec![], json!({}))],
+    )]);
+    let decoded = decode_otlp(&body, Some("application/json")).unwrap();
+    let normalized = &decoded[0].normalized;
+    assert_eq!(normalized.agent_name, None);
+    assert_eq!(normalized.framework, None);
+    assert_eq!(normalized.model, None);
+    assert_eq!(normalized.tool_call_id, None);
+    let stored = span_rows(decoded, &tenant, MAX_VALUE_BYTES);
+    let row = serde_json::to_value(&stored[0]).unwrap();
+    assert_eq!(
+        [
+            "AgentName",
+            "Framework",
+            "Model",
+            "ToolCallId",
+            "LiteLLMRequestId"
+        ]
+        .map(|column| row[column].clone()),
+        [""; 5].map(|value| json!(value)),
+    );
+    assert_eq!(row["CallKeys"], json!([]));
+    assert_eq!(row["CallEvidence"], "unknown");
+}

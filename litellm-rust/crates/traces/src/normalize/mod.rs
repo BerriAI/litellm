@@ -6,22 +6,24 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
+    str::FromStr,
 };
 
 use crate::{Error, otlp::DecodedEvent};
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 
 mod format;
 mod instrumentation;
 mod messages;
 mod metadata;
 
-pub(crate) use format::claude_code::{CLAUDE_CODE_AGENT, CLAUDE_CODE_SCOPE};
+pub(crate) const CLAUDE_CODE_SCOPE: &str = "com.anthropic.claude_code.tracing";
+pub(crate) const CLAUDE_CODE_AGENT: &str = "claude-code";
 use instrumentation::Instrumentation;
 pub(crate) use messages::{HIDDEN_BLOCK_TYPES, encode};
 pub use metadata::{AgentMetadata, AgentType, Integration};
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(wire_type)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
@@ -42,7 +44,8 @@ pub enum ObservationType {
 }
 
 /// A model request a span stands for, by the identifier its instrumentation recorded.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[serde(try_from = "String")]
 pub enum CallKey {
     /// LiteLLM's own id for the request (`spend_logs.request_id`).
     LiteLlmRequest(String),
@@ -62,6 +65,39 @@ impl fmt::Display for CallKey {
     }
 }
 
+impl FromStr for CallKey {
+    type Err = crate::InvalidCallKey;
+
+    fn from_str(encoded: &str) -> Result<Self, Self::Err> {
+        match encoded.split_once(':') {
+            Some(("provider_response", id)) if !id.is_empty() => {
+                Ok(Self::ProviderResponse(id.to_owned()))
+            }
+            Some(("litellm_request", id)) if !id.is_empty() => {
+                Ok(Self::LiteLlmRequest(id.to_owned()))
+            }
+            Some(("transport", "")) => Ok(Self::Transport),
+            _ => Err(crate::InvalidCallKey),
+        }
+    }
+}
+
+impl TryFrom<String> for CallKey {
+    type Error = crate::InvalidCallKey;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CallEvidenceKind {
+    Unknown,
+    Partial,
+    Complete,
+}
+
 impl Serialize for CallKey {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_str(self)
@@ -70,7 +106,7 @@ impl Serialize for CallKey {
 
 /// Which model requests a span accounts for. `Complete` comes only from an instrumentation's known
 /// contract (one chat span is one response), never from how many ids happened to be found.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub enum CallEvidence {
     #[default]
     Unknown,
@@ -79,6 +115,29 @@ pub enum CallEvidence {
 }
 
 impl CallEvidence {
+    pub(crate) fn row_keys(row: &crate::query::named::TraceSpansRow) -> BTreeSet<CallKey> {
+        if row.call_keys.is_empty() && !row.litellm_request_id.is_empty() {
+            BTreeSet::from([CallKey::ProviderResponse(row.litellm_request_id.clone())])
+        } else {
+            row.call_keys.iter().cloned().collect()
+        }
+    }
+
+    pub(crate) fn from_row(row: &crate::query::named::TraceSpansRow) -> Self {
+        let kind = row
+            .call_evidence
+            .unwrap_or(if row.litellm_request_id.is_empty() {
+                CallEvidenceKind::Unknown
+            } else {
+                CallEvidenceKind::Complete
+            });
+        match kind {
+            CallEvidenceKind::Complete => Self::Complete(Self::row_keys(row)),
+            CallEvidenceKind::Partial => Self::Partial(Self::row_keys(row)),
+            CallEvidenceKind::Unknown => Self::Unknown,
+        }
+    }
+
     pub(crate) fn complete(key: CallKey) -> Self {
         Self::Complete(BTreeSet::from([key]))
     }
@@ -93,18 +152,18 @@ impl CallEvidence {
         }
     }
 
-    fn key_set(&self) -> Option<&BTreeSet<CallKey>> {
+    pub fn key_set(&self) -> Option<&BTreeSet<CallKey>> {
         match self {
             Self::Unknown => None,
             Self::Partial(keys) | Self::Complete(keys) => Some(keys),
         }
     }
 
-    fn label(&self) -> &'static str {
+    pub fn kind(&self) -> CallEvidenceKind {
         match self {
-            Self::Unknown => "unknown",
-            Self::Partial(_) => "partial",
-            Self::Complete(_) => "complete",
+            Self::Unknown => CallEvidenceKind::Unknown,
+            Self::Partial(_) => CallEvidenceKind::Partial,
+            Self::Complete(_) => CallEvidenceKind::Complete,
         }
     }
 }
@@ -124,25 +183,24 @@ pub(crate) struct SpanContext<'a> {
     pub parent_span_id: &'a str,
     pub attributes: &'a BTreeMap<String, String>,
     pub events: &'a [DecodedEvent],
+    pub resource_attributes: &'a BTreeMap<String, String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct NormalizedSpan {
     pub observation_type: ObservationType,
     pub wrapper_candidate: bool,
-    pub agent_name: String,
-    pub framework: String,
+    pub agent_name: Option<String>,
+    pub framework: Option<Integration>,
     pub agent_metadata: AgentMetadata,
-    pub litellm_request_id: String,
-    pub call_keys: Vec<CallKey>,
-    pub call_evidence: &'static str,
-    pub model: String,
+    pub calls: CallEvidence,
+    pub model: Option<String>,
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub input: String,
     pub input_preview: String,
     pub output: String,
-    pub tool_call_id: String,
+    pub tool_call_id: Option<String>,
 }
 
 pub(crate) struct Normalization {
@@ -151,26 +209,9 @@ pub(crate) struct Normalization {
     pub consumed_attributes: Box<[&'static str]>,
 }
 
-pub fn normalize(
-    scope_name: &str,
-    name: &str,
-    parent_span_id: &str,
-    attributes: &BTreeMap<String, String>,
-    events: &[DecodedEvent],
-) -> Result<Normalization, Error> {
-    let context = SpanContext {
-        scope: scope_name,
-        name,
-        parent_span_id,
-        attributes,
-        events,
-    };
-    let extraction = format::extract(&context)?;
-    Ok(Instrumentation::detect(&context).interpret(
-        &context,
-        extraction,
-        metadata::extract(&context),
-    ))
+pub(crate) fn normalize(context: &SpanContext<'_>) -> Result<Normalization, Error> {
+    let extraction = format::extract(context)?;
+    Ok(Instrumentation::detect(context).interpret(context, extraction, metadata::extract(context)))
 }
 
 /// An attribute's text together with the key it came from, so consumption follows extraction.
@@ -250,7 +291,7 @@ mod tests {
 
     use rstest::rstest;
 
-    use super::{ObservationType, normalize};
+    use super::{ObservationType, SpanContext, normalize};
 
     #[rstest]
     #[case::langsmith("langsmith", [("langsmith.span.kind", "llm"), ("openinference.span.kind", "TOOL")], ObservationType::Llm)]
@@ -266,9 +307,16 @@ mod tests {
             .into_iter()
             .map(|(key, value)| (key.to_owned(), value.to_owned()))
             .collect();
-        let fields = normalize(scope, "step", "parent", &attributes, &[])
-            .expect("valid tokens")
-            .span;
+        let fields = normalize(&SpanContext {
+            scope,
+            name: "step",
+            parent_span_id: "parent",
+            attributes: &attributes,
+            events: &[],
+            resource_attributes: &BTreeMap::new(),
+        })
+        .expect("valid tokens")
+        .span;
         assert_eq!(fields.observation_type, expected);
         if expected == ObservationType::Tool {
             assert_eq!(fields.input_tokens, 7);
@@ -279,9 +327,16 @@ mod tests {
     fn token_counts_accept_surrounding_whitespace() {
         let attributes =
             BTreeMap::from([("gen_ai.usage.input_tokens".to_owned(), " 7 ".to_owned())]);
-        let fields = normalize("", "root", "", &attributes, &[])
-            .expect("valid tokens")
-            .span;
+        let fields = normalize(&SpanContext {
+            scope: "",
+            name: "root",
+            parent_span_id: "",
+            attributes: &attributes,
+            events: &[],
+            resource_attributes: &BTreeMap::new(),
+        })
+        .expect("valid tokens")
+        .span;
         assert_eq!(fields.input_tokens, 7);
     }
 
@@ -291,6 +346,16 @@ mod tests {
     fn token_counts_outside_storage_range_are_rejected(#[case] value: &str) {
         let attributes =
             BTreeMap::from([("gen_ai.usage.input_tokens".to_owned(), value.to_owned())]);
-        assert!(normalize("", "root", "", &attributes, &[]).is_err());
+        assert!(
+            normalize(&SpanContext {
+                scope: "",
+                name: "root",
+                parent_span_id: "",
+                attributes: &attributes,
+                events: &[],
+                resource_attributes: &BTreeMap::new()
+            })
+            .is_err()
+        );
     }
 }

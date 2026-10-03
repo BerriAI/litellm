@@ -51,6 +51,10 @@ pub(super) fn percent<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64,
     }
 }
 
+pub(super) fn boolean<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    flag(deserializer).map(|value| value == 1)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::query::named::SpanErrorRow;

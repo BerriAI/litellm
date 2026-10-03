@@ -1,13 +1,17 @@
-use super::{
-    graph::Graph,
-    spend::{self, Ownership, Requests, SpendEvidence, call_keys},
-};
+use std::collections::HashMap;
+
+use indexmap::IndexMap;
+
 use crate::{
-    normalize::CallKey,
+    normalize::{CallKey, ObservationType},
     query::named::{SpendByResponseIdsRow as SpendRow, TraceSpansRow},
 };
-use indexmap::IndexMap;
-use std::collections::HashMap;
+
+use super::{
+    graph::Graph,
+    spend::{self, Ownership, Requests, SpendEvidence},
+};
+
 pub(super) fn agent_label(row: &TraceSpansRow) -> &str {
     if row.agent.is_empty() {
         &row.name
@@ -20,7 +24,7 @@ pub(super) struct Resolution<'a> {
     pub(super) graph: Graph<'a>,
     ownership: Ownership<'a>,
     spend: &'a [SpendRow],
-    types: HashMap<&'a str, &'a str>,
+    types: HashMap<&'a str, ObservationType>,
     pub(super) model_calls: Vec<usize>,
 }
 
@@ -28,16 +32,16 @@ impl<'a> Resolution<'a> {
     pub(super) fn new(rows: &'a [TraceSpansRow], spend: &'a [SpendRow]) -> Self {
         let graph = Graph::new(rows);
         let named_agents = rows.iter().any(|row| !row.agent.is_empty());
-        let types: HashMap<&str, &str> = (0..rows.len())
+        let types: HashMap<&str, ObservationType> = (0..rows.len())
             .map(|index| (graph.id(index), resolved_type(&graph, index, named_agents)))
             .collect();
         let model_calls = (0..rows.len())
             .filter(|index| {
-                types[graph.id(*index)] == "llm"
+                types[graph.id(*index)] == ObservationType::Llm
                     && !graph
                         .descendants(*index)
                         .into_iter()
-                        .any(|descendant| types[graph.id(descendant)] == "llm")
+                        .any(|descendant| types[graph.id(descendant)] == ObservationType::Llm)
             })
             .collect();
         Self {
@@ -57,12 +61,12 @@ impl<'a> Resolution<'a> {
         &self.graph.rows[index]
     }
 
-    pub(super) fn kind(&self, index: usize) -> &'a str {
+    pub(super) fn kind(&self, index: usize) -> ObservationType {
         self.types[self.graph.id(index)]
     }
 
     pub(super) fn is_agent(&self, index: usize) -> bool {
-        self.kind(index) == "agent"
+        self.kind(index) == ObservationType::Agent
     }
 
     pub(super) fn owner(&self, index: usize) -> &'a str {
@@ -83,14 +87,14 @@ impl<'a> Resolution<'a> {
 
     pub(super) fn call_requests(&self, call: usize) -> Option<Requests<'a>> {
         let wrappers = self.graph.ancestors(call).into_iter().filter(|ancestor| {
-            self.kind(*ancestor) == "llm"
+            self.kind(*ancestor) == ObservationType::Llm
                 && self
                     .graph
                     .descendants(*ancestor)
                     .into_iter()
                     .all(|descendant| {
                         self.graph.id(descendant) == self.graph.id(call)
-                            || self.kind(descendant) != "llm"
+                            || self.kind(descendant) != ObservationType::Llm
                     })
         });
         let sources: Vec<_> = std::iter::once(call)
@@ -102,9 +106,9 @@ impl<'a> Resolution<'a> {
             .descendants(call)
             .into_iter()
             .filter(|descendant| {
-                call_keys(self.row(*descendant))
-                    .iter()
-                    .any(|key| matches!(key, Some(CallKey::Transport)))
+                self.row(*descendant)
+                    .call_keys
+                    .contains(&CallKey::Transport)
             })
             .map(|transport| self.requests(transport))
             .collect();
@@ -138,7 +142,9 @@ impl<'a> Resolution<'a> {
 
     pub(super) fn unique_tools(&self) -> Vec<usize> {
         let mut by_call: IndexMap<&str, usize> = IndexMap::new();
-        for index in (0..self.graph.rows.len()).filter(|index| self.kind(*index) == "tool") {
+        for index in
+            (0..self.graph.rows.len()).filter(|index| self.kind(*index) == ObservationType::Tool)
+        {
             let row = self.row(index);
             let key = if row.tool_call_id.is_empty() {
                 &row.span_id
@@ -151,20 +157,24 @@ impl<'a> Resolution<'a> {
     }
 }
 
-fn resolved_type<'a>(graph: &Graph<'a>, index: usize, named_agents: bool) -> &'a str {
+fn resolved_type(graph: &Graph<'_>, index: usize, named_agents: bool) -> ObservationType {
     let row = &graph.rows[index];
-    if row.wrapper_candidate == 0 || row.kind != "agent" {
-        return &row.kind;
+    if !row.wrapper_candidate || row.kind != ObservationType::Agent {
+        return row.kind;
     }
     if row.agent.is_empty() {
-        return if named_agents { "chain" } else { "agent" };
+        return if named_agents {
+            ObservationType::Chain
+        } else {
+            ObservationType::Agent
+        };
     }
     let nearest = graph
         .ancestors(index)
         .into_iter()
-        .find(|ancestor| graph.rows[*ancestor].kind == "agent");
+        .find(|ancestor| graph.rows[*ancestor].kind == ObservationType::Agent);
     match nearest {
-        Some(agent) if agent_label(&graph.rows[agent]) == row.agent => "chain",
-        _ => "agent",
+        Some(agent) if agent_label(&graph.rows[agent]) == row.agent => ObservationType::Chain,
+        _ => ObservationType::Agent,
     }
 }

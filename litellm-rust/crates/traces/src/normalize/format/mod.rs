@@ -27,6 +27,43 @@ pub(crate) struct SpanFacts {
     pub input_preview: Option<String>,
 }
 
+impl SpanFacts {
+    pub(crate) fn or(self, fallback: Self) -> Self {
+        Self {
+            role: self.role.or(fallback.role),
+            agent_name: self.agent_name.or(fallback.agent_name),
+            model: self.model.or(fallback.model),
+            input_tokens: if self.input_tokens == 0 {
+                fallback.input_tokens
+            } else {
+                self.input_tokens
+            },
+            output_tokens: if self.output_tokens == 0 {
+                fallback.output_tokens
+            } else {
+                self.output_tokens
+            },
+            input: if self.input.is_empty() {
+                fallback.input
+            } else {
+                self.input
+            },
+            output: if self.output.is_empty() {
+                fallback.output
+            } else {
+                self.output
+            },
+            tool_call_id: self.tool_call_id.or(fallback.tool_call_id),
+            calls: if self.calls == CallEvidence::Unknown {
+                fallback.calls
+            } else {
+                self.calls
+            },
+            input_preview: self.input_preview.or(fallback.input_preview),
+        }
+    }
+}
+
 /// A convention's complete reading of a span, including which attributes it consumed.
 pub(crate) struct Extraction {
     pub facts: SpanFacts,
@@ -35,6 +72,17 @@ pub(crate) struct Extraction {
 }
 
 impl Extraction {
+    pub(crate) fn consuming(self, attribute: Option<AttributeText<'_>>) -> Self {
+        Self {
+            consumed_attributes: self
+                .consumed_attributes
+                .into_iter()
+                .chain(attribute.map(|value| value.source))
+                .collect(),
+            ..self
+        }
+    }
+
     pub(crate) fn map_facts(self, adjust: impl FnOnce(SpanFacts) -> SpanFacts) -> Self {
         Self {
             facts: adjust(self.facts),

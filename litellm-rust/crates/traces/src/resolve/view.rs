@@ -1,15 +1,21 @@
+use std::collections::{BTreeSet, HashSet};
+
+use indexmap::IndexMap;
+use time::OffsetDateTime;
+
+use crate::{
+    normalize::ObservationType,
+    query::named::{ListTracesRow, SpendByResponseIdsRow as SpendRow, TraceSpansRow},
+    view::{AgentNode, Span, SpanStatus, Trace, TraceSummary},
+};
+
 use super::{
     resolution::{Resolution, agent_label},
     spend::{Requests, request_cost, total},
 };
-use crate::{
-    query::named::{ListTracesRow, SpendByResponseIdsRow as SpendRow, TraceSpansRow},
-    view::{AgentNode, Span, SpanStatus, Trace, TraceSummary},
-};
-use indexmap::IndexMap;
-use std::collections::{BTreeSet, HashSet};
-use time::OffsetDateTime;
+
 const NANOS_PER_MS: f64 = 1_000_000.0;
+
 fn optional(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
 }
@@ -21,15 +27,15 @@ fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span 
         span_id: row.span_id.clone(),
         parent_span_id: optional(&row.parent_span_id),
         name: row.name.clone(),
-        kind: resolution.kind(index).to_owned(),
+        kind: resolution.kind(index),
         agent: row.agent.clone(),
         framework: row.framework.clone(),
         start_offset_ms: (i128::from(row.start_ns) - i128::from(trace_start_ns)) as f64
             / NANOS_PER_MS,
         duration_ms: row.duration_ns as f64 / NANOS_PER_MS,
-        status: SpanStatus::from_code(&row.status),
+        status: row.status,
         error: optional(&row.status_message),
-        error_truncated: row.error_truncated != 0,
+        error_truncated: row.error_truncated,
         input_preview: row.input_preview.clone(),
         model: optional(&row.model),
         input_tokens: row.input_tokens,
@@ -158,7 +164,8 @@ pub fn resolve_trace(
         .zip(rows)
         .enumerate()
         .filter(|(_, (span, _))| {
-            !span.input_preview.is_empty() && matches!(span.kind.as_str(), "agent" | "llm")
+            !span.input_preview.is_empty()
+                && matches!(span.kind, ObservationType::Agent | ObservationType::Llm)
         })
         .min_by_key(|(index, (_, row))| (row.start_ns, *index))
         .map(|(_, (span, _))| span.input_preview.clone())
@@ -216,7 +223,7 @@ pub fn listed_summary(row: &ListTracesRow) -> TraceSummary {
         input_preview: row.input_preview.clone(),
         start_time: iso_time(row.start_ms),
         duration_ms: row.duration_ms as f64,
-        status: SpanStatus::from_code(&row.status),
+        status: row.status,
         span_count: row.span_count,
         agent_count: row.agent_count,
         agent_invocations: if row.agent_invocations == 0 {

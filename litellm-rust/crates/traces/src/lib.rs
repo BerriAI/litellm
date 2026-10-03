@@ -23,10 +23,13 @@ mod tenant;
 mod truncate;
 mod ui;
 mod view;
-mod wire;
+pub mod wire;
 
-pub use error::{Error, InvalidQuery, InvalidScope};
-pub use normalize::{AgentMetadata, AgentType, Integration, NormalizedSpan, ObservationType};
+pub use error::{Error, InvalidCallKey, InvalidQuery, InvalidScope};
+pub use normalize::{
+    AgentMetadata, AgentType, CallEvidence, CallEvidenceKind, CallKey, Integration, NormalizedSpan,
+    ObservationType,
+};
 pub use otlp::{DecodedEvent, DecodedSpan, decode_otlp};
 pub use query::ReadQuery;
 pub use query_access::QueryScope;
@@ -38,5 +41,3 @@ pub use ui::{ChatRole, UiContent, UiField, UiMessage, UiToolCall, to_ui_content}
 pub use view::{
     AgentNode, Span, SpanDetail, SpanErrorPage, SpanStatus, Trace, TracePage, TraceSummary,
 };
-
-pub use wire::span_type as deserialize_span_type;

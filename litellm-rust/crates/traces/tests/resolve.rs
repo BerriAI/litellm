@@ -14,13 +14,13 @@ fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> Trac
         span_id: span_id.into(),
         parent_span_id: parent.into(),
         name: name.into(),
-        kind: kind.into(),
-        wrapper_candidate: 0,
+        kind: kind.parse().unwrap(),
+        wrapper_candidate: false,
         agent: agent.into(),
         framework: String::new(),
-        status: "STATUS_CODE_OK".into(),
+        status: SpanStatus::Ok,
         status_message: String::new(),
-        error_truncated: 0,
+        error_truncated: false,
         start_ns: T0,
         duration_ns: 10 * MS as u64,
         service: "agent-demo".into(),
@@ -30,7 +30,7 @@ fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> Trac
         output_tokens: 0,
         litellm_request_id: String::new(),
         call_keys: Vec::new(),
-        call_evidence: String::new(),
+        call_evidence: None,
         tool_call_id: String::new(),
         team_id: String::new(),
         api_key_hash: String::new(),
@@ -159,7 +159,7 @@ fn no_rows_is_no_trace() {
 #[rstest]
 fn summary_counts_model_calls_tools_and_agents() {
     let mut rows = deep_agent(1);
-    rows[2].status = "STATUS_CODE_ERROR".into();
+    rows[2].status = SpanStatus::Error;
     let summary = resolve_trace("t1", "ref", &rows, &[]).unwrap().summary;
     assert_eq!(summary.trace_id, "t1");
     assert_eq!(summary.trace_ref, "ref");
@@ -258,7 +258,7 @@ fn parent_agent_skips_same_name_ancestors_and_stops_at_cycles() {
 #[rstest]
 fn unnamed_calls_belong_to_the_nearest_agent_and_wrappers_are_not_agents() {
     let crew = TraceSpansRow {
-        wrapper_candidate: 1,
+        wrapper_candidate: true,
         ..row("crew", "", "crew.kickoff", "agent", "")
     };
     let nodes = agents(&[
@@ -284,7 +284,7 @@ fn unnamed_calls_belong_to_the_nearest_agent_and_wrappers_are_not_agents() {
 #[rstest]
 fn named_wrapper_inside_the_same_agent_is_a_chain() {
     let wrapper = TraceSpansRow {
-        wrapper_candidate: 1,
+        wrapper_candidate: true,
         ..row("w", "a", "researcher.run", "agent", "researcher")
     };
     let trace = resolve_trace(
@@ -294,7 +294,7 @@ fn named_wrapper_inside_the_same_agent_is_a_chain() {
         &[],
     )
     .unwrap();
-    assert_eq!(trace.spans[1].kind, "chain");
+    assert_eq!(trace.spans[1].kind, litellm_traces::ObservationType::Chain);
     assert_eq!(trace.agents[0].invocations, 1);
 }
 
@@ -543,8 +543,8 @@ fn incomplete_call_cost_never_becomes_a_partial_total(#[case] failure: &str) {
 fn transport_spans_complete_a_call_without_its_own_id() {
     let mut transport = row("http", "llm", "POST", "framework", "");
     transport.trace_id = "trace".into();
-    transport.call_keys = vec!["transport:".into()];
-    transport.call_evidence = "complete".into();
+    transport.call_keys = vec!["transport:".parse().unwrap()];
+    transport.call_evidence = Some(litellm_traces::CallEvidenceKind::Complete);
     let mut call = llm("llm", "agent", "agent", "");
     call.trace_id = "trace".into();
     let rows = [
@@ -575,7 +575,7 @@ fn listed_summary_keeps_rollup_counts_with_unknown_cost() {
         name: "deep_research_agent".into(),
         service: "agent-demo".into(),
         input_preview: "hi".into(),
-        status: "STATUS_CODE_OK".into(),
+        status: SpanStatus::Ok,
         start_ms: 1_790_742_989_377,
         duration_ms: 51_385,
         span_count: 126,
@@ -620,8 +620,8 @@ fn complete_wrapper_reconciles_ambiguous_response(
     #[case] expected: Option<f64>,
 ) {
     let wrapper = TraceSpansRow {
-        call_keys: vec![format!("litellm_request:{exact_id}")],
-        call_evidence: "complete".into(),
+        call_keys: vec![litellm_traces::CallKey::LiteLlmRequest(exact_id.to_owned())],
+        call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
         ..owned(llm("wrapper", "", "agent", ""), "team", "", "key")
     };
     let rows = [
@@ -670,18 +670,25 @@ fn complete_correlation_requires_known_finite_cost(
 }
 
 #[rstest]
-#[case::complete_retry(true, Some(0.75))]
-#[case::missing_retry(false, None)]
+#[case::complete_retry(true, litellm_traces::CallEvidenceKind::Complete, Some(0.75))]
+#[case::missing_retry(false, litellm_traces::CallEvidenceKind::Complete, None)]
+#[case::unknown_retry(true, litellm_traces::CallEvidenceKind::Unknown, None)]
+#[case::partial_retry(true, litellm_traces::CallEvidenceKind::Partial, None)]
 fn transports_preserve_retry_spend_without_counting_unrelated_cached_rows(
     #[case] retry_logged: bool,
+    #[case] retry_evidence: litellm_traces::CallEvidenceKind,
     #[case] expected: Option<f64>,
 ) {
     let transport = |id: &str| {
         owned(
             TraceSpansRow {
                 trace_id: "trace".into(),
-                call_keys: vec!["transport:".into()],
-                call_evidence: "complete".into(),
+                call_keys: vec!["transport:".parse().unwrap()],
+                call_evidence: Some(if id == "first" {
+                    retry_evidence
+                } else {
+                    litellm_traces::CallEvidenceKind::Complete
+                }),
                 ..row(id, "call", "POST", "framework", "")
             },
             "team",
@@ -725,10 +732,10 @@ fn multiple_identifiers_for_one_request_count_its_spend_once(#[case] cached_row:
     let rows = [owned(
         TraceSpansRow {
             call_keys: vec![
-                "provider_response:response".into(),
-                "litellm_request:request".into(),
+                "provider_response:response".parse().unwrap(),
+                "litellm_request:request".parse().unwrap(),
             ],
-            call_evidence: "complete".into(),
+            call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
             ..llm("call", "", "agent", "response")
         },
         "team",
@@ -769,10 +776,10 @@ fn complete_wrapper_accounts_for_retries_missing_from_the_call_span() {
         owned(
             TraceSpansRow {
                 call_keys: vec![
-                    "litellm_request:retry".into(),
-                    "litellm_request:final".into(),
+                    "litellm_request:retry".parse().unwrap(),
+                    "litellm_request:final".parse().unwrap(),
                 ],
-                call_evidence: "complete".into(),
+                call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
                 ..llm("wrapper", "", "agent", "")
             },
             "team",
@@ -793,6 +800,69 @@ fn complete_wrapper_accounts_for_retries_missing_from_the_call_span() {
     let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
     assert_eq!(trace.summary.spend, Some(0.75));
     assert_eq!(trace.agents[0].spend, Some(0.75));
+}
+
+#[rstest]
+#[case::legacy(None, Some(0.25))]
+#[case::unknown(Some(litellm_traces::CallEvidenceKind::Unknown), None)]
+#[case::partial(Some(litellm_traces::CallEvidenceKind::Partial), None)]
+#[case::complete(Some(litellm_traces::CallEvidenceKind::Complete), Some(0.25))]
+fn legacy_request_id_fallback_respects_recorded_evidence(
+    #[case] evidence: Option<litellm_traces::CallEvidenceKind>,
+    #[case] expected: Option<f64>,
+) {
+    let span = owned(
+        TraceSpansRow {
+            call_evidence: evidence,
+            ..llm("call", "", "agent", "response")
+        },
+        "team",
+        "",
+        "key",
+    );
+    let stored = serde_json::to_value(span).unwrap();
+    let decoded: TraceSpansRow = serde_json::from_value(stored).unwrap();
+    let logs = [spend("request", "response", "team", "", "key", 0.25)];
+    let trace = resolve_trace("trace", "ref", &[decoded], &logs).unwrap();
+    assert_eq!(trace.summary.spend, expected);
+    assert_eq!(trace.spans[0].spend, expected);
+}
+
+#[rstest]
+#[case::wrapper("wrapper_candidate", serde_json::json!(2))]
+#[case::truncation("error_truncated", serde_json::json!(2))]
+#[case::call_key("call_keys", serde_json::json!(["provider_response:"]))]
+#[case::call_evidence("call_evidence", serde_json::json!("invalid"))]
+#[case::role("type", serde_json::json!("invalid"))]
+fn malformed_stored_span_fields_are_rejected(
+    #[case] field: &str,
+    #[case] value: serde_json::Value,
+) {
+    let mut encoded = serde_json::to_value(row("span", "", "agent", "agent", "agent")).unwrap();
+    encoded[field] = value;
+    assert!(serde_json::from_value::<TraceSpansRow>(encoded).is_err());
+}
+
+#[rstest]
+#[case::unknown(litellm_traces::CallEvidenceKind::Unknown)]
+#[case::complete(litellm_traces::CallEvidenceKind::Complete)]
+fn spend_lookup_fetches_recorded_keys_before_resolving_completeness(
+    #[case] evidence: litellm_traces::CallEvidenceKind,
+) {
+    let recorded = TraceSpansRow {
+        trace_id: "trace".to_owned(),
+        call_keys: vec![
+            litellm_traces::CallKey::ProviderResponse("response".to_owned()),
+            litellm_traces::CallKey::LiteLlmRequest("request".to_owned()),
+            litellm_traces::CallKey::Transport,
+        ],
+        call_evidence: Some(evidence),
+        ..row("span", "", "operation", "llm", "")
+    };
+    let lookup = litellm_traces::SpendLookup::new(&[recorded]);
+    assert_eq!(lookup.response_ids, ["response"]);
+    assert_eq!(lookup.request_ids, ["request"]);
+    assert_eq!(lookup.trace_ids, ["trace"]);
 }
 
 #[rstest]

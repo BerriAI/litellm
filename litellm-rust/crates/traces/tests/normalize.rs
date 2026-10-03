@@ -21,31 +21,46 @@ fn assert_invariants(span: &DecodedSpan) {
     {
         assert!(
             normalized
-                .call_keys
-                .iter()
+                .calls
+                .key_set()
+                .into_iter()
+                .flatten()
                 .any(|key| key.to_string() == format!("provider_response:{id}"))
         );
-        assert_ne!(normalized.call_evidence, "unknown");
+        assert_ne!(
+            normalized.calls.kind(),
+            litellm_traces::CallEvidenceKind::Unknown
+        );
     }
-    if normalized.call_evidence == "unknown" {
-        assert!(normalized.call_keys.is_empty());
+    if normalized.calls.kind() == litellm_traces::CallEvidenceKind::Unknown {
+        assert!(
+            normalized
+                .calls
+                .key_set()
+                .is_none_or(|keys| keys.is_empty())
+        );
     } else {
-        assert!(!normalized.call_keys.is_empty());
+        assert!(
+            !normalized
+                .calls
+                .key_set()
+                .is_none_or(|keys| keys.is_empty())
+        );
     }
     for (actual, keys) in [
         (
             normalized.input_tokens,
             [
-                "gen_ai.usage.input_tokens",
                 "llm.token_count.prompt",
+                "gen_ai.usage.input_tokens",
                 "gen_ai.usage.prompt_tokens",
             ],
         ),
         (
             normalized.output_tokens,
             [
-                "gen_ai.usage.output_tokens",
                 "llm.token_count.completion",
+                "gen_ai.usage.output_tokens",
                 "output_tokens",
             ],
         ),
@@ -186,4 +201,31 @@ fn fixture_sdk_roles(
             span.span_id
         );
     }
+}
+
+#[rstest]
+#[case::request(litellm_traces::CallKey::LiteLlmRequest("request:with:colons".to_owned()))]
+#[case::response(litellm_traces::CallKey::ProviderResponse("response:with:colons".to_owned()))]
+#[case::transport(litellm_traces::CallKey::Transport)]
+fn call_keys_round_trip_through_storage(#[case] key: litellm_traces::CallKey) {
+    assert_eq!(
+        key.to_string().parse::<litellm_traces::CallKey>().unwrap(),
+        key
+    );
+    let encoded = serde_json::to_string(&key).unwrap();
+    assert_eq!(
+        serde_json::from_str::<litellm_traces::CallKey>(&encoded).unwrap(),
+        key
+    );
+}
+
+#[rstest]
+#[case::missing_separator("provider_response")]
+#[case::missing_response("provider_response:")]
+#[case::missing_request("litellm_request:")]
+#[case::transport_id("transport:unexpected")]
+#[case::unknown("unknown:id")]
+fn malformed_call_keys_are_rejected_at_the_boundary(#[case] encoded: &str) {
+    assert!(encoded.parse::<litellm_traces::CallKey>().is_err());
+    assert!(serde_json::from_value::<litellm_traces::CallKey>(serde_json::json!(encoded)).is_err());
 }
