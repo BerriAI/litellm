@@ -85,6 +85,7 @@ def assert_native_request(
         assert headers.get("x-amz-date")
         assert body["messages"][0]["content"][0]["audio"]["source"]["bytes"] == "AQI="
         assert "The audio language is en" in body["messages"][0]["content"][1]["text"]
+        assert "system" not in body
         return
     assert path == "/v1/messages"
     assert headers.get("x-api-key") == "sk-native"
