@@ -1,17 +1,20 @@
+from __future__ import annotations
+
 import enum
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import BaseModel
-from typing_extensions import TypedDict
+from pydantic import BaseModel, ConfigDict, Field
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import HiddenParams
 
 if TYPE_CHECKING:
+    import httpx2
     from mcp.types import EmbeddedResource as MCPEmbeddedResource
     from mcp.types import ImageContent as MCPImageContent
     from mcp.types import TextContent as MCPTextContent
@@ -32,12 +35,10 @@ class MCPSpecVersion(str, enum.Enum):
     mar_2025 = "2025-03-26"
     jun_2025 = "2025-06-18"
     nov_2025 = "2025-11-25"
+    jul_2026 = "2026-07-28"
 
 
-# The highest MCP spec revision LiteLLM speaks, kept in lockstep with the pinned SDK's
-# LATEST_PROTOCOL_VERSION (tests/test_litellm/types/test_mcp.py fails when they diverge). Outbound
-# MCP requests LiteLLM builds itself advertise this instead of a hardcoded historical revision.
-MCP_LATEST_SUPPORTED_SPEC_VERSION: Final = MCPSpecVersion.nov_2025
+MCP_LATEST_HANDSHAKE_SPEC_VERSION: Final = MCPSpecVersion.nov_2025
 
 
 class MCPAuth(str, enum.Enum):
@@ -63,8 +64,23 @@ DEFAULT_SUBJECT_TOKEN_TYPE: Final = "urn:ietf:params:oauth:token-type:access_tok
 
 # MCP Literals
 MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http, MCPTransport.stdio]
+MCPLegacyVersion = Literal["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]
+MCP_LEGACY_VERSIONS: Final[tuple[MCPLegacyVersion, ...]] = ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25")
+MCPUpstreamProtocol = MCPLegacyVersion | Literal["auto", "2026-07-28"]
+
+
+def validate_mcp_protocol_transport(protocol_version: MCPUpstreamProtocol, transport: MCPTransportType) -> None:
+    if protocol_version == "2026-07-28" and transport == MCPTransport.sse:
+        raise ValueError("Modern MCP requires HTTP or stdio transport")
+
+
+MCPAdvertisedVersions = Annotated[tuple[MCPLegacyVersion, ...], Field(min_length=1)]
 MCPSpecVersionType = Literal[
-    MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025, MCPSpecVersion.nov_2025
+    MCPSpecVersion.nov_2024,
+    MCPSpecVersion.mar_2025,
+    MCPSpecVersion.jun_2025,
+    MCPSpecVersion.nov_2025,
+    MCPSpecVersion.jul_2026,
 ]
 MCPAuthType = (
     Literal[
@@ -100,11 +116,57 @@ class MCPPublicServer(BaseModel):
     mcp_info: dict[str, Any] | None = None
 
 
+class MCPAllowedClient(BaseModel):
+    """One entry of `general_settings.mcp_allowed_clients`."""
+
+    model_config = ConfigDict(frozen=True)
+
+    alias: str = Field(
+        min_length=1,
+        description="Human-readable name for this client application, shown in the dashboard and in gateway logs.",
+    )
+    value: str = Field(
+        min_length=1,
+        description="Exact value of the JWT claim named in litellm_jwtauth.mcp_client_id_jwt_field, or of the "
+        "mcp_client_id_header header, that identifies this client application. Matched case-sensitively.",
+    )
+
+
+class MCPToolSearchSettings(BaseModel):
+    """`litellm_settings.mcp_tool_search`: how the native `mcp_tool_search` virtual tool ranks the caller's tools."""
+
+    model_config = ConfigDict(frozen=True)
+
+    embedding_model: str | None = Field(
+        default=None,
+        description="Embedding model from model_list used to rank tools by meaning. Unset keeps keyword matching.",
+    )
+    top_k: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        description="Most ranked tools a search returns. A smaller top_k in the tool call wins. Core tools do not count.",
+    )
+    similarity_threshold: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Lowest cosine similarity a tool needs to appear in semantic results (0.0 = no cutoff).",
+    )
+    core_tools: tuple[str, ...] = Field(
+        default=(),
+        description="Tool names always returned first when the caller can access them, e.g. `my_server-get_rates`.",
+    )
+
+
 # OAuth 2.0 token-endpoint client authentication method (RFC 6749 section 2.3.1).
 MCPTokenEndpointAuthMethod = Literal["client_secret_basic", "client_secret_post"]
 
 
 class MCPCredentials(TypedDict, total=False):
+    dcr_issuer: ReadOnly[str | None]
+    dcr_server_url: ReadOnly[str | None]
+
     auth_value: str | None
     """
     Authentication value
@@ -314,7 +376,7 @@ def custom_credential_slot(headers: Mapping[str, str] | None) -> str | None:
 
 def credential_redirect_hook(
     configured_url: str, slot: str | None
-) -> Callable[[httpx.Request], Awaitable[None]] | None:
+) -> Callable[[httpx.Request | httpx2.Request], Awaitable[None]] | None:
     """An httpx request hook dropping ``slot`` once a redirect leaves ``configured_url``'s origin.
 
     None when no guard is needed, so callers do not each repeat the exemption: HTTP clients already
@@ -324,7 +386,7 @@ def credential_redirect_hook(
     if not configured_url or not slot or same_header(slot, DEFAULT_CREDENTIAL_HEADER):
         return None
 
-    async def guard(request: httpx.Request) -> None:
+    async def guard(request: httpx.Request | httpx2.Request) -> None:
         if slot in request.headers and crosses_origin(configured_url, str(request.url)):
             del request.headers[slot]
 
@@ -417,3 +479,40 @@ class MCPPostCallResponseObject(BaseModel):
 
     mcp_tool_call_response: list[MCPTextContent | MCPImageContent | MCPEmbeddedResource]
     hidden_params: HiddenParams
+
+
+class MCPGatewaySession(BaseModel):
+    """One live stateful Streamable HTTP session held by this proxy worker."""
+
+    session_id_prefix: str
+    client_name: str | None = None
+    client_version: str | None = None
+    user_id: str | None = None
+    user_email: str | None = None
+    key_alias: str | None = None
+    team_id: str | None = None
+    team_alias: str | None = None
+    client_ip: str | None = None
+    idle_seconds: float
+    in_flight_requests: int
+
+
+class MCPGatewaySessionGroupCount(BaseModel):
+    label: str | None = None
+    count: int
+
+
+class MCPGatewaySessionsResponse(BaseModel):
+    worker_pid: int
+    total_sessions: int
+    by_client: list[MCPGatewaySessionGroupCount] = Field(default_factory=list)
+    by_user: list[MCPGatewaySessionGroupCount] = Field(default_factory=list)
+    sessions: list[MCPGatewaySession] = Field(default_factory=list)
+
+
+class MCPGatewaySessionsTerminateResponse(BaseModel):
+    """Stateful sessions an administrator force-closed on this proxy worker."""
+
+    worker_pid: int
+    terminated_sessions: int
+    sessions: list[MCPGatewaySession] = Field(default_factory=list)

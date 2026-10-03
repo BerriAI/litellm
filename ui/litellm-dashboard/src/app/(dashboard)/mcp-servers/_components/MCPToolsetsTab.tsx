@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { SortingState } from "@tanstack/react-table";
 import { Inbox, Plus, X } from "lucide-react";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
@@ -451,6 +451,7 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
 
       <DataTable
         data={toolsets}
+        paginationMode="client"
         columns={columns}
         getRowId={(toolset, index) => toolset.toolset_id || String(index)}
         sortingMode="client"

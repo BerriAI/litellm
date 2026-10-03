@@ -16,6 +16,7 @@ from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
     normalize_token_endpoint_auth_method,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.middleware.per_request_root_path_middleware import get_request_root_path
 
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -124,6 +125,14 @@ def _resolve_proxy_base_url_env() -> str | None:
         )
         _warned_invalid_proxy_base_url = configured
     return None
+
+
+BYOK_RESOURCE_METADATA_PATH: Final = "/v1/mcp/oauth/protected-resource"
+
+
+def get_byok_www_authenticate() -> str:
+    base_url: Final = _resolve_proxy_base_url_env() or get_request_root_path().rstrip("/")
+    return f'Bearer resource_metadata="{base_url}{BYOK_RESOURCE_METADATA_PATH}"'
 
 
 def get_request_base_url(request: Request) -> str:
@@ -652,7 +661,7 @@ def canonicalize_url_identity(url: str) -> str:
 def issuer_identities_match(claimed_issuer: str, expected_issuer: str) -> bool:
     """Issuer equality tolerant only of URL-insignificant differences (scheme/host case, the default
     port, a trailing slash), through the shared canonicalizer. Used for RFC 8414 §3.3 metadata
-    anchoring and for the RFC 9207 ``iss`` an authorization response carries.
+    anchoring and persisted OAuth client bindings. RFC 9207 callbacks compare exact strings.
 
     An RFC 8414 issuer identifier carries no params, query or fragment, and the canonicalizer drops
     all three, so two issuers differing only there would compare equal. That difference is compared
@@ -662,6 +671,17 @@ def issuer_identities_match(claimed_issuer: str, expected_issuer: str) -> bool:
     if (claimed.params, claimed.query, claimed.fragment) != (expected.params, expected.query, expected.fragment):
         return False
     return canonicalize_url_identity(claimed_issuer) == canonicalize_url_identity(expected_issuer)
+
+
+def oauth_client_registration_matches(
+    registered_issuer: str | None,
+    registered_url: str | None,
+    current_issuer: str | None,
+    current_url: str | None,
+) -> bool:
+    if registered_issuer and current_issuer:
+        return issuer_identities_match(registered_issuer, current_issuer)
+    return not registered_url or registered_url == current_url
 
 
 def canonical_resource_uri(url: str) -> str | None:

@@ -12,11 +12,12 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
+from typing import Final
 
 import pytest
 
-from e2e_config import UI_PASSWORD, UI_USERNAME, unique_marker
-from e2e_http import StreamingResponse, Success
+from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, UI_PASSWORD, UI_USERNAME, unique_marker
+from e2e_http import StreamingResponse, Success, unwrap
 from lifecycle import ResourceManager
 from management_client import (
     DASHBOARD_SESSION_TEAM_ID,
@@ -25,7 +26,9 @@ from management_client import (
     ManagementClient,
 )
 from models import (
+    AuditLogPage,
     KeyGenerateBody,
+    KeyGenerateResponse,
     KeyUpdateBody,
     LiteLLMParamsBody,
     ModelInfoEntry,
@@ -34,13 +37,20 @@ from models import (
     OrgUpdateBody,
     TagListEntry,
     TagNewBody,
+    TeamMemberEntry,
     TeamNewBody,
     TeamUpdateBody,
     UserNewBody,
     UserUpdateBody,
 )
+from proxy_client import Converged, await_converged
 
 pytestmark = pytest.mark.e2e
+
+REGENERATE_GRACE_PERIOD = "15s"
+REGENERATE_GRACE_SECONDS = 15.0
+TEAM_DELETE_POOL_OVERFLOW_MEMBERS = 250
+
 
 def _poll[T](client: ManagementClient, attempt: Callable[[], T | None], failure: str) -> T:
     deadline = time.monotonic() + client.proxy.poll_timeout
@@ -365,6 +375,36 @@ class TestKeyRegeneration:
             client, old_rejected, "old key was still accepted after regeneration (never rejected 401) at the deadline"
         )
 
+    @pytest.mark.covers("other.key_mgmt.regenerate.grace_period_honored")
+    def test_regenerate_with_grace_period_keeps_old_key_until_revoked(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        old_key = _generate_key(client, resources, KeyGenerateBody(models=["gpt-5.5"]))
+
+        new_key = client.regenerate_key(old_key, grace_period=REGENERATE_GRACE_PERIOD)
+        resources.defer(lambda: client.proxy.delete_key(new_key))
+        revoke_at: Final = time.monotonic() + REGENERATE_GRACE_SECONDS
+        assert new_key != old_key, "regenerate returned the same key string, so no rotation happened"
+
+        def old_accepted() -> bool | None:
+            outcome = client.chat_status(old_key, "gpt-5.5", f"say hi {unique_marker()}")
+            return True if outcome.ok else None
+
+        _ = _poll(client, old_accepted, "old key was rejected 401 inside its grace period at the deadline")
+        assert time.monotonic() < revoke_at, (
+            f"old key was only accepted after its {REGENERATE_GRACE_PERIOD} grace period had elapsed"
+        )
+
+        def old_rejected() -> bool | None:
+            outcome = client.chat_status(old_key, "gpt-5.5", f"say hi {unique_marker()}")
+            return True if outcome.status_code == 401 else None
+
+        _ = _poll(
+            client,
+            old_rejected,
+            f"old key was still accepted past its {REGENERATE_GRACE_PERIOD} grace period (never 401) at the deadline",
+        )
+
 
 class TestTeamRoutes:
     @pytest.mark.covers("mgmt.team.new.persists")
@@ -439,6 +479,43 @@ class TestTeamRoutes:
 
         _ = _poll(
             client, rejected, "team-bound key was still accepted on chat (never rejected 401) after team deletion"
+        )
+
+    @pytest.mark.covers("mgmt.team.delete.membership_larger_than_db_pool")
+    def test_team_delete_succeeds_for_team_larger_than_db_pool(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        """Customer repro: /team/delete fans one transaction per member out over a
+        Prisma pool of 10 connections, each queued on the team's advisory lock,
+        so a team bigger than the pool must still delete cleanly instead of
+        answering 500 P2028."""
+        team_id = _create_team(client, resources, f"e2e-mgmt-team-{unique_marker()}", [])
+        user_ids = tuple(
+            _create_user(
+                client,
+                resources,
+                UserNewBody(
+                    user_email=f"e2e-mgmt-bulk-{i}-{unique_marker()}@example.com",
+                    user_role="internal_user",
+                ),
+            )
+            for i in range(TEAM_DELETE_POOL_OVERFLOW_MEMBERS)
+        )
+        client.add_team_members(team_id, [TeamMemberEntry(role="user", user_id=user_id) for user_id in user_ids])
+        seated = len(client.team_info(team_id).members_with_roles)
+        assert seated >= len(user_ids), (
+            f"/team/info lists {seated} members after the bulk /team/member_add, expected at least {len(user_ids)}"
+        )
+
+        outcome = client.delete_team_status(team_id)
+
+        assert outcome.status_code == 200, (
+            f"/team/delete on a {len(user_ids)}-member team must succeed, got "
+            f"{outcome.status_code}: {outcome.body[:500]}"
+        )
+        probe = client.team_info_status(team_id)
+        assert probe.status_code == 404, (
+            f"deleted team {team_id} still resolves: /team/info returned {probe.status_code}: {probe.body[:300]}"
         )
 
     @pytest.mark.covers("mgmt.team.member_add.persists")
@@ -766,3 +843,128 @@ class TestCustomer:
         assert info.user_id == customer, (
             f"/customer/info did not report the created end-user; got {info.user_id!r}"
         )
+
+
+def _await_deleted_audit_rows(client: ManagementClient, token_hash: str) -> AuditLogPage:
+    outcome = await_converged(
+        lambda: client.key_deleted_audit_logs(token_hash),
+        converged=lambda page: page.total >= 1,
+        timeout=POLL_TIMEOUT,
+        interval=POLL_INTERVAL,
+        now=time.monotonic,
+        sleep=time.sleep,
+    )
+    return outcome.result if isinstance(outcome, Converged) else outcome.last_result
+
+
+def _assert_single_deleted_row(page: AuditLogPage, token_hash: str) -> None:
+    assert page.total == 1, page
+    row = page.audit_logs[0]
+    assert row.action == "deleted", row
+    assert row.table_name == "LiteLLM_VerificationToken", row
+    assert row.object_id == token_hash, row
+    assert row.changed_by, row
+
+
+def _assert_key_deleted(client: ManagementClient, key: str) -> None:
+    def gone() -> bool | None:
+        match client.key_info_as(key):
+            case Success(data=response):
+                return True if response.info.status == "deleted" else None
+            case _:
+                return True
+
+    _ = _poll(
+        client,
+        gone,
+        "/key/info never reported status 'deleted' for a key whose deletion returned",
+    )
+
+
+def _token_of(created: KeyGenerateResponse) -> str:
+    assert created.token is not None, created
+    return created.token
+
+
+def _generate_response(
+    client: ManagementClient, resources: ResourceManager, body: KeyGenerateBody
+) -> KeyGenerateResponse:
+    created = unwrap(client.generate_key(body))
+    resources.defer(lambda: client.delete_key_strict(created.key, missing_ok=True))
+    return created
+
+
+class TestKeyDeletionAuditLog:
+    @pytest.mark.covers("mgmt.key.delete.audit_logged")
+    def test_key_delete_by_key_writes_audit_row(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        created = _generate_response(client, resources, KeyGenerateBody(key_alias=f"e2e-audit-{unique_marker()}"))
+        token = _token_of(created)
+
+        client.delete_key_strict(created.key)
+
+        _assert_key_deleted(client, created.key)
+        _assert_single_deleted_row(_await_deleted_audit_rows(client, token), token)
+
+    @pytest.mark.covers("mgmt.key.delete.audit_logged")
+    def test_key_delete_by_alias_writes_audit_row(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        alias = f"e2e-audit-{unique_marker()}"
+        created = _generate_response(client, resources, KeyGenerateBody(key_alias=alias))
+        token = _token_of(created)
+
+        client.delete_key_by_alias(alias)
+
+        _assert_key_deleted(client, created.key)
+        _assert_single_deleted_row(_await_deleted_audit_rows(client, token), token)
+
+    @pytest.mark.covers("mgmt.team.member_delete.audit_logs_keys")
+    def test_team_member_delete_writes_audit_row_for_member_keys(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        team_id = _create_team(client, resources, f"e2e-audit-team-{unique_marker()}", [])
+        user_id = _create_user(
+            client,
+            resources,
+            UserNewBody(user_email=f"e2e-audit-{unique_marker()}@example.com", user_role="internal_user"),
+        )
+        client.add_team_member(team_id, user_id)
+        created = _generate_response(client, resources, KeyGenerateBody(user_id=user_id, team_id=team_id))
+        token = _token_of(created)
+
+        client.delete_team_member(team_id, user_id)
+
+        _assert_key_deleted(client, created.key)
+        _assert_single_deleted_row(_await_deleted_audit_rows(client, token), token)
+
+    @pytest.mark.covers("mgmt.team.delete.audit_logs_keys")
+    def test_team_delete_writes_audit_row_for_team_keys(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        team_id = _create_team(client, resources, f"e2e-audit-team-{unique_marker()}", [])
+        created = _generate_response(client, resources, KeyGenerateBody(team_id=team_id))
+        token = _token_of(created)
+
+        client.delete_team(team_id)
+
+        _assert_key_deleted(client, created.key)
+        _assert_single_deleted_row(_await_deleted_audit_rows(client, token), token)
+
+    @pytest.mark.covers("mgmt.user.delete.audit_logs_keys")
+    def test_user_delete_writes_audit_row_for_user_keys(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        user_id = _create_user(
+            client,
+            resources,
+            UserNewBody(user_email=f"e2e-audit-{unique_marker()}@example.com", user_role="internal_user"),
+        )
+        created = _generate_response(client, resources, KeyGenerateBody(user_id=user_id))
+        token = _token_of(created)
+
+        client.delete_user_strict(user_id)
+
+        _assert_key_deleted(client, created.key)
+        _assert_single_deleted_row(_await_deleted_audit_rows(client, token), token)

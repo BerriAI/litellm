@@ -16,20 +16,32 @@ import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 export type McpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
 
+export interface McpDcrCredentials {
+  client_id: string;
+  client_secret?: string | null;
+  dcr_issuer?: string | null;
+  dcr_server_url?: string | null;
+  token_endpoint_auth_method?: string | null;
+  redirect_uris?: string[];
+}
+
+export interface RegisteredMcpOAuthClient {
+  clientId?: string;
+  clientSecret?: string;
+  dcrCredentials?: McpDcrCredentials;
+}
+
 interface UseMcpOAuthFlowOptions {
   accessToken: string | null;
   getCredentials: () =>
     | {
         client_id?: string;
-        client_secret?: string;
+        client_secret?: string | null;
         scopes?: string[];
       }
     | undefined;
   getTemporaryPayload: () => Record<string, any> | null;
-  onTokenReceived: (
-    tokenResponse: Record<string, any>,
-    registeredClient?: { clientId?: string; clientSecret?: string },
-  ) => void;
+  onTokenReceived: (tokenResponse: Record<string, any>, registeredClient?: RegisteredMcpOAuthClient) => void;
   onBeforeRedirect?: () => void;
   // Distinguishes which form started the flow (e.g. "create" vs "edit"). Both forms
   // mount this hook with shared storage keys, so the return handler only processes a
@@ -69,6 +81,7 @@ export const useMcpOAuthFlow = ({
     codeVerifier: string;
     clientId?: string;
     clientSecret?: string;
+    dcrCredentials?: McpDcrCredentials;
     serverId: string;
     redirectUri: string;
     flowSource?: string;
@@ -147,7 +160,7 @@ export const useMcpOAuthFlow = ({
         throw new Error("Temporary MCP server identifier missing. Please retry.");
       }
 
-      let registeredClient: { clientId?: string; clientSecret?: string } = {};
+      let registeredClient: RegisteredMcpOAuthClient = {};
       const hasPreconfiguredCredentials = Boolean(temporaryPayload.credentials?.client_id);
 
       if (!hasPreconfiguredCredentials) {
@@ -165,6 +178,17 @@ export const useMcpOAuthFlow = ({
         registeredClient = {
           clientId: registration?.client_id,
           clientSecret: registration?.client_secret,
+          dcrCredentials: registration?.dcr_server_url
+            ? {
+                client_id: registration.client_id,
+                client_secret: registration.client_secret ?? null,
+                dcr_issuer: registration.dcr_issuer ?? null,
+                dcr_server_url: registration.dcr_server_url,
+                token_endpoint_auth_method:
+                  registration.token_endpoint_auth_method === "client_secret_basic" ? "client_secret_basic" : null,
+                redirect_uris: registration.dcr_redirect_uris,
+              }
+            : undefined,
         };
       }
 
@@ -190,7 +214,8 @@ export const useMcpOAuthFlow = ({
         state,
         codeVerifier: verifier,
         clientId,
-        clientSecret: registeredClient.clientSecret || credentials.client_secret,
+        clientSecret: registeredClient.clientSecret || credentials.client_secret || undefined,
+        dcrCredentials: registeredClient.dcrCredentials,
         serverId,
         redirectUri: callbackUrl(),
         flowSource,
@@ -326,7 +351,11 @@ export const useMcpOAuthFlow = ({
         return;
       }
 
-      onTokenReceived(token, { clientId: flowState.clientId, clientSecret: flowState.clientSecret });
+      onTokenReceived(token, {
+        clientId: flowState.clientId,
+        clientSecret: flowState.clientSecret,
+        dcrCredentials: flowState.dcrCredentials,
+      });
       setTokenResponse(token);
       setStatus("success");
       setError(null);

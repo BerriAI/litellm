@@ -13,7 +13,7 @@ This module decodes them into float arrays for OpenAI-compatible responses.
 
 import base64
 import struct
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -117,7 +117,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         }
 
     @staticmethod
-    def _decode_base64_embedding(embedding_value: Any) -> list[float]:
+    def _decode_base64_embedding(embedding_value: object) -> object:
         """
         Decode a Perplexity embedding into a list of floats.
 
@@ -130,7 +130,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         if isinstance(embedding_value, str):
             raw_bytes: Final = base64.b64decode(embedding_value)
             count: Final = len(raw_bytes)
-            int8_values: Final = struct.unpack(f"{count}b", raw_bytes)
+            int8_values: Final[tuple[int, ...]] = struct.unpack(f"{count}b", raw_bytes)
             return [float(v) / 127.0 for v in int8_values]
         return embedding_value
 
@@ -154,7 +154,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         model_response.object = raw_response_json.get("object", "list")
 
         raw_data: Final = raw_response_json.get("data", [])
-        decoded_data: Final[list[dict[str, Any]]] = []
+        decoded_data: Final[list[dict[str, object]]] = []
         for item in raw_data:
             decoded_item = dict(item)
             decoded_item["embedding"] = self._decode_base64_embedding(item.get("embedding"))

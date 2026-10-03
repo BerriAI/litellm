@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
-import { setSecureItem } from "@/utils/secureStorage";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 import { useMcpOAuthFlow } from "./useMcpOAuthFlow";
 
 vi.mock("@/components/networking", () => ({
@@ -198,7 +198,13 @@ describe("useMcpOAuthFlow reset", () => {
 
   it("registers a fresh client when no client_id is present (new URL after the derived client is cleared)", async () => {
     vi.mocked(networking.cacheTemporaryMcpServer).mockResolvedValue({ server_id: "server-2" });
-    vi.mocked(networking.registerMcpOAuthClient).mockResolvedValue({ client_id: "fresh-client" });
+    vi.mocked(networking.registerMcpOAuthClient).mockResolvedValue({
+      client_id: "fresh-client",
+      token_endpoint_auth_method: "none",
+      dcr_issuer: "https://idp.example.com",
+      dcr_server_url: "https://server-2.example.com/mcp",
+      dcr_redirect_uris: ["https://gateway.example.com/callback"],
+    });
     vi.mocked(networking.buildMcpOAuthAuthorizeUrl).mockReturnValue("https://idp.example.com/authorize");
 
     const { result } = renderHook(() =>
@@ -219,6 +225,18 @@ describe("useMcpOAuthFlow reset", () => {
       await result.current.startOAuthFlow();
     });
 
+    expect(JSON.parse(getSecureItem(FLOW_STATE_KEY)!)).toEqual(
+      expect.objectContaining({
+        dcrCredentials: {
+          client_id: "fresh-client",
+          client_secret: null,
+          token_endpoint_auth_method: null,
+          dcr_issuer: "https://idp.example.com",
+          dcr_server_url: "https://server-2.example.com/mcp",
+          redirect_uris: ["https://gateway.example.com/callback"],
+        },
+      }),
+    );
     expect(networking.registerMcpOAuthClient).toHaveBeenCalledTimes(1);
     expect(networking.buildMcpOAuthAuthorizeUrl).toHaveBeenCalledWith(
       expect.objectContaining({ clientId: "fresh-client" }),
