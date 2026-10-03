@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -534,3 +535,18 @@ def test_openrouter_error_response_surfaces_as_not_found_error():
             api_key="sk-test",
             client=_client(recorder),
         )
+
+
+@pytest.mark.parametrize(
+    "matrix_path",
+    [
+        Path(litellm.__file__).parent.parent / "provider_endpoints_support.json",
+        Path(litellm.__file__).parent / "provider_endpoints_support_backup.json",
+    ],
+    ids=["root", "backup"],
+)
+def test_endpoint_matrix_lists_openrouter_image_generations(matrix_path: Path):
+    """The proxy's public endpoint listing reads the backup copy shipped inside the package"""
+    matrix = json.loads(matrix_path.read_text())
+
+    assert matrix["providers"]["openrouter"]["endpoints"]["image_generations"] is True
