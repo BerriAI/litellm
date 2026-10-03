@@ -15,7 +15,7 @@ Documentation: https://docs.cline.bot/
 """
 
 import json
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -26,6 +26,17 @@ from litellm.types.utils import ModelResponse
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import ClinePassException
+
+# Mirrors litellm/llms/openai/chat/gpt_transformation.py: these are needed only
+# for annotations, and importing litellm_logging at runtime from a provider
+# module risks a circular import.
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 CLINEPASS_API_BASE: Final = "https://api.cline.bot/api/v1"
 
@@ -189,12 +200,12 @@ class ClinePassConfig(OpenAIGPTConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
