@@ -7,9 +7,10 @@
 #   notepad quickstart.ps1
 #   powershell -ExecutionPolicy Bypass -File quickstart.ps1
 #
-# Asks at most two questions (where to keep the files, and whether to open the
-# admin UI), each with a default you accept by pressing Enter. It asks nothing
-# when input is not a console, under CI or Claude Code, or with -Yes.
+# Asks where to keep the files, then offers to copy the admin password and
+# open the admin UI; every question has a default you accept by pressing Enter.
+# It asks nothing when input is not a console, under CI or Claude Code, or
+# with -Yes.
 #
 #   -Yes, or LITELLM_YES=1   no questions: install to ~\litellm-gateway, don't open a browser
 #   LITELLM_DIR              folder to install into (skips the folder question)
@@ -20,8 +21,9 @@
 # from other machines, remove LITELLM_BIND from .env and put it behind TLS.
 #
 # Keys and the database password are random, written only to .env, which only
-# your Windows account can read, and never printed. Needs Docker Desktop,
-# Podman, or Rancher Desktop.
+# your Windows account can read, and never printed. When you ask, the admin
+# password goes straight to your clipboard. Needs Docker Desktop, Podman, or
+# Rancher Desktop.
 # Works in Windows PowerShell 5.1 and PowerShell 7. Everything runs inside
 # Invoke-LiteLLMQuickstart, so a partial download runs nothing.
 param([switch]$Yes)
@@ -156,6 +158,22 @@ function Invoke-LiteLLMQuickstart {
     (-not [Console]::IsInputRedirected) -and [Environment]::UserInteractive
 
   # Menu "Question" Default @(@('label', 'note'), ...) -> the 1-based pick.
+  # ReadKey holds on to Ctrl+C, so take it as a key and stop the way PowerShell
+  # does; finally blocks still run and put the terminal back.
+  function Read-Key {
+    $saved = [Console]::TreatControlCAsInput
+    try {
+      [Console]::TreatControlCAsInput = $true
+      $key = [Console]::ReadKey($true)
+    } finally {
+      [Console]::TreatControlCAsInput = $saved
+    }
+    if ($key.Key -eq 'C' -and ($key.Modifiers -band [ConsoleModifiers]::Control)) {
+      throw [System.Management.Automation.PipelineStoppedException]::new()
+    }
+    return $key
+  }
+
   function Menu {
     param([string]$Question, [int]$Default, [object[]]$Options)
     if (-not $interactive) { return $Default }
@@ -182,7 +200,7 @@ function Invoke-LiteLLMQuickstart {
         Clear-Line
         Say "  {d:$($sym.Hint)}"
         if (-not $vt) { $top = [Console]::CursorTop - ($count + 1) }
-        $key = [Console]::ReadKey($true)
+        $key = Read-Key
         if ($key.Key -eq 'UpArrow' -or $key.KeyChar -eq 'k') { if ($choice -gt 1) { $choice-- } }
         elseif ($key.Key -eq 'DownArrow' -or $key.KeyChar -eq 'j') { if ($choice -lt $count) { $choice++ } }
         elseif ($key.KeyChar -match '^[1-9]$' -and [int]"$($key.KeyChar)" -le $count) { $choice = [int]"$($key.KeyChar)" }
@@ -296,6 +314,33 @@ function Invoke-LiteLLMQuickstart {
 
   # The closing summary. Plain output, and a console too narrow for the frame,
   # get the same lines without it.
+  function Open-Url([string]$Url) {
+    try {
+      if ($onWindows) { Start-Process $Url } elseif (Get-Command open -ErrorAction SilentlyContinue) { & open $Url } else { & xdg-open $Url }
+      Step "Opened {a:$Url} in your browser"
+    } catch {
+      # No browser to open; print the address instead.
+      Say "  {d:Open} {a:$Url} {d:when you are ready.}"
+    }
+  }
+
+  # The admin password is the master key. It goes straight to the clipboard,
+  # never to the screen.
+  function Copy-Password([string]$Folder) {
+    $pw = Get-Content -LiteralPath (Join-Path $Folder '.env') |
+      Where-Object { $_.StartsWith('LITELLM_MASTER_KEY=') } | Select-Object -First 1
+    if (-not $pw) { Warn ('No LITELLM_MASTER_KEY in ' + (Lit (Join-Path (Tildify $Folder) '.env')) + '.'); return }
+    try {
+      Set-Clipboard -Value $pw.Substring('LITELLM_MASTER_KEY='.Length) -ErrorAction Stop
+      Step 'Copied the admin password. Paste it into the sign-in page.'
+    } catch {
+      # Another app can hold the Windows clipboard open.
+      Warn ('Could not copy it. The password is LITELLM_MASTER_KEY in ' + (Lit (Join-Path (Tildify $Folder) '.env')) + '.')
+    } finally {
+      $pw = $null
+    }
+  }
+
   function Show-Box([string]$Title, [object[]]$Rows) {
     $width = $Title.Length
     foreach ($r in $Rows) { if (11 + $r[1].Length -gt $width) { $width = 11 + $r[1].Length } }
@@ -556,25 +601,34 @@ function Invoke-LiteLLMQuickstart {
     $where = Tildify $dir
     if ($where -match ' ') { $where = "`"$where`"" }
     Write-Host ''
+    # Over SSH the clipboard would be the server's, not yours. On Linux,
+    # Set-Clipboard without xclip quietly keeps the text inside PowerShell, so
+    # only Windows and macOS, which always have a clipboard, get the option.
+    $canCopy = $interactive -and (-not $env:SSH_CONNECTION) -and
+      ($onWindows -or ((Test-Path variable:IsMacOS) -and $IsMacOS))
+    $password = "the LITELLM_MASTER_KEY value in $(Join-Path (Tildify $dir) '.env')"
+    if ($canCopy) { $password = "copy it below, or LITELLM_MASTER_KEY in $(Join-Path (Tildify $dir) '.env')" }
     Show-Box 'LiteLLM is running' @(
       , @('Admin UI', $url)
       , @('Username', 'admin')
-      , @('Password', "the LITELLM_MASTER_KEY value in $(Join-Path (Tildify $dir) '.env')")
+      , @('Password', $password)
       , @('Next', 'in the UI, open Models + Endpoints > Add Model and paste a provider API key')
       , @('Stop it', "cd $where; $engine compose -f docker-compose.quickstart.yml down"))
 
-    if ($interactive) {
-      $open = Menu 'Open the admin UI in your browser?' 1 @(
-        , @('Yes')
-        , @('No'))
-      $opened = $false
-      if ($open -eq 1) {
-        try {
-          if ($onWindows) { Start-Process $url } elseif (Get-Command open -ErrorAction SilentlyContinue) { & open $url } else { & xdg-open $url }
-          $opened = $true
-        } catch { <# no browser to open; the address is printed below #> }
+    if ($canCopy) {
+      # Come back to the menu after each choice, with the next step as the default.
+      $pick = 1
+      while ($true) {
+        $pick = Menu 'What next?' $pick @(
+          , @('Copy the admin password', 'to the clipboard, ready to paste')
+          , @('Open the admin UI in your browser')
+          , @('Done'))
+        if ($pick -eq 1) { Copy-Password $dir; $pick = 2 }
+        elseif ($pick -eq 2) { Open-Url $url; $pick = 3 }
+        else { break }
       }
-      if ($opened) { Step "Opened {a:$url} in your browser" } else { Say "  {d:Open} {a:$url} {d:when you are ready.}" }
+    } elseif ($interactive) {
+      if ((Menu 'Open the admin UI in your browser?' 1 @(, @('Yes'), @('No'))) -eq 1) { Open-Url $url }
     }
     return 0
   } finally {

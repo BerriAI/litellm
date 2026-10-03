@@ -8,9 +8,10 @@
 #   less quickstart.sh
 #   sh quickstart.sh
 #
-# Asks at most two questions (where to keep the files, and whether to open the
-# admin UI), each with a default you accept by pressing Enter. It asks nothing
-# when there is no terminal, under CI or Claude Code, or when run with --yes.
+# Asks where to keep the files, then offers to copy the admin password and
+# open the admin UI; every question has a default you accept by pressing Enter.
+# It asks nothing when there is no terminal, under CI or Claude Code, or when
+# run with --yes.
 #
 #   --yes, -y        no questions: install to ~/litellm-gateway, don't open a browser
 #   LITELLM_DIR      folder to install into (skips the folder question)
@@ -21,8 +22,9 @@
 # from other machines, remove LITELLM_BIND from .env and put it behind TLS.
 #
 # Keys and the database password are random (openssl rand), written only to
-# .env with permissions 600, and never printed. Needs Docker, Podman, or
-# Rancher Desktop, each with Compose v2.
+# .env with permissions 600, and never printed. When you ask, the admin
+# password goes straight to your clipboard. Needs Docker, Podman, or Rancher
+# Desktop, each with Compose v2.
 # Everything runs inside main(), so a partial download runs nothing.
 set -eu
 
@@ -432,19 +434,68 @@ wait_ready() {
   done
 }
 
-open_browser() {
-  url="$1"
-  menu "Open the admin UI in your browser?" 1 "Yes" "No"
-  [ "$INTERACTIVE" = 1 ] || return 0
-  if [ "$CHOICE" = 1 ]; then
-    for opener in open xdg-open; do
-      if command -v "$opener" >/dev/null 2>&1 && "$opener" "$url" >/dev/null 2>&1; then
-        step "Opened ${C_ACC}$url${C_OFF} in your browser"
-        return 0
-      fi
-    done
+open_url() {
+  for opener in open xdg-open; do
+    if command -v "$opener" >/dev/null 2>&1 && "$opener" "$1" >/dev/null 2>&1; then
+      step "Opened ${C_ACC}$1${C_OFF} in your browser"
+      return 0
+    fi
+  done
+  printf '  %sOpen%s %s%s%s %swhen you are ready.%s\n' "${C_DIM}" "${C_OFF}" "${C_ACC}" "$1" "${C_OFF}" "${C_DIM}" "${C_OFF}"
+}
+
+# A clipboard to copy the admin password to, or nothing. Over SSH the
+# clipboard would be the server's, not yours.
+find_clipboard() {
+  [ -z "${SSH_CONNECTION:-}${SSH_TTY:-}" ] || return 0
+  if command -v pbcopy >/dev/null 2>&1; then CLIP=pbcopy
+  elif [ -n "${WAYLAND_DISPLAY:-}" ] && command -v wl-copy >/dev/null 2>&1; then CLIP=wl-copy
+  elif [ -n "${DISPLAY:-}" ] && command -v xclip >/dev/null 2>&1; then CLIP="xclip -selection clipboard"
+  elif [ -n "${DISPLAY:-}" ] && command -v xsel >/dev/null 2>&1; then CLIP="xsel --clipboard --input"
+  elif command -v clip.exe >/dev/null 2>&1; then CLIP=clip.exe
   fi
-  printf '  %sOpen%s %s%s%s %swhen you are ready.%s\n' "${C_DIM}" "${C_OFF}" "${C_ACC}" "$url" "${C_OFF}" "${C_DIM}" "${C_OFF}"
+}
+
+# The admin password is the master key. It goes through a pipe, so it is
+# never on screen or in the process list.
+copy_password() {
+  pw="$(sed -n 's/^LITELLM_MASTER_KEY=//p' .env | head -n 1)"
+  if [ -z "$pw" ]; then
+    warn "No LITELLM_MASTER_KEY in $(tildify "$DIR")/.env."
+    return 0
+  fi
+  # shellcheck disable=SC2086 # CLIP is a command and its flags
+  if printf '%s' "$pw" | $CLIP >/dev/null 2>&1; then
+    step "Copied the admin password. Paste it into the sign-in page."
+  else
+    warn "Could not copy it. The password is LITELLM_MASTER_KEY in $(tildify "$DIR")/.env."
+  fi
+  pw=''
+}
+
+# After the summary: copy the password, open the admin UI, or finish. The
+# menu comes back after each choice with the next step as its default.
+next_steps() {
+  url="$1"
+  [ "$INTERACTIVE" = 1 ] || return 0
+  if [ -z "$CLIP" ]; then
+    menu "Open the admin UI in your browser?" 1 "Yes" "No"
+    if [ "$CHOICE" = 1 ]; then open_url "$url"; fi
+    return 0
+  fi
+  tab="$(printf '\t')"
+  pick=1
+  while :; do
+    menu "What next?" "$pick" \
+      "Copy the admin password${tab}to the clipboard, ready to paste" \
+      "Open the admin UI in your browser" \
+      "Done"
+    case "$CHOICE" in
+      1) copy_password; pick=2 ;;
+      2) open_url "$url"; pick=3 ;;
+      *) return 0 ;;
+    esac
+  done
 }
 
 main() {
@@ -559,15 +610,21 @@ EOF
   step "LiteLLM and Postgres are up ${C_DIM}· $(elapsed_since "$started")"
 
   url="http://localhost:$PORT/ui"
+  password="the LITELLM_MASTER_KEY value in $(tildify "$DIR")/.env"
+  CLIP=''
+  if [ "$INTERACTIVE" = 1 ]; then find_clipboard; fi
+  if [ -n "$CLIP" ]; then
+    password="copy it below, or LITELLM_MASTER_KEY in $(tildify "$DIR")/.env"
+  fi
   echo
   box "LiteLLM is running" \
     "Admin UI|$url" \
     "Username|admin" \
-    "Password|the LITELLM_MASTER_KEY value in $(tildify "$DIR")/.env" \
+    "Password|$password" \
     "Next|in the UI, open Models + Endpoints > Add Model and paste a provider API key" \
     "Stop it|cd $(tildify "$DIR") && $ENGINE compose -f docker-compose.quickstart.yml down"
 
-  open_browser "$url"
+  next_steps "$url"
 }
 
 main "$@"
