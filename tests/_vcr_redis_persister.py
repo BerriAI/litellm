@@ -246,7 +246,10 @@ _PATCHED_AIOHTTP_RECORD = False
 def patch_vcrpy_aiohttp_record_path() -> None:
     """Re-feed the response body into aiohttp's StreamReader after vcrpy's
     record_response drains it, so downstream consumers (e.g.
-    LiteLLMAiohttpTransport.AiohttpResponseStream) can still read it."""
+    LiteLLMAiohttpTransport.AiohttpResponseStream) can still read it.
+
+    vcrpy with kevin1024/vcrpy#1055 already hands back an unread stream, and
+    re-feeding that one would repeat the body, so only a drained stream is re-fed."""
     global _PATCHED_AIOHTTP_RECORD
     if _PATCHED_AIOHTTP_RECORD:
         return
@@ -257,7 +260,7 @@ def patch_vcrpy_aiohttp_record_path() -> None:
     async def _record_response_preserving_body(cassette, vcr_request, response):
         await _orig_record_response(cassette, vcr_request, response)
         body = getattr(response, "_body", None) or b""
-        if body:
+        if body and response.content.at_eof():
             response.content.unread_data(body)
 
     _aiohttp_stubs.record_response = _record_response_preserving_body

@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
+from collections.abc import AsyncIterator
+from typing import Final
+from unittest import mock
 
+import aiohttp
 import fakeredis
 import pytest
+import vcr
+from aiohttp import web
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import OutOfMemoryError as RedisOutOfMemoryError
 from redis.exceptions import TimeoutError as RedisTimeoutError
@@ -23,6 +30,7 @@ from tests._vcr_redis_persister import (  # noqa: E402
     filter_non_2xx_response,
     make_redis_persister,
     mark_test_outcome_for_cassette,
+    patch_vcrpy_aiohttp_record_path,
     redis_key_for,
     reset_cassette_cache_health,
 )
@@ -445,3 +453,55 @@ def test_capacity_snapshot_swallows_exceptions():
             raise RuntimeError("redis offline")
 
     assert cassette_cache_capacity_snapshot(client=_Boom()) is None
+
+
+@contextlib.asynccontextmanager
+async def _local_upstream_replying(body: bytes) -> AsyncIterator[str]:
+    async def _reply(_request: web.Request) -> web.Response:
+        return web.Response(body=body, content_type="application/json")
+
+    app: Final = web.Application()
+    app.router.add_post("/v1/chat/completions", _reply)
+    runner: Final = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", 0).start()
+    try:
+        yield f"http://127.0.0.1:{runner.addresses[0][1]}/v1/chat/completions"
+    finally:
+        await runner.cleanup()
+
+
+async def _stream_while_recording(cassette_path: str, body: bytes) -> bytes:
+    async with _local_upstream_replying(body) as url:
+        with vcr.use_cassette(cassette_path):
+            async with aiohttp.ClientSession() as session, session.post(url, json={}) as response:
+                return b"".join([chunk async for chunk in response.content.iter_chunked(1024)])
+
+
+async def test_aiohttp_response_streams_its_body_exactly_once_while_recording(tmp_path):
+    body: Final = b'{"id":"chatcmpl-1","object":"chat.completion"}'
+    patch_vcrpy_aiohttp_record_path()
+
+    streamed: Final = await _stream_while_recording(str(tmp_path / "cassette.yaml"), body)
+
+    assert streamed == body, f"streamed {len(streamed)} bytes of a {len(body)}-byte body"
+
+
+async def test_aiohttp_record_patch_does_not_refeed_an_unread_stream(tmp_path, monkeypatch):
+    body: Final = b'{"id":"chatcmpl-1","object":"chat.completion"}'
+
+    async def _record_leaving_the_stream_unread(_cassette, _vcr_request, response: aiohttp.ClientResponse) -> None:
+        # Stands in for vcrpy with kevin1024/vcrpy#1055, which reads the body for the cassette and then
+        # hands back a fresh, unread stream. The pinned vcrpy drains the stream instead.
+        recorded: Final = await response.read()
+        response.content = aiohttp.StreamReader(mock.Mock(_reading_paused=False), 2**16)
+        response.content.feed_data(recorded)
+        response.content.feed_eof()
+
+    monkeypatch.setattr("vcr.stubs.aiohttp_stubs.record_response", _record_leaving_the_stream_unread)
+    monkeypatch.setattr("tests._vcr_redis_persister._PATCHED_AIOHTTP_RECORD", False)
+    patch_vcrpy_aiohttp_record_path()
+
+    streamed: Final = await _stream_while_recording(str(tmp_path / "cassette.yaml"), body)
+
+    assert streamed == body, f"streamed {len(streamed)} bytes of a {len(body)}-byte body"
