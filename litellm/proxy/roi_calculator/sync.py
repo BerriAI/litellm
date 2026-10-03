@@ -222,7 +222,7 @@ async def _estimate_with_fallback(
 
 
 async def _unavailable_record(
-    github: RepositorySource, repo: str, pull: GitHubPullListItem, error: SourceError
+    github: RepositorySource, settings: ROISettings, repo: str, pull: GitHubPullListItem, error: SourceError
 ) -> ROIPullRecord:
     login: Final = pull.user.login if pull.user and pull.user.login else "deleted-user"
     profile: Final = await github.profile_email(login)
@@ -232,6 +232,10 @@ async def _unavailable_record(
         "reasoning": f"PR metadata could not be read: {error} Run analysis again to retry this PR.",
     }
     return ROIPullRecord(
+        source_repo=repository_tag(settings, pull.head.repo.full_name)
+        if pull.head and pull.head.repo and pull.head.repo.full_name
+        else "",
+        source_branch=pull.head.ref if pull.head else "",
         repo=repo,
         number=pull.number,
         title=pull.title,
@@ -546,7 +550,7 @@ class SyncManager:
                 try:
                     evidence: Final = await github.evidence(repo, pull)
                 except SourceError as exc:
-                    unavailable: Final = await _unavailable_record(github, repo, pull, exc)
+                    unavailable: Final = await _unavailable_record(github, settings, repo, pull, exc)
                     self._update_estimate_progress(unavailable["estimate"])
                     return _ProcessedPull(index, unavailable, metadata_unavailable=True)
                 estimate: Final = await _estimate_with_fallback(estimator, evidence)

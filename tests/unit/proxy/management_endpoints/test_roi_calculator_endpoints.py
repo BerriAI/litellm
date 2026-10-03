@@ -6,6 +6,7 @@ from math import isclose
 from types import MappingProxyType
 from typing import Final, cast
 
+import httpx
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
@@ -17,6 +18,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.roi_calculator_endpoints import (
     _estimator_models_from_deployments,
     _next_update,
+    get_github_transport,
     get_roi_config_repository,
     register_scheduled_sync,
     router,
@@ -69,11 +71,14 @@ class _ConfigRepository:
         return self.values[param_name]
 
 
-def _client(role: LitellmUserRoles, repository: _ConfigRepository) -> TestClient:
+def _client(
+    role: LitellmUserRoles, repository: _ConfigRepository, transport: httpx.AsyncBaseTransport | None = None
+) -> TestClient:
     app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=role)
     app.dependency_overrides[get_roi_config_repository] = lambda: repository
+    app.dependency_overrides[get_github_transport] = lambda: transport
     return TestClient(app)
 
 
@@ -160,6 +165,42 @@ def test_github_api_url_must_use_https() -> None:
 
     assert response.status_code == 422
     assert not repository.values
+
+
+@pytest.mark.parametrize(
+    "patch", ({"github_api_url": None}, {"gitlab_api_url": None}, {"repos": ["invalid"]}, {"estimator_prompt": " "})
+)
+def test_invalid_connection_settings_are_rejected_without_saving(patch: Mapping[str, object]) -> None:
+    repository: Final = _ConfigRepository()
+    client: Final = _client(LitellmUserRoles.PROXY_ADMIN, repository)
+    assert client.put("/roi-calculator/settings", json=patch).status_code == 422
+    assert not repository.values
+
+
+@pytest.mark.parametrize("upstream_status", (200, 403))
+def test_public_gitlab_repository_browser_and_errors(upstream_status: int) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v4/projects"
+        assert request.url.params["search"] == "gateway"
+        assert "PRIVATE-TOKEN" not in request.headers
+        return httpx.Response(
+            upstream_status, json=[{"id": 1, "path_with_namespace": "group/gateway"}], headers={"x-next-page": "2"}
+        )
+
+    repository: Final = _ConfigRepository()
+    client: Final = _client(LitellmUserRoles.PROXY_ADMIN, repository, httpx.MockTransport(respond))
+    assert client.put("/roi-calculator/settings", json={"source_provider": "gitlab"}).status_code == 200
+    response: Final = client.get("/roi-calculator/repositories", params={"query": "gateway"})
+    if upstream_status == 200:
+        assert response.status_code == 200
+        assert response.json() == {
+            "repositories": [{"name": "group/gateway", "visibility": "private", "archived": False}],
+            "page": 1,
+            "has_more": True,
+        }
+    else:
+        assert response.status_code == 502
+        assert "HTTP 403" in response.json()["detail"]
 
 
 @pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])

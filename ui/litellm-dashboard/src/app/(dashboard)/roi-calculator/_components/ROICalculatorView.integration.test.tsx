@@ -1,6 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
 
 import { apiClient } from "@/components/networking";
 import ROICalculatorView from "./ROICalculatorView";
@@ -12,21 +11,6 @@ vi.mock("@/components/networking", () => ({
     post: vi.fn(),
     put: vi.fn(),
   },
-}));
-vi.mock("@/components/ui/chart", () => ({
-  ChartContainer: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  ChartLegend: () => null,
-  ChartLegendContent: () => null,
-  ChartTooltip: () => null,
-  ChartTooltipContent: () => null,
-}));
-vi.mock("recharts", () => ({
-  Bar: () => null,
-  CartesianGrid: () => null,
-  ComposedChart: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  Line: () => null,
-  XAxis: () => null,
-  YAxis: () => null,
 }));
 
 const summary = {
@@ -73,6 +57,15 @@ const summary = {
   pulls: [
     {
       repo: "org/repo",
+      source_repo: "github.com/org/repo",
+      source_branch: "feature/routing",
+      branch_cost: {
+        repo: "github.com/org/repo",
+        branch: "feature/routing",
+        status: "matched",
+        spend: 8,
+        requests: 12,
+      },
       number: 42,
       title: "Improve request routing",
       url: "https://github.com/org/repo/pull/42",
@@ -145,8 +138,8 @@ describe("ROICalculatorView", () => {
   it("shows the spend summary and opens an accessible pull reasoning dialog", async () => {
     render(<ROICalculatorView accessToken="token" />);
 
-    expect(await screen.findByText("Cost / estimated hour")).toBeInTheDocument();
-    expect(screen.getByText("$3.00")).toBeInTheDocument();
+    expect(await screen.findByText("Gateway AI cost")).toBeInTheDocument();
+    expect(screen.getByText("$20.00")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open estimate for org/repo pull request 42" }));
 
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
@@ -157,17 +150,17 @@ describe("ROICalculatorView", () => {
     );
   });
 
-  it("keeps the selected cost view when reviewing people and returning to the overview", async () => {
+  it("separates the overview, people, and branch reports into three tabs", async () => {
     render(<ROICalculatorView accessToken="token" />);
-
-    fireEvent.click(await screen.findByRole("radio", { name: "By branch" }));
+    expect(await screen.findByRole("heading", { name: "Where AI costs are matched" })).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: "Branches" }));
     expect(screen.getByRole("heading", { name: "Costs by branch" })).toBeVisible();
-    expect(screen.getByRole("radio", { name: "By branch" })).toBeChecked();
+    expect(screen.getByRole("cell", { name: "$8.00" })).toBeVisible();
     fireEvent.click(screen.getByRole("tab", { name: "People" }));
+    expect(screen.getByRole("heading", { name: "People and account matches" })).toBeVisible();
     fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
-    expect(screen.getByRole("radio", { name: "By branch" })).toBeChecked();
-    fireEvent.click(screen.getByRole("radio", { name: "By person" }));
-    expect(screen.getByText("$3.00")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Highest-cost changes" })).toBeVisible();
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
   });
 
   it("shows incomplete repository results without a spend-per-hour figure", async () => {
@@ -192,6 +185,7 @@ describe("ROICalculatorView", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(warning);
     expect(screen.getByRole("button", { name: "Open estimate for org/repo pull request 42" })).toBeInTheDocument();
     expect(screen.queryByText("$3.00")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "People" }));
     fireEvent.click(screen.getByText("How this is calculated"));
     expect(
       screen.getByText("Spend per estimated hour is unavailable until all selected repositories can be read."),
@@ -214,7 +208,7 @@ describe("ROICalculatorView", () => {
 
     render(<ROICalculatorView accessToken="token" userRole="Admin" isViewOnly />);
 
-    expect(await screen.findByText("Cost / estimated hour")).toBeInTheDocument();
+    expect(await screen.findByText("Gateway AI cost")).toBeInTheDocument();
     expect(screen.getByRole("note")).toHaveTextContent("Read-only access");
     expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel sync" })).not.toBeInTheDocument();
@@ -265,6 +259,49 @@ describe("ROICalculatorView", () => {
     expect(screen.getAllByText("Connect your repositories")).toHaveLength(1);
   });
 
+  it.each(["github", "gitlab"])("only permits unauthenticated repository browsing for GitLab: %s", async (provider) => {
+    const publicSettings = {
+      ...settings,
+      source_provider: provider,
+      gitlab_api_url: "https://gitlab.com/api/v4",
+      has_github_token: false,
+      has_gitlab_token: false,
+    };
+    vi.mocked(apiClient.get).mockImplementation((path: string) => {
+      if (path === "/roi-calculator/settings") {
+        return Promise.resolve(publicSettings);
+      }
+      if (path === "/roi-calculator/report") return Promise.resolve({ report: summary });
+      return Promise.resolve(idleStatus);
+    });
+    render(<ROICalculatorView accessToken="token" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    const load = screen.getByRole("button", { name: "Load repositories" });
+    if (provider === "github") expect(load).toBeDisabled();
+    else expect(load).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: "Repository name" })).toBeEnabled();
+  });
+
+  it("closes the old settings dialog when saving a different source", async () => {
+    const gitlabSettings = {
+      ...settings,
+      source_provider: "gitlab",
+      gitlab_api_url: "https://gitlab.com/api/v4",
+      has_gitlab_token: false,
+      repos: [],
+      ready: false,
+    };
+    vi.mocked(apiClient.put).mockResolvedValue(gitlabSettings);
+    render(<ROICalculatorView accessToken="token" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    fireEvent.change(screen.getByLabelText("Repository source"), { target: { value: "gitlab" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+    expect(await screen.findByRole("heading", { name: "Connect your repositories" })).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getAllByLabelText("Repository source")).toHaveLength(1);
+    expect(screen.getByLabelText("Repository source")).toHaveValue("gitlab");
+  });
+
   it("clearly identifies the sample report and returns to setup when exiting", async () => {
     const emptySettings = { ...settings, has_github_token: false, ready: false, repos: [], estimator_model: "" };
     vi.mocked(apiClient.get).mockImplementation((path: string, options) => {
@@ -279,7 +316,7 @@ describe("ROICalculatorView", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Preview sample report" }));
 
     expect(await screen.findByText("You’re viewing demo data")).toBeVisible();
-    expect(screen.getByRole("radio", { name: "By branch" })).toBeChecked();
+    expect(screen.getByRole("tab", { name: "Branches" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("Cost / estimated hour")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Settings" })).not.toBeInTheDocument();
@@ -317,15 +354,23 @@ describe("ROICalculatorView", () => {
     });
 
     render(<ROICalculatorView accessToken="token" />);
-    fireEvent.change(await screen.findByRole("searchbox"), { target: { value: "no matching PR" } });
+    fireEvent.click(await screen.findByRole("tab", { name: "Branches" }));
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "no matching PR" } });
     fireEvent.click(screen.getByRole("button", { name: "Preview sample report" }));
 
     expect(await screen.findByText("You’re viewing demo data")).toBeVisible();
-    expect(screen.getByRole("radio", { name: "By branch" })).toBeChecked();
+    expect(screen.getByRole("tab", { name: "Branches" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("searchbox")).toHaveValue("");
     expect(screen.getByRole("cell", { name: "$9.10" })).toBeVisible();
     expect(screen.queryByText("Improve request routing")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
+
+    const runningStatus = { ...idleStatus, running: true, phase: "estimating", total: 1 };
+    vi.mocked(apiClient.get).mockClear().mockResolvedValue(runningStatus);
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith("/roi-calculator/sync", { accessToken: "token" }), {
+      timeout: 3000,
+    });
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Open estimate for org/repo pull request 42" }));
     expect(await screen.findByRole("dialog")).toBeVisible();
@@ -336,7 +381,7 @@ describe("ROICalculatorView", () => {
 
     expect(screen.getByText("Improve request routing")).toBeVisible();
     expect(screen.queryByText("Sample usage breakdown")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Run analysis" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Syncing…" })).toBeDisabled();
     expect(apiClient.post).not.toHaveBeenCalled();
     expect(apiClient.put).not.toHaveBeenCalled();
   });
@@ -365,7 +410,7 @@ describe("ROICalculatorView", () => {
     render(<ROICalculatorView accessToken="token" />);
 
     expect(await screen.findByRole("progressbar", { name: "Sync progress" })).toBeInTheDocument();
-    expect(await screen.findByText("Cost / estimated hour", {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByText("Gateway AI cost", {}, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Connect your repositories" })).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Last synced Sep 30, 2026, 12:00 PM UTC");
   });
@@ -445,7 +490,7 @@ describe("ROICalculatorView", () => {
     expect(await screen.findByRole("alert", {}, { timeout: 5000 })).toHaveTextContent(
       "The sync status could not be loaded.",
     );
-    expect(await screen.findByText("Cost / estimated hour", {}, { timeout: 7000 })).toBeInTheDocument();
+    expect(await screen.findByText("Gateway AI cost", {}, { timeout: 7000 })).toBeInTheDocument();
     expect(screen.queryByText("The sync status could not be loaded.")).not.toBeInTheDocument();
   });
   it("saves the edited schedule before running from Settings", async () => {

@@ -45,7 +45,7 @@ class _MergeRequest(BaseModel):
     source_project_id: int | None
     changes_count: str | None = None
 
-    def pull(self) -> GitHubPullListItem:
+    def pull(self, source: _Project | None) -> GitHubPullListItem:
         return GitHubPullListItem.model_validate(
             {
                 "number": self.iid,
@@ -55,7 +55,11 @@ class _MergeRequest(BaseModel):
                 "user": {"login": self.author.username},
                 "merged_at": self.merged_at,
                 "updated_at": self.updated_at,
-                "head": {"sha": self.sha or "", "ref": self.source_branch},
+                "head": {
+                    "sha": self.sha or "",
+                    "ref": self.source_branch,
+                    "repo": {"full_name": source.path_with_namespace} if source else None,
+                },
             }
         )
 
@@ -192,11 +196,14 @@ class GitLab:
                 "sort": "desc",
             },
         )
-        return tuple(
-            item.pull()
-            for item in items
-            if item.merged_at and start.isoformat() <= item.merged_at[:10] <= end.isoformat()
+        merged: Final = tuple(
+            item for item in items if item.merged_at and start.isoformat() <= item.merged_at[:10] <= end.isoformat()
         )
+        sources: Final = {
+            source_id: await self._source_project(source_id)
+            for source_id in frozenset(item.source_project_id for item in merged)
+        }
+        return tuple(item.pull(sources[item.source_project_id]) for item in merged)
 
     async def profile_email(self, login: str, *, fallback: str = "") -> str:
         if login.casefold() in self.profiles:

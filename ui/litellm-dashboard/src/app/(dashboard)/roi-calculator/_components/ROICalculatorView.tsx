@@ -17,7 +17,7 @@ import { extractErrorMessage } from "@/utils/errorUtils";
 import { isProxyAdminTierRole } from "@/utils/roles";
 import ROISettingsPanel from "./ROISettingsPanel";
 import { IdentityMatchDialog, type PersonMatchSelection, PullReasoningDialog } from "./ROICalculatorDialogs";
-import { ROIOverview, ROIPeopleView } from "./ROICalculatorViews";
+import { ROIBranches, ROIOverview, ROIPeopleView } from "./ROICalculatorViews";
 import { filterPulls, formatSyncedAt } from "./roiCalculatorData";
 import type {
   ROIIdentityMapResponse,
@@ -29,7 +29,7 @@ import type {
   ROISyncStatus,
 } from "./roiCalculatorData";
 
-type View = "overview" | "people";
+type View = "overview" | "people" | "branches";
 
 const IDLE_STATUS: ROISyncStatus = {
   running: false,
@@ -58,7 +58,6 @@ export default function ROICalculatorView({
   const readOnly = adminReadOnly || sampleSummary !== null;
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [view, setView] = React.useState<View>("overview");
-  const [costView, setCostView] = React.useState<"people" | "branches">("people");
   const [settings, setSettings] = React.useState<ROISettings | null>(null);
   const [liveSummary, setSummary] = React.useState<ROISummary | null>(null);
   const summary = sampleSummary ?? liveSummary;
@@ -203,8 +202,7 @@ export default function ROICalculatorView({
         query: { mode: "demo" },
       });
       setSampleSummary(response.report);
-      setView("overview");
-      setCostView("branches");
+      setView("branches");
       setQuery("");
     } catch (reason) {
       setError(extractErrorMessage(reason));
@@ -222,7 +220,7 @@ export default function ROICalculatorView({
   const progress = status.total > 0 ? Math.min(100, (status.done / status.total) * 100) : 0;
   const statusIsIdleOrComplete = status.phase === "idle" || status.phase === "complete";
   const syncIsUpToDate = !status.running && statusIsIdleOrComplete;
-  const syncedAt = syncIsUpToDate ? summary?.synced_at : null;
+  const syncedAt = sampleSummary?.synced_at ?? (syncIsUpToDate ? summary?.synced_at : null);
 
   return (
     <Page className="gap-6">
@@ -279,17 +277,18 @@ export default function ROICalculatorView({
           <PageTabsList aria-label="ROI Calculator views">
             <PageTabsTrigger value="overview">Overview</PageTabsTrigger>
             <PageTabsTrigger value="people">People</PageTabsTrigger>
+            <PageTabsTrigger value="branches">Branches</PageTabsTrigger>
           </PageTabsList>
         </Tabs>
       )}
 
-      {error && (
+      {!sampleSummary && error && (
         <Alert variant="destructive">
           <AlertTitle>ROI Calculator request failed</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
-      {status.error && (
+      {!sampleSummary && status.error && (
         <Alert variant="destructive">
           <AlertTitle>Sync failed</AlertTitle>
           <AlertDescription>{status.error}</AlertDescription>
@@ -301,7 +300,7 @@ export default function ROICalculatorView({
           <AlertDescription>{warning}</AlertDescription>
         </Alert>
       ))}
-      {status.running && (
+      {!sampleSummary && status.running && (
         <Card>
           <CardContent className="flex flex-wrap items-center justify-between gap-4 pt-6">
             <div
@@ -346,13 +345,18 @@ export default function ROICalculatorView({
       {view === "overview" && summary && (
         <ROIOverview
           summary={summary}
-          costView={costView}
-          onCostViewChange={setCostView}
+          onSelectPull={setSelectedPull}
+          onViewPeople={() => setView("people")}
+          onViewBranches={() => setView("branches")}
+        />
+      )}
+      {view === "branches" && summary && (
+        <ROIBranches
+          summary={summary}
           pulls={filteredPulls}
           query={query}
           onQueryChange={setQuery}
           onSelectPull={setSelectedPull}
-          onViewPeople={() => setView("people")}
         />
       )}
       {view === "people" && summary && (
@@ -374,13 +378,15 @@ export default function ROICalculatorView({
             initialSettings={settings}
             onboarding={false}
             onSaved={(updated) => {
-              setSettings(updated);
               if (
                 updated.source_provider !== settings.source_provider ||
                 updated.github_api_url !== settings.github_api_url ||
                 updated.gitlab_api_url !== settings.gitlab_api_url
-              )
-                setSummary(null);
+              ) {
+                resetView(updated);
+                return;
+              }
+              setSettings(updated);
             }}
             onReset={resetView}
             onStartSync={startSync}

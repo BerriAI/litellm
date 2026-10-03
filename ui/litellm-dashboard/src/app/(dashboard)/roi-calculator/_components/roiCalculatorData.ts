@@ -70,6 +70,12 @@ export const filterPulls = (pulls: ROIPull[], query: string): ROIPull[] => {
   );
 };
 
+export const highestCostPulls = (pulls: ROIPull[]): ROIPull[] =>
+  pulls
+    .filter((pull) => pull.branch_cost?.status === "matched")
+    .sort((left, right) => (right.branch_cost?.spend ?? 0) - (left.branch_cost?.spend ?? 0))
+    .slice(0, 5);
+
 export const peopleCsv = (summary: Pick<ROISummary, "people" | "start" | "end" | "effort_basis">): string => {
   const escape = (value: unknown): string => {
     const text = value == null ? "" : String(value);

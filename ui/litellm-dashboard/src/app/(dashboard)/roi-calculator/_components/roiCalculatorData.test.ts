@@ -8,6 +8,7 @@ import {
   formatMoney,
   formatNumber,
   formatSyncedAt,
+  highestCostPulls,
   peopleCsv,
 } from "./roiCalculatorData";
 import type { ROIPull } from "./roiCalculatorData";
@@ -41,6 +42,15 @@ const summary = {
 };
 
 describe("ROI calculator display helpers", () => {
+  it("ranks only attributed PR costs, limits the overview to five and preserves report order", () => {
+    const pulls = [2, 6, 1, 4, 3, 5].map((spend) =>
+      pull({ number: spend, branch_cost: { status: "matched", spend, requests: 1, cost_per_hour: spend } }),
+    );
+    pulls.push(pull({ number: 99, branch_cost: { status: "ambiguous", spend: 99, requests: 1, cost_per_hour: null } }));
+    pulls.push(pull({ number: 100 }));
+    expect(highestCostPulls(pulls).map((item) => item.number)).toEqual([6, 5, 4, 3, 2]);
+    expect(pulls.map((item) => item.number)).toEqual([2, 6, 1, 4, 3, 5, 99, 100]);
+  });
   it("formats spend and estimated hours without losing null values", () => {
     expect(formatMoney(1234.5)).toBe("$1,234.50");
     expect(formatMoney(0.0001)).toBe("$0.0001");

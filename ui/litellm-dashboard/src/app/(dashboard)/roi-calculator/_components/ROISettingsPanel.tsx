@@ -67,7 +67,8 @@ export default function ROISettingsPanel({
   const [message, setMessage] = React.useState<string | null>(null);
 
   const sourceUnchanged = provider === (initialSettings.source_provider ?? "github") && apiUrl === savedUrl;
-  const canLoadRepositories = sourceUnchanged && !token.trim() && !clearToken;
+  const credentialsSaved = sourceUnchanged && !token.trim() && !clearToken;
+  const canLoadRepositories = credentialsSaved && (provider === "gitlab" || savedToken);
   const tokenHelp =
     provider === "gitlab"
       ? "For private projects, use a token with read_api scope and project access."
@@ -209,14 +210,10 @@ export default function ROISettingsPanel({
       {onboarding && (
         <CardHeader>
           <h2 className="text-base leading-normal font-medium">
-            {onboarding
-              ? ["Connect your repositories", "Choose repositories", "Choose an estimator"][step]
-              : "ROI Calculator settings"}
+            {["Connect your repositories", "Choose repositories", "Choose an estimator"][step]}
           </h2>
           <CardDescription>
-            {onboarding
-              ? "Your gateway is already connected. Choose a source and an estimator for your first report."
-              : "Choose repositories and the gateway model used to estimate engineering effort."}
+            Your gateway is already connected. Choose a source and an estimator for your first report.
           </CardDescription>
         </CardHeader>
       )}
@@ -329,7 +326,9 @@ export default function ROISettingsPanel({
                 </div>
                 {!canLoadRepositories && (
                   <p className="text-xs text-muted-foreground">
-                    Save the source and connection settings before loading repositories.
+                    {provider === "github" && !savedToken
+                      ? "Save a GitHub token to browse repositories, or add a public repository by name."
+                      : "Save the source and connection settings before loading repositories."}
                   </p>
                 )}
                 {repos.length > 0 && (
@@ -389,11 +388,6 @@ export default function ROISettingsPanel({
                         </span>
                       </label>
                     ))}
-                    {availableRepos.length === 0 && (
-                      <p className="text-sm text-muted-foreground">
-                        Load repositories to choose which changes to analyze.
-                      </p>
-                    )}
                   </div>
                 )}
                 {hasMoreRepos && (

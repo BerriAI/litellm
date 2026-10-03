@@ -1,101 +1,198 @@
 "use client";
 
 import React from "react";
-import { ChevronDown, Download, Search } from "lucide-react";
-import { Bar, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from "recharts";
+import { ChevronDown, Download, GitBranch, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  ChartContainer,
-  ChartLegend,
-  ChartLegendContent,
-  ChartTooltip,
-  ChartTooltipContent,
-} from "@/components/ui/chart";
-import type { ChartConfig } from "@/components/ui/chart";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { peopleCsv, effortNote, estimateLabel, formatMoney, formatNumber, branchCostLabel } from "./roiCalculatorData";
+import {
+  peopleCsv,
+  effortNote,
+  estimateLabel,
+  formatMoney,
+  formatNumber,
+  branchCostLabel,
+  highestCostPulls,
+} from "./roiCalculatorData";
 import type { ROIPerson, ROIPull, ROISummary } from "./roiCalculatorData";
 
-const CHART_CONFIG = {
-  spend: { label: "Matched spend", color: "var(--chart-1)" },
-  hours: { label: "Estimated hours", color: "var(--chart-2)" },
-} satisfies ChartConfig;
-type CostView = "people" | "branches";
+type PullSelection = { summary: ROISummary; onSelectPull: (pull: ROIPull) => void };
 
 export function ROIOverview({
   summary,
-  costView,
-  onCostViewChange,
+  onSelectPull,
+  onViewPeople,
+  onViewBranches,
+}: PullSelection & {
+  onViewPeople: () => void;
+  onViewBranches: () => void;
+}) {
+  const metrics = summary.metrics;
+  const branches = summary.branch_metrics;
+  const topPulls = highestCostPulls(summary.pulls);
+  return (
+    <div className="space-y-8">
+      <div className="@container overflow-hidden rounded-xl border">
+        <dl aria-label="Report overview" className="grid grid-cols-2 @min-[760px]:grid-cols-4">
+          <MetricCard
+            title="Gateway AI cost"
+            value={formatMoney(metrics.total_spend)}
+            description="All gateway usage in this period"
+            primary
+          />
+          <MetricCard
+            title="Estimated effort"
+            value={`${formatNumber(metrics.total_output_hours)} hrs`}
+            description={summary.effort_basis === "without_ai" ? "Estimated without AI" : "Check estimate assumptions"}
+          />
+          <MetricCard
+            title="Merged changes"
+            value={formatNumber(metrics.merged_prs)}
+            description={`${metrics.estimated_prs} estimated`}
+          />
+          <MetricCard
+            title="People"
+            value={formatNumber(metrics.people_with_prs)}
+            description="Contributors to merged work"
+          />
+        </dl>
+      </div>
+      <section aria-label="Cost coverage" className="space-y-4">
+        <div className="space-y-1">
+          <h2 className="text-base font-semibold">Where AI costs are matched</h2>
+          <p className="text-sm text-muted-foreground">
+            People use gateway account costs. Branches use tagged requests for these repositories.
+          </p>
+        </div>
+        <div className="overflow-hidden rounded-xl border">
+          <Table className="min-w-[600px]">
+            <TableHeader className="bg-muted/40">
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="px-4 text-xs">View</TableHead>
+                <TableHead className="px-4 text-right text-xs">Matched cost</TableHead>
+                <TableHead className="px-4 text-right text-xs">Unmatched cost</TableHead>
+                <TableHead className="px-4 text-right text-xs">Changes matched</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow>
+                <TableCell className="px-4 py-3">
+                  <Button variant="link" className="h-auto p-0" onClick={onViewPeople}>
+                    People
+                  </Button>
+                </TableCell>
+                <TableCell className="px-4 py-3 text-right font-medium tabular-nums">
+                  {formatMoney(metrics.matched_spend)}
+                </TableCell>
+                <TableCell className="px-4 py-3 text-right text-muted-foreground tabular-nums">
+                  {formatMoney(metrics.excluded_spend)}
+                </TableCell>
+                <TableCell className="px-4 py-3 text-right tabular-nums">
+                  {metrics.matched_prs} / {metrics.merged_prs}
+                </TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className="px-4 py-3">
+                  <Button variant="link" className="h-auto p-0" onClick={onViewBranches}>
+                    Branches
+                  </Button>
+                </TableCell>
+                <TableCell className="px-4 py-3 text-right font-medium tabular-nums">
+                  {formatMoney(branches?.spend)}
+                </TableCell>
+                <TableCell className="px-4 py-3 text-right text-muted-foreground tabular-nums">
+                  {formatMoney(branches?.unlinked_spend)}
+                </TableCell>
+                <TableCell className="px-4 py-3 text-right tabular-nums">
+                  {branches?.matched_pulls ?? 0} / {metrics.merged_prs}
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
+      </section>
+      <ROIPulls
+        summary={summary}
+        pulls={topPulls}
+        onSelectPull={onSelectPull}
+        compact
+        onViewBranches={onViewBranches}
+      />
+    </div>
+  );
+}
+
+export function ROIBranches({
+  summary,
+  onSelectPull,
   pulls,
   query,
   onQueryChange,
-  onSelectPull,
-  onViewPeople,
-}: {
-  summary: ROISummary;
-  costView: CostView;
-  onCostViewChange: (value: CostView) => void;
+}: PullSelection & {
   pulls: ROIPull[];
   query: string;
-  onQueryChange: (value: string) => void;
-  onSelectPull: (pull: ROIPull) => void;
-  onViewPeople: () => void;
+  onQueryChange: (query: string) => void;
 }) {
-  const costViewId = React.useId();
-  const branchMode = costView === "branches";
+  return (
+    <div className="space-y-8">
+      <section aria-label="Branch cost analysis" className="space-y-4">
+        <div className="@container overflow-hidden rounded-xl border">
+          <ROIMetrics summary={summary} branchMode />
+          <ROIComparison summary={summary} branchMode />
+        </div>
+      </section>
+      <ROIPulls
+        summary={summary}
+        pulls={pulls}
+        query={query}
+        onQueryChange={onQueryChange}
+        onSelectPull={onSelectPull}
+      />
+    </div>
+  );
+}
+
+function ROIPulls({
+  summary,
+  onSelectPull,
+  pulls,
+  query = "",
+  onQueryChange,
+  compact = false,
+  onViewBranches,
+}: PullSelection & {
+  pulls: ROIPull[];
+  query?: string;
+  onQueryChange?: (query: string) => void;
+  compact?: boolean;
+  onViewBranches?: () => void;
+}) {
   const changeName = summary.source_provider === "gitlab" ? "merge request" : "pull request";
   const [pagination, setPagination] = React.useState({ query, visibleCount: 10 });
   const visibleCount = pagination.query === query ? pagination.visibleCount : 10;
   const metrics = summary.metrics;
+  const emptyMessage = compact
+    ? "No merged changes with tagged costs yet. Open Branches to see how to add tags."
+    : `No merged ${changeName}s in this period.`;
   return (
-    <div className="space-y-8">
-      <section aria-label="AI cost analysis" className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="space-y-1">
-            <h2 className="text-base font-semibold">AI cost analysis</h2>
-            <p className="text-sm text-muted-foreground">
-              {branchMode
-                ? "Request costs linked to each merged branch."
-                : "Gateway costs linked to each person’s merged work."}
-            </p>
-          </div>
-          <fieldset className="inline-flex shrink-0 rounded-lg bg-muted p-1">
-            <legend className="sr-only">Analyze AI costs</legend>
-            {(["people", "branches"] as const).map((value) => (
-              <label key={value} className="cursor-pointer">
-                <input
-                  type="radio"
-                  name={costViewId}
-                  value={value}
-                  checked={costView === value}
-                  onChange={() => onCostViewChange(value)}
-                  className="peer sr-only"
-                />
-                <span className="block whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground peer-checked:bg-background peer-checked:text-foreground peer-checked:shadow-sm peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-ring">
-                  {value === "people" ? "By person" : "By branch"}
-                </span>
-              </label>
-            ))}
-          </fieldset>
+    <section aria-label={`Merged ${changeName}s`} className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="space-y-1">
+          <h2 className="text-base font-semibold">{compact ? "Highest-cost changes" : "Costs by branch"}</h2>
+          <p className="text-sm text-muted-foreground">
+            {compact
+              ? "Merged work ranked by tagged AI cost"
+              : `${metrics.merged_prs} ${changeName}s · ${metrics.estimated_prs} estimated`}
+            {!compact && metrics.pending_prs > 0 && (
+              <span className="text-amber-700 dark:text-amber-400"> · {metrics.pending_prs} need attention</span>
+            )}
+          </p>
         </div>
-        <div className="@container overflow-hidden rounded-xl border">
-          <ROIMetrics summary={summary} branchMode={branchMode} />
-          <ROIComparison summary={summary} branchMode={branchMode} onViewPeople={onViewPeople} />
-        </div>
-      </section>
-      {!branchMode && metrics.cohort_people > 0 && <ROITrend summary={summary} />}
-      <section aria-label={`Merged ${changeName}s`} className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="space-y-1">
-            <h2 className="text-base font-semibold">{branchMode ? "Costs by branch" : "Merged work"}</h2>
-            <p className="text-sm text-muted-foreground">
-              {metrics.merged_prs} {changeName}s · {metrics.estimated_prs} estimated
-              {metrics.pending_prs > 0 && (
-                <span className="text-amber-700 dark:text-amber-400"> · {metrics.pending_prs} need attention</span>
-              )}
-            </p>
-          </div>
+        {compact ? (
+          <Button variant="outline" onClick={onViewBranches}>
+            View all branches
+          </Button>
+        ) : (
           <div className="relative w-full sm:w-64">
             <Search
               aria-hidden="true"
@@ -107,82 +204,84 @@ export function ROIOverview({
               placeholder={`Search ${changeName}s`}
               type="search"
               value={query}
-              onChange={(event) => onQueryChange(event.target.value)}
+              onChange={(event) => onQueryChange?.(event.target.value)}
             />
           </div>
-        </div>
-        <div className="overflow-hidden rounded-xl border">
-          <Table className="min-w-[600px] table-fixed">
-            <TableHeader className="bg-muted/40">
-              <TableRow className="hover:bg-transparent">
-                <TableHead className={`${branchMode ? "w-3/5" : "w-3/4"} px-4 text-xs text-muted-foreground`}>
-                  {changeName === "merge request" ? "Merge request" : "Pull request"}
-                </TableHead>
-                {branchMode && <TableHead className="px-4 text-right text-xs text-muted-foreground">AI cost</TableHead>}
-                <TableHead className="px-4 text-right text-xs text-muted-foreground">Estimated effort</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {pulls.slice(0, visibleCount).map((pull) => (
-                <TableRow key={`${pull.repo}#${pull.number}`}>
-                  <TableCell className="whitespace-normal px-4 py-3">
-                    <Button
-                      aria-label={`Open estimate for ${pull.repo} ${changeName} ${pull.number}`}
-                      className="h-auto w-full justify-start whitespace-normal p-0 text-left"
-                      variant="link"
-                      onClick={() => onSelectPull(pull)}
-                    >
-                      <span className="min-w-0 space-y-1">
-                        <span className="block break-words font-medium leading-5">{pull.title}</span>
-                        <span className="block break-all text-xs font-normal text-muted-foreground">
-                          {pull.repo} #{pull.number} · {pull.login}
-                        </span>
+        )}
+      </div>
+      <div className="overflow-hidden rounded-xl border">
+        <Table className="min-w-[600px] table-fixed">
+          <TableHeader className="bg-muted/40">
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="w-3/5 px-4 text-xs text-muted-foreground">
+                {changeName === "merge request" ? "Merge request" : "Pull request"}
+              </TableHead>
+              <TableHead className="px-4 text-right text-xs text-muted-foreground">AI cost</TableHead>
+              <TableHead className="px-4 text-right text-xs text-muted-foreground">Estimated effort</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {pulls.slice(0, visibleCount).map((pull) => (
+              <TableRow key={`${pull.repo}#${pull.number}`}>
+                <TableCell className="whitespace-normal px-4 py-3">
+                  <Button
+                    aria-label={`Open estimate for ${pull.repo} ${changeName} ${pull.number}`}
+                    className="h-auto w-full justify-start whitespace-normal p-0 text-left"
+                    variant="link"
+                    onClick={() => onSelectPull(pull)}
+                  >
+                    <span className="min-w-0 space-y-1">
+                      <span className="block break-words font-medium leading-5">{pull.title}</span>
+                      <span className="block break-all text-xs font-normal text-muted-foreground">
+                        {pull.repo} #{pull.number} · {pull.login}
                       </span>
-                    </Button>
-                  </TableCell>
-                  {branchMode && (
-                    <TableCell
-                      className={`px-4 py-3 text-right tabular-nums ${pull.branch_cost?.status === "matched" ? "font-medium" : "whitespace-normal text-xs text-muted-foreground"}`}
-                    >
-                      {branchCostLabel(pull)}
-                    </TableCell>
-                  )}
-                  <TableCell className="px-4 py-3 text-right tabular-nums">{estimateLabel(pull.estimate)}</TableCell>
-                </TableRow>
-              ))}
-              {pulls.length === 0 && (
-                <TableRow>
-                  <TableCell className="h-32 text-center text-muted-foreground" colSpan={branchMode ? 3 : 2}>
-                    {query
-                      ? `No matching ${changeName}s. Try another search.`
-                      : `No merged ${changeName}s in this period.`}
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-          {pulls.length > visibleCount && (
-            <div className="flex items-center justify-between gap-4 border-t px-4 py-3">
-              <p className="text-xs text-muted-foreground">
-                Showing {Math.min(visibleCount, pulls.length)} of {pulls.length}
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  setPagination((current) => ({
-                    query,
-                    visibleCount: (current.query === query ? current.visibleCount : 10) + 25,
-                  }))
-                }
-              >
-                Load more {changeName}s
-              </Button>
-            </div>
-          )}
-        </div>
-      </section>
-    </div>
+                      {!compact && pull.source_branch && (
+                        <span className="flex items-start gap-1.5 text-xs font-normal text-muted-foreground">
+                          <GitBranch aria-hidden="true" className="mt-0.5 size-3 shrink-0" />
+                          <span className="break-all">{pull.source_branch}</span>
+                        </span>
+                      )}
+                    </span>
+                  </Button>
+                </TableCell>
+                <TableCell
+                  className={`px-4 py-3 text-right tabular-nums ${pull.branch_cost?.status === "matched" ? "font-medium" : "whitespace-normal text-xs text-muted-foreground"}`}
+                >
+                  {branchCostLabel(pull)}
+                </TableCell>
+                <TableCell className="px-4 py-3 text-right tabular-nums">{estimateLabel(pull.estimate)}</TableCell>
+              </TableRow>
+            ))}
+            {pulls.length === 0 && (
+              <TableRow>
+                <TableCell className="h-32 text-center text-muted-foreground" colSpan={3}>
+                  {query ? `No matching ${changeName}s. Try another search.` : emptyMessage}
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+        {pulls.length > visibleCount && (
+          <div className="flex items-center justify-between gap-4 border-t px-4 py-3">
+            <p className="text-xs text-muted-foreground">
+              Showing {Math.min(visibleCount, pulls.length)} of {pulls.length}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                setPagination((current) => ({
+                  query,
+                  visibleCount: (current.query === query ? current.visibleCount : 10) + 25,
+                }))
+              }
+            >
+              Load more {changeName}s
+            </Button>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -245,7 +344,7 @@ function ROIComparison({
 }: {
   summary: ROISummary;
   branchMode: boolean;
-  onViewPeople: () => void;
+  onViewPeople?: () => void;
 }) {
   const branches = summary.branch_metrics;
   const metrics = summary.metrics;
@@ -255,7 +354,7 @@ function ROIComparison({
       : "Match gateway accounts to calculate costs per estimated hour.";
   return (
     <div className="border-t">
-      {!branchMode && metrics.cohort_people === 0 && (
+      {!branchMode && metrics.cohort_people === 0 && onViewPeople && (
         <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-3">
           <p className="text-sm text-muted-foreground">Match people to gateway accounts to see their AI costs.</p>
           <Button variant="outline" size="sm" onClick={onViewPeople}>
@@ -323,46 +422,16 @@ function ROIComparison({
                 complete estimates. Costs include each person’s full gateway usage across repositories during this UTC
                 period.
               </p>
-              <Button variant="link" className="h-auto p-0" onClick={onViewPeople}>
-                Review email matches
-              </Button>
+              {onViewPeople && (
+                <Button variant="link" className="h-auto p-0" onClick={onViewPeople}>
+                  Review email matches
+                </Button>
+              )}
             </>
           )}
         </div>
       </details>
     </div>
-  );
-}
-
-function ROITrend({ summary }: { summary: ROISummary }) {
-  return (
-    <section aria-label="Daily costs and effort" className="space-y-4">
-      <div className="space-y-1">
-        <h2 className="text-base font-semibold">Costs and effort over time</h2>
-        <p className="text-sm text-muted-foreground">Daily gateway costs and estimated effort for matched people.</p>
-      </div>
-      <div className="rounded-xl border p-4">
-        <ChartContainer config={CHART_CONFIG} className="h-[260px] w-full">
-          <ComposedChart data={summary.trend} margin={{ left: 8, right: 8 }}>
-            <CartesianGrid vertical={false} />
-            <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={36} />
-            <YAxis yAxisId="spend" tickFormatter={(value) => formatMoney(Number(value))} />
-            <YAxis yAxisId="hours" orientation="right" domain={[0, "auto"]} />
-            <ChartTooltip content={<ChartTooltipContent />} />
-            <ChartLegend content={<ChartLegendContent />} />
-            <Bar yAxisId="spend" dataKey="spend" fill="var(--color-spend)" isAnimationActive={false} />
-            <Line
-              yAxisId="hours"
-              dataKey="hours"
-              stroke="var(--color-hours)"
-              strokeWidth={2}
-              dot={false}
-              isAnimationActive={false}
-            />
-          </ComposedChart>
-        </ChartContainer>
-      </div>
-    </section>
   );
 }
 
@@ -386,7 +455,11 @@ export function ROIPeopleView({
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      <div className="@container overflow-hidden rounded-xl border">
+        <ROIMetrics summary={summary} branchMode={false} />
+        <ROIComparison summary={summary} branchMode={false} />
+      </div>
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="space-y-1">
           <h2 className="text-base font-semibold">People and account matches</h2>
