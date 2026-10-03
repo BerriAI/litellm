@@ -91,6 +91,8 @@ ignored_function_names = [
     "_get_claude_code_session_router_binding",  # Tested through the two-worker session routing test in test_router.py
     "_apply_updated_routing_strategy_args",  # Tested via update_settings in test_lowest_latency.py (file lacks "router" in name)
     "arm_routing_read_prefetch",  # Tested in tests/unit/caching/test_request_redis_batch_pre_call.py (file lacks "router" in name)
+    "_async_get_available_deployment",  # Body of the `route {model}` phase wrapper, exercised through async_get_available_deployment in test_router.py
+    "_async_get_available_deployment_for_pass_through",  # Same, through async_get_available_deployment_for_pass_through in test_router.py
     "_embedding",
     "_aembedding",
 ]

@@ -19,6 +19,9 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 if typing.TYPE_CHECKING:
     from fastapi import Request
 
+MCP_SERVERS_TARGET: Final = "mcp_servers"
+MCP_OAUTH_TOKENS_TARGET: Final = "mcp_oauth_tokens"
+
 
 class _McpServerLike(Protocol):
     @property
