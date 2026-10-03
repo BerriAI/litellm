@@ -2504,3 +2504,41 @@ def test_tool_changes_beta_requires_system_tool_reference(role: str, content: ob
     )
 
     assert ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER not in headers.get("anthropic-beta", "").split(",")
+
+
+@pytest.mark.parametrize(
+    "model,base_model",
+    [
+        ("claude-sonnet-4-6[1m]", "claude-sonnet-4-6"),
+        ("claude-sonnet-4-6[1M]", "claude-sonnet-4-6"),
+        ("claude-sonnet-4-6", "claude-sonnet-4-6"),
+        ("claude-[1m]-sonnet-4-6", "claude-[1m]-sonnet-4-6"),
+        ("claude-sonnet-4-6[1m][1m]", "claude-sonnet-4-6[1m]"),
+        ("claude-sonnet-4-6[200k]", "claude-sonnet-4-6[200k]"),
+    ],
+)
+def test_context_1m_suffix_is_only_a_trailing_marker(model: str, base_model: str) -> None:
+    from litellm.llms.anthropic.common_utils import has_context_1m_suffix, strip_context_1m_suffix
+
+    assert strip_context_1m_suffix(model) == base_model
+    assert has_context_1m_suffix(model) is (model != base_model)
+
+
+@pytest.mark.parametrize("model,expects_context_1m", [("claude-sonnet-4-6[1m]", True), ("claude-sonnet-4-6", False)])
+def test_validate_environment_adds_context_1m_beta_only_for_suffixed_model(
+    model: str, expects_context_1m: bool
+) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    headers: Final = AnthropicModelInfo().validate_environment(
+        headers={"anthropic-beta": "interleaved-thinking-2025-05-14"},
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        api_key=FAKE_REGULAR_KEY,
+    )
+
+    betas: Final = {beta.strip() for beta in headers["anthropic-beta"].split(",")}
+    assert ("context-1m-2025-08-07" in betas) is expects_context_1m
+    assert "interleaved-thinking-2025-05-14" in betas

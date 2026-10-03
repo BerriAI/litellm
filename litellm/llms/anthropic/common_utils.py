@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
@@ -77,6 +78,17 @@ _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
+_CONTEXT_1M_SUFFIX: Final = re.compile(r"\[1m\]$", flags=re.IGNORECASE)
+
+
+def has_context_1m_suffix(model: str) -> bool:
+    return _CONTEXT_1M_SUFFIX.search(model) is not None
+
+
+def strip_context_1m_suffix(model: str) -> str:
+    return _CONTEXT_1M_SUFFIX.sub("", model)
+
+
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 _CLAUDE_CODE_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
@@ -972,8 +984,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         is_mid_conversation_output_config_used: bool = False,
         is_thinking_display_updates_used: bool = False,
         is_mid_conversation_tool_change_used: bool = False,
+        context_1m_requested: bool = False,
     ) -> dict:
-        betas: Final = set()
+        betas: Final[set[str]] = set()
+        if context_1m_requested:
+            betas.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_1M_2025_08_07.value)
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
         # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
@@ -1037,8 +1052,6 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if is_vertex_request is True:
             # Vertex AI requires web search beta header for web search to work
             if web_search_tool_used:
-                from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
-
                 headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
         elif len(all_betas) > 0:
             headers["anthropic-beta"] = ",".join(all_betas)
@@ -1093,6 +1106,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
         anthropic_headers: Final = self.get_anthropic_headers(
             computer_tool_used=computer_tool_used,
+            context_1m_requested=has_context_1m_suffix(model),
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
             api_key=api_key,
