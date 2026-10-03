@@ -19,7 +19,8 @@ describe("runRequest", () => {
   });
 
   it("sends an exact window as ISO timestamps for a custom range", () => {
-    const request = runRequest({ ...base, preset: -1, start: "2026-10-02T10:00", end: "2026-10-02T12:00" });
+    const choice = { ...base, preset: -1 as const, start: "2026-10-02T10:00", end: "2026-10-02T12:00" };
+    const request = runRequest(choice);
     expect(request).toEqual({
       start: new Date("2026-10-02T10:00").toISOString(),
       end: new Date("2026-10-02T12:00").toISOString(),
@@ -27,9 +28,9 @@ describe("runRequest", () => {
   });
 
   it("rejects a missing or backwards custom range with a message instead of a request", () => {
-    expect(runRequest({ ...base, preset: -1, start: "", end: "2026-10-02T12:00" })).toBe("Choose a start and end time");
-    expect(runRequest({ ...base, preset: -1, start: "2026-10-02T12:00", end: "2026-10-02T10:00" })).toBe(
-      "Start time must be before end time",
-    );
+    const missing = { ...base, preset: -1 as const, start: "", end: "2026-10-02T12:00" };
+    const backwards = { ...base, preset: -1 as const, start: "2026-10-02T12:00", end: "2026-10-02T10:00" };
+    expect(runRequest(missing)).toBe("Choose a start and end time");
+    expect(runRequest(backwards)).toBe("Start time must be before end time");
   });
 });
