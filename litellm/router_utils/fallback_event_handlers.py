@@ -362,6 +362,78 @@ def mid_stream_fallback_hop_kwargs(
     }
 
 
+_MID_STREAM_RETRY_STRIPPED_KEYS: Final = (*_PER_REQUEST_FALLBACK_CONTROL_KEYS, "original_function")
+_MID_STREAM_RETRY_ATTEMPTED_KEY: Final = "attempted_retries"
+_MID_STREAM_RETRY_BUDGET_KEY: Final = "max_retries"
+
+
+def mid_stream_retry_kwargs(
+    hop_kwargs: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: unpacked as **kwargs into the attempt function, which pops its controls carrier
+    """
+    The kwargs a same-group retry re-enters the attempt function with. async_function_with_retries
+    pops the per-request controls and the chain's original_function before any attempt runs, and
+    the controls carrier the snapshot still holds restores the overrides into the retry's own hop.
+    """
+    return {key: value for key, value in hop_kwargs.items() if key not in _MID_STREAM_RETRY_STRIPPED_KEYS}
+
+
+def _request_metadata_bucket(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+    bucket: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
+    return bucket if isinstance(bucket, Mapping) else None
+
+
+def attempted_retries_for_request(kwargs: Mapping[str, object]) -> int:
+    """How many same-group retries async_function_with_retries, or a mid-stream retry, already spent on this request."""
+    bucket: Final = _request_metadata_bucket(kwargs)
+    attempted: Final = bucket.get(_MID_STREAM_RETRY_ATTEMPTED_KEY) if bucket is not None else None
+    return attempted if type(attempted) is int and attempted > 0 else 0
+
+
+def committed_retry_budget_for_request(kwargs: Mapping[str, object]) -> int | None:
+    """The budget the first retry of this request committed to, kept by every later attempt the way the
+    pre-stream retry loop keeps its own; None until a retry has run."""
+    if attempted_retries_for_request(kwargs) == 0:
+        return None
+    bucket: Final = _request_metadata_bucket(kwargs)
+    budget: Final = bucket.get(_MID_STREAM_RETRY_BUDGET_KEY) if bucket is not None else None
+    return budget if type(budget) is int else None
+
+
+def record_retry_attempt(kwargs: Mapping[str, object], attempted_retries: int, max_retries: int) -> None:
+    """Stamp the attempt about to run the way async_function_with_retries does before each of its retries."""
+    bucket: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
+    if not isinstance(bucket, dict):
+        return
+    bucket[_MID_STREAM_RETRY_ATTEMPTED_KEY] = attempted_retries
+    bucket[_MID_STREAM_RETRY_BUDGET_KEY] = max_retries
+
+
+def _routed_model_info(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+    bucket: Final = _request_metadata_bucket(kwargs)
+    model_info: Final = bucket.get("model_info") if bucket is not None else None
+    return model_info if isinstance(model_info, Mapping) else None
+
+
+def routed_deployment_id(kwargs: Mapping[str, object]) -> str | None:
+    model_info: Final = _routed_model_info(kwargs)
+    deployment_id: Final = model_info.get("id") if model_info is not None else None
+    return deployment_id if isinstance(deployment_id, str) else None
+
+
+def carry_over_routed_deployment(live_kwargs: Mapping[str, object], snapshot: Mapping[str, object]) -> None:
+    """
+    Copy the deployment this attempt routed to into the snapshot's metadata bucket, which was
+    taken before routing: a same-group retry reads the deployment's own num_retries off it and
+    records which deployment failed.
+    """
+    snapshot_bucket: Final = snapshot.get(get_metadata_variable_name_from_kwargs(snapshot))
+    model_info: Final = _routed_model_info(live_kwargs)
+    if not isinstance(snapshot_bucket, dict) or model_info is None:
+        return
+    snapshot_bucket["model_info"] = dict(model_info)
+
+
 DISABLE_FALLBACKS_METADATA_KEY: Final = "_disable_fallbacks"
 
 

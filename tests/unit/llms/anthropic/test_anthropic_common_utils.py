@@ -2504,3 +2504,27 @@ def test_tool_changes_beta_requires_system_tool_reference(role: str, content: ob
     )
 
     assert ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER not in headers.get("anthropic-beta", "").split(",")
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected", "expected_status"),
+    [
+        (429, "RateLimitError", 429),
+        (500, "InternalServerError", 500),
+        (529, "InternalServerError", 500),
+        (503, "ServiceUnavailableError", 503),
+        (504, "Timeout", 504),
+        (502, "APIError", 502),
+    ],
+)
+def test_anthropic_error_frame_exception_is_the_pre_stream_class_for_that_status(
+    status_code: int, expected: str, expected_status: int
+) -> None:
+    import litellm
+    from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
+
+    error = anthropic_error_frame_exception("upstream said no", status_code, "claude-sonnet-4-5")
+
+    assert type(error) is getattr(litellm, expected)
+    assert error.status_code == expected_status
+    assert "upstream said no" in str(error)
