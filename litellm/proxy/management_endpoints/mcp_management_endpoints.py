@@ -19,7 +19,7 @@ import functools
 import importlib
 import json
 import os
-from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -2227,7 +2227,7 @@ if MCP_AVAILABLE:
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth,
         request: Request | None = None,
-    ) -> AsyncIterator[MCPServer]:
+    ) -> AsyncGenerator[MCPServer]:
         if await get_cached_temporary_mcp_server(server_id) is not None:
             yield await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request)
             return

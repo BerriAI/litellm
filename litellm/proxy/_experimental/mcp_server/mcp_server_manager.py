@@ -1458,7 +1458,7 @@ def warn_on_server_name_fields(
     _warn("server_name", server_name)
 
 
-def _warn_on_shared_identifier_prefixes(servers: Iterable[MCPServer]) -> None:
+def warn_on_shared_identifier_prefixes(servers: Iterable[MCPServer]) -> None:
     """Warn once per identifier that several servers share.
 
     ``get_server_prefix`` resolves alias first, so two servers sharing a
@@ -2644,7 +2644,7 @@ class MCPServerManager:
             self.assign_unique_short_prefix(new_server)
             _warn_legacy_delegate_auth_if_applicable(new_server, source="config")
             _warn_config_id_jag_server_outruns_sso(new_server)
-            self._invalidate_server_definition_caches(server_id)
+            self.invalidate_server_definition_caches(server_id)
             self.config_mcp_servers[server_id] = new_server
             self._set_oauth_discovery_deferred(
                 server_id,
@@ -2844,7 +2844,7 @@ class MCPServerManager:
         mappings make ``_get_mcp_server_from_tool_name`` resolve to a prefix that
         no longer exists in the live registry.
         """
-        self._invalidate_server_definition_caches(server.server_id)
+        self.invalidate_server_definition_caches(server.server_id)
         self.remove_server_tool_routing(server)
 
     def remove_server_tool_routing(self, server: MCPServer) -> None:
@@ -3257,10 +3257,10 @@ class MCPServerManager:
                 # `credentials` field is the only one still encrypted here).
                 # Re-decrypting plaintext would zero the values, so build with
                 # env_vars_are_encrypted=False.
-                self._warn_if_newly_blocked_stdio(mcp_server, None)
+                self.warn_if_newly_blocked_stdio(mcp_server, None)
                 new_server: Final = await self.build_mcp_server_from_table(mcp_server, env_vars_are_encrypted=False)
                 self.assign_unique_short_prefix(new_server)
-                self._invalidate_server_definition_caches(mcp_server.server_id)
+                self.invalidate_server_definition_caches(mcp_server.server_id)
                 self.registry[mcp_server.server_id] = new_server
                 await self.maybe_register_openapi_tools(new_server)
                 self.prime_oauth_metadata_discovery(new_server)
@@ -3297,7 +3297,7 @@ class MCPServerManager:
                     previous_server=self.registry[mcp_server.server_id],
                 )
                 self.assign_unique_short_prefix(new_server)
-                self._invalidate_server_definition_caches(mcp_server.server_id)
+                self.invalidate_server_definition_caches(mcp_server.server_id)
                 self.registry[mcp_server.server_id] = new_server
                 await self.maybe_register_openapi_tools(new_server)
                 self.prime_oauth_metadata_discovery(new_server)
@@ -4343,6 +4343,10 @@ class MCPServerManager:
             )
             raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
 
+    def clear_initialize_instructions(self) -> None:
+        self._upstream_initialize_instructions_by_server_id.clear()
+        self._upstream_initialize_instructions_probed_at.clear()
+
     def invalidate_discovery_lists(self, server_id: str) -> None:
         self._upstream_initialize_instructions_by_server_id.pop(server_id, None)
         self._upstream_initialize_instructions_probed_at.pop(server_id, None)
@@ -4350,7 +4354,7 @@ class MCPServerManager:
         self._resource_discovery_cache.invalidate(server_id)
         self._template_discovery_cache.invalidate(server_id)
 
-    def _invalidate_server_definition_caches(self, server_id: str) -> None:
+    def invalidate_server_definition_caches(self, server_id: str) -> None:
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (  # noqa: PLC0415  # lazy: discoverable_endpoints lazily imports this module's manager singleton
             invalidate_oauth_metadata_cache,
         )
@@ -4389,7 +4393,7 @@ class MCPServerManager:
         return server.server_id, hashlib.sha256(material.encode()).hexdigest()
 
     @staticmethod
-    def _warn_if_newly_blocked_stdio(row: LiteLLM_MCPServerTable, previous: MCPServer | None) -> None:
+    def warn_if_newly_blocked_stdio(row: LiteLLM_MCPServerTable, previous: MCPServer | None) -> None:
         if previous is None or previous.transport != row.transport:
             warn_if_mcp_stdio_blocked(row.alias or row.server_name, row.transport)
 

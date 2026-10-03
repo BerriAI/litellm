@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Final
@@ -40,7 +40,7 @@ class MCPToolRegistry:
         self.published_tools = tools
 
     @contextmanager
-    def catalog_scope(self, tools: Mapping[str, MCPTool]) -> Iterator[dict[str, MCPTool]]:
+    def catalog_scope(self, tools: Mapping[str, MCPTool]) -> Generator[dict[str, MCPTool]]:
         detached: Final = dict(tools)
         closed: Final = asyncio.Event()
         token: Final = self._catalog_tools.set((detached, closed))
