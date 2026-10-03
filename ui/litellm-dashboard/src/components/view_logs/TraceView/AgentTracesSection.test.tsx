@@ -7,7 +7,7 @@ import { ApiError } from "@/lib/http/client";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import traceList from "./__fixtures__/trace_list.json";
 import AgentTracesPage from "./AgentTracesPage";
-import { AgentTracesSection, filterRuns } from "./AgentTracesSection";
+import { AgentTracesSection, filterRuns, type TimeControls } from "./AgentTracesSection";
 import type { TracePage, TraceSummary } from "./traceTypes";
 
 vi.mock("../../networking", () => ({
@@ -45,7 +45,7 @@ const renderSection = () =>
   );
 
 // A UTC-pinned day around the fixture runs (2026-09-30 ~06:43 UTC), so they land in the same bucket in any timezone.
-const renderWindowed = () =>
+const renderWindowed = (timeControls?: TimeControls) =>
   renderWithProviders(
     <AgentTracesSection
       accessToken="sk-test"
@@ -54,6 +54,7 @@ const renderWindowed = () =>
       endTime="2026-10-01T00:00Z"
       isCustomDate
       isLiveTail={false}
+      timeControls={timeControls}
     />,
   );
 
@@ -271,10 +272,13 @@ describe("AgentTracesSection", () => {
     expect(rows[0]).toHaveTextContent("Should we store OTEL agent spans");
   });
 
-  it("labels the OTEL service as the agent and filters runs by it", async () => {
+  it("uses recorded agent names for the column and filter even when services are shared", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({
       ...(traceList as TracePage),
-      data: [...runs.slice(1), { ...runs[0], service: "billing-agent" }],
+      data: [
+        ...runs.slice(1).map((run) => ({ ...run, service: "shared-app", agent_names: ["research-agent"] })),
+        { ...runs[0], service: "shared-app", agent_names: ["billing-agent", "review-agent"] },
+      ],
     });
     const user = userEvent.setup();
     renderSection();
@@ -288,9 +292,37 @@ describe("AgentTracesSection", () => {
     const rows = screen.getAllByTestId("agent-trace-row");
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent("billing-agent");
+    expect(rows[0]).not.toHaveTextContent("shared-app");
+
+    await chooseSelectOption(user, agentFilter, "review-agent");
+    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(1);
 
     await chooseSelectOption(user, agentFilter, "All agents");
     expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
+  });
+
+  it("shows each run's agent name with the logo of the SDK that produced it", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue({
+      ...(traceList as TracePage),
+      data: [
+        { ...runs[0], agent_names: ["research-bot"], frameworks: ["claude-agent-sdk", "claude-code"] },
+        { ...runs[1], agent_names: [], frameworks: ["claude-code"] },
+        { ...runs[2], frameworks: [] },
+      ],
+    });
+    renderSection();
+    const [sdkRun, cliRun, plainRun] = await screen.findAllByTestId("agent-trace-row");
+    const agentCell = (row: HTMLElement) => within(row).getAllByRole("cell")[1];
+
+    expect(agentCell(sdkRun)).toHaveTextContent(/^research-bot$/);
+    expect(agentCell(sdkRun)).toHaveAttribute("title", "research-bot · Claude Agent SDK");
+    expect(within(sdkRun).getByRole("img", { name: "Claude Agent SDK logo", hidden: true })).toHaveAttribute(
+      "src",
+      expect.stringContaining("anthropic.svg"),
+    );
+    expect(agentCell(cliRun)).toHaveTextContent(/^Claude Code$/);
+    expect(within(plainRun).queryByRole("img", { hidden: true })).not.toBeInTheDocument();
+    expect(agentCell(plainRun)).toHaveTextContent((runs[2].agent_names ?? [runs[2].service]).join(", "));
   });
 
   it("status filter 'Failed' keeps only runs with errors", () => {
@@ -394,6 +426,25 @@ describe("AgentTracesSection", () => {
     expect(screen.queryByTestId("timeline-selection")).not.toBeInTheDocument();
     expect(rowCount()).toBe(runs.length);
   });
+
+  it("clears timeline zoom when refreshed", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
+    renderWindowed({ rangeHours: 24, onRangeHoursChange: () => {}, onLiveChange: () => {} });
+    await screen.findAllByTestId("agent-trace-row");
+    const area = screen.getByTestId("timeline-area");
+    const x = (bucket: number) => bucket * 10 + 5;
+
+    fireEvent.pointerDown(area, { clientX: x(0), pointerId: 1 });
+    fireEvent.pointerMove(area, { clientX: x(1), pointerId: 1 });
+    fireEvent.pointerUp(area, { clientX: x(1), pointerId: 1 });
+    expect(screen.getByTestId("timeline-selection")).toBeInTheDocument();
+    expect(screen.queryAllByTestId("agent-trace-row")).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(screen.queryByTestId("timeline-selection")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
+  });
 });
 
 describe("AgentTracesPage", () => {
@@ -422,7 +473,18 @@ describe("AgentTracesPage", () => {
     expect(live).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(live);
     expect(live).toHaveAttribute("aria-pressed", "false");
-    expect(screen.getByRole("button", { name: "Reset zoom" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+  });
+
+  it("refreshes the trace list", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
+    renderWithProviders(<AgentTracesPage accessToken="sk-test" />);
+    await screen.findByTestId("runs-table");
+
+    const callsBeforeRefresh = vi.mocked(agentTraceListCall).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    await waitFor(() => expect(vi.mocked(agentTraceListCall).mock.calls.length).toBeGreaterThan(callsBeforeRefresh));
   });
 
   it("keeps the time controls on an empty range the user picked, instead of showing onboarding", async () => {

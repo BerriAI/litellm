@@ -64014,6 +64014,7 @@
         ]
     },
     "xai/grok-voice-transcribe-1.0": {
+        "deprecation_date": "2026-10-02",
         "input_cost_per_second": 2.778e-05,
         "litellm_provider": "xai",
         "metadata": {
@@ -72621,6 +72622,45 @@
         "supports_pdf_input": true,
         "supports_audio_input": true,
         "supports_video_input": true
+    },
+    "laya/english": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "laya",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://github.com/NandhaKishorM/laya",
+        "supported_endpoints": [
+            "/v1/systemone"
+        ],
+        "metadata": {
+            "notes": "Self-hosted decision model; infrastructure costs are paid separately"
+        }
+    },
+    "laya/multilingual": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "laya",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://github.com/NandhaKishorM/laya",
+        "supported_endpoints": [
+            "/v1/systemone"
+        ],
+        "metadata": {
+            "notes": "Self-hosted decision model; infrastructure costs are paid separately"
+        }
+    },
+    "laya/typed-decisions": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "laya",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://github.com/NandhaKishorM/laya",
+        "supported_endpoints": [
+            "/v1/systemone"
+        ],
+        "metadata": {
+            "notes": "Self-hosted decision model; infrastructure costs are paid separately"
+        }
     },
     "typesafe/jev-1.13.0": {
         "input_cost_per_token": 4.2e-08,

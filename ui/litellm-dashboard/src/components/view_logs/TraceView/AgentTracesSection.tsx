@@ -9,7 +9,7 @@ import { AgentTracesTable } from "./AgentTracesTable";
 import { RunDrawer } from "./RunDrawer";
 import { ALL_AGENTS, RunsToolbar, type RunStatusFilter } from "./RunsToolbar";
 import type { TraceSummary } from "./traceTypes";
-import { previewText } from "./traceUtils";
+import { previewText, traceAgentNames } from "./traceUtils";
 import { TimeRangeControls } from "./TimeRangeControls";
 import { TracesTimeline, type TimeWindow } from "./TracesTimeline";
 import { ActiveDot } from "./ActiveDot";
@@ -27,7 +27,7 @@ export function filterRuns(
   return runs.filter((run) => {
     const haystack = [run.trace_id, previewText(run.input_preview), run.name].map((s) => s.toLowerCase());
     const matchesQuery = !q || haystack.some((text) => text.includes(q));
-    const matchesAgent = agent === ALL_AGENTS || run.service === agent;
+    const matchesAgent = agent === ALL_AGENTS || traceAgentNames(run).includes(agent);
     const failed = run.error_count > 0;
     const matchesStatus = status === "all" || (status === "error" ? failed : !failed);
     return matchesQuery && matchesAgent && matchesStatus;
@@ -121,7 +121,7 @@ export function AgentTracesSection({
     if (setup.disabledDetail == null) void history.refetch();
   };
 
-  const agents = useMemo(() => Array.from(new Set(traces.traces.map((t) => t.service))).sort(), [traces.traces]);
+  const agents = useMemo(() => Array.from(new Set(traces.traces.flatMap(traceAgentNames))).sort(), [traces.traces]);
   // Relative ranges end "now" (the list query uses Date.now() too); round to the minute so the histogram is stable.
   const endMs = isCustomDate ? moment(endTime).valueOf() : moment().endOf("minute").valueOf();
   const range = useMemo(
@@ -211,8 +211,11 @@ export function AgentTracesSection({
             onRangeHoursChange={(hours) => changeRange(hours, timeControls.onRangeHoursChange)}
             live={isLiveTail}
             onLiveChange={timeControls.onLiveChange}
-            zoomed={zoom !== null}
-            onResetZoom={() => setZoom(null)}
+            onRefresh={() => {
+              setZoom(null);
+              checkTraces();
+            }}
+            refreshing={traces.isFetching}
           />
         )}
       </RunsToolbar>
