@@ -16,6 +16,7 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
+from litellm.constants import SERVER_STREAMING_CLASSIFICATION_KEY, SERVER_STREAMING_CLASSIFICATION_MARKER
 from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
@@ -8633,3 +8634,37 @@ def test_body_snapshot_excludes_the_server_streaming_marker() -> None:
     refresh_proxy_server_request_body_snapshot(data)
 
     assert proxy_request == {"body": {"messages": [{"role": "user", "content": "hi"}]}}
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        SERVER_STREAMING_CLASSIFICATION_MARKER,
+        json.loads(json.dumps(SERVER_STREAMING_CLASSIFICATION_MARKER)),
+    ],
+    ids=["enum", "json-string"],
+)
+def test_body_snapshot_drops_only_the_marker_and_keeps_caller_value(marker: str) -> None:
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    marker_request: Final = {"body": {}}
+    marker_data: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        SERVER_STREAMING_CLASSIFICATION_KEY: marker,
+        "proxy_server_request": marker_request,
+    }
+
+    refresh_proxy_server_request_body_snapshot(marker_data)
+
+    assert SERVER_STREAMING_CLASSIFICATION_KEY not in marker_request["body"], marker_request
+
+    caller_request: Final = {"body": {}}
+    caller_data: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        SERVER_STREAMING_CLASSIFICATION_KEY: "caller-value",
+        "proxy_server_request": caller_request,
+    }
+
+    refresh_proxy_server_request_body_snapshot(caller_data)
+
+    assert caller_request["body"][SERVER_STREAMING_CLASSIFICATION_KEY] == "caller-value", caller_request

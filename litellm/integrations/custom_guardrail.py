@@ -220,7 +220,7 @@ class CustomGuardrail(CustomLogger):
     records_own_guardrail_information: ClassVar[bool] = False
 
     stream_scope_default: GuardrailStreamScope = DEFAULT_GUARDRAIL_STREAM_SCOPE
-    stream_scope_by_hook: Mapping[str, GuardrailStreamScope] = MappingProxyType({})
+    stream_scope_by_hook: tuple[tuple[str, GuardrailStreamScope], ...] = ()
 
     timeout: float | httpx.Timeout | None = None
 
@@ -1104,26 +1104,13 @@ class CustomGuardrail(CustomLogger):
     def apply_stream_scope(self, stream_scope: object) -> None:
         default, by_hook = runtime_stream_scope(stream_scope)
         self.stream_scope_default = default
-        self.stream_scope_by_hook = by_hook
-
-    def __getstate__(
-        self,
-    ) -> tuple[tuple[tuple[str, object], ...], tuple[tuple[str, GuardrailStreamScope], ...]]:
-        return (
-            tuple((key, value) for key, value in self.__dict__.items() if key != "stream_scope_by_hook"),
-            tuple(self.stream_scope_by_hook.items()),
-        )
-
-    def __setstate__(
-        self,
-        state: tuple[tuple[tuple[str, object], ...], tuple[tuple[str, GuardrailStreamScope], ...]],
-    ) -> None:
-        attributes, stream_scope_by_hook = state
-        self.__dict__.update(attributes)
-        self.stream_scope_by_hook = MappingProxyType(dict(stream_scope_by_hook))
+        self.stream_scope_by_hook = tuple(by_hook.items())
 
     def stream_scope_allows(self, data: object, event_type: GuardrailEventHooks) -> bool:
-        scope: Final = self.stream_scope_by_hook.get(event_type.value, self.stream_scope_default)
+        scope: Final = next(
+            (scope for hook, scope in self.stream_scope_by_hook if hook == event_type.value),
+            self.stream_scope_default,
+        )
         if scope == "both":
             return True
         is_streaming: Final = _request_is_streaming(data, event_type)

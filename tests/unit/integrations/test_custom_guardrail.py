@@ -3,6 +3,7 @@ import copy
 import datetime as dt
 import json
 import pickle
+import threading
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 from unittest.mock import AsyncMock
 
@@ -3445,6 +3446,92 @@ def test_guardrail_survives_deepcopy_and_pickle_with_its_stream_scope(stream_sco
     for clone in (copy.deepcopy(guardrail), pickle.loads(pickle.dumps(guardrail))):
         assert dict(clone.stream_scope_by_hook) == dict(guardrail.stream_scope_by_hook)
         assert clone.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is expected
+
+
+class _LockHoldingGuardrail(CustomGuardrail):
+    def __init__(self, **kwargs):
+        self.lock = threading.Lock()
+        super().__init__(**kwargs)
+
+    def __getstate__(self):
+        state: Final = dict(self.__dict__)
+        state.pop("lock")
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.lock = threading.Lock()
+
+
+class _SetstateOnlyGuardrail(CustomGuardrail):
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.restored = True
+
+
+class _SlotsGuardrail(CustomGuardrail):
+    __slots__ = ("vendor_client",)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.vendor_client = "vendor-client-object"
+
+
+def _subclass_guardrails():
+    kwargs: Final = {
+        "guardrail_name": "vendor",
+        "default_on": True,
+        "event_hook": GuardrailEventHooks.post_call,
+        "stream_scope": {"post_call": "streaming"},
+    }
+    return (
+        pytest.param(_LockHoldingGuardrail(**kwargs), id="dict-getstate"),
+        pytest.param(_SetstateOnlyGuardrail(**kwargs), id="setstate-only"),
+        pytest.param(_SlotsGuardrail(**kwargs), id="slots"),
+    )
+
+
+@pytest.mark.parametrize("guardrail", _subclass_guardrails())
+@pytest.mark.parametrize(
+    "cloner",
+    [copy.copy, copy.deepcopy, lambda g: pickle.loads(pickle.dumps(g))],
+    ids=["copy", "deepcopy", "pickle"],
+)
+def test_out_of_tree_guardrail_subclasses_survive_copy_and_pickle(guardrail, cloner):
+    clone = cloner(guardrail)
+
+    if isinstance(clone, _LockHoldingGuardrail):
+        assert isinstance(clone.lock, type(threading.Lock()))
+    elif isinstance(clone, _SetstateOnlyGuardrail):
+        assert clone.restored is True
+    else:
+        assert clone.vendor_client == "vendor-client-object"
+    assert clone.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is False
+    assert clone.should_run_guardrail({"stream": True}, GuardrailEventHooks.post_call) is True
+
+
+def test_router_constructs_with_a_dict_getstate_guardrail_in_deployment_callbacks():
+    import litellm
+
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "sk-test",
+                    "callbacks": [
+                        _LockHoldingGuardrail(
+                            guardrail_name="vendor",
+                            default_on=True,
+                            event_hook=GuardrailEventHooks.post_call,
+                            stream_scope={"post_call": "streaming"},
+                        )
+                    ],
+                },
+            }
+        ]
+    )
 
 
 def test_subclass_that_skips_super_init_still_runs_with_default_scope():
