@@ -1,0 +1,12 @@
+services:
+  lens-worker:
+    image: ${LENS_WORKER_IMAGE:-ghcr.io/berriai/litellm-lens-worker@sha256:44f0597c7583dcfef999ece9a8bc02cfeb9f0f5167a1221cee3bd10b1b79271b}
+    environment:
+      LITELLM_URL: ${LITELLM_URL:?Set the URL reachable from this container}
+      LENS_WORKER_TOKEN: ${LENS_WORKER_TOKEN:?Create a worker credential in the Lens UI}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=${LENS_WORKER_TMP_SIZE:-1g}
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]

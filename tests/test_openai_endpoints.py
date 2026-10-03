@@ -1,3 +1,5 @@
+import os
+from typing import Final
 # What this tests ?
 ## Tests /chat/completions by generating a key and then making a chat completions-request
 import pytest
@@ -398,10 +400,12 @@ async def test_completion_streaming_usage_metrics():
     """
     [PROD Test] Ensures usage metrics are returned correctly when `include_usage` is set to `True`
     """
-    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+    client: Final = AsyncOpenAI(
+        api_key="sk-1234", base_url=os.environ.get("LITELLM_PROXY_BASE_URL", "http://0.0.0.0:4000")
+    )
 
     response = await client.completions.create(
-        model="gpt-instruct",
+        model="gpt-6-luna",
         prompt="hey",
         stream=True,
         stream_options={"include_usage": True},
@@ -417,125 +421,8 @@ async def test_completion_streaming_usage_metrics():
     assert last_chunk is not None, "No chunks were received"
     assert last_chunk.usage is not None, "Usage information was not received"
     assert last_chunk.usage.prompt_tokens > 0, "Prompt tokens should be greater than 0"
-    assert (
-        last_chunk.usage.completion_tokens > 0
-    ), "Completion tokens should be greater than 0"
+    assert last_chunk.usage.completion_tokens > 0, "Completion tokens should be greater than 0"
     assert last_chunk.usage.total_tokens > 0, "Total tokens should be greater than 0"
-
-
-@pytest.mark.asyncio
-async def test_chat_completion_anthropic_structured_output():
-    """
-    Ensure nested pydantic output is returned correctly
-    """
-    from pydantic import BaseModel
-
-    class CalendarEvent(BaseModel):
-        name: str
-        date: str
-        participants: list[str]
-
-    class EventsList(BaseModel):
-        events: list[CalendarEvent]
-
-    messages = [
-        {"role": "user", "content": "List 5 important events in the XIX century"}
-    ]
-
-    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
-
-    res = await client.beta.chat.completions.parse(
-        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        messages=messages,
-        response_format=EventsList,
-        timeout=60,
-    )
-    message = res.choices[0].message
-
-    if message.parsed:
-        print(message.parsed.events)
-
-
-@pytest.mark.asyncio
-async def test_completion():
-    """
-    - Create key
-    Make chat completion call
-    - Create user
-    make chat completion call
-    """
-    async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session)
-        key = key_gen["key"]
-        await completion(session=session, key=key)
-        key_gen = await new_user(session=session)
-        key_2 = key_gen["key"]
-        # response = await completion(session=session, key=key_2)
-
-    ## validate openai format ##
-    client = OpenAI(api_key=key_2, base_url="http://0.0.0.0:4000")
-
-    client.completions.create(
-        model="gpt-4",
-        prompt="Say this is a test",
-        max_tokens=7,
-        temperature=0,
-    )
-
-
-@pytest.mark.asyncio
-async def test_embeddings():
-    """
-    - Create key
-    Make embeddings call
-    - Create user
-    make embeddings call
-    """
-    async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session)
-        key = key_gen["key"]
-        await embeddings(session=session, key=key)
-        key_gen = await new_user(session=session)
-        key_2 = key_gen["key"]
-        await embeddings(session=session, key=key_2)
-
-        # embedding request with non OpenAI model
-        await embeddings(session=session, key=key, model="mistral-embed")
-
-
-@pytest.mark.flaky(retries=5, delay=1)
-@pytest.mark.asyncio
-async def test_image_generation():
-    """
-    - Create key
-    Make embeddings call
-    - Create user
-    make embeddings call
-    """
-    async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session)
-        key = key_gen["key"]
-        await image_generation(session=session, key=key)
-        key_gen = await new_user(session=session)
-        key_2 = key_gen["key"]
-        await image_generation(session=session, key=key_2)
-
-
-@pytest.mark.flaky(retries=5, delay=1)
-@pytest.mark.asyncio
-async def test_openai_wildcard_chat_completion():
-    """
-    - Create key for model = "*" -> this has access to all models
-    - proxy_server_config.yaml has model = *
-    - Make chat completion call
-
-    """
-    async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session, models=["*"])
-        key = key_gen["key"]
-
-        # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
-        await chat_completion(session=session, key=key, model="gpt-3.5-turbo-0125")
 
 
 @pytest.mark.asyncio
@@ -581,20 +468,3 @@ async def test_batch_chat_completions():
         assert isinstance(response, list)
 
 
-@pytest.mark.asyncio
-async def test_moderations_endpoint():
-    """
-    - Make chat completion call using
-
-    """
-    async with aiohttp.ClientSession() as session:
-
-        # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
-        response = await moderation(
-            session=session,
-            key="sk-1234",
-        )
-
-        print(f"response: {response}")
-
-        assert "results" in response

@@ -359,6 +359,7 @@ class TargetCatalog:
 
     async def _reload(self, *, reuse_unchanged: bool) -> None:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _warn_on_shared_identifier_prefixes,
             carry_forward_resolved_oauth_endpoints,
             config_ids_capturing_db_identifiers,
             oauth_endpoints_unresolved,
@@ -415,6 +416,7 @@ class TargetCatalog:
                     alias=getattr(server, "alias", None),
                     server_name=getattr(server, "server_name", None),
                 )
+                self.manager._warn_if_newly_blocked_stdio(server, existing_server)
                 verbose_logger.debug("Building server from DB: %s (%s)", server.server_id, server.server_name)
                 # raw_rows come straight from the DB, so their global env var
                 # values (like credentials) are still encrypted here, unlike the
@@ -468,10 +470,14 @@ class TargetCatalog:
 
         for server_id in previous_registry.keys() | registered_registry.keys():
             if previous_registry.get(server_id) != registered_registry.get(server_id):
-                self.manager.invalidate_discovery_lists(server_id)
+                self.manager._invalidate_server_definition_caches(server_id)
                 self.manager.invalidate_oauth_discovery_state(server_id)
         self._database_identity = database_identity
         self.manager.registry = registered_registry
+        if not reuse_unchanged:
+            self.manager._upstream_initialize_instructions_by_server_id.clear()
+            self.manager._upstream_initialize_instructions_probed_at.clear()
+        _warn_on_shared_identifier_prefixes(registered_registry.values())
         # A discovery task may have published into ``previous_registry`` while
         # this replacement was being staged. Reconcile every published entry
         # synchronously after the swap so a lost publication cannot also leave

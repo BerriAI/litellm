@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from typing import Final, Protocol
 
@@ -17,7 +17,7 @@ class Complete:
 
 @dataclass(frozen=True, slots=True)
 class Open:
-    value: None
+    value: object
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +46,7 @@ class StreamClosed(Exception):
 async def _settle(execution: Execution, step: Step) -> Settled:
     while isinstance(step, Await):
         try:
-            value = await step.awaitable  # rebind-ok: each selected await produces the next protocol input
+            value = await step.awaitable
         except GeneratorExit:
             raise
         except BaseException as error:
@@ -62,13 +62,15 @@ def _settled(step: Step) -> Settled:
     return step
 
 
-async def drive(execution: Execution) -> object:
+async def drive(execution: Execution, stream_factory: Callable[[Execution, object], object] | None = None) -> object:
     handed_off = False  # rebind-ok: set once the execution belongs to the returned stream
     try:
         step: Final = await _settle(execution, execution.start())
         if isinstance(step, Open):
+            factory: Final = Stream if stream_factory is None else stream_factory
+            stream: Final = factory(execution, step.value)
             handed_off = True
-            return Stream(execution)
+            return stream
         return step.value
     finally:
         if not handed_off:
@@ -78,9 +80,10 @@ async def drive(execution: Execution) -> object:
 class Stream(AsyncIterator[object]):
     """A streamed native call: each read resumes the execution until its next chunk."""
 
-    def __init__(self, execution: Execution) -> None:
+    def __init__(self, execution: Execution, head: object = None) -> None:
         self._execution: Final = execution
         self._done = False
+        self.head: Final = head
 
     def __aiter__(self) -> Stream:
         return self
@@ -114,9 +117,10 @@ class Stream(AsyncIterator[object]):
 class SyncStream(Iterator[object]):
     """The sync form of `Stream`; its execution never suspends on an awaitable."""
 
-    def __init__(self, execution: Execution) -> None:
+    def __init__(self, execution: Execution, head: object = None) -> None:
         self._execution: Final = execution
         self._done = False
+        self.head: Final = head
 
     def __iter__(self) -> SyncStream:
         return self

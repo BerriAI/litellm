@@ -1,7 +1,8 @@
+import json
 from datetime import datetime
-from typing import Any, Final, Literal
+from typing import Annotated, Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 from typing_extensions import Self
 
 from litellm.types.mcp import (
@@ -10,11 +11,20 @@ from litellm.types.mcp import (
     MCPAuthType,
     MCPTokenEndpointAuthMethod,
     MCPTransportType,
+    MCPUpstreamProtocol,
     normalize_upstream_header_name,
+    validate_mcp_protocol_transport,
 )
 
+
 # MCPInfo now allows arbitrary additional fields for custom metadata
-MCPInfo = dict[str, Any]
+def _validate_mcp_protocol_metadata(value: dict[str, object]) -> dict[str, object]:
+    if "protocol_version" in value:
+        TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(value["protocol_version"])
+    return value
+
+
+MCPInfo = Annotated[dict[str, Any], AfterValidator(_validate_mcp_protocol_metadata)]
 
 
 class MCPOAuthMetadata(BaseModel):
@@ -59,6 +69,23 @@ class MCPOAuthIdentityBinding(BaseModel):
     require_email_verified: bool = True
 
 
+class PinnedMCPTool(BaseModel):
+    """One tool of an admin-pinned catalog: the description and input schema tools/list keeps serving."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    description: str = ""
+    input_schema: dict[str, object] = Field(default_factory=dict)
+
+
+_PINNED_TOOLS: Final[TypeAdapter[dict[str, PinnedMCPTool] | None]] = TypeAdapter(dict[str, PinnedMCPTool] | None)
+
+
+def parse_pinned_tools(value: object) -> dict[str, PinnedMCPTool] | None:
+    decoded: Final = json.loads(value) if isinstance(value, str) and value else value
+    return _PINNED_TOOLS.validate_python(decoded or None)
+
+
 class MCPServer(BaseModel):
     server_id: str
     name: str
@@ -66,6 +93,7 @@ class MCPServer(BaseModel):
     server_name: str | None = None
     url: str | None = None
     transport: MCPTransportType
+    protocol_version: MCPUpstreamProtocol = "auto"
     spec_path: str | None = None
     auth_type: MCPAuthType | None = None
     authentication_token: str | None = None
@@ -78,6 +106,7 @@ class MCPServer(BaseModel):
     disallowed_tools: list[str] | None = None
     tool_name_to_display_name: dict[str, str] | None = None
     tool_name_to_description: dict[str, str] | None = None
+    pinned_tools: dict[str, PinnedMCPTool] | None = None
     allowed_params: dict[str, list[str]] | None = None  # map of tool names to allowed parameter lists
     static_headers: dict[str, str] | None = None  # static headers to forward to the MCP server
     # Admin-configured env vars. Each entry is {name, value, scope, description}.
@@ -245,6 +274,15 @@ class MCPServer(BaseModel):
         breaking regression introduced with the M2M feature.
         """
         return self.oauth2_flow == "client_credentials"
+
+    @model_validator(mode="after")
+    def resolve_protocol_version(self) -> Self:
+        if "protocol_version" not in self.model_fields_set and self.mcp_info is not None:
+            self.protocol_version = TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
+                self.mcp_info.get("protocol_version", "auto")
+            )
+        validate_mcp_protocol_transport(self.protocol_version, self.transport)
+        return self
 
     @model_validator(mode="after")
     def validate_identity_binding_mode(self) -> Self:

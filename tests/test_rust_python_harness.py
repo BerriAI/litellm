@@ -36,8 +36,6 @@ def _case(module: str = "tests.example") -> HarnessCase:
 @pytest.mark.parametrize(
     "module",
     [
-        "tests.rust-python-harness.strategies.e2e_parity.sdk.ocr.test_sdk_parity",
-        "tests.rust-python-harness.strategies.trace_parity.sdk.ocr.case",
         "tests.rust-python-harness.strategies.trace_parity.sdk.messages.case",
         "tests.rust-python-harness.strategies.trace_parity.sdk.chat_completions.case",
         "tests.rust-python-harness.strategies.trace_parity.sdk.transcription.case",

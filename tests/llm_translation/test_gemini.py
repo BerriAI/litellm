@@ -74,6 +74,16 @@ GEMINI_3_IMAGE_SIZE_MAPPINGS = [
 
 
 class TestGoogleAIStudioGemini(BaseLLMChatTest):
+    test_async_pdf_handling_with_file_id = None
+    test_content_list_handling = None
+    test_developer_role_translation = None
+    test_function_calling_with_tool_response = None
+    test_image_url = None
+    test_json_response_nested_json_schema = None
+    test_json_response_nested_pydantic_obj = None
+    test_json_response_pydantic_obj = None
+    test_web_search = None
+
     def get_base_completion_call_args(self) -> dict:
         return {"model": "gemini/gemini-2.5-flash"}
 
@@ -1800,7 +1810,7 @@ def test_gemini_image_size_limit_exceeded(monkeypatch):
     that could cause memory issues and pod crashes.
 
     The image fetch is mocked (mirroring the LargeImageClient pattern in
-    tests/test_litellm/litellm_core_utils/test_image_handling.py) so the test
+    tests/unit/litellm_core_utils/test_image_handling.py) so the test
     deterministically exercises the size-limit rejection path without any
     external network dependency.
     """

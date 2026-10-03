@@ -274,13 +274,13 @@ describe("AddAutoRouterTab", () => {
     mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
     renderWithProviders(<Harness />);
     await user.click(await screen.findByRole("button", { name: "Choose models for me" }));
-    await user.click(screen.getByRole("radio", { name: "Jev" }));
+    await user.click(screen.getByRole("radio", { name: "OSS Classifier" }));
     await waitFor(() =>
       expect(apiClient.post).toHaveBeenLastCalledWith(
         "/auto_router/availability",
         expect.objectContaining({
           body: expect.objectContaining({
-            complexity_router_config: expect.objectContaining({ classifier_type: "jev" }),
+            complexity_router_config: expect.objectContaining({ classifier_type: "oss_classifier" }),
           }),
         }),
       ),
@@ -301,13 +301,13 @@ describe("AddAutoRouterTab", () => {
     expect(within(screen.getByRole("alert")).getByRole("link", { name: "Talk to our team" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Restore defaults" }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
-    expect(screen.getByRole("radio", { name: "Jev" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "OSS Classifier" })).toBeChecked();
     await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     const saved = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config;
     expect(saved).not.toHaveProperty("tier_definitions");
-    expect(saved?.classifier_type).toBe("jev");
+    expect(saved?.classifier_type).toBe("oss_classifier");
     expect(Object.keys(saved?.tiers ?? {})).toEqual(["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]);
     expect(saved?.tiers).toEqual(initialRequest.complexity_router_config.tiers);
   });
@@ -317,7 +317,7 @@ describe("AddAutoRouterTab", () => {
     mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
     renderWithProviders(<Harness />);
     await user.click(await screen.findByRole("button", { name: "Choose models for me" }));
-    await user.click(screen.getByRole("radio", { name: "Jev" }));
+    await user.click(screen.getByRole("radio", { name: "OSS Classifier" }));
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "checked-router" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     let complete: ((result: unknown) => void) | undefined;
@@ -357,17 +357,22 @@ describe("AddAutoRouterTab", () => {
     expect(screen.getByRole("button", { name: "Routing approach" })).toHaveTextContent("Complexity");
   });
 
-  it.each(["LLM", "Jev"])("keeps %s and the frequency when choosing models automatically", async (family) => {
-    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
-    renderWithProviders(<Harness />);
-    const automatic = await screen.findByRole("button", { name: "Choose models for me" });
-    await userEvent.click(screen.getByRole("radio", { name: family }));
-    await selectAutoRouterOption("How often to classify", "Every new user message");
-    await userEvent.click(automatic);
-    expect(screen.getByRole("radio", { name: family })).toBeChecked();
-    expect(screen.getByRole("combobox", { name: "How often to classify" })).toHaveTextContent("Every new user message");
-    expect(screen.getByRole("button", { name: "Advanced settings" })).toHaveAttribute("aria-expanded", "false");
-  });
+  it.each(["LLM", "OSS Classifier"])(
+    "keeps %s and the frequency when choosing models automatically",
+    async (family) => {
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+      renderWithProviders(<Harness />);
+      const automatic = await screen.findByRole("button", { name: "Choose models for me" });
+      await userEvent.click(screen.getByRole("radio", { name: family }));
+      await selectAutoRouterOption("How often to classify", "Every new user message");
+      await userEvent.click(automatic);
+      expect(screen.getByRole("radio", { name: family })).toBeChecked();
+      expect(screen.getByRole("combobox", { name: "How often to classify" })).toHaveTextContent(
+        "Every new user message",
+      );
+      expect(screen.getByRole("button", { name: "Advanced settings" })).toHaveAttribute("aria-expanded", "false");
+    },
+  );
 
   it.each(["Capability", "Fuse v2"])(
     "creates %s from its dedicated tab without complexity templates",
@@ -1660,10 +1665,6 @@ describe("AddAutoRouterTab", () => {
 
     const ALL_RENAMED_DEPLOYMENTS = getAllPresets().flatMap((preset) => renamedDeploymentsFor(preset.key));
 
-    const renamedGroupFor = (model: string): string =>
-      ALL_RENAMED_DEPLOYMENTS.find((deployment) => deployment.litellm_params.model === `someprovider/${model}`)!
-        .model_name;
-
     it("enables a preset whose models exist only under renamed deployments, labeling the match", async () => {
       mockFetchAvailableModels.mockResolvedValue(groupsFor(ALL_RENAMED_DEPLOYMENTS));
       mockFetchAllModelDeployments.mockResolvedValue(ALL_RENAMED_DEPLOYMENTS);
@@ -1677,10 +1678,23 @@ describe("AddAutoRouterTab", () => {
       expect(optionByLabel("Anthropic Family")!).toHaveTextContent(/Matches your deployments/);
     });
 
-    it("keeps detailed configuration open and prefills the admin's group names on apply", async () => {
+    it("keeps detailed configuration open and submits native group names when cloud twins are available", async () => {
       const user = userEvent.setup();
-      mockFetchAvailableModels.mockResolvedValue(groupsFor(ALL_RENAMED_DEPLOYMENTS));
-      mockFetchAllModelDeployments.mockResolvedValue(ALL_RENAMED_DEPLOYMENTS);
+      const nativeDeployments = renamedDeploymentsFor("anthropic_family").map((deployment) => ({
+        ...deployment,
+        litellm_params: { model: deployment.litellm_params.model.replace("someprovider/", "anthropic/") },
+      }));
+      const nativeGroupFor = (model: string): string =>
+        nativeDeployments.find((deployment) => deployment.litellm_params.model === `anthropic/${model}`)!.model_name;
+      const cloudDeployments = nativeDeployments.map((deployment) => ({
+        model_name: `a-cloud-${deployment.model_name}`,
+        litellm_params: {
+          model: `bedrock/us.anthropic.${deployment.litellm_params.model.split("/")[1]}-v1:0`,
+        },
+      }));
+      const deployments = [...cloudDeployments, ...nativeDeployments];
+      mockFetchAvailableModels.mockResolvedValue(groupsFor(deployments));
+      mockFetchAllModelDeployments.mockResolvedValue(deployments);
 
       renderWithProviders(<Harness />);
       openTemplateDropdown();
@@ -1688,6 +1702,7 @@ describe("AddAutoRouterTab", () => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
       await selectTemplate("Anthropic Family");
+      expectTierModel("Complex", nativeGroupFor(ANTHROPIC_TIERS.COMPLEX[0]));
 
       openAutoRouterAdvanced("Keyword/Semantic Matching");
 
@@ -1701,10 +1716,10 @@ describe("AddAutoRouterTab", () => {
       expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
         complexity_router_config: {
           tiers: {
-            SIMPLE: ANTHROPIC_TIERS.SIMPLE.map(renamedGroupFor),
-            MEDIUM: ANTHROPIC_TIERS.MEDIUM.map(renamedGroupFor),
-            COMPLEX: ANTHROPIC_TIERS.COMPLEX.map(renamedGroupFor),
-            REASONING: ANTHROPIC_TIERS.REASONING.map(renamedGroupFor),
+            SIMPLE: ANTHROPIC_TIERS.SIMPLE.map(nativeGroupFor),
+            MEDIUM: ANTHROPIC_TIERS.MEDIUM.map(nativeGroupFor),
+            COMPLEX: ANTHROPIC_TIERS.COMPLEX.map(nativeGroupFor),
+            REASONING: ANTHROPIC_TIERS.REASONING.map(nativeGroupFor),
           },
         },
       });
@@ -1892,7 +1907,7 @@ describe("preset catalog fetch states", () => {
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0].complexity_router_config).toMatchObject({
-      classifier_type: "jev",
+      classifier_type: "oss_classifier",
       classifier_context_per_turn_chars: 450,
     });
   });
