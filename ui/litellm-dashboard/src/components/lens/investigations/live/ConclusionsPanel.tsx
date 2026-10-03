@@ -10,26 +10,22 @@ export interface Arrival {
   text: string;
 }
 
-const FLY_MS = 550;
+const FLY_MS = 400;
 
 function fly(from: DOMRect, to: DOMRect, text: string) {
   const node = document.createElement("div");
   node.textContent = text;
   node.setAttribute("aria-hidden", "true");
   node.className =
-    "pointer-events-none fixed z-floating truncate rounded-lg border border-[#e5484d]/30 bg-background px-3 py-2 text-xs font-semibold text-[#e5484d] shadow-lg";
+    "pointer-events-none fixed z-floating truncate rounded-md border bg-background px-3 py-1.5 text-[12px] font-medium text-[#e5484d] shadow-sm";
   Object.assign(node.style, { left: `${from.left}px`, top: `${from.top}px`, width: `${from.width}px` });
   document.body.appendChild(node);
   const animation = node.animate(
     [
-      { transform: "translate(0, 0)", width: `${from.width}px`, opacity: 1 },
-      {
-        transform: `translate(${to.left - from.left}px, ${to.top - from.top}px)`,
-        width: `${Math.max(200, to.width)}px`,
-        opacity: 0.2,
-      },
+      { transform: "translate(0, 0)", opacity: 1 },
+      { transform: `translate(${to.left - from.left}px, ${to.top - from.top}px)`, opacity: 0 },
     ],
-    { duration: FLY_MS, easing: "cubic-bezier(.3,.7,.2,1)" },
+    { duration: FLY_MS, easing: "ease-out" },
   );
   animation.onfinish = () => node.remove();
   return () => node.remove();
@@ -57,41 +53,44 @@ export function ConclusionsPanel({
   arrival: Arrival | null;
   verdictRef: RefObject<HTMLElement | null>;
 }) {
-  const list = useRef<HTMLOListElement>(null);
+  const list = useRef<HTMLTableSectionElement>(null);
   useFlyIn(arrival, verdictRef, list);
   return (
-    <ol ref={list} aria-label="Conclusions" className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 py-2.5">
-      {groups.map((group) => (
-        <li
-          key={group.checkId}
-          data-check={group.checkId}
-          data-hit={arrival?.checkId === group.checkId || undefined}
-          className={cn(
-            "rounded-lg border bg-background px-3 py-2 transition-shadow duration-500 motion-safe:animate-in motion-safe:fade-in",
-            "data-hit:border-[#e5484d]/30 data-hit:ring-3 data-hit:ring-[#e5484d]/10",
-          )}
-        >
-          <p className="flex items-start gap-1.5 text-[12.5px] font-semibold">
-            <span
-              aria-hidden="true"
-              className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", group.issue ? "bg-[#e5484d]" : "bg-muted-foreground/50")}
-            />
-            <span className="line-clamp-2">{group.label}</span>
-          </p>
-          <p className="mt-1 flex justify-between gap-3 font-mono text-[11px] text-muted-foreground">
-            <span>
-              {group.count} {group.count === 1 ? "trace" : "traces"}
-            </span>
-            <span>{Math.round((group.count / Math.max(1, reviewed)) * 100)}% of reviewed</span>
-          </p>
-          {group.latest !== group.label && (
-            <p className="mt-1 line-clamp-1 text-[11px] text-muted-foreground" title={group.latest}>
-              latest: {group.latest}
-            </p>
-          )}
-        </li>
-      ))}
-      {!groups.length && <li className="py-4 text-xs text-muted-foreground">Nothing flagged yet.</li>}
-    </ol>
+    <table aria-label="Conclusions" className="w-full table-fixed border-collapse text-left">
+      <tbody ref={list}>
+        {groups.map((group) => (
+          <tr
+            key={group.checkId}
+            data-check={group.checkId}
+            className="border-b border-border/60 text-[12px]"
+            title={group.latest}
+          >
+            <td className="w-6 pl-3 align-top">
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "mt-3.5 block size-1.5 rounded-full",
+                  group.issue ? "bg-[#e5484d]" : "bg-muted-foreground/40",
+                )}
+              />
+            </td>
+            <td className="py-2 pr-2">
+              <span className="line-clamp-2 text-foreground">{group.label}</span>
+              <span className="text-[11px] text-muted-foreground">
+                {Math.round((group.count / Math.max(1, reviewed)) * 100)}% of reviewed
+              </span>
+            </td>
+            <td className="w-12 px-3 py-2 text-right align-top font-mono tabular-nums text-foreground">
+              {group.count}
+            </td>
+          </tr>
+        ))}
+        {!groups.length && (
+          <tr className="text-[12px] text-muted-foreground">
+            <td className="px-3 py-6">Nothing flagged yet.</td>
+          </tr>
+        )}
+      </tbody>
+    </table>
   );
 }

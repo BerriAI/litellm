@@ -1,69 +1,50 @@
+import { Loader2 } from "lucide-react";
+
 import { cn } from "@/lib/cva.config";
 
-import { outcome, reviewKey } from "../../model/live";
-import type { Review } from "../../model/types";
+import { outcome, queueRows, reviewKey, type Playback } from "../../model/live";
 
-const BEFORE = 6;
-const AFTER = 12;
-const MARK = { issue: "●", clear: "✓", unknown: "?" } as const;
+const LIMIT = 80;
 
-type Row = { review: Review; state: "done" | "active" | "next" };
-
-function rows(played: readonly Review[], current: Review | null, pending: readonly Review[], live: boolean): Row[] {
-  const tail = played.slice(live ? -BEFORE : -(BEFORE + AFTER));
-  return [
-    ...tail.map((review): Row => ({ review, state: "done" })),
-    ...(current ? [{ review: current, state: live ? "active" : "done" } as Row] : []),
-    ...pending.slice(0, AFTER).map((review): Row => ({ review, state: "next" })),
-  ];
-}
-
-export function ReviewQueue({
-  played,
-  current,
-  pending,
-  live,
-}: {
-  played: readonly Review[];
-  current: Review | null;
-  pending: readonly Review[];
-  live: boolean;
-}) {
+export function ReviewQueue({ playback, live }: { playback: Pick<Playback, "played" | "current">; live: boolean }) {
   return (
-    <ol aria-label="Reviewed traces" className="min-h-0 flex-1 overflow-hidden">
-      {rows(played, current, pending, live).map(({ review, state }) => {
-        const result = outcome(review);
-        return (
-          <li
-            key={reviewKey(review)}
-            data-state={state}
-            aria-current={state === "active" ? "step" : undefined}
-            className={cn(
-              "grid grid-cols-[0.875rem_minmax(0,1fr)_auto] items-center gap-2 border-b border-border/60 px-3.5 py-1.5 text-xs",
-              state === "active" && "bg-(--provider)/5 shadow-[inset_2px_0_0_var(--provider)]",
-              state === "next" && "text-muted-foreground",
-            )}
-          >
-            {state === "active" && (
-              <span
-                aria-label="Reviewing"
-                className="size-2.5 rounded-full border-[1.5px] border-(--provider)/25 border-t-(--provider) motion-safe:animate-spin"
-              />
-            )}
-            {state === "done" && (
-              <span
-                aria-label={result}
-                className={cn("text-[11px]", result === "issue" ? "text-[#e5484d]" : "text-muted-foreground")}
-              >
-                {MARK[result]}
-              </span>
-            )}
-            {state === "next" && <span className="text-[11px] text-muted-foreground">·</span>}
-            <span className="truncate">{review.agent || review.name}</span>
-            <span className="font-mono text-[11px] text-muted-foreground">{review.trace_id.slice(0, 8)}</span>
-          </li>
-        );
-      })}
-    </ol>
+    <table aria-label="Reviewed traces" className="w-full table-fixed border-collapse text-left">
+      <tbody>
+        {queueRows(playback, LIMIT).map((review) => {
+          const active = live && review === playback.current;
+          const result = outcome(review);
+          return (
+            <tr
+              key={reviewKey(review)}
+              data-state={active ? "active" : result}
+              aria-current={active ? "step" : undefined}
+              className={cn(
+                "h-9 border-b border-border/60 text-[12px]",
+                active && "bg-trace-row-hover",
+                review === playback.current && "motion-safe:animate-in motion-safe:fade-in",
+              )}
+            >
+              <td className="w-7 pl-3">
+                {active ? (
+                  <Loader2 aria-label="Reviewing" className="size-3 text-muted-foreground motion-safe:animate-spin" />
+                ) : (
+                  <span
+                    aria-label={result}
+                    className={cn(
+                      "block size-1.5 rounded-full",
+                      result === "issue" ? "bg-[#e5484d]" : "bg-muted-foreground/40",
+                    )}
+                  />
+                )}
+              </td>
+              <td className="truncate px-2 text-foreground">{review.agent || review.name}</td>
+              <td className="w-[84px] truncate px-3 text-right font-mono text-[11px] text-muted-foreground">
+                {review.trace_id.slice(0, 8)}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }
