@@ -25,7 +25,6 @@ from litellm.llms.base_llm.auth.identity_source import (
 )
 from litellm.llms.base_llm.auth.jwt_signing import build_jwks, rfc7638_thumbprint
 from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
-from litellm.types.router import GenericLiteLLMParams
 from litellm.llms.base_llm.auth.types import (
     AssertionSourceError,
     ExchangeError,
@@ -34,6 +33,7 @@ from litellm.llms.base_llm.auth.types import (
     TokenEndpointError,
     TokenTransportError,
 )
+from litellm.types.router import GenericLiteLLMParams
 
 WIF_ENV_VARS: Final = (
     "ANTHROPIC_FEDERATION_RULE_ID",
@@ -1131,6 +1131,28 @@ class TestIdentitySourceValidationFailsClosed:
                     "anthropic_keycloak_client_id": "leaked-from-other-variant",
                 }
             )
+
+    def test_blank_optional_and_foreign_fields_count_as_unset(self):
+        configured = {
+            "anthropic_federation_rule_id": "fdrl_1",
+            "anthropic_organization_id": "org-1",
+            "anthropic_identity_source": "internal_issuer",
+            "anthropic_issuer_url": "https://issuer.internal.example",
+            "anthropic_issuer_subject": "workload-a",
+            "anthropic_issuer_signing_key_ref": ISSUER_SIGNING_KEY_REF,
+        }
+        with_blanks = {
+            **configured,
+            "anthropic_issuer_audience": "",
+            "anthropic_issuer_ttl_seconds": "",
+            "anthropic_keycloak_client_id": "",
+        }
+
+        expected = resolve_anthropic_wif_params(configured)
+        actual = resolve_anthropic_wif_params(with_blanks)
+
+        assert expected is not None and actual is not None
+        assert actual.assertion_ref == expected.assertion_ref
 
     def test_secret_pasted_into_wrong_field_never_appears_in_the_error(self):
         secret_value = "super-secret-client-value-xyz"
