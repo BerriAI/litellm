@@ -104,7 +104,6 @@ async fn schema_supports_span_rollups_and_spend_joins(
                     all_teams: 0,
                     user_id: String::new(),
                     team_ids: vec!["team-1".into()],
-                    api_key_hash: String::new(),
                 },
                 trace_id: "trace-1".into(),
                 trace_ref: String::new(),
@@ -119,7 +118,6 @@ async fn schema_supports_span_rollups_and_spend_joins(
         ("all_teams".into(), Parameter::Integer(0)),
         ("user_id".into(), Parameter::Text(String::new())),
         ("team_ids".into(), Parameter::Strings(vec!["team-1".into()])),
-        ("api_key_hash".into(), Parameter::Text(String::new())),
         (
             "start_ms".into(),
             Parameter::Integer(timestamp / 1_000_000 - 1000),
@@ -153,7 +151,6 @@ async fn schema_supports_span_rollups_and_spend_joins(
         ("all_teams".into(), Parameter::Integer(0)),
         ("user_id".into(), Parameter::Text(String::new())),
         ("team_ids".into(), Parameter::Strings(vec!["team-1".into()])),
-        ("api_key_hash".into(), Parameter::Text(String::new())),
         (
             "start_ms".into(),
             Parameter::Integer(timestamp / 1_000_000 - 1000),
@@ -421,6 +418,7 @@ async fn listed_agent_names_preserve_scope_and_cursor(
             vec![serde_json::from_value(serde_json::json!({
                 "Timestamp": timestamp, "TraceId": trace, "SpanId": span, "ParentSpanId": parent,
                 "ServiceName": "shared-app", "SpanName": span, "AgentName": agent,
+                "UserId": if key == "one" { "owner" } else { "other" },
                 "Framework": framework, "ObservationType": "agent",
                 "ResourceAttributes": {"litellm.team_id": team, "litellm.api_key_hash": key}
             }))?],
@@ -442,9 +440,8 @@ async fn listed_agent_names_preserve_scope_and_cursor(
     let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
     let parameters = BTreeMap::from([
         ("all_teams".into(), Parameter::Integer(0)),
-        ("user_id".into(), Parameter::Text(String::new())),
+        ("user_id".into(), Parameter::Text("owner".into())),
         ("team_ids".into(), Parameter::Strings(vec![])),
-        ("api_key_hash".into(), Parameter::Text("one".into())),
         (
             "start_ms".into(),
             Parameter::Integer(timestamp / 1_000_000 - 1000),
@@ -596,7 +593,6 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
         ("all_teams".into(), Parameter::Integer(0)),
         ("user_id".into(), Parameter::Text(String::new())),
         ("team_ids".into(), Parameter::Strings(vec!["team-1".into()])),
-        ("api_key_hash".into(), Parameter::Text(String::new())),
         (
             "start_ms".into(),
             Parameter::Integer(day_start / 1_000_000 - 2000),
@@ -795,7 +791,7 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
     for (key, text) in [("one", "timeout"), ("two", "success")] {
         insert_rows(&database, "otel_traces", vec![serde_json::from_value(serde_json::json!({
             "Timestamp": timestamp, "TraceId": "shared", "SpanId": "root", "ParentSpanId": "",
-            "ServiceName": "review", "SpanName": "release", "Input": text,
+            "ServiceName": "review", "SpanName": "release", "Input": text, "UserId": key,
             "ResourceAttributes": {"litellm.team_id": "team", "litellm.api_key_hash": key, "swarm": "release"}
         }))?]).await?;
     }
@@ -849,7 +845,6 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
         ("all_teams".into(), Parameter::Integer(0)),
         ("user_id".into(), Parameter::Text(String::new())),
         ("team_ids".into(), Parameter::Strings(vec!["team".into()])),
-        ("api_key_hash".into(), Parameter::Text(String::new())),
     ]);
     let identities: serde_json::Value = serde_json::from_str(
         &execute_named_read(
@@ -861,11 +856,11 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
         .await?,
     )?;
     assert_eq!(identities["data"].as_array().map(Vec::len), Some(2));
-    let key_params = identity_params
+    let user_params = identity_params
         .into_iter()
         .chain([
             ("team_ids".into(), Parameter::Strings(vec![])),
-            ("api_key_hash".into(), Parameter::Text("one".into())),
+            ("user_id".into(), Parameter::Text("one".into())),
         ])
         .collect();
     let identity: serde_json::Value = serde_json::from_str(
@@ -873,7 +868,7 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
             &database.client,
             &connection,
             ReadQuery::TraceIdentity,
-            &key_params,
+            &user_params,
         )
         .await?,
     )?;
@@ -1170,7 +1165,6 @@ async fn trace_error_previews_preserve_paginated_diagnostics(
         ("all_teams".into(), Parameter::Integer(1)),
         ("user_id".into(), Parameter::Text(String::new())),
         ("team_ids".into(), Parameter::Strings(vec![])),
-        ("api_key_hash".into(), Parameter::Text(String::new())),
         ("trace_ref".into(), Parameter::Text(String::new())),
     ]);
     let body = execute_named_read(
@@ -1217,10 +1211,7 @@ async fn trace_error_previews_preserve_paginated_diagnostics(
     }
     assert_eq!(recovered, message);
     parameters.insert("all_teams".into(), Parameter::Integer(0));
-    parameters.insert(
-        "api_key_hash".into(),
-        Parameter::Text("unrelated-key".into()),
-    );
+    parameters.insert("user_id".into(), Parameter::Text("unrelated-user".into()));
     let denied =
         execute_named_read(&database.client, &reader, ReadQuery::SpanError, &parameters).await?;
     assert_eq!(
@@ -1265,7 +1256,6 @@ async fn duplicate_span_preview_matches_diagnostic(
         ("all_teams".into(), Parameter::Integer(1)),
         ("user_id".into(), Parameter::Text(String::new())),
         ("team_ids".into(), Parameter::Strings(vec![])),
-        ("api_key_hash".into(), Parameter::Text(String::new())),
         ("trace_ref".into(), Parameter::Text(String::new())),
         ("error_version".into(), Parameter::Text(String::new())),
         ("error_offset".into(), Parameter::Integer(0)),
@@ -1716,16 +1706,16 @@ fn field_definitions_match_serialized_normalized_span() {
 }
 
 #[rstest]
-#[case::own_user("owner", vec![], "", vec!["own"])]
-#[case::own_user_and_permitted_team("owner", vec!["permitted"], "", vec!["own", "team"])]
-#[case::key_only("", vec![], "request-key", vec!["own"])]
-#[case::no_identity("", vec![], "", vec![])]
+#[case::own_user("owner", vec![], None, vec!["own"])]
+#[case::own_user_and_permitted_team("owner", vec!["permitted"], None, vec!["own", "team"])]
+#[case::no_identity("", vec![], None, vec![])]
+#[case::legacy_key_without_identity("", vec![], Some("request-key"), vec![])]
 #[tokio::test]
 async fn named_and_sql_readers_share_request_log_visibility(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
     #[case] user: &str,
     #[case] teams: Vec<&str>,
-    #[case] key: &str,
+    #[case] legacy_key: Option<&str>,
     #[case] expected: Vec<&str>,
 ) -> TestResult {
     use litellm_traces_clickhouse::query::named::{
@@ -1748,12 +1738,10 @@ async fn named_and_sql_readers_share_request_log_visibility(
     let reader = Connection::reader(&database.url, "trace_test")?;
     let params =
         SpendByResponseIdsParams::from(litellm_traces::query::named::SpendByResponseIdsParams {
-            access: ReadAccessParams {
-                all_teams: 0,
-                user_id: user.into(),
-                team_ids: teams.iter().map(|team| (*team).into()).collect(),
-                api_key_hash: key.into(),
-            },
+            access: serde_json::from_value::<ReadAccessParams>(serde_json::json!({
+                "all_teams": 0, "user_id": user, "team_ids": teams,
+                "api_key_hash": legacy_key.unwrap_or_default(),
+            }))?,
             response_ids: vec!["shared-response".into()],
             start_ms: timestamp / 1_000_000 - 1,
             end_ms: timestamp / 1_000_000 + 1,
@@ -1765,10 +1753,9 @@ async fn named_and_sql_readers_share_request_log_visibility(
         spend.iter().map(|row| row.0.request_id.as_str()).collect();
     let expected: std::collections::BTreeSet<_> = expected.into_iter().collect();
     assert_eq!(actual, expected);
-    let scope = QueryScope::Logs {
+    let scope = QueryScope::Owned {
         user_id: user.into(),
         team_ids: teams.into_iter().map(str::to_owned).collect(),
-        api_key_hash: key.into(),
     };
     if user.is_empty() && scope.validate().is_err() {
         assert!(
@@ -1829,7 +1816,6 @@ async fn rollup_cost_completeness_preserves_missing_ids_and_fails_closed_for_his
                 all_teams: 0,
                 user_id: "".into(),
                 team_ids: vec!["team".into()],
-                api_key_hash: "".into(),
             },
             start_ms: timestamp / 1_000_000 - 1,
             end_ms: timestamp / 1_000_000 + 1,
@@ -1850,7 +1836,6 @@ async fn rollup_cost_completeness_preserves_missing_ids_and_fails_closed_for_his
                 user_id: "owner".into(),
                 team_ids: vec![],
                 all_teams: 0,
-                api_key_hash: String::new(),
             },
             ..params.0
         },
@@ -1882,18 +1867,16 @@ async fn rollup_cost_completeness_preserves_missing_ids_and_fails_closed_for_his
 }
 
 #[rstest]
-#[case::admin(1, "", vec![], "", "own answer")]
-#[case::user(0, "owner", vec![], "", "own answer")]
-#[case::team(0, "", vec!["alpha"], "", "own answer")]
-#[case::key(0, "", vec![], "one", "own answer")]
-#[case::no_identity(0, "", vec![], "", "")]
+#[case::admin(1, "", vec![], "own answer")]
+#[case::user(0, "owner", vec![], "own answer")]
+#[case::team(0, "", vec!["alpha"], "own answer")]
+#[case::no_identity(0, "", vec![], "")]
 #[tokio::test]
 async fn agent_final_answer_preserves_visibility_and_trace_ownership(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
     #[case] all_teams: u8,
     #[case] user: &str,
     #[case] teams: Vec<&str>,
-    #[case] key: &str,
     #[case] expected: &str,
 ) -> TestResult {
     use litellm_traces_clickhouse::query::named::{ReadAccessParams, SpanDetail, SpanDetailParams};
@@ -1952,7 +1935,6 @@ async fn agent_final_answer_preserves_visibility_and_trace_ownership(
                 all_teams,
                 user_id: user.into(),
                 team_ids: teams.into_iter().map(str::to_owned).collect(),
-                api_key_hash: key.into(),
             },
             trace_id: "shared".into(),
             trace_ref: String::new(),

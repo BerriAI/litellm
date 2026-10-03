@@ -46,7 +46,7 @@ Gotchas
 
 {% block reader_limits %}The reader enforces {{ limits.result_rows }} result rows, {{ limits.result_mib() }} MiB response bytes, {{ limits.memory_mib() }} MiB memory and a {{ limits.execution_seconds }} second query limit; exceeding limits fails instead of returning partial results{% endblock %}
 
-{% block reader_profile %}LiteLLM provisions SELECT-only readers from the configured ClickHouse connection and enforces request-log visibility through row policies. Callers see their own user rows and permitted teams, or their own key rows when no user identity is available. Provisioning requires CREATE USER, ALTER USER, CREATE ROW POLICY, and GRANT SELECT permissions{% endblock %}
+{% block reader_profile %}LiteLLM provisions SELECT-only readers from the configured ClickHouse connection and enforces request-log visibility through row policies. Callers see their own user rows and permitted teams. Provisioning requires CREATE USER, ALTER USER, CREATE ROW POLICY, and GRANT SELECT permissions{% endblock %}
 
 {% block output_format %}Do not add FORMAT clauses; the endpoint requires ClickHouse JSON output{% endblock %}
 

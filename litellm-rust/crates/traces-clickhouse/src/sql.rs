@@ -64,7 +64,7 @@ mod tests {
         #[case] specific: serde_json::Value,
     ) {
         let common = serde_json::json!({
-            "all_teams": 1, "user_id": "", "team_ids": [], "api_key_hash": "", "trace_id": "trace", "trace_ref": ""
+            "all_teams": 1, "user_id": "", "team_ids": [], "trace_id": "trace", "trace_ref": ""
         });
         let parameters: BTreeMap<String, Parameter> = common
             .as_object()
