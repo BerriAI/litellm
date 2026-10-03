@@ -125,6 +125,7 @@ from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_st
 from litellm.proxy.spend_tracking.carried_budget_state import carry_organization_budget_state
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import DatabaseClient, RowT_co
@@ -2250,8 +2251,10 @@ async def _query_uncached_tags(
     if not tags_to_fetch:
         return ()
 
-    db_tags: Final = await _tag_table(TagRepository(prisma_client)).find_many(
-        where={"tag_name": {"in": list(tags_to_fetch)}},
+    db_tags: Final = await find_many_in(
+        _tag_table(TagRepository(prisma_client)),
+        "tag_name",
+        tags_to_fetch,
         include={"litellm_budget_table": True},
     )
     fetched: Final = tuple((db_tag.tag_name, LiteLLM_TagTable.model_validate(db_tag.dict())) for db_tag in db_tags)

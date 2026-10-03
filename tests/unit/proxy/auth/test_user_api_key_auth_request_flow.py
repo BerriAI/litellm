@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path
@@ -10305,6 +10305,7 @@ async def _run_tag_ownership_auth(
         patches[2],
         patches[3],
         patches[4] as mock_reserve,
+        patch("litellm.proxy.proxy_server.premium_user", True) if jwt_result is not None else nullcontext(),
     ):
         try:
             result = await user_api_key_auth(request=request, api_key=api_key)

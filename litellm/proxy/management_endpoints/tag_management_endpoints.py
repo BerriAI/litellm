@@ -33,6 +33,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     DailyTagSpendRepository,
@@ -299,16 +300,27 @@ async def _get_tag_list_scope(
     return {"api_key": {"in": scoped_api_keys}}
 
 
-def _stored_tag_where(
+async def _stored_tag_rows(
+    prisma_client: "PrismaClient",
     tag_scope: Mapping[str, Mapping[str, Sequence[str]]] | None,
     used_tag_names: Sequence[str],
     team_id: str | None,
-) -> Mapping[str, object] | None:
+) -> "Sequence[_TagRecord]":
+    """Stored tag rows matching the dynamic-name filter or, for team callers, their own team."""
+    tag_table: Final = _table(TagRepository(prisma_client))
     if tag_scope is None:
-        return None
-    if team_id is not None:
-        return {"OR": [{"tag_name": {"in": used_tag_names}}, {"team_id": team_id}]}
-    return {"tag_name": {"in": used_tag_names}}
+        return await tag_table.find_many(include={"litellm_budget_table": True})
+    named_tags: Final = await find_many_in(
+        tag_table,
+        "tag_name",
+        used_tag_names,
+        include={"litellm_budget_table": True},
+    )
+    if team_id is None:
+        return named_tags
+    named_names: Final = {tag.tag_name for tag in named_tags}
+    team_tags: Final = await tag_table.find_many(where={"team_id": team_id}, include={"litellm_budget_table": True})
+    return (*named_tags, *(tag for tag in team_tags if tag.tag_name not in named_names))
 
 
 async def get_tag_daily_activity_api_key_filter(
@@ -780,16 +792,12 @@ async def list_tags(
         if tag_scope is not None and not used_tag_names and user_api_key_dict.team_id is None:
             return []
 
-        stored_tag_where: Final = _stored_tag_where(
+        ## QUERY STORED TAGS ##
+        tag_records: Final = await _stored_tag_rows(
+            prisma_client=prisma_client,
             tag_scope=tag_scope,
             used_tag_names=used_tag_names,
             team_id=user_api_key_dict.team_id,
-        )
-
-        ## QUERY STORED TAGS ##
-        tag_records: Final = await _table(TagRepository(prisma_client)).find_many(
-            where=stored_tag_where,
-            include={"litellm_budget_table": True},
         )
 
         stored_tag_names: Final = set()

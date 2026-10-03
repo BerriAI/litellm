@@ -179,8 +179,9 @@ from litellm.proxy.management_helpers.utils import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.chunked_in import delete_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.prisma_protocols import DeleteManyTable, TableActions
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,
     DeletedTeamRepository,
@@ -4485,11 +4486,17 @@ async def delete_team(
     # the lock before this transaction starts, in which case this sweep reaches what it wrote,
     # or is still waiting on the lock, in which case its own re-read happens after this commits
     # and sees the row gone before it writes anything.
-    delete_filter: Final[_TeamIdInFilter] = {"team_id": {"in": data.team_ids}}
     async with prisma_client.tx() as tx:
         for team_id in sorted(data.team_ids):
             await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
-        await tx.litellm_teamtable.delete_many(where=delete_filter)
+        await delete_many_in(
+            cast(
+                DeleteManyTable, tx.litellm_teamtable
+            ),  # cast-ok: generated where input narrows the Mapping the protocol accepts
+            "team_id",
+            data.team_ids,
+            atomicity="caller_transaction",
+        )
         await _sweep_deleted_team_references_tx(team_ids=data.team_ids, tx=tx)
 
     deleted_teams: Final[_DeletedTeamsResult] = {"deleted_teams": data.team_ids}

@@ -14,7 +14,6 @@ litellm/proxy/agent_endpoints/endpoints.py _attach_keys_to_agents prisma agent_i
 litellm/proxy/agent_endpoints/endpoints.py get_agents prisma agent_id.in `agent_ids` 0
 litellm/proxy/anthropic_endpoints/claude_code_endpoints/claude_code_skill_access.py SkillVisibility.where prisma name.in `sorted(self.granted)` 0
 litellm/proxy/auth/auth_checks.py _fetch_uncached_model_access_group_budgets prisma access_group_name.in `list(uncached_groups)` 0
-litellm/proxy/auth/auth_checks.py _fetch_uncached_tags prisma tag_name.in `list(tags_to_fetch)` 0
 litellm/proxy/auth/auth_checks.py get_jwt_key_mapping_cache_keys_for_tokens prisma token.in `tuple(hashed_tokens)` 0
 litellm/proxy/auth/auth_checks.py get_managed_vector_store_rows_by_uuids prisma vector_store_id.in `cache_misses` 0
 litellm/proxy/common_utils/reset_budget_job.py _budget_link_where prisma budget_id.in `list(budget_ids)` 0
@@ -77,7 +76,6 @@ litellm/proxy/management_endpoints/session_endpoints.py revoke_ui_session_keys p
 litellm/proxy/management_endpoints/tag_management_endpoints.py _get_model_names prisma model_id.in `model_ids` 0
 litellm/proxy/management_endpoints/tag_management_endpoints.py _get_tag_list_scope prisma api_key.in `scoped_api_keys` 0
 litellm/proxy/management_endpoints/tag_management_endpoints.py info_tag prisma tag_name.in `data.names` 0
-litellm/proxy/management_endpoints/tag_management_endpoints.py list_tags prisma tag_name.in `used_tag_names` 0
 litellm/proxy/management_endpoints/team_endpoints.py _append_permissions_to_specific_teams prisma team_id.in `team_ids` 0
 litellm/proxy/management_endpoints/team_endpoints.py _authorize_and_filter_teams prisma organization_id.in `allowed_org_ids` 0
 litellm/proxy/management_endpoints/team_endpoints.py _batch_resolve_access_group_resources prisma access_group_id.in `unique_ids` 0

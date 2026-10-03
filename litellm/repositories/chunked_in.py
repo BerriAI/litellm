@@ -95,10 +95,13 @@ async def find_many_in(
     values: Iterable[Hashable],
     *,
     where: Mapping[str, object] | None = None,
+    include: Mapping[str, object] | None = None,
     chunk_size: int = IN_LIST_CHUNK_SIZE,
 ) -> tuple[RowT, ...]:
     """Rows in chunk order. No take/skip/cursor/order/distinct: none of them survive a split."""
-    pages: Final = await _each_chunk(field, values, where, lambda chunk: table.find_many(where=chunk), chunk_size)
+    pages: Final = await _each_chunk(
+        field, values, where, lambda chunk: table.find_many(where=chunk, include=include), chunk_size
+    )
     return tuple(chain.from_iterable(pages))
 
 
