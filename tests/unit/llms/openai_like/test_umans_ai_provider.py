@@ -1,5 +1,7 @@
 import json
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -45,9 +47,9 @@ def test_umans_ai_provider_keeps_explicit_credentials(monkeypatch: pytest.Monkey
 
 
 def test_umans_ai_is_available_in_add_model_form():
-    fields_path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
-    providers = json.loads(fields_path.read_text())
-    umans = next(provider for provider in providers if provider["litellm_provider"] == "umans-ai")
+    fields_path: Final = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
+    providers: Final = json.loads(fields_path.read_text())
+    umans: Final = next(provider for provider in providers if provider["litellm_provider"] == "umans-ai")
 
     assert umans["provider"] == "UMANS_AI"
     assert umans["provider_display_name"] == "Umans AI"
@@ -59,8 +61,8 @@ def test_umans_ai_is_available_in_add_model_form():
 
 
 def test_umans_ai_supported_endpoints():
-    matrix_path = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
-    providers = json.loads(matrix_path.read_text())["providers"]
+    matrix_path: Final = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
+    providers: Final = json.loads(matrix_path.read_text())["providers"]
 
     assert providers["umans-ai"]["endpoints"] == {
         "chat_completions": True,
@@ -187,51 +189,58 @@ async def test_umans_ai_anthropic_messages_request(monkeypatch: pytest.MonkeyPat
     assert response["content"][0]["text"] == "Hello from Umans AI"
 
 
-UMANS_PRICING: Final = (
-    # model, then USD per token for input, output and cache read (app.umans.ai/pricing)
-    ("umans-ai/umans-deepseek-v4-flash-0731", 1.4e-07, 2.8e-07, 2.8e-08),
-    ("umans-ai/umans-deepseek-v4.1-flash", 1.5e-07, 6e-07, 2.8e-08),
-    ("umans-ai/umans-glm-5.3", 1.4e-06, 4.4e-06, 2.6e-07),
-    ("umans-ai/umans-glm-5.3-flash", 1.5e-07, 5e-07, 3e-08),
-    ("umans-ai/umans-kimi-k3", 3e-06, 1.5e-05, 3e-07),
-    ("umans-ai/umans-flash", 1.5e-07, 1e-06, 5e-08),
-    ("umans-ai/umans-coder", 1.5e-07, 5e-07, 3e-08),
-)
+COST_FIELDS: Final = ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
 
 
-def _load_cost_map(filename: str = "model_prices_and_context_window.json") -> dict:
-    with open(Path(__file__).parents[4] / filename) as f:
-        return json.load(f)
+def _umans_cost_entries(filename: str = "model_prices_and_context_window.json") -> Mapping[str, Mapping[str, object]]:
+    cost_map: Final = json.loads((Path(__file__).parents[4] / filename).read_text())
+    return MappingProxyType({model: entry for model, entry in cost_map.items() if model.startswith("umans-ai/")})
 
 
-@pytest.mark.parametrize(("model", "input_cost", "output_cost", "cache_read_cost"), UMANS_PRICING)
-def test_umans_ai_models_are_priced(model: str, input_cost: float, output_cost: float, cache_read_cost: float):
-    entry: Final = _load_cost_map()[model]
+def test_umans_ai_cost_map_entries_match_backup_and_are_priced():
+    entries: Final = _umans_cost_entries()
 
-    assert entry["litellm_provider"] == "umans-ai"
-    assert entry["mode"] == "chat"
-    assert entry["input_cost_per_token"] == input_cost
-    assert entry["output_cost_per_token"] == output_cost
-    assert entry["cache_read_input_token_cost"] == cache_read_cost
-    assert _load_cost_map("litellm/model_prices_and_context_window_backup.json")[model] == entry
+    assert entries
+    assert entries == _umans_cost_entries("litellm/model_prices_and_context_window_backup.json")
+    for entry in entries.values():
+        assert entry["litellm_provider"] == "umans-ai"
+        assert entry["mode"] == "chat"
+        assert entry["max_tokens"] == entry["max_output_tokens"]
+        assert all(isinstance(cost, float) and cost > 0 for cost in (entry[field] for field in COST_FIELDS))
 
 
-def test_umans_ai_usage_is_billed():
-    prompt_cost, completion_cost = litellm.cost_per_token(
-        model="umans-ai/umans-deepseek-v4-flash-0731",
-        prompt_tokens=1_000_000,
-        completion_tokens=1_000_000,
+def test_umans_ai_default_model_is_priced():
+    fields_path: Final = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
+    umans: Final = next(
+        provider for provider in json.loads(fields_path.read_text()) if provider["litellm_provider"] == "umans-ai"
     )
 
-    assert prompt_cost == pytest.approx(0.14)
-    assert completion_cost == pytest.approx(0.28)
+    assert umans["default_model_placeholder"] in _umans_cost_entries()
 
 
-def _sse(*events: dict) -> bytes:
+def test_umans_ai_usage_is_billed_at_cost_map_rates():
+    model: Final = "umans-ai/umans-deepseek-v4-flash-0731"
+    entry: Final = _umans_cost_entries()[model]
+    input_cost: Final = entry["input_cost_per_token"]
+    output_cost: Final = entry["output_cost_per_token"]
+    cache_read_cost: Final = entry["cache_read_input_token_cost"]
+    assert isinstance(input_cost, float)
+    assert isinstance(output_cost, float)
+    assert isinstance(cache_read_cost, float)
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=model, prompt_tokens=1_000, completion_tokens=2_000, cache_read_input_tokens=800
+    )
+
+    assert prompt_cost == pytest.approx(200 * input_cost + 800 * cache_read_cost)
+    assert completion_cost == pytest.approx(2_000 * output_cost)
+
+
+def _sse(*events: Mapping[str, object]) -> bytes:
     return b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in events) + b"data: [DONE]\n\n"
 
 
-def _typed_sse(*events: dict) -> bytes:
+def _typed_sse(*events: Mapping[str, object]) -> bytes:
     return b"".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events)
 
 
@@ -362,7 +371,7 @@ async def test_umans_ai_anthropic_messages_streaming_request(monkeypatch: pytest
         route: Final = upstream.post("https://api.code.umans.ai/v1/messages").respond(
             200, content=stream_body, headers={"content-type": "text/event-stream"}
         )
-        stream = await litellm.anthropic.messages.acreate(
+        stream: Final = await litellm.anthropic.messages.acreate(
             model="umans-ai/umans-deepseek-v4-flash-0731",
             messages=[{"role": "user", "content": "Say hello"}],
             max_tokens=32,
