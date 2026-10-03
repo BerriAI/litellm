@@ -1577,12 +1577,12 @@ def _canonical_json_dumps() -> Callable[[object], bytes]:
 _canonical_json: Final = _canonical_json_dumps()
 
 
-def _content_fingerprint(value: object) -> object:
+def _content_fingerprint(value: object, dumps: Callable[[object], bytes] = _canonical_json) -> object:
     """Serialized form of a JSON-shaped value so the allow/mask baseline costs one JSON pass, not a
     deep copy of the whole prompt. Anything the serializer rejects falls back to a deep copy."""
     try:
-        return _canonical_json(value)
-    except TypeError:
+        return dumps(value)
+    except (TypeError, ValueError):
         return copy.deepcopy(value)
 
 
