@@ -1313,6 +1313,23 @@ async def cancel_response(
         )
 
 
+def _resolve_responses_ws_session_limit_seconds() -> float:
+    from litellm.proxy.proxy_server import general_settings
+
+    field: Final = "responses_websocket_session_limit_seconds"
+    raw: Final = general_settings.get(field)
+    try:
+        return ConfigGeneralSettings.model_validate(
+            {} if raw is None else {field: raw}
+        ).responses_websocket_session_limit_seconds
+    except ValidationError as e:
+        default: Final = ConfigGeneralSettings.model_fields[field].default
+        verbose_proxy_logger.warning(
+            "invalid general_settings.%s=%r (%s); using default %ss", field, raw, e, default
+        )
+        return float(default)
+
+
 async def _read_ws_model_from_first_frame(
     websocket: WebSocket,
     query_model: str | None = None,
@@ -1320,12 +1337,10 @@ async def _read_ws_model_from_first_frame(
     """Read the first WS frame and return (model, raw_message), or None on error.
 
     Sends an appropriate error frame and closes the socket before returning None.
+    The session-duration deadline is enforced by the caller, not here.
     """
     try:
-        first_message: Final = await asyncio.wait_for(websocket.receive_text(), timeout=30)
-    except asyncio.TimeoutError:
-        await websocket.close(code=1008, reason="Timed out waiting for first message")
-        return None
+        first_message: Final = await websocket.receive_text()
     except WebSocketDisconnect:
         return None
     except Exception:
@@ -1471,25 +1486,11 @@ async def _enforce_responses_ws_first_frame_model_auth(
     )
 
 
-@router.websocket("/v1/responses")
-@router.websocket("/responses")
-async def responses_websocket_endpoint(
+async def _responses_websocket_session(
     websocket: WebSocket,
-    model: str | None = fastapi.Query(None, description="The model to use for the responses WebSocket session."),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
-):
-    """
-    Responses API WebSocket mode endpoint.
-
-    Keeps a persistent WebSocket connection for response.create events,
-    enabling lower-latency agentic workflows with many tool-call round trips.
-
-    Follows the OpenAI split: the bearer token is validated at connection time
-    (before accept); the model is resolved either from the ?model= query param
-    or from the first response.create frame, whichever is present.
-
-    See: https://developers.openai.com/api/docs/guides/websocket-mode/
-    """
+    model: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -1503,16 +1504,6 @@ async def responses_websocket_endpoint(
         version,
     )
     from litellm.proxy.route_llm_request import route_request
-
-    # Accept the WebSocket handshake. Key was already validated by the Depends
-    # above; we can safely accept regardless of whether ?model= was supplied.
-    requested_protocols: Final = [
-        p.strip() for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()
-    ]
-    accept_kwargs: Final[dict] = {}
-    if requested_protocols:
-        accept_kwargs["subprotocol"] = requested_protocols[0]
-    await websocket.accept(**accept_kwargs)
 
     result: Final = await _read_ws_model_from_first_frame(websocket, query_model=model)
     if result is None:
@@ -1618,3 +1609,51 @@ async def responses_websocket_endpoint(
             request_data=routed_data,
         )
         await websocket.close(code=1011, reason="Internal server error")
+
+
+@router.websocket("/v1/responses")
+@router.websocket("/responses")
+async def responses_websocket_endpoint(
+    websocket: WebSocket,
+    model: str | None = fastapi.Query(None, description="The model to use for the responses WebSocket session."),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
+):
+    """
+    Responses API WebSocket mode endpoint.
+
+    Keeps a persistent WebSocket connection for response.create events,
+    enabling lower-latency agentic workflows with many tool-call round trips.
+
+    Follows the OpenAI split: the bearer token is validated at connection time
+    (before accept); the model is resolved either from the ?model= query param
+    or from the first response.create frame, whichever is present.
+
+    The session is bounded by a lifetime measured from accept, configured via
+    general_settings.responses_websocket_session_limit_seconds (60-7200,
+    default 3600). There is no separate first-frame deadline, so
+    pre-established connections may sit idle until their first response.create.
+
+    See: https://developers.openai.com/api/docs/guides/websocket-mode/
+    """
+    # Accept the WebSocket handshake. Key was already validated by the Depends
+    # above; we can safely accept regardless of whether ?model= was supplied.
+    requested_protocols: Final = [
+        p.strip() for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()
+    ]
+    accept_kwargs: Final[dict] = {}
+    if requested_protocols:
+        accept_kwargs["subprotocol"] = requested_protocols[0]
+    await websocket.accept(**accept_kwargs)
+
+    limit_seconds: Final = _resolve_responses_ws_session_limit_seconds()
+    session: Final = _responses_websocket_session(
+        websocket=websocket,
+        model=model,
+        user_api_key_dict=user_api_key_dict,
+    )
+    try:
+        await asyncio.wait_for(session, timeout=limit_seconds)
+    except asyncio.TimeoutError:
+        verbose_proxy_logger.info("Responses WebSocket closed: session duration limit reached")
+        with contextlib.suppress(Exception):
+            await websocket.close(code=1000, reason="Session duration limit reached")
