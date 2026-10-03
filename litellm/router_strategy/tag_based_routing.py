@@ -10,7 +10,7 @@ Use this to route requests between Teams
 import re
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
 
 from litellm._logging import verbose_logger
 from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY, ROUTING_REQUEST_TAGS_METADATA_KEY
@@ -712,7 +712,7 @@ def can_satisfy_confirmed_routing_tags(
     (no prefix, no confirmed tags, tag filtering off) or the group might still
     serve the request.
     """
-    routing_prefix: Final = getattr(llm_router_instance, "tag_routing_prefix", None) or ""
+    routing_prefix: Final = llm_router_instance.tag_routing_prefix or ""
     if not routing_prefix or request_kwargs is None:
         return True
 
@@ -722,7 +722,9 @@ def can_satisfy_confirmed_routing_tags(
         return True
 
     try:
-        deployments: Final = llm_router_instance._get_all_deployments(model_name=model)
+        deployments: Final[_DeploymentPool] = cast(
+            _DeploymentPool, llm_router_instance._get_all_deployments(model_name=model)
+        )
     except Exception:  # noqa: BLE001  # fail safe toward attempting the leg on lookup errors
         return True
     if not deployments:
@@ -730,9 +732,10 @@ def can_satisfy_confirmed_routing_tags(
 
     request_enable_tag_filtering: Final = request_kwargs.get("enable_tag_filtering")
     chain_enable_tag_filtering: Final = _chain_tag_filtering_override(llm_router_instance, model, deployments)
-    router_enable_tag_filtering: Final = getattr(llm_router_instance, "enable_tag_filtering", False)
     chain_default: Final = (
-        chain_enable_tag_filtering if chain_enable_tag_filtering is not None else router_enable_tag_filtering
+        chain_enable_tag_filtering
+        if chain_enable_tag_filtering is not None
+        else llm_router_instance.enable_tag_filtering
     )
     if request_enable_tag_filtering is not True and chain_default is not True:
         return True
@@ -751,15 +754,13 @@ def can_satisfy_confirmed_routing_tags(
     if not confirmed_positive:
         return True
 
-    if any(d.get("litellm_params", MappingProxyType({})).get("tag_regex") for d in candidates):
+    if any(d.get("litellm_params", {}).get("tag_regex") for d in candidates):
         return True
 
-    match_any: Final = getattr(llm_router_instance, "tag_filtering_match_any", True)
-    return any(
-        is_valid_deployment_tag(
-            d.get("litellm_params", MappingProxyType({})).get("tags") or (),
-            positive_tags,
-            match_any,
-        )
-        for d in candidates
-    )
+    match_any: Final = llm_router_instance.tag_filtering_match_any
+    for deployment in candidates:
+        litellm_params: Final = deployment.get("litellm_params", {})
+        deployment_tags: Final[Sequence[str] | None] = litellm_params.get("tags")
+        if is_valid_deployment_tag(deployment_tags or (), positive_tags, match_any):
+            return True
+    return False

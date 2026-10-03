@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -678,7 +678,9 @@ async def run_async_fallback(
             continue
         if not await _is_fallback_target_within_budget(litellm_router, mg, original_model_group, kwargs):
             continue
-        if not _is_fallback_target_tag_satisfiable(litellm_router, mg, kwargs):
+        if not _is_fallback_target_tag_satisfiable(
+            litellm_router, mg, cast(Mapping[str, object], kwargs)
+        ):
             continue
         attempt_key = fallback_attempt_key(mg)
         if attempt_key is not None:
