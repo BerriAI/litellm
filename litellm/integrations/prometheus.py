@@ -20,7 +20,11 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
-from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK, PROXY_REJECTED_BEFORE_ROUTING_KEY
+from litellm.constants import (
+    PROMETHEUS_OVERFLOW_SERIES_LABEL_VALUE,
+    PROXY_LLM_PROVIDER_FALLBACK,
+    PROXY_REJECTED_BEFORE_ROUTING_KEY,
+)
 from litellm.exceptions import (
     validate_rate_limit_category,
     validate_rate_limit_type,
@@ -33,6 +37,9 @@ from litellm.integrations.prometheus_helpers import (
 from litellm.integrations.prometheus_helpers.bounded_prometheus_series_tracker import (
     BoundedPrometheusSeriesTracker,
     PrometheusSeriesLimits,
+)
+from litellm.integrations.prometheus_helpers.shared_prometheus_series_admissions import (
+    SharedPrometheusSeriesAdmissions,
 )
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
@@ -102,7 +109,6 @@ _TableRowT: Final = TypeVar("_TableRowT", bound=BaseModel)
 _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT: Final = 5.0
 
 UNRECOGNIZED_REQUESTED_MODEL_LABEL: Final = "other"
-OVERFLOW_SERIES_LABEL_VALUE: Final = "other"
 
 _NON_ENUM_METRIC_LABELS: Final[frozenset[str]] = frozenset(
     (
@@ -172,11 +178,10 @@ class _LabeledMetric:
     call so the emitted arguments match the metric's real label set. With ``limits.max_series`` set, only that
     many label sets get a series of their own: a counter or histogram records every later label set on one
     series whose labels are all ``other``, so totals stay exact, and a gauge skips it, since one shared gauge
-    value would mean nothing. ``evicts`` is False in multi-process mode, where the prometheus client cannot
-    remove a series."""
+    value would mean nothing. In multi-process mode the tracker is the one the workers share, and ``remove`` does
+    nothing there, since the prometheus client cannot remove a series."""
 
     __slots__ = (
-        "_evicts",
         "_excluded_labels",
         "_limits",
         "_metric",
@@ -192,9 +197,8 @@ class _LabeledMetric:
         metric_name: str,
         original_labelnames: tuple[str, ...],
         excluded_labels: frozenset[str],
-        tracker: BoundedPrometheusSeriesTracker,
+        tracker: BoundedPrometheusSeriesTracker | SharedPrometheusSeriesAdmissions,
         limits: PrometheusSeriesLimits,
-        evicts: bool,
         shares_overflow_series: bool,
     ) -> None:
         kept_label_count: Final = len(tuple(name for name in original_labelnames if name not in excluded_labels))
@@ -204,9 +208,8 @@ class _LabeledMetric:
         self._excluded_labels = excluded_labels
         self._tracker = tracker
         self._limits = limits
-        self._evicts = evicts
         self._overflow_child: Callable[[], MetricWrapperBase | NoOpMetric] = (
-            partial(metric.labels, *(OVERFLOW_SERIES_LABEL_VALUE,) * kept_label_count)
+            partial(metric.labels, *(PROMETHEUS_OVERFLOW_SERIES_LABEL_VALUE,) * kept_label_count)
             if shares_overflow_series
             else NoOpMetric
         )
@@ -216,18 +219,33 @@ class _LabeledMetric:
         kept_values: Final = self._kept_values(values)
         if not kept_values:
             return self._metric
-        if not self._limits.enabled or self._tracker.admit_series(
-            metric=self._metric, metric_name=self._metric_name, label_values=kept_values, limits=self._limits
-        ):
+        if not self._limits.enabled:
             return self._metric.labels(*kept_values)
+        with self._tracker.lock:
+            if self._admits(kept_values):
+                return self._metric.labels(*kept_values)
         return self._overflow_child()
 
     def remove(self, *labelvalues: object) -> None:
-        if not self._evicts:
-            return
-        kept_values: Final = self._kept_values(labelvalues)
-        self._tracker.forget_series(self._metric_name, kept_values)
-        self._metric.remove(*kept_values)
+        match self._tracker:
+            case SharedPrometheusSeriesAdmissions():
+                return
+            case BoundedPrometheusSeriesTracker():
+                kept_values: Final = self._kept_values(labelvalues)
+                with self._tracker.lock:
+                    self._tracker.forget_series(self._metric_name, kept_values)
+                    self._metric.remove(*kept_values)
+
+    def _admits(self, kept_values: tuple[str, ...]) -> bool:
+        match self._tracker:
+            case SharedPrometheusSeriesAdmissions():
+                return self._limits.max_series is None or self._tracker.admit_series(
+                    metric_name=self._metric_name, label_values=kept_values, max_series=self._limits.max_series
+                )
+            case BoundedPrometheusSeriesTracker():
+                return self._tracker.admit_series(
+                    metric=self._metric, metric_name=self._metric_name, label_values=kept_values, limits=self._limits
+                )
 
     def _kept_values(self, values: tuple[object, ...]) -> tuple[str, ...]:
         return tuple(
@@ -349,9 +367,13 @@ class PrometheusLogger(CustomLogger):
             _custom_buckets: Final = litellm.prometheus_latency_buckets
             self.latency_buckets = tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
             self._bounded_prometheus_series_tracker = BoundedPrometheusSeriesTracker()
-            self._multiprocess_mode = "PROMETHEUS_MULTIPROC_DIR" in os.environ
-            self._series_cap_tracker = BoundedPrometheusSeriesTracker()
-            self._series_limits = self._configured_series_limits(multiprocess_mode=self._multiprocess_mode)
+            _multiproc_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+            self._series_cap_tracker = (
+                BoundedPrometheusSeriesTracker()
+                if _multiproc_dir is None
+                else SharedPrometheusSeriesAdmissions(directory=_multiproc_dir)
+            )
+            self._series_limits = self._configured_series_limits(multiprocess_mode=_multiproc_dir is not None)
 
             # Create metric factory functions
             self._counter_factory = self._create_metric_factory(Counter)
@@ -745,13 +767,13 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_successful_fallbacks = self._counter_factory(
                 "litellm_deployment_successful_fallbacks",
                 "LLM Deployment Analytics - Number of successful fallback requests from primary model -> fallback model",
-                self.get_labels_for_metric("litellm_deployment_successful_fallbacks"),
+                labelnames=self.get_labels_for_metric("litellm_deployment_successful_fallbacks"),
             )
 
             self.litellm_deployment_failed_fallbacks = self._counter_factory(
                 "litellm_deployment_failed_fallbacks",
                 "LLM Deployment Analytics - Number of failed fallback requests from primary model -> fallback model",
-                self.get_labels_for_metric("litellm_deployment_failed_fallbacks"),
+                labelnames=self.get_labels_for_metric("litellm_deployment_failed_fallbacks"),
             )
 
             # Callback Logging Failure Metrics
@@ -1255,7 +1277,6 @@ class PrometheusLogger(CustomLogger):
                 excluded_labels=self.exclude_labels,
                 tracker=self._series_cap_tracker,
                 limits=self._series_limits,
-                evicts=not self._multiprocess_mode,
                 shares_overflow_series=shares_overflow_series,
             )
 

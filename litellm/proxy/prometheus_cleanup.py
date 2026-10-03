@@ -1,7 +1,7 @@
 """
 Prometheus multiprocess directory cleanup utilities.
 
-Wipes all .db files on startup so workers start with a clean slate.
+Wipes all .db files and admitted-series files on startup so workers start with a clean slate.
 """
 
 from __future__ import annotations
@@ -12,13 +12,17 @@ import re
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX
 
 _LIVE_GAUGE_PID: Final = re.compile(r"gauge_live[a-z]*_(\d+)\.db$")
 
 
 def wipe_directory(directory: str) -> None:
-    """Delete all .db files in the directory. Called once before workers fork."""
-    files: Final = glob.glob(os.path.join(directory, "*.db"))
+    """Delete all .db files and admitted-series files in the directory. Called once before workers fork."""
+    files: Final = (
+        *glob.glob(os.path.join(directory, "*.db")),
+        *glob.glob(os.path.join(directory, f"{PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX}*")),
+    )
     deleted = 0
     for filepath in files:
         try:
@@ -27,7 +31,7 @@ def wipe_directory(directory: str) -> None:
         except OSError as e:
             verbose_proxy_logger.warning("Failed to delete stale prometheus file %s: %s", filepath, e)
     if deleted:
-        verbose_proxy_logger.info("Prometheus cleanup: wiped %s stale .db files from %s", deleted, directory)
+        verbose_proxy_logger.info("Prometheus cleanup: wiped %s stale files from %s", deleted, directory)
 
 
 def mark_worker_exit(worker_pid: int) -> None:

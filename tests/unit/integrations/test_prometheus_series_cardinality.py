@@ -1,13 +1,24 @@
 import re
+from pathlib import Path
+from threading import Thread
 from time import monotonic
 from typing import Final
 
 import pytest
-from prometheus_client import REGISTRY, generate_latest
+from prometheus_client import REGISTRY, CollectorRegistry, Counter, generate_latest
 
 import litellm
-from litellm.integrations.prometheus import PrometheusLogger, prometheus_label_factory
+from litellm.constants import PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX
+from litellm.integrations.prometheus import PrometheusLogger, _LabeledMetric, prometheus_label_factory
 from litellm.integrations.prometheus_helpers import bounded_prometheus_series_tracker
+from litellm.integrations.prometheus_helpers.bounded_prometheus_series_tracker import (
+    BoundedPrometheusSeriesTracker,
+    PrometheusSeriesLimits,
+)
+from litellm.integrations.prometheus_helpers.shared_prometheus_series_admissions import (
+    SharedPrometheusSeriesAdmissions,
+)
+from litellm.proxy.prometheus_cleanup import wipe_directory
 from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
 SERIES_SETTINGS: Final = (
@@ -32,12 +43,15 @@ def _unregister_everything() -> None:
 
 @pytest.fixture(autouse=True)
 def isolated_registry_and_settings(monkeypatch):
+    collectors_before: Final = tuple(REGISTRY._collector_to_names)
     _unregister_everything()
     monkeypatch.delenv("PROMETHEUS_MULTIPROC_DIR", raising=False)
     for setting in SERIES_SETTINGS:
         monkeypatch.setattr(litellm, setting, getattr(litellm, setting))
     yield
     _unregister_everything()
+    for collector in collectors_before:
+        REGISTRY.register(collector)
 
 
 @pytest.fixture
@@ -47,8 +61,8 @@ def clock(monkeypatch):
     return now
 
 
-def _scraped_series(sample_name: str) -> frozenset[str]:
-    exposition: Final = generate_latest(REGISTRY).decode()
+def _scraped_series(sample_name: str, registry: CollectorRegistry = REGISTRY) -> frozenset[str]:
+    exposition: Final = generate_latest(registry).decode()
     return frozenset(line for line in exposition.splitlines() if line.startswith(f"{sample_name}{{"))
 
 
@@ -140,6 +154,114 @@ def test_cap_holds_and_ttl_is_ignored_in_multiprocess_mode(monkeypatch, tmp_path
 
     series: Final = _scraped_series("litellm_proxy_total_requests_metric_total")
     assert _label_values(series, "user_agent") == {"first-agent", "second-agent", "other"}
+
+
+def test_workers_sharing_a_multiprocess_dir_admit_the_same_label_sets(tmp_path: Path):
+    first_worker: Final = SharedPrometheusSeriesAdmissions(directory=str(tmp_path))
+    second_worker: Final = SharedPrometheusSeriesAdmissions(directory=str(tmp_path))
+
+    assert first_worker.admit_series("litellm_requests_metric", ("user-a",), max_series=2)
+    assert second_worker.admit_series("litellm_requests_metric", ("user-b",), max_series=2)
+
+    replacement_worker: Final = SharedPrometheusSeriesAdmissions(directory=str(tmp_path))
+    for worker in (first_worker, second_worker, replacement_worker):
+        assert worker.admit_series("litellm_requests_metric", ("user-a",), max_series=2)
+        assert worker.admit_series("litellm_requests_metric", ("user-b",), max_series=2)
+        assert not worker.admit_series("litellm_requests_metric", ("user-c",), max_series=2)
+    assert first_worker.admit_series("litellm_spend_metric", ("user-c",), max_series=2)
+
+
+def test_workers_agree_when_racing_appends_overfill_the_admissions_file(tmp_path: Path):
+    racing_workers: Final = SharedPrometheusSeriesAdmissions(directory=str(tmp_path))
+    for user in ("user-a", "user-b", "user-c"):
+        assert racing_workers.admit_series("litellm_requests_metric", (user,), max_series=3)
+
+    worker: Final = SharedPrometheusSeriesAdmissions(directory=str(tmp_path))
+
+    assert not worker.admit_series("litellm_requests_metric", ("user-c",), max_series=2)
+    assert worker.admit_series("litellm_requests_metric", ("user-a",), max_series=2)
+    assert worker.admit_series("litellm_requests_metric", ("user-b",), max_series=2)
+
+
+def test_a_line_another_worker_is_still_writing_is_read_once_it_is_complete(tmp_path: Path):
+    admissions_file: Final = tmp_path / f"{PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX}litellm_requests_metric"
+    assert SharedPrometheusSeriesAdmissions(directory=str(tmp_path)).admit_series(
+        "litellm_requests_metric", ("user-a",), max_series=2
+    )
+    reader: Final = SharedPrometheusSeriesAdmissions(directory=str(tmp_path))
+
+    with admissions_file.open("ab") as write_in_progress:
+        write_in_progress.write(b'["user')
+        write_in_progress.flush()
+        assert reader.admit_series("litellm_requests_metric", ("user-a",), max_series=2)
+        write_in_progress.write(b'-b"]\n')
+
+    assert not reader.admit_series("litellm_requests_metric", ("user-c",), max_series=2)
+    assert reader.admit_series("litellm_requests_metric", ("user-b",), max_series=2)
+
+
+def test_wiping_the_multiprocess_dir_frees_every_admitted_slot(tmp_path: Path):
+    before_restart: Final = SharedPrometheusSeriesAdmissions(directory=str(tmp_path))
+    assert before_restart.admit_series("litellm_requests_metric", ("user-a",), max_series=1)
+
+    wipe_directory(str(tmp_path))
+
+    after_restart: Final = SharedPrometheusSeriesAdmissions(directory=str(tmp_path))
+    assert after_restart.admit_series("litellm_requests_metric", ("user-b",), max_series=1)
+    assert not after_restart.admit_series("litellm_requests_metric", ("user-a",), max_series=1)
+
+
+def test_eviction_racing_a_new_series_cannot_leave_it_untracked():
+    registry: Final = CollectorRegistry()
+    counter: Final = Counter("requests", "requests", labelnames=("user",), registry=registry)
+
+    class _EvictedWhileBeingCreated:
+        def labels(self, *labelvalues: str):
+            if labelvalues == ("evicted-user",):
+                eviction.start()
+                eviction.join(timeout=0.05)
+            return counter.labels(*labelvalues)
+
+        def remove(self, *labelvalues: str) -> None:
+            counter.remove(*labelvalues)
+
+    labeled: Final = _LabeledMetric(
+        metric=_EvictedWhileBeingCreated(),
+        metric_name="requests",
+        original_labelnames=("user",),
+        excluded_labels=frozenset(),
+        tracker=BoundedPrometheusSeriesTracker(),
+        limits=PrometheusSeriesLimits(max_series=1, ttl_seconds=None, cleanup_interval_seconds=None),
+        shares_overflow_series=True,
+    )
+    eviction: Final = Thread(target=labeled.remove, args=("evicted-user",))
+
+    labeled.labels("evicted-user").inc()
+    eviction.join()
+    labeled.labels("next-user").inc()
+
+    assert _label_values(_scraped_series("requests_total", registry), "user") == {"next-user"}
+
+
+@pytest.mark.parametrize(
+    "metric_name", ["litellm_deployment_successful_fallbacks", "litellm_deployment_failed_fallbacks"]
+)
+def test_cap_applies_to_the_fallback_counters(metric_name: str):
+    litellm.prometheus_metrics_max_series_per_metric = 2
+    litellm.prometheus_metrics_ttl_seconds = None
+    logger: Final = PrometheusLogger()
+
+    for index in range(4):
+        PrometheusLogger._inc_labeled_counter(
+            logger,
+            getattr(logger, metric_name),
+            metric_name,
+            UserAPIKeyLabelValues(fallback_model=f"model-{index}"),
+        )
+
+    series: Final = _scraped_series(f"{metric_name}_total")
+    assert _label_values(series, "fallback_model") == {"model-0", "model-1", "other"}
+    assert _sample_value(series, "fallback_model", "other") == 2
 
 
 def test_end_user_eviction_keeps_the_series_and_its_slot_in_multiprocess_mode(monkeypatch, tmp_path):
