@@ -8,6 +8,7 @@ unioned rather than ranked.
 """
 
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -35,6 +36,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     model_access_group_registry_cache_key,
     model_access_group_spend_counter_key,
+    registry_loaded_version_cache_key,
+    registry_version_cache_key,
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -84,7 +87,11 @@ async def _cache(
     org_models: tuple[str, ...] = (),
 ) -> UserApiKeyCache:
     cache = UserApiKeyCache()
-    await cache.async_set_cache(key=model_access_group_registry_cache_key(), value=budgeted_groups)
+    registry_key: Final = model_access_group_registry_cache_key()
+    registry_version: Final = 307
+    await cache.async_set_cache(key=registry_key, value=budgeted_groups)
+    await cache.async_set_cache(key=registry_loaded_version_cache_key(registry_key), value=registry_version)
+    await cache.async_set_cache(key=registry_version_cache_key(registry_key), value=registry_version)
     if member_allowed_models:
         await cache.async_set_cache(
             key=team_membership_reservation_cache_key(user_id=USER_ID, team_id=TEAM_ID),

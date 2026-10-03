@@ -25,6 +25,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, Unpack
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache, LimitedSizeOrderedDict
+from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.constants import (
     CLI_JWT_EXPIRATION_HOURS,
     CLI_SESSION_KEY_PREFIX,
@@ -92,12 +93,14 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_query_params,
 )
 from litellm.proxy.common_utils.model_listing_utils import alias_map
+from litellm.proxy.common_utils.registry_cache_version import current_registry_version_for_load
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
     MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
     NO_TEAM_MEMBERSHIP_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
+    RegistryMemoryCache,
     UserApiKeyCache,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
@@ -108,6 +111,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     object_permission_cache_key,
     project_cache_key,
     project_spend_counter_key,
+    registry_loaded_version_cache_key,
+    registry_version_cache_key,
     tag_cache_key,
     tag_registry_cache_key,
     team_membership_auth_cache_key,
@@ -1703,6 +1708,36 @@ class _RegistryNotCached:
 
 
 _REGISTRY_NOT_CACHED: Final = _RegistryNotCached()
+_REGISTRY_VERSION_VALUE: Final = TypeAdapter(int)
+_REGISTRY_CACHE_ROWS: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+_REGISTRY_LIST_VALUES: Final[TypeAdapter[list[object] | tuple[object, ...]]] = TypeAdapter(
+    list[object] | tuple[object, ...]
+)
+
+
+def _registry_version(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        decoded_value: Final = value.decode("utf-8") if isinstance(value, bytes) else value
+        normalized_value: Final = int(decoded_value) if isinstance(decoded_value, str) else decoded_value
+        if not isinstance(normalized_value, int):
+            return None
+        return _REGISTRY_VERSION_VALUE.validate_python(normalized_value, strict=True)
+    except (UnicodeDecodeError, ValueError, ValidationError):
+        return None
+
+
+def _memory_registry_version(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _registry_ids(value: object) -> frozenset[str] | None:
+    if not isinstance(value, (list, tuple)):
+        return None
+    entries: Final = _REGISTRY_LIST_VALUES.validate_python(value)
+    return frozenset(entry for entry in entries if isinstance(entry, str))
+
 
 #: One lock per registry; module-level because the stampede to collapse is worker-wide.
 _TAG_REGISTRY_LOAD_LOCK: Final = asyncio.Lock()
@@ -1716,12 +1751,72 @@ async def _cached_registry(
     user_api_key_cache: UserApiKeyCache,
 ) -> frozenset[str] | None | _RegistryNotCached:
     """The cached registry answer, or ``_REGISTRY_NOT_CACHED`` when the caller has to query."""
-    cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=cache_key)
-    if cached == overflow_sentinel:
+    loaded_version_key: Final = registry_loaded_version_cache_key(cache_key)
+    version_key: Final = registry_version_cache_key(cache_key)
+    memory: Final[RegistryMemoryCache] = user_api_key_cache.in_memory_cache_for(cache_key)
+    memory_value: Final = memory.get_cache(key=cache_key)
+    memory_loaded_version: Final = memory.get_cache(key=loaded_version_key)
+    memory_current_version: Final = memory.get_cache(key=version_key)
+    if memory_value == overflow_sentinel:
         return None
-    # Memory hands back the tuple that was written; Redis round-trips it through JSON as a list.
-    if isinstance(cached, (list, tuple)):
-        return frozenset(entry for entry in cached if isinstance(entry, str))
+    memory_tag: Final = _memory_registry_version(memory_loaded_version)
+    memory_version: Final = _memory_registry_version(memory_current_version)
+    memory_ids: Final = _registry_ids(memory_value)
+    if (
+        memory_ids is not None
+        and memory_tag is not None
+        and memory_version is not None
+        and memory_tag == memory_version
+    ):
+        return memory_ids
+
+    redis_cache: Final = user_api_key_cache.redis_cache
+    if redis_cache is None:
+        return _REGISTRY_NOT_CACHED
+    try:
+        keys: Final = [cache_key, loaded_version_key, version_key]
+        batch: Final = active_request_redis_batch(redis_cache)
+        redis_result: Final[object] = (
+            await redis_cache.async_batch_get_cache(key_list=keys) if batch is None else await batch.mget(keys)
+        )
+        redis_values: Final = _REGISTRY_CACHE_ROWS.validate_python(redis_result)
+    except Exception:
+        return _REGISTRY_NOT_CACHED
+    redis_value: Final = redis_values.get(cache_key)
+    redis_loaded_version: Final = redis_values.get(loaded_version_key)
+    redis_current_version: Final = redis_values.get(version_key)
+    current_version: Final = _registry_version(redis_current_version)
+    if current_version is not None:
+        memory.set_cache(
+            key=version_key,
+            value=current_version,
+            ttl=get_management_object_ttl(user_api_key_cache),
+        )
+    if redis_value == overflow_sentinel:
+        return None
+    redis_ids: Final = _registry_ids(redis_value)
+    selected_ids: Final = memory_ids if memory_ids is not None else redis_ids
+    selected_loaded_version: Final = memory_loaded_version if memory_ids is not None else redis_loaded_version
+    loaded_version: Final = _registry_version(selected_loaded_version)
+    if memory_ids is None and redis_ids is not None and loaded_version is not None:
+        management_ttl: Final = get_management_object_ttl(user_api_key_cache)
+        memory.set_cache(
+            key=cache_key,
+            value=redis_value,
+            ttl=management_ttl,
+        )
+        memory.set_cache(
+            key=loaded_version_key,
+            value=loaded_version,
+            ttl=management_ttl,
+        )
+    if (
+        selected_ids is not None
+        and loaded_version is not None
+        and current_version is not None
+        and loaded_version == current_version
+    ):
+        return selected_ids
     return _REGISTRY_NOT_CACHED
 
 
@@ -1746,6 +1841,7 @@ async def _fetch_and_cache_registry(
     user_api_key_cache: UserApiKeyCache,
 ) -> frozenset[str] | None:
     """The registry as the database has it, cached whole, or ``None`` when it is unusable."""
+    loaded_version: Final = await current_registry_version_for_load(cache_key, user_api_key_cache)
     try:
         registry_ids: Final = await fetch_ids()
     except Exception as e:  # noqa: BLE001  # fail-safe: any registry load error must degrade to per-id lookups, never break auth
@@ -1773,12 +1869,19 @@ async def _fetch_and_cache_registry(
         )
         return None
 
-    await _cache_registry_answer(
-        cache_key=cache_key,
-        value=registry_ids,
-        ttl=get_management_object_ttl(user_api_key_cache),
-        user_api_key_cache=user_api_key_cache,
-    )
+    if loaded_version is None:
+        return frozenset(registry_ids)
+    management_ttl: Final = get_management_object_ttl(user_api_key_cache)
+    loaded_version_key: Final = registry_loaded_version_cache_key(cache_key)
+    cache_list: Final = ((cache_key, registry_ids), (loaded_version_key, loaded_version))
+    for key, value in cache_list:
+        user_api_key_cache.in_memory_cache_for(key).set_cache(key=key, value=value, ttl=management_ttl)
+    redis_cache: Final = user_api_key_cache.redis_cache
+    if redis_cache is not None:
+        try:
+            await redis_cache.async_set_cache_atomically(cache_list=cache_list, ttl=management_ttl)
+        except Exception as e:
+            verbose_proxy_logger.warning("Failed to cache registry %s atomically: %s", cache_key, e)
     return frozenset(registry_ids)
 
 

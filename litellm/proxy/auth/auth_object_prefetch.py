@@ -23,8 +23,10 @@ from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import LiteLLM_ProjectTableCachedObj, UserAPIKeyAuth
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.user_api_key_cache import (
+    REGISTRY_CACHE_KEYS,
     UserApiKeyCache,
     get_management_object_ttl,
+    registry_loaded_version_cache_key,
     team_membership_auth_cache_key,
     team_membership_reservation_cache_key,
 )
@@ -212,6 +214,10 @@ def _missing_in_memory(entries: Sequence[_CacheEntry], memory: _InMemoryCache) -
     return tuple(entry for entry in entries if memory.get_cache(key=entry.cache_key) is None)
 
 
+def _memory_cache_for(cache: UserApiKeyCache, key: str) -> _InMemoryCache:
+    return cache.in_memory_cache_for(key)
+
+
 def _set_in_memory(memory: _InMemoryCache, cache_key: str, value: object, ttl: float | None) -> None:
     if ttl is None:
         memory.set_cache(key=cache_key, value=value)
@@ -340,11 +346,35 @@ async def prefetch_identity_keys(cache_keys: Sequence[str], user_api_key_cache: 
         redis_cache: Final = user_api_key_cache.redis_cache
         if redis_cache is None:
             return
-        missing: Final = tuple(
+        requested: Final = tuple(dict.fromkeys(cache_keys))
+        requested_set: Final = frozenset(requested)
+        registry_keys: Final = tuple(sorted(REGISTRY_CACHE_KEYS))
+        registry_loaded_keys: Final = tuple(registry_loaded_version_cache_key(key) for key in registry_keys)
+        registry_pair_keys: Final = frozenset((*registry_keys, *registry_loaded_keys))
+        requested_registry_keys: Final = tuple(
             key
-            for key in dict.fromkeys(cache_keys)
-            if user_api_key_cache.in_memory_cache_for(key).get_cache(key=key) is None
+            for key in registry_keys
+            if key in requested_set or registry_loaded_version_cache_key(key) in requested_set
         )
+        incomplete_registry_keys: Final = tuple(
+            key
+            for key in requested_registry_keys
+            if _memory_cache_for(user_api_key_cache, key).get_cache(key=key) is None
+            or _memory_cache_for(user_api_key_cache, registry_loaded_version_cache_key(key)).get_cache(
+                key=registry_loaded_version_cache_key(key)
+            )
+            is None
+        )
+        incomplete_loaded_keys: Final = tuple(
+            registry_loaded_version_cache_key(key) for key in incomplete_registry_keys
+        )
+        registry_pair_missing: Final = frozenset((*incomplete_registry_keys, *incomplete_loaded_keys))
+        ordinary_missing: Final = tuple(
+            key
+            for key in requested
+            if key not in registry_pair_keys and _memory_cache_for(user_api_key_cache, key).get_cache(key=key) is None
+        )
+        missing: Final = tuple(sorted(registry_pair_missing | frozenset(ordinary_missing)))
         if not missing:
             return
         found: Final = _RowValues.validate_python(await _read_redis_rows(sorted(missing), redis_cache))
@@ -352,7 +382,26 @@ async def prefetch_identity_keys(cache_keys: Sequence[str], user_api_key_cache: 
     except Exception as e:  # noqa: BLE001  # warm-up only; the getters read Redis and the database on their own
         verbose_proxy_logger.warning("auth identity prefetch skipped, falling back to per-key lookups: %s", e)
         return
-    for key, value in ((key, found.get(key)) for key in missing):
+    for registry_key, loaded_version_key in zip(incomplete_registry_keys, incomplete_loaded_keys, strict=True):
+        if found.get(registry_key) is None or found.get(loaded_version_key) is None:
+            continue
+        _set_in_memory(
+            _memory_cache_for(user_api_key_cache, registry_key),
+            registry_key,
+            found[registry_key],
+            management_ttl,
+        )
+        _set_in_memory(
+            _memory_cache_for(user_api_key_cache, loaded_version_key),
+            loaded_version_key,
+            found[loaded_version_key],
+            management_ttl,
+        )
+    for key, value in ((key, found.get(key)) for key in ordinary_missing):
         if value is not None:
-            memory: _InMemoryCache = user_api_key_cache.in_memory_cache_for(key)
-            _set_in_memory(memory, key, value, _identity_memory_ttl(value, management_ttl))
+            _set_in_memory(
+                _memory_cache_for(user_api_key_cache, key),
+                key,
+                value,
+                _identity_memory_ttl(value, management_ttl),
+            )

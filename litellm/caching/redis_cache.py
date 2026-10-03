@@ -79,6 +79,18 @@ class _AsyncRedisCommands(Protocol):
 
     def delete(self, *names: str) -> Awaitable[int]: ...
 
+    def get(self, name: str) -> Awaitable[bytes | str | None]: ...
+
+    def incr(self, name: str) -> Awaitable[int]: ...
+
+    def set(
+        self,
+        name: str,
+        value: str | bytes | float,
+        nx: bool = False,
+        ex: int | timedelta | None = None,
+    ) -> Awaitable[bool | None]: ...
+
     def ttl(self, name: str) -> Awaitable[int]: ...
 
     def expire(self, name: str, time: int) -> Awaitable[bool]: ...
@@ -2101,6 +2113,58 @@ class RedisCache(BaseCache):
             )
             log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Redis Cache RPUSH: - Got exception from REDIS", e)
             raise e
+
+    @_redis_circuit_breaker_guard
+    async def async_seed_and_increment(self, key: str, seed: int) -> int:
+        redis_client: Final = self._async_commands()
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
+        try:
+            async with redis_client.pipeline(transaction=True) as pipe:
+                pipe.set(name=namespaced_key, value=seed, nx=True)
+                pipe.incr(namespaced_key)
+                results: Final[list[object]] = await pipe.execute()
+            for result in results:
+                if isinstance(result, Exception):
+                    raise result
+            return _LUA_COUNT.validate_python(results[1])
+        except Exception as e:
+            log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Redis Cache seed+increment failed", e)
+            raise
+
+    @_redis_circuit_breaker_guard
+    async def async_get_or_seed(self, key: str, seed: int) -> int:
+        redis_client: Final = self._async_commands()
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
+        try:
+            async with redis_client.pipeline(transaction=True) as pipe:
+                pipe.set(name=namespaced_key, value=seed, nx=True)
+                pipe.get(namespaced_key)
+                results: Final[list[object]] = await pipe.execute()
+            for result in results:
+                if isinstance(result, Exception):
+                    raise result
+            value: Final = results[1]
+            decoded_value: Final = value.decode("utf-8") if isinstance(value, bytes) else value
+            return _LUA_COUNT.validate_python(decoded_value)
+        except Exception as e:
+            log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Redis Cache get-or-seed failed", e)
+            raise
+
+    @_redis_circuit_breaker_guard
+    async def async_set_cache_atomically(
+        self,
+        cache_list: Sequence[tuple[str, object]],
+        ttl: float | None,
+    ) -> None:
+        if not cache_list:
+            return
+        redis_client: Final = self._async_commands()
+        try:
+            async with redis_client.pipeline(transaction=True) as pipe:
+                await self._pipeline_helper(pipe, cache_list, ttl)
+        except Exception as e:
+            log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Redis Cache atomic set failed", e)
+            raise
 
     @_redis_circuit_breaker_guard
     async def async_rpush_and_trim(

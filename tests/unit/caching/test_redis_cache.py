@@ -1510,6 +1510,60 @@ async def test_async_set_cache_pipeline_with_ttls_keeps_each_entry_ttl(monkeypat
     ]
 
 
+@pytest.fixture
+def fakeredis_cache(monkeypatch: pytest.MonkeyPatch, redis_no_ping: None) -> RedisCache:
+    from fakeredis import FakeServer
+    from fakeredis.aioredis import FakeRedis
+
+    import litellm._redis as redis_module
+
+    server: Final = FakeServer()
+
+    def fake_sync_client(**kwargs: object) -> MagicMock:
+        return MagicMock()
+
+    def fake_pool(**kwargs: object) -> None:
+        return None
+
+    def fake_async_client(**kwargs: object) -> FakeRedis:
+        return FakeRedis(server=server, decode_responses=False)
+
+    monkeypatch.setattr(redis_module, "get_redis_client", fake_sync_client)
+    monkeypatch.setattr(redis_module, "get_redis_connection_pool", fake_pool)
+    monkeypatch.setattr(redis_module, "get_redis_async_client", fake_async_client)
+    return RedisCache(host=f"registry-methods-{id(server)}", namespace="registry-methods")
+
+
+@pytest.mark.asyncio
+async def test_async_seed_and_increment_and_get_or_seed_keep_existing_versions(fakeredis_cache: RedisCache):
+    cache: Final = fakeredis_cache
+
+    assert await cache.async_seed_and_increment("incremented", 101) == 102
+    assert await cache.async_seed_and_increment("incremented", 7) == 103
+    assert await cache.async_get_cache("incremented") == 103
+
+    assert await cache.async_get_or_seed("seeded", 211) == 211
+    assert await cache.async_get_or_seed("seeded", 3) == 211
+    assert await cache.async_get_cache("seeded") == 211
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_atomically_encodes_values_and_applies_ttl(fakeredis_cache: RedisCache):
+    cache: Final = fakeredis_cache
+    cache_values: Final = (
+        ("registry-list", ("one", "two")),
+        ("registry-version", 307),
+    )
+
+    await cache.async_set_cache_atomically(cache_values, ttl=45)
+
+    assert await cache.async_get_cache("registry-list") == ["one", "two"]
+    assert await cache.async_get_cache("registry-version") == 307
+    redis_client: Final = cache._async_commands()
+    assert await redis_client.ttl(cache.check_and_fix_namespace("registry-list")) > 0
+    assert await redis_client.ttl(cache.check_and_fix_namespace("registry-version")) > 0
+
+
 class _ListPipeline:
     def __init__(self, rows: list[str]) -> None:
         self.rows = rows

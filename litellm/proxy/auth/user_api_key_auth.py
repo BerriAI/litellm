@@ -123,6 +123,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
     model_access_group_registry_cache_key,
+    registry_loaded_version_cache_key,
+    registry_version_cache_key,
     team_membership_auth_cache_key,
 )
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
@@ -3412,7 +3414,11 @@ def _identity_cache_keys(api_key: str, *, end_user_id: str | None, key_is_resolv
             None if key_is_resolved else hash_token(api_key),
             None if not end_user_id else end_user_cache_key(end_user_id),
             None if not end_user_id else end_user_restricted_registry_cache_key(),
+            None if not end_user_id else registry_loaded_version_cache_key(end_user_restricted_registry_cache_key()),
+            None if not end_user_id else registry_version_cache_key(end_user_restricted_registry_cache_key()),
             model_access_group_registry_cache_key(),
+            registry_loaded_version_cache_key(model_access_group_registry_cache_key()),
+            registry_version_cache_key(model_access_group_registry_cache_key()),
         )
         if key is not None
     )

@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,6 +14,7 @@ from litellm.proxy._types import (
     ProxyException,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.customer_endpoints import router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -925,21 +927,23 @@ def test_char_delete_body(mock_prisma_client, mock_user_api_key_auth):
     }
 
 
-class _RecordingAuthCache:
+class _RecordingAuthCache(UserApiKeyCache):
     """Captures the keys an endpoint evicts, so tests assert on cache keys not mock plumbing."""
 
-    def __init__(self):
-        self.deleted: list[str] = []
+    def __init__(self) -> None:
+        super().__init__()
+        self.deleted: Final[list[str]] = []
 
     async def async_delete_cache(self, key: str) -> None:
         self.deleted.append(key)
+        await super().async_delete_cache(key=key)
 
 
 @contextmanager
 def _end_user_cache_doubles():
     """Swaps in the auth cache and the cross-worker publisher a customer mutation is expected to hit."""
-    recording_cache = _RecordingAuthCache()
-    mock_publish = AsyncMock()
+    recording_cache: Final = _RecordingAuthCache()
+    mock_publish: Final = AsyncMock()
     with (
         patch("litellm.proxy.proxy_server.user_api_key_cache", recording_cache),
         patch(
@@ -972,8 +976,15 @@ def test_customer_new_invalidates_end_user_and_registry_caches(mock_prisma_clien
         )
 
     assert response.status_code == 200, response.text
-    assert recording_cache.deleted == ["end_user_id:c1", "end_user_restricted_registry"]
-    assert _published_keys(mock_publish) == ["end_user_id:c1", "end_user_restricted_registry"]
+    assert recording_cache.deleted == [
+        "end_user_id:c1",
+        "end_user_restricted_registry",
+    ]
+    assert _published_keys(mock_publish) == [
+        "end_user_id:c1",
+        "end_user_restricted_registry",
+        "end_user_restricted_registry:version",
+    ]
 
 
 def test_customer_update_invalidates_end_user_and_registry_caches(mock_prisma_client, mock_user_api_key_auth):
@@ -991,8 +1002,15 @@ def test_customer_update_invalidates_end_user_and_registry_caches(mock_prisma_cl
         )
 
     assert response.status_code == 200, response.text
-    assert recording_cache.deleted == ["end_user_id:c1", "end_user_restricted_registry"]
-    assert _published_keys(mock_publish) == ["end_user_id:c1", "end_user_restricted_registry"]
+    assert recording_cache.deleted == [
+        "end_user_id:c1",
+        "end_user_restricted_registry",
+    ]
+    assert _published_keys(mock_publish) == [
+        "end_user_id:c1",
+        "end_user_restricted_registry",
+        "end_user_restricted_registry:version",
+    ]
 
 
 def test_customer_block_invalidates_end_user_and_registry_caches(mock_prisma_client, mock_user_api_key_auth):
@@ -1018,6 +1036,7 @@ def test_customer_block_invalidates_end_user_and_registry_caches(mock_prisma_cli
         "end_user_id:c1",
         "end_user_id:c2",
         "end_user_restricted_registry",
+        "end_user_restricted_registry:version",
     ]
 
 
@@ -1048,4 +1067,5 @@ def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_cl
         "end_user_id:c1",
         "end_user_id:c2",
         "end_user_restricted_registry",
+        "end_user_restricted_registry:version",
     ]

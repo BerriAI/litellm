@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast, overload
 
 from pydantic import BaseModel
 
@@ -22,6 +22,14 @@ if TYPE_CHECKING:
 T = TypeVar("T", bound=BaseModel)
 
 _HASHED_TOKEN_CACHE_KEY: Final = re.compile(r"[0-9a-f]{64}")
+
+
+class RegistryMemoryCache(Protocol):
+    def get_cache(self, key: str, **kwargs: object) -> object | None: ...
+
+    def set_cache(self, key: str, value: object, **kwargs: object) -> None: ...
+
+    def delete_cache(self, key: str, **kwargs: object) -> None: ...
 
 
 def is_user_key_cache_key(key: str) -> bool:
@@ -373,6 +381,23 @@ def end_user_cache_key(end_user_id: str) -> str:
 def end_user_restricted_registry_cache_key() -> str:
     """Cache key for the set of end-user ids whose row carries a restriction auth enforces."""
     return "end_user_restricted_registry"
+
+
+def registry_version_cache_key(registry_key: str) -> str:
+    return f"{registry_key}:version"
+
+
+def registry_loaded_version_cache_key(registry_key: str) -> str:
+    return f"{registry_key}:loaded_version"
+
+
+REGISTRY_CACHE_KEYS: Final = frozenset(
+    {
+        end_user_restricted_registry_cache_key(),
+        tag_registry_cache_key(),
+        model_access_group_registry_cache_key(),
+    }
+)
 
 
 def team_membership_auth_cache_key(team_id: str, user_id: str) -> str:
