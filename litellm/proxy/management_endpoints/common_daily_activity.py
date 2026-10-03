@@ -247,7 +247,7 @@ def _provider_throughput(
 ) -> ProviderThroughputMetrics:
     output_tokens_per_second: Final = (
         timed_completion_tokens * 1000 / total_response_time_ms
-        if timed_completion_tokens > 0 and timed_requests > 0 and total_response_time_ms > 0
+        if timed_requests > 0 and total_response_time_ms > 0
         else None
     )
     return ProviderThroughputMetrics(

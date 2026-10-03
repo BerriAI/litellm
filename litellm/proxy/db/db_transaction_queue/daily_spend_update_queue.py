@@ -1,6 +1,8 @@
 import asyncio
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Iterator
 from copy import deepcopy
+from functools import reduce
+from itertools import groupby
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
@@ -11,6 +13,47 @@ from litellm.proxy.db.db_transaction_queue.base_update_queue import (
     service_logger_obj,
 )
 from litellm.types.services import ServiceTypes
+
+
+def _daily_spend_updates(
+    updates: list[dict[str, BaseDailySpendTransaction]],
+) -> Iterator[tuple[str, BaseDailySpendTransaction]]:
+    for update in updates:
+        yield from update.items()
+
+
+def _merge_daily_spend_transactions(
+    existing: BaseDailySpendTransaction,
+    payload: BaseDailySpendTransaction,
+) -> BaseDailySpendTransaction:
+    return {
+        **existing,
+        "spend": existing["spend"] + payload["spend"],
+        "prompt_tokens": existing["prompt_tokens"] + payload["prompt_tokens"],
+        "completion_tokens": existing["completion_tokens"] + payload["completion_tokens"],
+        "api_requests": existing["api_requests"] + payload["api_requests"],
+        "successful_requests": existing["successful_requests"] + payload["successful_requests"],
+        "failed_requests": existing["failed_requests"] + payload["failed_requests"],
+        "cache_read_input_tokens": (existing.get("cache_read_input_tokens", 0) or 0)
+        + (payload.get("cache_read_input_tokens", 0) or 0),
+        "cache_creation_input_tokens": (existing.get("cache_creation_input_tokens", 0) or 0)
+        + (payload.get("cache_creation_input_tokens", 0) or 0),
+        "compression_saved_tokens": (existing.get("compression_saved_tokens", 0) or 0)
+        + (payload.get("compression_saved_tokens", 0) or 0),
+        "compression_savings_spend": (existing.get("compression_savings_spend", 0) or 0)
+        + (payload.get("compression_savings_spend", 0) or 0),
+        "prompt_caching_savings_spend": (existing.get("prompt_caching_savings_spend", 0) or 0)
+        + (payload.get("prompt_caching_savings_spend", 0) or 0),
+        "gateway_injected_caching_savings_spend": (existing.get("gateway_injected_caching_savings_spend", 0) or 0)
+        + (payload.get("gateway_injected_caching_savings_spend", 0) or 0),
+        "autorouter_savings_spend": (existing.get("autorouter_savings_spend", 0) or 0)
+        + (payload.get("autorouter_savings_spend", 0) or 0),
+        "total_response_time_ms": (existing.get("total_response_time_ms", 0) or 0)
+        + (payload.get("total_response_time_ms", 0) or 0),
+        "timed_requests": (existing.get("timed_requests", 0) or 0) + (payload.get("timed_requests", 0) or 0),
+        "timed_completion_tokens": (existing.get("timed_completion_tokens", 0) or 0)
+        + (payload.get("timed_completion_tokens", 0) or 0),
+    }
 
 
 class DailySpendUpdateQueue(BaseUpdateQueue):
@@ -113,62 +156,14 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
         updates: list[dict[str, BaseDailySpendTransaction]],
     ) -> dict[str, BaseDailySpendTransaction]:
         """Aggregate updates by daily_transaction_key."""
-        aggregated_daily_spend_update_transactions: Final[dict[str, BaseDailySpendTransaction]] = {}
-        for _update in updates:
-            for _key, payload in _update.items():
-                if _key in aggregated_daily_spend_update_transactions:
-                    daily_transaction = aggregated_daily_spend_update_transactions[_key]
-                    daily_transaction["spend"] += payload["spend"]
-                    daily_transaction["prompt_tokens"] += payload["prompt_tokens"]
-                    daily_transaction["completion_tokens"] += payload["completion_tokens"]
-                    daily_transaction["api_requests"] += payload["api_requests"]
-                    daily_transaction["successful_requests"] += payload["successful_requests"]
-                    daily_transaction["failed_requests"] += payload["failed_requests"]
-
-                    # Add optional metrics cache_read_input_tokens and cache_creation_input_tokens
-                    daily_transaction["cache_read_input_tokens"] = (
-                        payload.get("cache_read_input_tokens", 0) or 0
-                    ) + daily_transaction.get("cache_read_input_tokens", 0)
-
-                    daily_transaction["cache_creation_input_tokens"] = (
-                        payload.get("cache_creation_input_tokens", 0) or 0
-                    ) + daily_transaction.get("cache_creation_input_tokens", 0)
-
-                    daily_transaction["compression_saved_tokens"] = (
-                        payload.get("compression_saved_tokens", 0) or 0
-                    ) + daily_transaction.get("compression_saved_tokens", 0)
-
-                    daily_transaction["compression_savings_spend"] = (
-                        payload.get("compression_savings_spend", 0) or 0
-                    ) + daily_transaction.get("compression_savings_spend", 0)
-
-                    daily_transaction["prompt_caching_savings_spend"] = (
-                        payload.get("prompt_caching_savings_spend", 0) or 0
-                    ) + daily_transaction.get("prompt_caching_savings_spend", 0)
-
-                    daily_transaction["gateway_injected_caching_savings_spend"] = (
-                        payload.get("gateway_injected_caching_savings_spend", 0) or 0
-                    ) + daily_transaction.get("gateway_injected_caching_savings_spend", 0)
-
-                    daily_transaction["autorouter_savings_spend"] = (
-                        payload.get("autorouter_savings_spend", 0) or 0
-                    ) + daily_transaction.get("autorouter_savings_spend", 0)
-
-                    daily_transaction["total_response_time_ms"] = (
-                        payload.get("total_response_time_ms", 0) or 0
-                    ) + daily_transaction.get("total_response_time_ms", 0)
-
-                    daily_transaction["timed_requests"] = (
-                        payload.get("timed_requests", 0) or 0
-                    ) + daily_transaction.get("timed_requests", 0)
-
-                    daily_transaction["timed_completion_tokens"] = (
-                        payload.get("timed_completion_tokens", 0) or 0
-                    ) + daily_transaction.get("timed_completion_tokens", 0)
-
-                else:
-                    aggregated_daily_spend_update_transactions[_key] = deepcopy(payload)
-        return aggregated_daily_spend_update_transactions
+        ordered_updates: Final = sorted(_daily_spend_updates(updates), key=lambda update: update[0])
+        return {
+            key: reduce(
+                _merge_daily_spend_transactions,
+                (deepcopy(payload) for _, payload in grouped_updates),
+            )
+            for key, grouped_updates in groupby(ordered_updates, key=lambda update: update[0])
+        }
 
     async def _emit_new_item_added_to_queue_event(
         self,

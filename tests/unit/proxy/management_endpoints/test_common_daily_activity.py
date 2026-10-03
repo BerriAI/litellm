@@ -1858,7 +1858,7 @@ def test_grouping_sets_dispatcher_returns_provider_throughput_for_models_and_mod
     assert day.breakdown.model_groups["public-gpt-4o"].provider_breakdown["openai"].output_tokens_per_second == 300.0
 
 
-def test_grouping_sets_dispatcher_returns_no_throughput_for_legacy_rows_without_timed_tokens():
+def test_grouping_sets_dispatcher_returns_zero_for_timed_requests_without_completion_tokens():
     from litellm.proxy.management_endpoints.common_daily_activity import (
         _GROUP_DATE_MODEL_PROVIDER,
         _aggregate_grouping_sets_records_sync,
@@ -1877,7 +1877,7 @@ def test_grouping_sets_dispatcher_returns_no_throughput_for_legacy_rows_without_
 
     day = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})["results"][0]
 
-    assert day.breakdown.models["gpt-4o"].provider_breakdown["openai"].output_tokens_per_second is None
+    assert day.breakdown.models["gpt-4o"].provider_breakdown["openai"].output_tokens_per_second == 0.0
 
 
 def test_grouping_sets_dispatcher_keeps_ptu_flat_cost_out_of_the_provider_breakdown():

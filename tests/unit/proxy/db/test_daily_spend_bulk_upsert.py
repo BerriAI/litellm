@@ -127,9 +127,7 @@ def test_counters_increment_rather_than_overwrite(column):
 
 
 def test_request_id_is_preserved_when_a_later_batch_carries_none():
-    sql, params = build_bulk_upsert(
-        TAG_TABLE, merge_by_conflict_key(TAG_TABLE, (tag_txn(request_id=None),))
-    )
+    sql, params = build_bulk_upsert(TAG_TABLE, merge_by_conflict_key(TAG_TABLE, (tag_txn(request_id=None),)))
 
     assert '"request_id" = COALESCE(EXCLUDED."request_id", "LiteLLM_DailyTagSpend"."request_id")' in sql
     assert None in params
