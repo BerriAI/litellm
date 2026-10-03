@@ -49,6 +49,13 @@ class CostBreakdownRow(BaseModel):
     reasoning_cost: float | None = None
     tool_usage_cost: float | None = None
     total_cost: float | None = None
+    original_cost: float | None = None
+    discount_percent: float | None = None
+    discount_amount: float | None = None
+    margin_percent: float | None = None
+    margin_fixed_amount: float | None = None
+    margin_total_amount: float | None = None
+    guardrail_cost: float | None = None
     service_tier: str | None = None
 
 
