@@ -50,6 +50,19 @@ OPENROUTER_API_BASE: Final = "https://openrouter.ai/api/v1"
 IMAGES_PATH: Final = "/images"
 LEGACY_CHAT_COMPLETIONS_SUFFIX: Final = "/chat/completions"
 QUALITY_ALIASES: Final = MappingProxyType({"standard": "low", "hd": "high"})
+RESOLUTION_TIER_MODEL_AUTHOR: Final = "google/"
+QUALITY_RESOLUTION_TIERS: Final = MappingProxyType({"auto": "1K", "low": "1K", "medium": "2K", "high": "4K"})
+OPENAI_SIZE_ASPECT_RATIOS: Final = MappingProxyType(
+    {
+        "256x256": "1:1",
+        "512x512": "1:1",
+        "1024x1024": "1:1",
+        "1536x1024": "3:2",
+        "1024x1536": "2:3",
+        "1792x1024": "16:9",
+        "1024x1792": "9:16",
+    }
+)
 LEGACY_IMAGE_CONFIG_FIELDS: Final = MappingProxyType({"aspect_ratio": "aspect_ratio", "image_size": "resolution"})
 NON_BODY_PARAMS: Final = frozenset(
     {"model", "prompt", "messages", "modalities", "stream", "image_config", "extra_headers"}
@@ -80,15 +93,40 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
     ) -> dict:
         """
         size and n pass through as is: /images takes explicit pixel sizes and normalizes them per
-        provider. quality is native on /images, so only the dall-e-3 names are translated
+        provider. quality is native on /images, so only the dall-e-3 names are translated, except on
+        Google's models, see _map_quality_to_resolution_tier
         """
         supported_params: Final = self.get_supported_openai_params(model)
-        mapped_params: Final = {
+        mapped_params: Final[dict[str, object]] = {
             key: QUALITY_ALIASES.get(value, value) if key == "quality" else value
             for key, value in non_default_params.items()
             if (key in supported_params or not drop_params) and (key, value) != ("size", "auto")
         }
+        if (
+            "quality" in mapped_params
+            and "image_config" not in optional_params
+            and model.removeprefix("openrouter/").startswith(RESOLUTION_TIER_MODEL_AUTHOR)
+        ):
+            return {**optional_params, **self._map_quality_to_resolution_tier(mapped_params)}
         return {**optional_params, **mapped_params}
+
+    @staticmethod
+    def _map_quality_to_resolution_tier(mapped_params: dict[str, object]) -> dict[str, object]:
+        """
+        Google's image models take a resolution tier on /images and ignore quality, so quality keeps the
+        meaning it had on the chat-based path: image_config.image_size (1K, 2K or 4K), next to the aspect
+        ratio of an OpenAI pixel size. A tier size or an image_config set by the caller wins
+        """
+        size: Final = str(mapped_params.get("size") or "")
+        tier: Final = QUALITY_RESOLUTION_TIERS.get(str(mapped_params["quality"]))
+        params: Final = {key: value for key, value in mapped_params.items() if key != "quality"}
+        if tier is None or (size and PIXEL_SIZE.fullmatch(size) is None):
+            return params
+        aspect_ratio: Final = OPENAI_SIZE_ASPECT_RATIOS.get(size)
+        image_config: Final = (
+            {"image_size": tier} if aspect_ratio is None else {"aspect_ratio": aspect_ratio, "image_size": tier}
+        )
+        return {**params, "image_config": image_config}
 
     def _set_usage_and_cost(
         self,

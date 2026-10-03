@@ -16,6 +16,7 @@ from litellm.types.utils import ImageResponse, ImageUsage, ImageUsageInputTokens
 CONFIG: Final = OpenRouterImageGenerationConfig()
 IMAGE_ONLY_MODEL: Final = "openai/gpt-image-1-mini"
 HYBRID_MODEL: Final = "google/gemini-2.5-flash-image"
+RESOLUTION_TIER_MODEL: Final = "google/gemini-3.1-flash-image"
 PROMPT: Final = "a small red apple on a white table, simple flat illustration"
 IMAGES_URL: Final = "https://openrouter.ai/api/v1/images"
 
@@ -156,6 +157,81 @@ def test_map_openai_params_keeps_params_already_in_optional_params():
     )
 
     assert mapped == {"resolution": "2K", "n": 1}
+
+
+# On 2026-10-03 GET https://openrouter.ai/api/v1/images/models/<id>/endpoints listed resolution and no quality for
+# google/gemini-3-pro-image and google/gemini-3.1-flash-image, and quality and no resolution for openai/gpt-image-*
+# and openai/gpt-5-image. The quality field in https://openrouter.ai/openapi.json says providers without a quality
+# knob ignore it
+@pytest.mark.parametrize(
+    ("non_default_params", "expected_params"),
+    [
+        ({"quality": "low"}, {"image_config": {"image_size": "1K"}}),
+        ({"quality": "standard"}, {"image_config": {"image_size": "1K"}}),
+        ({"quality": "auto"}, {"image_config": {"image_size": "1K"}}),
+        ({"quality": "medium"}, {"image_config": {"image_size": "2K"}}),
+        ({"quality": "high"}, {"image_config": {"image_size": "4K"}}),
+        ({"quality": "hd"}, {"image_config": {"image_size": "4K"}}),
+        (
+            {"quality": "medium", "size": "1024x1024", "n": 1},
+            {"size": "1024x1024", "n": 1, "image_config": {"aspect_ratio": "1:1", "image_size": "2K"}},
+        ),
+        (
+            {"quality": "high", "size": "1536x1024"},
+            {"size": "1536x1024", "image_config": {"aspect_ratio": "3:2", "image_size": "4K"}},
+        ),
+        (
+            {"quality": "hd", "size": "1024x1792"},
+            {"size": "1024x1792", "image_config": {"aspect_ratio": "9:16", "image_size": "4K"}},
+        ),
+        ({"quality": "medium", "size": "1344x768"}, {"size": "1344x768", "image_config": {"image_size": "2K"}}),
+        ({"quality": "high", "size": "2K"}, {"size": "2K"}),
+        ({"quality": "xhigh"}, {}),
+    ],
+)
+def test_map_openai_params_turns_quality_into_a_resolution_tier_on_google_models(
+    non_default_params: dict[str, object], expected_params: dict[str, object]
+):
+    mapped = CONFIG.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params={},
+        model=RESOLUTION_TIER_MODEL,
+        drop_params=False,
+    )
+
+    assert mapped == expected_params
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_params"),
+    [
+        ("google/gemini-2.5-flash-image", {"image_config": {"image_size": "4K"}}),
+        ("openrouter/google/gemini-3-pro-image", {"image_config": {"image_size": "4K"}}),
+        ("openai/gpt-image-1-mini", {"quality": "high"}),
+        ("openai/gpt-5-image", {"quality": "high"}),
+        ("x-ai/grok-imagine-image-2.0", {"quality": "high"}),
+    ],
+)
+def test_map_openai_params_keeps_native_quality_outside_google_models(model: str, expected_params: dict[str, object]):
+    mapped = CONFIG.map_openai_params(
+        non_default_params={"quality": "high"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert mapped == expected_params
+
+
+def test_map_openai_params_quality_tier_yields_to_an_image_config_already_set():
+    mapped = CONFIG.map_openai_params(
+        non_default_params={"quality": "high", "size": "1536x1024"},
+        optional_params={"image_config": {"image_size": "1K"}},
+        model=RESOLUTION_TIER_MODEL,
+        drop_params=False,
+    )
+
+    assert mapped == {"image_config": {"image_size": "1K"}, "quality": "high", "size": "1536x1024"}
 
 
 @patch("litellm.llms.openrouter.image_generation.transformation.get_secret_str")
@@ -402,6 +478,35 @@ def test_legacy_image_config_with_an_openai_pixel_size_sends_only_the_aspect_rat
 
     (request,) = recorder.requests
     assert json.loads(request.content) == {"model": HYBRID_MODEL, "prompt": PROMPT, "aspect_ratio": "16:9"}
+
+
+@pytest.mark.parametrize(
+    ("extra_kwargs", "expected_fields"),
+    [
+        ({}, {"aspect_ratio": "1:1", "resolution": "2K"}),
+        ({"resolution": "1K"}, {"aspect_ratio": "1:1", "resolution": "1K"}),
+        ({"image_config": {"image_size": "4K"}}, {"resolution": "4K"}),
+    ],
+)
+def test_google_model_quality_still_picks_the_resolution_tier_and_explicit_values_win(
+    extra_kwargs: dict[str, object], expected_fields: dict[str, object]
+):
+    recorder = RequestRecorder(_images_response("aW1hZ2Ux"))
+
+    litellm.image_generation(
+        model=f"openrouter/{RESOLUTION_TIER_MODEL}",
+        prompt=PROMPT,
+        size="1024x1024",
+        quality="medium",
+        n=1,
+        api_key="sk-test",
+        client=_client(recorder),
+        **extra_kwargs,
+    )
+
+    (request,) = recorder.requests
+    assert str(request.url) == IMAGES_URL
+    assert json.loads(request.content) == {"model": RESOLUTION_TIER_MODEL, "prompt": PROMPT, "n": 1, **expected_fields}
 
 
 def test_legacy_chat_completions_api_base_still_reaches_the_images_endpoint():
