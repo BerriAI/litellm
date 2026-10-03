@@ -9,6 +9,8 @@ See: https://github.com/BerriAI/litellm/issues/24770
 
 import copy
 
+import pytest
+
 import litellm
 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
 from litellm.router import Router
@@ -39,10 +41,7 @@ class TestUnmappedModelBudgetEnforcement:
             ]
         )
         result = _is_model_cost_zero(model="custom-model", llm_router=router)
-        assert result is False, (
-            "Unmapped model should enforce budget (return False), "
-            "not bypass it (return True)"
-        )
+        assert result is False, "Unmapped model should enforce budget (return False), not bypass it (return True)"
 
     def test_explicitly_free_model_bypasses_budget(self):
         """A model with explicit cost=0 in model_info should bypass budget."""
@@ -65,9 +64,7 @@ class TestUnmappedModelBudgetEnforcement:
             ]
         )
         result = _is_model_cost_zero(model="free-model", llm_router=router)
-        assert (
-            result is True
-        ), "Explicitly free model should bypass budget (return True)"
+        assert result is True, "Explicitly free model should bypass budget (return True)"
 
     def test_known_paid_model_enforces_budget(self):
         """A model in the cost map with non-zero costs should enforce budget."""
@@ -101,9 +98,7 @@ class TestUnmappedModelBudgetEnforcement:
             ]
         )
         result = _is_model_cost_zero(model="free-via-params", llm_router=router)
-        assert (
-            result is True
-        ), "Model with explicit cost=0 in litellm_params should bypass budget"
+        assert result is True, "Model with explicit cost=0 in litellm_params should bypass budget"
 
     def test_cache_invalidates_on_in_place_pricing_update(self):
         """
@@ -285,9 +280,12 @@ class TestUnmappedModelBudgetEnforcement:
             "An aliased PTU group must not be read as free"
         )
 
-    def test_hidden_model_group_alias_enforces_budget(self):
-        """A hidden alias keeps budget enforced: get_model_group_info() returns None for it,
-        so the cost is unknown before the configuration gate is reached."""
+    def test_hidden_model_group_alias_to_free_model_bypasses_budget(self):
+        """A hidden alias to an explicitly free group bypasses budget, like the group itself.
+
+        ``get_model_group_info`` returns None for hidden aliases, so the alias must be
+        resolved to its target group before the cost lookup.
+        """
         router = Router(
             model_list=[
                 {
@@ -304,7 +302,22 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"hidden-alias": {"model": "free-model", "hidden": True}},
         )
 
-        assert _is_model_cost_zero(model="hidden-alias", llm_router=router) is False
+        assert _is_model_cost_zero(model="hidden-alias", llm_router=router) is True
+
+    def test_hidden_model_group_alias_to_paid_model_enforces_budget(self):
+        """A hidden alias to a priced group keeps budget enforced."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "paid-model",
+                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-fake"},
+                    "model_info": {"id": "paid-model-id"},
+                },
+            ],
+            model_group_alias={"hidden-paid-alias": {"model": "paid-model", "hidden": True}},
+        )
+
+        assert _is_model_cost_zero(model="hidden-paid-alias", llm_router=router) is False
 
     def test_dangling_model_group_alias_enforces_budget(self):
         """An alias pointing at a group that does not exist keeps budget enforced."""
@@ -325,6 +338,115 @@ class TestUnmappedModelBudgetEnforcement:
         )
 
         assert _is_model_cost_zero(model="dangling-alias", llm_router=router) is False
+
+    def test_repointed_hidden_alias_does_not_reuse_cached_free_result(self):
+        """Repointing a hidden alias from a free group to a paid group re-evaluates the cost.
+
+        ``Router.update_settings`` is the one runtime path that rewrites the alias map (the
+        proxy's config update applies ``router_settings`` through it), so the cached verdict
+        has to drop there.
+        """
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {
+                        "model": "ollama/llama2",
+                        "api_base": "http://localhost:11434",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {"id": "free-model-id"},
+                },
+                {
+                    "model_name": "paid-model",
+                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-fake"},
+                    "model_info": {"id": "paid-model-id"},
+                },
+            ],
+            model_group_alias={"hidden-alias": {"model": "free-model", "hidden": True}},
+        )
+
+        assert _is_model_cost_zero(model="hidden-alias", llm_router=router) is True
+        router.update_settings(model_group_alias={"hidden-alias": {"model": "paid-model", "hidden": True}})
+        assert _is_model_cost_zero(model="hidden-alias", llm_router=router) is False
+
+    @pytest.mark.parametrize("alias_name_first", [True, False])
+    def test_alias_shadowing_a_real_group_gives_each_name_its_own_verdict(self, alias_name_first: bool):
+        """An alias whose name is also a real PTU-priced group never shares a verdict with its target.
+
+        The verdict is cached per requested name, so whichever name is asked first, the free target
+        stays free and the shadowed PTU name stays enforced.
+        """
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {
+                        "model": "ollama/llama2",
+                        "api_base": "http://localhost:11434",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {"id": "free-model-id"},
+                },
+                {
+                    "model_name": "ptu-model",
+                    "litellm_params": {
+                        "model": "azure/ptu-deployment",
+                        "api_base": "https://fake.openai.azure.com",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {"id": "ptu-model-id", "ptu_count": 100, "cost_per_ptu_per_hour": 2.0},
+                },
+            ],
+            model_group_alias={"ptu-model": "free-model"},
+        )
+        order = ("ptu-model", "free-model") if alias_name_first else ("free-model", "ptu-model")
+        expected = {"ptu-model": False, "free-model": True}
+
+        assert [_is_model_cost_zero(model=name, llm_router=router) for name in order] == [
+            expected[name] for name in order
+        ]
+        assert [_is_model_cost_zero(model=name, llm_router=router) for name in order] == [
+            expected[name] for name in order
+        ], "the cached verdicts must match the first evaluation"
+
+    def test_alias_chain_through_a_priced_group_enforces_budget(self):
+        """An alias to a group that is itself an alias key resolves one hop, like the router does.
+
+        The router serves ``chain-smart`` with the real ``chain-legacy`` deployment, which is priced,
+        so following the second hop to the free group would waive the budget for a paid call.
+        """
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "chain-legacy",
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0000002,
+                        "output_cost_per_token": 0.0000012,
+                    },
+                    "model_info": {"id": "chain-legacy-id"},
+                },
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {
+                        "model": "ollama/llama2",
+                        "api_base": "http://localhost:11434",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {"id": "free-model-id"},
+                },
+            ],
+            model_group_alias={"chain-smart": "chain-legacy", "chain-legacy": "free-model"},
+        )
+
+        assert _is_model_cost_zero(model="chain-smart", llm_router=router) is False
 
     def test_handles_router_without_zero_cost_cache_attribute(self):
         """Tolerate router-like objects (e.g. ``MagicMock`` stand-ins) that
