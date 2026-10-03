@@ -1019,7 +1019,6 @@ def test_responses_api_bridge_check_gpt_5_4_and_5_5_tools_without_effort_stay_ch
         "gpt-5.2-pro",
         "gpt-5.3-codex",
         "gpt-5.4-pro",
-        "o3-deep-research",
     ),
 )
 def test_responses_api_bridge_check_azure_regional_responses_only_models_route_to_responses(

@@ -71102,7 +71102,7 @@
         "cache_read_input_token_cost": 2.75e-06,
         "input_cost_per_token": 1.1e-05,
         "litellm_provider": "azure",
-        "mode": "responses",
+        "mode": "chat",
         "output_cost_per_token": 4.4e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
@@ -71424,7 +71424,7 @@
         "cache_read_input_token_cost": 2.75e-06,
         "input_cost_per_token": 1.1e-05,
         "litellm_provider": "azure",
-        "mode": "responses",
+        "mode": "chat",
         "output_cost_per_token": 4.4e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
