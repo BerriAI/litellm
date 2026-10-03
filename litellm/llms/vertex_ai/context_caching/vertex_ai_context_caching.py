@@ -5,7 +5,6 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import Cache, LiteLLMCacheType
-from litellm.constants import MINIMUM_PROMPT_CACHE_TOKEN_COUNT
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -17,7 +16,7 @@ from litellm.types.llms.vertex_ai import (
     CachedContentListAllResponseBody,
     VertexAICachedContentResponseObject,
 )
-from litellm.utils import is_prompt_caching_valid_prompt
+from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt
 
 from ..common_utils import VertexAIError, get_vertex_base_url
 from ..vertex_llm_base import VertexBase
@@ -30,6 +29,23 @@ from .transformation import (
 local_cache_obj: Final = Cache(type=LiteLLMCacheType.LOCAL)  # only used for calling 'get_cache_key' function
 
 MAX_PAGINATION_PAGES: Final = 100  # Reasonable upper bound for pagination
+
+
+def _is_cached_content_too_small_error(err: httpx.HTTPStatusError) -> bool:
+    if err.response.status_code != 400:
+        return False
+    error_text: Final = (err.response.text or "").lower()
+    return "minimum token count to start explicit caching" in error_text or "cached content is too small" in error_text
+
+
+def _raise_unless_cached_content_too_small(err: httpx.HTTPStatusError) -> None:
+    if not _is_cached_content_too_small_error(err):
+        raise VertexAIError(status_code=err.response.status_code, message=err.response.text)
+    verbose_logger.debug(
+        "Vertex AI context caching: server rejected cached content as below "
+        "minimum token threshold (%s). Falling back to uncached request.",
+        err.response.text,
+    )
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -317,7 +333,6 @@ class ContextCachingEndpoints(VertexBase):
             )
             return messages, optional_params, None
 
-        # Gemini requires a minimum of 1024 tokens for context caching.
         # Skip caching if the cached content is too small to avoid API errors.
         if not is_prompt_caching_valid_prompt(
             model=model,
@@ -328,10 +343,11 @@ class ContextCachingEndpoints(VertexBase):
             verbose_logger.debug(
                 "Vertex AI context caching: cached content is below minimum token "
                 "count (%d). Skipping context caching.",
-                MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+                get_prompt_cache_min_tokens(model=model),
             )
             return messages, optional_params, None
 
+        fallback_optional_params: Final = optional_params.copy()
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)
 
@@ -419,8 +435,8 @@ class ContextCachingEndpoints(VertexBase):
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
-            error_code: Final = err.response.status_code
-            raise VertexAIError(status_code=error_code, message=err.response.text)
+            _raise_unless_cached_content_too_small(err)
+            return messages, fallback_optional_params, None
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
@@ -477,7 +493,6 @@ class ContextCachingEndpoints(VertexBase):
             )
             return messages, optional_params, None
 
-        # Gemini requires a minimum of 1024 tokens for context caching.
         # Skip caching if the cached content is too small to avoid API errors.
         if not is_prompt_caching_valid_prompt(
             model=model,
@@ -488,10 +503,11 @@ class ContextCachingEndpoints(VertexBase):
             verbose_logger.debug(
                 "Vertex AI context caching: cached content is below minimum token "
                 "count (%d). Skipping context caching.",
-                MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+                get_prompt_cache_min_tokens(model=model),
             )
             return messages, optional_params, None
 
+        fallback_optional_params: Final = optional_params.copy()
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)
 
@@ -575,8 +591,8 @@ class ContextCachingEndpoints(VertexBase):
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
-            error_code: Final = err.response.status_code
-            raise VertexAIError(status_code=error_code, message=err.response.text)
+            _raise_unless_cached_content_too_small(err)
+            return messages, fallback_optional_params, None
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
