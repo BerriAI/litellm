@@ -4,8 +4,11 @@ Tests for Vertex AI partner models count_tokens location resolution.
 Ref: https://github.com/BerriAI/litellm/issues/23872
 """
 
+from unittest.mock import AsyncMock, Mock
+
 import pytest
 
+from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import (
     VertexAIPartnerModelsTokenCounter,
 )
@@ -294,3 +297,57 @@ class TestCountTokensVersionSuffixStripping:
 
         # The model name sent to the API must NOT have the @default suffix
         assert captured_json["model"] == "claude-sonnet-4-6"
+
+
+SYSTEM = "You are a careful assistant."
+TOOLS = [
+    {
+        "name": "noop",
+        "description": "Do nothing",
+        "input_schema": {"type": "object", "properties": {}},
+    }
+]
+
+
+class TestCountTokensSystemToolsForwarding:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("system", "tools", "expected_extra"),
+        [
+            (SYSTEM, None, {"system": SYSTEM}),
+            (None, TOOLS, {"tools": TOOLS}),
+            (SYSTEM, TOOLS, {"system": SYSTEM, "tools": TOOLS}),
+            (None, None, {}),
+        ],
+    )
+    async def test_system_and_tools_are_forwarded(self, monkeypatch, system, tools, expected_extra):
+        import litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler as handler_mod
+
+        model = "claude-3-5-sonnet-v2"
+        messages = [{"role": "user", "content": "Hello"}]
+        response = Mock(status_code=200, text="")
+        response.json.return_value = {"input_tokens": 37}
+        http_client = Mock()
+        http_client.post = AsyncMock(return_value=response)
+        monkeypatch.setattr(
+            handler_mod.VertexAIPartnerModelsTokenCounter,
+            "_ensure_access_token_async",
+            AsyncMock(return_value=("test-token", "test-project")),
+        )
+        monkeypatch.setattr(handler_mod, "get_async_httpx_client", lambda **_: http_client)
+        await VertexAITokenCounter().count_tokens(
+            model_to_use=model,
+            messages=messages,
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-east5",
+                }
+            },
+            request_model=model,
+            system=system,
+            tools=tools,
+        )
+        sent = http_client.post.await_args.kwargs["json"]
+        assert sent == {"model": model, "messages": messages, **expected_extra}

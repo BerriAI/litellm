@@ -2,6 +2,7 @@
 ## API Handler for calling Vertex AI Partner Models
 from collections.abc import Callable
 from enum import Enum
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -263,6 +264,8 @@ class VertexAIPartnerModels(VertexBase):
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,
+        tools: list[dict[str, object]] | None = None,
+        system: object | None = None,
     ):
         """
         Count tokens for Vertex AI partner models (Anthropic Claude, Mistral, etc.)
@@ -293,9 +296,11 @@ class VertexAIPartnerModels(VertexBase):
             )
 
             # Prepare request data in Anthropic Messages API format
+            optional_fields: Final = (("system", system), ("tools", tools))
             request_data: Final = {
                 "model": model,
                 "messages": messages,
+                **MappingProxyType({key: value for key, value in optional_fields if value is not None}),
             }
 
             # Prepare litellm_params with credentials
