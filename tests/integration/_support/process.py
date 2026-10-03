@@ -55,7 +55,7 @@ def stop_root_process(process: subprocess.Popen[bytes]) -> bool:
         return True
     process.terminate()
     try:
-        process.wait(timeout=30)
+        process.wait(timeout=float(os.environ.get("INTEGRATION_PROXY_STOP_SECONDS", "30")))
     except subprocess.TimeoutExpired:
         return False
     return True
