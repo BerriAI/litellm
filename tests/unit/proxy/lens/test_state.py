@@ -5,6 +5,7 @@ from typing import Final
 import pytest
 
 from litellm.proxy.lens.models import (
+    MAX_REVIEWS,
     MAX_STEPS,
     AgentTestCase,
     Check,
@@ -13,11 +14,13 @@ from litellm.proxy.lens.models import (
     IssueBrief,
     Lens,
     LensSettings,
+    Review,
     Scope,
     Step,
     Worker,
 )
 from litellm.proxy.lens.state import (
+    add_review,
     add_step,
     can_access,
     claim_job,
@@ -345,3 +348,23 @@ def test_calendar_overflow_is_rejected_without_the_old_history_and_interval_caps
     assert getattr(accepted, field) == 100000
     with pytest.raises(ValidationError, match="supported calendar range"):
         LensSettings.model_validate({**lens().settings.model_dump(), field: 10**30})
+
+
+def review(index: int) -> Review:
+    return Review(
+        execution_id=f"run-{index}", trace_id="t", agent="support", name="task", model="analysis", duration_ms=1, at=NOW
+    )
+
+
+def test_reviews_keep_the_newest_window_while_counting_every_review() -> None:
+    job: Final = queue_job(lens(), NOW, "job").jobs[0]
+    grown: Final = reduce(add_review, tuple(review(i) for i in range(MAX_REVIEWS + 3)), job)
+    assert grown.reviewed == MAX_REVIEWS + 3
+    assert len(grown.reviews) == MAX_REVIEWS
+    assert grown.reviews[0].execution_id == "run-3"
+    assert grown.reviews[-1].execution_id == f"run-{MAX_REVIEWS + 2}"
+
+
+def test_progress_without_a_review_leaves_the_review_history_alone() -> None:
+    job: Final = add_review(queue_job(lens(), NOW, "job").jobs[0], review(0))
+    assert add_review(job, None) == job

@@ -4,12 +4,14 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 from litellm.proxy.lens.models import (
+    MAX_REVIEWS,
     MAX_STEPS,
     Finding,
     FindingDraft,
     Job,
     Lens,
     LensSettings,
+    Review,
     Scope,
     Step,
     Worker,
@@ -80,6 +82,14 @@ def queue_job(
 
 def add_step(job: Job, step: Step) -> Job:
     return job.model_copy(update=MappingProxyType({"steps": (*job.steps, step)[-MAX_STEPS:]}))
+
+
+def add_review(job: Job, review: Review | None) -> Job:
+    if review is None:
+        return job
+    return job.model_copy(
+        update=MappingProxyType({"reviews": (*job.reviews, review)[-MAX_REVIEWS:], "reviewed": job.reviewed + 1})
+    )
 
 
 def claim_job(lens: Lens, worker: Worker, now: datetime) -> Lens:

@@ -46,6 +46,7 @@ from litellm.proxy.lens.models import (
 from litellm.proxy.lens.repository import LensRepository, WriterDatabase
 from litellm.proxy.lens.sources import ActivityAvailability, SourceReader, Storage, parse_execution
 from litellm.proxy.lens.state import (
+    add_review,
     add_step,
     can_access,
     claim_job,
@@ -490,10 +491,13 @@ async def progress(lens_id: str, job_id: str, body: Progress, worker: WorkerAuth
         job: Final = current_job(e)
         if job is None or job.id != job_id or job.worker_id != worker.id:
             return e
-        renewed: Final = job.model_copy(
-            update=MappingProxyType(
-                {"stage": body.stage, "coverage": body.coverage, "lease_until": now + timedelta(minutes=5)}
-            )
+        renewed: Final = add_review(
+            job.model_copy(
+                update=MappingProxyType(
+                    {"stage": body.stage, "coverage": body.coverage, "lease_until": now + timedelta(minutes=5)}
+                )
+            ),
+            body.review,
         )
         return replace_job(
             e,
