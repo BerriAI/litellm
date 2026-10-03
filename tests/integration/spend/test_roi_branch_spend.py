@@ -50,12 +50,22 @@ async def test_branch_spend_uses_request_tags_once_and_respects_utc_window() -> 
                     ).format(sql.Identifier(schema)),
                     (timestamp, spend, json.dumps(request_tags)),
                 )
-            for marker, spend in ((True, 100), (False, 13), (None, 17)):
+            for marker, spend, extra_tags in (
+                (True, 100, ()),
+                (True, 100, ("litellm-roi-estimator",)),
+                (False, 13, ("litellm-roi-estimator",)),
+                (None, 100, ("litellm-roi-estimator",)),
+            ):
                 setup.execute(
                     sql.SQL('INSERT INTO {}."LiteLLM_SpendLogs" VALUES (%s::timestamp, %s, %s::jsonb, %s::jsonb)').format(
                         sql.Identifier(schema)
                     ),
-                    ("2026-09-15 00:00:00", spend, json.dumps(tags), json.dumps({"litellm_roi_estimator": marker})),
+                    (
+                        "2026-09-15 00:00:00",
+                        spend,
+                        json.dumps(tags + extra_tags),
+                        json.dumps({"litellm_roi_estimator": marker}),
+                    ),
                 )
             database: Final = Prisma(datasource={"url": scoped})
             await database.connect()
@@ -64,6 +74,6 @@ async def test_branch_spend_uses_request_tags_once_and_respects_utc_window() -> 
             finally:
                 await database.disconnect()
             costs: Final = {row.branch: (row.spend, row.requests) for row in result}
-            assert costs == {"feature/one": (46, 5), "Feature/one": (7, 1), "free": (0, 1)}
+            assert costs == {"feature/one": (18, 3), "Feature/one": (7, 1), "free": (0, 1)}
         finally:
             setup.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))

@@ -34,7 +34,11 @@ async def read_branch_spend(
             ) AS tags
             WHERE logs."startTime" >= $1::text::timestamp AND logs."startTime" < $2::text::timestamp
               AND cardinality(tags.repos) = 1 AND cardinality(tags.branches) = 1
-              AND (logs.metadata -> 'litellm_roi_estimator') IS DISTINCT FROM 'true'::jsonb
+              AND CASE logs.metadata -> 'litellm_roi_estimator'
+                  WHEN 'true'::jsonb THEN false
+                  WHEN 'false'::jsonb THEN true
+                  ELSE NOT coalesce(logs.request_tags ? 'litellm-roi-estimator', false)
+              END
         )
         SELECT CASE WHEN $4 THEN lower(repo) ELSE repo END AS repo,
                branch, sum(spend)::double precision AS spend, count(*)::integer AS requests
