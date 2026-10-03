@@ -6,10 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RunsTab } from "./RunsTab";
 import { InvestigationProgress } from "../InvestigationProgress";
+import { StepFeed } from "../StepFeed";
+import { RunNowDialog } from "./RunNowDialog";
+import { useState } from "react";
 import { InvestigationSummary } from "./InvestigationSummary";
 import { InvestigationFailure } from "./InvestigationFailure";
 import { scopeLabel, sourceLabels } from "../../model/format";
 import { type Lens } from "../../model/types";
+import type { LensWrite } from "../../api/mutations";
 
 import { InvestigationActions } from "./InvestigationActions";
 import { RunPicker } from "./RunPicker";
@@ -26,6 +30,7 @@ export function InvestigationDetail({
   update,
   connected,
   results,
+  agents = [],
 }: {
   lens: Lens;
   readOnly: boolean;
@@ -33,10 +38,12 @@ export function InvestigationDetail({
   busy: boolean;
   setEditing: (mode: "new" | "edit" | "duplicate") => void;
   setMonitoring: (open: boolean) => void;
-  update: (path: string, body: unknown, method?: "post" | "put" | "patch") => Promise<void>;
+  update: (write: LensWrite) => Promise<unknown>;
   connected: boolean;
   results: ReturnType<typeof useInvestigationResults>;
+  agents?: readonly string[];
 }) {
+  const [runNow, setRunNow] = useState(false);
   const {
     active,
     job,
@@ -84,6 +91,7 @@ export function InvestigationDetail({
               setEditing={setEditing}
               setMonitoring={setMonitoring}
               update={update}
+              onRunNow={() => setRunNow(true)}
             />
           )}
         </div>
@@ -96,9 +104,22 @@ export function InvestigationDetail({
               readOnly
                 ? undefined
                 : () => {
-                    void update(`/lens/${lens.id}/cancel`, {});
+                    void update((api) => api.cancelRun(lens.id));
                   }
             }
+          />
+        )}
+        {active && <StepFeed job={active} />}
+        {runNow && (
+          <RunNowDialog
+            lens={lens}
+            agents={agents}
+            busy={busy}
+            onClose={() => setRunNow(false)}
+            onRun={async (request) => {
+              await update((api) => api.startRun(lens.id, request));
+              setRunNow(false);
+            }}
           />
         )}
         {job?.error && <InvestigationFailure job={job} connected={connected} />}

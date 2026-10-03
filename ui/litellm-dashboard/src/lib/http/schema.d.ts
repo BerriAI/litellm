@@ -4586,6 +4586,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decisions */
+        post: operations["decisions_decisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/delete/allowed_ip": {
         parameters: {
             query?: never;
@@ -8951,6 +8968,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/watch-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Watch All */
+        post: operations["watch_all_lens_watch_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/worker/claim": {
         parameters: {
             query?: never;
@@ -10446,6 +10480,11 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
+         *                     provider's model catalog. When present, the response is Codex's own
+         *                     catalog shape (`{"models": [...]}`) built from the same listing, with
+         *                     each model's `model_info.service_tiers` as its service tiers; absent,
+         *                     the OpenAI shape below is returned
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -19790,6 +19829,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decisions */
+        post: operations["decisions_v1_decisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/embeddings": {
         parameters: {
             query?: never;
@@ -21185,6 +21241,11 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
+         *                     provider's model catalog. When present, the response is Codex's own
+         *                     catalog shape (`{"models": [...]}`) built from the same listing, with
+         *                     each model's `model_info.service_tiers` as its service tiers; absent,
+         *                     the OpenAI shape below is returned
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -25672,10 +25733,7 @@ export interface components {
             /** Updated By */
             updated_by: string;
         };
-        /**
-         * AgentNode
-         * @description One distinct agent in a trace. 200 invocations of `researcher` = one node.
-         */
+        /** AgentNode */
         AgentNode: {
             /** Duration Ms */
             duration_ms: number;
@@ -28095,7 +28153,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -33313,6 +33371,17 @@ export interface components {
              * @enum {string}
              */
             status: "queued" | "running" | "completed" | "failed" | "cancelled";
+            /**
+             * Steps
+             * @default []
+             */
+            steps: components["schemas"]["Step"][];
+            /**
+             * Trigger
+             * @default schedule
+             * @enum {string}
+             */
+            trigger: "schedule" | "manual";
             /** Worker Id */
             worker_id?: string | null;
         };
@@ -44209,9 +44278,15 @@ export interface components {
         };
         /** RunRequest */
         RunRequest: {
+            /** Agent Name */
+            agent_name?: string | null;
+            /** End */
+            end?: string | null;
             /** Lookback Hours */
             lookback_hours?: number | null;
             settings?: components["schemas"]["LensSettings"] | null;
+            /** Start */
+            start?: string | null;
         };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
@@ -45181,7 +45256,7 @@ export interface components {
              * Type
              * @enum {string}
              */
-            type: "agent" | "llm" | "tool" | "chain" | "framework";
+            type: "agent" | "llm" | "tool" | "chain" | "framework" | "retriever" | "embedding" | "reranker" | "guardrail" | "evaluator" | "prompt" | "decision";
         };
         /** SpanDetail */
         SpanDetail: {
@@ -45541,6 +45616,46 @@ export interface components {
              * @default []
              */
             user_ids: string[];
+        };
+        /** Step */
+        Step: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /**
+             * Cost
+             * @default 0
+             */
+            cost: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "stage" | "model" | "error";
+            /** Label */
+            label: string;
+            /**
+             * Model
+             * @default
+             */
+            model: string;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Purpose
+             * @default
+             */
+            purpose: string;
         };
         /**
          * SuccessfulKeyUpdate
@@ -47016,6 +47131,8 @@ export interface components {
         Trace: {
             /** Agents */
             agents: components["schemas"]["AgentNode"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
             /** Spans */
             spans: components["schemas"]["Span"][];
             summary: components["schemas"]["TraceSummary"];
@@ -47248,6 +47365,8 @@ export interface components {
             name: string;
             /** Output Tokens */
             output_tokens: number;
+            /** Resolution Limited */
+            resolution_limited?: boolean;
             /** Service */
             service: string;
             /** Span Count */
@@ -47364,7 +47483,7 @@ export interface components {
             /** Content */
             content: string;
             /** Name */
-            name?: string;
+            name?: string | null;
             /**
              * Role
              * @enum {string}
@@ -49298,6 +49417,25 @@ export interface components {
             type: "wait";
         } & {
             [key: string]: unknown;
+        };
+        /** WatchAllResult */
+        WatchAllResult: {
+            /**
+             * Skipped
+             * @default []
+             */
+            skipped: components["schemas"]["WatchSkipped"][];
+            /** Watching */
+            watching: string[];
+        };
+        /** WatchSkipped */
+        WatchSkipped: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Reason */
+            reason: string;
         };
         /**
          * WebSearchInterceptionSettings
@@ -56846,6 +56984,26 @@ export interface operations {
             };
         };
     };
+    decisions_decisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     delete_allowed_ip_delete_allowed_ip_post: {
         parameters: {
             query?: never;
@@ -62219,6 +62377,26 @@ export interface operations {
             };
         };
     };
+    watch_all_lens_watch_all_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchAllResult"];
+                };
+            };
+        };
+    };
     claim_lens_worker_claim_post: {
         parameters: {
             query?: {
@@ -64494,6 +64672,7 @@ export interface operations {
                 fallback_type?: string | null;
                 scope?: string | null;
                 healthy_only?: boolean | null;
+                client_version?: string | null;
             };
             header?: never;
             path?: never;
@@ -76521,6 +76700,26 @@ export interface operations {
             };
         };
     };
+    decisions_v1_decisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     embeddings_v1_embeddings_post: {
         parameters: {
             query?: never;
@@ -78868,6 +79067,7 @@ export interface operations {
                 fallback_type?: string | null;
                 scope?: string | null;
                 healthy_only?: boolean | null;
+                client_version?: string | null;
             };
             header?: never;
             path?: never;
@@ -80163,6 +80363,8 @@ export interface operations {
         parameters: {
             query?: {
                 trace_ref?: string;
+                cursor?: string | null;
+                page_size?: number | null;
             };
             header?: never;
             path: {

@@ -1,9 +1,19 @@
 import hashlib
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 
-from litellm.proxy.lens.models import Finding, FindingDraft, Job, Lens, LensSettings, Scope, Worker
+from litellm.proxy.lens.models import (
+    MAX_STEPS,
+    Finding,
+    FindingDraft,
+    Job,
+    Lens,
+    LensSettings,
+    Scope,
+    Step,
+    Worker,
+)
 
 
 def can_access(viewer: Scope, target: Scope) -> bool:
@@ -24,25 +34,52 @@ def replace_job(lens: Lens, job: Job) -> Lens:
     )
 
 
+SETTLE_DELAY = timedelta(minutes=2)
+
+
+def scheduled_window(lens: Lens, now: datetime) -> tuple[datetime, datetime]:
+    end: Final = now - SETTLE_DELAY
+    floor: Final = now - timedelta(hours=lens.settings.lookback_hours)
+    start: Final = max(lens.last_scan_at, floor) if lens.last_scan_at else floor
+    return min(start, end), end
+
+
+def next_scan_start(lens: Lens, job: Job, failed: bool) -> datetime | None:
+    if failed or job.trigger == "manual":
+        return lens.last_scan_at
+    return max(lens.last_scan_at or job.end, job.end)
+
+
 def queue_job(
     lens: Lens,
     now: datetime,
     job_id: str,
     lookback_hours: int | None = None,
     settings: LensSettings | None = None,
+    window: tuple[datetime, datetime] | None = None,
+    trigger: Literal["schedule", "manual"] = "schedule",
 ) -> Lens:
     if current_job(lens):
         return lens
     selected: Final = settings or lens.settings
+    hours: Final = lookback_hours if lookback_hours is not None else (selected.lookback_hours if settings else None)
+    start, end = window or (
+        (now - timedelta(hours=hours), now - SETTLE_DELAY) if hours is not None else scheduled_window(lens, now)
+    )
     job: Final = Job(
         id=job_id,
         created_at=now,
-        start=now - timedelta(hours=lookback_hours if lookback_hours is not None else selected.lookback_hours),
-        end=now - timedelta(minutes=2),
+        start=start,
+        end=end,
         settings=selected,
         revision=lens.revision,
+        trigger=trigger,
     )
     return lens.model_copy(update=MappingProxyType({"jobs": (job,)}))
+
+
+def add_step(job: Job, step: Step) -> Job:
+    return job.model_copy(update=MappingProxyType({"steps": (*job.steps, step)[-MAX_STEPS:]}))
 
 
 def claim_job(lens: Lens, worker: Worker, now: datetime) -> Lens:

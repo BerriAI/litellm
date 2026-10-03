@@ -14,6 +14,7 @@
     "test:integration": "vitest run --project integration",
     "test:dot": "vitest --reporter=dot",
     "test:types": "vitest run --project types",
+    "typecheck": "tsc --project tsconfig.production.json",
     "test:watch": "vitest -w",
     "test:coverage": "vitest run --coverage",
     "format": "prettier --write .",
