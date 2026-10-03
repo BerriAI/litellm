@@ -205,6 +205,53 @@ pick_port() {
   export LITELLM_PORT="$PORT"
 }
 
+migrate_env() {
+  rename_password=0
+  if grep -q '^POSTGRES_PASSWORD=' .env && ! grep -q '^LITELLM_POSTGRES_PASSWORD=' .env; then
+    rename_password=1
+  fi
+  normalize_bind=0
+  if grep -q '^LITELLM_BIND=.*:$' .env; then normalize_bind=1; fi
+
+  envfile=.env
+  symlink_hops=0
+  while [ -L "$envfile" ]; do
+    if [ "$symlink_hops" -ge 40 ]; then
+      echo "$DIR/.env is a symlink loop." >&2
+      return 1
+    fi
+    if ! link="$(readlink "$envfile")"; then
+      echo "Could not resolve the $DIR/.env symlink." >&2
+      return 1
+    fi
+    case "$link" in
+      /*) envfile=$link ;;
+      *) envfile="$(dirname "$envfile")/$link" ;;
+    esac
+    symlink_hops=$((symlink_hops + 1))
+  done
+  if [ "$rename_password" = 0 ] && [ "$normalize_bind" = 0 ]; then return 0; fi
+
+  if ! temp="$(umask 077; mktemp "$(dirname "$envfile")/.env.XXXXXX")"; then
+    echo "Cannot create a temporary file in $(dirname "$envfile"); check that it is writable." >&2
+    return 1
+  fi
+  if ! (umask 077; awk -v rename_password="$rename_password" '
+    rename_password && /^POSTGRES_PASSWORD=/ { sub(/^POSTGRES_PASSWORD=/, "LITELLM_POSTGRES_PASSWORD=") }
+    /^LITELLM_BIND=/ { sub(/:$/, "") }
+    { print }
+  ' "$envfile" >"$temp"); then
+    rm -f "$temp"
+    return 1
+  fi
+  if ! mv "$temp" "$envfile"; then
+    rm -f "$temp"
+    echo "Could not atomically update $DIR/.env." >&2
+    return 1
+  fi
+  echo "Updated $DIR/.env to the current variable names."
+}
+
 # Docker names containers and the database volume after the project, so an
 # install outside the home folder gets its own name and never shares a
 # database with another litellm-gateway folder.
@@ -274,18 +321,21 @@ EOF
   if [ -f .env ]; then
     echo "Reusing $DIR/.env, so existing keys and data keep working."
   else
-    (umask 077 && printf 'LITELLM_MASTER_KEY=sk-%s\nLITELLM_SALT_KEY=sk-%s\nPOSTGRES_PASSWORD=%s\nLITELLM_PORT=%s\nLITELLM_BIND=127.0.0.1:\nCOMPOSE_PROJECT_NAME=%s\n' \
+    (umask 077 && printf 'LITELLM_MASTER_KEY=sk-%s\nLITELLM_SALT_KEY=sk-%s\nLITELLM_POSTGRES_PASSWORD=%s\nLITELLM_PORT=%s\nLITELLM_BIND=127.0.0.1\nCOMPOSE_PROJECT_NAME=%s\n' \
       "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" "$(openssl rand -hex 24)" "$PORT" "$project" >.env)
     echo "Generated $DIR/.env with your master key, salt key, and database password. Keep this file."
   fi
+  migrate_env
 
   # Compose prefers values already set in the shell over .env, so drop any
   # inherited ones: .env stays the only source for keys and the project name.
-  unset LITELLM_MASTER_KEY LITELLM_SALT_KEY POSTGRES_PASSWORD COMPOSE_PROJECT_NAME
-  # The bind address follows .env when .env sets it (every install this script
-  # creates does). For an older .env without it, a value exported in the shell
-  # is kept, so an intentional LITELLM_BIND=127.0.0.1: is not dropped.
-  if grep -q '^LITELLM_BIND=' .env; then unset LITELLM_BIND; fi
+  unset LITELLM_MASTER_KEY LITELLM_SALT_KEY LITELLM_POSTGRES_PASSWORD COMPOSE_PROJECT_NAME
+  if grep -q '^LITELLM_BIND=' .env; then
+    unset LITELLM_BIND
+  elif [ "${LITELLM_BIND+x}" = x ]; then
+    LITELLM_BIND="${LITELLM_BIND%:}"
+    export LITELLM_BIND
+  fi
 
   echo "Starting LiteLLM and Postgres (the first run downloads the images)..."
   docker compose -f docker-compose.quickstart.yml up -d

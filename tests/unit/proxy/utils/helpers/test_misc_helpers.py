@@ -156,16 +156,30 @@ def test_construct_database_url_from_env_vars_special_chars_encoded(monkeypatch)
     result = construct_database_url_from_env_vars()
     summary = {
         "result": result,
-        "username_encoded": "us+er%40x" in result,
+        "username_encoded": "us%20er%40x" in result,
         "password_encoded": "p%40ss%2Fword" in result,
         "name_encoded": "lite%2Fllm" in result,
     }
     assert summary == {
-        "result": "postgresql://us+er%40x:p%40ss%2Fword@db.example.com/lite%2Fllm",
+        "result": "postgresql://us%20er%40x:p%40ss%2Fword@db.example.com/lite%2Fllm",
         "username_encoded": True,
         "password_encoded": True,
         "name_encoded": True,
     }
+
+
+def test_construct_database_url_from_env_vars_encodes_spaces_and_reserved_password_chars(monkeypatch):
+    monkeypatch.setenv("DATABASE_HOST", "db:5432")
+    monkeypatch.setenv("DATABASE_USERNAME", "litellm")
+    monkeypatch.setenv("DATABASE_PASSWORD", "p ss@:/#?%&+=")
+    monkeypatch.setenv("DATABASE_NAME", "litellm")
+    monkeypatch.delenv("DATABASE_SCHEMA", raising=False)
+    monkeypatch.delenv("DATABASE_SSLMODE", raising=False)
+    monkeypatch.delenv("DATABASE_SSLROOTCERT", raising=False)
+
+    assert construct_database_url_from_env_vars() == (
+        "postgresql://litellm:p%20ss%40%3A%2F%23%3F%25%26%2B%3D@db:5432/litellm"
+    )
 
 
 def test_construct_database_url_from_env_vars_with_schema(monkeypatch):
