@@ -6,7 +6,7 @@ this is OpenAI compatible - no translation needed / occurs
 
 import os
 from collections.abc import Coroutine
-from typing import Any, Literal, overload
+from typing import Any, Final, Literal, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -64,14 +64,16 @@ class HerokuChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        api_base, _ = self._get_openai_compatible_provider_info(api_base, api_key)
+        resolved_base, _ = self._get_openai_compatible_provider_info(api_base, api_key)
 
-        if not api_base:
+        if not resolved_base:
             raise HerokuError(
                 "No api base was set. Please provide an api_base, or set the HEROKU_API_BASE environment variable."
             )
 
-        if not api_base.endswith("/v1/chat/completions"):
-            api_base = f"{api_base}/v1/chat/completions"
+        clean_api_base: Final = resolved_base.rstrip("/")
 
-        return api_base
+        if not clean_api_base.endswith("/v1/chat/completions"):
+            return f"{clean_api_base}/v1/chat/completions"
+
+        return clean_api_base

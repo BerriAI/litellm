@@ -55,9 +55,10 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         stream: bool | None = None,
     ) -> str:
         if api_base:
-            if not api_base.endswith("/contextualizedembeddings"):
-                api_base = f"{api_base}/contextualizedembeddings"
-            return api_base
+            clean_api_base: Final = api_base.rstrip("/")
+            if not clean_api_base.endswith("/contextualizedembeddings"):
+                return f"{clean_api_base}/contextualizedembeddings"
+            return clean_api_base
         return "https://api.voyageai.com/v1/contextualizedembeddings"
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class signature

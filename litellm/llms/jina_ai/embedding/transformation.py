@@ -95,7 +95,12 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        return f"{api_base}/embeddings" if api_base else "https://api.jina.ai/v1/embeddings"
+        if api_base:
+            clean_api_base: Final = api_base.rstrip("/")
+            if not clean_api_base.endswith("/embeddings"):
+                return f"{clean_api_base}/embeddings"
+            return clean_api_base
+        return "https://api.jina.ai/v1/embeddings"
 
     def transform_embedding_request(
         self,

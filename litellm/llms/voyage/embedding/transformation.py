@@ -46,9 +46,10 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
         stream: bool | None = None,
     ) -> str:
         if api_base:
-            if not api_base.endswith("/embeddings"):
-                api_base = f"{api_base}/embeddings"
-            return api_base
+            clean_api_base: Final = api_base.rstrip("/")
+            if not clean_api_base.endswith("/embeddings"):
+                return f"{clean_api_base}/embeddings"
+            return clean_api_base
         return "https://api.voyageai.com/v1/embeddings"
 
     def get_supported_openai_params(self, model: str) -> list:

@@ -468,14 +468,10 @@ class OllamaConfig(BaseConfig):
 
         Some providers need `model` in `api_base`
         """
-        if api_base is None:
-            api_base = "http://localhost:11434"
-        if api_base.endswith("/api/generate"):
-            url = api_base
-        else:
-            url = f"{api_base}/api/generate"
-
-        return url
+        clean_api_base: Final = (api_base or "http://localhost:11434").rstrip("/")
+        if clean_api_base.endswith("/api/generate"):
+            return clean_api_base
+        return f"{clean_api_base}/api/generate"
 
     def get_model_response_iterator(
         self,
