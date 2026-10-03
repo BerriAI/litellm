@@ -5,7 +5,7 @@ import { renderWithProviders as renderProviders, testQueryClient } from "@/../te
 import { ApiError } from "@/lib/http/client";
 import { apiClient } from "@/components/networking";
 import { LensView } from "./LensView";
-import { nextCheckStatus, runTime, type Lens, type Finding } from "./lensData";
+import { briefMarkdown, nextCheckStatus, runTime, type Lens, type Finding } from "./lensData";
 
 function renderWithProviders(ui: React.ReactElement, options?: Parameters<typeof renderProviders>[1]) {
   return renderProviders(ui, { searchParams: window.location.search, ...options });
@@ -173,6 +173,52 @@ describe("Lens findings and runs", () => {
     expect(screen.queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
   });
 
+  const brief = {
+    problem: "The workspace was not a Git repository, so the agent could not commit.",
+    user_goal: "Open a pull request fixing a typo",
+    what_happened: 'Git returned "fatal: not a git repository"',
+    test_cases: [{ input: "Fix the typo and open a PR", expected: "A PR URL is returned" }],
+  };
+
+  async function openIssue(finding: Finding) {
+    testQueryClient.clear();
+    const jobs = lens.jobs.map((job) => ({ ...job, findings: [finding] }));
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === "/lens")
+        return { lenses: [{ ...lens, findings: [finding], jobs }], workers: [], tracing_enabled: true };
+      if (path === "/lens/lens/runs") return jobs;
+      return { data: [] };
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<LensView accessToken="test" readOnly />);
+    await user.click(await screen.findByRole("button", { name: new RegExp(finding.title) }));
+    return { user, detail: within(screen.getByRole("dialog", { name: finding.title })) };
+  }
+
+  it.each(["Claude Code", "Codex"])("renders the issue brief and copies its markdown for %s", async (agent) => {
+    const { user, detail } = await openIssue({ ...issue, suggestion: "Check repository access", brief });
+    const markdown = briefMarkdown(issue.title, brief);
+    expect(detail.getByRole("heading", { level: 1, name: issue.title })).toBeVisible();
+    for (const section of ["Problem", "User goal", "What happened", "Test cases"]) {
+      expect(detail.getByRole("heading", { level: 2, name: section })).toBeVisible();
+    }
+    expect(detail.getByText(brief.problem)).toBeVisible();
+    expect(detail.getByRole("listitem")).toHaveTextContent(
+      `Input: ${brief.test_cases[0].input} Expect: ${brief.test_cases[0].expected}`,
+    );
+    expect(detail.queryByText("## Problem", { exact: false })).not.toBeInTheDocument();
+    expect(detail.queryByText("Check repository access")).not.toBeInTheDocument();
+    await user.click(detail.getByRole("button", { name: `Copy for ${agent}` }));
+    expect(await navigator.clipboard.readText()).toBe(markdown);
+  });
+
+  it("keeps the summary and suggestion for findings recorded before briefs existed", async () => {
+    const { detail } = await openIssue({ ...issue, suggestion: "Check repository access" });
+    expect(detail.getByText(issue.description)).toBeVisible();
+    expect(detail.getByText("Check repository access")).toBeVisible();
+    expect(detail.queryByRole("button", { name: "Copy for Claude Code" })).not.toBeInTheDocument();
+  });
+
   it("shows the actual frozen run selection in the Runs tab", async () => {
     const user = userEvent.setup();
     renderWithProviders(<LensView accessToken="test" readOnly />);
@@ -231,39 +277,18 @@ it("runs saved settings immediately without opening setup", async () => {
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
 
-it("lets a new user inspect example evidence and return to setup without starting an investigation", async () => {
+it("offers the interactive demo without starting an investigation", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [], workers: [], tracing_enabled: false };
     return { traces: false, requests: false };
   });
+  const onDemo = vi.fn();
   const user = userEvent.setup();
-  renderWithProviders(<LensView accessToken="test" />);
-
-  await user.click(await screen.findByRole("button", { name: "View an example" }));
-  const example = within(screen.getByRole("dialog", { name: "Example investigation" }));
-  expect(example.getByRole("heading", { name: "Failed lookups leave customers without answers" })).toBeVisible();
-  const evidence = example.getByText(/Where is my order\?/);
-  expect(evidence).not.toBeVisible();
-  await user.click(example.getByText("See the trace"));
-  expect(evidence).toBeVisible();
-  expect(example.getByText(/Service unavailable/)).toBeVisible();
-  await user.click(example.getByText("See the trace"));
-  expect(evidence).not.toBeVisible();
-
-  await user.click(example.getByRole("button", { name: "Close" }));
-  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-  expect(screen.getByRole("link", { name: "Set up traces" })).toBeVisible();
-  expect(screen.getByRole("button", { name: "Connect worker" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "New investigation" })).toBeDisabled();
-
-  await user.click(screen.getByRole("button", { name: "View an example" }));
-  expect(screen.getByRole("dialog", { name: "Example investigation" })).toBeVisible();
-  expect(screen.getByText(/Where is my order\?/)).not.toBeVisible();
-  await user.keyboard("{Escape}");
-  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-  expect(screen.getByRole("button", { name: "View an example" })).toBeVisible();
+  renderWithProviders(<LensView accessToken="test" onDemo={onDemo} />);
+  await user.click(await screen.findByRole("button", { name: "Preview sample" }));
+  expect(onDemo).toHaveBeenCalledOnce();
   expect(apiClient.post).not.toHaveBeenCalled();
 });
 
@@ -276,13 +301,14 @@ it("guides a first-time administrator into worker connection and lens setup", as
     return { traces: true, requests: false, data: [] };
   });
   const user = userEvent.setup();
-  renderWithProviders(<LensView accessToken="test" />);
+  renderWithProviders(<LensView accessToken="test" onDemo={vi.fn()} />);
   const guide = within(await screen.findByRole("region", { name: "Find what needs attention" }));
   expect(apiClient.get).toHaveBeenCalledWith("/lens/activity/available", { accessToken: "test" });
   expect(await guide.findByRole("link", { name: "View traces" })).toHaveAttribute(
     "href",
     expect.stringMatching(/^\/ui\/lens\/?\?tab=traces$/),
   );
+  expect(await guide.findByRole("button", { name: "Preview sample" })).toBeVisible();
   await user.click(guide.getByRole("button", { name: "Connect worker" }));
   const connection = within(await screen.findByRole("dialog", { name: "Connect a worker" }));
   expect(connection.getByRole("button", { name: "Get install command" })).toBeVisible();
@@ -305,6 +331,7 @@ it("guides a first-time administrator into worker connection and lens setup", as
     });
   });
   await waitFor(() => expect(guide.getByRole("button", { name: "New investigation" })).toBeEnabled());
+  expect(guide.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
   await user.click(guide.getByRole("button", { name: "New investigation" }));
   expect(await screen.findByRole("dialog", { name: "Which activity should we investigate?" })).toBeVisible();
 });
