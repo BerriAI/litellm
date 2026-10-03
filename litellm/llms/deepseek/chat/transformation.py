@@ -59,6 +59,14 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         elif reasoning_effort is not None:
             optional_params["thinking"] = {"type": "disabled" if reasoning_effort == "none" else "enabled"}
 
+        if (
+            model.removeprefix("deepseek/").startswith(("deepseek-v4-", "deepseek-flash"))
+            and not (isinstance(thinking_value, dict) and thinking_value.get("type") == "disabled")
+            and isinstance(reasoning_effort, str)
+            and reasoning_effort != "none"
+        ):
+            return {**optional_params, "reasoning_effort": reasoning_effort}  # mutable-ok: adapters mutate this dict
+
         return optional_params
 
     def _fill_reasoning_content(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
