@@ -14,7 +14,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
-from ..common_utils import resolve_opencode_api_key, with_opencode_session_header
+from ..common_utils import require_opencode_api_key, with_opencode_session_header
 
 
 class OpenCodeResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -39,7 +39,7 @@ class OpenCodeResponsesAPIConfig(OpenAIResponsesAPIConfig):
         base_headers: Final[Mapping[str, object]] = {
             "Content-Type": "application/json",
             **headers,
-            "Authorization": f"Bearer {resolve_opencode_api_key(resolved_params.api_key)}",
+            "Authorization": f"Bearer {require_opencode_api_key(resolved_params.api_key, model)}",
         }
         return with_opencode_session_header(base_headers, resolved_params.model_dump())
 

@@ -742,3 +742,56 @@ class TestMessagesCompletionWiring:
         assert body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hello"}]}]
         assert body["system"] == [{"type": "text", "text": "Be terse."}]
         assert body["max_tokens"] == 16
+
+
+class TestCredentialIsolation:
+    """
+    AnthropicConfig falls back to ANTHROPIC_API_KEY when handed no key, so an OpenCode request
+    with no OpenCode key would ship an unrelated provider's credential to OpenCode's operator.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_opencode_key(self, monkeypatch):
+        # set rather than delete: litellm's own load_dotenv would otherwise refill from .env
+        monkeypatch.setenv("OPENCODE_API_KEY", "")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-leak-canary")
+        monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-token-canary")
+
+    @pytest.mark.parametrize("config", [OpenCodeZenMessagesChatConfig(), OpenCodeGoMessagesChatConfig()])
+    def test_messages_never_falls_back_to_anthropic_credentials(self, config):
+        with pytest.raises(litellm.AuthenticationError, match="Missing OpenCode API key"):
+            config.validate_environment(
+                headers={},
+                model="claude-opus-5",
+                messages=[{"role": "user", "content": "hi"}],
+                optional_params={},
+                litellm_params={},
+            )
+
+    def test_gemini_requires_its_own_key(self):
+        with pytest.raises(litellm.AuthenticationError, match="Missing OpenCode API key"):
+            OpenCodeZenGeminiChatConfig().validate_environment(
+                headers={},
+                model="gemini-3.5-flash-lite",
+                messages=[{"role": "user", "content": "hi"}],
+                optional_params={},
+                litellm_params={},
+            )
+
+    @pytest.mark.parametrize("config", [OpenCodeZenResponsesAPIConfig(), OpenCodeGoResponsesAPIConfig()])
+    def test_responses_requires_its_own_key(self, config):
+        """Without the guard this shipped the literal string "Bearer None"."""
+        with pytest.raises(litellm.AuthenticationError, match="Missing OpenCode API key"):
+            config.validate_environment(headers={}, model="gpt-5.6-luna", litellm_params=None)
+
+    def test_an_explicit_key_still_authenticates(self):
+        headers = OpenCodeGoMessagesChatConfig().validate_environment(
+            headers={},
+            model="minimax-m3",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            api_key="opencode-key",
+        )
+        assert headers["x-api-key"] == "opencode-key"
+        assert "leak-canary" not in str(headers)

@@ -64,3 +64,23 @@ def opencode_endpoint_for_model(provider: str, model: str) -> str:
 def resolve_opencode_api_key(api_key: str | None) -> str | None:
     """One OpenCode account key authenticates both Zen and Go, so both surfaces read one variable."""
     return api_key or get_secret_str(OPENCODE_API_KEY_ENV_VAR)
+
+
+def require_opencode_api_key(api_key: str | None, model: str) -> str:
+    """
+    Guard the credential before any parent validator runs: AnthropicConfig falls back to
+    ANTHROPIC_API_KEY, which would hand an unrelated provider's key to OpenCode's operator.
+    """
+    import litellm
+
+    resolved: Final = resolve_opencode_api_key(api_key)
+    if not resolved:
+        raise litellm.AuthenticationError(
+            message=(
+                "Missing OpenCode API key. Set OPENCODE_API_KEY or pass api_key for this model. "
+                "LiteLLM will not fall back to another provider's credential."
+            ),
+            llm_provider="opencode",
+            model=model,
+        )
+    return resolved

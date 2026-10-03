@@ -17,7 +17,11 @@ from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
-from ..common_utils import resolve_opencode_api_key, with_opencode_session_header
+from ..common_utils import (
+    require_opencode_api_key,
+    resolve_opencode_api_key,
+    with_opencode_session_header,
+)
 
 _HEADERS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
@@ -117,7 +121,7 @@ class OpenCodeMessagesChatConfig(AnthropicConfig):
             messages=list(messages),
             optional_params=dict(optional_params),
             litellm_params=dict(litellm_params),
-            api_key=resolve_opencode_api_key(api_key),
+            api_key=require_opencode_api_key(api_key, model),
             api_base=api_base,
         )
         return with_opencode_session_header(_HEADERS_ADAPTER.validate_python(base_headers), litellm_params)
@@ -204,7 +208,7 @@ class OpenCodeZenGeminiChatConfig(GoogleAIStudioGeminiConfig):
         OpenCode authenticates this endpoint with Google's `x-goog-api-key`; a bearer token,
         an `x-api-key` and a `?key=` query parameter all come back as `Missing API key`.
         """
-        resolved_key: Final = resolve_opencode_api_key(api_key if isinstance(api_key, str) else None)
+        resolved_key: Final = require_opencode_api_key(api_key if isinstance(api_key, str) else None, model)
         base_headers: Final[Mapping[str, object]] = dict(
             chain(
                 (("Content-Type", "application/json"),),
