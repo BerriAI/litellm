@@ -1467,3 +1467,42 @@ def test_gpt56_json_object_with_response_schema_goes_to_converse_as_a_json_tool(
     assert body["toolConfig"]["tools"][0]["toolSpec"]["name"] == "json_tool_call"
     assert body["toolConfig"]["toolChoice"] == {"tool": {"name": "json_tool_call"}}
     assert "response_format" not in body
+
+
+LITERAL_TAGGED_ANSWER = "<reasoning>not thinking</reasoning> Hello"
+
+
+@pytest.mark.parametrize("model", ["openai.gpt-5.6-sol", "us.xai.grok-4.6"])
+def test_streaming_handler_keeps_a_literal_reasoning_tag_outside_gpt_oss(model):
+    handler = BedrockRuntimeChatCompletionsStreamingHandler(streaming_response=iter(()), sync_stream=True)
+
+    opened = handler.chunk_parser({**_stream_chunk({"content": "<reasoning>not thinking"}), "model": model})
+    assert opened.choices[0].delta.content == "<reasoning>not thinking"
+    assert _reasoning_of(opened) is None
+
+    closed = handler.chunk_parser({**_stream_chunk({"content": "</reasoning> Hello"}, finish_reason="stop"), "model": model})
+    assert closed.choices[0].delta.content == "</reasoning> Hello"
+    assert _reasoning_of(closed) is None
+
+
+@pytest.mark.parametrize(
+    "model, expected_content, expected_reasoning",
+    [
+        ("bedrock/global.openai.gpt-5.6-sol", LITERAL_TAGGED_ANSWER, None),
+        ("bedrock/chat_completions/us.xai.grok-4.6", LITERAL_TAGGED_ANSWER, None),
+        ("bedrock/chat_completions/openai.gpt-oss-20b-1:0", "Hello", "not thinking"),
+    ],
+)
+def test_reasoning_tag_split_applies_to_gpt_oss_answers_only(
+    local_cost_map, fake_aws_env, model, expected_content, expected_reasoning
+):
+    model_id = model.removeprefix("bedrock/").removeprefix("chat_completions/")
+    requests, client = _recording_client(json=_chat_completion_json(LITERAL_TAGGED_ANSWER, model_id))
+
+    response = litellm.completion(
+        model=model, messages=[{"role": "user", "content": "hello"}], client=client, max_tokens=64
+    )
+
+    assert str(requests[0].url).endswith("/openai/v1/chat/completions")
+    assert response.choices[0].message.content == expected_content
+    assert getattr(response.choices[0].message, "reasoning_content", None) == expected_reasoning
