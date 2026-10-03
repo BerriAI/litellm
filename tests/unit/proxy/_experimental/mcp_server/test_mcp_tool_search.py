@@ -11,12 +11,13 @@ Covers:
 """
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import JsonValue
 from mcp.types import Tool
 
 import litellm
@@ -58,6 +59,90 @@ SAMPLE_TOOLS = _make_tools(
         ("notion-create_page", "Create a new page in Notion"),
     ]
 )
+
+
+@pytest.mark.parametrize(
+    ("schema", "arguments", "error"),
+    (
+        (
+            {
+                "type": "object",
+                "$defs": {"amount": {"type": "number", "minimum": 0.25, "multipleOf": 0.25}},
+                "properties": {"amount": {"$ref": "#/$defs/amount"}},
+                "required": ["amount"],
+            },
+            {"amount": 0.75},
+            None,
+        ),
+        ({"type": "object", "anyOf": [{"required": ["amount"]}, {"required": ["trace"]}]}, {"trace": "a"}, None),
+        (
+            {"type": "object", "properties": {"amount": {"type": "number", "minimum": 0.25}}},
+            {"amount": 0.1},
+            "Invalid arguments:",
+        ),
+        ({"$ref": "https://schemas.example.invalid/amount"}, {}, "Unable to validate"),
+        ({"$ref": "#/$defs/missing"}, {}, "Unable to validate"),
+        ({"$ref": "#"}, {}, "Unable to validate"),
+        ({"type": "not-a-type"}, {}, "Unable to validate"),
+        ({"properties": {"value": {"pattern": "["}}}, {"value": "a"}, "Unable to validate"),
+    ),
+)
+def test_offline_schema_validation_preserves_supported_constraints(
+    schema: Mapping[str, JsonValue], arguments: Mapping[str, JsonValue], error: str | None
+) -> None:
+    from litellm.proxy._experimental.mcp_server.tool_search import _validate_tool_arguments
+
+    result: Final = _validate_tool_arguments(schema, arguments)
+    if error is None:
+        assert result is None
+    else:
+        assert result is not None and result.startswith(error)
+
+
+@pytest.mark.parametrize(("count", "allowed"), ((4_999, True), (5_000, False)))
+def test_validation_node_limit(count: int, allowed: bool) -> None:
+    from litellm.proxy._experimental.mcp_server.tool_search import _validation_limit_error
+
+    result: Final = _validation_limit_error({}, {str(index): None for index in range(count)})
+    assert (result is None) is allowed
+
+
+@pytest.mark.parametrize(("size", "allowed"), ((1_048_575, True), (1_048_576, False)))
+def test_validation_text_limit(size: int, allowed: bool) -> None:
+    from litellm.proxy._experimental.mcp_server.tool_search import _validation_limit_error
+
+    assert (_validation_limit_error({}, {"x": "a" * size}) is None) is allowed
+
+
+@pytest.mark.parametrize(("depth", "allowed"), ((64, True), (65, False)))
+def test_validation_depth_limit(depth: int, allowed: bool) -> None:
+    from functools import reduce
+
+    from litellm.proxy._experimental.mcp_server.tool_search import _validation_limit_error
+
+    nested: Final = reduce(lambda value, _: {"x": value}, range(depth), {})
+    assert (_validation_limit_error({}, nested) is None) is allowed
+
+
+@pytest.mark.asyncio
+async def test_oversized_arguments_are_rejected_before_worker_submission() -> None:
+    from litellm.proxy._experimental.mcp_server.tool_search import _tool_argument_validation_error
+
+    with patch("anyio.to_process.run_sync", new_callable=AsyncMock) as submit:
+        result: Final = await _tool_argument_validation_error({}, {"value": "x" * 1_048_576})
+    assert result == "Tool schema or arguments exceed validation size or depth limits"
+    submit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_failed_validation_worker_returns_tool_error() -> None:
+    from anyio import BrokenWorkerProcess
+
+    from litellm.proxy._experimental.mcp_server.tool_search import _tool_argument_validation_error
+
+    with patch("anyio.to_process.run_sync", side_effect=BrokenWorkerProcess):
+        result: Final = await _tool_argument_validation_error({}, {})
+    assert result == "Tool argument validation worker failed"
 
 
 FX_TOOL = Tool(

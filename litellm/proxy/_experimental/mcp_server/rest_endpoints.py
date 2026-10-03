@@ -555,7 +555,7 @@ if MCP_AVAILABLE:
             verbose_logger.warning("_prefetch_user_oauth_creds: failed to prefetch for user=%s: %s", user_id, e)
             return {}
 
-    def _create_tool_response_objects(tools, server: MCPServer):
+    def _create_tool_response_objects(tools: Sequence[MCPTool], server: MCPServer):
         """Helper function to create tool response objects.
 
         Enriches the server's ``mcp_info`` with ``server_id`` and ``alias`` so
@@ -569,9 +569,7 @@ if MCP_AVAILABLE:
         }
         return [
             ListMCPToolsRestAPIResponseObject(
-                name=tool.name,
-                description=tool.description,
-                inputSchema=tool.input_schema,
+                **tool.model_dump(by_alias=True, exclude={"mcp_info"}),
                 mcp_info=enriched_mcp_info,
             )
             for tool in tools

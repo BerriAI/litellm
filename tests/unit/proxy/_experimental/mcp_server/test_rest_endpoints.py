@@ -14,7 +14,7 @@ if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
 import httpx
 import pytest
 from fastapi import HTTPException
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, TextContent, Tool
 from starlette.requests import Request
 
 from litellm.constants import MCP_TOOL_LISTING_TIMEOUT
@@ -3404,17 +3404,10 @@ class TestGetToolsForSingleServer:
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
         from litellm.types.mcp import MCPTransport
 
-        # Create mock tools
-        class MockTool:
-            def __init__(self, name, description):
-                self.name = name
-                self.description = description
-                self.input_schema = {}
-
         mock_tools = [
-            MockTool("tool1", "First tool"),
-            MockTool("tool2", "Second tool"),
-            MockTool("tool3", "Third tool"),
+            Tool(name="tool1", description="First tool", inputSchema={}),
+            Tool(name="tool2", description="Second tool", inputSchema={}),
+            Tool(name="tool3", description="Third tool", inputSchema={}),
         ]
 
         # Mock _get_tools_from_server to return all tools
@@ -3466,15 +3459,9 @@ class TestGetToolsForSingleServer:
         from litellm.proxy._experimental.mcp_server.server import MCPServer
         from litellm.types.mcp import MCPTransport
 
-        class MockTool:
-            def __init__(self, name, description):
-                self.name = name
-                self.description = description
-                self.input_schema = {}
-
         mock_tools = [
-            MockTool("tool1", "First tool"),
-            MockTool("tool2", "Second tool"),
+            Tool(name="tool1", description="First tool", inputSchema={}),
+            Tool(name="tool2", description="Second tool", inputSchema={}),
         ]
 
         async def fake_get_tools_from_server(**kwargs):
@@ -3514,15 +3501,9 @@ class TestGetToolsForSingleServer:
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
         from litellm.types.mcp import MCPTransport
 
-        class MockTool:
-            def __init__(self, name, description):
-                self.name = name
-                self.description = description
-                self.input_schema = {}
-
         mock_tools = [
-            MockTool("tool1", "First tool"),
-            MockTool("tool2", "Second tool"),
+            Tool(name="tool1", description="First tool", inputSchema={}),
+            Tool(name="tool2", description="Second tool", inputSchema={}),
         ]
 
         async def fake_get_tools_from_server(**kwargs):
@@ -3567,15 +3548,9 @@ class TestGetToolsForSingleServer:
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
         from litellm.types.mcp import MCPTransport
 
-        class MockTool:
-            def __init__(self, name, description):
-                self.name = name
-                self.description = description
-                self.input_schema = {}
-
         mock_tools = [
-            MockTool("tool1", "First tool"),
-            MockTool("tool2", "Second tool"),
+            Tool(name="tool1", description="First tool", inputSchema={}),
+            Tool(name="tool2", description="Second tool", inputSchema={}),
         ]
 
         async def fake_get_tools_from_server(**kwargs):
@@ -3620,17 +3595,11 @@ class TestGetToolsForSingleServer:
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
         from litellm.types.mcp import MCPTransport
 
-        class MockTool:
-            def __init__(self, name, description):
-                self.name = name
-                self.description = description
-                self.input_schema = {}
-
         mock_tools = [
-            MockTool("tool1", "First tool"),
-            MockTool("tool2", "Second tool"),
-            MockTool("tool3", "Third tool"),
-            MockTool("tool4", "Fourth tool"),
+            Tool(name="tool1", description="First tool", inputSchema={}),
+            Tool(name="tool2", description="Second tool", inputSchema={}),
+            Tool(name="tool3", description="Third tool", inputSchema={}),
+            Tool(name="tool4", description="Fourth tool", inputSchema={}),
         ]
 
         async def fake_get_tools_from_server(**kwargs):
@@ -3682,13 +3651,7 @@ class TestGetToolsForSingleServer:
         from litellm.proxy._experimental.mcp_server.server import MCPServer
         from litellm.types.mcp import MCPTransport
 
-        class MockTool:
-            def __init__(self, name):
-                self.name = name
-                self.description = name
-                self.input_schema = {}
-
-        mock_tools = [MockTool("tool1"), MockTool("tool2"), MockTool("tool3")]
+        mock_tools = [Tool(name="tool1", description="tool1", inputSchema={}), Tool(name="tool2", description="tool2", inputSchema={}), Tool(name="tool3", description="tool3", inputSchema={})]
 
         async def fake_get_tools_from_server(**kwargs):
             return mock_tools
@@ -4401,6 +4364,31 @@ class TestToolResponseMcpInfoEnrichment:
             "alias": None,
         }
 
+    def test_preserves_complete_sdk_tool_definition(self) -> None:
+        from mcp.types import Tool
+
+        tool: Final = Tool.model_validate(
+            {
+                "name": "quote",
+                "title": "Quote",
+                "description": "Return a quote",
+                "inputSchema": {
+                    "type": "object",
+                    "$defs": {"amount": {"type": "number", "minimum": 0.25}},
+                    "properties": {"amount": {"$ref": "#/$defs/amount"}},
+                    "anyOf": [{"required": ["amount"]}, {"maxProperties": 0}],
+                },
+                "outputSchema": {"type": "object", "properties": {"price": {"type": "number", "multipleOf": 0.25}}},
+                "annotations": {"readOnlyHint": True},
+                "_meta": {"display": {"priority": 0.75}},
+                "icons": [{"src": "https://example.com/icon.png"}],
+            }
+        )
+        original: Final = tool.model_dump(by_alias=True)
+        server: Final = MCPServer(server_id="quotes", name="quotes", transport=MCPTransport.http)
+        response: Final = rest_endpoints._create_tool_response_objects([tool], server)[0]
+        assert response.model_dump(by_alias=True, exclude={"mcp_info"}) == original
+        assert tool.model_dump(by_alias=True) == original
 
 class TestRestListToolsetFiltering:
     @pytest.mark.asyncio
