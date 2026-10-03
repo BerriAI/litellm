@@ -120,6 +120,17 @@ def _quoted(columns: Sequence[str]) -> str:
     return ", ".join(f'"{column}"' for column in columns)
 
 
+_CONFLICT_EXPRESSIONS: Final[Mapping[str, str]] = MappingProxyType({"model_group": "COALESCE(\"model_group\", '')"})
+
+
+def _conflict_target(table: DailySpendTable) -> str:
+    """The unique index's expression list. model_group joined the key after rows were stored with
+    NULL in it, so the index matches it through COALESCE and those rows keep their identity unrewritten."""
+    return ", ".join(
+        _CONFLICT_EXPRESSIONS.get(column, f'"{column}"') for column in (table.entity_id_column, *_KEY_COLUMNS)
+    )
+
+
 def _as_text(value: object) -> str:
     return "" if value is None else str(value)
 
@@ -219,7 +230,7 @@ def build_bulk_upsert(
     sql: Final = (
         f'INSERT INTO {quoted_table} ({_quoted(columns)}, "updated_at")\n'
         f"VALUES {rows}\n"
-        f"ON CONFLICT ({_quoted((table.entity_id_column, *_KEY_COLUMNS))}) DO UPDATE SET\n"
+        f"ON CONFLICT ({_conflict_target(table)}) DO UPDATE SET\n"
         f"  {increments}{request_id_update},\n"
         f"  \"updated_at\" = (NOW() AT TIME ZONE 'UTC')"
     )

@@ -202,6 +202,9 @@ def _max_migration_timestamp(names) -> int:
     return max(_migration_timestamp(n) for n in names)
 
 
+DAILY_SPEND_IDENTITY_MIGRATION: Final = "20260922000000_daily_spend_model_group_identity"
+
+
 def _get_prisma_command() -> str:
     """Get the Prisma command to use, bypassing Python wrapper in offline mode."""
     if str_to_bool(os.getenv("PRISMA_OFFLINE_MODE")):
@@ -1027,6 +1030,7 @@ class ProxyExtrasDBManager:
                     stdout=None,
                     stderr=None,
                 )
+                ProxyExtrasDBManager._apply_daily_spend_identity(migrations_dir)
                 return True
             except (
                 subprocess.CalledProcessError,
@@ -1352,6 +1356,24 @@ class ProxyExtrasDBManager:
         return thread
 
     @staticmethod
+    def _apply_daily_spend_identity(prisma_dir: str) -> None:
+        """`prisma db push` builds only what schema.prisma declares. The daily spend identity is a
+        COALESCE expression index Prisma cannot declare, so the migration owning it runs after the push."""
+        prisma_toolchain.run_prisma(
+            [
+                _get_prisma_command(),
+                "db",
+                "execute",
+                "--file",
+                f"{prisma_dir}/migrations/{DAILY_SPEND_IDENTITY_MIGRATION}/migration.sql",
+                "--schema",
+                f"{prisma_dir}/schema.prisma",
+            ],
+            timeout=prisma_command_timeout(),
+            env=_get_prisma_env(),
+        )
+
+    @staticmethod
     def _run_migrations(use_migrate: bool, use_v2_resolver: bool) -> bool:
         if use_v2_resolver:
             logger.info("Using v2 migration resolver (--use_v2_migration_resolver)")
@@ -1584,6 +1606,7 @@ class ProxyExtrasDBManager:
                         stderr=None,
                         env=_get_prisma_env(),
                     )
+                    ProxyExtrasDBManager._apply_daily_spend_identity(migrations_dir)
                     return True
             except subprocess.TimeoutExpired:
                 logger.warning(

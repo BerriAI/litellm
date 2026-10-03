@@ -99,13 +99,14 @@ def test_one_statement_carries_every_row_in_the_batch():
     assert sql.count("(NOW() AT TIME ZONE 'UTC')") == 100 + 1
 
 
-def test_conflict_target_is_the_full_unique_constraint():
+def test_conflict_target_is_the_unique_index_with_model_group_matched_through_coalesce():
     sql, _ = build_bulk_upsert(TAG_TABLE, merge_by_conflict_key(TAG_TABLE, (tag_txn(),)))
 
-    conflict_target = re.search(r"ON CONFLICT \(([^)]*)\)", sql)
+    conflict_target = re.search(r"ON CONFLICT \((.*)\) DO UPDATE", sql)
     assert conflict_target is not None
     assert conflict_target.group(1) == (
-        '"tag", "date", "api_key", "model", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint", "model_group"'
+        '"tag", "date", "api_key", "model", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint", '
+        "COALESCE(\"model_group\", '')"
     )
 
 
