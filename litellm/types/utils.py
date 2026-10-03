@@ -4170,6 +4170,7 @@ class LlmProviders(str, Enum):
     DARKBLOOM = "darkbloom"
     META = "meta"
     SAIL = "sail"
+    UMANS_AI = "umans-ai"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
