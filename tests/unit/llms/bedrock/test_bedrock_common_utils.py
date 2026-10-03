@@ -497,8 +497,6 @@ def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_fi
     ],
 )
 def test_bedrock_model_accepts_cache_points_prefers_the_explicit_breakpoint_flag(monkeypatch, entry, expected):
-    """A regional entry without either flag resolves through its base entry, where an explicit
-    ``supports_prompt_cache_breakpoint`` decides before ``supports_prompt_caching`` does."""
     import litellm
     from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
 
@@ -511,8 +509,6 @@ def test_bedrock_model_accepts_cache_points_prefers_the_explicit_breakpoint_flag
 
 @pytest.mark.parametrize("model", ["moonshotai.kimi-k3", "us.moonshotai.kimi-k3", "global.moonshotai.kimi-k3"])
 def test_kimi_k3_keeps_cached_token_pricing_while_refusing_converse_cache_points(model, local_model_cost_map):
-    """Bedrock prices Kimi K3 cache reads through implicit caching but rejects explicit cachePoint
-    blocks on Converse ("This model doesn't support the cachePoint field"), so the two flags split."""
     import litellm
     from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
 
@@ -522,16 +518,19 @@ def test_kimi_k3_keeps_cached_token_pricing_while_refusing_converse_cache_points
 
 
 def test_deployment_model_info_breakpoint_flag_covers_an_unmapped_arn(local_model_cost_map):
-    """An application inference profile ARN is absent from the cost map, so the gate keeps emitting
-    for it. The router registers each deployment's ``model_info`` under ``bedrock/<model>``, which is
-    how an admin turns cache points off for a profile pointing at a model that rejects them."""
     from litellm import Router
     from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
 
     flagged_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/flagged"
     unflagged_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/unflagged"
+    converse_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/converse"
     Router(
         model_list=[
+            {
+                "model_name": "kimi-k3-profile-converse",
+                "litellm_params": {"model": f"bedrock/converse/{converse_arn}", "aws_region_name": "us-east-1"},
+                "model_info": {"supports_prompt_cache_breakpoint": False},
+            },
             {
                 "model_name": "kimi-k3-profile",
                 "litellm_params": {"model": f"bedrock/{flagged_arn}", "aws_region_name": "us-east-1"},
@@ -545,6 +544,7 @@ def test_deployment_model_info_breakpoint_flag_covers_an_unmapped_arn(local_mode
     )
 
     assert bedrock_model_accepts_cache_points(flagged_arn) is False
+    assert bedrock_model_accepts_cache_points(converse_arn) is False
     assert bedrock_model_accepts_cache_points(unflagged_arn) is True
 
 

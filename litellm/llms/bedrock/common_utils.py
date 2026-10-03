@@ -926,7 +926,9 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     ``supports_prompt_cache_breakpoint`` on the entry wins over that flag: a model can price
     cached tokens through implicit caching yet reject the marker on Converse ("This model
     doesn't support the cachePoint field", Kimi K3). The router registers a deployment's
-    ``model_info`` under ``bedrock/<model>``, so that flag set there covers an application
+    ``model_info`` under ``bedrock/<model>`` as configured, route prefix included, while the
+    Converse transformation sees the model with ``converse/`` or ``converse_like/`` already
+    stripped, so every registration form is read. That flag set there covers an application
     inference profile ARN or a model newer than the map, while only the map decides whether
     a model is known: absent a map entry the model keeps emitting so existing caching setups
     never silently degrade. ``litellm.utils.supports_prompt_caching`` is not reusable here:
@@ -936,7 +938,14 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
         return True
     if _OPENAI_FAMILY_MODEL_RE.search(model):
         return False
-    deployment_entry: Final = litellm.model_cost.get(f"bedrock/{model}")
+    deployment_entry: Final = next(
+        (
+            entry
+            for route in ("", "converse/", "converse_like/")
+            if (entry := litellm.model_cost.get(f"bedrock/{route}{model}")) is not None
+        ),
+        None,
+    )
     map_entries: Final = tuple(
         entry
         for candidate in (model, get_bedrock_base_model(model))
