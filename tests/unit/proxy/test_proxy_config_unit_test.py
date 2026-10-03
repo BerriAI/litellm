@@ -158,6 +158,22 @@ async def test_multiple_includes():
     assert config["litellm_settings"]["callbacks"] == ["prometheus"]
 
 
+
+@pytest.mark.asyncio
+async def test_process_includes_rejects_escaping_include(tmp_path):
+    """ProxyConfig._process_includes must fail closed on escaping include paths."""
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir()
+    outside = tmp_path / "outside.yaml"
+    outside.write_text("model_list:\n  - model_name: leaked\n    litellm_params:\n      model: openai/gpt-4o-mini\n")
+    root_config = cfg_dir / "config.yaml"
+    root_config.write_text("include:\n  - ../outside.yaml\n\nmodel_list: []\n")
+
+    proxy_config_instance = ProxyConfig()
+    with pytest.raises(ValueError, match="outside the config directory"):
+        await proxy_config_instance.get_config(config_file_path=str(root_config))
+
+
 def test_add_callbacks_from_db_config():
     """Test that callbacks are added correctly and duplicates are prevented"""
     # Setup
