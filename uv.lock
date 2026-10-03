@@ -4506,9 +4506,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "fastuuid" },
     { name = "httpx", extra = ["http2"] },
-    { name = "importlib-metadata" },
     { name = "jinja2" },
-    { name = "jsonschema" },
     { name = "openai" },
     { name = "packaging" },
     { name = "pydantic" },
@@ -4586,6 +4584,7 @@ proxy = [
     { name = "httpx2" },
     { name = "huggingface-hub" },
     { name = "inquirerpy" },
+    { name = "jsonschema" },
     { name = "litellm-enterprise" },
     { name = "litellm-proxy-extras" },
     { name = "mcp" },
@@ -4636,6 +4635,7 @@ sdk-extras = [
     { name = "boto3" },
     { name = "botocore" },
     { name = "huggingface-hub" },
+    { name = "jsonschema" },
     { name = "tokenizers" },
 ]
 semantic-router = [
@@ -4658,6 +4658,9 @@ tokenizers = [
 ]
 utils = [
     { name = "numpydoc" },
+]
+validation = [
+    { name = "jsonschema" },
 ]
 
 [package.dev-dependencies]
@@ -4812,14 +4815,13 @@ requires-dist = [
     { name = "httpx2", marker = "extra == 'mcp'", specifier = ">=2.5.0,<3" },
     { name = "httpx2", marker = "extra == 'proxy'", specifier = ">=2.5.0,<3" },
     { name = "huggingface-hub", marker = "extra == 'tokenizers'", specifier = ">=0.34.0,<2.0" },
-    { name = "importlib-metadata", specifier = ">=8.0.0,<9.0" },
     { name = "inquirerpy", marker = "extra == 'cli'", specifier = ">=0.3.4,<1.0" },
     { name = "inquirerpy", marker = "extra == 'proxy'", specifier = ">=0.3.4,<1.0" },
     { name = "jinja2", specifier = ">=3.1.6,<4.0" },
-    { name = "jsonschema", specifier = ">=4.0.0,<5.0" },
+    { name = "jsonschema", marker = "extra == 'validation'", specifier = ">=4.0.0,<5.0" },
     { name = "keyring", marker = "extra == 'cli'", specifier = ">=25.6.0,<26.0" },
     { name = "langfuse", marker = "extra == 'proxy-runtime'", specifier = ">=4.7,<5.0" },
-    { name = "litellm", extras = ["aws", "tokenizers"], marker = "extra == 'sdk-extras'" },
+    { name = "litellm", extras = ["aws", "tokenizers", "validation"], marker = "extra == 'sdk-extras'" },
     { name = "litellm", extras = ["sdk-extras"], marker = "extra == 'proxy'" },
     { name = "litellm-enterprise", marker = "extra == 'proxy'", editable = "enterprise" },
     { name = "litellm-proxy-extras", marker = "extra == 'proxy'", editable = "litellm-proxy-extras" },
@@ -4881,7 +4883,7 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.22.1,<1.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0" },
 ]
-provides-extras = ["aws", "tokenizers", "sdk-extras", "proxy", "cli", "extra-proxy", "utils", "caching", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-vertex-chirp", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
+provides-extras = ["aws", "tokenizers", "validation", "sdk-extras", "proxy", "cli", "extra-proxy", "utils", "caching", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-vertex-chirp", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
 
 [package.metadata.requires-dev]
 benchmarks = [
