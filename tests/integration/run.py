@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -24,6 +25,29 @@ GROUPS: Final = MappingProxyType(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class Selection:
+    nodes: tuple[str, ...]
+    foreign: tuple[str, ...]
+
+
+def file_of(node: str) -> str:
+    return node.split("::", 1)[0]
+
+
+def select(requested: tuple[str, ...], group_files: tuple[str, ...]) -> Selection:
+    members: Final = frozenset(group_files)
+    return Selection(
+        nodes=requested or group_files,
+        foreign=tuple(sorted({node for node in requested if file_of(node) not in members})),
+    )
+
+
+def uncollected(nodes: tuple[str, ...], collected: frozenset[str]) -> tuple[str, ...]:
+    collected_files: Final = frozenset(file_of(node) for node in collected)
+    return tuple(node for node in nodes if file_of(node) not in collected_files)
+
+
 def main() -> int:
     parser: Final = argparse.ArgumentParser()
     parser.add_argument("group", choices=tuple(GROUPS))
@@ -32,7 +56,7 @@ def main() -> int:
     parser.add_argument("--order-seed", type=int, default=int(os.environ.get("INTEGRATION_ORDER_SEED", "0")))
     parser.add_argument("--workers", type=int, default=int(os.environ.get("INTEGRATION_WORKERS", "1")))
     parser.add_argument("--list", action="store_true", help="print the group's test files and exit")
-    parser.add_argument("files", nargs="*", help="run only these files of the group")
+    parser.add_argument("files", nargs="*", help="run only these files, or pytest node ids inside them, of the group")
     options: Final = parser.parse_intermixed_args()
     root: Final = Path(__file__).resolve().parents[2]
     group_files: Final = tuple(
@@ -43,11 +67,10 @@ def main() -> int:
     if options.list:
         print("\n".join(group_files))
         return 0
-    foreign: Final = sorted(set(options.files) - set(group_files))
-    if foreign:
-        parser.error(f"Not in the {options.group} group: {', '.join(foreign)}")
-    selected: Final = tuple(options.files) or group_files
-    if not selected:
+    selection: Final = select(tuple(options.files), group_files)
+    if selection.foreign:
+        parser.error(f"Not in the {options.group} group: {', '.join(selection.foreign)}")
+    if not selection.nodes:
         parser.error(f"No integration test files selected for {options.group}")
     output: Final = options.results.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -62,7 +85,7 @@ def main() -> int:
             sys.executable,
             "-m",
             "pytest",
-            *selected,
+            *selection.nodes,
             "-vv",
             "-rs",
             "--strict-markers",
@@ -72,6 +95,7 @@ def main() -> int:
             "no:rerunfailures",
             "--timeout=90",
             "--durations=15",
+            "--tb=short",
             f"--hypothesis-seed={options.seed}",
             f"--integration-order-seed={options.order_seed}",
             f"--junitxml={output / 'junit.xml'}",
@@ -85,8 +109,7 @@ def main() -> int:
     if result != 0:
         return result
     evidence: Final = json.loads((output / "execution.json").read_text())
-    collected_files: Final = {node.split("::", 1)[0] for node in evidence["collected"]}
-    empty: Final = tuple(path for path in selected if path not in collected_files)
+    empty: Final = uncollected(selection.nodes, frozenset(evidence["collected"]))
     if empty:
         sys.stderr.write(f"Selected integration files collected zero tests: {', '.join(empty)}\n")
         return 1

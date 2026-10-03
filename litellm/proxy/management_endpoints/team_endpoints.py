@@ -117,6 +117,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
     build_model_max_budget_usage,
@@ -125,7 +126,8 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN, TeamRole, is_team_admin, team_access_denied
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_daily_activity import (
-    get_daily_activity_aggregated,
+    InvalidDateRange,
+    parse_canonical_date_range,
 )
 from litellm.proxy.management_endpoints.common_utils import (
     _check_disable_global_guardrails_caller_permission,
@@ -2404,7 +2406,7 @@ async def update_team(
 
         if "metadata" in updated_kv:
             stored_metadata: Final[Mapping[str, JsonValue] | None] = (
-                {  # mutable-ok: the validator payload's isinstance guard requires a plain dict
+                {
                     key: value
                     for key, value in existing_team_row.metadata.items()
                     if key not in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS
@@ -2937,7 +2939,7 @@ def _resolve_member_identity(member: Member, updated_users: Sequence[LiteLLM_Use
         None,
     )
     return member.model_copy(
-        update={  # mutable-ok: pydantic update payload
+        update={
             "user_id": resolved_user_id,
             "user_email": resolved_user_email,
         }
@@ -3088,11 +3090,7 @@ async def _resolve_existing_member_user_ids(
         return frozenset()
 
     found: Final = await _user_id_rows_db(UserRepository(prisma_client)).find_many(
-        where={  # mutable-ok: Prisma query filters are dict-shaped
-            "user_id": {  # mutable-ok: Prisma query filters are dict-shaped
-                "in": sorted(requested_user_ids)
-            }
-        }
+        where={"user_id": {"in": sorted(requested_user_ids)}}
     )
     return frozenset(user.user_id for user in found or () if user.user_id is not None)
 
@@ -3146,7 +3144,7 @@ def _validate_member_user_id_provisioning(
     remaining: Final = len(unknown_user_ids) - _MAX_REPORTED_UNKNOWN_USER_IDS
     raise HTTPException(
         status_code=403,
-        detail={  # mutable-ok: HTTPException detail must be a plain mapping to keep this route's {"error": ...} response shape
+        detail={
             "error": (
                 "Only proxy admins can add a user_id that does not exist yet: {}{}. "
                 "Add the member by user_email to invite a new user, or ask a proxy admin "
@@ -3163,7 +3161,7 @@ def _members_audit_value(team_alias: str | None, members: Sequence[Member]) -> s
     under a key rather than serialized as a top-level array.
     """
     return safe_dumps(
-        {  # mutable-ok: the audit-log JSON column rejects a top-level array, so this value must be an object
+        {
             "team_alias": team_alias,
             "members_with_roles": tuple(member.model_dump() for member in members),
         }
@@ -3470,6 +3468,12 @@ async def team_member_add(
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
+    await delete_cache_team_object(
+        team_id=data.team_id,
+        team_alias=complete_team_data.team_alias,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
     await evict_and_broadcast(
         cache_keys=tuple(sorted(user.user_id for user in updated_users)),
         user_api_key_cache=user_api_key_cache,
@@ -3926,7 +3930,7 @@ def _check_not_resetting_own_spend(user_id: str, user_api_key_dict: UserAPIKeyAu
 
 
 def _raise_reset_spend_error(status_code: int, message: str) -> NoReturn:
-    detail: Final = {"error": message}  # mutable-ok: HTTPException.detail takes a dict
+    detail: Final = {"error": message}
     raise HTTPException(status_code=status_code, detail=detail)
 
 
@@ -3960,7 +3964,7 @@ def _validate_team_member_reset_spend_value(
 
 @router.post(
     "/team/{team_id}/member/{user_id}/reset_spend",
-    tags=["team management"],  # mutable-ok: FastAPI's `tags` param is typed as list[str], not Sequence
+    tags=["team management"],
     dependencies=(Depends(user_api_key_auth),),
 )
 @management_endpoint_wrapper
@@ -3997,12 +4001,10 @@ async def reset_team_member_spend_fn(
         team_access_denied()
     _check_not_resetting_own_spend(user_id=user_id, user_api_key_dict=user_api_key_dict)
 
-    membership_where: Final = {  # mutable-ok: prisma client requires a plain dict where= argument
-        "user_id_team_id": {"user_id": user_id, "team_id": team_id}  # mutable-ok: same prisma where= argument
-    }
+    membership_where: Final = {"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
     _membership_row: Final = await _team_membership_db(prisma_client).find_unique(
         where=membership_where,
-        include={"litellm_budget_table": True},  # mutable-ok: prisma client requires a plain dict include= argument
+        include={"litellm_budget_table": True},
     )
     if _membership_row is None:
         _raise_reset_spend_error(status.HTTP_404_NOT_FOUND, f"User {user_id} is not a member of team {team_id}.")
@@ -4013,7 +4015,7 @@ async def reset_team_member_spend_fn(
 
     await _team_membership_db(prisma_client).update(
         where=membership_where,
-        data={"spend": reset_to},  # mutable-ok: prisma client requires a plain dict data= argument
+        data={"spend": reset_to},
     )
 
     await invalidate_team_member_spend_state(
@@ -4023,7 +4025,7 @@ async def reset_team_member_spend_fn(
         new_spend=reset_to,
     )
 
-    return {  # mutable-ok: matches this router's established untyped-response-dict convention
+    return {
         "team_id": team_id,
         "user_id": user_id,
         "spend": reset_to,
@@ -4047,7 +4049,7 @@ async def _existing_team_default_budget_id(team: LiteLLM_TeamTable, prisma_clien
     if budget_id is None:
         return None
     row: Final = await _budget_db(prisma_client).find_unique(
-        where={"budget_id": budget_id},  # mutable-ok: prisma client requires a plain dict where= argument
+        where={"budget_id": budget_id},
     )
     return budget_id if row is not None else None
 
@@ -4060,7 +4062,7 @@ def _member_budget_source(budget_id: str | None, team_default_budget_id: str | N
 
 @router.post(
     "/team/{team_id}/member/{user_id}/reset_budget",
-    tags=["team management"],  # mutable-ok: FastAPI's `tags` param is typed as list[str], not Sequence
+    tags=["team management"],
     dependencies=(Depends(user_api_key_auth),),
     response_model=TeamMemberResetBudgetResponse,
 )
@@ -4092,9 +4094,7 @@ async def reset_team_member_budget_fn(
     if not await get_team_access().allows(user_api_key_dict, team_obj, TEAM_OR_ORG_ADMIN):
         team_access_denied()
 
-    membership_where: Final = {  # mutable-ok: prisma client requires a plain dict where= argument
-        "user_id_team_id": {"user_id": user_id, "team_id": team_id}  # mutable-ok: same prisma where= argument
-    }
+    membership_where: Final = {"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
     membership_row: Final = await _team_membership_db(prisma_client).find_unique(where=membership_where)
     if membership_row is None:
         _raise_reset_spend_error(status.HTTP_404_NOT_FOUND, f"User {user_id} is not a member of team {team_id}.")
@@ -4103,11 +4103,11 @@ async def reset_team_member_budget_fn(
     budget_link: Final = (
         {"connect": {"budget_id": team_default_budget_id}}
         if team_default_budget_id is not None
-        else {"disconnect": True}  # mutable-ok: same prisma data= argument
+        else {"disconnect": True}
     )
     await _team_membership_db(prisma_client).update(
         where=membership_where,
-        data={"litellm_budget_table": budget_link},  # mutable-ok: prisma client requires a plain dict data= argument
+        data={"litellm_budget_table": budget_link},
     )
     await invalidate_team_member_spend_state(
         user_id=user_id,
@@ -4505,9 +4505,7 @@ async def delete_team(
     )
 
     for deleted_team in team_rows:
-        _emit_team_members_metric(
-            deleted_team.model_copy(update={"members_with_roles": ()})  # mutable-ok: pydantic update payload
-        )
+        _emit_team_members_metric(deleted_team.model_copy(update={"members_with_roles": ()}))
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
 
     return deleted_teams
@@ -4779,15 +4777,7 @@ async def _hydrate_member_user_details(
     """Attach ``user_alias`` and fill in a missing ``user_email`` from ``LiteLLM_UserTable`` in one query."""
     user_ids: Final = frozenset(m.user_id for m in members if m.user_id is not None)
     user_rows: Final[Sequence[prisma_models.LiteLLM_UserTable]] = (
-        await _user_db(prisma_client).find_many(
-            where={  # mutable-ok: Prisma query filters are dict-shaped
-                "user_id": {  # mutable-ok: Prisma query filters are dict-shaped
-                    "in": sorted(user_ids)
-                }
-            }
-        )
-        if user_ids
-        else ()
+        await _user_db(prisma_client).find_many(where={"user_id": {"in": sorted(user_ids)}}) if user_ids else ()
     )
     user_by_id: Final = MappingProxyType({u.user_id: u for u in user_rows})
 
@@ -4966,7 +4956,7 @@ async def team_info(
             members=resolved_team_info.members_with_roles,
         )
         hydrated_team_info: Final = resolved_team_info.model_copy(
-            update={  # mutable-ok: pydantic update payload
+            update={
                 "members_with_roles": hydrated_members,
                 "organization_models": organization_models,
                 "model_max_budget_usage": await build_model_max_budget_usage(
@@ -5240,7 +5230,7 @@ async def unblock_team(
 
 @router.get(
     "/team/metadata_schema",
-    tags=["team management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    tags=["team management"],
     dependencies=(Depends(user_api_key_auth),),
     response_model=TeamMetadataSchemaResponse,
 )
@@ -6523,7 +6513,7 @@ async def _append_permissions_to_all_teams(prisma_client: PrismaClient, permissi
 def _daily_activity_error(*, status_code: int, message: str) -> HTTPException:
     """Single construction site for the `{"error": ...}` detail shape the
     /team/daily/activity endpoints have always returned."""
-    return HTTPException(status_code=status_code, detail={"error": message})  # mutable-ok: FastAPI JSON detail
+    return HTTPException(status_code=status_code, detail={"error": message})
 
 
 class _TeamDailyActivityScope(NamedTuple):
@@ -6533,7 +6523,7 @@ class _TeamDailyActivityScope(NamedTuple):
     api_key_filter: str | list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
 
 
-async def _resolve_team_daily_activity_scope(
+async def resolve_team_daily_activity_scope(
     *,
     team_ids: str | None,
     exclude_team_ids: str | None,
@@ -6616,11 +6606,14 @@ async def _resolve_team_daily_activity_scope(
             user_api_keys = [key.token for key in user_keys if key.token]
             # If user has no API keys, return empty result
             if not user_api_keys:
-                user_api_keys = [""]  # Use empty string to ensure no matches
+                user_api_keys = []
 
-    # If api_key parameter is provided, use it; otherwise use user_api_keys if set
-    final_api_key_filter: str | list[str] | None = api_key
-    if final_api_key_filter is None and user_api_keys is not None:
+    final_api_key_filter: str | list[str] | None
+    if user_api_keys is None:
+        final_api_key_filter = api_key
+    elif api_key:
+        final_api_key_filter = api_key if api_key in user_api_keys else []
+    else:
         final_api_key_filter = user_api_keys
 
     return _TeamDailyActivityScope(
@@ -6671,7 +6664,7 @@ async def get_team_daily_activity(
     if prisma_client is None:
         raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    scope: Final = await _resolve_team_daily_activity_scope(
+    scope: Final = await resolve_team_daily_activity_scope(
         team_ids=team_ids,
         exclude_team_ids=exclude_team_ids,
         api_key=api_key,
@@ -6700,93 +6693,17 @@ async def get_team_daily_activity(
 _MAX_AGGREGATED_RANGE_DAYS: Final = 400
 
 
-def _aggregated_date_range_error(start_date: str | None, end_date: str | None) -> str | None:
+def aggregated_date_range_error(start_date: str | None, end_date: str | None) -> str | None:
     """The aggregated endpoint has no pagination to bound its work, so malformed
     dates and ranges wider than the UI ever requests are rejected before querying."""
-    if start_date is None or end_date is None:
-        return "Please provide start_date and end_date"
-    try:
-        parsed_start: Final = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        parsed_end: Final = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    except ValueError:
-        return "start_date and end_date must be valid YYYY-MM-DD dates"
-    if parsed_end < parsed_start:
+    date_range: Final = parse_canonical_date_range(start_date, end_date)
+    if isinstance(date_range, InvalidDateRange):
+        return date_range.reason
+    if date_range.end < date_range.start:
         return "end_date must be on or after start_date"
-    if (parsed_end - parsed_start).days > _MAX_AGGREGATED_RANGE_DAYS:
+    if (date_range.end - date_range.start).days > _MAX_AGGREGATED_RANGE_DAYS:
         return f"Date range must be at most {_MAX_AGGREGATED_RANGE_DAYS} days"
     return None
-
-
-@router.get(
-    "/team/daily/activity/aggregated",
-    response_model=SpendAnalyticsPaginatedResponse,
-    tags=["team management"],
-)
-async def get_team_daily_activity_aggregated(
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    team_ids: str | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    model: str | None = None,
-    api_key: str | None = None,
-    exclude_team_ids: str | None = None,
-    timezone: int | None = None,
-):
-    """
-    Aggregated daily activity for teams without pagination, including per-team breakdown.
-
-    One SQL GROUPING SETS pass returns every day in the range regardless of row
-    volume, so callers never reassemble pages. Same response shape as the
-    paginated endpoint with page metadata pinned to a single page.
-
-    Args:
-        team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
-        start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
-        end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
-        model (Optional[str]): Filter by model name.
-        api_key (Optional[str]): Filter by API key.
-        exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
-        timezone (Optional[int]): Timezone offset in minutes from UTC, matching JavaScript's Date.getTimezoneOffset() convention.
-    Returns:
-        SpendAnalyticsPaginatedResponse: Response containing all daily activity data for the range.
-    """
-    from litellm.proxy.proxy_server import (
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
-    if prisma_client is None:
-        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
-
-    range_error: Final = _aggregated_date_range_error(start_date, end_date)
-    if range_error is not None:
-        raise _daily_activity_error(status_code=400, message=range_error)
-
-    scope: Final = await _resolve_team_daily_activity_scope(
-        team_ids=team_ids,
-        exclude_team_ids=exclude_team_ids,
-        api_key=api_key,
-        user_api_key_dict=user_api_key_dict,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-
-    return await get_daily_activity_aggregated(
-        prisma_client=prisma_client,
-        table_name="litellm_dailyteamspend",
-        entity_id_field="team_id",
-        entity_id=scope.team_ids,
-        entity_metadata_field=scope.team_alias_metadata,
-        start_date=start_date,
-        end_date=end_date,
-        model=model,
-        api_key=scope.api_key_filter,
-        exclude_entity_ids=scope.exclude_team_ids,
-        timezone_offset_minutes=timezone,
-        include_entity_breakdown=True,
-    )
 
 
 def _team_user_spend_sql(*, team_count: int, restrict_to_user: bool) -> str:
@@ -6832,7 +6749,7 @@ class _TeamUserSpendDbRow(TypedDict):
 @router.get(
     "/team/spend/by_user",
     response_model=TeamUserSpendResponse,
-    tags=["team management"],  # mutable-ok: fastapi route tags must be a list
+    tags=["team management"],
 )
 async def get_team_spend_by_user(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
@@ -6856,14 +6773,14 @@ async def get_team_spend_by_user(
     if prisma_client is None:
         raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    range_error: Final = aggregated_date_range_error(start_date, end_date)
     if range_error is not None or start_date is None or end_date is None:
         raise _daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
 
     if not team_ids:
         raise _daily_activity_error(status_code=400, message="Please provide team_ids")
 
-    scope: Final = await _resolve_team_daily_activity_scope(
+    scope: Final = await resolve_team_daily_activity_scope(
         team_ids=team_ids,
         exclude_team_ids=None,
         api_key=None,
@@ -6878,13 +6795,14 @@ async def get_team_spend_by_user(
 
     own_user_only: Final = scope.api_key_filter is not None
     user_param: Final = (user_api_key_dict.user_id or "",) if own_user_only else ()
-    rows: Final[Sequence[_TeamUserSpendDbRow]] = await prisma_client.db.query_raw(
-        _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
-        start_date,
-        end_date,
-        *scoped_team_ids,
-        *user_param,
-    )
+    async with db_span("team_user_spend", "LiteLLM_SpendLogs"):
+        rows: Final[Sequence[_TeamUserSpendDbRow]] = await prisma_client.db.query_raw(
+            _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
+            start_date,
+            end_date,
+            *scoped_team_ids,
+            *user_param,
+        )
     results: Final = tuple(
         TeamUserSpendRow(
             team_id=row["team_id"],

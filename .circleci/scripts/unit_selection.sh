@@ -77,6 +77,7 @@ legacy_paths() {
       echo tests/unit/embeddings
       echo tests/unit/endpoints
       echo tests/unit/files
+      echo tests/unit/harness
       echo tests/unit/images
       echo tests/unit/interactions
       echo tests/unit/messages
@@ -107,7 +108,7 @@ legacy_paths() {
       echo tests/unit/proxy/test_update_spend.py
       echo tests/unit/skills/test_skills_db.py ;;
     proxy-db-endpoints-and-responses)
-      echo tests/unit/proxy/engine
+      echo tests/unit/proxy/lens
       echo tests/unit/proxy/auth/test_models_fallback_endpoint.py
       echo tests/unit/proxy/common_utils/test_check_batch_cost.py
       echo tests/unit/proxy/common_utils/test_check_responses_cost.py
@@ -116,7 +117,7 @@ legacy_paths() {
       echo tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py
       echo tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py
       echo tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py
-      echo tests/unit/proxy/response_polling/test_response_polling_handler.py
+      echo tests/unit/proxy/response_polling
       echo tests/unit/proxy/test_custom_tokenizer_bug.py
       echo tests/unit/proxy/test_get_favicon.py
       echo tests/unit/proxy/test_get_image.py
@@ -145,12 +146,14 @@ legacy_paths() {
       echo tests/unit/proxy/test_proxy_token_counter.py
       echo tests/unit/proxy/test_server_root_path.py ;;
     proxy-db-proxy-server-core)
+      echo tests/unit/proxy/test__lazy_features.py
       echo tests/unit/proxy/test_aproxy_startup.py
       echo tests/unit/proxy/test_proxy_server.py ;;
     proxy-db-proxy-utils) echo tests/unit/proxy/test_proxy_utils.py ;;
     proxy-extras) echo tests/unit/litellm_proxy_extras ;;
     proxy-infra)
       echo tests/unit/gateway
+      echo tests/unit/proxy/management
       echo tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
       echo tests/unit/proxy/roi_calculator ;;
     responses-caching-types)

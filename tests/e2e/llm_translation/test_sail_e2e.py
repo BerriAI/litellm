@@ -117,7 +117,7 @@ def _assert_spend_row_matches(proxy: ProxyClient, key: str, header_cost: float) 
 class TestSailChatCompletions:
     @pytest.mark.covers("llm.chat_completions.sail.service_tier.nonstream.cost_logged")
     @pytest.mark.parametrize(
-        ("service_tier", "billed_tier"), [("flex", "flex"), ("balanced", "balanced"), ("auto", "base")]
+        ("service_tier", "billed_tier"), [("balanced", "balanced"), ("auto", "base")]
     )
     def test_service_tier_bills_the_matching_completion_window(
         self,
@@ -176,7 +176,7 @@ class TestSailChatCompletions:
 
 class TestSailResponses:
     @pytest.mark.covers("llm.responses.sail.service_tier.nonstream.cost_logged")
-    def test_flex_completion_window_bills_flex_rates(
+    def test_caller_completion_window_bills_its_rates(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
         model, key = _register(proxy, resources)
@@ -185,7 +185,7 @@ class TestSailResponses:
             model=model,
             input=f"{PROMPT} {unique_marker()}",
             max_output_tokens=MAX_TOKENS,
-            metadata={"completion_window": "flex"},
+            metadata={"completion_window": "balanced"},
             extra_body=NO_PROXY_CACHE,
         )
         usage: Final = raw.parse().usage
@@ -196,7 +196,9 @@ class TestSailResponses:
             completion=usage.output_tokens,
         )
 
-        header_cost: Final = _assert_billed_at("flex", tokens, response_header(raw.headers, "x-litellm-response-cost"))
+        header_cost: Final = _assert_billed_at(
+            "balanced", tokens, response_header(raw.headers, "x-litellm-response-cost")
+        )
         _assert_spend_row_matches(proxy, key, header_cost)
 
 

@@ -363,7 +363,7 @@ def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> 
         _get_masked_values,  # pyright: ignore[reportPrivateUsage]  # the shared header-masking helper has no public name
     )
 
-    return {  # mutable-ok: logging's curl and raw-request builders take dict
+    return {
         **transformed_request,
         "headers": _get_masked_values(request_headers),
     }
@@ -2559,7 +2559,7 @@ class BaseLLMHTTPHandler:
         )
 
         if self._has_agentic_completion_hook(logging_obj):
-            agentic_kwargs: Final = dict(litellm_params)  # mutable-ok: agentic hooks mutate kwargs in place
+            agentic_kwargs: Final = dict(litellm_params)
             final_response: Final = run_async_function(
                 self._call_agentic_completion_hooks,
                 response=initial_response,
@@ -2754,7 +2754,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
-        agentic_kwargs: Final = dict(litellm_params)  # mutable-ok: agentic hooks mutate kwargs in place
+        agentic_kwargs: Final = dict(litellm_params)
         final_response: Final = await self._call_agentic_completion_hooks(
             response=initial_response,
             model=model,
@@ -3910,6 +3910,7 @@ class BaseLLMHTTPHandler:
                 provider_config=provider_config,
             )
 
+        self._raise_for_provider_error_status(response=batch_response, provider_config=provider_config)
         return provider_config.transform_retrieve_batch_response(
             model=model,
             raw_response=batch_response,
@@ -4067,6 +4068,7 @@ class BaseLLMHTTPHandler:
                 provider_config=provider_config,
             )
 
+        self._raise_for_provider_error_status(response=batch_response, provider_config=provider_config)
         return provider_config.transform_retrieve_batch_response(
             model=model,
             raw_response=batch_response,
@@ -4484,6 +4486,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
+        self._raise_for_provider_error_status(response=response, provider_config=provider_config)
         return provider_config.transform_retrieve_file_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -4540,6 +4543,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
+        self._raise_for_provider_error_status(response=response, provider_config=provider_config)
         return provider_config.transform_retrieve_file_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -4732,12 +4736,11 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
+        self._raise_for_provider_error_status(response=response, provider_config=provider_config)
         files_per_page: Final = self._files_per_listing_page(
             response, provider_config, logging_obj, litellm_params, headers, sync_httpx_client, timeout
         )
-        return [  # mutable-ok: the files contract returns the listing as a list
-            listed_file for page_files in files_per_page for listed_file in page_files
-        ]
+        return [listed_file for page_files in files_per_page for listed_file in page_files]
 
     async def async_list_files(
         self,
@@ -4789,12 +4792,11 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
+        self._raise_for_provider_error_status(response=response, provider_config=provider_config)
         files_per_page: Final = self._files_per_async_listing_page(
             response, provider_config, logging_obj, litellm_params, headers, async_httpx_client, timeout
         )
-        return [  # mutable-ok: the files contract returns the listing as a list
-            listed_file async for page_files in files_per_page for listed_file in page_files
-        ]
+        return [listed_file async for page_files in files_per_page for listed_file in page_files]
 
     def _files_per_listing_page(
         self,
@@ -5925,6 +5927,38 @@ class BaseLLMHTTPHandler:
 
         return None
 
+    def _raise_for_provider_error_status(
+        self,
+        response: httpx.Response,
+        provider_config: Union[
+            BaseConfig,
+            BaseRerankConfig,
+            BaseResponsesAPIConfig,
+            BaseImageEditConfig,
+            BaseImageGenerationConfig,
+            BaseVectorStoreConfig,
+            BaseVectorStoreFilesConfig,
+            BaseGoogleGenAIGenerateContentConfig,
+            BaseAnthropicMessagesConfig,
+            BaseBatchesConfig,
+            BaseVideoConfig,
+            BaseSearchConfig,
+            BaseTextToSpeechConfig,
+            BaseSkillsAPIConfig,
+            "BasePassthroughConfig",
+            "BaseContainerConfig",
+            BaseEvalsAPIConfig,
+            BaseRealtimeHTTPConfig,
+        ],
+    ) -> None:
+        if not httpx.codes.is_error(response.status_code):
+            return
+        raise provider_config.get_error_class(
+            error_message=response.text,
+            status_code=response.status_code,
+            headers=response.headers,
+        )
+
     def _handle_error(
         self,
         e: Exception,
@@ -5962,7 +5996,7 @@ class BaseLLMHTTPHandler:
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
         if error_response and hasattr(error_response, "text"):
-            error_text = getattr(error_response, "text", error_text)
+            error_text = getattr(error_response, "text", None) or error_text
         if error_headers:
             error_headers = dict(error_headers)
         else:
@@ -7337,6 +7371,7 @@ class BaseLLMHTTPHandler:
                 )
 
             # Transform the response using the provider config
+            self._raise_for_provider_error_status(response=response, provider_config=video_content_provider_config)
             return video_content_provider_config.transform_video_content_response(
                 raw_response=response,
                 logging_obj=logging_obj,
@@ -7415,6 +7450,7 @@ class BaseLLMHTTPHandler:
                 )
 
             # Transform the response using the provider config
+            self._raise_for_provider_error_status(response=response, provider_config=video_content_provider_config)
             return await video_content_provider_config.async_transform_video_content_response(
                 raw_response=response,
                 logging_obj=logging_obj,
@@ -8388,6 +8424,7 @@ class BaseLLMHTTPHandler:
                 params=params,
             )
 
+            self._raise_for_provider_error_status(response=response, provider_config=video_list_provider_config)
             return video_list_provider_config.transform_video_list_response(
                 raw_response=response,
                 logging_obj=logging_obj,
@@ -8569,6 +8606,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                 )
 
+            self._raise_for_provider_error_status(response=response, provider_config=video_status_provider_config)
             return video_status_provider_config.transform_video_status_retrieve_response(
                 raw_response=response,
                 logging_obj=logging_obj,
@@ -8659,6 +8697,7 @@ class BaseLLMHTTPHandler:
                     url=url,
                     headers=headers,
                 )
+            self._raise_for_provider_error_status(response=response, provider_config=video_status_provider_config)
             return await video_status_provider_config.async_transform_video_status_retrieve_response(
                 raw_response=response,
                 logging_obj=logging_obj,
@@ -9704,7 +9743,7 @@ class BaseLLMHTTPHandler:
         logging_obj.pre_call(
             input="",
             api_key="",
-            additional_args={  # mutable-ok: pre_call's additional_args contract is a dict
+            additional_args={
                 "query": query,
                 "vector_store_id": vector_store_id,
                 "api_base": endpoint,
@@ -9740,7 +9779,7 @@ class BaseLLMHTTPHandler:
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                litellm_params=dict(litellm_params),
                 embedding_executor=embedding_executor,
                 timeout=timeout,
             )
@@ -9880,7 +9919,7 @@ class BaseLLMHTTPHandler:
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                litellm_params=dict(litellm_params),
                 embedding_executor=embedding_executor,
                 timeout=timeout,
             )
@@ -10156,6 +10195,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
+        self._raise_for_provider_error_status(response=response, provider_config=vector_store_provider_config)
         return vector_store_provider_config.transform_create_vector_store_response(
             response=response,
         )
@@ -10220,6 +10260,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
+        self._raise_for_provider_error_status(response=response, provider_config=vector_store_provider_config)
         return vector_store_provider_config.transform_create_vector_store_response(
             response=response,
         )
@@ -10286,6 +10327,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
+        self._raise_for_provider_error_status(response=response, provider_config=vector_store_provider_config)
         return response.json()
 
     def vector_store_list_handler(
@@ -10364,6 +10406,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
+        self._raise_for_provider_error_status(response=response, provider_config=vector_store_provider_config)
         return response.json()
 
     async def async_vector_store_update_handler(
@@ -10832,6 +10875,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_files_provider_config)
 
+        self._raise_for_provider_error_status(response=response, provider_config=vector_store_files_provider_config)
         return vector_store_files_provider_config.transform_list_vector_store_files_response(response=response)
 
     def vector_store_file_list_handler(
@@ -10908,6 +10952,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_files_provider_config)
 
+        self._raise_for_provider_error_status(response=response, provider_config=vector_store_files_provider_config)
         return vector_store_files_provider_config.transform_list_vector_store_files_response(response=response)
 
     async def async_vector_store_file_retrieve_handler(
@@ -10967,6 +11012,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_files_provider_config)
 
+        self._raise_for_provider_error_status(response=response, provider_config=vector_store_files_provider_config)
         return vector_store_files_provider_config.transform_retrieve_vector_store_file_response(response=response)
 
     def vector_store_file_retrieve_handler(
@@ -11037,6 +11083,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_files_provider_config)
 
+        self._raise_for_provider_error_status(response=response, provider_config=vector_store_files_provider_config)
         return vector_store_files_provider_config.transform_retrieve_vector_store_file_response(response=response)
 
     async def async_vector_store_file_content_handler(
@@ -11096,6 +11143,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_files_provider_config)
 
+        self._raise_for_provider_error_status(response=response, provider_config=vector_store_files_provider_config)
         return vector_store_files_provider_config.transform_retrieve_vector_store_file_content_response(
             response=response
         )
@@ -11168,6 +11216,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_files_provider_config)
 
+        self._raise_for_provider_error_status(response=response, provider_config=vector_store_files_provider_config)
         return vector_store_files_provider_config.transform_retrieve_vector_store_file_content_response(
             response=response
         )
@@ -12128,6 +12177,7 @@ class BaseLLMHTTPHandler:
                 provider_config=skills_api_provider_config,
             )
 
+        self._raise_for_provider_error_status(response=response, provider_config=skills_api_provider_config)
         return skills_api_provider_config.transform_list_skills_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -12175,6 +12225,7 @@ class BaseLLMHTTPHandler:
                 provider_config=skills_api_provider_config,
             )
 
+        self._raise_for_provider_error_status(response=response, provider_config=skills_api_provider_config)
         return skills_api_provider_config.transform_list_skills_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -12231,6 +12282,7 @@ class BaseLLMHTTPHandler:
                 provider_config=skills_api_provider_config,
             )
 
+        self._raise_for_provider_error_status(response=response, provider_config=skills_api_provider_config)
         return skills_api_provider_config.transform_get_skill_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -12276,6 +12328,7 @@ class BaseLLMHTTPHandler:
                 provider_config=skills_api_provider_config,
             )
 
+        self._raise_for_provider_error_status(response=response, provider_config=skills_api_provider_config)
         return skills_api_provider_config.transform_get_skill_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -12546,6 +12599,7 @@ class BaseLLMHTTPHandler:
                 provider_config=evals_api_provider_config,
             )
 
+        self._raise_for_provider_error_status(response=response, provider_config=evals_api_provider_config)
         return evals_api_provider_config.transform_list_evals_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -12593,6 +12647,7 @@ class BaseLLMHTTPHandler:
                 provider_config=evals_api_provider_config,
             )
 
+        self._raise_for_provider_error_status(response=response, provider_config=evals_api_provider_config)
         return evals_api_provider_config.transform_list_evals_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -12649,6 +12704,7 @@ class BaseLLMHTTPHandler:
                 provider_config=evals_api_provider_config,
             )
 
+        self._raise_for_provider_error_status(response=response, provider_config=evals_api_provider_config)
         return evals_api_provider_config.transform_get_eval_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -12694,6 +12750,7 @@ class BaseLLMHTTPHandler:
                 provider_config=evals_api_provider_config,
             )
 
+        self._raise_for_provider_error_status(response=response, provider_config=evals_api_provider_config)
         return evals_api_provider_config.transform_get_eval_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -13171,6 +13228,7 @@ class BaseLLMHTTPHandler:
                 provider_config=evals_api_provider_config,
             )
 
+        self._raise_for_provider_error_status(response=response, provider_config=evals_api_provider_config)
         return evals_api_provider_config.transform_list_runs_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -13218,6 +13276,7 @@ class BaseLLMHTTPHandler:
                 provider_config=evals_api_provider_config,
             )
 
+        self._raise_for_provider_error_status(response=response, provider_config=evals_api_provider_config)
         return evals_api_provider_config.transform_list_runs_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -13274,6 +13333,7 @@ class BaseLLMHTTPHandler:
                 provider_config=evals_api_provider_config,
             )
 
+        self._raise_for_provider_error_status(response=response, provider_config=evals_api_provider_config)
         return evals_api_provider_config.transform_get_run_response(
             raw_response=response,
             logging_obj=logging_obj,
@@ -13319,6 +13379,7 @@ class BaseLLMHTTPHandler:
                 provider_config=evals_api_provider_config,
             )
 
+        self._raise_for_provider_error_status(response=response, provider_config=evals_api_provider_config)
         return evals_api_provider_config.transform_get_run_response(
             raw_response=response,
             logging_obj=logging_obj,

@@ -242,6 +242,56 @@ describe("MCPServerEdit (stdio)", () => {
   });
 });
 
+describe("MCPServerEdit (stdio disabled on the proxy)", () => {
+  const stdioServer = {
+    server_id: "server-1",
+    server_name: "TestServer",
+    alias: "test",
+    transport: "stdio",
+    url: null,
+    auth_type: "none",
+    command: "npx",
+    args: ["-y", "@circleci/mcp-server-circleci"],
+    created_at: "2024-01-01T00:00:00Z",
+    created_by: "user-1",
+    updated_at: "2024-01-01T00:00:00Z",
+    updated_by: "user-1",
+    mcp_access_groups: [],
+  };
+  const renderEdit = (mcpServer: object, stdioEnabled: boolean) =>
+    render(
+      <MCPServerEdit
+        mcpServer={mcpServer as React.ComponentProps<typeof MCPServerEdit>["mcpServer"]}
+        accessToken={null}
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+        stdioEnabled={stdioEnabled}
+      />,
+    );
+
+  it("explains why an existing stdio server cannot run or be saved as stdio", () => {
+    renderEdit(stdioServer, false);
+
+    expect(screen.getByText("stdio is disabled on this proxy")).toBeInTheDocument();
+    expect(screen.getByText(/Set LITELLM_ENABLE_MCP_STDIO=true on the proxy and restart/)).toBeInTheDocument();
+  });
+
+  it("shows no banner for a stdio server once stdio is enabled", () => {
+    renderEdit(stdioServer, true);
+
+    expect(screen.getByLabelText("Command")).toBeInTheDocument();
+    expect(screen.queryByText("stdio is disabled on this proxy")).not.toBeInTheDocument();
+  });
+
+  it("shows no banner for a non-stdio server while stdio is disabled", () => {
+    renderEdit({ ...stdioServer, transport: "http", url: "https://mcp.example.com/mcp" }, false);
+
+    expect(screen.getByRole("tab", { name: "Server Configuration" })).toBeInTheDocument();
+    expect(screen.queryByText("stdio is disabled on this proxy")).not.toBeInTheDocument();
+  });
+});
+
 describe("MCPServerEdit (delegate auth)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
