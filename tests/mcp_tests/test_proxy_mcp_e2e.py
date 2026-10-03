@@ -9,10 +9,12 @@ import tempfile
 import threading
 import time
 import typing
+from collections.abc import Mapping
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Final
 
 import httpx
 import httpx2
@@ -23,6 +25,8 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult
 from starlette.requests import Request
+
+from tests.integration._support.wire import Reply, Request as WireRequest, Wire, wire_server
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._experimental.mcp_server.tool_search import handle_mcp_proxy_tool
@@ -44,6 +48,147 @@ PROXY_START_TIMEOUT = 30
 
 PROXY_AUTHORIZATION_HEADER = "Bearer sk-1234"
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", (False, True))
+@pytest.mark.parametrize("concurrency", (1, 8))
+async def test_schema_validation_stops_expensive_work_and_recovers(cancel: bool, concurrency: int) -> None:
+    import psutil
+
+    from litellm.proxy._experimental.mcp_server.tool_search import _tool_argument_validation_error
+
+    existing_children: Final = frozenset(child.pid for child in psutil.Process().children())
+    assert await _tool_argument_validation_error({"type": "object"}, {}) is None
+    started: Final = time.monotonic()
+    tasks: Final = tuple(
+        asyncio.create_task(
+            _tool_argument_validation_error(
+                {"type": "object", "properties": {"value": {"type": "string", "pattern": "^(a+)+$"}}},
+                {"value": "a" * 80 + "!"},
+            )
+        )
+        for _ in range(concurrency)
+    )
+    group: Final = asyncio.gather(*tasks, return_exceptions=True)
+    try:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(group), timeout=0.2)
+        workers: Final = tuple(
+            child
+            for child in psutil.Process().children()
+            if child.pid not in existing_children and "anyio.to_process" in child.cmdline()
+        )
+        assert 1 <= len(workers) <= 4
+        if cancel:
+            for task in tasks:
+                task.cancel()
+            assert all(isinstance(result, asyncio.CancelledError) for result in await group)
+        else:
+            assert await group == ["Tool argument validation exceeded its time limit"] * concurrency
+        assert time.monotonic() - started < 8
+        assert all(not worker.is_running() for worker in workers), "Cancelled validation must terminate worker CPU work"
+        assert await _tool_argument_validation_error({"type": "object"}, {}) is None
+    finally:
+        for task in tasks:
+            task.cancel()
+        await group
+
+
+@pytest.fixture(scope="session")
+def schema_peer() -> typing.Iterator[Wire]:
+    def respond(request: WireRequest) -> Reply:
+        if request.method == "GET":
+            return Reply(body=b'{"type":"number"}')
+        body: Final = json.loads(request.body)
+        if "id" not in body:
+            return Reply(status=202)
+        result: Final[Mapping[str, object]]
+        if body["method"] == "initialize":
+            result = {
+                "protocolVersion": body["params"]["protocolVersion"],
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "schema-peer", "version": "1"},
+            }
+        elif body["method"] == "tools/list":
+            result = {
+                "tools": [
+                    {
+                        "name": name,
+                        "description": "Schema validation",
+                        "inputSchema": {
+                            "type": "object",
+                            "$defs": {"amount": {"type": "number", "minimum": 0.25, "multipleOf": 0.25}},
+                            "properties": {
+                                "value": {"$ref": peer.url + "/ref" if name == "external" else "#/$defs/amount"}
+                            },
+                        },
+                    }
+                    for name in ("external", "local")
+                ]
+            }
+        else:
+            assert body["method"] == "tools/call"
+            result = {"content": [{"type": "text", "text": "called"}], "isError": False}
+        return Reply(body=json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": result}).encode())
+
+    with wire_server(respond) as peer:
+        yield peer
+
+
+@pytest.mark.parametrize("external", (True, False))
+def test_proxy_schema_validation_resolves_only_local_references(
+    proxy_server_url: str, schema_peer: Wire, external: bool
+) -> None:
+    with httpx.Client(
+        base_url=proxy_server_url,
+        headers={
+            "Authorization": "Bearer sk-schema",
+            "Accept": "application/json, text/event-stream",
+            "x-mcp-servers": "schema",
+        },
+        timeout=30,
+    ) as client:
+        search: Final = _rpc_result(
+            client.post(
+                "/mcp/proxy",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "search_tools", "arguments": {"query": "schema"}},
+                },
+            )
+        )
+        name: Final = "schema-external" if external else "schema-local"
+        tool_id: Final = next(hit["tool_id"] for hit in json.loads(search["content"][0]["text"]) if hit["name"] == name)
+        schema_peer.drain()
+        called: Final = _rpc_result(
+            client.post(
+                "/mcp/proxy",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "call_tool",
+                        "arguments": {"tool_id": tool_id, "arguments": {"value": 0.75}},
+                    },
+                },
+            )
+        )
+        observed: Final = schema_peer.drain()
+        assert not any(request.method == "GET" for request in observed), (
+            "Schema validation must not retrieve external references"
+        )
+        calls: Final = tuple(
+            request
+            for request in observed
+            if request.method == "POST" and json.loads(request.body).get("method") == "tools/call"
+        )
+        assert len(calls) == (0 if external else 1), "Only valid local schemas may reach upstream execution"
+        assert called["isError"] is external
+        if not external:
+            assert called["content"][0]["text"] == "called"
 
 @pytest.fixture(scope="session", autouse=True)
 def _clear_proxy_database_env() -> typing.Iterator[None]:
@@ -175,10 +320,12 @@ def _proxy_server(
     tmp_path_factory: pytest.TempPathFactory,
     math_streamable_http_server: str,
     math_restricted_server: str,
+    schema_peer: Wire,
 ):
     config_dir = tmp_path_factory.mktemp("mcp_e2e")
     config_path = config_dir / "config.yaml"
     config = yaml.safe_load(CONFIG_TEMPLATE_PATH.read_text())
+    config["mcp_servers"]["schema"] = {"transport": "http", "url": schema_peer.url + "/mcp"}
     config["mcp_servers"]["math_stdio"]["command"] = MCP_PEER_PYTHON
     config["mcp_servers"]["math_streamable_http"]["url"] = f"{math_streamable_http_server}/mcp"
     config["mcp_servers"]["math_restricted"]["url"] = f"{math_restricted_server}/mcp"
@@ -528,6 +675,7 @@ class TestProxyMcpSchemaDiscoveryMode:
 
 async def authorize_proxy_key(request: Request, api_key: str) -> UserAPIKeyAuth:
     permissions = {
+        "sk-schema": LiteLLM_ObjectPermissionTable(object_permission_id="schema", mcp_servers=["schema"]),
         "sk-1234": LiteLLM_ObjectPermissionTable(object_permission_id="open", mcp_servers=["math_stdio"]),
         "sk-restricted": LiteLLM_ObjectPermissionTable(
             object_permission_id="restricted", mcp_servers=["math_restricted"]

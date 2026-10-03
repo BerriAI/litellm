@@ -3114,14 +3114,148 @@ async def test_modern_upstream_requests_are_self_contained_without_initializatio
         assert client._last_initialize_instructions == "modern instructions"
         assert tuple(methods.get_nowait() for _ in range(methods.qsize())) == (
             "server/discover",
-            "tools/call",
             "tools/list",
+            "tools/call",
         )
     else:
         with pytest.raises((MCPError, RuntimeError), match="protocol version"):
             await client.call_tool(params, raise_on_error=True)
         assert tuple(methods.get_nowait() for _ in range(methods.qsize())) == ("server/discover",)
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("paginated", (False, True))
+@pytest.mark.parametrize("valid_annotation", (True, False))
+async def test_modern_call_emits_listed_argument_headers(paginated: bool, valid_annotation: bool) -> None:
+    from collections.abc import Mapping
+    from queue import SimpleQueue
+
+    from mcp.types import DiscoverResult, ToolsCapability
+
+    calls: Final[SimpleQueue[str]] = SimpleQueue()
+
+    def response_result(request: httpx2.Request, payload: JSONRPCRequest) -> Mapping[str, object]:
+        assert payload.params is not None
+        caller: Final = request.headers["authorization"].removeprefix("Bearer ")
+        if payload.method == "server/discover":
+            return DiscoverResult(
+                supported_versions=["2026-07-28"], capabilities=ServerCapabilities(tools=ToolsCapability())
+            ).model_dump(by_alias=True, exclude_none=True)
+        if payload.method == "tools/list":
+            if paginated and "cursor" not in payload.params:
+                return {
+                    "resultType": "complete",
+                    "cacheScope": "private",
+                    "ttlMs": 0,
+                    "tools": [],
+                    "nextCursor": "second",
+                }
+            return {
+                "resultType": "complete",
+                "cacheScope": "private",
+                "ttlMs": 0,
+                "tools": [
+                    {
+                        "name": "quote",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "workspace": {
+                                    "type": "string" if valid_annotation else "number",
+                                    "x-mcp-header": caller,
+                                },
+                                "count": {"type": "integer", "x-mcp-header": "Count"},
+                                "preview": {"type": "boolean", "x-mcp-header": "Preview"},
+                            },
+                        },
+                    }
+                ],
+            }
+        assert payload.method == "tools/call"
+        calls.put(caller)
+        assert valid_annotation, "Invalid header definitions must prevent dispatch"
+        assert request.headers.get(f"mcp-param-{caller.lower()}") == caller
+        assert request.headers.get("mcp-param-count") == "3"
+        assert request.headers.get("mcp-param-preview") == "true"
+        assert set(key for key in request.headers if key.startswith("mcp-param-")) == {
+            f"mcp-param-{caller.lower()}",
+            "mcp-param-count",
+            "mcp-param-preview",
+        }
+        assert payload.params["arguments"] == {"workspace": caller, "count": 3, "preview": True}
+        return {"resultType": "complete", "content": [{"type": "text", "text": "quoted"}], "isError": False}
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        assert isinstance(payload, JSONRPCRequest)
+        return httpx2.Response(
+            200, json={"jsonrpc": "2.0", "id": payload.id, "result": response_result(request, payload)}
+        )
+
+    async def call_as(caller: str) -> None:
+        client: Final = _MockTransportClient(
+            respond,
+            server_url="https://example.com/mcp",
+            protocol_version="2026-07-28",
+            auth_type=MCPAuth.bearer_token,
+            auth_value=caller,
+        )
+        params: Final = CallToolRequestParams(
+            name="quote", arguments={"workspace": caller, "count": 3, "preview": True}
+        )
+        if not valid_annotation:
+            with pytest.raises(MCPError, match="valid upstream catalog"):
+                await client.call_tool(params, raise_on_error=True)
+            return
+        result: Final = await client.call_tool(params, raise_on_error=True)
+        assert result.is_error is False
+        assert result.content[0].text == "quoted"
+
+    await asyncio.gather(call_as("Engineering"), call_as("Finance"))
+    assert calls.qsize() == (2 if valid_annotation else 0)
+
+@pytest.mark.asyncio
+async def test_cancelled_modern_catalog_load_prevents_tool_execution() -> None:
+    from queue import SimpleQueue
+
+    from mcp.types import DiscoverResult, ToolsCapability
+
+    listing_started: Final = asyncio.Event()
+    hold_listing: Final = asyncio.Event()
+    methods: Final[SimpleQueue[str]] = SimpleQueue()
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        assert isinstance(payload, JSONRPCRequest)
+        methods.put(payload.method)
+        if payload.method == "tools/list":
+            listing_started.set()
+            await hold_listing.wait()
+        assert payload.method == "server/discover", "A cancelled listing must not dispatch a tool call"
+        discovery: Final = DiscoverResult(
+            supported_versions=["2026-07-28"], capabilities=ServerCapabilities(tools=ToolsCapability())
+        )
+        return httpx2.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": payload.id, "result": discovery.model_dump(by_alias=True, exclude_none=True)},
+        )
+
+    client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", protocol_version="2026-07-28")
+    task: Final = asyncio.create_task(
+        client.call_tool(CallToolRequestParams(name="quote", arguments={}), raise_on_error=True)
+    )
+    observed_listing: Final = asyncio.create_task(listing_started.wait())
+    try:
+        await asyncio.wait((task, observed_listing), return_when=asyncio.FIRST_COMPLETED)
+        assert listing_started.is_set()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert tuple(methods.get_nowait() for _ in range(methods.qsize())) == ("server/discover", "tools/list")
+    finally:
+        task.cancel()
+        observed_listing.cancel()
+        await asyncio.gather(task, observed_listing, return_exceptions=True)
 
 def test_modern_upstream_rejects_legacy_sse_transport() -> None:
     with pytest.raises(ValueError, match="transport"):
