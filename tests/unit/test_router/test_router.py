@@ -2324,6 +2324,27 @@ def test_update_settings_model_group_alias_drops_cached_group_info():
     assert after.input_cost_per_token is not None and after.input_cost_per_token > 0
 
 
+def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selector():
+    router = _alias_cost_router()
+
+    router._switch_routing_strategy(
+        "lar1",
+        {
+            "routing_strategy_args": {
+                "confidence_threshold_low": 0.1,
+                "confidence_threshold_medium": 0.3,
+                "confidence_threshold_high": 0.9,
+            }
+        },
+    )
+    assert router.routing_strategy == "lar1"
+    assert "async_get_available_deployment" in router.__dict__
+
+    router._switch_routing_strategy("usage-based-routing-v2", {})
+    assert router.lowesttpm_logger_v2 is not None
+    assert "async_get_available_deployment" not in router.__dict__
+
+
 @pytest.mark.parametrize(
     "value,expected",
     [
