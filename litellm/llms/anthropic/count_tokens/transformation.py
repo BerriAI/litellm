@@ -11,6 +11,7 @@ from typing import Final
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.anthropic.wif import resolve_anthropic_base
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
@@ -72,28 +73,19 @@ class AnthropicCountTokensConfig:
             )
         )
 
-    def get_required_headers(self, api_key: str) -> dict[str, str]:
-        """
-        Get the required headers for the CountTokens API.
-
-        Args:
-            api_key: The Anthropic API key
-
-        Returns:
-            Dictionary of required headers
-        """
-        from litellm.llms.anthropic.common_utils import (
-            optionally_handle_anthropic_oauth,
-        )
-
-        headers: dict[str, str] = {
+    def get_count_tokens_headers(self, auth_header: Mapping[str, str]) -> dict[str, str]:
+        """The count-tokens headers around a resolved Anthropic auth header
+        (``AnthropicModelInfo.get_auth_header``): x-api-key for a static key, an Authorization
+        bearer for ``ANTHROPIC_AUTH_TOKEN`` and for sk-ant-oat tokens, whose mandatory oauth beta
+        merges with the token-counting beta instead of replacing it."""
+        return {
             "Content-Type": "application/json",
-            "x-api-key": api_key,
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
+            **auth_header,
+            "anthropic-beta": merge_anthropic_beta_headers(
+                auth_header.get("anthropic-beta"), ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+            ),
         }
-        headers, _ = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
-        return headers
 
     def validate_request(
         self,

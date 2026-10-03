@@ -156,7 +156,7 @@ async def test_handler_posts_to_count_tokens_path_under_deployment_api_base(http
         result = await AnthropicCountTokensHandler().handle_count_tokens_request(
             model="claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
-            api_key="sk-ant-api03-test-key",
+            auth_header={"x-api-key": "sk-ant-api03-test-key"},
             api_base="https://gateway.example",
         )
 

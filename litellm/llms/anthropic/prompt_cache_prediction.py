@@ -524,6 +524,9 @@ async def count_prompt_tokens(
     body: Mapping[str, JsonValue],
     api_base: str | None = None,
 ) -> int | None:
+    auth_header: Final = AnthropicModelInfo.get_auth_header(api_key=api_key, api_base=api_base)
+    if auth_header is None:
+        return None
     try:
         native: Final = _CountBody.model_validate(body)
         result: Final = _CountResult.model_validate(
@@ -532,7 +535,7 @@ async def count_prompt_tokens(
                 messages=_count_objects(native.messages),
                 tools=_count_objects(native.tools) if native.tools is not None else None,
                 system=_JSON_OBJECT.validate_python(MappingProxyType({"system": native.system}))["system"],
-                api_key=api_key,
+                auth_header=auth_header,
                 api_base=api_base,
                 optional_params=_JSON_OBJECT.validate_python(
                     MappingProxyType({key: body[key] for key in COUNT_TOKEN_OPTION_NAMES if key in body})
