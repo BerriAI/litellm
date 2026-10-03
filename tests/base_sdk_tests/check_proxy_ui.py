@@ -2,6 +2,7 @@
 
 import argparse
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -53,6 +54,15 @@ def check_proxy_ui() -> str:
                 asset_response.status_code == 200, f"dashboard asset {relative} returned {asset_response.status_code}"
             )
             _require(asset_response.content == asset.read_bytes(), f"wrong dashboard asset content for {relative}")
+    registry: Final = json.loads(files("litellm").joinpath("proxy/mcp_registry.json").read_text())
+    icons: Final = [server["icon_url"] for server in registry["servers"] if server.get("icon_url", "").startswith("/ui/assets/logos/")]
+    _require(bool(icons), "MCP registry has no bundled icons to verify")
+    for icon in icons:
+        packaged_icon: Final = files("litellm_proxy_extras").joinpath("ui", icon.removeprefix("/ui/"))
+        _require(packaged_icon.is_file(), f"MCP icon missing from proxy wheel: {icon}")
+        icon_response: Final = client.get(icon)
+        _require(icon_response.status_code == 200, f"MCP icon is not served: {icon}")
+        _require(bool(icon_response.content) and icon_response.content == packaged_icon.read_bytes(), f"wrong MCP icon: {icon}")
     callback: Final = client.get("/ui/mcp/oauth/callback?code=abc&state=xyz", follow_redirects=False)
     _require(callback.status_code == 307, "nested callback route did not redirect")
     _require(callback.headers["location"].endswith("/ui/mcp/oauth/callback/?code=abc&state=xyz"), "callback redirect lost query")
