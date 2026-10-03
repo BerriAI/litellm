@@ -16,10 +16,10 @@ from tests.integration._support.client import Gateway, eventually, gateway_from_
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
 from tests.integration._support.manifest import OWNED_DIRECTORIES
 from tests.integration._support.routing import RoutingPlugin
+from tests.integration.run import GITHUB_FILES
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
 REPORTS: Final = pytest.StashKey[list[pytest.TestReport]]()
-GITHUB_FILES: Final = frozenset({"database/test_roi_observed.py"})
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -70,7 +70,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         for item in items
         if item.path.is_relative_to(root) and item.path.relative_to(root).parts[0] in OWNED_DIRECTORIES
     )
-    circleci_only: Final = tuple(item for item in owned if item.path.relative_to(root).as_posix() not in GITHUB_FILES)
+    circleci_only: Final = tuple(
+        item for item in owned if item.path.relative_to(root.parents[1]).as_posix() not in GITHUB_FILES
+    )
     if circleci_only and os.environ.get("GITHUB_ACTIONS") == "true":
         raise pytest.UsageError("Integration contracts are owned by CircleCI")
     for item in owned:
