@@ -18,9 +18,11 @@ caller's identity metadata, minus two things that must never be forwarded as-is:
 from __future__ import annotations
 
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, NON_INFERENCE_CALL_TYPES
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN, InternalCallOrigin
 
 BUDGET_RESERVATION_METADATA_KEYS: Final = frozenset({"user_api_key_budget_reservation"})
@@ -153,3 +155,16 @@ def sanitized_forwardable_call_metadata(
     """
     identity: Final = {k: v for k, v in parent_metadata.items() if k in FORWARDABLE_IDENTITY_METADATA_KEYS}
     return _sanitized(identity) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}  # mutable-ok: SDK metadata kwarg
+
+
+def parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mapping[str, str]:
+    kwargs: Final = request_kwargs or MappingProxyType({})
+    return MappingProxyType(
+        {k: kwargs[k] for k in ("litellm_session_id", "litellm_trace_id") if isinstance(kwargs.get(k), str)}
+    )
+
+
+def effective_turn_off_message_logging(request_kwargs: Mapping[str, object] | None) -> bool | None:
+    return initialize_standard_callback_dynamic_params(
+        dict(request_kwargs) if request_kwargs else None  # mutable-ok: callback params take a mutable dict copy
+    ).get("turn_off_message_logging")

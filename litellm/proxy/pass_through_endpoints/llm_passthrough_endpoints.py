@@ -471,10 +471,10 @@ async def mistral_proxy_route(
 
 @router.api_route(
     "/typesafe/{endpoint:path}",
-    methods=["GET", "POST"],  # mutable-ok: FastAPI route metadata requires a list
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route metadata requires a list
     tags=["TypeSafe AI Pass-through", "pass-through"],  # mutable-ok: FastAPI route metadata requires a list
 )
-async def typesafe_proxy_route(
+async def typesafe_proxy_route(  # noqa: ANN201  # FastAPI route returns the endpoint_func response object
     endpoint: str,
     request: Request,
     fastapi_response: Response,
@@ -500,6 +500,42 @@ async def typesafe_proxy_route(
             "Content-Type": "application/json",
         },
         custom_llm_provider="typesafe",
+        is_streaming_request=False,
+    )
+    return await endpoint_func(request, fastapi_response, user_api_key_dict)
+
+
+@router.api_route(
+    "/openrouter/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route metadata requires a list
+    tags=["OpenRouter Pass-through", "pass-through"],  # mutable-ok: FastAPI route metadata requires a list
+)
+async def openrouter_proxy_route(  # noqa: ANN201  # FastAPI route returns the endpoint_func response object
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    base_target_url: Final = get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
+    api_root: Final = base_target_url.removesuffix("/").removesuffix("/v1")
+    encoded_endpoint: Final = httpx.URL(endpoint).path
+    normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
+    base_url: Final = httpx.URL(api_root)
+    updated_url: Final = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, normalized_endpoint),
+    )
+    openrouter_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="openrouter",
+        region_name=None,
+    )
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers={  # mutable-ok: pass-through request headers require a mutable mapping
+            "Authorization": f"Bearer {openrouter_api_key}",
+            "Content-Type": "application/json",
+        },
+        custom_llm_provider="openrouter",
         is_streaming_request=False,
     )
     return await endpoint_func(request, fastapi_response, user_api_key_dict)

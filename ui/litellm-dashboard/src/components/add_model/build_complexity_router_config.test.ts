@@ -1,3 +1,4 @@
+import { describe, expect, it } from "vitest";
 import {
   buildComplexityRouterConfig,
   getPlanModeTierError,
@@ -23,6 +24,11 @@ const tiers = {
 
 const baseParams: BuildComplexityRouterConfigParams = {
   tiers,
+  defaultModel: undefined,
+  planModeMinTier: undefined,
+  classificationExamples: undefined,
+  heuristicFirstMaxTier: undefined,
+  classificationMode: undefined,
   tierLabels: undefined,
   classifierType: "heuristic",
   classifierLlmConfig: undefined,
@@ -47,6 +53,99 @@ const baseParams: BuildComplexityRouterConfigParams = {
 };
 
 describe("buildComplexityRouterConfig", () => {
+  it("accepts built-in JEV defaults without an LLM classifier model", () => {
+    expect(getClassifierModelError({ classifier_type: "jev" })).toBeNull();
+  });
+
+  it.each([
+    { model: "" },
+    { model: "   " },
+    { timeout_ms: 0 },
+    { timeout_ms: 1.5 },
+    { timeout_ms: Number.NaN },
+    { circuit_breaker_cooldown_seconds: -1 },
+    { circuit_breaker_cooldown_seconds: Number.POSITIVE_INFINITY },
+  ])("rejects invalid JEV settings before saving or testing: %j", (patch) => {
+    expect(
+      getClassifierModelError({
+        classifier_type: "jev",
+        jev_classifier_config: { model: "jev-latest", timeout_ms: 3000, ...patch },
+      }),
+    ).toBe("Enter a JEV model, a positive whole-number timeout and a positive cooldown");
+  });
+
+  it.each([false, true])("serializes JEV with shared context and no LLM config, custom tiers: %s", (custom) => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "jev",
+      jevClassifierConfig: {
+        model: "jev-test",
+        timeout_ms: 4500,
+        instructions: "  Choose the configured tier  ",
+        circuit_breaker_enabled: false,
+        circuit_breaker_cooldown_seconds: 12.5,
+      },
+      classifierLlmConfig: { model: "stale", timeout_ms: 30 },
+      classificationPrompt: "stale prompt",
+      classificationExamples: "stale examples",
+      classifierContextWindowSize: 4,
+      classifierContextBudgetChars: 2000,
+      classifierContextPerTurnChars: 450,
+      classifierContextIncludeAssistantTurns: true,
+      classifierFallback: "default_model",
+      ...(custom && {
+        customTierSet: {
+          tiers: [
+            { id: "quick", name: "QUICK", definition: "Short answers", models: ["fast"] },
+            { id: "review", name: "REVIEW", definition: "Deep review", models: ["strong"] },
+          ],
+          fallback_tier_id: "quick",
+        },
+      }),
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.classifier_type).toBe("jev");
+    const expectedJevConfig = {
+      model: "jev-test",
+      timeout_ms: 4500,
+      instructions: "Choose the configured tier",
+      circuit_breaker_enabled: false,
+      circuit_breaker_cooldown_seconds: 12.5,
+    };
+    expect(config.jev_classifier_config).toEqual(expectedJevConfig);
+    expect(config.classifier_context_window_size).toBe(4);
+    expect(config.classifier_context_budget_chars).toBe(2000);
+    expect(config.classifier_context_per_turn_chars).toBe(450);
+    expect(config.classifier_context_include_assistant_turns).toBe(true);
+    expect(config).not.toHaveProperty("classifier_llm_config");
+    expect(config).not.toHaveProperty("classification_prompt");
+    expect(config).not.toHaveProperty("classification_examples");
+    if (custom) {
+      expect(config.tiers).toEqual({ QUICK: ["fast"], REVIEW: ["strong"] });
+      expect(config.fallback_tier).toBe("QUICK");
+    } else {
+      expect(config.classifier_fallback).toBe("default_model");
+      expect(config.tiers).toEqual(tiers);
+    }
+  });
+
+  it("omits blank JEV instructions and ignores stale JEV settings when saving LLM", () => {
+    const jev = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "jev",
+      jevClassifierConfig: { model: "jev-latest", timeout_ms: 3000, instructions: "  " },
+    });
+    expect(jev.jev_classifier_config).toEqual({ model: "jev-latest", timeout_ms: 3000 });
+    const llmParams: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "judge", timeout_ms: 1000 },
+      jevClassifierConfig: jev.jev_classifier_config,
+    };
+    const llm = buildComplexityRouterConfig(llmParams);
+    expect(llm).not.toHaveProperty("jev_classifier_config");
+  });
+
   it("emits tiers, classifier_type, and escalation_keywords when nothing else is configured", () => {
     const config = buildComplexityRouterConfig(baseParams);
     const expected = {
@@ -88,6 +187,21 @@ describe("buildComplexityRouterConfig", () => {
     });
     expect(config.classifier_type).toBe("llm");
     expect(config.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+  });
+
+  it("preserves explicit classifier circuit-breaker settings, including disabled", () => {
+    const classifierLlmConfig = {
+      model: "gpt-4o-mini",
+      timeout_ms: 3000,
+      circuit_breaker_enabled: false,
+      circuit_breaker_cooldown_seconds: 45,
+    };
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig,
+    });
+    expect(config.classifier_llm_config).toEqual(classifierLlmConfig);
   });
 
   it("omits classifier_llm_config when classifier_type is heuristic even if config lingers in state", () => {

@@ -24,7 +24,7 @@ AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
 StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality"]
 
-StrategyRouterDependencyRole: TypeAlias = Literal["tier", "default", "classifier", "embedding"]
+StrategyRouterDependencyRole: TypeAlias = Literal["tier", "default", "classifier", "embedding", "evaluation"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +149,14 @@ def strategy_router_dependencies(
         dict.fromkeys(
             tuple(dep for tier in _mapping(complexity.get("tiers")).values() for dep in _pool(tier, "tier"))
             + _named(litellm_params.get("complexity_router_default_model"), "default")
+            + (
+                _named(
+                    f"typesafe/{_mapping(complexity.get('jev_classifier_config')).get('model', 'jev-latest')}",
+                    "evaluation",
+                )
+                if complexity.get("classifier_type") == "jev"
+                else ()
+            )
             + (
                 _named(classifier.get("model"), "classifier")
                 if complexity.get("classifier_type") in LLM_CLASSIFIER_TYPES
