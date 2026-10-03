@@ -561,10 +561,7 @@ class ChunkProcessor:
                         custom = tool_call.get("custom")
                         if isinstance(custom, dict):
                             if custom_name := custom.get("name"):
-                                if tool_call_map[index]["custom_name"] is None:
-                                    tool_call_map[index]["custom_name"] = custom_name
-                                else:
-                                    tool_call_map[index]["custom_name"] += custom_name
+                                tool_call_map[index]["custom_name"] = custom_name
                     else:
                         # tool_call is an object
                         if hasattr(tool_call, "id") and tool_call.id:
@@ -584,11 +581,8 @@ class ChunkProcessor:
                             tool_call, "custom", None
                         )
                         if object_custom is not None:
-                            if object_custom_name := getattr(object_custom, "name", None):
-                                if tool_call_map[index]["custom_name"] is None:
-                                    tool_call_map[index]["custom_name"] = object_custom_name
-                                else:
-                                    tool_call_map[index]["custom_name"] += object_custom_name
+                            if getattr(object_custom, "name", None):
+                                tool_call_map[index]["custom_name"] = object_custom.name
 
                     # Preserve provider_specific_fields from streaming chunks
                     provider_fields: object = None
