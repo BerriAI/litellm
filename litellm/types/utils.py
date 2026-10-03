@@ -211,6 +211,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"] | None]
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
     bedrock_converse_supports_strict_tools: bool | None
+    supports_regex_lookaround: ReadOnly[bool | None]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -467,6 +468,8 @@ class CallTypes(str, Enum):
     arerank = "arerank"
     search = "search"
     asearch = "asearch"
+    decisions = "decisions"
+    adecisions = "adecisions"
     arealtime = "_arealtime"
     aresponses_websocket = "_aresponses_websocket"
     create_batch = "create_batch"
@@ -653,6 +656,8 @@ CallTypesLiteral = Literal[
     "arerank",
     "search",
     "asearch",
+    "decisions",
+    "adecisions",
     "_arealtime",
     "_aresponses_websocket",
     "create_batch",
@@ -762,6 +767,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # Search
     "/search": [CallTypes.asearch, CallTypes.search],
     "/v1/search": [CallTypes.asearch, CallTypes.search],
+    "/decisions": [CallTypes.adecisions, CallTypes.decisions],
+    "/v1/decisions": [CallTypes.adecisions, CallTypes.decisions],
     # Batches
     "/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
     "/v1/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
@@ -3844,10 +3851,13 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
 
 DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
 
+DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset({"supports_regex_lookaround"})
+
 SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
     - frozenset(CustomPricingLiteLLMParams.model_fields)
     - DEPLOYMENT_SCOPED_PRICING_FIELDS
+    - DEPLOYMENT_SCOPED_CAPABILITY_FIELDS
 )
 
 
@@ -4044,6 +4054,8 @@ class LlmProviders(str, Enum):
     OLLAMA_CHAT = "ollama_chat"
     DEEPINFRA = "deepinfra"
     PERPLEXITY = "perplexity"
+    TYPESAFE = "typesafe"
+    STRANDS_DECIDER = "strands_decider"
     MISTRAL = "mistral"
     MILVUS = "milvus"
     GROQ = "groq"

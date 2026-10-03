@@ -33,6 +33,7 @@ EXCLUDED_FOLDERS = {
     "codex",
     "opencode",
     "deepagents",
+    "tool_loop",
 }
 
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { DashboardHeader } from "./DashboardHeader";
 import { NAV_PRODUCT_LINK_CLASS } from "@/components/Navbar/navProductLinkClass";
 
@@ -27,6 +27,7 @@ vi.mock("@/components/Navbar/CommunityEngagementButtons/CommunityEngagementButto
 }));
 vi.mock("@/components/Navbar/NotificationsBell/NotificationsBell", () => ({ NotificationsBell: () => null }));
 vi.mock("@/components/Navbar/WorkerDropdown/WorkerDropdown", () => ({ default: () => null }));
+vi.mock("@/components/liteadmin/LiteAdmin", () => ({ default: () => <button>LiteAdmin</button> }));
 
 describe("DashboardHeader breadcrumb", () => {
   afterEach(() => {
@@ -88,5 +89,14 @@ describe("DashboardHeader breadcrumb", () => {
     expect(separators).toHaveLength(1);
     expect(separators[0].className).not.toMatch(/self-stretch/);
     expect(separators[0].className).toContain("data-vertical:self-center");
+  });
+
+  it("places LiteAdmin in the header tools ahead of Docs", () => {
+    render(<DashboardHeader />);
+
+    const liteAdmin = within(screen.getByRole("banner")).getByRole("button", { name: "LiteAdmin" });
+    expect(liteAdmin.compareDocumentPosition(screen.getByRole("link", { name: "Docs" }))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
   });
 });

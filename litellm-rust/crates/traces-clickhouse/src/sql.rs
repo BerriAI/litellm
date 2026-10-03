@@ -19,6 +19,9 @@ pub async fn execute_named_read(
             named_json::<TraceIdentity>(client, connection, parameters).await
         }
         ReadQuery::TraceSpans => named_json::<TraceSpans>(client, connection, parameters).await,
+        ReadQuery::TracePageSpans => {
+            named_json::<TracePageSpans>(client, connection, parameters).await
+        }
         ReadQuery::SpanDetail => named_json::<SpanDetail>(client, connection, parameters).await,
         ReadQuery::SpanError => named_json::<SpanError>(client, connection, parameters).await,
         ReadQuery::SpendByResponseIds => {

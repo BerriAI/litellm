@@ -1936,6 +1936,23 @@ export interface paths {
         patch: operations["bedrock_proxy_route_bedrock__endpoint__patch"];
         trace?: never;
     };
+    "/bespoke/v1/systemone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Bespoke Proxy Route */
+        post: operations["bespoke_proxy_route_bespoke_v1_systemone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/budget/delete": {
         parameters: {
             query?: never;
@@ -4563,6 +4580,23 @@ export interface paths {
         get: operations["get_debug_report_debug_report_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decisions */
+        post: operations["decisions_decisions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8934,6 +8968,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/watch-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Watch All */
+        post: operations["watch_all_lens_watch_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/worker/claim": {
         parameters: {
             query?: never;
@@ -10429,6 +10480,11 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
+         *                     provider's model catalog. When present, the response is Codex's own
+         *                     catalog shape (`{"models": [...]}`) built from the same listing, with
+         *                     each model's `model_info.service_tiers` as its service tiers; absent,
+         *                     the OpenAI shape below is returned
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -19773,6 +19829,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decisions */
+        post: operations["decisions_v1_decisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/embeddings": {
         parameters: {
             query?: never;
@@ -21168,6 +21241,11 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
+         *                     provider's model catalog. When present, the response is Codex's own
+         *                     catalog shape (`{"models": [...]}`) built from the same listing, with
+         *                     each model's `model_info.service_tiers` as its service tiers; absent,
+         *                     the OpenAI shape below is returned
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -25655,10 +25733,7 @@ export interface components {
             /** Updated By */
             updated_by: string;
         };
-        /**
-         * AgentNode
-         * @description One distinct agent in a trace. 200 invocations of `researcher` = one node.
-         */
+        /** AgentNode */
         AgentNode: {
             /** Duration Ms */
             duration_ms: number;
@@ -25823,6 +25898,13 @@ export interface components {
             type: "archive";
             /** Url */
             url: string;
+        };
+        /** AgentTestCase */
+        AgentTestCase: {
+            /** Expected */
+            expected: string;
+            /** Input */
+            input: string;
         };
         /**
          * AlertType
@@ -28071,7 +28153,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -31913,6 +31995,7 @@ export interface components {
         };
         /** Finding */
         Finding: {
+            brief?: components["schemas"]["IssueBrief"] | null;
             /** Check Id */
             check_id: string;
             /** Description */
@@ -31978,6 +32061,7 @@ export interface components {
         };
         /** FindingDraft */
         FindingDraft: {
+            brief?: components["schemas"]["IssueBrief"] | null;
             /** Check Id */
             check_id: string;
             /** Description */
@@ -33162,6 +33246,17 @@ export interface components {
             /** Is Accepted */
             is_accepted: boolean;
         };
+        /** IssueBrief */
+        IssueBrief: {
+            /** Problem */
+            problem: string;
+            /** Test Cases */
+            test_cases: components["schemas"]["AgentTestCase"][];
+            /** User Goal */
+            user_goal: string;
+            /** What Happened */
+            what_happened: string;
+        };
         /**
          * ItemReference
          * @description An internal identifier for an item to reference.
@@ -33276,6 +33371,17 @@ export interface components {
              * @enum {string}
              */
             status: "queued" | "running" | "completed" | "failed" | "cancelled";
+            /**
+             * Steps
+             * @default []
+             */
+            steps: components["schemas"]["Step"][];
+            /**
+             * Trigger
+             * @default schedule
+             * @enum {string}
+             */
+            trigger: "schedule" | "manual";
             /** Worker Id */
             worker_id?: string | null;
         };
@@ -39149,12 +39255,12 @@ export interface components {
         OpenSourceClassifierConfig: {
             /**
              * Api Base
-             * @description Provider API base; defaults to TYPESAFE_API_BASE or LAYA_API_BASE for the selected provider
+             * @description Provider API base; defaults to the selected provider API_BASE environment variable
              */
             api_base?: string | null;
             /**
              * Api Key
-             * @description Provider API key; optional for self-hosted Laya
+             * @description Provider API key; optional for self-hosted providers
              */
             api_key?: string | null;
             /**
@@ -39169,7 +39275,7 @@ export interface components {
             circuit_breaker_enabled: boolean;
             /**
              * Instructions
-             * @description Replaces the built-in Jev question instructions
+             * @description Replaces the built-in classification instructions
              */
             instructions?: string | null;
             /**
@@ -39182,7 +39288,7 @@ export interface components {
              * @default jev
              * @enum {string}
              */
-            provider: "jev" | "laya";
+            provider: "jev" | "laya" | "bespoke";
             /**
              * Timeout Ms
              * @default 3000
@@ -41213,6 +41319,67 @@ export interface components {
                 };
             } | null;
         };
+        /** ROIBranchAttribution */
+        ROIBranchAttribution: {
+            /** Branch */
+            branch: string;
+            /** Repo */
+            repo: string;
+            /**
+             * Requests
+             * @default 0
+             */
+            requests: number;
+            /** Spend */
+            spend?: number | null;
+            /**
+             * Status
+             * @default unattributed
+             * @enum {string}
+             */
+            status: "matched" | "unattributed" | "ambiguous" | "unavailable";
+        };
+        /** ROIBranchMetrics */
+        ROIBranchMetrics: {
+            /** Cost Per Hour */
+            cost_per_hour?: number | null;
+            /**
+             * Hours
+             * @default 0
+             */
+            hours: number;
+            /**
+             * Matched Pulls
+             * @default 0
+             */
+            matched_pulls: number;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Total Tagged Spend
+             * @default 0
+             */
+            total_tagged_spend: number;
+            /**
+             * Unlinked Spend
+             * @default 0
+             */
+            unlinked_spend: number;
+        };
+        /** ROIBranchSpend */
+        ROIBranchSpend: {
+            /** Branch */
+            branch: string;
+            /** Repo */
+            repo: string;
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+        };
         /** ROIEstimateResponse */
         ROIEstimateResponse: {
             /**
@@ -41235,6 +41402,13 @@ export interface components {
              * @enum {string}
              */
             status: "estimated" | "needs_review" | "error";
+        };
+        /** ROIEstimatorModel */
+        ROIEstimatorModel: {
+            /** Model Name */
+            model_name: string;
+            /** Provider Models */
+            provider_models: string[];
         };
         /** ROIIdentityMapResponse */
         ROIIdentityMapResponse: {
@@ -41309,6 +41483,7 @@ export interface components {
         ROIPullResponse: {
             /** Additions */
             additions: number;
+            branch_cost?: components["schemas"]["ROIBranchAttribution"];
             /** Cache Key */
             cache_key?: string | null;
             /** Changed Files */
@@ -41340,6 +41515,16 @@ export interface components {
             profile_email: string;
             /** Repo */
             repo: string;
+            /**
+             * Source Branch
+             * @default
+             */
+            source_branch: string;
+            /**
+             * Source Repo
+             * @default
+             */
+            source_repo: string;
             /** Title */
             title: string;
             /** Url */
@@ -41377,14 +41562,29 @@ export interface components {
             default_prompt: string;
             /** Estimator Model */
             estimator_model: string;
+            /**
+             * Estimator Models
+             * @default []
+             */
+            estimator_models: components["schemas"]["ROIEstimatorModel"][];
             /** Estimator Prompt */
             estimator_prompt: string;
             /** Github Api Url */
             github_api_url: string;
+            /**
+             * Gitlab Api Url
+             * @default https://gitlab.com/api/v4
+             */
+            gitlab_api_url: string;
             /** Has Estimator Key */
             has_estimator_key: boolean;
             /** Has Github Token */
             has_github_token: boolean;
+            /**
+             * Has Gitlab Token
+             * @default false
+             */
+            has_gitlab_token: boolean;
             /** Identity Map */
             identity_map: {
                 [key: string]: string;
@@ -41393,6 +41593,12 @@ export interface components {
             ready: boolean;
             /** Repos */
             repos: string[];
+            /**
+             * Source Provider
+             * @default github
+             * @enum {string}
+             */
+            source_provider: "github" | "gitlab";
             /** Update Interval Minutes */
             update_interval_minutes: number;
         };
@@ -41410,13 +41616,20 @@ export interface components {
             github_api_url?: string | null;
             /** Github Token */
             github_token?: string | null;
+            /** Gitlab Api Url */
+            gitlab_api_url?: string | null;
+            /** Gitlab Token */
+            gitlab_token?: string | null;
             /** Repos */
             repos?: string[] | null;
+            /** Source Provider */
+            source_provider?: ("github" | "gitlab") | null;
             /** Update Interval Minutes */
             update_interval_minutes?: number | null;
         };
         /** ROISummaryResponse */
         ROISummaryResponse: {
+            branch_metrics?: components["schemas"]["ROIBranchMetrics"];
             /** Effort Basis */
             effort_basis: string | null;
             /** End */
@@ -41436,12 +41649,23 @@ export interface components {
             pulls: components["schemas"]["ROIPullResponse"][];
             /** Repos */
             repos: string[];
+            /**
+             * Source Provider
+             * @default github
+             * @enum {string}
+             */
+            source_provider: "github" | "gitlab";
             /** Start */
             start: string;
             /** Synced At */
             synced_at: string;
             /** Trend */
             trend: components["schemas"]["ROITrendResponse"][];
+            /**
+             * Unlinked Branches
+             * @default []
+             */
+            unlinked_branches: components["schemas"]["ROIBranchSpend"][];
             /** Warnings */
             warnings: string[];
         };
@@ -41989,7 +42213,7 @@ export interface components {
             classifier_plugin_timeout_ms: number;
             /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary, or 'oss_classifier', a structured choice call using Jev or Laya
+             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary, or 'oss_classifier', a structured choice call using Jev, Laya or Bespoke Nimble
              * @default heuristic
              * @enum {string}
              */
@@ -44054,9 +44278,15 @@ export interface components {
         };
         /** RunRequest */
         RunRequest: {
+            /** Agent Name */
+            agent_name?: string | null;
+            /** End */
+            end?: string | null;
             /** Lookback Hours */
             lookback_hours?: number | null;
             settings?: components["schemas"]["LensSettings"] | null;
+            /** Start */
+            start?: string | null;
         };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
@@ -45026,7 +45256,7 @@ export interface components {
              * Type
              * @enum {string}
              */
-            type: "agent" | "llm" | "tool" | "chain" | "framework";
+            type: "agent" | "llm" | "tool" | "chain" | "framework" | "retriever" | "embedding" | "reranker" | "guardrail" | "evaluator" | "prompt" | "decision";
         };
         /** SpanDetail */
         SpanDetail: {
@@ -45386,6 +45616,46 @@ export interface components {
              * @default []
              */
             user_ids: string[];
+        };
+        /** Step */
+        Step: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /**
+             * Cost
+             * @default 0
+             */
+            cost: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "stage" | "model" | "error";
+            /** Label */
+            label: string;
+            /**
+             * Model
+             * @default
+             */
+            model: string;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Purpose
+             * @default
+             */
+            purpose: string;
         };
         /**
          * SuccessfulKeyUpdate
@@ -46861,6 +47131,8 @@ export interface components {
         Trace: {
             /** Agents */
             agents: components["schemas"]["AgentNode"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
             /** Spans */
             spans: components["schemas"]["Span"][];
             summary: components["schemas"]["TraceSummary"];
@@ -47093,6 +47365,8 @@ export interface components {
             name: string;
             /** Output Tokens */
             output_tokens: number;
+            /** Resolution Limited */
+            resolution_limited?: boolean;
             /** Service */
             service: string;
             /** Span Count */
@@ -47209,7 +47483,7 @@ export interface components {
             /** Content */
             content: string;
             /** Name */
-            name?: string;
+            name?: string | null;
             /**
              * Role
              * @enum {string}
@@ -49143,6 +49417,25 @@ export interface components {
             type: "wait";
         } & {
             [key: string]: unknown;
+        };
+        /** WatchAllResult */
+        WatchAllResult: {
+            /**
+             * Skipped
+             * @default []
+             */
+            skipped: components["schemas"]["WatchSkipped"][];
+            /** Watching */
+            watching: string[];
+        };
+        /** WatchSkipped */
+        WatchSkipped: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Reason */
+            reason: string;
         };
         /**
          * WebSearchInterceptionSettings
@@ -53033,6 +53326,26 @@ export interface operations {
             };
         };
     };
+    bespoke_proxy_route_bespoke_v1_systemone_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     delete_budget_budget_delete_post: {
         parameters: {
             query?: never;
@@ -56667,6 +56980,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnvironmentReport"];
+                };
+            };
+        };
+    };
+    decisions_decisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -62044,6 +62377,26 @@ export interface operations {
             };
         };
     };
+    watch_all_lens_watch_all_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchAllResult"];
+                };
+            };
+        };
+    };
     claim_lens_worker_claim_post: {
         parameters: {
             query?: {
@@ -64319,6 +64672,7 @@ export interface operations {
                 fallback_type?: string | null;
                 scope?: string | null;
                 healthy_only?: boolean | null;
+                client_version?: string | null;
             };
             header?: never;
             path?: never;
@@ -76346,6 +76700,26 @@ export interface operations {
             };
         };
     };
+    decisions_v1_decisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     embeddings_v1_embeddings_post: {
         parameters: {
             query?: never;
@@ -78693,6 +79067,7 @@ export interface operations {
                 fallback_type?: string | null;
                 scope?: string | null;
                 healthy_only?: boolean | null;
+                client_version?: string | null;
             };
             header?: never;
             path?: never;
@@ -79988,6 +80363,8 @@ export interface operations {
         parameters: {
             query?: {
                 trace_ref?: string;
+                cursor?: string | null;
+                page_size?: number | null;
             };
             header?: never;
             path: {

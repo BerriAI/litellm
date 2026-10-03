@@ -7,7 +7,14 @@ import { Textarea } from "@/components/ui/textarea";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { defaultJevClassifierConfig, LAYA_MODELS } from "./jev_classifier_config";
+import { defaultJevClassifierConfig, OSS_CLASSIFIER_MODELS } from "./jev_classifier_config";
+
+const providerDescriptions = {
+  jev: "Uses TypeSafe System One Choice evaluation with your configured tiers",
+  laya: "Uses Laya with your configured tiers. Set LAYA_API_BASE on the gateway to connect your Laya server.",
+  bespoke:
+    "Uses Bespoke Nimble with your configured tiers. Set BESPOKE_API_BASE on the gateway to connect your Nimble server.",
+};
 
 export default function JevClassifierConfig({
   value,
@@ -18,26 +25,22 @@ export default function JevClassifierConfig({
 }) {
   const id = useId();
   const config = value.jev_classifier_config ?? defaultJevClassifierConfig();
-  const isLaya = config.provider === "laya";
+  const models = config.provider && config.provider !== "jev" ? OSS_CLASSIFIER_MODELS[config.provider] : undefined;
   const update = (patch: Partial<typeof config>) =>
     onChange({ ...value, jev_classifier_config: { ...config, ...patch } });
 
   return (
     <div className="mt-4 space-y-3">
-      <p className="text-sm text-muted-foreground">
-        {isLaya
-          ? "Uses Laya with your configured tiers. Set LAYA_API_BASE on the gateway to connect your Laya server."
-          : "Uses TypeSafe System One Choice evaluation with your configured tiers"}
-      </p>
+      <p className="text-sm text-muted-foreground">{providerDescriptions[config.provider ?? "jev"]}</p>
       <div>
         <Label htmlFor={`${id}-model`}>Classifier Model</Label>
-        {isLaya ? (
+        {models ? (
           <Select value={config.model} onValueChange={(model) => model && update({ model })}>
             <SelectTrigger id={`${id}-model`} className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {LAYA_MODELS.map((model) => (
+              {models.map((model) => (
                 <SelectItem key={model} value={model}>
                   {model}
                 </SelectItem>
