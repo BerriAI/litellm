@@ -6,11 +6,11 @@ import pytest
 from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
 from litellm.router_strategy.complexity_router.jev_classifier import DEFAULT_JEV_INSTRUCTIONS
 from litellm.router_utils.auto_router_model_naming import (
-    carries_complexity_router_settings,
-    classify_strategy_router_model,
     GATED_AUTO_ROUTER_CAPABILITIES,
     capability_limit_violation,
+    carries_complexity_router_settings,
     claimed_capability,
+    classify_strategy_router_model,
     count_capability_routers,
     gated_capability_of,
     strategy_router_dependencies,
@@ -23,27 +23,60 @@ COMPLEXITY_FIELDS = frozenset({"complexity_router_config"})
 SEMANTIC_FIELDS = frozenset({"auto_router_config", "auto_router_default_model", "auto_router_embedding_model"})
 
 
-@pytest.mark.parametrize("model", ["jev-latest", "jev-preview"])
-def test_jev_enumerates_a_paid_evaluation_without_a_completion_classifier(model: str) -> None:
-    found = strategy_router_dependencies(
+@pytest.mark.parametrize(
+    ("classifier_type", "config_key"),
+    [
+        ("jev", "jev_classifier_config"),
+        ("oss_classifier", "opensource_classifier_config"),
+        ("jev", "opensource_classifier_config"),
+        ("oss_classifier", "jev_classifier_config"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("provider", "model", "accounting_provider"),
+    [
+        (None, "jev-latest", "typesafe"),
+        ("typesafe", "jev-preview", "typesafe"),
+        ("jev", "jev-preview", "typesafe"),
+        ("laya", "english", "laya"),
+        ("bespoke", "nimble-latest", "bespoke"),
+    ],
+)
+def test_open_source_classifier_enumerates_its_accounting_model(
+    classifier_type: str, config_key: str, provider: str | None, model: str, accounting_provider: str
+) -> None:
+    found: Final = strategy_router_dependencies(
         {
             "model": "auto_router/complexity_router",
             "complexity_router_config": {
-                "classifier_type": "jev",
-                "jev_classifier_config": {"model": model},
+                "classifier_type": classifier_type,
+                config_key: {"model": model, **({"provider": provider} if provider else {})},
                 "tiers": {"SIMPLE": "cheap"},
             },
         }
     )
     assert tuple((dep.model_name, dep.role) for dep in found) == (
         ("cheap", "tier"),
-        (f"typesafe/{model}", "evaluation"),
+        (f"{accounting_provider}/{model}", "evaluation"),
     )
 
 
 @pytest.mark.parametrize("instructions", [None, DEFAULT_JEV_INSTRUCTIONS, "Route conservatively"])
-def test_only_non_default_jev_instructions_claim_the_shared_customization_slot(instructions: str | None) -> None:
-    capability = claimed_capability({"classifier_type": "jev", "jev_classifier_config": {"instructions": instructions}})
+@pytest.mark.parametrize(
+    ("classifier_type", "config_key"),
+    [
+        ("jev", "jev_classifier_config"),
+        ("oss_classifier", "opensource_classifier_config"),
+        ("jev", "opensource_classifier_config"),
+        ("oss_classifier", "jev_classifier_config"),
+    ],
+)
+def test_only_non_default_open_source_instructions_claim_the_shared_customization_slot(
+    instructions: str | None, classifier_type: str, config_key: str
+) -> None:
+    capability: Final = claimed_capability(
+        {"classifier_type": classifier_type, config_key: {"instructions": instructions}}
+    )
     assert (capability.key if capability else None) == (
         "tier_or_classifier_prompt" if instructions == "Route conservatively" else None
     )
@@ -121,6 +154,21 @@ VALID_TIERS = {
     "COMPLEX": ["gpt-4o"],
     "REASONING": ["gpt-4o"],
 }
+
+
+@pytest.mark.parametrize("legacy_config", [None, {}, {"provider": "laya", "model": "english"}])
+def test_dual_classifier_blocks_return_a_write_validation_error(legacy_config: Mapping[str, object] | None) -> None:
+    violation: Final = validate_complexity_router_config_write(
+        {
+            "tiers": VALID_TIERS,
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": {"provider": "laya", "model": "english"},
+            "jev_classifier_config": legacy_config,
+        }
+    )
+    assert violation is not None
+    assert "opensource_classifier_config" in violation
+    assert "jev_classifier_config" in violation
 
 
 @pytest.mark.parametrize(
@@ -408,6 +456,8 @@ def test_complexity_embedding_model_is_a_dependency_only_when_semantic_matching_
         ("token_thresholds", "dimension_weights"),
         ("reasoning_override_min_score",),
         ("tiers",),
+        ("jev_classifier_config",),
+        ("opensource_classifier_config",),
     ],
 )
 def test_placement_rejects_settings_written_beside_the_config(misplaced):
@@ -447,7 +497,7 @@ def test_placement_guards_every_setting_the_config_owns():
         ComplexityRouterConfig,
     )
 
-    assert COMPLEXITY_ROUTER_CONFIG_KEYS == frozenset(ComplexityRouterConfig.model_fields)
+    assert COMPLEXITY_ROUTER_CONFIG_KEYS == frozenset(ComplexityRouterConfig.model_fields) | {"jev_classifier_config"}
     assert {"tier_boundaries", "token_thresholds", "dimension_weights"} <= COMPLEXITY_ROUTER_CONFIG_KEYS
 
 

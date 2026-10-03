@@ -14,6 +14,7 @@
     "test:integration": "vitest run --project integration",
     "test:dot": "vitest --reporter=dot",
     "test:types": "vitest run --project types",
+    "typecheck": "tsc --project tsconfig.production.json",
     "test:watch": "vitest -w",
     "test:coverage": "vitest run --coverage",
     "format": "prettier --write .",
@@ -40,11 +41,11 @@
     "dayjs": "1.11.19",
     "jwt-decode": "4.0.0",
     "lucide-react": "0.513.0",
-    "moment": "2.30.1",
-    "next": "16.3.3",
+    "moment": "2.31.0",
+    "next": "16.3.6",
     "next-themes": "^0.4.6",
     "nuqs": "^2.9.4",
-    "openai": "4.104.0",
+    "openai": "6.49.0",
     "openapi-fetch": "^0.17.0",
     "openapi-react-query": "^0.5.4",
     "papaparse": "5.5.3",
@@ -60,7 +61,7 @@
     "sonner": "2.0.8",
     "tailwind-merge": "3.4.0",
     "uuid": "14.0.0",
-    "zod": "3.25.76"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@eslint/js": "9.39.2",
@@ -98,7 +99,7 @@
   "overrides": {
     "prismjs": "1.30.0",
     "js-yaml": "4.3.2",
-    "brace-expansion": "5.0.9",
+    "brace-expansion": "5.0.12",
     "glob": "13.0.0",
     "minimatch": "10.2.4",
     "ws": "8.21.0",

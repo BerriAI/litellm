@@ -3,10 +3,9 @@ that fail after auth but before the route handler runs (e.g. /model/new
 TypeError or RequestValidationError)."""
 
 import asyncio
-import types
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 
 import litellm.proxy.proxy_server as proxy_server_module
@@ -23,13 +22,11 @@ from litellm.integrations._types.open_inference import ErrorAttributes
 from ._helpers import assert_server_span_attrs, get_server_span
 
 
-def _fake_request(parent_otel_span=None, path="/key/generate"):
-    """A real Request always carries a url; the validation handler reads its path to
-    decide whether the caller is on a surface with its own error contract."""
-    state = types.SimpleNamespace()
-    if parent_otel_span is not None:
-        state.parent_otel_span = parent_otel_span
-    return types.SimpleNamespace(state=state, url=types.SimpleNamespace(path=path))
+def _fake_request(parent_otel_span: object | None = None, path: str = "/key/generate") -> Request:
+    return Request({
+        "type": "http", "method": "POST", "path": path, "headers": [],
+        "state": {"parent_otel_span": parent_otel_span},
+    })
 
 
 @pytest.fixture
