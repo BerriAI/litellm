@@ -126,6 +126,45 @@ export function analysisProgress(job: Job) {
   };
 }
 
+export interface ProgressSample {
+  at: number;
+  step: number;
+  done: number;
+  fraction: number;
+}
+
+export const stageWeights = [0.6, 0.2, 0.2];
+
+export function analysisFraction({
+  step,
+  done,
+  total,
+}: Pick<ReturnType<typeof analysisProgress>, "step" | "done" | "total">): number {
+  if (step < 0) return 0;
+  const before = stageWeights.slice(0, step).reduce((sum, weight) => sum + weight, 0);
+  return before + stageWeights[step] * (total ? Math.min(1, done / total) : 0);
+}
+
+export function analysisPace(samples: readonly ProgressSample[], now: number) {
+  const latest = samples.at(-1);
+  const first = samples.find((sample) => sample.step === latest?.step && now - sample.at <= 60000);
+  const anchor = samples.find((sample) => now - sample.at <= 60000);
+  if (!latest || !first || !anchor) return { perMinute: null, secondsLeft: null };
+  const stepMinutes = (now - first.at) / 60000;
+  const perMinute = stepMinutes >= 1 / 6 ? (latest.done - first.done) / stepMinutes : null;
+  const spanSeconds = (now - anchor.at) / 1000;
+  const gained = latest.fraction - anchor.fraction;
+  const secondsLeft = spanSeconds >= 10 && gained > 0 ? ((1 - latest.fraction) * spanSeconds) / gained : null;
+  return { perMinute, secondsLeft };
+}
+
+export function remainingLabel(seconds: number | null): string {
+  if (seconds === null) return "Estimating time left";
+  if (seconds < 60) return "Less than a minute left";
+  if (seconds < 3600) return `About ${Math.ceil(seconds / 60)} min left`;
+  return `About ${Math.floor(seconds / 3600)}h ${Math.ceil((seconds % 3600) / 60)}m left`;
+}
+
 export function analysisElapsed(createdAt: string, now: number): string {
   const seconds = Math.max(0, Math.floor((now - Date.parse(createdAt)) / 1000));
   if (!Number.isFinite(seconds)) return "0s";
