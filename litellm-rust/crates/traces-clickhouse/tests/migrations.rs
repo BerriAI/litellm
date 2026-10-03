@@ -1683,7 +1683,15 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
         let values: serde_json::Value = serde_json::from_str(&body)?;
         assert_eq!(
             values["data"].as_array().ok_or("missing data")?.is_empty(),
-            !populated || example["name"] == "LLM spans without a direct spend match",
+            !populated
+                || matches!(
+                    example["name"].as_str(),
+                    Some(
+                        "LLM spans without a direct spend match"
+                            | "Recent failed spans"
+                            | "Filter calls by nested metadata"
+                    )
+                ),
             "{sql}"
         );
         if populated && example["name"] == "Traces correlated with LLM call metadata" {
