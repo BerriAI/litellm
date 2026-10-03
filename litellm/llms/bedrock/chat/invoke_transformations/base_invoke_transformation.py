@@ -455,6 +455,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         chunk_size: Final = stored_control_options(litellm_params).stream_chunk_size
         completion_stream, response_headers = await make_call(
@@ -469,6 +470,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
             json_mode=json_mode,
             stream_chunk_size=chunk_size,
+            timeout=timeout,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -494,6 +496,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         sync_client: Final = (
             _get_httpx_client(params={}) if client is None or isinstance(client, AsyncHTTPHandler) else client
@@ -512,6 +515,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
             json_mode=json_mode,
             stream_chunk_size=chunk_size,
+            timeout=timeout,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,

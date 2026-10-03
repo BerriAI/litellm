@@ -1,7 +1,7 @@
 import base64
 import binascii
-import itertools
 import datetime
+import itertools
 import json
 import re
 import struct
@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock.chat.invoke_handler import (
@@ -21,10 +22,14 @@ from litellm.llms.bedrock.chat.invoke_handler import (
     make_call,
     make_sync_call,
 )
-from litellm.exceptions import MidStreamFallbackError
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_stream_event_statuses
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import ModelResponseStream
+from tests.unit.llms.bedrock.slow_upstream import (
+    STREAM_TIMEOUT_SECONDS,
+    slow_upstream_async_client,
+    slow_upstream_sync_client,
+)
 
 
 def test_transform_thinking_blocks_with_redacted_content():
@@ -215,9 +220,7 @@ def test_bedrock_converse_streaming_consistent_id():
     expected_id = f"chatcmpl-{native_conversation_id}"
 
     for response in parsed_responses:
-        assert (
-            response.id == expected_id
-        ), "All chunk IDs must match the one captured from the messageStart event"
+        assert response.id == expected_id, "All chunk IDs must match the one captured from the messageStart event"
 
 
 def test_converse_streaming_usage_uses_provider_thinking_tokens():
@@ -1125,3 +1128,26 @@ def test_converse_stream_made_only_of_unknown_events_raises_instead_of_an_empty_
     assert isinstance(exc_info.value.original_exception, litellm.BadGatewayError)
     assert "somethingBedrockAddedLater" in str(exc_info.value)
     assert _UPSTREAM_REJECTION in str(exc_info.value)
+
+
+def _invoke_streaming_kwargs() -> dict[str, object]:
+    return {
+        "model": "bedrock/invoke/anthropic.claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+        "timeout": STREAM_TIMEOUT_SECONDS,
+        "aws_access_key_id": "fake",
+        "aws_secret_access_key": "fake",
+        "aws_region_name": "us-east-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_streaming_fails_at_the_request_timeout_not_the_upstreams_pace() -> None:
+    with pytest.raises(litellm.Timeout):
+        await litellm.acompletion(client=slow_upstream_async_client(), **_invoke_streaming_kwargs())
+
+
+def test_sync_invoke_streaming_fails_at_the_request_timeout_not_the_upstreams_pace() -> None:
+    with pytest.raises(litellm.Timeout):
+        litellm.completion(client=slow_upstream_sync_client(), **_invoke_streaming_kwargs())

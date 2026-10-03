@@ -395,6 +395,7 @@ class BaseConfig(ABC):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "CustomStreamWrapper":
         raise NotImplementedError
 
@@ -412,6 +413,7 @@ class BaseConfig(ABC):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "CustomStreamWrapper":
         raise NotImplementedError
 
