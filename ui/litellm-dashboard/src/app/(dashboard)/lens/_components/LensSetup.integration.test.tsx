@@ -5,7 +5,7 @@ import { renderWithProviders } from "@/../tests/test-utils";
 import { MonitoringSetup } from "./LensOverview";
 import { LensSetup } from "./LensSetup";
 import { apiClient } from "@/components/networking";
-import type { Settings } from "./lensData";
+import { initialWatches, watchChecks, type Settings } from "./lensData";
 
 vi.mock("@/components/networking", () => ({ apiClient: { post: vi.fn(), get: vi.fn() } }));
 
@@ -105,12 +105,13 @@ describe("Lens setup", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Metadata key 1" }), { target: { value: "swarm" } });
     fireEvent.change(screen.getByRole("combobox", { name: "Metadata value 1" }), { target: { value: "research" } });
     await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: /Add your own/ }));
     await user.type(screen.getByRole("textbox", { name: "Check 1" }), "Find incomplete reports");
-    await user.click(screen.getByRole("button", { name: "Add check" }));
+    await user.click(screen.getByRole("button", { name: /Add your own/ }));
     fireEvent.change(screen.getByRole("textbox", { name: "Check 2" }), {
       target: { value: "Find repeated searches\nInclude retries that add no information" },
     });
-    await user.click(screen.getByRole("button", { name: "Add check" }));
+    await user.click(screen.getByRole("button", { name: /Add your own/ }));
     await user.click(screen.getByRole("button", { name: "Remove check 3" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled());
@@ -129,6 +130,7 @@ describe("Lens setup", () => {
       model: "analysis",
       monthly_budget: 100,
       checks: [
+        ...watchChecks(initialWatches(undefined)),
         expect.objectContaining({ instruction: "Find incomplete reports" }),
         expect.objectContaining({ instruction: "Find repeated searches\nInclude retries that add no information" }),
       ],
@@ -410,4 +412,66 @@ it("saves a discovered agent independently of the application name", async () =>
   expect(save).toHaveBeenCalledWith(
     expect.objectContaining({ agent_name: "research_agent", service: "shared-service" }),
   );
+});
+
+describe("Watch for", () => {
+  const tile = (name: string) => screen.getByRole("button", { name: new RegExp(`^${name}`) });
+
+  it("saves exactly the presets the user toggled, by click and by number key", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LensSetup models={["analysis"]} defaultModel="analysis" accessToken="test" onClose={vi.fn()} onSave={save} />,
+    );
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(tile("unhappy"));
+    tile("unsolved").focus();
+    await user.keyboard("6");
+    await user.keyboard("{ArrowRight}{ArrowRight}");
+    expect(tile("unsafe")).toHaveFocus();
+    expect(tile("unhappy")).toHaveAttribute("aria-pressed", "false");
+    expect(tile("looping")).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Run investigation" }));
+    const saved = (save.mock.calls[0][0] as Settings).checks.map((check) => check.id);
+    expect(saved).toEqual(["watch_unsolved", "watch_blocked", "watch_looping"]);
+  });
+
+  it("keeps an edited investigation's preset choices and custom checks apart", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    const initial: Settings = {
+      ...settings,
+      checks: [{ id: "watch_invented", instruction: "old wording", enabled: true }, settings.checks[1]],
+    };
+    renderWithProviders(
+      <LensSetup initial={initial} models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={save} />,
+    );
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(tile("invented")).toHaveAttribute("aria-pressed", "true");
+    expect(tile("unsolved")).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("textbox", { name: "Check 1" })).toHaveValue("Find incomplete reports");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect((save.mock.calls[0][0] as Settings).checks).toEqual([
+      ...watchChecks(new Set(["watch_invented"])),
+      settings.checks[1],
+    ]);
+  });
+
+  it("lets a run start from presets alone and blocks it once nothing is selected", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <LensSetup models={["analysis"]} defaultModel="analysis" accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />,
+    );
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByRole("button", { name: "Run investigation" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    for (const name of ["unsolved", "blocked", "unhappy"]) await user.click(tile(name));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("pick something to watch for");
+  });
 });
