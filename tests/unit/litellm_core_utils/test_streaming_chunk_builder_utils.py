@@ -1851,3 +1851,114 @@ def test_stream_chunk_builder_omits_service_tier_when_no_chunk_carried_one():
 
     assert response is not None
     assert "service_tier" not in response.model_dump()
+
+
+def test_get_combined_tool_content_rebuilds_fragmented_name_and_id():
+    """Test that ChunkProcessor.get_combined_tool_content concatenates tool call name and id when streamed in multiple fragments (#44392)."""
+    # Test with ModelResponseStream objects
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-test-1",
+            created=1744771912,
+            model="gpt-4o",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                id="call_",
+                                function=Function(
+                                    name="get_",
+                                    arguments="",
+                                ),
+                                type="function",
+                                index=0,
+                            )
+                        ],
+                    ),
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-test-2",
+            created=1744771913,
+            model="gpt-4o",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    delta=Delta(
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                id="9f2c",
+                                function=Function(
+                                    name="weather",
+                                    arguments='{"city": "Paris"}',
+                                ),
+                                type="function",
+                                index=0,
+                            )
+                        ],
+                    ),
+                )
+            ],
+        ),
+    ]
+
+    processor = ChunkProcessor()
+    tool_calls = processor.get_combined_tool_content(chunks)
+    assert len(tool_calls) == 1
+    assert tool_calls[0].id == "call_9f2c"
+    assert tool_calls[0].function.name == "get_weather"
+    assert tool_calls[0].function.arguments == '{"city": "Paris"}'
+
+    # Test with raw dict format
+    dict_chunks = [
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_",
+                                "type": "function",
+                                "function": {"name": "get_", "arguments": ""},
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "abc1",
+                                "type": "function",
+                                "function": {"name": "data", "arguments": '{"query": "AI"}'},
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+    ]
+    dict_tool_calls = processor.get_combined_tool_content(dict_chunks)
+    assert len(dict_tool_calls) == 1
+    assert dict_tool_calls[0].id == "call_abc1"
+    assert dict_tool_calls[0].function.name == "get_data"
+    assert dict_tool_calls[0].function.arguments == '{"query": "AI"}'
