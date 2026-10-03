@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
     convert_to_gemini_tool_call_result,
+    function_call_prompt,
     get_tool_calls_from_response,
     make_valid_bedrock_tool_name,
     ollama_pt,
@@ -3872,6 +3873,40 @@ def test_convert_to_anthropic_tool_invoke_keeps_paired_server_tool_use():
         },
         server_result,
     ]
+
+
+FUNCTION_PROMPT_DESCRIPTIONS: Final = "\n{'name': 'graph_stats'}\n"
+
+
+@pytest.mark.parametrize(
+    ("messages", "expected_system_contents"),
+    [
+        ([{"role": "user", "content": "hi"}], None),
+        ([{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}], "Be brief. "),
+        (
+            [{"role": "system", "content": [{"type": "text", "text": "Be brief."}]}, {"role": "user", "content": "hi"}],
+            [{"type": "text", "text": "Be brief."}],
+        ),
+    ],
+)
+def test_function_call_prompt_returns_new_messages(messages, expected_system_contents):
+    original: Final = json.loads(json.dumps(messages))
+
+    result: Final = function_call_prompt(messages=messages, function_descriptions=FUNCTION_PROMPT_DESCRIPTIONS)
+
+    assert messages == original
+    system_messages: Final = [m for m in result if m["role"] == "system"]
+    assert len(system_messages) == 1
+    content: Final = system_messages[0]["content"]
+    prompt_text: Final = content if isinstance(content, str) else content[-1]["text"]
+    assert "Produce JSON OUTPUT ONLY" in prompt_text
+    assert "graph_stats" in prompt_text
+    if expected_system_contents is None:
+        assert result[:-1] == original
+    elif isinstance(expected_system_contents, str):
+        assert content.startswith(expected_system_contents)
+    else:
+        assert content[:-1] == expected_system_contents
 
 
 def test_anthropic_messages_pt_keeps_system_role_after_user_turn():
