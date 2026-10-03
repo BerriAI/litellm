@@ -671,3 +671,102 @@ fn openinference_provider_response_identity(
     });
     assert_eq!(decoded.normalized.calls, expected);
 }
+
+#[rstest]
+#[case::unknown("custom", "gen_ai.response.id", CallKey::ProviderResponse("id".into()))]
+#[case::gateway("custom", "litellm.call_id", CallKey::LiteLlmRequest("id".into()))]
+#[case::other_format("langsmith", "litellm.call_id", CallKey::LiteLlmRequest("id".into()))]
+fn generic_ids_do_not_prove_call_completeness(
+    span: Span,
+    #[case] scope: &str,
+    #[case] attribute: &str,
+    #[case] key: CallKey,
+) {
+    let decoded = decode(span, scope, &[(attribute, "id")], vec![]).unwrap();
+    assert_eq!(
+        decoded.normalized.calls,
+        CallEvidence::Partial(std::collections::BTreeSet::from([key]))
+    );
+}
+
+#[rstest]
+fn transport_contract_keeps_independent_call_ids(span: Span) {
+    let decoded = decode(
+        span,
+        "opentelemetry.instrumentation.httpx",
+        &[
+            ("litellm.call_id", "gateway"),
+            ("gen_ai.response.id", "response"),
+        ],
+        vec![],
+    )
+    .unwrap();
+    assert_eq!(
+        decoded.normalized.calls,
+        CallEvidence::Complete(std::collections::BTreeSet::from([
+            CallKey::Transport,
+            CallKey::LiteLlmRequest("gateway".into()),
+            CallKey::ProviderResponse("response".into()),
+        ]))
+    );
+}
+
+#[rstest]
+#[case::both(true, true)]
+#[case::input_only(true, false)]
+#[case::output_only(false, true)]
+fn langsmith_consumption_follows_selected_payloads(
+    span: Span,
+    #[case] legacy_input: bool,
+    #[case] legacy_output: bool,
+) {
+    let decoded = decode(
+        span,
+        "langsmith",
+        &[
+            ("langsmith.span.kind", "chain"),
+            (
+                "gen_ai.input.messages",
+                r#"[{"role":"user","content":"modern input"}]"#,
+            ),
+            (
+                "gen_ai.output.messages",
+                r#"[{"role":"assistant","content":"modern output"}]"#,
+            ),
+            (
+                "gen_ai.prompt",
+                if legacy_input { "legacy input" } else { "" },
+            ),
+            (
+                "gen_ai.completion",
+                if legacy_output { "legacy output" } else { "" },
+            ),
+        ],
+        vec![],
+    )
+    .unwrap();
+    for (legacy, modern, selected, payload, expected) in [
+        (
+            "gen_ai.prompt",
+            "gen_ai.input.messages",
+            legacy_input,
+            &decoded.normalized.input,
+            "legacy input",
+        ),
+        (
+            "gen_ai.completion",
+            "gen_ai.output.messages",
+            legacy_output,
+            &decoded.normalized.output,
+            "legacy output",
+        ),
+    ] {
+        assert_eq!(decoded.consumed_attributes.contains(&legacy), selected);
+        assert_eq!(decoded.consumed_attributes.contains(&modern), !selected);
+        if selected {
+            assert_eq!(payload, expected);
+        } else {
+            assert!(serde_json::from_str::<Value>(payload).unwrap().is_array());
+        }
+    }
+}

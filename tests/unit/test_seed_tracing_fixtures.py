@@ -13,8 +13,6 @@ from litellm.rust_bridge.trace.storage import span_rows
 from litellm.tracing.types import SpendLogRecord
 from scripts.seed_tracing_fixtures import (
     JSON,
-    SPEND_FIXTURE,
-    SPEND_ROWS,
     TRACE_FIXTURES,
     fixture_capture,
     fixture_replays,
@@ -80,9 +78,7 @@ def test_all_fixture_replays_are_recent_and_preserve_spans(path: Path) -> None:
 def test_replay_preserves_trace_topology_usage_and_event_timing() -> None:
     export: Final = JSON.validate_json((TRACE_FIXTURES / "deeplite_swarm.json").read_bytes())
     original: Final = span_rows(json.dumps(export).encode(), "application/json")
-    spend_rows: Final = SPEND_ROWS.validate_python(
-        tuple(json.loads(line) for line in SPEND_FIXTURE.read_text().splitlines())
-    )
+    spend_rows: Final = dict(spend_fixtures())["deeplite_swarm"]
     pattern: Final = re.compile("|".join(re.escape(row["response_id"]) for row in spend_rows))
     shifted: Final = rebase(export, 123_000_000, "first-run", pattern)
     replayed: Final = span_rows(json.dumps(shifted).encode(), "application/json")
@@ -109,9 +105,7 @@ def test_replay_preserves_trace_topology_usage_and_event_timing() -> None:
 @pytest.mark.requires_rust_extension
 def test_paired_fixture_joins_every_successful_llm_span_after_replay() -> None:
     export: Final = JSON.validate_json((TRACE_FIXTURES / "deeplite_swarm.json").read_bytes())
-    spends: Final = SPEND_ROWS.validate_python(
-        tuple(json.loads(line) for line in SPEND_FIXTURE.read_text().splitlines())
-    )
+    spends: Final = dict(spend_fixtures())["deeplite_swarm"]
     pattern: Final = re.compile("|".join(re.escape(row["response_id"]) for row in spends))
     replays: Final = fixture_replays(TRACE_FIXTURES, max(timestamps(export)) // 1_000_000 + 1123, "paired-run", pattern)
     replay: Final = next(item for item in replays if item.name == "deeplite_swarm")
@@ -137,9 +131,7 @@ def test_paired_fixture_joins_every_successful_llm_span_after_replay() -> None:
 
 
 def test_postgres_rows_preserve_clickhouse_cost_identity_and_payloads() -> None:
-    spends: Final = SPEND_ROWS.validate_python(
-        tuple(json.loads(line) for line in SPEND_FIXTURE.read_text().splitlines())
-    )
+    spends: Final = dict(spend_fixtures())["deeplite_swarm"]
 
     for spend, postgres in ((spend, postgres_row(spend)) for spend in spends):
         start_time, end_time = DATETIMES.validate_python((postgres["startTime"], postgres["endTime"]))
@@ -192,3 +184,15 @@ def test_captured_spend_replay_preserves_real_cost_and_call_identity(
         assert bool(frozenset(f"provider_response:{identity}" for identity in response_ids((after,))) & keys) is (
             capture.spend_linked
         )
+
+
+@pytest.mark.parametrize("call_id", (None, "gateway"))
+def test_spend_fixture_loading_preserves_gateway_ids_and_defaults_legacy_rows(
+    tmp_path: Path, call_id: str | None
+) -> None:
+    original: Final = dict(spend_fixtures())["deeplite_swarm"][0]
+    fields: Final = {key: value for key, value in original.items() if key != "litellm_call_id"}
+    supplied: Final = fields if call_id is None else {**fields, "litellm_call_id": call_id}
+    (tmp_path / "example_spend_logs.jsonl").write_text(json.dumps(supplied) + "\n")
+    loaded: Final = spend_fixtures(tmp_path)
+    assert loaded == (("example", ({**original, "litellm_call_id": call_id or ""},)),)
