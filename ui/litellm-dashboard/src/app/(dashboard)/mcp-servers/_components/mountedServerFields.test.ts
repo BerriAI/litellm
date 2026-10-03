@@ -50,6 +50,10 @@ describe("edit root: transport gates", () => {
       "mcp_access_groups",
       "extra_headers",
       "static_headers",
+      "approval_policy_tools",
+      "approval_policy_issuer",
+      "approval_policy_jwks_url",
+      "approval_policy_audience",
     ]);
   });
 
@@ -218,6 +222,12 @@ const PERMS = [
   "extra_headers",
   "static_headers",
 ];
+const APPROVAL = [
+  "approval_policy_tools",
+  "approval_policy_issuer",
+  "approval_policy_jwks_url",
+  "approval_policy_audience",
+];
 const sorted = (xs: readonly string[]) => [...xs].sort();
 
 const expectEditSets = (
@@ -238,13 +248,16 @@ const expectCreateSets = (
 
 describe("edit root: exact mounted set per auth configuration", () => {
   it("http + none", () => {
-    expectEditSets(HTTP_NONE, { root: [...ALWAYS, "url", "auth_type", "env_vars", ...PERMS], credentials: [] });
+    expectEditSets(HTTP_NONE, {
+      root: [...ALWAYS, "url", "auth_type", "env_vars", ...PERMS, ...APPROVAL],
+      credentials: [],
+    });
   });
 
   it("http + api_key", () => {
     expectEditSets(
       { transport: "http", auth_type: "api_key" },
-      { root: [...ALWAYS, "url", "auth_type", "env_vars", ...PERMS], credentials: ["auth_value"] },
+      { root: [...ALWAYS, "url", "auth_type", "env_vars", ...PERMS, ...APPROVAL], credentials: ["auth_value"] },
     );
   });
 
@@ -260,6 +273,7 @@ describe("edit root: exact mounted set per auth configuration", () => {
           "token_url",
           "env_vars",
           ...PERMS,
+          ...APPROVAL,
           "delegate_auth_to_upstream",
         ],
         credentials: [
@@ -291,6 +305,7 @@ describe("edit root: exact mounted set per auth configuration", () => {
           "token_storage_ttl_seconds",
           "env_vars",
           ...PERMS,
+          ...APPROVAL,
           "delegate_auth_to_upstream",
         ],
         credentials: [
@@ -319,6 +334,7 @@ describe("edit root: exact mounted set per auth configuration", () => {
           "subject_token_type",
           "env_vars",
           ...PERMS,
+          ...APPROVAL,
         ],
         credentials: ["client_id", "client_secret", "scopes", "upstream_token_header"],
       },
@@ -337,6 +353,7 @@ describe("edit root: exact mounted set per auth configuration", () => {
           "token_exchange_endpoint",
           "env_vars",
           ...PERMS,
+          ...APPROVAL,
         ],
         credentials: ["client_id", "client_secret", "scopes", "upstream_token_header"],
       },
@@ -356,6 +373,7 @@ describe("edit root: exact mounted set per auth configuration", () => {
           "subject_token_type",
           "env_vars",
           ...PERMS,
+          ...APPROVAL,
         ],
         credentials: [
           "upstream_token_header",
@@ -376,7 +394,7 @@ describe("edit root: exact mounted set per auth configuration", () => {
     expectEditSets(
       { transport: "http", auth_type: "true_passthrough" },
       {
-        root: [...ALWAYS, "url", "auth_type", "dcr_bridge", "env_vars", ...PERMS],
+        root: [...ALWAYS, "url", "auth_type", "dcr_bridge", "env_vars", ...PERMS, ...APPROVAL],
         credentials: ["client_id", "client_secret"],
       },
     );
@@ -385,7 +403,7 @@ describe("edit root: exact mounted set per auth configuration", () => {
   it("openapi + none", () => {
     expectEditSets(
       { transport: "openapi", auth_type: "none" },
-      { root: [...ALWAYS, "spec_path", "auth_type", "env_vars", ...PERMS], credentials: [] },
+      { root: [...ALWAYS, "spec_path", "auth_type", "env_vars", ...PERMS, ...APPROVAL], credentials: [] },
     );
   });
 });
@@ -394,7 +412,7 @@ describe("create root: exact mounted set per configuration", () => {
   it("http + none", () => {
     expectCreateSets(
       { transport: "http", auth_type: "none" },
-      { root: [...ALWAYS, "source_url", "url", "auth_type", "env_vars", ...PERMS], credentials: [] },
+      { root: [...ALWAYS, "source_url", "url", "auth_type", "env_vars", ...PERMS, ...APPROVAL], credentials: [] },
     );
   });
 
@@ -412,6 +430,7 @@ describe("create root: exact mounted set per configuration", () => {
           "auth_type",
           "env_vars",
           ...PERMS,
+          ...APPROVAL,
         ],
         credentials: [],
       },
@@ -421,12 +440,15 @@ describe("create root: exact mounted set per configuration", () => {
   it("stdio", () => {
     expectCreateSets(
       { transport: "stdio" },
-      { root: [...ALWAYS, "source_url", "stdio_config", "env_vars", ...PERMS], credentials: [] },
+      { root: [...ALWAYS, "source_url", "stdio_config", "env_vars", ...PERMS, ...APPROVAL], credentials: [] },
     );
   });
 
   it("transport still unset", () => {
-    expectCreateSets({ transport: "" }, { root: [...ALWAYS, "source_url", "env_vars", ...PERMS], credentials: [] });
+    expectCreateSets(
+      { transport: "" },
+      { root: [...ALWAYS, "source_url", "env_vars", ...PERMS, ...APPROVAL], credentials: [] },
+    );
   });
 
   it("http + oauth2 interactive", () => {
@@ -447,6 +469,7 @@ describe("create root: exact mounted set per configuration", () => {
           "token_storage_ttl_seconds",
           "env_vars",
           ...PERMS,
+          ...APPROVAL,
           "delegate_auth_to_upstream",
         ],
         credentials: [
@@ -465,7 +488,7 @@ describe("create root: exact mounted set per configuration", () => {
     expectCreateSets(
       { transport: "http", auth_type: "oauth_delegate" },
       {
-        root: [...ALWAYS, "source_url", "url", "auth_type", "dcr_bridge", "env_vars", ...PERMS],
+        root: [...ALWAYS, "source_url", "url", "auth_type", "dcr_bridge", "env_vars", ...PERMS, ...APPROVAL],
         credentials: ["client_id", "client_secret"],
       },
     );

@@ -8572,7 +8572,10 @@ def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
         data=AddTeamCallback(
             callback_name="signoz",
             callback_type="success",
-            callback_vars={"signoz_ingestion_key": "team-key", "signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443"},
+            callback_vars={
+                "signoz_ingestion_key": "team-key",
+                "signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443",
+            },
         ),
         team_callback_settings_obj=None,
     )
@@ -8590,3 +8593,67 @@ def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
         team_callback_settings_obj=None,
     )
     assert under_other.callback_vars == {"langfuse_host": "https://cloud.langfuse.com"}
+
+
+def test_clean_headers_drops_approval_reference_header_in_both_modes():
+    from starlette.datastructures import Headers
+    from litellm.constants import MCP_APPROVAL_REFERENCE_HEADER
+    from litellm.proxy.litellm_pre_call_utils import clean_headers
+
+    token = "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJhIn0.sig"
+    for forward in (False, True):
+        cleaned = clean_headers(
+            Headers({MCP_APPROVAL_REFERENCE_HEADER: token, "x-nuid": "nuid-1"}),
+            forward_llm_provider_auth_headers=forward,
+        )
+        assert token not in cleaned.values()
+        assert cleaned.get("x-nuid") == "nuid-1"
+
+        cleaned_mixed_case = clean_headers(
+            Headers({"X-LiteLLM-MCP-Approval-Reference": token, "x-nuid": "nuid-1"}),
+            forward_llm_provider_auth_headers=forward,
+        )
+        assert token not in cleaned_mixed_case.values()
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_drops_approval_reference_but_keeps_secret_fields():
+    from litellm.constants import MCP_APPROVAL_REFERENCE_HEADER
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    token = "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJhIn0.sig"
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {MCP_APPROVAL_REFERENCE_HEADER: token, "x-nuid": "nuid-1"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data={"metadata": {}, "model": "gpt-3.5-turbo"},
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    proxy_headers = {k.lower() for k in updated["proxy_server_request"]["headers"]}
+    assert MCP_APPROVAL_REFERENCE_HEADER not in proxy_headers
+    metadata_headers = {k.lower() for k in (updated["metadata"].get("headers") or {})}
+    assert MCP_APPROVAL_REFERENCE_HEADER not in metadata_headers
+    assert updated["secret_fields"]["raw_headers"][MCP_APPROVAL_REFERENCE_HEADER] == token

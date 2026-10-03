@@ -50,7 +50,7 @@ from litellm.types.mcp import (
     MCPUpstreamProtocol,
     validate_mcp_protocol_transport,
 )
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.types.mcp_server.mcp_server_manager import MCPApprovalPolicy, MCPInfo
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.carried_budget_state import (
     OrgBudgetSnapshot,
@@ -1627,6 +1627,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     mcp_info: MCPInfo | None = None
     mcp_access_groups: list[str] = Field(default_factory=list)
     allowed_tools: list[str] | None = None
+    approval_policy: MCPApprovalPolicy | None = None
     tool_name_to_display_name: dict[str, str] | None = None
     tool_name_to_description: dict[str, str] | None = None
     extra_headers: list[str] | None = None
@@ -1766,6 +1767,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     is_byok: bool = False
     byok_description: list[str] = Field(default_factory=list)
     byok_api_key_help_url: str | None = None
+    approval_policy: MCPApprovalPolicy | None = None
     source_url: str | None = None
     timeout: float | None = None
     max_concurrent_requests: int | None = None

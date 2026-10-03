@@ -47,7 +47,8 @@ export type BuildCreatePayloadResult =
   | { readonly kind: "ok"; readonly payload: Record<string, unknown> }
   | { readonly kind: "invalid_tool_display_name"; readonly displayName: string }
   | { readonly kind: "invalid_stdio_json" }
-  | { readonly kind: "invalid_token_validation_json" };
+  | { readonly kind: "invalid_token_validation_json" }
+  | { readonly kind: "invalid_approval_policy" };
 
 export type StdioParseResult =
   | { readonly kind: "ok"; readonly fields: Record<string, unknown>; readonly derivedServerName?: string }
@@ -120,6 +121,15 @@ const filterCredentials = (credentialValues: unknown): Record<string, unknown> |
   );
 };
 
+export const toToolNameList = (raw: unknown): readonly string[] =>
+  Array.isArray(raw)
+    ? raw
+        .map((entry: unknown) => (typeof entry === "string" ? entry.trim() : ""))
+        .filter((entry: string) => entry !== "")
+    : [];
+
+export const toTrimmedString = (raw: unknown): string => (typeof raw === "string" ? raw.trim() : "");
+
 const firstInvalidToolDisplayName = (toolNameToDisplayName: Readonly<Record<string, string>>): string | undefined =>
   Object.entries(toolNameToDisplayName).find(
     ([, displayName]) => displayName && !TOOL_DISPLAY_NAME_PATTERN.test(displayName),
@@ -145,6 +155,10 @@ export const buildCreateServerPayload = (
     oauth_passthrough: oauthPassthroughRaw,
     dcr_bridge: dcrBridgeRaw,
     token_validation_json: rawTokenValidationJson,
+    approval_policy_tools: rawApprovalTools,
+    approval_policy_issuer: rawApprovalIssuer,
+    approval_policy_jwks_url: rawApprovalJwksUrl,
+    approval_policy_audience: rawApprovalAudience,
     ...restValues
   } = values;
 
@@ -165,6 +179,14 @@ export const buildCreateServerPayload = (
     return { kind: "invalid_token_validation_json" };
   }
   const tokenValidation = tokenValidationResult.value;
+
+  const approvalTools = toToolNameList(rawApprovalTools);
+  const approvalIssuer = toTrimmedString(rawApprovalIssuer);
+  const approvalJwksUrl = toTrimmedString(rawApprovalJwksUrl);
+  const approvalAudience = toTrimmedString(rawApprovalAudience);
+  if (approvalTools.length > 0 && (!approvalIssuer || !approvalJwksUrl)) {
+    return { kind: "invalid_approval_policy" };
+  }
 
   const serverName = (restValues.server_name as string | undefined) || stdio.derivedServerName;
   // "openapi" is a UI-only transport; the backend stores those servers as plain http.
@@ -222,6 +244,16 @@ export const buildCreateServerPayload = (
       ...(authType === AUTH_TYPE.OAUTH2
         ? {
             oauth2_flow: values.oauth_flow_type === OAUTH_FLOW.M2M ? MCP_OAUTH2_FLOW_M2M : MCP_OAUTH2_FLOW_INTERACTIVE,
+          }
+        : {}),
+      ...(approvalTools.length > 0
+        ? {
+            approval_policy: {
+              tools: [...approvalTools],
+              issuer: approvalIssuer,
+              jwks_url: approvalJwksUrl,
+              audience: approvalAudience || null,
+            },
           }
         : {}),
       static_headers: reduceStaticHeaders(staticHeadersList),

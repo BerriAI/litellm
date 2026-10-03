@@ -982,6 +982,7 @@ if MCP_AVAILABLE:
             available_on_public_internet=payload.available_on_public_internet,
             timeout=payload.timeout,
             max_concurrent_requests=payload.max_concurrent_requests,
+            approval_policy=payload.approval_policy,
         )
 
     def get_prisma_client_or_throw(message: str):

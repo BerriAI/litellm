@@ -294,3 +294,70 @@ describe("buildCreateServerPayload mcp_info", () => {
     expect(payload.stdio_config).toBeUndefined();
   });
 });
+
+describe("buildCreateServerPayload approval policy", () => {
+  const approvalValues = {
+    approval_policy_tools: ["delete_records", "wipe_records"],
+    approval_policy_issuer: "https://approvals.example.com",
+    approval_policy_jwks_url: "https://approvals.example.com/.well-known/jwks.json",
+  };
+
+  it("sends the approval policy only when at least one tool is set", () => {
+    const expectedPolicy = {
+      tools: ["delete_records", "wipe_records"],
+      issuer: "https://approvals.example.com",
+      jwks_url: "https://approvals.example.com/.well-known/jwks.json",
+      audience: null,
+    };
+    const payload = payloadOf(build(approvalValues));
+    expect(payload.approval_policy).toEqual(expectedPolicy);
+  });
+
+  it("carries the audience when one is given", () => {
+    const expectedPolicy = {
+      tools: ["delete_records", "wipe_records"],
+      issuer: "https://approvals.example.com",
+      jwks_url: "https://approvals.example.com/.well-known/jwks.json",
+      audience: "mcp-gateway",
+    };
+    const payload = payloadOf(build({ ...approvalValues, approval_policy_audience: "mcp-gateway" }));
+    expect(payload.approval_policy).toEqual(expectedPolicy);
+  });
+
+  it("omits approval_policy when no tools are set even if issuer fields are filled", () => {
+    const payload = payloadOf(
+      build({
+        approval_policy_tools: [],
+        approval_policy_issuer: "https://approvals.example.com",
+        approval_policy_jwks_url: "https://approvals.example.com/.well-known/jwks.json",
+      }),
+    );
+    expect(payload).not.toHaveProperty("approval_policy");
+  });
+
+  it("rejects tools without an issuer", () => {
+    expect(
+      build({ approval_policy_tools: ["delete_records"], approval_policy_jwks_url: "https://a.example.com/jwks" }),
+    ).toEqual({ kind: "invalid_approval_policy" });
+  });
+
+  it("rejects tools without a JWKS URL", () => {
+    expect(
+      build({ approval_policy_tools: ["delete_records"], approval_policy_issuer: "https://a.example.com" }),
+    ).toEqual({ kind: "invalid_approval_policy" });
+  });
+
+  it("trims the issuer and JWKS URL before sending", () => {
+    const payload = payloadOf(
+      build({
+        approval_policy_tools: ["delete_records"],
+        approval_policy_issuer: "  https://approvals.example.com  ",
+        approval_policy_jwks_url: " https://approvals.example.com/jwks ",
+      }),
+    );
+    expect(payload.approval_policy).toMatchObject({
+      issuer: "https://approvals.example.com",
+      jwks_url: "https://approvals.example.com/jwks",
+    });
+  });
+});

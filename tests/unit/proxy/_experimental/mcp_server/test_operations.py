@@ -603,13 +603,24 @@ async def test_discovery_lists_each_capability_with_the_same_caller(available):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
 async def test_discovery_concurrent_listings_drain_on_failure_and_cancellation(outcome):
-    from mcp.types import DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult
+    from mcp.types import (
+        DiscoverRequest,
+        ListToolsResult,
+        ListPromptsResult,
+        ListResourcesResult,
+        ListResourceTemplatesResult,
+    )
     from litellm.proxy._experimental.mcp_server import operations
 
     ready = [asyncio.Event() for _ in range(4)]
     closed = [asyncio.Event() for _ in range(4)]
     release = asyncio.Event()
-    responses = (ListToolsResult(tools=[]), ListPromptsResult(prompts=[]), ListResourcesResult(resources=[]), ListResourceTemplatesResult(resource_templates=[]))
+    responses = (
+        ListToolsResult(tools=[]),
+        ListPromptsResult(prompts=[]),
+        ListResourcesResult(resources=[]),
+        ListResourceTemplatesResult(resource_templates=[]),
+    )
 
     def listing(index):
         async def run(*args, **kwargs):
@@ -665,3 +676,243 @@ async def test_tools_listing_preserves_explicit_spend_log_policy(log_enabled):
         )
     assert result.tools == []
     assert listing.await_args.kwargs["log_list_tools_to_spendlogs"] is log_enabled
+
+
+_APPROVAL_ISSUER = "https://approvals.example.com"
+_APPROVAL_JWKS_URL = "https://approvals.example.com/.well-known/jwks.json"
+
+_approval_rsa_key = None
+_approval_jwks = None
+
+
+def _approval_signing_material():
+    import json
+
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    global _approval_rsa_key, _approval_jwks
+    if _approval_rsa_key is None:
+        _approval_rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        doc = json.loads(pyjwt.algorithms.RSAAlgorithm.to_jwk(_approval_rsa_key.public_key()))
+        doc["kid"] = "kid-1"
+        doc["use"] = "sig"
+        doc["alg"] = "RS256"
+        _approval_jwks = [doc]
+    return _approval_rsa_key, _approval_jwks
+
+
+def _approval_server(server_id: str = "srv-approval") -> MCPServer:
+    from litellm.types.mcp_server.mcp_server_manager import MCPApprovalPolicy
+
+    return MCPServer(
+        server_id=server_id,
+        name="records-server",
+        url="https://up.example.com/mcp",
+        transport=MCPTransport.http,
+        approval_policy=MCPApprovalPolicy(
+            tools=("delete_records",),
+            issuer=_APPROVAL_ISSUER,
+            jwks_url=_APPROVAL_JWKS_URL,
+        ),
+    )
+
+
+def _approval_token(server: MCPServer, tool: str = "delete_records", bind_to: str | None = None) -> str:
+    import time
+
+    import jwt as pyjwt
+
+    key, _ = _approval_signing_material()
+    now = int(time.time())
+    return pyjwt.encode(
+        {
+            "iss": _APPROVAL_ISSUER,
+            "exp": now + 600,
+            "jti": "jti-ops-1",
+            "mcp_server": bind_to or server.server_id,
+            "mcp_tool": tool,
+            "sub": "agent-7",
+        },
+        key,
+        algorithm="RS256",
+        headers={"kid": "kid-1"},
+    )
+
+
+async def _seed_approval_jwks() -> None:
+    from litellm.proxy._experimental.mcp_server.approval_reference import _jwks_cache
+
+    _, jwks = _approval_signing_material()
+    await _jwks_cache.async_set_cache(_APPROVAL_JWKS_URL, jwks)
+
+
+@pytest.fixture(autouse=True)
+def _clear_approval_jwks_cache():
+    from litellm.proxy._experimental.mcp_server.approval_reference import _jwks_cache
+
+    yield
+    _jwks_cache.flush_cache()
+
+
+async def _dispatch_tool_call(server: MCPServer, *, name: str, headers: dict, logging_obj=None):
+    """Run execute_mcp_tool for ``server`` and return the upstream dispatch mock.
+
+    The call may raise; ``upstream.assert_not_awaited()`` then proves nothing
+    reached the upstream MCP server.
+    """
+    from datetime import datetime, timezone
+
+    from mcp.types import CallToolResult, TextContent
+
+    from litellm.proxy._experimental.mcp_server import operations
+
+    manager = operations.global_mcp_server_manager
+    upstream = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="ok")], isError=False))
+    manager.registry[server.server_id] = server
+    try:
+        with (
+            patch.object(manager, "server_exposes_tool", return_value=True),
+            patch.object(manager, "_call_regular_mcp_tool", upstream),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+        ):
+            await operations.execute_mcp_tool(
+                name=name,
+                arguments={},
+                allowed_mcp_servers=[server],
+                start_time=datetime.now(timezone.utc),
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-caller"),
+                raw_headers=headers,
+                requested_server_id=server.server_id,
+                litellm_logging_obj=logging_obj,
+            )
+    finally:
+        manager.registry.pop(server.server_id, None)
+    return upstream
+
+
+@pytest.mark.asyncio
+async def test_high_risk_tool_without_approval_reference_is_403_and_never_dispatched():
+    from fastapi import HTTPException
+
+    await _seed_approval_jwks()
+    server = _approval_server()
+    with pytest.raises(HTTPException) as exc_info:
+        await _dispatch_tool_call(server, name="delete_records", headers={"x-litellm-api-key": "sk-caller"})
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["error"] == "mcp_approval_reference_required"
+
+
+@pytest.mark.asyncio
+async def test_denied_approval_call_never_reaches_upstream():
+    from fastapi import HTTPException
+
+    await _seed_approval_jwks()
+    server = _approval_server()
+    from datetime import datetime, timezone
+
+    from mcp.types import CallToolResult, TextContent
+
+    from litellm.proxy._experimental.mcp_server import operations
+
+    manager = operations.global_mcp_server_manager
+    upstream = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="ok")], isError=False))
+    manager.registry[server.server_id] = server
+    try:
+        with (
+            patch.object(manager, "server_exposes_tool", return_value=True),
+            patch.object(manager, "_call_regular_mcp_tool", upstream),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+            pytest.raises(HTTPException),
+        ):
+            await operations.execute_mcp_tool(
+                name="delete_records",
+                arguments={},
+                allowed_mcp_servers=[server],
+                start_time=datetime.now(timezone.utc),
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-caller"),
+                raw_headers={},
+                requested_server_id=server.server_id,
+            )
+    finally:
+        manager.registry.pop(server.server_id, None)
+    upstream.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_valid_approval_reference_is_forwarded_and_recorded_on_spend_log():
+    from datetime import datetime
+
+    from litellm.constants import MCP_APPROVAL_REFERENCE_HEADER
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    await _seed_approval_jwks()
+    server = _approval_server()
+    logging_obj = Logging(
+        model="MCP: delete_records",
+        messages=[],
+        stream=False,
+        call_type="call_mcp_tool",
+        start_time=datetime.now(),
+        litellm_call_id="approval-test",
+        function_id="approval-fn",
+        dynamic_success_callbacks=[],
+    )
+    upstream = await _dispatch_tool_call(
+        server,
+        name="delete_records",
+        headers={MCP_APPROVAL_REFERENCE_HEADER: _approval_token(server)},
+        logging_obj=logging_obj,
+    )
+    upstream.assert_awaited_once()
+    assert upstream.await_args.kwargs["original_tool_name"] == "delete_records"
+    record = logging_obj.model_call_details["mcp_tool_call_metadata"]["approval_reference"]
+    assert record == {
+        "jti": "jti-ops-1",
+        "issuer": _APPROVAL_ISSUER,
+        "subject": "agent-7",
+        "expires_at": record["expires_at"],
+    }
+    assert isinstance(record["expires_at"], int)
+
+
+@pytest.mark.asyncio
+async def test_tool_outside_approval_policy_is_forwarded_without_reference():
+    upstream = await _dispatch_tool_call(_approval_server(), name="read_records", headers={})
+    upstream.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_server_without_approval_policy_is_unchanged():
+    upstream = await _dispatch_tool_call(_server("srv-plain", MCPAuth.none), name="delete_records", headers={})
+    upstream.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_token_bound_to_display_name_is_rejected():
+    from fastapi import HTTPException
+
+    from litellm.constants import MCP_APPROVAL_REFERENCE_HEADER
+
+    await _seed_approval_jwks()
+    server = _approval_server()
+    with pytest.raises(HTTPException) as exc_info:
+        await _dispatch_tool_call(
+            server,
+            name="delete_records",
+            headers={MCP_APPROVAL_REFERENCE_HEADER: _approval_token(server, bind_to=server.name)},
+        )
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["error"] == "mcp_approval_reference_invalid"
+
+
+@pytest.mark.asyncio
+async def test_prefixed_tool_name_still_enforces_approval_reference():
+    from fastapi import HTTPException
+
+    await _seed_approval_jwks()
+    server = _approval_server()
+    with pytest.raises(HTTPException) as exc_info:
+        await _dispatch_tool_call(server, name=f"{server.server_id}-delete_records", headers={})
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["error"] == "mcp_approval_reference_required"
