@@ -1,0 +1,238 @@
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final
+
+from pydantic import TypeAdapter, ValidationError
+
+_STR_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_OBJECT_TUPLE: Final = TypeAdapter(tuple[object, ...])
+_EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
+
+_SEND_VIA_EXTRA_BODY: Final = "extra_body"
+_SEND_VIA_PROVIDER_MAPPED: Final = "provider_mapped"
+_SEND_VIA_VALUES: Final = frozenset((_SEND_VIA_EXTRA_BODY, _SEND_VIA_PROVIDER_MAPPED))
+_THINKING_ENABLED_STRINGS: Final = frozenset(("enabled", "true", "1", "auto"))
+_THINKING_TYPE_ENABLED: Final = frozenset(("enabled", "auto", "true"))
+
+_EFFORT_FALLBACKS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "xhigh": ("max", "high"),
+        "max": ("xhigh", "high"),
+        "medium": ("high", "low"),
+        "minimal": ("low", "none"),
+        "none": ("low",),
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ThinkingParamsState:
+    thinking: object | None
+    reasoning_effort: object | None
+    extra_body: Mapping[str, object]
+
+
+def str_keyed_mapping_or_none(value: object) -> Mapping[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return _STR_KEYED_MAPPING.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _as_str_tuple(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(item for item in _OBJECT_TUPLE.validate_python(value) if isinstance(item, str))
+
+
+def _thinking_enabled(thinking: object) -> bool:
+    if isinstance(thinking, bool):
+        return thinking
+    if isinstance(thinking, str):
+        return thinking.lower() in _THINKING_ENABLED_STRINGS
+    mapping: Final = str_keyed_mapping_or_none(thinking)
+    if mapping is None:
+        return False
+    typ: Final = mapping.get("type")
+    if isinstance(typ, str):
+        return typ.lower() in _THINKING_TYPE_ENABLED
+    enabled: Final = mapping.get("enabled")
+    return enabled if isinstance(enabled, bool) else False
+
+
+def _thinking_type_candidate(thinking: object) -> str | None:
+    match thinking:
+        case bool():
+            return "enabled" if thinking else "disabled"
+        case str():
+            return thinking
+        case _:
+            mapping: Final = str_keyed_mapping_or_none(thinking)
+            raw: Final = mapping.get("type") if mapping is not None else None
+            return raw if isinstance(raw, str) else None
+
+
+def _thinking_type_value(thinking: object, allowed: Sequence[str]) -> str | None:
+    candidate: Final = _thinking_type_candidate(thinking)
+    if candidate is None:
+        return None
+    if not allowed or candidate in allowed:
+        return candidate
+    if candidate == "auto" and "enabled" in allowed:
+        return "enabled"
+    return None
+
+
+def _thinking_payload(thinking: object, typ: str) -> Mapping[str, object]:
+    mapping: Final = str_keyed_mapping_or_none(thinking)
+    if mapping is None:
+        return MappingProxyType({"type": typ})
+    return MappingProxyType({**mapping, "type": typ})
+
+
+def _clamp_effort(value: object, allowed: Sequence[str]) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if not allowed:
+        return None
+    if value in allowed:
+        return value
+    for fallback in _EFFORT_FALLBACKS.get(value, ()):
+        if fallback in allowed:
+            return fallback
+    return None
+
+
+def _merged_mapping_value(left: Mapping[str, object], right: Mapping[str, object], key: str) -> object:
+    if key not in right:
+        return left[key]
+    if key not in left:
+        return right[key]
+    left_map: Final = str_keyed_mapping_or_none(left[key])
+    right_map: Final = str_keyed_mapping_or_none(right[key])
+    if left_map is not None and right_map is not None:
+        return _deep_merge_pair(left_map, right_map)
+    return right[key]
+
+
+def _deep_merge_pair(left: Mapping[str, object], right: Mapping[str, object]) -> Mapping[str, object]:
+    keys: Final = (*left, *(key for key in right if key not in left))
+    return MappingProxyType({key: _merged_mapping_value(left, right, key) for key in keys})
+
+
+def _thawed(value: object) -> object:
+    mapping: Final = str_keyed_mapping_or_none(value)
+    return value if mapping is None else thaw_mapping(mapping)
+
+
+def thaw_mapping(mapping: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: JSON request body
+    return {key: _thawed(item) for key, item in mapping.items()}
+
+
+def _map_thinking_to_extra_body(
+    *,
+    thinking_param: str | None,
+    thinking: object,
+    thinking_values: Sequence[str],
+) -> Mapping[str, object]:
+    match thinking_param:
+        case "thinking.type":
+            typ: Final = _thinking_type_value(thinking, thinking_values)
+            if typ is None:
+                return _EMPTY
+            return MappingProxyType({"thinking": _thinking_payload(thinking, typ)})
+        case "thinking":
+            thinking_mapping: Final = str_keyed_mapping_or_none(thinking)
+            if thinking_mapping is not None:
+                return MappingProxyType({"thinking": MappingProxyType(thinking_mapping)})
+            typ_only: Final = _thinking_type_value(thinking, thinking_values or ("enabled", "disabled"))
+            if typ_only is None:
+                return _EMPTY
+            return MappingProxyType({"thinking": MappingProxyType({"type": typ_only})})
+        case "enable_thinking":
+            return MappingProxyType({"enable_thinking": _thinking_enabled(thinking)})
+        case "chat_template_kwargs":
+            return MappingProxyType(
+                {"chat_template_kwargs": MappingProxyType({"enable_thinking": _thinking_enabled(thinking)})}
+            )
+        case _:
+            return _EMPTY
+
+
+def _map_effort_to_extra_body(
+    *,
+    effort: object,
+    effort_values: Sequence[str],
+    send_via: object,
+) -> Mapping[str, object]:
+    clamped: Final = _clamp_effort(effort, effort_values)
+    if clamped is not None:
+        return MappingProxyType({"reasoning_effort": clamped})
+    if not effort_values and send_via == _SEND_VIA_EXTRA_BODY and isinstance(effort, str):
+        return MappingProxyType({"reasoning_effort": effort})
+    return _EMPTY
+
+
+def translate_thinking_params(
+    *,
+    model_info: Mapping[str, object] | None,
+    state: ThinkingParamsState,
+) -> ThinkingParamsState:
+    if model_info is None:
+        return state
+
+    send_via: Final = model_info.get("thinking_send_via")
+    if send_via not in _SEND_VIA_VALUES:
+        return state
+
+    supports_reasoning: Final = model_info.get("supports_reasoning") is True
+    thinking_param_raw: Final = model_info.get("thinking_param")
+    thinking_param: Final = thinking_param_raw if isinstance(thinking_param_raw, str) else None
+    thinking_values: Final = _as_str_tuple(model_info.get("thinking_values"))
+    effort_values: Final = _as_str_tuple(model_info.get("reasoning_effort_values"))
+
+    if not supports_reasoning and send_via != _SEND_VIA_PROVIDER_MAPPED:
+        return state
+
+    thinking: Final = state.thinking
+    effort: Final = state.reasoning_effort
+    if thinking is None and effort is None:
+        return state
+
+    keep_thinking: Final = send_via == _SEND_VIA_PROVIDER_MAPPED
+    thinking_patch: Final = (
+        _map_thinking_to_extra_body(
+            thinking_param=thinking_param,
+            thinking=thinking,
+            thinking_values=thinking_values,
+        )
+        if thinking is not None and send_via == _SEND_VIA_EXTRA_BODY
+        else _EMPTY
+    )
+    effort_patch: Final = (
+        _map_effort_to_extra_body(
+            effort=effort,
+            effort_values=effort_values,
+            send_via=send_via,
+        )
+        if effort is not None
+        else _EMPTY
+    )
+    patch: Final = MappingProxyType({**thinking_patch, **effort_patch})
+    if not patch:
+        return state
+
+    thinking_mapped: Final = any(key in patch for key in ("thinking", "enable_thinking", "chat_template_kwargs"))
+    next_thinking: Final = thinking if (keep_thinking or not thinking_mapped) else None
+    next_effort: Final = None if "reasoning_effort" in patch else effort
+    merged_extra: Final = _deep_merge_pair(patch, state.extra_body)
+    return ThinkingParamsState(
+        thinking=next_thinking,
+        reasoning_effort=next_effort,
+        extra_body=merged_extra,
+    )
