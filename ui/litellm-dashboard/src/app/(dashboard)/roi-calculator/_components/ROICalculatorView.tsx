@@ -1,10 +1,12 @@
 "use client";
 
+import { Page } from "@/components/shared/Page";
 import React from "react";
 import { Calculator, RefreshCw } from "lucide-react";
 
 import { apiClient } from "@/components/networking";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { DemoNotice } from "@/components/shared/DemoNotice";
+import { PageHeader, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -218,42 +220,34 @@ export default function ROICalculatorView({
   const syncedAt = syncIsUpToDate ? summary?.synced_at : null;
 
   return (
-    <main className="w-full space-y-6 p-8">
-      <PageHeader
-        icon={<Calculator />}
-        title="ROI Calculator"
-        subtitle={
-          <>
-            {summary
-              ? `${summary.start} through ${summary.end} · UTC`
-              : "Compare gateway spend with estimated engineering effort for merged pull requests"}
-            {syncedAt && (
-              <span className="mt-1 block text-xs text-muted-foreground" role="status">
-                Last synced {formatSyncedAt(syncedAt)}
-                {!status.running && status.phase === "complete" && status.reused > 0
-                  ? ` · ${status.reused} of ${status.total} estimates reused`
-                  : ""}
-              </span>
-            )}
-          </>
-        }
-      />
-      {!liveSummary && showLiveStatus && (
-        <Button variant="outline" onClick={() => void previewSample()}>
-          Preview sample report
-        </Button>
-      )}
-      {sampleSummary && (
-        <Alert>
-          <AlertTitle>Sample report</AlertTitle>
-          <AlertDescription>
-            Example data only. No GitHub or model requests were made.
-            <Button variant="link" onClick={() => setSampleSummary(null)}>
-              Use my data
+    <Page>
+      <PageHeader>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <PageHeaderTitle>
+            <Calculator />
+            ROI Calculator
+          </PageHeaderTitle>
+          {!liveSummary && showLiveStatus && (
+            <Button variant="outline" onClick={() => void previewSample()}>
+              Preview sample report
             </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+          )}
+        </div>
+        <PageHeaderDescription>
+          {summary
+            ? `${summary.start} through ${summary.end} · UTC`
+            : "Compare gateway spend with estimated engineering effort for merged pull requests"}
+          {syncedAt && (
+            <span className="mt-1 block text-xs text-muted-foreground" role="status">
+              Last synced {formatSyncedAt(syncedAt)}
+              {!status.running && status.phase === "complete" && status.reused > 0
+                ? ` · ${status.reused} of ${status.total} estimates reused`
+                : ""}
+            </span>
+          )}
+        </PageHeaderDescription>
+      </PageHeader>
+      {sampleSummary && <DemoNotice onExit={() => setSampleSummary(null)} />}
       {liveSummary && showLiveStatus && (
         <p className="text-xs text-muted-foreground">
           {status.next_update ? `Next update ${formatSyncedAt(status.next_update)}` : scheduleLabel}
@@ -372,6 +366,6 @@ export default function ROICalculatorView({
           onSave={updateIdentity}
         />
       )}
-    </main>
+    </Page>
   );
 }

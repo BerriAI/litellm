@@ -94,7 +94,7 @@ async fn queries_and_help_are_scoped_by_the_database(
         .await?,
     )?;
     assert_eq!(summary["data"][0]["count"], json!(expected.len()));
-    let help = query_help(&database.client, &reader).await?;
+    let help = serde_json::to_string(&query_help(&database.client, &reader).await?)?;
     assert_eq!(help.contains("secret_b"), expected.contains(&"b"));
     assert_eq!(help.contains("secret-b"), expected.contains(&"b"));
     let recreated = QueryReaders::new(database.writer.clone(), "trace_test".to_owned());

@@ -4,8 +4,9 @@ import { createQueryKeys } from "../common/queryKeysFactory";
 
 const modelCostMapKeys = createQueryKeys("modelCostMap");
 
-export const useModelCostMap = () => {
+export const useModelCostMap = (enabled = true) => {
   return useQuery<Record<string, any>>({
+    enabled,
     queryKey: modelCostMapKeys.list({}),
     queryFn: async () => await modelCostMap(),
     staleTime: 60 * 1000, // 1 minute
