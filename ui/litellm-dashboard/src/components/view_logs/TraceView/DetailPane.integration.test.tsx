@@ -23,12 +23,12 @@ const span = (overrides: SpanFields): Span => ({
   name: overrides.span_id,
   type: "chain",
   agent: "support_triage_agent",
+  framework: "",
   start_offset_ms: 0,
   duration_ms: 1300,
   status: "ok",
   error: null,
   error_truncated: false,
-  framework: "",
   input_preview: "",
   model: null,
   input_tokens: 0,
@@ -119,6 +119,7 @@ const standardDetail: SpanDetail = {
       {
         role: "assistant",
         content: "Refund approved for T-981.",
+        name: null,
         tool_calls: [{ name: "issue_refund", arguments: '{"amount_usd": 40}' }],
       },
     ],
@@ -328,6 +329,29 @@ describe("DetailPane", () => {
 });
 
 describe("SpanHoverCard", () => {
+  it.each([
+    ["retriever", "Retriever"],
+    ["embedding", "Embedding"],
+    ["reranker", "Reranker"],
+    ["guardrail", "Guardrail"],
+    ["evaluator", "Evaluator"],
+    ["prompt", "Prompt"],
+    ["decision", "Decision"],
+  ] as const)("renders the %s operation", async (type, label) => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <SpanHoverCard
+        facts={spanFacts(span({ span_id: "specialized", type }))}
+        traceStartMs={Date.parse(trace.summary.start_time)}
+      >
+        <button type="button">row</button>
+      </SpanHoverCard>,
+    );
+    await user.hover(screen.getByRole("button", { name: "row" }));
+    const card = await screen.findByTestId("span-hover-card", {}, { timeout: 2000 });
+    expect(within(card).getByText(label)).toBeInTheDocument();
+  });
+
   it("shows absolute Start / End times and the agent tag after hovering the row", async () => {
     const user = userEvent.setup();
     const traceStartMs = Date.parse(trace.summary.start_time);

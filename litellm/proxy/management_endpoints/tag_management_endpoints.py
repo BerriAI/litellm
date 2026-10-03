@@ -438,7 +438,7 @@ async def update_tag(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             litellm_proxy_admin_name=litellm_proxy_admin_name,
-            budget_duration_cleared="budget_duration" in tag.model_fields_set and tag.budget_duration is None,
+            cleared_budget_fields=frozenset(field for field in tag.model_fields_set if getattr(tag, field) is None),
         )
 
         # Get model names for model_info

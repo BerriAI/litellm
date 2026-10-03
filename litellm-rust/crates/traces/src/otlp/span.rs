@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     Error, Shared,
-    normalize::{CLAUDE_CODE_AGENT, CLAUDE_CODE_SCOPE, normalize},
+    normalize::{SpanContext, normalize},
 };
 
 pub(super) fn flatten(request: ExportTraceServiceRequest) -> Result<Vec<DecodedSpan>, Error> {
@@ -141,39 +141,40 @@ fn decoded_span(
             })
         })
         .collect::<Result<Vec<_>, Error>>()?;
-    let normalization = normalize(
-        scope_name.as_ref(),
-        &span.name,
-        &parent_span_id,
-        &span_attributes,
-        &events,
-    )?;
-    let resource_agent_name = resource_attributes
-        .get("gen_ai.agent.name")
-        .filter(|name| !name.is_empty());
-    let agent_name = match (resource_agent_name, normalization.span.agent_name.as_str()) {
-        (Some(name), "") => name.clone(),
-        (Some(name), "hermes-agent") if scope_name.as_ref() == "hermes-otel-plugin" => name.clone(),
-        (Some(name), CLAUDE_CODE_AGENT) if scope_name.as_ref() == CLAUDE_CODE_SCOPE => name.clone(),
-        (None, CLAUDE_CODE_AGENT) if scope_name.as_ref() == CLAUDE_CODE_SCOPE => {
-            resource_attributes
-                .get("service.name")
-                .filter(|name| !name.is_empty())
-                .map_or_else(|| CLAUDE_CODE_AGENT.to_owned(), Clone::clone)
-        }
-        (_, name) => name.to_owned(),
-    };
-    let normalized = crate::normalize::NormalizedSpan {
-        agent_name,
-        ..normalization.span
-    };
+    let normalization = normalize(&SpanContext {
+        scope: scope_name.as_ref(),
+        name: &span.name,
+        parent_span_id: &parent_span_id,
+        attributes: &span_attributes,
+        events: &events,
+        resource_attributes: resource_attributes.as_ref(),
+    })?;
+    let normalized = normalization.span;
     budget.consume(
         normalized.input.len()
             + normalized.output.len()
-            + normalized.agent_name.len()
-            + normalized.framework.len()
-            + normalized.litellm_request_id.len()
-            + normalized.model.len()
+            + normalized.agent_name.as_ref().map_or(0, String::len)
+            + normalized
+                .framework
+                .as_ref()
+                .map_or(0, |integration| match integration {
+                    crate::Integration::Other(name) => name.len(),
+                    _ => 0,
+                })
+            + normalized.agent_metadata.byte_len()
+            + normalized
+                .calls
+                .key_set()
+                .into_iter()
+                .flatten()
+                .map(|key| match key {
+                    crate::CallKey::LiteLlmRequest(id) | crate::CallKey::ProviderResponse(id) => {
+                        id.len() + size_of::<crate::CallKey>()
+                    }
+                    crate::CallKey::Transport => size_of::<crate::CallKey>(),
+                })
+                .sum::<usize>()
+            + normalized.model.as_ref().map_or(0, String::len)
             + normalization.display_name.as_ref().map_or(0, String::len),
     )?;
     Ok(DecodedSpan {

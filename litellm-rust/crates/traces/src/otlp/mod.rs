@@ -32,7 +32,7 @@ pub struct DecodedSpan {
     pub status_message: String,
     pub events: Vec<DecodedEvent>,
     pub normalized: NormalizedSpan,
-    pub consumed_attributes: [&'static str; 2],
+    pub consumed_attributes: Box<[&'static str]>,
 }
 
 pub fn decode_otlp(body: &[u8], content_type: Option<&str>) -> Result<Vec<DecodedSpan>, Error> {

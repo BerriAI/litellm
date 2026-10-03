@@ -4453,15 +4453,20 @@ dependencies = [
 name = "litellm-traces"
 version = "0.1.0"
 dependencies = [
+ "askama",
  "criterion",
  "indexmap 2.14.0",
+ "litellm-llms-types",
+ "macro_rules_attribute",
  "opentelemetry-proto",
  "prost",
  "rstest",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "strum",
  "thiserror 2.0.19",
+ "time",
 ]
 
 [[package]]
@@ -4469,15 +4474,19 @@ name = "litellm-traces-clickhouse"
 version = "0.1.0"
 dependencies = [
  "askama",
+ "base64 0.22.1",
  "flate2",
  "futures-util",
  "hmac 0.12.1",
+ "jsonschema",
  "litellm-http",
  "litellm-migrate",
  "litellm-storage-clickhouse",
  "litellm-traces",
+ "macro_rules_attribute",
  "moka",
  "rstest",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4486,6 +4495,7 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "tokio",
+ "tracing",
  "url",
  "wiremock",
 ]

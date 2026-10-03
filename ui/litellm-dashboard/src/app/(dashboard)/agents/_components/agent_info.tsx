@@ -202,13 +202,13 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       .filter((key) => /(^|_)(url|api_base|endpoint)$/i.test(key));
 
     const fieldsToSet: AgentFormValues = {
-      name: selected_card.name,
-      description: selected_card.description,
+      name: selected_card.name ?? undefined,
+      description: selected_card.description ?? undefined,
       url: selection.upstream_url,
       streaming: Boolean(selected_card.capabilities?.streaming),
       skills,
-      iconUrl: selected_card.iconUrl,
-      documentationUrl: selected_card.documentationUrl,
+      iconUrl: selected_card.iconUrl ?? undefined,
+      documentationUrl: selected_card.documentationUrl ?? undefined,
       ...Object.fromEntries(urlCredentialKeys.map((key) => [key, selection.upstream_url])),
     };
 
@@ -282,7 +282,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
   }
 
   // Format date helper function
-  const formatDate = (dateString?: string) => {
+  const formatDate = (dateString?: string | null) => {
     if (!dateString) return "-";
     const date = new Date(dateString);
     return date.toLocaleString();
@@ -450,7 +450,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
               <div style={{ marginTop: 24 }}>
                 <h3 className="text-lg font-medium">Skills</h3>
                 <DetailList className="mt-4">
-                  {agent.agent_card_params.skills.map((skill: any, index: number) => (
+                  {agent.agent_card_params.skills.map((skill, index) => (
                     <DetailItem label={skill.name || `Skill ${index + 1}`} key={index}>
                       <div>
                         <div>

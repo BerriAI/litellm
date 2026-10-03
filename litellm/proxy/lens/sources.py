@@ -15,7 +15,7 @@ from litellm.proxy.lens.models import (
     Scope,
     TracePart,
 )
-from litellm.rust_bridge.trace_queries import (
+from litellm.rust_bridge.trace.generated.models import (
     ActivityAvailability,
     AgentRow,
     CountRow,

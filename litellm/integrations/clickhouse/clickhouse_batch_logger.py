@@ -21,7 +21,7 @@ from litellm.constants import (
     CLICKHOUSE_MAX_RETRIES,
 )
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.rust_bridge.traces import ClickHouseStorage
+from litellm.rust_bridge.trace.storage import ClickHouseStorage
 from litellm.tracing.config import trace_storage_config
 
 

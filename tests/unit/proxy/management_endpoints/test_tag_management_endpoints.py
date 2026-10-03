@@ -1,22 +1,20 @@
 import inspect
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from types import MappingProxyType, SimpleNamespace
-from typing import Mapping, Optional
+from typing import Final, cast
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from prisma.actions import LiteLLM_VerificationTokenActions
 
-
-from contextlib import contextmanager
-from unittest.mock import AsyncMock, Mock, patch
-
-import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.proxy_server import app
-from litellm.types.tag_management import TagDeleteRequest, TagInfoRequest, TagNewRequest
+from litellm.proxy.utils import PrismaClient
+from litellm.types.tag_management import TagNewRequest
 
 client = TestClient(app)
 
@@ -76,7 +74,7 @@ async def test_create_and_get_tag():
     try:
         with (
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-            patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+            patch("litellm.proxy.proxy_server.llm_router"),
             patch(
                 "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
             ),
@@ -286,28 +284,25 @@ async def test_new_tag_persists_a_budget():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "field",
-    ["max_budget", "soft_budget", "model_max_budget", "tpm_limit", "rpm_limit"],
+    ("budget_fields", "should_update", "expected_max_budget"),
+    [
+        ({"max_budget": None}, True, None),
+        ({}, False, None),
+        ({"max_budget": 0}, True, 0.0),
+    ],
 )
-async def test_update_tag_explicit_null_preserves_general_budget_fields(field):
+async def test_update_tag_clears_or_sets_only_provided_budget_fields(
+    budget_fields: Mapping[str, object],
+    should_update: bool,
+    expected_max_budget: float | None,
+) -> None:
     from datetime import datetime
 
     from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
     from litellm.types.tag_management import TagUpdateRequest
 
-    budget_state = _BudgetState(
-        {
-            "budget_id": "budget-1",
-            "max_budget": 100.0,
-            "soft_budget": 80.0,
-            "model_max_budget": {"model-a": {"max_budget": 50.0}},
-            "tpm_limit": 1000,
-            "rpm_limit": 100,
-            "budget_duration": "30d",
-        }
-    )
-    existing_tag = SimpleNamespace(budget_id="budget-1")
-    updated_tag = SimpleNamespace(
+    existing_tag: Final = SimpleNamespace(budget_id="budget-1")
+    updated_tag: Final = SimpleNamespace(
         tag_name="budget-tag",
         description=None,
         models=[],
@@ -315,17 +310,21 @@ async def test_update_tag_explicit_null_preserves_general_budget_fields(field):
         updated_at=datetime(2024, 1, 1),
         created_by="admin",
     )
-    mock_db = Mock()
-    mock_prisma = SimpleNamespace(db=mock_db)
-    mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
-    mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
-    mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
+    find_tag: Final = AsyncMock(return_value=existing_tag)
+    find_models: Final = AsyncMock(return_value=[])
+    update_tag_row: Final = AsyncMock(return_value=updated_tag)
+    update_budget: Final = AsyncMock()
+    mock_prisma: Final = cast(
+        PrismaClient,
+        SimpleNamespace(
+            db=SimpleNamespace(
+                litellm_tagtable=SimpleNamespace(find_unique=find_tag, update=update_tag_row),
+                litellm_proxymodeltable=SimpleNamespace(find_many=find_models),
+                litellm_budgettable=SimpleNamespace(update=update_budget),
+            )
+        ),
+    )
 
-    async def update_budget(where, data, **_):
-        budget_state.store(data)
-        return budget_state.row()
-
-    mock_db.litellm_budgettable.update = update_budget
     with (
         patch(  # test-quality-ok: endpoint resolves the fake database through proxy_server
             "litellm.proxy.proxy_server.prisma_client", mock_prisma
@@ -338,18 +337,27 @@ async def test_update_tag_explicit_null_preserves_general_budget_fields(field):
         ),
     ):
         await update_tag(
-            tag=TagUpdateRequest(name="budget-tag", **{field: None}),
+            tag=TagUpdateRequest.model_validate({"name": "budget-tag", **budget_fields}),
             user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
         )
 
-    expected_values = {
-        "max_budget": 100.0,
-        "soft_budget": 80.0,
-        "model_max_budget": {"model-a": {"max_budget": 50.0}},
-        "tpm_limit": 1000,
-        "rpm_limit": 100,
+    if not should_update:
+        update_budget.assert_not_awaited()
+        return
+
+    update_args: Final = update_budget.await_args
+    assert update_args is not None
+    budget_data: Final = cast(Mapping[str, object], update_args.kwargs["data"])
+    assert "max_budget" in budget_data
+    assert budget_data["max_budget"] == expected_max_budget
+    assert not budget_data.keys() & {
+        "soft_budget",
+        "max_parallel_requests",
+        "tpm_limit",
+        "rpm_limit",
+        "model_max_budget",
+        "budget_duration",
     }
-    assert budget_state.get(field) == expected_values[field]
 
 
 @pytest.mark.asyncio

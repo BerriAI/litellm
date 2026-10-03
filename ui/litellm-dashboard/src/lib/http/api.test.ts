@@ -59,6 +59,17 @@ describe("typed api client middleware", () => {
     expect(requests[0].headers.get("Authorization")).toBeNull();
   });
 
+  it("preserves an explicit token when the session has a different token", async () => {
+    registerAuthTokenGetter(() => "session-token");
+    registerAuthHeaderNameGetter(() => "x-litellm-key");
+    const { fetch, requests } = capturingFetch(jsonResponse(200, { data: [] }));
+    await fetchClient.GET("/model_group/info", {
+      fetch,
+      headers: { "x-litellm-key": "Bearer explicit-token" },
+    });
+    expect(requests[0].headers.get("x-litellm-key")).toBe("Bearer explicit-token");
+  });
+
   it("omits the auth header when no token is set", async () => {
     const { fetch, requests } = capturingFetch(jsonResponse(200, { data: [] }));
 

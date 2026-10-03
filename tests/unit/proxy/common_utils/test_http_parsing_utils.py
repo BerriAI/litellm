@@ -1327,12 +1327,12 @@ async def test_otlp_auth_does_not_consume_chunked_bodies_before_the_receiver_lim
     ]}, receive)
     assert await _read_request_body(request) == {}
     assert received == []
-    store = MagicMock()
-    store.insert_spans = AsyncMock()
+    storage = MagicMock()
+    storage.ingest = AsyncMock()
     with pytest.raises(TracingPayloadTooLargeError):
-        await TraceReceiver(store).ingest(request.stream(), content_type, encoding, Tenant("team", "key"))
+        await TraceReceiver(storage).ingest(request.stream(), content_type, encoding, Tenant("team", "key"))
     assert len(received) == 2
-    store.insert_spans.assert_not_awaited()
+    storage.ingest.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1351,10 +1351,10 @@ async def test_auth_body_read_and_trace_handler_leave_stream_for_receiver_limit(
         {"type": "http", "method": "POST", "path": "/v1/traces", "headers": [(b"content-type", b"application/json")]},
         receive,
     )
-    store: Final = MagicMock()
-    store.insert_spans = AsyncMock()
+    storage: Final = MagicMock()
+    storage.ingest = AsyncMock()
     context: Final = await tracing_endpoints.provide_trace_access(
-        auth=UserAPIKeyAuth(token="key", team_id="team"), tracing=TraceReceiver(store), log_team_lookup=AsyncMock()
+        auth=UserAPIKeyAuth(token="key", team_id="team"), tracing=TraceReceiver(storage), log_team_lookup=AsyncMock()
     )
 
     parsed, parse_error = await _read_request_body_deferring_parse_failure(request)
@@ -1365,4 +1365,4 @@ async def test_auth_body_read_and_trace_handler_leave_stream_for_receiver_limit(
     response: Final = await tracing_endpoints.ingest_otlp_traces(request, context)
     assert response.status_code == 413
     assert receive.await_count == 2
-    store.insert_spans.assert_not_awaited()
+    storage.ingest.assert_not_awaited()

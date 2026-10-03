@@ -733,15 +733,15 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
     const fieldsToSet: AgentFormValues = {
       agent_name: seededAgentName,
-      name: selected_card.name,
-      description: selected_card.description,
+      name: selected_card.name ?? undefined,
+      description: selected_card.description ?? undefined,
       url: upstream_url,
-      version: selected_card.version,
+      version: selected_card.version ?? undefined,
       protocolVersion: selected_card.protocolVersion ?? "1.0",
       streaming: Boolean(selected_card.capabilities?.streaming),
       skills,
-      iconUrl: selected_card.iconUrl,
-      documentationUrl: selected_card.documentationUrl,
+      iconUrl: selected_card.iconUrl ?? undefined,
+      documentationUrl: selected_card.documentationUrl ?? undefined,
       ...Object.fromEntries(urlCredentialKeys.map((key) => [key, upstream_url])),
     };
 

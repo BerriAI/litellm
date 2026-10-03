@@ -1,14 +1,13 @@
 use std::collections::BTreeMap;
 
-use litellm_host_python::{FromPythonCache, ToPythonCache};
 use litellm_http::ClientVariant;
-use litellm_traces::{QueryScope, ReadQuery, Shared};
+use litellm_traces::{QueryScope, ReadQuery, Tenant, query::named::ReadAccessParams};
 use litellm_traces_clickhouse::{Config, Error, InsertTable, Parameter, QueryReaders};
 use prost::Message;
 use pyo3::{
     exceptions::{PyOverflowError, PyRuntimeError, PyValueError},
     prelude::*,
-    types::{PyBytes, PyDict, PyList, PyMapping, PyString},
+    types::PyBytes,
 };
 
 #[derive(Message)]
@@ -36,14 +35,20 @@ fn map_error_ref(error: &Error) -> PyErr {
     use litellm_storage_clickhouse::Error as StorageError;
 
     match error {
+        Error::Decode(litellm_traces::Error::TooLarge) | Error::InsertTooLarge => {
+            PyOverflowError::new_err(error.to_string())
+        }
         Error::InvalidRow
         | Error::InvalidTable
+        | Error::InvalidCursor(_)
+        | Error::AmbiguousTrace
+        | Error::Decode(_)
         | Error::InvalidSchema
         | Error::InvalidQuery
         | Error::InvalidParameters
         | Error::InvalidScope => PyValueError::new_err(error.to_string()),
-        Error::InsertTooLarge => PyOverflowError::new_err(error.to_string()),
-        Error::SchemaFailed(_)
+        Error::Task
+        | Error::SchemaFailed(_)
         | Error::SchemaTransport
         | Error::MissingSecret
         | Error::Busy
@@ -87,9 +92,15 @@ pub struct NativeTraceConfig {
 #[pymethods]
 impl NativeTraceConfig {
     #[new]
-    fn new(database: String, url: &str, retention_days: u32) -> PyResult<Self> {
+    fn new(
+        database: String,
+        url: &str,
+        retention_days: u32,
+        max_attribute_value_bytes: usize,
+    ) -> PyResult<Self> {
         Ok(Self {
-            inner: Config::new(database, url, retention_days).map_err(map_error)?,
+            inner: Config::new(database, url, retention_days, max_attribute_value_bytes)
+                .map_err(map_error)?,
         })
     }
 }
@@ -137,7 +148,9 @@ impl NativeTraceStorage {
         &self,
         py: Python<'py>,
         table: &str,
-        #[pyo3(from_py_with = insert_rows_from_py)] rows: Vec<litellm_traces_clickhouse::InsertRow>,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] rows: Vec<
+            BTreeMap<String, serde_json::Value>,
+        >,
     ) -> PyResult<Bound<'py, PyAny>> {
         let table = InsertTable::parse(table).map_err(map_error)?;
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
@@ -146,12 +159,155 @@ impl NativeTraceStorage {
         crate::execution::run_async(
             py,
             async move {
+                litellm_traces_clickhouse::insert_rows(&client, &connection, &database, table, rows)
+                    .await
+            },
+            map_error,
+        )
+    }
+
+    fn ingest<'py>(
+        &self,
+        py: Python<'py>,
+        payload: &[u8],
+        content_type: Option<String>,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] tenant: Tenant,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let payload = payload.to_vec();
+        let max_value_bytes = self.config.max_attribute_value_bytes();
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        let connection = self.config.storage().writer().clone();
+        let database = self.config.storage().database().to_owned();
+        crate::execution::run_async(
+            py,
+            async move {
+                let rows = tokio::task::spawn_blocking(move || {
+                    litellm_traces::decode_otlp(&payload, content_type.as_deref()).map(|spans| {
+                        litellm_traces_clickhouse::span_rows(spans, &tenant, max_value_bytes)
+                    })
+                })
+                .await
+                .map_err(|_| Error::Task)??;
+                let count = rows.len();
                 litellm_traces_clickhouse::insert_shared_rows(
                     &client,
                     &connection,
                     &database,
-                    table,
+                    InsertTable::OtelTraces,
                     rows,
+                )
+                .await?;
+                Ok(count)
+            },
+            map_error,
+        )
+    }
+
+    #[pyo3(signature = (scope, start_ms, end_ms, cursor, limit))]
+    fn list_traces<'py>(
+        &self,
+        py: Python<'py>,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: ReadAccessParams,
+        start_ms: i64,
+        end_ms: i64,
+        cursor: Option<String>,
+        limit: u32,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        let connection = self.config.storage().reader().clone();
+        crate::execution::run_async(
+            py,
+            async move {
+                litellm_traces_clickhouse::list_traces(
+                    &client,
+                    &connection,
+                    &scope,
+                    start_ms,
+                    end_ms,
+                    cursor.as_deref(),
+                    limit,
+                )
+                .await
+            },
+            map_error,
+        )
+    }
+
+    fn get_trace<'py>(
+        &self,
+        py: Python<'py>,
+        trace_id: String,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: ReadAccessParams,
+        trace_ref: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        let connection = self.config.storage().reader().clone();
+        crate::execution::run_async(
+            py,
+            async move {
+                litellm_traces_clickhouse::get_trace(
+                    &client,
+                    &connection,
+                    &scope,
+                    &trace_id,
+                    &trace_ref,
+                )
+                .await
+            },
+            map_error,
+        )
+    }
+
+    fn get_span<'py>(
+        &self,
+        py: Python<'py>,
+        trace_id: String,
+        span_id: String,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: ReadAccessParams,
+        trace_ref: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        let connection = self.config.storage().reader().clone();
+        crate::execution::run_async(
+            py,
+            async move {
+                litellm_traces_clickhouse::get_span(
+                    &client,
+                    &connection,
+                    &scope,
+                    &trace_id,
+                    &span_id,
+                    &trace_ref,
+                )
+                .await
+            },
+            map_error,
+        )
+    }
+
+    #[pyo3(signature = (trace_id, span_id, scope, trace_ref, cursor))]
+    fn get_span_error<'py>(
+        &self,
+        py: Python<'py>,
+        trace_id: String,
+        span_id: String,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: ReadAccessParams,
+        trace_ref: String,
+        cursor: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        let connection = self.config.storage().reader().clone();
+        crate::execution::run_async(
+            py,
+            async move {
+                litellm_traces_clickhouse::get_span_error(
+                    &client,
+                    &connection,
+                    &scope,
+                    &trace_id,
+                    &span_id,
+                    &trace_ref,
+                    cursor.as_deref(),
                 )
                 .await
             },
@@ -232,101 +388,23 @@ impl NativeTraceStorage {
     }
 }
 
+/// The `otel_traces` rows an export would be stored as, without writing them.
 #[pyfunction]
-pub fn trace_decode_otlp<'py>(
+pub fn trace_span_rows<'py>(
     py: Python<'py>,
     body: &[u8],
     content_type: Option<&str>,
+    #[pyo3(from_py_with = litellm_host_python::from_py_argument)] tenant: Tenant,
+    max_attribute_value_bytes: usize,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let spans = py
-        .detach(|| litellm_traces::decode_otlp(body, content_type))
-        .map_err(|error| match error {
-            litellm_traces::Error::TooLarge => PyOverflowError::new_err(error.to_string()),
-            _ => PyValueError::new_err(error.to_string()),
-        })?;
-    spans_to_py(py, &spans).map(Bound::into_any)
-}
-
-fn insert_rows_from_py(
-    value: &Bound<'_, PyAny>,
-) -> PyResult<Vec<litellm_traces_clickhouse::InsertRow>> {
-    let mut resources = FromPythonCache::default();
-    value
-        .try_iter()?
-        .map(|row| {
-            let row = row?;
-            let mut fields = BTreeMap::new();
-            for item in row.cast::<PyMapping>()?.items()?.iter() {
-                let (key, value): (String, Bound<'_, PyAny>) = item.extract()?;
-                let converted = if matches!(
-                    key.as_str(),
-                    "ResourceAttributes" | "ScopeName" | "ScopeVersion"
-                ) {
-                    resources
-                        .get_or_try_insert_with(&value, |value| {
-                            litellm_host_python::from_py_argument::<serde_json::Value>(value)
-                                .map(Shared::new)
-                        })?
-                        .clone()
-                } else {
-                    Shared::new(litellm_host_python::from_py_argument(&value)?)
-                };
-                fields.insert(key, converted);
-            }
-            Ok(fields)
+    let rows = py
+        .detach(|| {
+            litellm_traces::decode_otlp(body, content_type).map(|spans| {
+                litellm_traces_clickhouse::span_rows(spans, &tenant, max_attribute_value_bytes)
+            })
         })
-        .collect()
-}
-
-fn spans_to_py<'py>(
-    py: Python<'py>,
-    spans: &[litellm_traces::DecodedSpan],
-) -> PyResult<Bound<'py, PyList>> {
-    let mut resources = ToPythonCache::default();
-    let mut scopes = ToPythonCache::default();
-    let result = PyList::empty(py);
-    for span in spans {
-        let resource = resources
-            .get_or_try_insert_with(span.resource_attributes.as_ref(), |value| {
-                litellm_host_python::Pythonized(value).into_pyobject(py)
-            })?;
-        let row = PyDict::new(py);
-        row.set_item("trace_id", &span.trace_id)?;
-        row.set_item("span_id", &span.span_id)?;
-        row.set_item("parent_span_id", &span.parent_span_id)?;
-        row.set_item("trace_state", &span.trace_state)?;
-        row.set_item("name", &span.name)?;
-        row.set_item("kind", &span.kind)?;
-        row.set_item("resource_attributes", resource)?;
-        for (key, value) in [
-            ("scope_name", &span.scope_name),
-            ("scope_version", &span.scope_version),
-        ] {
-            let value = scopes.get_or_try_insert_with(value.as_ref(), |value| {
-                Ok(PyString::new(py, value).into_any())
-            })?;
-            row.set_item(key, value)?;
-        }
-        row.set_item("attributes", &span.attributes)?;
-        row.set_item("start_ns", span.start_ns)?;
-        row.set_item("end_ns", span.end_ns)?;
-        row.set_item("status_code", &span.status_code)?;
-        row.set_item("status_message", &span.status_message)?;
-        row.set_item(
-            "events",
-            litellm_host_python::Pythonized(&span.events).into_pyobject(py)?,
-        )?;
-        row.set_item(
-            "normalized",
-            litellm_host_python::Pythonized(&span.normalized).into_pyobject(py)?,
-        )?;
-        row.set_item(
-            "consumed_attributes",
-            litellm_host_python::Pythonized(&span.consumed_attributes).into_pyobject(py)?,
-        )?;
-        result.append(row)?;
-    }
-    Ok(result)
+        .map_err(|error| map_error(error.into()))?;
+    litellm_host_python::Pythonized(rows).into_pyobject(py)
 }
 
 #[cfg(test)]
@@ -383,50 +461,20 @@ mod tests {
     }
 
     #[rstest]
-    fn insert_projection_preserves_identity_without_merging_equal_resources() {
+    #[case::decode_budget(Error::Decode(litellm_traces::Error::TooLarge), "OverflowError")]
+    #[case::invalid_export(Error::Decode(litellm_traces::Error::InvalidPayload), "ValueError")]
+    #[case::cursor(Error::InvalidCursor("trace"), "ValueError")]
+    #[case::ambiguous(Error::AmbiguousTrace, "ValueError")]
+    fn trace_read_and_ingest_failures_preserve_public_exception_types(
+        #[case] error: Error,
+        #[case] exception_name: &str,
+    ) {
         Python::initialize();
         Python::attach(|py| {
-            let resource = PyDict::new(py);
-            resource.set_item("service.name", "shared").unwrap();
-            let equal_resource = resource.copy().unwrap();
-            let rows = PyList::empty(py);
-            for value in [&resource, &resource, &equal_resource] {
-                let row = PyDict::new(py);
-                row.set_item("ResourceAttributes", value).unwrap();
-                rows.append(row).unwrap();
-            }
-            let projected = insert_rows_from_py(rows.as_any()).unwrap();
-            assert!(Shared::shares_storage_with(
-                &projected[0]["ResourceAttributes"],
-                &projected[1]["ResourceAttributes"]
-            ));
-            assert!(!Shared::shares_storage_with(
-                &projected[0]["ResourceAttributes"],
-                &projected[2]["ResourceAttributes"]
-            ));
-            assert_eq!(projected[0], projected[2]);
+            assert_eq!(
+                map_error(error).get_type(py).name().unwrap(),
+                exception_name
+            );
         });
     }
-
-    #[rstest]
-    fn shared_conversion_preserves_every_decoded_field() {
-        Python::initialize();
-        Python::attach(|py| {
-            let spans = litellm_traces::decode_otlp(
-                include_bytes!("../../../../../tests/test_litellm/tracing/fixtures/langsmith_deep_agent_export.json"),
-                Some("application/json"),
-            ).unwrap();
-            let expected = litellm_host_python::Pythonized(&spans)
-                .into_pyobject(py)
-                .unwrap();
-            let actual = spans_to_py(py, &spans).unwrap();
-            assert!(actual.eq(expected).unwrap());
-        });
-    }
-}
-
-#[pyfunction]
-pub fn trace_normalized_field_definitions<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-    litellm_host_python::Pythonized(litellm_traces_clickhouse::NORMALIZED_FIELD_DEFINITIONS)
-        .into_pyobject(py)
 }

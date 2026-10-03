@@ -139,11 +139,29 @@ fn span_row(span: &DecodedSpan, team: &str, key: &str) -> BTreeMap<String, Value
             "ObservationType".into(),
             json!(span.normalized.observation_type),
         ),
-        ("AgentName".into(), json!(span.normalized.agent_name)),
-        ("Model".into(), json!(span.normalized.model)),
+        (
+            "AgentName".into(),
+            json!(span.normalized.agent_name.as_deref().unwrap_or_default()),
+        ),
+        (
+            "Model".into(),
+            json!(span.normalized.model.as_deref().unwrap_or_default()),
+        ),
         (
             "LiteLLMRequestId".into(),
-            json!(span.normalized.litellm_request_id),
+            json!(
+                span.normalized
+                    .calls
+                    .key_set()
+                    .into_iter()
+                    .flatten()
+                    .find_map(|key| match key {
+                        litellm_traces::CallKey::LiteLlmRequest(id)
+                        | litellm_traces::CallKey::ProviderResponse(id) => Some(id.as_str()),
+                        litellm_traces::CallKey::Transport => None,
+                    })
+                    .unwrap_or_default()
+            ),
         ),
         ("InputTokens".into(), json!(span.normalized.input_tokens)),
         ("OutputTokens".into(), json!(span.normalized.output_tokens)),

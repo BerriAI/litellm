@@ -78,12 +78,18 @@ pub struct NormalizedFieldDefinition {
     pub meaning: &'static str,
 }
 
-pub const NORMALIZED_FIELD_DEFINITIONS: [NormalizedFieldDefinition; 9] = [
+pub const NORMALIZED_FIELD_DEFINITIONS: [NormalizedFieldDefinition; 15] = [
     NormalizedFieldDefinition {
         name: "observation_type",
         clickhouse_column: "ObservationType",
         clickhouse_type: "LowCardinality(String)",
-        meaning: "Agent, LLM, tool, chain, or framework span",
+        meaning: "Operation recorded by the span, including agent, model, tool, retrieval and evaluation steps",
+    },
+    NormalizedFieldDefinition {
+        name: "wrapper_candidate",
+        clickhouse_column: "WrapperCandidate",
+        clickhouse_type: "Bool",
+        meaning: "Span may only wrap the operation it names; the trace graph decides",
     },
     NormalizedFieldDefinition {
         name: "agent_name",
@@ -98,10 +104,28 @@ pub const NORMALIZED_FIELD_DEFINITIONS: [NormalizedFieldDefinition; 9] = [
         meaning: "Agent framework or SDK that emitted this span, e.g. claude-agent-sdk",
     },
     NormalizedFieldDefinition {
+        name: "agent_metadata",
+        clickhouse_column: "AgentMetadata",
+        clickhouse_type: "String",
+        meaning: "Typed agent metadata as JSON, including thread, subagent, runtime and repository identity",
+    },
+    NormalizedFieldDefinition {
         name: "litellm_request_id",
         clickhouse_column: "LiteLLMRequestId",
         clickhouse_type: "String",
         meaning: "LiteLLM response ID used to link a span to a spend log",
+    },
+    NormalizedFieldDefinition {
+        name: "call_keys",
+        clickhouse_column: "CallKeys",
+        clickhouse_type: "Array(String)",
+        meaning: "Model requests the span accounts for, as kind:id (litellm_request, provider_response, transport)",
+    },
+    NormalizedFieldDefinition {
+        name: "call_evidence",
+        clickhouse_column: "CallEvidence",
+        clickhouse_type: "LowCardinality(String)",
+        meaning: "Whether CallKeys are all of the span's requests: complete, partial or unknown",
     },
     NormalizedFieldDefinition {
         name: "model",
@@ -128,9 +152,21 @@ pub const NORMALIZED_FIELD_DEFINITIONS: [NormalizedFieldDefinition; 9] = [
         meaning: "Normalized input payload",
     },
     NormalizedFieldDefinition {
+        name: "input_preview",
+        clickhouse_column: "InputPreview",
+        clickhouse_type: "String",
+        meaning: "Latest user message of the input, else the input's first characters",
+    },
+    NormalizedFieldDefinition {
         name: "output",
         clickhouse_column: "Output",
         clickhouse_type: "String",
         meaning: "Normalized output payload",
+    },
+    NormalizedFieldDefinition {
+        name: "tool_call_id",
+        clickhouse_column: "ToolCallId",
+        clickhouse_type: "String",
+        meaning: "Tool call the span executes, shared by instrumentations recording the same call",
     },
 ];

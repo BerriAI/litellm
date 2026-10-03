@@ -49,6 +49,10 @@ jobs:
         if: steps.changes.outputs.decision != 'skip'
         run: npm ci
 
+      - name: Check UI production source types
+        if: steps.changes.outputs.decision != 'skip'
+        run: npm run typecheck
+
       - name: Run UI type tests (Vitest)
         if: steps.changes.outputs.decision != 'skip'
         env:

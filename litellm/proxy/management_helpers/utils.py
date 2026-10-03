@@ -1,13 +1,14 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Set as AbstractSet
 from datetime import datetime
 from functools import wraps
 from types import MappingProxyType
 from typing import Any, Final, Protocol
 
 from fastapi import HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -39,6 +40,8 @@ from litellm.proxy.utils import PrismaClient, jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.repositories.user_repository import UserRepository
+
+_BUDGET_DATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
 class _PrismaRecord(Protocol):
@@ -178,12 +181,12 @@ def get_new_internal_user_defaults(user_id: str, user_email: str | None = None) 
 
 
 async def handle_budget_for_entity(
-    data,
+    data: BaseModel | Mapping[str, object],
     existing_budget_id: str | None,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
     litellm_proxy_admin_name: str,
-    budget_duration_cleared: bool = False,
+    cleared_budget_fields: AbstractSet[str] = frozenset(),
 ) -> str | None:
     """
     Common helper to handle budget creation/updates for entities (organizations, tags, etc).
@@ -211,13 +214,14 @@ async def handle_budget_for_entity(
     budget_params: Final = LiteLLM_BudgetTable.model_fields.keys()
 
     # Extract budget fields from data
-    _json_data: Final = data.model_dump(exclude_none=True) if hasattr(data, "model_dump") else data
+    _json_data: Final = _BUDGET_DATA_MAPPING.validate_python(
+        data.model_dump(exclude_none=True) if isinstance(data, BaseModel) else data
+    )
     _budget_data: Final = MappingProxyType(
         {
             k: _json_data.get(k)
             for k in budget_params
-            if k in _json_data
-            or (k == "budget_duration" and existing_budget_id is not None and budget_duration_cleared)
+            if k in _json_data or (existing_budget_id is not None and k in cleared_budget_fields)
         }
     )
 

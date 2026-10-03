@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { detectAgentType, extractModelTemplateValues, parseDynamicAgentForForm } from "./agent_type_utils";
 import type { AgentCreateInfo } from "@/components/networking";
-import type { Agent } from "@/components/agents/types";
+import { toAgent, type Agent } from "@/components/agents/types";
 
 const FULL_RUNTIME_ARN = "arn:aws:bedrock-agentcore:eu-central-1:123456789012:runtime/hosted_agent_4vm3i-BaTdfOELAs";
 
@@ -95,5 +95,41 @@ describe("detectAgentType", () => {
     } as unknown as Agent;
 
     expect(detectAgentType(agent)).toBe("bedrock_agentcore");
+  });
+});
+
+describe("API agent metadata validation", () => {
+  const apiAgent = {
+    agent_id: "agent-1",
+    agent_name: "agent",
+    agent_card_params: {},
+    enabled: true,
+    execution_mode: "autonomous",
+    identity_managed: false,
+    jwt_auth_configured: false,
+  } satisfies Parameters<typeof toAgent>[0];
+
+  it("supports null parameters and metadata without inventing a model", () => {
+    const agent = toAgent({ ...apiAgent, litellm_params: null, spend: null, created_at: null });
+    expect(detectAgentType(agent)).toBe("a2a");
+    expect(parseDynamicAgentForForm(agent, bedrockAgentcoreInfo).agent_runtime_arn).toBeUndefined();
+    expect(agent.spend).toBeNull();
+    expect(agent.created_at).toBeNull();
+  });
+
+  it("rejects invalid known fields before components use them", () => {
+    expect(() => toAgent({ ...apiAgent, litellm_params: { model: { name: "model" } } })).toThrow();
+    expect(() => toAgent({ ...apiAgent, object_permission: { mcp_servers: "server" } })).toThrow();
+  });
+
+  it("preserves provider-specific parameters and permissions after validation", () => {
+    const agent = toAgent({
+      ...apiAgent,
+      litellm_params: { model: "langgraph/assistant", api_base: "https://agent.example.com" },
+      object_permission: { mcp_servers: ["server"], mcp_tool_permissions: { server: ["search"] } },
+    });
+    expect(detectAgentType(agent)).toBe("langgraph");
+    expect(agent.litellm_params?.api_base).toBe("https://agent.example.com");
+    expect(agent.object_permission?.mcp_tool_permissions).toEqual({ server: ["search"] });
   });
 });

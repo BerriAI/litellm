@@ -144,11 +144,11 @@ async fn typed_queries_read_normalized_spans_and_keep_trace_identities_separate(
     );
     assert_eq!(
         (
-            spans[1].0.kind.as_str(),
+            spans[1].0.kind,
             spans[1].0.input_tokens,
             spans[1].0.output_tokens
         ),
-        ("llm", 12, 6)
+        (litellm_traces::ObservationType::Llm, 12, 6)
     );
     assert_eq!(spans[2].0.status_message, "lookup timed out");
     Ok(())
@@ -225,7 +225,13 @@ async fn captured_deeplite_exports_round_trip_through_clickhouse(
         .filter(|span| span.parent_span_id.is_empty())
         .collect::<Vec<_>>();
     assert_eq!(roots.len(), 1);
-    assert_eq!(traces[0].0.status, roots[0].status_code);
+    assert_eq!(
+        traces[0].0.status,
+        serde_json::from_value::<litellm_traces::SpanStatus>(serde_json::json!(
+            roots[0].status_code
+        ))
+        .unwrap()
+    );
     assert_eq!(
         traces[0].0.error_count,
         decoded
@@ -246,7 +252,13 @@ async fn captured_deeplite_exports_round_trip_through_clickhouse(
         assert_eq!(row.duration_ns, span.end_ns - span.start_ns);
         assert_eq!(row.input_tokens, span.normalized.input_tokens);
         assert_eq!(row.output_tokens, span.normalized.output_tokens);
-        assert_eq!(row.status, span.status_code);
+        assert_eq!(
+            row.status,
+            serde_json::from_value::<litellm_traces::SpanStatus>(serde_json::json!(
+                span.status_code
+            ))
+            .unwrap()
+        );
     }
     Ok(())
 }

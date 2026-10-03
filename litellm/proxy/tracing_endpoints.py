@@ -26,16 +26,21 @@ from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependenc
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
-from litellm.rust_bridge.trace_query_responses import TraceQueryHelp, TraceSQLResponse
-from litellm.rust_bridge.traces import AllQueryScope, ClickHouseStorage, OwnedQueryScope, QueryScope
-from litellm.tracing import (
-    Tenant,
-    TraceReceiver,
-    TracingPayloadTooLargeError,
+from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
+from litellm.rust_bridge.trace.generated.types import (
+    AllQueryScope,
+    OwnedQueryScope,
+    QueryScope,
+    SpanDetail,
+    SpanErrorPage,
+    Trace,
+    TracePage,
+    TraceScope,
 )
-from litellm.tracing.decode import InvalidOTLPPayloadError, encode_otlp_response
-from litellm.tracing.store import AmbiguousTraceError
-from litellm.tracing.types import SpanDetail, SpanErrorPage, Trace, TracePage, TraceScope
+from litellm.rust_bridge.trace.queries import TraceSQLResponse
+from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
+from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
+from litellm.tracing.otlp_http import InvalidOTLPPayloadError, encode_otlp_response
 
 router = APIRouter(tags=["agent tracing"])
 
@@ -186,7 +191,7 @@ async def provide_trace_query_access(
     secret: Annotated[str, Depends(provide_trace_query_secret)],
     log_team_lookup: LogTeamLookupDependency,
 ) -> TraceQueryAccess:
-    storage: Final = require_receiver(tracing).store.storage
+    storage: Final = require_receiver(tracing).storage
     scope: Final = await resolve_trace_read_scope(auth, partial(log_team_lookup, auth))
     if scope is None:
         raise HTTPException(status_code=403, detail="Not allowed to view logs")
@@ -227,7 +232,7 @@ async def get_agent_trace(
     tracing, scope = context.reader()
     try:
         trace: Final = await tracing.get_trace(trace_id, scope, trace_ref)
-    except AmbiguousTraceError as error:
+    except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     if trace is None:
         raise HTTPException(status_code=404, detail=f"Trace {trace_id} not found")
@@ -244,7 +249,7 @@ async def get_agent_trace_span(
     tracing, scope = context.reader()
     try:
         span: Final = await tracing.get_span(trace_id, span_id, scope, trace_ref)
-    except AmbiguousTraceError as error:
+    except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     if span is None:
         raise HTTPException(status_code=404, detail=f"Span {span_id} not found")

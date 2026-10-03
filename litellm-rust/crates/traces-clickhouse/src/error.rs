@@ -30,6 +30,14 @@ pub enum Error {
     ProvisionFailed(u16),
     #[error("ClickHouse reader provisioning transport failed")]
     ProvisionTransport,
+    #[error("Invalid {0} cursor")]
+    InvalidCursor(&'static str),
+    #[error("Multiple traces have this ID; provide trace_ref")]
+    AmbiguousTrace,
+    #[error(transparent)]
+    Decode(#[from] litellm_traces::Error),
+    #[error("trace ingestion task failed")]
+    Task,
     #[error(transparent)]
     Storage(#[from] litellm_storage_clickhouse::Error),
     #[error(transparent)]

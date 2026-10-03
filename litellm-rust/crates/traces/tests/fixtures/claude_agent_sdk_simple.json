@@ -1,0 +1,576 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "gen_ai.agent.name",
+            "value": {
+              "stringValue": "research_agent"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-agent-sdk-simple-linked"
+            }
+          },
+          {
+            "key": "host.arch",
+            "value": {
+              "stringValue": "arm64"
+            }
+          },
+          {
+            "key": "os.type",
+            "value": {
+              "stringValue": "linux"
+            }
+          },
+          {
+            "key": "os.version",
+            "value": {
+              "stringValue": "7.0.11-orbstack-00360-gc9bc4d96ac70"
+            }
+          },
+          {
+            "key": "service.version",
+            "value": {
+              "stringValue": "2.1.286"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "com.anthropic.claude_code.tracing",
+            "version": "1.0.0"
+          },
+          "spans": [
+            {
+              "traceId": "68d4ab5c1bb4cdff9f7fa72ce5e360d4",
+              "spanId": "2202f91fa2679814",
+              "parentSpanId": "f0281548ccd4d661",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1791013731536000000",
+              "endTimeUnixNano": "1791013738679125375",
+              "attributes": [
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "4493a11fb6084c04be89c081b455b16d3b2df792ebf4dc2014e12d078d4732e8"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "7b36c5c7-8eb5-45ad-8ffc-2966f64389b7"
+                  }
+                },
+                {
+                  "key": "terminal.type",
+                  "value": {
+                    "stringValue": "non-interactive"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "anthropic"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "llm_request.context",
+                  "value": {
+                    "stringValue": "interaction"
+                  }
+                },
+                {
+                  "key": "speed",
+                  "value": {
+                    "stringValue": "normal"
+                  }
+                },
+                {
+                  "key": "query_source",
+                  "value": {
+                    "stringValue": "sdk"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "sdk"
+                  }
+                },
+                {
+                  "key": "system_prompt_hash",
+                  "value": {
+                    "stringValue": "sp_900a80ee886b"
+                  }
+                },
+                {
+                  "key": "system_prompt_preview",
+                  "value": {
+                    "stringValue": "x-anthropic-billing-header: cc_version=2.1.286.bd3; cc_entrypoint=sdk-py;\n\nYou are a Claude agent, built on Anthropic's Claude Agent SDK."
+                  }
+                },
+                {
+                  "key": "system_prompt_length",
+                  "value": {
+                    "intValue": "137"
+                  }
+                },
+                {
+                  "key": "tools",
+                  "value": {
+                    "stringValue": "[]"
+                  }
+                },
+                {
+                  "key": "tools_count",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "new_context_message_count",
+                  "value": {
+                    "intValue": "2"
+                  }
+                },
+                {
+                  "key": "system_reminders_count",
+                  "value": {
+                    "intValue": "1"
+                  }
+                },
+                {
+                  "key": "new_context",
+                  "value": {
+                    "stringValue": "[USER]\nWhat is an agent trace?"
+                  }
+                },
+                {
+                  "key": "system_reminders",
+                  "value": {
+                    "stringValue": "# Environment\nYou have been invoked in the following environment: \n - Primary working directory: /fixtures/claude-agent-sdk\n - Is a git repository: true\n - Platform: linux\n - Shell: unknown\n - OS Version: Linux 7.0.11-orbstack-00360-gc9bc4d96ac70\n\nYou are powered by the model openai/gpt-6-luna.\n\n<total_tokens>15000000 tokens left</total_tokens>\n\nToday's date is 2026-10-03."
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "7143"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "172"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "665"
+                  }
+                },
+                {
+                  "key": "cache_read_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "cache_creation_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "attempt",
+                  "value": {
+                    "intValue": "1"
+                  }
+                },
+                {
+                  "key": "response.has_tool_call",
+                  "value": {
+                    "boolValue": false
+                  }
+                },
+                {
+                  "key": "request_id",
+                  "value": {
+                    "stringValue": "msg_7117e61b-cb2a-4e2f-8155-9b8bab62a4b9"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "msg_7117e61b-cb2a-4e2f-8155-9b8bab62a4b9"
+                  }
+                },
+                {
+                  "key": "ttft_ms",
+                  "value": {
+                    "intValue": "540"
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "5584"
+                  }
+                },
+                {
+                  "key": "effort",
+                  "value": {
+                    "stringValue": "high"
+                  }
+                },
+                {
+                  "key": "response.model_output",
+                  "value": {
+                    "stringValue": "An **agent trace** is the chronological record of an agent run: the input it received, the model’s intermediate messages, any tools it called and their results, and how the run ended.\n\nIt shows **how** the agent reached its final answer—not just the answer itself—and is useful for debugging and monitoring. In the Claude Agent SDK, you can follow a run through its streamed messages and events. Traces may contain prompts or other sensitive data, so handle them accordingly."
+                  }
+                },
+                {
+                  "key": "stop_reason",
+                  "value": {
+                    "stringValue": "end_turn"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "end_turn"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791013731538265232",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": [
+                    {
+                      "key": "attempt",
+                      "value": {
+                        "intValue": "1"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "68d4ab5c1bb4cdff9f7fa72ce5e360d4",
+              "spanId": "f0281548ccd4d661",
+              "parentSpanId": "d8aa87f2b774735d",
+              "name": "claude_code.interaction",
+              "kind": 1,
+              "startTimeUnixNano": "1791013731512000000",
+              "endTimeUnixNano": "1791013738692801566",
+              "attributes": [
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "4493a11fb6084c04be89c081b455b16d3b2df792ebf4dc2014e12d078d4732e8"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "7b36c5c7-8eb5-45ad-8ffc-2966f64389b7"
+                  }
+                },
+                {
+                  "key": "terminal.type",
+                  "value": {
+                    "stringValue": "non-interactive"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "interaction"
+                  }
+                },
+                {
+                  "key": "user_prompt",
+                  "value": {
+                    "stringValue": "What is an agent trace?"
+                  }
+                },
+                {
+                  "key": "user_prompt_length",
+                  "value": {
+                    "intValue": "23"
+                  }
+                },
+                {
+                  "key": "interaction.sequence",
+                  "value": {
+                    "intValue": "1"
+                  }
+                },
+                {
+                  "key": "parent.source",
+                  "value": {
+                    "stringValue": "env"
+                  }
+                },
+                {
+                  "key": "queued_sends",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "new_context",
+                  "value": {
+                    "stringValue": "[USER PROMPT]\nWhat is an agent trace?"
+                  }
+                },
+                {
+                  "key": "interaction.duration_ms",
+                  "value": {
+                    "intValue": "7181"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 769
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.45.0"
+            }
+          },
+          {
+            "key": "service.instance.id",
+            "value": {
+              "stringValue": "ff3ae854-67ab-4a61-98b3-8840846062f8"
+            }
+          },
+          {
+            "key": "gen_ai.agent.name",
+            "value": {
+              "stringValue": "research_agent"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-agent-sdk-simple-linked"
+            }
+          },
+          {
+            "key": "telemetry.auto.version",
+            "value": {
+              "stringValue": "0.66b0"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "openinference.instrumentation.claude_agent_sdk",
+            "version": "0.1.20"
+          },
+          "spans": [
+            {
+              "traceId": "68d4ab5c1bb4cdff9f7fa72ce5e360d4",
+              "spanId": "d8aa87f2b774735d",
+              "name": "ClaudeAgentSDK.query",
+              "kind": 1,
+              "startTimeUnixNano": "1791013731360778595",
+              "endTimeUnixNano": "1791013738788489656",
+              "attributes": [
+                {
+                  "key": "llm.system",
+                  "value": {
+                    "stringValue": "anthropic"
+                  }
+                },
+                {
+                  "key": "llm.provider",
+                  "value": {
+                    "stringValue": "anthropic"
+                  }
+                },
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "What is an agent trace?"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "text/plain"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.content.0",
+                  "value": {
+                    "stringValue": "An **agent trace** is the chronological record of an agent run: the input it received, the model’s intermediate messages, any tools it called and their results, and how the run ended.\n\nIt shows **how** the agent reached its final answer—not just the answer itself—and is useful for debugging and monitoring. In the Claude Agent SDK, you can follow a run through its streamed messages and events. Traces may contain prompts or other sensitive data, so handle them accordingly."
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.role",
+                  "value": {
+                    "stringValue": "assistant"
+                  }
+                },
+                {
+                  "key": "llm.finish_reason",
+                  "value": {
+                    "stringValue": "end_turn"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "An **agent trace** is the chronological record of an agent run: the input it received, the model’s intermediate messages, any tools it called and their results, and how the run ended.\n\nIt shows **how** the agent reached its final answer—not just the answer itself—and is useful for debugging and monitoring. In the Claude Agent SDK, you can follow a run through its streamed messages and events. Traces may contain prompts or other sensitive data, so handle them accordingly."
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "text/plain"
+                  }
+                },
+                {
+                  "key": "llm.model_name",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt",
+                  "value": {
+                    "intValue": "172"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion",
+                  "value": {
+                    "intValue": "665"
+                  }
+                },
+                {
+                  "key": "llm.token_count.total",
+                  "value": {
+                    "intValue": "837"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt_details.cache_read",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt_details.cache_write",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "llm.cost.total",
+                  "value": {
+                    "doubleValue": 0.013987999999999999
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "7b36c5c7-8eb5-45ad-8ffc-2966f64389b7"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "AGENT"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
