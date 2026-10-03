@@ -64,7 +64,7 @@ pub struct TraceSpansParams {
     pub trace_ref: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TraceSpansRow {
     #[serde(default)]
     pub trace_id: String,

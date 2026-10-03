@@ -1,9 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
-use base64::{
-    Engine as _,
-    engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD},
-};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use litellm_traces::{
     CallEvidence, CallEvidenceKind, CallKey, DecodedSpan, ObservationType, SpanStatus, decode_otlp,
     query::named::{SpendByResponseIdsRow, TraceSpansRow},
@@ -13,274 +11,43 @@ use rstest::rstest;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-#[derive(Clone, Copy)]
 struct CaptureData {
-    otlp: &'static [u8],
-    spend_logs: &'static str,
+    otlp: Vec<u8>,
 }
 
-fn capture_data(name: &str) -> CaptureData {
-    match name {
-        "claude_agent_sdk_missing_request_id_simple" => CaptureData {
-            otlp: include_bytes!("fixtures/claude_agent_sdk_missing_request_id_simple.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/claude_agent_sdk_missing_request_id_simple_spend_logs.jsonl"
-            ),
-        },
-        "claude_agent_sdk_missing_request_id_swarm" => CaptureData {
-            otlp: include_bytes!("fixtures/claude_agent_sdk_missing_request_id_swarm.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/claude_agent_sdk_missing_request_id_swarm_spend_logs.jsonl"
-            ),
-        },
-        "claude_agent_sdk_simple" => CaptureData {
-            otlp: include_bytes!("fixtures/claude_agent_sdk_simple.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/claude_agent_sdk_simple_spend_logs.jsonl"
-            ),
-        },
-        "claude_agent_sdk_swarm" => CaptureData {
-            otlp: include_bytes!("fixtures/claude_agent_sdk_swarm.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/claude_agent_sdk_swarm_spend_logs.jsonl"
-            ),
-        },
-        "crewai_simple" => CaptureData {
-            otlp: include_bytes!("fixtures/crewai_simple.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/crewai_simple_spend_logs.jsonl"
-            ),
-        },
-        "crewai_swarm" => CaptureData {
-            otlp: include_bytes!("fixtures/crewai_swarm.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/crewai_swarm_spend_logs.jsonl"
-            ),
-        },
-        "deepagents_simple" => CaptureData {
-            otlp: include_bytes!("fixtures/deepagents_simple.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/deepagents_simple_spend_logs.jsonl"
-            ),
-        },
-        "deepagents_swarm" => CaptureData {
-            otlp: include_bytes!("fixtures/deepagents_swarm.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/deepagents_swarm_spend_logs.jsonl"
-            ),
-        },
-        "google_adk_billed_failure" => CaptureData {
-            otlp: include_bytes!("fixtures/google_adk_billed_failure.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/google_adk_billed_failure_spend_logs.jsonl"
-            ),
-        },
-        "google_adk_retry" => CaptureData {
-            otlp: include_bytes!("fixtures/google_adk_retry.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/google_adk_retry_spend_logs.jsonl"
-            ),
-        },
-        "google_adk_simple" => CaptureData {
-            otlp: include_bytes!("fixtures/google_adk_simple.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/google_adk_simple_spend_logs.jsonl"
-            ),
-        },
-        "google_adk_stream" => CaptureData {
-            otlp: include_bytes!("fixtures/google_adk_stream.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/google_adk_stream_spend_logs.jsonl"
-            ),
-        },
-        "google_adk_swarm" => CaptureData {
-            otlp: include_bytes!("fixtures/google_adk_swarm.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/google_adk_swarm_spend_logs.jsonl"
-            ),
-        },
-        "langchain_simple" => CaptureData {
-            otlp: include_bytes!("fixtures/langchain_simple.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/langchain_simple_spend_logs.jsonl"
-            ),
-        },
-        "langchain_swarm" => CaptureData {
-            otlp: include_bytes!("fixtures/langchain_swarm.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/langchain_swarm_spend_logs.jsonl"
-            ),
-        },
-        "langgraph_simple" => CaptureData {
-            otlp: include_bytes!("fixtures/langgraph_simple.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/langgraph_simple_spend_logs.jsonl"
-            ),
-        },
-        "langgraph_swarm" => CaptureData {
-            otlp: include_bytes!("fixtures/langgraph_swarm.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/langgraph_swarm_spend_logs.jsonl"
-            ),
-        },
-        "llamaindex_simple" => CaptureData {
-            otlp: include_bytes!("fixtures/llamaindex_simple.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/llamaindex_simple_spend_logs.jsonl"
-            ),
-        },
-        "llamaindex_swarm" => CaptureData {
-            otlp: include_bytes!("fixtures/llamaindex_swarm.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/llamaindex_swarm_spend_logs.jsonl"
-            ),
-        },
-        "mastra_simple" => CaptureData {
-            otlp: include_bytes!("fixtures/mastra_simple.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/mastra_simple_spend_logs.jsonl"
-            ),
-        },
-        "mastra_swarm" => CaptureData {
-            otlp: include_bytes!("fixtures/mastra_swarm.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/mastra_swarm_spend_logs.jsonl"
-            ),
-        },
-        "openai_agents_simple" => CaptureData {
-            otlp: include_bytes!("fixtures/openai_agents_simple.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/openai_agents_simple_spend_logs.jsonl"
-            ),
-        },
-        "openai_agents_swarm" => CaptureData {
-            otlp: include_bytes!("fixtures/openai_agents_swarm.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/openai_agents_swarm_spend_logs.jsonl"
-            ),
-        },
-        "opentelemetry_simple" => CaptureData {
-            otlp: include_bytes!("fixtures/opentelemetry_simple.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/opentelemetry_simple_spend_logs.jsonl"
-            ),
-        },
-        "opentelemetry_swarm" => CaptureData {
-            otlp: include_bytes!("fixtures/opentelemetry_swarm.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/opentelemetry_swarm_spend_logs.jsonl"
-            ),
-        },
-        "pydantic_ai_billed_failure" => CaptureData {
-            otlp: include_bytes!("fixtures/pydantic_ai_billed_failure.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/pydantic_ai_billed_failure_spend_logs.jsonl"
-            ),
-        },
-        "pydantic_ai_retry" => CaptureData {
-            otlp: include_bytes!("fixtures/pydantic_ai_retry.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/pydantic_ai_retry_spend_logs.jsonl"
-            ),
-        },
-        "pydantic_ai_simple" => CaptureData {
-            otlp: include_bytes!("fixtures/pydantic_ai_simple.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/pydantic_ai_simple_spend_logs.jsonl"
-            ),
-        },
-        "pydantic_ai_stream" => CaptureData {
-            otlp: include_bytes!("fixtures/pydantic_ai_stream.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/pydantic_ai_stream_spend_logs.jsonl"
-            ),
-        },
-        "pydantic_ai_swarm" => CaptureData {
-            otlp: include_bytes!("fixtures/pydantic_ai_swarm.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/pydantic_ai_swarm_spend_logs.jsonl"
-            ),
-        },
-        "pydantic_ai_swarm_stream" => CaptureData {
-            otlp: include_bytes!("fixtures/pydantic_ai_swarm_stream.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/pydantic_ai_swarm_stream_spend_logs.jsonl"
-            ),
-        },
-        "pydantic_ai_token_limit_swarm" => CaptureData {
-            otlp: include_bytes!("fixtures/pydantic_ai_token_limit_swarm.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/pydantic_ai_token_limit_swarm_spend_logs.jsonl"
-            ),
-        },
-        "strands_billed_failure" => CaptureData {
-            otlp: include_bytes!("fixtures/strands_billed_failure.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/strands_billed_failure_spend_logs.jsonl"
-            ),
-        },
-        "strands_retry" => CaptureData {
-            otlp: include_bytes!("fixtures/strands_retry.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/strands_retry_spend_logs.jsonl"
-            ),
-        },
-        "strands_simple" => CaptureData {
-            otlp: include_bytes!("fixtures/strands_simple.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/strands_simple_spend_logs.jsonl"
-            ),
-        },
-        "strands_swarm" => CaptureData {
-            otlp: include_bytes!("fixtures/strands_swarm.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/strands_swarm_spend_logs.jsonl"
-            ),
-        },
-        "vercel_ai_sdk_billed_failure" => CaptureData {
-            otlp: include_bytes!("fixtures/vercel_ai_sdk_billed_failure.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/vercel_ai_sdk_billed_failure_spend_logs.jsonl"
-            ),
-        },
-        "vercel_ai_sdk_py_simple" => CaptureData {
-            otlp: include_bytes!("fixtures/vercel_ai_sdk_py_simple.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/vercel_ai_sdk_py_simple_spend_logs.jsonl"
-            ),
-        },
-        "vercel_ai_sdk_py_swarm" => CaptureData {
-            otlp: include_bytes!("fixtures/vercel_ai_sdk_py_swarm.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/vercel_ai_sdk_py_swarm_spend_logs.jsonl"
-            ),
-        },
-        "vercel_ai_sdk_retry" => CaptureData {
-            otlp: include_bytes!("fixtures/vercel_ai_sdk_retry.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/vercel_ai_sdk_retry_spend_logs.jsonl"
-            ),
-        },
-        "vercel_ai_sdk_simple" => CaptureData {
-            otlp: include_bytes!("fixtures/vercel_ai_sdk_simple.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/vercel_ai_sdk_simple_spend_logs.jsonl"
-            ),
-        },
-        "vercel_ai_sdk_stream" => CaptureData {
-            otlp: include_bytes!("fixtures/vercel_ai_sdk_stream.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/vercel_ai_sdk_stream_spend_logs.jsonl"
-            ),
-        },
-        "vercel_ai_sdk_swarm" => CaptureData {
-            otlp: include_bytes!("fixtures/vercel_ai_sdk_swarm.json"),
-            spend_logs: include_str!(
-                "../../traces-clickhouse/tests/fixtures/vercel_ai_sdk_swarm_spend_logs.jsonl"
-            ),
-        },
-        _ => panic!("unknown trace capture {name}"),
+fn capture_name(spend_log_path: &Path) -> &str {
+    spend_log_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .and_then(|stem| stem.strip_suffix("_spend_logs"))
+        .unwrap_or_else(|| {
+            panic!(
+                "spend log filename must end with _spend_logs: {}",
+                spend_log_path.display()
+            )
+        })
+}
+
+fn manifest_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
     }
+}
+
+fn capture_data(spend_log_path: &Path) -> CaptureData {
+    let name = capture_name(spend_log_path);
+    let otlp_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(format!("{name}.json"));
+    let otlp = std::fs::read(&otlp_path).unwrap_or_else(|error| {
+        panic!(
+            "missing OTLP export for spend capture {name} at {}: {error}",
+            otlp_path.display()
+        )
+    });
+    CaptureData { otlp }
 }
 
 #[derive(Deserialize)]
@@ -323,8 +90,6 @@ fn upstream_response_id(response_id: &str) -> String {
     };
     STANDARD
         .decode(encoded)
-        .or_else(|_| URL_SAFE.decode(encoded))
-        .or_else(|_| URL_SAFE_NO_PAD.decode(encoded))
         .ok()
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .and_then(|decoded| {
@@ -456,17 +221,25 @@ fn trace_rows(otlp: &[u8]) -> Vec<TraceSpansRow> {
 }
 
 fn fixture(
-    name: &str,
+    spend_log_path: &Path,
 ) -> (
     CaptureData,
     FixtureCapture,
     Vec<TraceSpansRow>,
     Vec<SpendByResponseIdsRow>,
 ) {
-    let data = capture_data(name);
-    let (capture, spends) = captured_spend_rows(data.spend_logs);
+    let spend_log_path = manifest_path(spend_log_path);
+    let name = capture_name(&spend_log_path);
+    let spend_log_contents = std::fs::read_to_string(&spend_log_path).unwrap_or_else(|error| {
+        panic!(
+            "unable to read spend log fixture {}: {error}",
+            spend_log_path.display()
+        )
+    });
+    let (capture, spends) = captured_spend_rows(&spend_log_contents);
     assert_eq!(capture.name, name);
-    let rows = trace_rows(data.otlp);
+    let data = capture_data(&spend_log_path);
+    let rows = trace_rows(&data.otlp);
     (data, capture, rows, spends)
 }
 
@@ -486,36 +259,6 @@ fn agent_spends(trace: &litellm_traces::Trace) -> BTreeMap<String, Option<f64>> 
         .iter()
         .map(|agent| (agent.name.clone(), agent.spend))
         .collect()
-}
-
-fn clone_trace_row(row: &TraceSpansRow) -> TraceSpansRow {
-    TraceSpansRow {
-        trace_id: row.trace_id.clone(),
-        span_id: row.span_id.clone(),
-        parent_span_id: row.parent_span_id.clone(),
-        name: row.name.clone(),
-        kind: row.kind,
-        wrapper_candidate: row.wrapper_candidate,
-        agent: row.agent.clone(),
-        framework: row.framework.clone(),
-        status: row.status,
-        status_message: row.status_message.clone(),
-        error_truncated: row.error_truncated,
-        start_ns: row.start_ns,
-        duration_ns: row.duration_ns,
-        service: row.service.clone(),
-        input_preview: row.input_preview.clone(),
-        model: row.model.clone(),
-        input_tokens: row.input_tokens,
-        output_tokens: row.output_tokens,
-        litellm_request_id: row.litellm_request_id.clone(),
-        call_keys: row.call_keys.clone(),
-        call_evidence: row.call_evidence,
-        tool_call_id: row.tool_call_id.clone(),
-        team_id: row.team_id.clone(),
-        api_key_hash: row.api_key_hash.clone(),
-        user_id: row.user_id.clone(),
-    }
 }
 
 fn unrelated_transport(call: &TraceSpansRow) -> TraceSpansRow {
@@ -586,51 +329,13 @@ fn append_response_id(document: &mut Value, trace_id: &str, span_id: &str, respo
 }
 
 #[rstest]
-#[case::claude_agent_sdk_missing_request_id_simple("claude_agent_sdk_missing_request_id_simple")]
-#[case::claude_agent_sdk_missing_request_id_swarm("claude_agent_sdk_missing_request_id_swarm")]
-#[case::claude_agent_sdk_simple("claude_agent_sdk_simple")]
-#[case::claude_agent_sdk_swarm("claude_agent_sdk_swarm")]
-#[case::crewai_simple("crewai_simple")]
-#[case::crewai_swarm("crewai_swarm")]
-#[case::deepagents_simple("deepagents_simple")]
-#[case::deepagents_swarm("deepagents_swarm")]
-#[case::google_adk_billed_failure("google_adk_billed_failure")]
-#[case::google_adk_retry("google_adk_retry")]
-#[case::google_adk_simple("google_adk_simple")]
-#[case::google_adk_stream("google_adk_stream")]
-#[case::google_adk_swarm("google_adk_swarm")]
-#[case::langchain_simple("langchain_simple")]
-#[case::langchain_swarm("langchain_swarm")]
-#[case::langgraph_simple("langgraph_simple")]
-#[case::langgraph_swarm("langgraph_swarm")]
-#[case::llamaindex_simple("llamaindex_simple")]
-#[case::llamaindex_swarm("llamaindex_swarm")]
-#[case::mastra_simple("mastra_simple")]
-#[case::mastra_swarm("mastra_swarm")]
-#[case::openai_agents_simple("openai_agents_simple")]
-#[case::openai_agents_swarm("openai_agents_swarm")]
-#[case::opentelemetry_simple("opentelemetry_simple")]
-#[case::opentelemetry_swarm("opentelemetry_swarm")]
-#[case::pydantic_ai_billed_failure("pydantic_ai_billed_failure")]
-#[case::pydantic_ai_retry("pydantic_ai_retry")]
-#[case::pydantic_ai_simple("pydantic_ai_simple")]
-#[case::pydantic_ai_stream("pydantic_ai_stream")]
-#[case::pydantic_ai_swarm("pydantic_ai_swarm")]
-#[case::pydantic_ai_swarm_stream("pydantic_ai_swarm_stream")]
-#[case::pydantic_ai_token_limit_swarm("pydantic_ai_token_limit_swarm")]
-#[case::strands_billed_failure("strands_billed_failure")]
-#[case::strands_retry("strands_retry")]
-#[case::strands_simple("strands_simple")]
-#[case::strands_swarm("strands_swarm")]
-#[case::vercel_ai_sdk_billed_failure("vercel_ai_sdk_billed_failure")]
-#[case::vercel_ai_sdk_py_simple("vercel_ai_sdk_py_simple")]
-#[case::vercel_ai_sdk_py_swarm("vercel_ai_sdk_py_swarm")]
-#[case::vercel_ai_sdk_retry("vercel_ai_sdk_retry")]
-#[case::vercel_ai_sdk_simple("vercel_ai_sdk_simple")]
-#[case::vercel_ai_sdk_stream("vercel_ai_sdk_stream")]
-#[case::vercel_ai_sdk_swarm("vercel_ai_sdk_swarm")]
-fn captured_trace_cost_matches_spend_logs(#[case] name: &str) {
-    let (_, capture, rows, spends) = fixture(name);
+fn captured_trace_cost_matches_spend_logs(
+    #[files("../traces-clickhouse/tests/fixtures/*_spend_logs.jsonl")]
+    #[exclude("deeplite_swarm")]
+    spend_logs: PathBuf,
+) {
+    let name = capture_name(&spend_logs);
+    let (_, capture, rows, spends) = fixture(&spend_logs);
     let trace = resolve_trace(&capture.trace_id, "", &rows, &spends).expect("captured trace");
     let expected = if capture.spend_linked && capture.spend_complete {
         Some(spends.iter().map(|row| row.spend.unwrap_or(0.0)).sum())
@@ -641,51 +346,13 @@ fn captured_trace_cost_matches_spend_logs(#[case] name: &str) {
 }
 
 #[rstest]
-#[case::claude_agent_sdk_missing_request_id_simple("claude_agent_sdk_missing_request_id_simple")]
-#[case::claude_agent_sdk_missing_request_id_swarm("claude_agent_sdk_missing_request_id_swarm")]
-#[case::claude_agent_sdk_simple("claude_agent_sdk_simple")]
-#[case::claude_agent_sdk_swarm("claude_agent_sdk_swarm")]
-#[case::crewai_simple("crewai_simple")]
-#[case::crewai_swarm("crewai_swarm")]
-#[case::deepagents_simple("deepagents_simple")]
-#[case::deepagents_swarm("deepagents_swarm")]
-#[case::google_adk_billed_failure("google_adk_billed_failure")]
-#[case::google_adk_retry("google_adk_retry")]
-#[case::google_adk_simple("google_adk_simple")]
-#[case::google_adk_stream("google_adk_stream")]
-#[case::google_adk_swarm("google_adk_swarm")]
-#[case::langchain_simple("langchain_simple")]
-#[case::langchain_swarm("langchain_swarm")]
-#[case::langgraph_simple("langgraph_simple")]
-#[case::langgraph_swarm("langgraph_swarm")]
-#[case::llamaindex_simple("llamaindex_simple")]
-#[case::llamaindex_swarm("llamaindex_swarm")]
-#[case::mastra_simple("mastra_simple")]
-#[case::mastra_swarm("mastra_swarm")]
-#[case::openai_agents_simple("openai_agents_simple")]
-#[case::openai_agents_swarm("openai_agents_swarm")]
-#[case::opentelemetry_simple("opentelemetry_simple")]
-#[case::opentelemetry_swarm("opentelemetry_swarm")]
-#[case::pydantic_ai_billed_failure("pydantic_ai_billed_failure")]
-#[case::pydantic_ai_retry("pydantic_ai_retry")]
-#[case::pydantic_ai_simple("pydantic_ai_simple")]
-#[case::pydantic_ai_stream("pydantic_ai_stream")]
-#[case::pydantic_ai_swarm("pydantic_ai_swarm")]
-#[case::pydantic_ai_swarm_stream("pydantic_ai_swarm_stream")]
-#[case::pydantic_ai_token_limit_swarm("pydantic_ai_token_limit_swarm")]
-#[case::strands_billed_failure("strands_billed_failure")]
-#[case::strands_retry("strands_retry")]
-#[case::strands_simple("strands_simple")]
-#[case::strands_swarm("strands_swarm")]
-#[case::vercel_ai_sdk_billed_failure("vercel_ai_sdk_billed_failure")]
-#[case::vercel_ai_sdk_py_simple("vercel_ai_sdk_py_simple")]
-#[case::vercel_ai_sdk_py_swarm("vercel_ai_sdk_py_swarm")]
-#[case::vercel_ai_sdk_retry("vercel_ai_sdk_retry")]
-#[case::vercel_ai_sdk_simple("vercel_ai_sdk_simple")]
-#[case::vercel_ai_sdk_stream("vercel_ai_sdk_stream")]
-#[case::vercel_ai_sdk_swarm("vercel_ai_sdk_swarm")]
-fn unrelated_sibling_transport_leaves_cost_unchanged(#[case] name: &str) {
-    let (_, capture, rows, spends) = fixture(name);
+fn unrelated_sibling_transport_leaves_cost_unchanged(
+    #[files("../traces-clickhouse/tests/fixtures/*_spend_logs.jsonl")]
+    #[exclude("deeplite_swarm")]
+    spend_logs: PathBuf,
+) {
+    let name = capture_name(&spend_logs);
+    let (_, capture, rows, spends) = fixture(&spend_logs);
     let baseline = resolve_trace(&capture.trace_id, "", &rows, &spends).expect("captured trace");
     let baseline_spend = baseline.summary.spend;
     let baseline_agent_spends = agent_spends(&baseline);
@@ -694,13 +361,13 @@ fn unrelated_sibling_transport_leaves_cost_unchanged(#[case] name: &str) {
         .filter(|row| {
             row.kind == ObservationType::Llm && !row.call_keys.contains(&CallKey::Transport)
         })
-        .map(clone_trace_row)
+        .cloned()
         .collect();
     assert!(!calls.is_empty(), "{name} has no model call rows");
     for call in calls {
         let augmented_rows = rows
             .iter()
-            .map(clone_trace_row)
+            .cloned()
             .chain([unrelated_transport(&call)])
             .collect::<Vec<_>>();
         let augmented =
@@ -720,52 +387,14 @@ fn unrelated_sibling_transport_leaves_cost_unchanged(#[case] name: &str) {
 }
 
 #[rstest]
-#[case::claude_agent_sdk_missing_request_id_simple("claude_agent_sdk_missing_request_id_simple")]
-#[case::claude_agent_sdk_missing_request_id_swarm("claude_agent_sdk_missing_request_id_swarm")]
-#[case::claude_agent_sdk_simple("claude_agent_sdk_simple")]
-#[case::claude_agent_sdk_swarm("claude_agent_sdk_swarm")]
-#[case::crewai_simple("crewai_simple")]
-#[case::crewai_swarm("crewai_swarm")]
-#[case::deepagents_simple("deepagents_simple")]
-#[case::deepagents_swarm("deepagents_swarm")]
-#[case::google_adk_billed_failure("google_adk_billed_failure")]
-#[case::google_adk_retry("google_adk_retry")]
-#[case::google_adk_simple("google_adk_simple")]
-#[case::google_adk_stream("google_adk_stream")]
-#[case::google_adk_swarm("google_adk_swarm")]
-#[case::langchain_simple("langchain_simple")]
-#[case::langchain_swarm("langchain_swarm")]
-#[case::langgraph_simple("langgraph_simple")]
-#[case::langgraph_swarm("langgraph_swarm")]
-#[case::llamaindex_simple("llamaindex_simple")]
-#[case::llamaindex_swarm("llamaindex_swarm")]
-#[case::mastra_simple("mastra_simple")]
-#[case::mastra_swarm("mastra_swarm")]
-#[case::openai_agents_simple("openai_agents_simple")]
-#[case::openai_agents_swarm("openai_agents_swarm")]
-#[case::opentelemetry_simple("opentelemetry_simple")]
-#[case::opentelemetry_swarm("opentelemetry_swarm")]
-#[case::pydantic_ai_billed_failure("pydantic_ai_billed_failure")]
-#[case::pydantic_ai_retry("pydantic_ai_retry")]
-#[case::pydantic_ai_simple("pydantic_ai_simple")]
-#[case::pydantic_ai_stream("pydantic_ai_stream")]
-#[case::pydantic_ai_swarm("pydantic_ai_swarm")]
-#[case::pydantic_ai_swarm_stream("pydantic_ai_swarm_stream")]
-#[case::pydantic_ai_token_limit_swarm("pydantic_ai_token_limit_swarm")]
-#[case::strands_billed_failure("strands_billed_failure")]
-#[case::strands_retry("strands_retry")]
-#[case::strands_simple("strands_simple")]
-#[case::strands_swarm("strands_swarm")]
-#[case::vercel_ai_sdk_billed_failure("vercel_ai_sdk_billed_failure")]
-#[case::vercel_ai_sdk_py_simple("vercel_ai_sdk_py_simple")]
-#[case::vercel_ai_sdk_py_swarm("vercel_ai_sdk_py_swarm")]
-#[case::vercel_ai_sdk_retry("vercel_ai_sdk_retry")]
-#[case::vercel_ai_sdk_simple("vercel_ai_sdk_simple")]
-#[case::vercel_ai_sdk_stream("vercel_ai_sdk_stream")]
-#[case::vercel_ai_sdk_swarm("vercel_ai_sdk_swarm")]
-fn redundant_genai_response_id_keeps_call_evidence(#[case] name: &str) {
-    let data = capture_data(name);
-    let decoded = decode_otlp(data.otlp, Some("application/json")).expect("valid OTLP fixture");
+fn redundant_genai_response_id_keeps_call_evidence(
+    #[files("../traces-clickhouse/tests/fixtures/*_spend_logs.jsonl")]
+    #[exclude("deeplite_swarm")]
+    spend_logs: PathBuf,
+) {
+    let (data, capture, _, _) = fixture(&spend_logs);
+    let name = capture.name;
+    let decoded = decode_otlp(&data.otlp, Some("application/json")).expect("valid OTLP fixture");
     let targets: Vec<_> = decoded
         .iter()
         .filter_map(|span| {
@@ -795,7 +424,7 @@ fn redundant_genai_response_id_keeps_call_evidence(#[case] name: &str) {
     for (trace_id, span_id, expected, response_ids) in targets {
         for response_id in response_ids {
             let mut document: Value =
-                serde_json::from_slice(data.otlp).expect("valid OTLP JSON fixture");
+                serde_json::from_slice(&data.otlp).expect("valid OTLP JSON fixture");
             append_response_id(&mut document, &trace_id, &span_id, &response_id);
             let modified = serde_json::to_vec(&document).expect("serializable OTLP JSON");
             let spans = decode_otlp(&modified, Some("application/json"))
