@@ -32,6 +32,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import MAX_REDIS_BUFFER_DEQUEUE_COUNT, REDIS_GATEWAY_REQUESTS_BUFFER_KEY
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.middleware.billable_request_metrics_middleware import BillableCategory
 from litellm.types.proxy.gateway_requests import (
@@ -146,7 +147,8 @@ async def commit_gateway_requests_to_db(
         return
 
     sql, params = build_gateway_requests_upsert(snapshot)
-    await prisma_client.db.execute_raw(sql, *params)  # pyright: ignore[reportAny]  # untyped prisma client
+    async with db_span("commit_gateway_requests", "LiteLLM_DailyGatewayRequests"):
+        await prisma_client.db.execute_raw(sql, *params)  # pyright: ignore[reportAny]  # untyped prisma client
 
     verbose_proxy_logger.debug(
         "Gateway request tracking - committed %d aggregated rows in one statement", len(snapshot)

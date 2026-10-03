@@ -150,3 +150,101 @@ async def test_a_cache_hit_after_a_sibling_db_read_emits_no_db_event(success_hoo
     await cache_hit()
 
     assert await _db_call_types(success_hook) == ("read_row",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("lookup", "table_name"),
+    [
+        ({"token": "sk-hashed"}, "key"),
+        ({"tokens": ["sk-hashed"]}, "key"),
+        ({"user_id": "u-1"}, "user"),
+        ({"team_id": "t-1"}, "team"),
+        ({"token": "sk-hashed", "user_id": "u-1"}, "key"),
+        ({"table_name": "spend", "token": "sk-hashed"}, "spend"),
+    ],
+)
+async def test_a_crud_method_called_without_table_name_reports_the_table_its_lookup_key_selects(
+    success_hook: AsyncMock, lookup: dict[str, object], table_name: str
+) -> None:
+    engine: Final = _tracked_engine()
+
+    @log_db_metrics
+    async def get_data(*, table_name: str | None = None, **kwargs: object) -> object:
+        return await engine.query("{}", tx_id=None)
+
+    await get_data(**lookup)
+
+    await asyncio.sleep(0)
+    assert success_hook.await_args_list[0].kwargs["event_metadata"] == {"table_name": table_name}
+
+
+@pytest.mark.asyncio
+async def test_a_helper_without_a_table_name_parameter_gets_no_inferred_table(success_hook: AsyncMock) -> None:
+    engine: Final = _tracked_engine()
+
+    @log_db_metrics
+    async def get_team_member_default_budget(*, team_id: str, user_id: str) -> object:
+        return await engine.query("{}", tx_id=None)
+
+    await get_team_member_default_budget(team_id="t-1", user_id="u-1")
+
+    await asyncio.sleep(0)
+    assert success_hook.await_args_list[0].kwargs["event_metadata"] is None
+
+
+_FIND_UNIQUE_KEY_PAYLOAD: Final = (
+    '{"query": "query { result: findUniqueLiteLLM_VerificationToken(where: {token: \\"h\\"}) { token } }"}'
+)
+_RAW_SELECT_PAYLOAD: Final = '{"query": "mutation { result: queryRaw(query: \\"SELECT 1 FROM \\\\\\"LiteLLM_UserTable\\\\\\"\\", parameters: \\"[]\\") }"}'
+
+
+@pytest.mark.asyncio
+async def test_an_undecorated_prisma_query_emits_one_db_event_named_from_the_engine_payload(
+    success_hook: AsyncMock,
+) -> None:
+    engine: Final = _tracked_engine()
+
+    await engine.query(_RAW_SELECT_PAYLOAD, tx_id=None)
+    await engine.query(_FIND_UNIQUE_KEY_PAYLOAD, tx_id=None)
+
+    assert await _db_call_types(success_hook) == ("query_raw", "find_unique")
+    raw, model = (call.kwargs["event_metadata"] for call in success_hook.await_args_list)
+    assert raw == {"table_name": "LiteLLM_UserTable", "db_operation": "select"}
+    assert model == {"table_name": "LiteLLM_VerificationToken", "db_operation": "select"}
+
+
+@pytest.mark.asyncio
+async def test_a_decorated_call_owns_its_query_so_the_engine_fallback_stays_silent(success_hook: AsyncMock) -> None:
+    engine: Final = _tracked_engine()
+
+    @log_db_metrics
+    async def read_key_row(**kwargs: object) -> object:
+        return await engine.query(_FIND_UNIQUE_KEY_PAYLOAD, tx_id=None)
+
+    await read_key_row(parent_otel_span="span", token="h")
+
+    assert await _db_call_types(success_hook) == ("read_key_row",)
+
+
+@pytest.mark.asyncio
+async def test_a_task_spawned_by_a_decorated_call_that_queries_after_it_returned_emits_its_own_event(
+    success_hook: AsyncMock,
+) -> None:
+    engine: Final = _tracked_engine()
+    released: Final = asyncio.Event()
+
+    async def write_after_the_caller_returned() -> object:
+        await released.wait()
+        return await engine.query(_FIND_UNIQUE_KEY_PAYLOAD, tx_id=None)
+
+    @log_db_metrics
+    async def read_key_row(**kwargs: object) -> asyncio.Task[object]:
+        await engine.query(_FIND_UNIQUE_KEY_PAYLOAD, tx_id=None)
+        return asyncio.create_task(write_after_the_caller_returned())
+
+    background: Final = await read_key_row(token="h")
+    released.set()
+    await background
+
+    assert await _db_call_types(success_hook) == ("read_key_row", "find_unique")

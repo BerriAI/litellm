@@ -16,8 +16,10 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_url_settings import add_missing_query_params, token_refresh_params_from_url
-from litellm.proxy.db.log_db_metrics import record_db_io
+from litellm.proxy.db.log_db_metrics import db_io_claimed, record_db_io
+from litellm.proxy.db.prisma_query_span import parse_prisma_query
 from litellm.proxy.db.token_auth import (
     DEFAULT_POSTGRES_PORT,
     DatabaseTokenAuth,
@@ -107,10 +109,15 @@ class _TrackedPrismaEngine:
         return getattr(self._engine, name)
 
     async def query(self, content: str, *, tx_id: str | None) -> object:
-        record_db_io()
         self.tracker.begin_operation()
         try:
-            return await self._engine.query(content, tx_id=tx_id)
+            if db_io_claimed():
+                record_db_io()
+                return await self._engine.query(content, tx_id=tx_id)
+            query: Final = parse_prisma_query(content)
+            async with db_span(query.call_type, query.table, query.operation):
+                record_db_io()
+                return await self._engine.query(content, tx_id=tx_id)
         finally:
             self.tracker.end_operation()
 
