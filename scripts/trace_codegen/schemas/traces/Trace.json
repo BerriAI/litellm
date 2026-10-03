@@ -245,6 +245,10 @@
           "minimum": 0,
           "type": "integer"
         },
+        "resolution_limited": {
+          "type": "boolean",
+          "x-python-optional": true
+        },
         "service": {
           "type": "string"
         },
@@ -282,6 +286,7 @@
         }
       },
       "required": [
+        "resolution_limited",
         "trace_id",
         "trace_ref",
         "name",
@@ -314,6 +319,13 @@
       },
       "type": "array"
     },
+    "next_cursor": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-python-optional": true
+    },
     "spans": {
       "items": {
         "$ref": "#/$defs/Span"
@@ -327,7 +339,8 @@
   "required": [
     "summary",
     "agents",
-    "spans"
+    "spans",
+    "next_cursor"
   ],
   "title": "Trace",
   "type": "object"

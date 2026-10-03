@@ -47013,6 +47013,8 @@ export interface components {
         Trace: {
             /** Agents */
             agents: components["schemas"]["AgentNode"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
             /** Spans */
             spans: components["schemas"]["Span"][];
             summary: components["schemas"]["TraceSummary"];
@@ -47245,6 +47247,8 @@ export interface components {
             name: string;
             /** Output Tokens */
             output_tokens: number;
+            /** Resolution Limited */
+            resolution_limited?: boolean;
             /** Service */
             service: string;
             /** Span Count */
@@ -80160,6 +80164,8 @@ export interface operations {
         parameters: {
             query?: {
                 trace_ref?: string;
+                cursor?: string | null;
+                page_size?: number | null;
             };
             header?: never;
             path: {

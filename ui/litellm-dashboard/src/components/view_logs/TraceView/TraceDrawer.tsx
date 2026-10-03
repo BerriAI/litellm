@@ -2,7 +2,7 @@
 import { useLensDemo } from "@/components/lens/LensDemoContext";
 import { useTracesApi } from "@/components/lens/services";
 
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { ArrowLeft, Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -372,12 +372,27 @@ interface RunViewProps {
 export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack, embedded = false }: RunViewProps) {
   const traces = useTracesApi(accessToken);
   const [view, setView] = useState<TraceView>("steps");
-  const traceQuery = useQuery({
+  const traceQueryOptions = {
     queryKey: ["agentTrace", traceId, traceRef, accessToken],
-    queryFn: () => traces.trace(traceId, traceRef),
+    queryFn: ({ pageParam }: { pageParam: string | null }) => traces.trace(traceId, traceRef, pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage: Trace) => lastPage.next_cursor ?? undefined,
     staleTime: 30_000,
-  });
-  const trace = traceQuery.data;
+    retry: false,
+  };
+  const traceQuery = useInfiniteQuery(traceQueryOptions);
+  const trace = useMemo(() => {
+    const pages = traceQuery.data?.pages;
+    if (!pages?.length) return undefined;
+    return { ...pages[0], spans: pages.flatMap((page) => page.spans) };
+  }, [traceQuery.data]);
+  const seekingSpan = Boolean(initialSpanId && trace && !trace.spans.some((span) => span.span_id === initialSpanId));
+  const { hasNextPage, isFetching, isError, fetchNextPage } = traceQuery;
+  const canSeek = seekingSpan && hasNextPage;
+  useEffect(() => {
+    if (canSeek && !isFetching && !isError) void fetchNextPage();
+  }, [canSeek, isFetching, isError, fetchNextPage]);
+  const pageAction = isError ? "Retry" : "Load more steps";
 
   if (traceQuery.isLoading) {
     return (
@@ -396,7 +411,7 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
       </div>
     );
   }
-  if (traceQuery.isError || !trace) {
+  if (!trace) {
     return (
       <div className="p-6 text-[12px]" data-testid="run-view-error">
         <button
@@ -408,6 +423,9 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
         </button>
         <h1 className="mb-2 text-[13px] font-medium">Could not load trace</h1>
         <span className="text-muted-foreground">{traceQuery.error?.message ?? "Unknown error"}</span>
+        <Button variant="outline" size="sm" className="ml-3" onClick={() => void traceQuery.refetch()}>
+          Retry
+        </Button>
       </div>
     );
   }
@@ -422,8 +440,35 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
       data-testid="run-view"
     >
       <RunHeader trace={trace} onBack={onBack} embedded={embedded} />
+      {(traceQuery.hasNextPage || traceQuery.isError) && (
+        <div className="flex items-center justify-between gap-3 border-b px-3 py-2 text-xs" role="status">
+          <span>
+            {traceQuery.isError
+              ? "Could not load more steps. Your loaded steps are still available."
+              : `Showing ${trace.spans.length.toLocaleString()} of ${trace.summary.span_count.toLocaleString()} steps`}
+          </span>
+          {traceQuery.isError && (
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={traceQuery.isFetching}
+              onClick={() => void traceQuery.refetch()}
+            >
+              Refresh trace
+            </Button>
+          )}
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={traceQuery.isFetching}
+            onClick={() => void (traceQuery.hasNextPage ? traceQuery.fetchNextPage() : traceQuery.refetch())}
+          >
+            {traceQuery.isFetching ? "Loading…" : pageAction}
+          </Button>
+        </div>
+      )}
       <RunBody
-        key={trace.summary.trace_id}
+        key={`${trace.summary.trace_ref || trace.summary.trace_id}:${initialSpanId && !seekingSpan ? initialSpanId : "root"}`}
         trace={trace}
         accessToken={accessToken}
         initialSpanId={initialSpanId}
