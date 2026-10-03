@@ -25504,6 +25504,22 @@ export interface components {
             /** Uri */
             uri?: string;
         };
+        /** AgentFix */
+        AgentFix: {
+            /** Options */
+            options: [
+                components["schemas"]["FixOption"],
+                components["schemas"]["FixOption"]
+            ];
+            /** Problem */
+            problem: string;
+            /** Test Cases */
+            test_cases: components["schemas"]["AgentTestCase"][];
+            /** User Goal */
+            user_goal: string;
+            /** What Happened */
+            what_happened: string;
+        };
         /** AgentIdentityBinding */
         AgentIdentityBinding: {
             /**
@@ -25823,6 +25839,13 @@ export interface components {
             type: "archive";
             /** Url */
             url: string;
+        };
+        /** AgentTestCase */
+        AgentTestCase: {
+            /** Expected */
+            expected: string;
+            /** Input */
+            input: string;
         };
         /**
          * AlertType
@@ -31926,6 +31949,7 @@ export interface components {
              * Format: date-time
              */
             first_seen: string;
+            fix?: components["schemas"]["AgentFix"] | null;
             /** Id */
             id: string;
             /**
@@ -31986,6 +32010,7 @@ export interface components {
             evidence: components["schemas"]["Evidence"][];
             /** Existing Finding Id */
             existing_finding_id?: string | null;
+            fix?: components["schemas"]["AgentFix"] | null;
             /**
              * Kind
              * @default issue
@@ -32023,6 +32048,13 @@ export interface components {
              * @enum {string}
              */
             status: "open" | "resolved" | "dismissed";
+        };
+        /** FixOption */
+        FixOption: {
+            /** Change */
+            change: string;
+            /** Title */
+            title: string;
         };
         /** FunctionCall */
         FunctionCall: {
