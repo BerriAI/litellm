@@ -36,7 +36,8 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
 @pytest_asyncio.fixture(loop_scope="function")
-async def lens_database() -> AsyncIterator[PrismaClient]:
+async def lens_database(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[PrismaClient]:
+    monkeypatch.setenv("LITELLM_RELEASE_TAG", "v0.0.0-lens-lifecycle")
     original_db: Final = proxy_server.prisma_client
     original_router: Final = proxy_server.llm_router
     original_settings: Final = proxy_server.general_settings

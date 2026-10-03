@@ -111,3 +111,33 @@ api /lens > "$qa_dir/restarted.json"
 jq -e --arg id "$worker_id" --arg key "$key_id" \
   '.workers[] | select(.id == $id and .analysis_key_id == $key)' "$qa_dir/restarted.json" > /dev/null
 printf 'Compose restart: trace, worker identity, token and billing assignment preserved; wrong release rejected\n'
+
+cat > "$qa_dir/unversioned.yaml" <<'EOF'
+services:
+  litellm:
+    environment:
+      LITELLM_RELEASE_TAG: ""
+EOF
+"${compose[@]}" -f "$qa_dir/unversioned.yaml" up -d litellm
+for attempt in $(seq 1 90); do
+  if api /health/liveliness > /dev/null 2>&1; then break; fi
+  sleep 2
+done
+api /health/liveliness > /dev/null
+status=$(curl --silent --show-error --max-time 30 -o "$qa_dir/unversioned-registration.json" -w '%{http_code}' \
+  -H "Authorization: Bearer $master_key" -H 'Content-Type: application/json' \
+  -d "@$qa_dir/registration.json" 'http://127.0.0.1:4418/lens/workers/register')
+[[ "$status" == 503 ]]
+jq -e '.detail | contains("no release identity")' "$qa_dir/unversioned-registration.json" > /dev/null
+status=$(curl --silent --show-error --max-time 30 -o "$qa_dir/unversioned-claim.json" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $(jq -r '.token' "$qa_dir/worker.json")" \
+  'http://127.0.0.1:4418/lens/worker/claim?protocol_version=4&worker_release=')
+[[ "$status" == 503 ]]
+jq -e '.detail | contains("no release identity")' "$qa_dir/unversioned-claim.json" > /dev/null
+api /lens > "$qa_dir/unversioned-workers.json"
+jq -e --arg id "$worker_id" '.workers | length == 1 and .[0].id == $id' "$qa_dir/unversioned-workers.json" > /dev/null
+"${compose[@]}" up -d litellm
+heartbeat_after=$(date -u +'%Y-%m-%dT%H:%M:%S')
+connected
+trace_saved
+printf 'Unversioned gateway: setup and claims refused without guessing; original worker and trace recovered\n'
