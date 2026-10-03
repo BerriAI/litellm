@@ -12,6 +12,7 @@ from litellm.proxy.lens.models import (
     ExecutionContent,
     ModelRequest,
     ModelResult,
+    Progress,
     Result,
     Sample,
     TracePart,
@@ -417,3 +418,43 @@ async def test_transient_heartbeat_failure_recovers_without_cancelling_analysis(
     assert result.error == ""
     assert result.coverage.screened == 1 and result.coverage.unassessable == 0
     assert attempts.qsize() == 2 and saved.empty()
+
+
+@pytest.mark.asyncio
+async def test_worker_sends_each_runs_review_with_its_progress() -> None:
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    execution: Final = Execution(
+        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
+    )
+    sent: Final = SimpleQueue[Progress]()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        match request.url.path.rsplit("/", 1)[-1]:
+            case "claim":
+                return httpx.Response(200, json=claim.model_dump(mode="json"))
+            case "sample":
+                return httpx.Response(200, json=Sample(executions=(execution,), eligible=1).model_dump())
+            case "content":
+                return httpx.Response(
+                    200,
+                    json=ExecutionContent(
+                        execution=execution,
+                        parts=(TracePart(execution_id="run", span_id="s", name="step", kind="agent", content="Done"),),
+                    ).model_dump(),
+                )
+            case "model":
+                return httpx.Response(
+                    200, json={"content": '{"observations":[],"reasoning":"Finished the task."}', "cost": 0}
+                )
+            case "progress":
+                sent.put(Progress.model_validate_json(request.content))
+                return httpx.Response(200, json=True)
+            case "result":
+                return httpx.Response(200, json=True)
+            case _:
+                pytest.fail(f"Unexpected worker request: {request.url.path}")
+
+    async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
+        assert await LensWorker(client).run_once()
+    reviews: Final = tuple(p.review for p in (sent.get_nowait() for _ in range(sent.qsize())) if p.review)
+    assert tuple((r.execution_id, r.reasoning) for r in reviews) == (("run", "Finished the task."),)
