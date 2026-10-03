@@ -3033,7 +3033,7 @@ async def get_user_daily_activity_aggregated(
         default=False,
         description="When the range ends on the caller's current local day, include today's UTC bucket.",
     ),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
 ) -> SpendAnalyticsPaginatedResponse:
     from litellm.proxy.proxy_server import prisma_client
 
