@@ -746,6 +746,7 @@ fn transport_contract_keeps_independent_call_ids(span: Span) {
 #[case::unrelated_scope("custom", "gateway.request", "true", "POST", false)]
 #[case::unrelated_span("litellm.gateway.client", "step", "true", "POST", false)]
 #[case::missing_contract("litellm.gateway.client", "gateway.request", "", "POST", false)]
+#[case::disabled_contract("litellm.gateway.client", "gateway.request", "false", "POST", false)]
 #[case::unrelated_method("litellm.gateway.client", "gateway.request", "true", "GET", false)]
 fn gateway_attempt_contract_requires_recorded_request_boundary(
     span: Span,
@@ -774,7 +775,7 @@ fn gateway_attempt_contract_requires_recorded_request_boundary(
         decoded.normalized.calls,
         if complete {
             CallEvidence::Complete(std::collections::BTreeSet::from([
-                CallKey::Transport,
+                CallKey::GatewayAttempt,
                 gateway,
             ]))
         } else {

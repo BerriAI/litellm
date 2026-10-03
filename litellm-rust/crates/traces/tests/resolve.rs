@@ -579,7 +579,7 @@ fn sibling_transports_belong_to_the_only_model_call_under_their_parent(
         10,
     );
     transport.trace_id = "trace".into();
-    transport.call_keys = vec!["transport:".parse().unwrap()];
+    transport.call_keys = vec![litellm_traces::CallKey::GatewayAttempt];
     transport.call_evidence = Some(litellm_traces::CallEvidenceKind::Complete);
     let mut rows = vec![
         owned(
@@ -605,11 +605,15 @@ fn sibling_transports_belong_to_the_only_model_call_under_their_parent(
 }
 
 #[rstest]
-#[case::without_tool_http_sibling(None, Some(0.5))]
-#[case::after_call(Some((200, 10)), Some(0.5))]
-#[case::inside_call_without_spend(Some((10, 10)), None)]
+#[case::without_tool_http_sibling(None, false, litellm_traces::CallKey::Transport, Some(0.5))]
+#[case::after_call(Some((200, 10)), false, litellm_traces::CallKey::Transport, Some(0.5))]
+#[case::inside_call_without_spend(Some((10, 10)), false, litellm_traces::CallKey::Transport, Some(0.5))]
+#[case::inside_call_with_unrelated_spend(Some((10, 10)), true, litellm_traces::CallKey::Transport, Some(0.5))]
+#[case::missing_gateway_attempt(Some((10, 10)), false, litellm_traces::CallKey::GatewayAttempt, None)]
 fn sibling_transport_does_not_lose_model_call_spend(
     #[case] transport_timing: Option<(i64, u64)>,
+    #[case] unrelated_spend: bool,
+    #[case] key: litellm_traces::CallKey,
     #[case] expected: Option<f64>,
 ) {
     let call = owned(
@@ -637,22 +641,108 @@ fn sibling_transport_does_not_lose_model_call_spend(
     ];
     let rows: Vec<_> = base_rows
         .into_iter()
-        .chain(transport_timing.into_iter().map(|(start, duration)| {
+        .chain(transport_timing.map(|(start, duration)| {
             let mut transport = at(
                 row("tool-http", "step", "GET", "framework", ""),
                 start,
                 duration,
             );
             transport.trace_id = "trace".into();
-            transport.call_keys = vec![litellm_traces::CallKey::Transport];
+            transport.call_keys = vec![key];
             transport.call_evidence = Some(litellm_traces::CallEvidenceKind::Complete);
             owned(transport, "team", "", "key")
         }))
         .collect();
-    let logged = spend("chatcmpl-1", "chatcmpl-1", "team", "", "key", 0.5);
-    let trace = resolve_trace("trace", "ref", &rows, &[logged]).unwrap();
+    let logs: Vec<_> = std::iter::once(spend("chatcmpl-1", "chatcmpl-1", "team", "", "key", 0.5))
+        .chain(unrelated_spend.then(|| SpendByResponseIdsRow {
+            trace_id: "trace".into(),
+            span_id: "tool-http".into(),
+            ..spend("unrelated", "unrelated", "team", "", "key", 0.75)
+        }))
+        .collect();
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
     assert_eq!(trace.summary.spend, expected);
     assert_eq!(trace.agents[0].spend, expected);
+}
+
+#[rstest]
+#[case::agreeing_ids(
+    litellm_traces::CallKey::Transport,
+    "call-a",
+    Some("response-a"),
+    Some(0.25)
+)]
+#[case::conflicting_gateway_id(litellm_traces::CallKey::Transport, "call-b", None, None)]
+#[case::conflicting_response_id(
+    litellm_traces::CallKey::Transport,
+    "call-a",
+    Some("response-b"),
+    None
+)]
+#[case::conflicting_gateway_and_response(
+    litellm_traces::CallKey::Transport,
+    "call-b",
+    Some("response-b"),
+    None
+)]
+#[case::agreeing_gateway_attempt(
+    litellm_traces::CallKey::GatewayAttempt,
+    "call-a",
+    Some("response-a"),
+    Some(0.25)
+)]
+#[case::conflicting_gateway_attempt(litellm_traces::CallKey::GatewayAttempt, "call-b", None, None)]
+fn gateway_attempt_identifiers_must_match_one_spend_row(
+    #[case] transport: litellm_traces::CallKey,
+    #[case] call_id: &str,
+    #[case] response_id: Option<&str>,
+    #[case] expected: Option<f64>,
+) {
+    let keys = [
+        transport,
+        litellm_traces::CallKey::LiteLlmRequest(call_id.into()),
+    ]
+    .into_iter()
+    .chain(response_id.map(|id| litellm_traces::CallKey::ProviderResponse(id.into())))
+    .collect();
+    let rows = [
+        owned(
+            row("agent", "", "agent", "agent", "agent"),
+            "team",
+            "",
+            "key",
+        ),
+        owned(llm("call", "agent", "agent", ""), "team", "", "key"),
+        owned(
+            TraceSpansRow {
+                trace_id: "trace".into(),
+                call_keys: keys,
+                call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
+                ..row("attempt", "call", "gateway.request", "framework", "")
+            },
+            "team",
+            "",
+            "key",
+        ),
+    ];
+    let logs = [
+        SpendByResponseIdsRow {
+            litellm_call_id: "call-a".into(),
+            trace_id: "trace".into(),
+            span_id: "attempt".into(),
+            ..spend("request-a", "response-a", "team", "", "key", 0.25)
+        },
+        SpendByResponseIdsRow {
+            litellm_call_id: "call-b".into(),
+            trace_id: "trace".into(),
+            span_id: "other-attempt".into(),
+            ..spend("request-b", "response-b", "team", "", "key", 0.5)
+        },
+    ];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(trace.summary.spend, expected);
+    assert_eq!(trace.agents[0].spend, expected);
+    assert_eq!(trace.spans[2].spend, expected);
 }
 
 #[rstest]
