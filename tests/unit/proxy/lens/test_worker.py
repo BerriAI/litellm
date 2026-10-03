@@ -3,6 +3,7 @@ from typing import Final
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from litellm.proxy.lens.models import (
     Claim,
@@ -79,6 +80,45 @@ async def test_idle_worker_does_not_start_an_analysis() -> None:
 
     async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
         assert await LensWorker(client).run_once() is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result_status", (200, 409))
+async def test_incompatible_claim_reports_failure_instead_of_leaving_the_investigation_running(
+    result_status: int,
+) -> None:
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    payload: Final = claim.model_dump(mode="json") | {
+        "job": claim.job.model_dump(mode="json") | {
+            "settings": claim.job.settings.model_dump() | {"future_setting": "private content"},
+        },
+    }
+    saved: Final = SimpleQueue[Result]()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/lens/worker/claim":
+            return httpx.Response(200, json=payload)
+        assert request.url.path == "/lens/worker/lens/job/result"
+        saved.put(Result.model_validate_json(request.content))
+        return httpx.Response(result_status, json=True)
+
+    async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
+        assert await LensWorker(client).run_once() is True
+    assert saved.get_nowait().error == (
+        "The worker could not read this investigation. Update the worker to match the gateway, then retry."
+    )
+    assert saved.empty()
+
+
+@pytest.mark.asyncio
+async def test_claim_without_an_identity_does_not_report_failure_for_another_investigation() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/lens/worker/claim"
+        return httpx.Response(200, json={"job": {"settings": {"future_setting": True}}})
+
+    async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
+        with pytest.raises(ValidationError):
+            await LensWorker(client).run_once()
 
 
 @pytest.mark.asyncio

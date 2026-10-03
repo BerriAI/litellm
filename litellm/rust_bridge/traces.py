@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal, Protocol, TypedDict, TypeVar, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 from litellm.rust_bridge.loader import get_native_bridge
@@ -77,29 +77,17 @@ class DecodedSpan(TypedDict):
     consumed_attributes: ReadOnly[tuple[str, str]]
 
 
-class AdminQueryScope(TypedDict):
-    kind: ReadOnly[Literal["admin"]]
+class AllQueryScope(TypedDict):
+    kind: ReadOnly[Literal["all"]]
 
 
-class TeamQueryScope(TypedDict):
-    kind: ReadOnly[Literal["team"]]
-    team_id: ReadOnly[str]
-
-
-class KeyQueryScope(TypedDict):
-    kind: ReadOnly[Literal["key"]]
-    team_id: ReadOnly[str]
-    api_key_hash: ReadOnly[str]
-
-
-class LogQueryScope(TypedDict):
-    kind: ReadOnly[Literal["logs"]]
+class OwnedQueryScope(TypedDict):
+    kind: ReadOnly[Literal["owned"]]
     user_id: ReadOnly[str]
     team_ids: ReadOnly[tuple[str, ...]]
-    api_key_hash: ReadOnly[str]
 
 
-QueryScope = AdminQueryScope | TeamQueryScope | KeyQueryScope | LogQueryScope
+QueryScope = AllQueryScope | OwnedQueryScope
 
 
 class NativeStore(Protocol):
@@ -111,7 +99,7 @@ class NativeStore(Protocol):
 
     def query_sql(self, sql: str, scope: QueryScope, secret: str) -> Awaitable[str]: ...
 
-    def query_help(self, scope: QueryScope, secret: str) -> Awaitable[str]: ...
+    def query_help(self, scope: QueryScope, secret: str) -> Awaitable[JsonValue]: ...
 
     def query(
         self, name: ReadQueryName, parameters: Mapping[str, str | int | float | Sequence[str]]
@@ -189,6 +177,13 @@ def _decode_query_response(adapter: TypeAdapter[_ResponseT], body: str) -> _Resp
         raise RuntimeError("Native trace query returned an invalid response") from error
 
 
+def _validate_query_response(adapter: TypeAdapter[_ResponseT], value: JsonValue) -> _ResponseT:
+    try:
+        return adapter.validate_python(value)
+    except ValidationError as error:
+        raise RuntimeError("Native trace query returned an invalid response") from error
+
+
 class ClickHouseStorage:
     def __init__(self, config: TraceStorageConfig) -> None:
         native: Final = _native()
@@ -216,7 +211,7 @@ class ClickHouseStorage:
 
     async def query_help(self, scope: QueryScope, secret: str) -> TraceQueryHelp:
         result: Final = await self._native.query_help(scope, secret)
-        return _decode_query_response(_HELP_RESPONSE, result)
+        return _validate_query_response(_HELP_RESPONSE, result)
 
     async def lens_sample(self, parameters: LensSampleParams) -> tuple[ExecutionRow, ...]:
         return await self.query(LENS_SAMPLE, parameters)

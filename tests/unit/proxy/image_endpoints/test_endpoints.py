@@ -286,6 +286,28 @@ def test_image_edit_multipart_n_that_is_not_a_number_is_left_alone(monkeypatch):
     assert captured["n"] == "two"
 
 
+@pytest.mark.parametrize(
+    "files, form, missing",
+    [
+        ({}, {"model": "stability.stable-style-transfer-v1:0", "prompt": "oil painting"}, "image"),
+        (
+            {"image": ("tree.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+            {"model": "stability.stable-image-remove-background-v1:0"},
+            "prompt",
+        ),
+    ],
+)
+def test_image_edit_without_an_optional_field_reaches_the_provider_with_it_set_to_none(
+    monkeypatch, files, form, missing
+):
+    captured: Dict[str, Any] = {}
+
+    response = _image_edit_client(monkeypatch, captured).post("/v1/images/edits", files=files or None, data=form)
+
+    assert response.status_code == 200, response.text
+    assert missing in captured and captured[missing] is None, captured
+
+
 @pytest.mark.asyncio
 async def test_a_model_the_router_cannot_serve_answers_an_openai_typed_error(monkeypatch: pytest.MonkeyPatch):
     """A bare HTTPException carries no type or param, so the tail used to ship the

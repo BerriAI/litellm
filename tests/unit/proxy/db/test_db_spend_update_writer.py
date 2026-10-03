@@ -289,6 +289,65 @@ async def test_update_database_skips_tool_usage_when_spend_logs_disabled():
     assert prisma.tool_usage_transactions == []
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_spend_logs", [True, False])
+@pytest.mark.parametrize("session_id", ["session-1", None])
+async def test_a_routed_request_reaches_the_auto_router_rollup_whether_or_not_spend_logs_are_kept(
+    disable_spend_logs: bool, session_id: str | None
+) -> None:
+    db_writer = DBSpendUpdateWriter()
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _tool_usage_prisma()
+    prisma.autorouter_turn_transactions = []
+    prisma._autorouter_turn_transactions_lock = asyncio.Lock()
+    routed_payload: Final = {
+        **_minimal_spend_payload(),
+        "status": "success",
+        "api_key": "hashed-key",
+        "user": "u1",
+        "session_id": session_id,
+        "model": "claude-haiku-4-5",
+        "model_group": "smart-router",
+        "spend": 0.25,
+        "startTime": "2026-07-25T10:00:00+00:00",
+        "metadata": json.dumps(
+            {
+                "routing_decision": {"router_model_name": "smart-router", "router_type": "complexity"},
+                "autorouter_savings": 1.5,
+            }
+        ),
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", disable_spend_logs),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value=routed_payload,
+        ),
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="u1",
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={"model": "smart-router"},
+            completion_response=_tool_call_response("get_weather"),
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            response_cost=0.25,
+        )
+
+    (turn,) = prisma.autorouter_turn_transactions
+    stored_session: Final = session_id if session_id and not disable_spend_logs else ""
+    assert (turn.router_name, turn.router_type, turn.session_id) == ("smart-router", "complexity", stored_session)
+    assert (turn.spend, turn.saved_spend) == (0.25, 1.5)
+    assert (prisma.tool_usage_transactions == []) is disable_spend_logs
+
+
 Statement = tuple[str, tuple[object, ...]]
 
 

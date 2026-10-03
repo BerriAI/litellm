@@ -30,7 +30,6 @@ class ListTracesParams(BaseModel):
     all_teams: Literal[0, 1]
     user_id: str
     team_ids: tuple[str, ...]
-    api_key_hash: str
     start_ms: Int64
     end_ms: Int64
     cursor_ms: Int64
@@ -43,7 +42,6 @@ class TraceSpansParams(BaseModel):
     all_teams: Literal[0, 1]
     user_id: str
     team_ids: tuple[str, ...]
-    api_key_hash: str
     trace_id: str
     trace_ref: str
 
@@ -53,7 +51,6 @@ class SpanDetailParams(BaseModel):
     all_teams: Literal[0, 1]
     user_id: str
     team_ids: tuple[str, ...]
-    api_key_hash: str
     trace_id: str
     trace_ref: str
     span_id: str
@@ -64,7 +61,6 @@ class SpanErrorParams(BaseModel):
     all_teams: Literal[0, 1]
     user_id: str
     team_ids: tuple[str, ...]
-    api_key_hash: str
     trace_id: str
     trace_ref: str
     span_id: str
@@ -77,7 +73,6 @@ class SpendByResponseIdsParams(BaseModel):
     all_teams: Literal[0, 1]
     user_id: str
     team_ids: tuple[str, ...]
-    api_key_hash: str
     response_ids: tuple[str, ...]
     start_ms: Int64
     end_ms: Int64
@@ -143,7 +138,6 @@ class TraceIdentityParams(BaseModel):
     all_teams: Literal[0, 1]
     user_id: str
     team_ids: tuple[str, ...]
-    api_key_hash: str
     trace_id: str
 
 
