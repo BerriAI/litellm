@@ -563,10 +563,10 @@ def test_replacing_the_registration_switches_the_team_to_content(rig: Rig) -> No
 
 def test_request_metadata_cannot_lift_the_team_restriction(rig: Rig) -> None:
     _, key = rig.team_key("no_content", "a")
-    sent: Final = rig.send(key, extra={"metadata": {"capture_message_content": "span_only"}})
-    assert sent.status == 401, sent.text
-    assert "capture_message_content is not allowed in request body" in sent.text, sent.text
-    assert rig.upstream_hits(sent.marker) == 0
+    cursors: Final = rig.cursors()
+    sent: Final = _served(rig.send(key, extra={"metadata": {"capture_message_content": "span_only"}}))
+    assert rig.upstream_hits(sent.marker) == 1
+    _assert_redacted_twin(rig, sent, cursors, rig.sinks.tenant, cursors.tenant)
 
 
 def test_stalled_tenant_during_a_mixed_burst_keeps_serving_and_each_teams_policy(rig: Rig) -> None:
