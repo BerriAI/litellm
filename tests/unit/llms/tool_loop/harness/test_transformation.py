@@ -161,6 +161,19 @@ def test_gateway_extra_headers_must_be_string_mappings(tmp_path: Path) -> None:
         completion_kwargs(ctx)
 
 
+def test_gateway_none_extra_headers_uses_only_gateway_headers(tmp_path: Path) -> None:
+    gateway: Final = GatewayTarget(api_base="https://gateway", api_key="virtual-key")
+    ctx: Final = make_context(
+        tmp_path,
+        gateway=gateway,
+        options=ToolLoopOptions(completion_kwargs={"extra_headers": None}),
+    )
+
+    kwargs: Final = completion_kwargs(ctx)
+
+    assert kwargs["extra_headers"] == {"x-litellm-tags": "harness,tool_loop"}
+
+
 def test_configuration_requires_model_and_declares_capabilities(tmp_path: Path) -> None:
     config: Final = ToolLoopHarnessConfig()
     assert config.uses_model_endpoint is False

@@ -78,9 +78,11 @@ def _routing_kwargs(ctx: SessionContext, options: ToolLoopOptions) -> Mapping[st
         raise ValueError("Harness.TOOL_LOOP needs model=")
     if ctx.gateway is not None:
         caller_headers_value: Final[object] = _OBJECT_ADAPTER.validate_python(
-            options.completion_kwargs.get("extra_headers", {})
+            options.completion_kwargs.get("extra_headers")
         )
-        caller_headers: Final = _STRING_HEADERS_ADAPTER.validate_python(caller_headers_value)
+        caller_headers: Final = _STRING_HEADERS_ADAPTER.validate_python(
+            MappingProxyType({}) if caller_headers_value is None else caller_headers_value
+        )
         extra_headers: Final[dict[str, str]] = {  # mutable-ok: acompletion(extra_headers=) requires a dict
             **caller_headers,
             **gateway_headers(ctx),

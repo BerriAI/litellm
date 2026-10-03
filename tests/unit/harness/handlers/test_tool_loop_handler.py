@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import AsyncGenerator, Callable, Iterator, Mapping
 from pathlib import Path
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 import pytest
 from pydantic import BaseModel
@@ -553,6 +553,52 @@ async def test_interrupted_tool_calls_are_closed_before_the_next_session_turn(tm
             "content": "interrupted: the turn ended before this tool ran",
         },
         {"role": "user", "content": "second turn"},
+    ]
+
+
+async def test_closing_after_tool_result_keeps_result_and_interrupts_remaining_call(tmp_path: Path) -> None:
+    executed: list[str] = []  # mutable-ok: records which injected tools ran
+
+    def first_tool() -> str:
+        executed.append("first")
+        return "first result"
+
+    def second_tool() -> str:
+        executed.append("second")
+        return "second result"
+
+    completion: Final = ScriptedCompletion(
+        (
+            model_response(
+                tool_calls=(
+                    function_call("first_tool", "{}", "call-1"),
+                    function_call("second_tool", "{}", "call-2"),
+                )
+            ),
+        )
+    )
+    ctx: Final = make_context(tmp_path, tools=(first_tool, second_tool))
+    handler: Final = make_handler(completion)
+    await handler.start(ctx)
+
+    turn: Final = cast(AsyncGenerator[Event, None], handler.turn(ctx, "first turn"))
+    tool_results: list[ToolResult] = []  # mutable-ok: records the first yielded tool result
+    async for event in turn:
+        if isinstance(event, ToolResult):
+            tool_results.append(event)
+            break
+    await turn.aclose()
+    await handler.stop(ctx)
+
+    assert tool_results == [ToolResult(id="call-1", output="first result", is_error=False)]
+    assert executed == ["first"]
+    assert (await handler.history(ctx))[-2:] == [
+        {"role": "tool", "tool_call_id": "call-1", "content": "first result"},
+        {
+            "role": "tool",
+            "tool_call_id": "call-2",
+            "content": "interrupted: the turn ended before this tool ran",
+        },
     ]
 
 

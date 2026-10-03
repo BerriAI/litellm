@@ -398,11 +398,11 @@ class ToolLoopHandler(BaseHarnessHandler):
                     parse_error,
                     approval_error,
                 )
-                yield ToolResult(id=call.id, output=outcome.output, is_error=outcome.is_error)
                 tool_message: ChatCompletionMessageParam = {
                     "role": "tool",
                     "tool_call_id": call.id,
                     "content": outcome.output,
                 }
                 self._messages = (*self._messages, tool_message)
+                yield ToolResult(id=call.id, output=outcome.output, is_error=outcome.is_error)
         raise HarnessTurnError(f"Harness.TOOL_LOOP exceeded {TOOL_LOOP_MAX_MODEL_CALLS} model calls in one turn")
