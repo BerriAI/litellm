@@ -26,7 +26,9 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import build_web_search_call
 from litellm.types.utils import (
+    Choices,
     Delta,
+    Message,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
@@ -142,6 +144,251 @@ def test_tool_call_delta_is_emitted_as_responses_events():
     assert evt2.output_index == 1
     # The delta will be a chunk of the arguments, not the full arguments
     assert len(evt2.delta) <= 10  # Chunks are max 10 characters
+
+
+def test_final_function_call_done_events_use_distinct_sequence_numbers():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+    final_response = ModelResponse(
+        id="complete-1",
+        created=123,
+        model="test-model",
+        object="chat.completion",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "do_thing", "arguments": '{"x":1}'},
+                        }
+                    ],
+                ),
+            )
+        ],
+    )
+
+    iterator._queue_final_tool_call_done_events(final_response)
+
+    sequence_numbers = [event.__dict__["sequence_number"] for event in iterator._pending_tool_events]
+    assert sequence_numbers == [1, 2, 3, 4]
+    assert [event.type for event in iterator._pending_tool_events] == [
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+    ]
+
+
+def test_client_tool_search_delta_is_emitted_as_tool_search_call():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Find a weather tool",
+        responses_api_request={"tools": [{"type": "tool_search", "execution": "client"}]},
+    )
+    chunk = ModelResponseStream(
+        id="chunk-1",
+        created=123,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_tool_search",
+                            "type": "function",
+                            "function": {"name": "tool_search", "arguments": '{"query":"weather"}'},
+                        }
+                    ],
+                ),
+            )
+        ],
+    )
+
+    added = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
+
+    assert added is not None
+    assert added.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    assert added.item.type == "tool_search_call"
+    assert added.item.arguments == {}
+
+
+def test_client_tool_search_invalid_argument_json_is_preserved():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Find a weather tool",
+        responses_api_request={"tools": [{"type": "tool_search", "execution": "client"}]},
+    )
+    chunk = ModelResponseStream(
+        id="chunk-1",
+        created=123,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_tool_search",
+                            "type": "function",
+                            "function": {"name": "tool_search", "arguments": "{"},
+                        }
+                    ],
+                ),
+            )
+        ],
+    )
+
+    added = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
+
+    assert added is not None
+    assert added.item.type == "tool_search_call"
+    assert added.item.arguments == {}
+
+    iterator._queue_final_tool_call_done_events(
+        ModelResponse(
+            id="complete-1",
+            created=123,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": "call_tool_search",
+                                "type": "function",
+                                "function": {"name": "tool_search", "arguments": "{"},
+                            }
+                        ],
+                    ),
+                )
+            ],
+        )
+    )
+
+    final_item = next(
+        event.item
+        for event in reversed(iterator._pending_tool_events)
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+    )
+    assert final_item.type == "tool_search_call"
+    assert final_item.arguments == "{"
+
+
+def test_client_tool_search_stream_does_not_emit_function_argument_events():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Find a weather tool",
+        responses_api_request={"tools": [{"type": "tool_search", "execution": "client"}]},
+    )
+    chunk = ModelResponseStream(
+        id="chunk-1",
+        created=123,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call_tool_search",
+                            "type": "function",
+                            "function": {"name": "tool_search", "arguments": '{"query":"weather"}'},
+                        }
+                    ],
+                ),
+            )
+        ],
+    )
+
+    arg_only_chunk = ModelResponseStream(
+        id="chunk-1",
+        created=123,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "function": {"arguments": "}"},
+                        }
+                    ],
+                ),
+            )
+        ],
+    )
+
+    added = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
+    arg_delta = iterator._transform_chat_completion_chunk_to_response_api_chunk(arg_only_chunk)
+    delta = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
+    done = iterator._queue_final_tool_call_done_events(
+        ModelResponse(
+            id="complete-1",
+            created=123,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": "call_tool_search",
+                                "type": "function",
+                                "function": {"name": "tool_search", "arguments": '{"query":"weather"}'},
+                            }
+                        ],
+                    ),
+                )
+            ],
+        )
+    )
+
+    assert added is not None
+    assert arg_delta is None
+    assert delta is None
+    assert done is None
+    event_types = [event.type for event in iterator._pending_tool_events if event is not added]
+    assert event_types == [ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
 
 
 @pytest.mark.asyncio

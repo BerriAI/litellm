@@ -46,3 +46,94 @@ def test_additional_tools_item_without_a_tools_list_is_stripped_and_contributes_
     assert hoisted.input == [_USER_MESSAGE]
     assert hoisted.tools == ()
     assert hoisted.hoisted == ()
+
+
+def test_tool_search_output_tools_are_hoisted_without_removing_the_history_item():
+    request_input = [
+        _USER_MESSAGE,
+        {
+            "type": "tool_search_output",
+            "call_id": "call_tool_search",
+            "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object"}}],
+        },
+    ]
+
+    hoisted = hoist_additional_tools(request_input, [_TOP_LEVEL_TOOL])
+
+    assert hoisted.input == request_input
+    assert hoisted.tools == (
+        _TOP_LEVEL_TOOL,
+        {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+    )
+
+
+def test_tool_search_output_tools_are_deduplicated_by_type_and_name():
+    found_tool = {"type": "function", "name": "get_weather"}
+    request_input = [
+        {
+            "type": "tool_search_output",
+            "call_id": "call_tool_search",
+            "tools": [found_tool, {"type": "function", "name": "get_weather"}, _EXEC_TOOL],
+        },
+        {
+            "type": "additional_tools",
+            "role": "developer",
+            "tools": [_EXEC_TOOL, {"type": "function", "name": "get_weather"}],
+        },
+    ]
+
+    hoisted = hoist_additional_tools(request_input, None)
+
+    assert hoisted.hoisted == (found_tool, _EXEC_TOOL)
+
+
+def test_tool_search_output_tools_do_not_override_top_level_tools():
+    request_input = [
+        {
+            "type": "tool_search_output",
+            "call_id": "call_tool_search",
+            "tools": [{"type": "function", "name": "get_weather"}],
+        }
+    ]
+
+    hoisted = hoist_additional_tools(request_input, [_TOP_LEVEL_TOOL])
+
+    assert hoisted.tools == (_TOP_LEVEL_TOOL, {"type": "function", "name": "get_weather"})
+
+
+def test_mcp_tools_without_names_are_deduplicated_by_server_label():
+    first_mcp_tool = {"type": "mcp", "server_label": "first"}
+    second_mcp_tool = {"type": "mcp", "server_label": "second"}
+    request_input = [
+        {
+            "type": "tool_search_output",
+            "call_id": "call_tool_search",
+            "tools": [first_mcp_tool, second_mcp_tool],
+        },
+        {
+            "type": "additional_tools",
+            "role": "developer",
+            "tools": [first_mcp_tool],
+        },
+    ]
+
+    hoisted = hoist_additional_tools(request_input, None)
+
+    assert hoisted.hoisted == (first_mcp_tool, second_mcp_tool)
+
+
+def test_invalid_input_items_do_not_break_tool_hoisting():
+    """Invalid input items are treated as ordinary history, not hoisting candidates."""
+    request_input = [
+        {"role": "user", "content": None},
+        {
+            "type": "tool_search_output",
+            "call_id": "call_tool_search",
+            "tools": [{"type": "function", "name": "get_weather"}],
+        },
+    ]
+
+    hoisted = hoist_additional_tools(request_input, None)
+
+    assert hoisted.input == request_input
+    assert hoisted.hoisted == ({"type": "function", "name": "get_weather"},)

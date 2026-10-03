@@ -58,9 +58,7 @@ class TestExtractRequestToolNames:
                 {"type": "function", "name": "get_current_weather", "description": "x"},
             ]
         }
-        assert extract_request_tool_names("/v1/responses", data) == [
-            "get_current_weather"
-        ]
+        assert extract_request_tool_names("/v1/responses", data) == ["get_current_weather"]
 
     def test_openai_responses_mcp_tools(self):
         data = {
@@ -85,6 +83,64 @@ class TestExtractRequestToolNames:
             "apply_patch",
             "get_current_weather",
         ]
+
+    def test_openai_responses_hoisted_tools(self):
+        """Tool search results and additional input tools are merged into the
+        provider request, so they must participate in auth allowlist checks."""
+        data = {
+            "tools": [
+                {"type": "function", "name": "allowed", "description": "x"},
+                {"type": "mcp", "server_label": "allowed_mcp", "server_url": "http://x"},
+            ],
+            "input": [
+                {
+                    "type": "tool_search_output",
+                    "call_id": "call_tool_search",
+                    "tools": [
+                        {"type": "custom", "name": "forbidden_custom"},
+                        {"type": "mcp", "server_label": "forbidden_mcp"},
+                    ],
+                },
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [{"type": "function", "name": "forbidden_function"}],
+                },
+            ],
+        }
+
+        assert extract_request_tool_names("/v1/responses", data) == [
+            "allowed",
+            "allowed_mcp",
+            "forbidden_custom",
+            "forbidden_mcp",
+            "forbidden_function",
+        ]
+
+    def test_openai_responses_ignores_tools_in_ordinary_input_items(self):
+        data = {"input": [{"type": "message", "role": "user", "tools": [{"type": "function", "name": "x"}]}]}
+
+        assert extract_request_tool_names("/v1/responses", data) == []
+
+    def test_openai_responses_ignores_invalid_hoisted_tool_entries(self):
+        data = {
+            "input": [
+                {
+                    "type": "tool_search_output",
+                    "tools": ["not-a-dict", {"type": "function", "name": "valid"}],
+                }
+            ]
+        }
+
+        assert extract_request_tool_names("/v1/responses", data) == ["valid"]
+
+    def test_openai_responses_ignores_non_list_hoisted_tools(self):
+        data = {
+            "tools": [{"type": "unknown"}],
+            "input": [{"type": "tool_search_output", "tools": "not-a-list"}],
+        }
+
+        assert extract_request_tool_names("/v1/responses", data) == []
 
     def test_anthropic_tools(self):
         data = {"tools": [{"name": "get_weather"}, {"name": "run_sql"}]}
@@ -129,9 +185,7 @@ class TestExtractRequestToolNames:
                 },
             ]
         }
-        assert extract_request_tool_names("/generate_content", data) == [
-            "schedule_meeting"
-        ]
+        assert extract_request_tool_names("/generate_content", data) == ["schedule_meeting"]
 
     def test_mcp_call_tool_name(self):
         data = {"name": "my_tool", "arguments": {}}
@@ -226,6 +280,30 @@ class TestCheckToolsAllowlist:
             )
         assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
         assert "restricted_tool" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_disallowed_hoisted_tool_raises_on_responses_route(self):
+        token = _token(metadata={"allowed_tools": ["allowed"]})
+        body = {
+            "tools": [{"type": "function", "name": "allowed"}],
+            "input": [
+                {
+                    "type": "tool_search_output",
+                    "call_id": "call_tool_search",
+                    "tools": [{"type": "function", "name": "forbidden_function"}],
+                }
+            ],
+        }
+
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/responses",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "forbidden_function" in str(exc_info.value.message)
 
     @pytest.mark.asyncio
     async def test_team_allowlist_used_when_key_empty(self):

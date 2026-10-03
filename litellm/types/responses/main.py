@@ -1,8 +1,10 @@
+import json
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal, Optional, Union
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.response_function_web_search import ActionSearchSource, ResponseFunctionWebSearch
+from openai.types.responses.response_tool_search_call import ResponseToolSearchCall
 from pydantic import PrivateAttr
 from typing_extensions import Any, TypedDict
 
@@ -39,6 +41,29 @@ class OutputFunctionToolCall(BaseLiteLLMOpenAIResponseObject):
     id: str | None
     status: Literal["in_progress", "completed", "incomplete"]
     phase: Phase = None
+
+
+def build_tool_search_call(item: Mapping[str, object]) -> ResponseToolSearchCall:
+    return ResponseToolSearchCall.model_validate(
+        {
+            **item,
+            "call_id": item.get("call_id") or item.get("id"),
+            "execution": item.get("execution") or "client",
+            "status": item.get("status") or "completed",
+            "type": "tool_search_call",
+            "arguments": _normalize_tool_search_arguments(item.get("arguments")),
+        }
+    )
+
+
+def _normalize_tool_search_arguments(arguments: object) -> object:
+    if not isinstance(arguments, str):
+        return arguments if arguments is not None else {}
+    try:
+        parsed: Final[object] = json.loads(arguments)
+    except json.JSONDecodeError:
+        return arguments
+    return parsed if parsed is not None else {}
 
 
 def build_web_search_call(

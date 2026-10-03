@@ -29,6 +29,7 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 """
 
 import copy
+import json
 import time
 import uuid
 from collections.abc import Mapping, Sequence
@@ -63,6 +64,10 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     unappliable_request_rewrite,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
+from litellm.responses.additional_tools import (
+    ADDITIONAL_TOOLS_INPUT_ITEM_TYPE,
+    TOOL_SEARCH_OUTPUT_INPUT_ITEM_TYPE,
+)
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -92,6 +97,10 @@ from litellm.types.responses.main import (
     OutputText,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
+
+_HOISTED_TOOLS_INPUT_ITEM_TYPES: Final[frozenset[str]] = frozenset(
+    {ADDITIONAL_TOOLS_INPUT_ITEM_TYPE, TOOL_SEARCH_OUTPUT_INPUT_ITEM_TYPE}
+)
 
 if TYPE_CHECKING:
     from fastapi import HTTPException
@@ -226,9 +235,9 @@ _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
 )
 
 
-_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
+_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call", "tool_search_call"})
 _TOOL_CALL_PAYLOAD_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
-    {"function_call": "arguments", "custom_tool_call": "input"}
+    {"function_call": "arguments", "custom_tool_call": "input", "tool_search_call": "arguments"}
 )
 _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES: Final = frozenset(
     {"response.function_call_arguments.delta", "response.custom_tool_call_input.delta"}
@@ -305,12 +314,12 @@ def _provenance_unit_bounds(
     raw_input: Sequence[object],
     solo_conversions: Sequence[Sequence[object]],
 ) -> tuple[tuple[int, int], ...]:
-    trailing_roles: Final = tuple(
-        accumulate(
-            (_last_message_role(messages) for messages in solo_conversions),
-            lambda previous, current: current if current is not None else previous,
-        )
-    )
+    trailing_roles: list[str | None] = []  # mutable-ok: indexed provenance scratch state
+    previous_role: str | None = None
+    for messages in solo_conversions:
+        role = _last_message_role(messages)
+        previous_role = role if role is not None else previous_role
+        trailing_roles.append(previous_role)
     start_indexes: Final = tuple(
         index
         for index in range(len(raw_input))
@@ -327,14 +336,14 @@ def _input_item_provenance(
         return None
     solo_conversions: Final = tuple(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-            input=cast("ResponseInputParam", [item]),  # cast-ok: items checked as Mappings above
+            input=[item],  # pyright: ignore[reportArgumentType]  # every item is a validated Mapping
             responses_api_request=_EMPTY_RESPONSES_REQUEST,
         )
         for item in raw_input
     )
     full_conversion: Final = tuple(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-            input=cast("ResponseInputParam", list(raw_input)),  # cast-ok: items checked as Mappings above
+            input=list(raw_input),  # pyright: ignore[reportArgumentType]  # every item is a validated Mapping
             responses_api_request=_EMPTY_RESPONSES_REQUEST,
         )
     )
@@ -346,7 +355,7 @@ def _input_item_provenance(
         if end - start == 1
         else tuple(
             LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                input=cast("ResponseInputParam", list(raw_input[start:end])),  # cast-ok: checked as Mappings above
+                input=list(raw_input[start:end]),  # pyright: ignore[reportArgumentType]  # every item is a validated Mapping
                 responses_api_request=_EMPTY_RESPONSES_REQUEST,
             )
         )
@@ -659,11 +668,21 @@ class OpenAIResponsesHandler(BaseTranslation):
             data.get("input"), data.get("instructions"), structured_messages, merged
         )
 
-    def extract_request_tool_names(self, data: dict) -> list[str]:
+    def extract_request_tool_names(self, data: dict[str, object]) -> list[str]:
         """Extract tool names from Responses API request (tools[].name for function
         and custom, tools[].server_label for mcp)."""
-        names: Final[list[str]] = []
-        for tool in data.get("tools") or []:
+        names: list[str] = []  # mutable-ok: accumulator returned to auth for allowlist enforcement
+        tools: list[object] = []  # mutable-ok: request tool accumulator before read-only iteration
+        tools.extend(data.get("tools") or ())
+        input_value: Final[object] = data.get("input")
+        if isinstance(input_value, list):
+            for item in input_value:
+                if not isinstance(item, dict) or item.get("type") not in _HOISTED_TOOLS_INPUT_ITEM_TYPES:
+                    continue
+                item_tools: object = item.get("tools")
+                if isinstance(item_tools, list):
+                    tools.extend(item_tools)
+        for tool in tools:
             if not isinstance(tool, dict):
                 continue
             if tool.get("type") in ("function", "custom") and tool.get("name"):
@@ -1167,7 +1186,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         guardrail_name: str,
     ) -> None:
         """Write ended-stream guardrail tool-call rewrites into the completed
-        envelope's ``function_call`` and ``custom_tool_call`` items and sync the
+        envelope's ``function_call``, ``custom_tool_call``, and
+        ``tool_search_call`` items and sync the
         earlier stream events, keyed by ``call_id``. The guardrail sees the
         envelope's tool calls in output order, which is how a rewritten call
         finds its ``call_id``; the stream events find their call through the
@@ -1262,6 +1282,15 @@ class OpenAIResponsesHandler(BaseTranslation):
             self._write_tool_call_item(output_item, rewrite.name, rewrite.arguments)
 
     @staticmethod
+    def _parsed_tool_search_arguments(arguments: str) -> object:
+        try:
+            if not arguments:
+                return {}
+            return json.loads(arguments)
+        except json.JSONDecodeError:
+            return arguments
+
+    @staticmethod
     def _tool_call_ids_by_item_id(stream_events: Sequence[object]) -> Mapping[str, str]:
         items: Final = tuple(
             stream_item_field(event, "item")
@@ -1300,7 +1329,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             OpenAIResponsesHandler._write_event_field(item, "name", name)
         item_type: Final = stream_item_field(item, "type")
         if payload is not None and isinstance(item_type, str) and item_type in _TOOL_CALL_PAYLOAD_FIELDS:
-            OpenAIResponsesHandler._write_event_field(item, _TOOL_CALL_PAYLOAD_FIELDS[item_type], payload)
+            field_value: Final = (
+                OpenAIResponsesHandler._parsed_tool_search_arguments(payload)
+                if item_type == "tool_search_call"
+                else payload
+            )
+            OpenAIResponsesHandler._write_event_field(item, _TOOL_CALL_PAYLOAD_FIELDS[item_type], field_value)
 
     def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
         """

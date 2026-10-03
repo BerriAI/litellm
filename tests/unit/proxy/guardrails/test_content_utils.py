@@ -513,9 +513,7 @@ def test_build_inspection_messages_includes_reasoning_summary():
             }
         ]
     }
-    assert build_inspection_messages(data) == [
-        {"role": "assistant", "content": "secret summary"}
-    ]
+    assert build_inspection_messages(data) == [{"role": "assistant", "content": "secret summary"}]
 
 
 # ── has_non_string_content ────────────────────────────────────────────────────
@@ -537,6 +535,47 @@ def test_has_non_string_content_responses_api_string_input():
 
 def test_has_non_string_content_responses_api_list_input():
     assert has_non_string_content({"input": ["a", "b"]}) is True
+
+
+def test_has_non_string_content_responses_structured_input():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "text"}],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "text"},
+                    {"type": "image_url", "image_url": {"url": "..."}},
+                ],
+            },
+        ]
+    }
+    assert has_non_string_content(data) is True
+
+
+def test_has_non_string_content_reasoning_plain_and_structured_parts():
+    data = {
+        "input": [
+            {"type": "reasoning", "content": "plain reasoning"},
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "plain summary"}]},
+        ]
+    }
+
+    assert has_non_string_content(data) is False
+
+    data["input"].append(
+        {
+            "type": "reasoning",
+            "content": [{"type": "image_url", "image_url": {"url": "..."}}],
+        }
+    )
+
+    assert has_non_string_content(data) is True
 
 
 def test_has_non_string_content_empty_data():
@@ -569,17 +608,224 @@ def test_apply_redacted_messages_back_both_fields():
         "messages": [{"role": "user", "content": "old"}],
         "input": "old",
     }
-    apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}])
+    apply_redacted_messages_back(
+        data,
+        [
+            {"role": "user", "content": "message-[REDACTED]"},
+            {"role": "user", "content": "input-[REDACTED]"},
+        ],
+    )
+    assert data["messages"] == [{"role": "user", "content": "message-[REDACTED]"}]
+    assert data["input"] == "input-[REDACTED]"
+
+
+def test_apply_redacted_messages_back_reuses_one_matching_redaction_for_both_fields():
+    data = {
+        "messages": [{"role": "user", "content": "old"}],
+        "input": "old",
+    }
+
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}]) is True
     assert data["messages"] == [{"role": "user", "content": "[REDACTED]"}]
     assert data["input"] == "[REDACTED]"
 
 
-def test_apply_redacted_messages_back_skips_input_when_not_string():
-    """List ``input`` (multimodal Responses-API) is left alone — the
-    multimodal-degrades-to-block guard runs upstream."""
+def test_apply_redacted_messages_back_reuses_one_matching_structured_redaction_for_both_fields():
+    data = {
+        "messages": [{"role": "user", "content": "old"}],
+        "input": [{"type": "message", "role": "user", "content": "old"}],
+    }
+
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}]) is True
+    assert data["messages"] == [{"role": "user", "content": "[REDACTED]"}]
+    assert data["input"] == [{"type": "message", "role": "user", "content": "[REDACTED]"}]
+
+
+def test_apply_redacted_messages_back_rejects_non_string_matching_redaction_for_both_fields():
+    data = {
+        "messages": [{"role": "user", "content": "old"}],
+        "input": [{"type": "message", "role": "user", "content": "old"}],
+    }
+
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": None}]) is False
+    assert data == {
+        "messages": [{"role": "user", "content": "old"}],
+        "input": [{"type": "message", "role": "user", "content": "old"}],
+    }
+
+
+def test_apply_redacted_messages_back_rejects_extra_string_input_redactions():
+    data = {"input": "secret"}
+    redacted = [
+        {"role": "user", "content": "[REDACTED]"},
+        {"role": "user", "content": "spurious"},
+    ]
+
+    assert apply_redacted_messages_back(data, redacted) is False
+    assert data == {"input": "secret"}
+
+
+def test_apply_redacted_messages_back_rejects_non_string_string_input_redaction():
+    data = {"input": "secret"}
+
+    assert apply_redacted_messages_back(data, [{"role": "user"}]) is False
+    assert data == {"input": "secret"}
+
+
+def test_apply_redacted_messages_back_rejects_non_mapping_redaction_for_structured_input():
+    data = {"input": [{"type": "message", "role": "assistant", "content": "input-secret"}]}
+
+    assert apply_redacted_messages_back(data, ["not-a-message"]) is False
+    assert data == {"input": [{"type": "message", "role": "assistant", "content": "input-secret"}]}
+
+
+def test_apply_redacted_messages_back_ignores_non_string_non_list_input():
+    data = {"input": {"content": "secret"}}
+
+    assert apply_redacted_messages_back(data, []) is True
+    assert data == {"input": {"content": "secret"}}
+
+
+def test_apply_redacted_messages_back_rejects_fewer_message_redactions():
+    data = {
+        "messages": [
+            {"role": "user", "content": "first-secret"},
+            {"role": "user", "content": "second-secret"},
+        ]
+    }
+
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}]) is False
+    assert data == {
+        "messages": [
+            {"role": "user", "content": "first-secret"},
+            {"role": "user", "content": "second-secret"},
+        ]
+    }
+
+
+def test_apply_redacted_messages_back_rejects_non_string_redaction_for_string_input_with_messages():
+    data = {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": "input-secret",
+    }
+    redacted = [
+        {"role": "user", "content": "message-[REDACTED]"},
+        {"role": "user"},
+    ]
+
+    assert apply_redacted_messages_back(data, redacted) is False
+    assert data == {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": "input-secret",
+    }
+
+
+def test_apply_redacted_messages_back_rejects_mismatched_structured_input_redactions():
+    data = {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": [
+            {"type": "message", "role": "assistant", "content": "first-input-secret"},
+            {"type": "message", "role": "assistant", "content": "second-input-secret"},
+        ],
+    }
+    redacted = [
+        {"role": "user", "content": "message-[REDACTED]"},
+        {"role": "assistant", "content": "first-input-[REDACTED]"},
+        {"role": "assistant"},
+    ]
+
+    assert apply_redacted_messages_back(data, redacted) is False
+    assert data == {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": [
+            {"type": "message", "role": "assistant", "content": "first-input-secret"},
+            {"type": "message", "role": "assistant", "content": "second-input-secret"},
+        ],
+    }
+
+
+def test_apply_redacted_messages_back_rejects_extra_structured_input_redactions():
+    data = {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": [{"type": "message", "role": "assistant", "content": "input-secret"}],
+    }
+    redacted = [
+        {"role": "user", "content": "message-[REDACTED]"},
+        {"role": "assistant", "content": "input-[REDACTED]"},
+        {"role": "assistant", "content": "spurious"},
+    ]
+
+    assert apply_redacted_messages_back(data, redacted) is False
+    assert data == {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": [{"type": "message", "role": "assistant", "content": "input-secret"}],
+    }
+
+
+def test_apply_redacted_messages_back_separates_message_and_input_redactions():
+    """Responses bridge can carry chat history in ``messages`` and request
+    history in ``input``. Their redactions must stay aligned with the field
+    that produced them instead of shifting message edits onto input items."""
+    data = {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "input_text", "text": "input-secret"}],
+            }
+        ],
+    }
+    redacted = [
+        {"role": "user", "content": "message-[REDACTED]"},
+        {"role": "assistant", "content": "input-[REDACTED]"},
+    ]
+
+    assert apply_redacted_messages_back(data, redacted) is True
+    assert data["messages"] == [{"role": "user", "content": "message-[REDACTED]"}]
+    assert data["input"] == [{"type": "message", "role": "assistant", "content": "input-[REDACTED]"}]
+
+
+def test_apply_redacted_messages_back_rejects_missing_input_redaction_without_mutation():
+    data = {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": [{"type": "message", "role": "assistant", "content": "input-secret"}],
+    }
+
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "message-[REDACTED]"}]) is False
+    assert data == {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": [{"type": "message", "role": "assistant", "content": "input-secret"}],
+    }
+
+
+def test_apply_redacted_messages_back_rewrites_text_only_responses_list_input():
+    """Text-only Responses input can be flattened safely. Non-text input is
+    rejected upstream by ``has_non_string_content`` before mask-in-place."""
     data = {"input": [{"type": "text", "text": "leak"}]}
     apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}])
-    assert data["input"] == [{"type": "text", "text": "leak"}]
+    assert data["input"] == [{"type": "text", "text": "[REDACTED]"}]
+
+
+def test_apply_redacted_messages_back_rewrites_reasoning_content_and_summary():
+    data = {
+        "input": [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "content": [{"type": "summary_text", "text": "reasoning-secret"}],
+                "summary": [{"type": "summary_text", "text": "summary-secret"}],
+            }
+        ]
+    }
+    redacted = [
+        {"role": "assistant", "content": "reasoning-[REDACTED]"},
+        {"role": "assistant", "content": "summary-[REDACTED]"},
+    ]
+
+    assert apply_redacted_messages_back(data, redacted) is True
+    assert data["input"][0]["content"] == "reasoning-[REDACTED]"
+    assert data["input"][0]["summary"] == "summary-[REDACTED]"
 
 
 def test_apply_redacted_messages_back_rewrites_string_batches():
@@ -675,6 +921,7 @@ def test_is_string_batch_input_rejects_other_shapes():
 # LIT-4302: custom_tool_call_output walking
 # -------------------------------------------------------------------
 
+
 def test_iter_message_text_walks_custom_tool_call_output():
     """custom_tool_call_output items should yield their output text."""
     data = {
@@ -683,6 +930,7 @@ def test_iter_message_text_walks_custom_tool_call_output():
         ]
     }
     from litellm.proxy.guardrails._content_utils import iter_message_text
+
     texts = list(iter_message_text(data))
     assert "tool-secret" in texts
 
@@ -708,6 +956,179 @@ def test_build_inspection_messages_custom_tool_call_output():
     }
     msgs = build_inspection_messages(data)
     assert any("custom-tool-leak" in m["content"] for m in msgs)
+
+
+def test_guardrails_inspect_and_redact_tool_search_output_tool_descriptions():
+    data = {
+        "input": [
+            {
+                "type": "tool_search_output",
+                "call_id": "call_tool_search",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "get_weather",
+                        "description": "tool-secret",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            }
+        ]
+    }
+
+    assert list(iter_message_text(data)) == ["tool-secret"]
+    visited = walk_user_text(data, lambda text: text.replace("secret", "[REDACTED]"))
+
+    assert visited == 1
+    assert data["input"][0]["tools"][0]["description"] == "tool-[REDACTED]"
+    assert build_inspection_messages(data) == [{"role": "tool", "content": "tool-[REDACTED]"}]
+
+
+def test_guardrails_inspect_tool_search_output_fallback_output():
+    data = {"input": [{"type": "tool_search_output", "call_id": "call_tool_search", "output": "tool-secret"}]}
+
+    assert list(iter_message_text(data)) == ["tool-secret"]
+
+
+def test_apply_redacted_messages_back_rewrites_tool_search_output_tool_descriptions():
+    data = {
+        "input": [
+            {
+                "type": "tool_search_output",
+                "call_id": "call_tool_search",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "get_weather",
+                        "description": "tool-secret",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            }
+        ]
+    }
+    redacted = [{"role": "tool", "content": "tool-[REDACTED]"}]
+
+    assert apply_redacted_messages_back(data, redacted) is True
+    assert data["input"][0]["tools"][0]["description"] == "tool-[REDACTED]"
+    assert data["input"][0]["tools"][0]["name"] == "get_weather"
+
+
+def test_apply_redacted_messages_back_preserves_tool_search_output_non_text_tools() -> None:
+    data = {
+        "input": [
+            {
+                "type": "tool_search_output",
+                "call_id": "call_tool_search",
+                "tools": [
+                    {"type": "function", "name": "one", "description": "leak-one"},
+                    {"type": "function", "name": "two"},
+                ],
+            }
+        ]
+    }
+    redacted = [{"role": "tool", "content": "one-[REDACTED]"}, {"role": "tool", "content": ""}]
+
+    assert apply_redacted_messages_back(data, redacted) is True
+    assert data["input"][0]["tools"][0]["description"] == "one-[REDACTED]"
+    assert data["input"][0]["tools"][1] == {"type": "function", "name": "two"}
+
+
+def test_apply_redacted_messages_back_consumes_tool_search_output_empty_description_redaction() -> None:
+    data = {
+        "input": [
+            {
+                "type": "tool_search_output",
+                "call_id": "call_tool_search",
+                "tools": [
+                    {"type": "function", "name": "one", "description": "leak-one"},
+                    {"type": "function", "name": "two", "description": ""},
+                ],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "message-secret"}],
+            },
+        ]
+    }
+    redacted = [
+        {"role": "tool", "content": "one-[REDACTED]"},
+        {"role": "tool", "content": ""},
+        {"role": "user", "content": "message-[REDACTED]"},
+    ]
+
+    assert apply_redacted_messages_back(data, redacted) is True
+    assert data["input"][0]["tools"][0]["description"] == "one-[REDACTED]"
+    assert data["input"][0]["tools"][1]["description"] == ""
+    assert data["input"][1]["content"] == "message-[REDACTED]"
+
+
+def test_apply_redacted_messages_back_rewrites_mixed_response_content_parts() -> None:
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "message-secret"},
+                    {"type": "image_url", "image_url": {"url": "..."}},
+                ],
+            }
+        ]
+    }
+    redacted = [{"role": "user", "content": [{"type": "input_text", "text": "message-[REDACTED]"}]}]
+
+    assert apply_redacted_messages_back(data, redacted) is True
+    assert data["input"][0]["content"] == "message-[REDACTED]"
+
+
+def test_apply_redacted_messages_back_rewrites_tool_search_output_fallback_output():
+    data = {"input": [{"type": "tool_search_output", "call_id": "call_tool_search", "output": "tool-secret"}]}
+    redacted = [{"role": "tool", "content": "tool-[REDACTED]"}]
+
+    assert apply_redacted_messages_back(data, redacted) is True
+    assert data["input"][0]["output"] == "tool-[REDACTED]"
+
+
+def test_apply_redacted_messages_back_rewrites_responses_messages_and_tool_results_in_order():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "message-secret"}],
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": [{"type": "output_text", "text": "tool-secret"}],
+            },
+        ]
+    }
+    redacted = [
+        {"role": "user", "content": "message-[REDACTED]"},
+        {"role": "tool", "content": "tool-[REDACTED]"},
+    ]
+
+    assert apply_redacted_messages_back(data, redacted) is True
+    assert data["input"][0]["content"] == "message-[REDACTED]"
+    assert data["input"][1]["output"] == "tool-[REDACTED]"
+
+
+def test_apply_redacted_messages_back_blocks_partial_tool_search_output_rewrite():
+    data = {
+        "input": [
+            {
+                "type": "tool_search_output",
+                "call_id": "call_tool_search",
+                "tools": [{"type": "function", "name": "one", "description": "leak-one"}],
+            }
+        ]
+    }
+
+    assert apply_redacted_messages_back(data, []) is False
+    assert data["input"][0]["tools"][0]["description"] == "leak-one"
 
 
 # ── is_non_conversational_call_type ──────────────────────────────────────────────
