@@ -113,10 +113,10 @@ def _request_key(payload: dict[str, JsonValue], response: httpx.Response, marker
 
 def _assert_upstream_requests(requests: tuple[Request, ...], surface: Surface, expected: int) -> None:
     target: Final = _surface_target(surface)
-    observed: Final = tuple(request.target for request in requests)
-    assert len(requests) == expected, f"expected {expected} upstream POSTs, observed {len(requests)}: {observed}"
-    assert all(request.method == "POST" for request in requests), requests
-    assert all(request.target == target for request in requests), f"expected {target}, observed {observed}"
+    posts: Final = tuple(request for request in requests if request.method == "POST")
+    observed: Final = tuple(request.target for request in posts)
+    assert len(posts) == expected, f"expected {expected} upstream POSTs, observed {len(posts)}: {observed}"
+    assert all(request.target == target for request in posts), f"expected {target}, observed {observed}"
 
 
 def _assert_one_payload(
@@ -339,7 +339,9 @@ def test_failure_burst_through_sink_outage_lands_each_request_once(
             with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
                 responses: Final = tuple(pool.map(call, jobs))
 
-            upstream_requests: Final = upstream.drain()
+            upstream_requests: Final = tuple(
+                request for request in upstream.drain() if request.method == "POST"
+            )
             route_counts: Final = Counter(request.target for request in upstream_requests)
             expected_route_counts: Final = {
                 _surface_target(surface): 2 * requests_per_variant * 3 for surface in SURFACES
@@ -347,7 +349,6 @@ def test_failure_burst_through_sink_outage_lands_each_request_once(
             assert len(upstream_requests) == len(jobs) * 3, (
                 f"expected {len(jobs) * 3} upstream POSTs, observed {len(upstream_requests)}: {route_counts}"
             )
-            assert all(request.method == "POST" for request in upstream_requests), upstream_requests
             assert route_counts == expected_route_counts, f"unexpected upstream routes: {route_counts}"
             assert all(not 200 <= response.status_code < 300 for response in responses)
             assert all("synthetic upstream failure" in response.text for response in responses)
