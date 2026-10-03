@@ -15,7 +15,7 @@ function renderWithProviders(ui: React.ReactElement, options?: Parameters<typeof
 }
 
 vi.mock("@/components/networking", () => ({
-  apiClient: { get: vi.fn(), post: vi.fn(), request: vi.fn() },
+  apiClient: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), request: vi.fn() },
   proxyBaseUrl: "",
 }));
 
@@ -521,4 +521,44 @@ it("closes editing when browser navigation leaves the investigation", async () =
   });
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   expect(apiClient.request).not.toHaveBeenCalled();
+});
+
+it("resolves every investigation's copy of a merged finding from one row", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  const twin: Lens = { ...lens, id: "twin", settings: { ...lens.settings, name: "Twin reviews" } };
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [lens, twin], tracing_enabled: true, workers: [] };
+    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    return { data: [] };
+  });
+  vi.mocked(apiClient.patch).mockResolvedValue(undefined);
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView accessToken="test" />);
+  const rows = await screen.findAllByRole("row", { name: issue.title });
+  expect(rows).toHaveLength(1);
+  await user.click(rows[0]);
+  await user.click(await screen.findByRole("button", { name: "Mark resolved" }));
+  await waitFor(() => expect(apiClient.patch).toHaveBeenCalledTimes(2));
+  const resolved = vi
+    .mocked(apiClient.patch)
+    .mock.calls.map(([path]) => path)
+    .sort();
+  expect(resolved).toEqual(["/lens/lens/findings/issue", "/lens/twin/findings/issue"]);
+});
+
+it("lists investigations without edit or run controls for read-only viewers", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [lens], tracing_enabled: true, workers: [] };
+    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    return { data: [] };
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView accessToken="test" view="investigations" readOnly />);
+  const row = await screen.findByRole("row", { name: lens.settings.name });
+  expect(within(row).queryByRole("button", { name: /now/ })).not.toBeInTheDocument();
+  await user.click(row);
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
