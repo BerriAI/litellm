@@ -11184,13 +11184,13 @@ class Router:
 
         return model_group_info
 
-    def get_model_group_info(self, model_group: str) -> ModelGroupInfo | None:
+    def get_model_group_info(self, model_group: str, *, include_hidden: bool = False) -> ModelGroupInfo | None:
         """
         For a given model group name, return the combined model info
 
         Returns:
         - ModelGroupInfo if able to construct a model group
-        - None if error constructing model group info or hidden model group
+        - None if error constructing model group info or hidden model group (unless include_hidden)
         """
         ## Check if model group alias
         if model_group in self.model_group_alias:
@@ -11198,7 +11198,7 @@ class Router:
             if isinstance(item, str):
                 _router_model_group = item
             elif isinstance(item, dict):
-                if item["hidden"] is True:
+                if item["hidden"] is True and not include_hidden:
                     return None
                 else:
                     _router_model_group = item["model"]
@@ -12240,6 +12240,16 @@ class Router:
         ]
         return _settings_to_return
 
+    def _switch_routing_strategy(self, routing_strategy: str | None, kwargs: Mapping[str, object]) -> None:
+        if routing_strategy == "lar1":
+            from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
+
+            apply_lar1_routing_strategy(self, kwargs.get("routing_strategy_args"))
+            return
+        self.routing_strategy_init(
+            routing_strategy=routing_strategy, routing_strategy_args=kwargs.get("routing_strategy_args", {})
+        )
+
     def update_settings(self, **kwargs):
         """
         Update the router settings.
@@ -12253,6 +12263,7 @@ class Router:
         ]
 
         _existing_router_settings: Final = self.get_settings()
+        model_group_alias_before: Final = self.model_group_alias
         rebuild_routing_groups = False
         routing_args_updated = False
         for var in kwargs:
@@ -12276,20 +12287,7 @@ class Router:
                     if var == "routing_strategy":
                         value = self._normalize_strategy(value)
                         if _existing_router_settings["routing_strategy"] != value:
-                            if value == "lar1":
-                                from litellm.router_strategy.lar1_routing import (
-                                    apply_lar1_routing_strategy,
-                                )
-
-                                apply_lar1_routing_strategy(
-                                    self,
-                                    kwargs.get("routing_strategy_args"),
-                                )
-                            else:
-                                self.routing_strategy_init(
-                                    routing_strategy=value,
-                                    routing_strategy_args=kwargs.get("routing_strategy_args", {}),
-                                )
+                            self._switch_routing_strategy(value, kwargs)
                             rebuild_routing_groups = True
                     elif var == "routing_strategy_args":
                         routing_args_updated = value != self.routing_strategy_args
@@ -12299,6 +12297,9 @@ class Router:
 
         if routing_args_updated:
             self._apply_updated_routing_strategy_args()
+
+        if self.model_group_alias != model_group_alias_before:
+            self._invalidate_model_group_info_cache()
 
         if rebuild_routing_groups:
             routing_groups_input: Final = kwargs.get("routing_groups", self._routing_groups_input)
