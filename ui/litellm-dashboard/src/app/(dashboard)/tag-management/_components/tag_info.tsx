@@ -41,6 +41,12 @@ const tagEditSchema = z.object(tagEditShape);
 
 type TagEditFormValues = z.output<typeof tagEditSchema>;
 
+const budgetPayload = (value: TagEditFormValues["max_budget"]): number | null | undefined => {
+  if (value === undefined) return undefined;
+  if (value === "") return null;
+  return Number(value);
+};
+
 interface TagEditFormProps {
   tag: Tag;
   seedBudgetFields: boolean;
@@ -205,7 +211,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
         name: values.name,
         description: values.description,
         models: values.models,
-        max_budget: values.max_budget === undefined || values.max_budget === "" ? undefined : Number(values.max_budget),
+        max_budget: budgetPayload(values.max_budget),
         tpm_limit: undefined,
         rpm_limit: undefined,
         budget_duration: values.budget_duration,
