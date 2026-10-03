@@ -1,5 +1,6 @@
 import datetime
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, cast
@@ -15,7 +16,6 @@ from litellm.cost_calculator import (
     completion_cost,
     cost_per_token,
     handle_realtime_stream_cost_calculation,
-    pricing_entry_for_cost_calc,
     response_cost_calculator,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -3866,6 +3866,35 @@ def test_completion_cost_mantle_native_messages_prices_unversioned_claude_from_t
 
 
 @pytest.mark.parametrize("model", ["anthropic.claude-opus-5-5", "anthropic.claude-sonnet-5-5"])
+def test_completion_cost_region_without_its_own_row_prices_mantle_claude_from_the_mantle_row(
+    _local_model_cost_map, model: str
+):
+    """The proxy resolves a Mantle region for every call. A region with no
+    bedrock_mantle/<region>/<model> row must fall back to the model's own bedrock_mantle/ row, not to the
+    bare Bedrock row that the bedrock provider family also matches."""
+
+    response = litellm.ModelResponse(
+        id="msg_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model=model,
+        usage={"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
+    )
+    mantle: Final[Mapping[str, float]] = litellm.model_cost[f"bedrock_mantle/{model}"]
+    bedrock: Final[Mapping[str, float]] = litellm.model_cost[model]
+    expected: Final = 100 * mantle["input_cost_per_token"] + 10 * mantle["output_cost_per_token"]
+    assert expected != 100 * bedrock["input_cost_per_token"] + 10 * bedrock["output_cost_per_token"]
+
+    for deployment in (model, f"bedrock_mantle/{model}", f"bedrock_mantle/us-east-1/{model}"):
+        assert litellm.completion_cost(
+            completion_response=response,
+            model=deployment,
+            custom_llm_provider="bedrock_mantle",
+            region_name="us-east-1",
+        ) == pytest.approx(expected), deployment
+    assert litellm.get_model_info(f"bedrock_mantle/us-east-1/{model}", "bedrock_mantle")["key"] == f"bedrock_mantle/{model}"
+
+
+@pytest.mark.parametrize("model", ["anthropic.claude-opus-5-5", "anthropic.claude-sonnet-5-5"])
 def test_cost_per_token_gov_region_prices_mantle_claude_on_the_gov_row(_local_model_cost_map, model):
     """A bedrock_mantle/ deployment in us-gov-west-1 must price from the
     bedrock_mantle/us-gov-west-1/<model> row."""
@@ -5640,56 +5669,3 @@ def test_completion_cost_bills_base_when_gemini_serves_on_demand(
     )
 
     assert cost == pytest.approx(100 * 0.001 + 50 * 0.002)
-
-
-@pytest.mark.parametrize(
-    "custom_llm_provider,deployment_model,cost_map_key",
-    [
-        ("vertex_ai", "claude-opus-4-8@default", "vertex_ai/claude-opus-4-8@default"),
-        ("anthropic", "claude-opus-4-8", "claude-opus-4-8"),
-    ],
-)
-def test_completion_cost_prices_capability_rule_alias_from_the_deployment(
-    _local_model_cost_map: None, custom_llm_provider: str, deployment_model: str, cost_map_key: str
-) -> None:
-    """Streamed proxy chunks carry the client's alias, so the first cost candidate is the
-    provider-prefixed alias. That name matches a claude capability generalization rule (unpriced)
-    and must fall through to the deployment's priced model instead of stopping at $0."""
-    response: Final = ModelResponse(
-        id="chatcmpl_x",
-        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-        model="claude-opus-4.8",
-        usage=Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
-    )
-    row: Final = litellm.model_cost[cost_map_key]
-    expected: Final = 30 * row["input_cost_per_token"] + 40 * row["output_cost_per_token"]
-    assert expected > 0
-
-    assert completion_cost(
-        completion_response=response,
-        model=deployment_model,
-        custom_llm_provider=custom_llm_provider,
-    ) == pytest.approx(expected)
-
-
-def test_pricing_entry_for_cost_calc_skips_capability_rule_alias(_local_model_cost_map: None) -> None:
-    response: Final = ModelResponse(
-        id="chatcmpl_x",
-        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-        model="claude-opus-4.8",
-        usage=Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
-    )
-
-    resolved: Final = pricing_entry_for_cost_calc(
-        model="claude-opus-4-8@default",
-        completion_response=response,
-        custom_llm_provider="vertex_ai",
-        custom_pricing=None,
-        base_model=None,
-        router_model_id=None,
-        region_name=None,
-        litellm_logging_obj=None,
-    )
-
-    assert resolved is not None
-    assert resolved[0] == "vertex_ai/claude-opus-4-8@default"

@@ -478,6 +478,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/search",
         "/search/{search_tool_name}",
         "/v1/search/{search_tool_name}",
+        "/decisions",
+        "/v1/decisions",
         # OCR
         "/ocr",
         "/v1/ocr",
@@ -4214,6 +4216,7 @@ class SpendLogsMetadata(TypedDict):
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None
     routing_decision: StandardLoggingRoutingDecision | None
     internal_call_origin: InternalCallOrigin | None
+    litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
     guardrail_information: list[StandardLoggingGuardrailInformation] | None
     eval_information: Any | None
     status: StandardLoggingPayloadStatus

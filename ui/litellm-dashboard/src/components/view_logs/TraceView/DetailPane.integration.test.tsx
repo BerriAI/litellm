@@ -23,10 +23,12 @@ const span = (overrides: SpanFields): Span => ({
   name: overrides.span_id,
   type: "chain",
   agent: "support_triage_agent",
+  framework: "",
   start_offset_ms: 0,
   duration_ms: 1300,
   status: "ok",
   error: null,
+  error_truncated: false,
   input_preview: "",
   model: null,
   input_tokens: 0,
@@ -117,6 +119,7 @@ const standardDetail: SpanDetail = {
       {
         role: "assistant",
         content: "Refund approved for T-981.",
+        name: null,
         tool_calls: [{ name: "issue_refund", arguments: '{"amount_usd": 40}' }],
       },
     ],
@@ -169,13 +172,33 @@ describe("DetailPane", () => {
     expect(vi.mocked(agentTraceSpanCall)).toHaveBeenCalledWith("sk-test", "t1", "llm1", undefined);
   });
 
+  it("keeps the output visible when a step contains a long input conversation", async () => {
+    const user = userEvent.setup();
+    const messages = Array.from({ length: 120 }, (_, index) => ({
+      role: "user" as const,
+      content: `Review case ${index}`,
+    }));
+    vi.mocked(agentTraceSpanCall).mockResolvedValue({
+      ...details.root,
+      input: JSON.stringify(messages),
+      input_ui: { kind: "messages", messages },
+    });
+    renderPane(spanRow(root));
+    const input = await screen.findByRole("button", { name: "Input 120 messages" });
+    expect(input).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Customer acme-404 is on the Enterprise plan.")).toBeVisible();
+    expect(screen.getByText("Review case 119")).not.toBeVisible();
+    await user.click(input);
+    expect(screen.getByText("Review case 119")).toBeVisible();
+  });
+
   it("shows a tool failure as 'Tool · <reason>' with the exception line and no traceback", async () => {
     renderPane(spanRow(failedTool));
     const error = screen.getByRole("region", { name: "Error" });
     expect(error).toHaveTextContent("Tool · ValueError");
     expect(error).toHaveTextContent("ValueError('customer acme-404 not found in billing DB')");
     expect(error).not.toHaveTextContent("Traceback");
-    const input = await screen.findByRole("region", { name: "Input" });
+    const input = await screen.findByRole("region", { name: /^Input/ });
     expect(input).toHaveTextContent("customer_id");
     expect(input).toHaveTextContent("acme-404");
   });
@@ -231,11 +254,11 @@ describe("DetailPane", () => {
     expect(writeText.mock.calls[0][0]).toContain("http://proxy.test/v1/traces/t1?format=md&span_id=llm1");
   });
 
-  it("renders the AI tool call as a card and expands a long argument on click", async () => {
+  it("renders the assistant tool call as a card and expands a long argument on click", async () => {
     const user = userEvent.setup();
     renderPane(spanRow(llm));
     const output = await screen.findByRole("region", { name: "Output" });
-    expect(output).toHaveTextContent("AI");
+    expect(output).toHaveTextContent("Assistant");
     expect(output).toHaveTextContent("get_customer_plan");
     const expand = within(output).getAllByRole("button", { name: "Expand note" })[0];
     expect(within(output).queryAllByText(LONG_NOTE, { selector: "pre", ignore: "[inert] *" })).toHaveLength(0);
@@ -250,11 +273,11 @@ describe("DetailPane", () => {
   it("collapses the Input section without touching Output", async () => {
     const user = userEvent.setup();
     renderPane(spanRow(llm));
-    const input = await screen.findByRole("region", { name: "Input" });
+    const input = await screen.findByRole("region", { name: /^Input/ });
     const systemText = "You are a LiteLLM support agent.";
     expect(within(input).getByText(systemText, { ignore: "[inert] *" })).toBeInTheDocument();
-    await user.click(within(input).getByRole("button", { name: "Input" }));
-    expect(within(input).getByRole("button", { name: "Input" })).toHaveAttribute("aria-expanded", "false");
+    await user.click(within(input).getByRole("button", { name: /^Input/ }));
+    expect(within(input).getByRole("button", { name: /^Input/ })).toHaveAttribute("aria-expanded", "false");
     expect(within(input).queryByText(systemText, { ignore: "[inert] *" })).not.toBeInTheDocument();
     const output = screen.getByRole("region", { name: "Output" });
     expect(within(output).getAllByText("get_customer_plan", { ignore: "[inert] *" })).not.toHaveLength(0);
@@ -263,12 +286,12 @@ describe("DetailPane", () => {
   it("renders the standard input_ui / output_ui instead of re-parsing the raw payload", async () => {
     vi.mocked(agentTraceSpanCall).mockResolvedValue(standardDetail);
     renderPane(spanRow(llm));
-    const input = await screen.findByRole("region", { name: "Input" });
+    const input = await screen.findByRole("region", { name: /^Input/ });
     expect(input).toHaveTextContent("ticket_id");
     expect(input).toHaveTextContent("T-981");
     expect(input).not.toHaveTextContent("raw input left unparsed");
     const output = screen.getByRole("region", { name: "Output" });
-    expect(output).toHaveTextContent("AI");
+    expect(output).toHaveTextContent("Assistant");
     expect(output).toHaveTextContent("Refund approved for T-981.");
     expect(output).toHaveTextContent("issue_refund");
     expect(output).toHaveTextContent("amount_usd");
@@ -281,7 +304,7 @@ describe("DetailPane", () => {
     const output = await screen.findByRole("region", { name: "Output" });
     const result = within(output).getByText("permission denied: /etc/shadow");
     expect(result).toHaveClass("text-destructive");
-    expect(output).not.toHaveTextContent("AI");
+    expect(output).not.toHaveTextContent("Assistant");
   });
 
   it("shows a text output_ui as its plain text", async () => {
@@ -306,6 +329,29 @@ describe("DetailPane", () => {
 });
 
 describe("SpanHoverCard", () => {
+  it.each([
+    ["retriever", "Retriever"],
+    ["embedding", "Embedding"],
+    ["reranker", "Reranker"],
+    ["guardrail", "Guardrail"],
+    ["evaluator", "Evaluator"],
+    ["prompt", "Prompt"],
+    ["decision", "Decision"],
+  ] as const)("renders the %s operation", async (type, label) => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <SpanHoverCard
+        facts={spanFacts(span({ span_id: "specialized", type }))}
+        traceStartMs={Date.parse(trace.summary.start_time)}
+      >
+        <button type="button">row</button>
+      </SpanHoverCard>,
+    );
+    await user.hover(screen.getByRole("button", { name: "row" }));
+    const card = await screen.findByTestId("span-hover-card", {}, { timeout: 2000 });
+    expect(within(card).getByText(label)).toBeInTheDocument();
+  });
+
   it("shows absolute Start / End times and the agent tag after hovering the row", async () => {
     const user = userEvent.setup();
     const traceStartMs = Date.parse(trace.summary.start_time);

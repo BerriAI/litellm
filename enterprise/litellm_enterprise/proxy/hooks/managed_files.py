@@ -26,6 +26,7 @@ from pydantic import ValidationError
 
 import litellm
 from litellm import Router, verbose_logger
+from litellm._internal_context import with_service_target
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.constants import MAX_FILE_LIST_LIMIT
@@ -54,7 +55,6 @@ from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     FILE_LIST_CONTINUATION_CHUNK_SIZE,
-    ManagedFileIdResolver,
     _is_base64_encoded_unified_file_id,
     apply_unified_file_ids,
     decode_model_from_file_id,
@@ -230,6 +230,9 @@ def _storage_metadata_of(file_object: OpenAIFileObject | None) -> Mapping[str, s
     )
 
 
+_MANAGED_FILES_TARGET: Final = "managed_files"
+
+
 class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     # Class variables or attributes
     def __init__(self, internal_usage_cache: InternalUsageCache, prisma_client: PrismaClient):
@@ -243,6 +246,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         return PrometheusLogger.get_instance()
 
+    @with_service_target(_MANAGED_FILES_TARGET)
     async def store_unified_file_id(
         self,
         file_id: str,
@@ -326,6 +330,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             verbose_logger.warning(f"could not resolve org for managed object attribution: {e}")
             return None
 
+    @with_service_target(_MANAGED_FILES_TARGET)
     async def store_unified_object_id(
         self,
         unified_object_id: str,
@@ -413,6 +418,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             },
         )
 
+    @with_service_target(_MANAGED_FILES_TARGET)
     async def get_unified_file_id(
         self, file_id: str, litellm_parent_otel_span: Optional[Span] = None
     ) -> Optional[LiteLLM_ManagedFileTable]:
@@ -435,6 +441,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return LiteLLM_ManagedFileTable.model_validate(db_object.model_dump())
         return None
 
+    @with_service_target(_MANAGED_FILES_TARGET)
     async def delete_unified_file_id(
         self, file_id: str, litellm_parent_otel_span: Optional[Span] = None
     ) -> OpenAIFileObject:
