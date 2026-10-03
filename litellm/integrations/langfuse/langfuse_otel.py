@@ -29,6 +29,14 @@ LANGFUSE_CLOUD_US_ENDPOINT: Final = "https://us.cloud.langfuse.com/api/public/ot
 LANGFUSE_INGESTION_VERSION_HEADER: Final = "x-langfuse-ingestion-version"
 LANGFUSE_INGESTION_VERSION: Final = "4"
 
+_TRACE_IDENTITY_FIELDS: Final = (
+    "user_api_key_alias",
+    "user_api_key_user_id",
+    "user_api_key_end_user_id",
+    "user_api_key_team_id",
+    "user_api_key_team_alias",
+)
+
 
 class LangfuseOtelLogger(OpenTelemetry):
     def __init__(self, config=None, *args, **kwargs):
@@ -124,6 +132,30 @@ class LangfuseOtelLogger(OpenTelemetry):
                     except Exception:
                         value = str(value)
                 safe_set_attribute(span, enum_attr.value, value)
+
+    @staticmethod
+    def _set_request_metadata_attributes(span: Span, kwargs: dict[str, object]) -> None:
+        from litellm.integrations.arize._utils import safe_set_attribute
+        from litellm.integrations.langfuse.langfuse import log_requester_metadata
+        from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+        standard_logging_object: Final = kwargs.get("standard_logging_object")
+        request_metadata: Final = (
+            standard_logging_object.get("metadata") if isinstance(standard_logging_object, dict) else None
+        )
+        if not isinstance(request_metadata, dict):
+            return
+        observation_metadata: Final = {  # mutable-ok: stays a real dict for safe_dumps and .get reads below
+            key: value
+            for key, value in log_requester_metadata(redact_user_api_key_info(metadata=request_metadata)).items()
+            if value is not None
+        }
+        safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_METADATA.value, safe_dumps(observation_metadata))
+        trace_prefix: Final = LangfuseSpanAttributes.TRACE_METADATA.value
+        for field in _TRACE_IDENTITY_FIELDS:
+            if value := observation_metadata.get(field):
+                safe_set_attribute(span, f"{trace_prefix}.{field}", value)
 
     @staticmethod
     def _set_observation_output(span: Span, response_obj):
@@ -244,6 +276,7 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         metadata: Final = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
         LangfuseOtelLogger._set_metadata_attributes(span=span, metadata=metadata)
+        LangfuseOtelLogger._set_request_metadata_attributes(span=span, kwargs=kwargs)
 
         messages: Final = kwargs.get("messages")
         if messages:
