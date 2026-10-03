@@ -5,11 +5,11 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     io,
 };
-
 use indexmap::IndexMap;
-use litellm_llms_types::{formats::chat_completions::ChatMessageContent, recognized::Recognized};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, ser::Formatter};
+
+use litellm_llms_types::{formats::chat_completions::ChatMessageContent, recognized::Recognized};
 
 use super::{CallEvidence, CallKey, attr};
 
@@ -504,4 +504,29 @@ pub(crate) fn encode<T: Serialize>(value: &T) -> String {
         return String::new();
     }
     String::from_utf8(output).unwrap_or_default()
+}
+
+pub(super) fn state_preview(input: &str, key: &str) -> Option<String> {
+    let object = serde_json::from_str::<serde_json::Map<String, Value>>(input).ok()?;
+    let conversation = parse(object.get(key)?)?;
+    Some(preview(&conversation))
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::state_preview;
+
+    #[rstest]
+    #[case::latest_user(r#"{"messages":[{"role":"user","content":"first"},{"role":"assistant","content":"reply"},{"role":"user","content":"last"}]}"#, Some("last"))]
+    #[case::malformed("not-json", None)]
+    #[case::missing("{}", None)]
+    #[case::not_messages(r#"{"messages":[{"role":"user"}]}"#, None)]
+    fn state_preview_requires_a_valid_conversation(
+        #[case] input: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(state_preview(input, "messages").as_deref(), expected);
+    }
 }

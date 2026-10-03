@@ -13,7 +13,6 @@ use crate::{
 
 pub(crate) const CLAUDE_CODE_SCOPE: &str = "com.anthropic.claude_code.tracing";
 pub(crate) const CLAUDE_CODE_AGENT: &str = "claude-code";
-const AGENT_SDK_FRAMEWORK: &str = "claude-agent-sdk";
 
 /// Claude Code's built-in tracing, identified by its instrumentation scope.
 pub(crate) struct ClaudeCode;
@@ -37,16 +36,6 @@ fn span_type(name: &str, attributes: &BTreeMap<String, String>) -> SpanType {
         "llm_request" => SpanType::LlmRequest,
         "tool" => SpanType::Tool,
         _ => SpanType::Other,
-    }
-}
-
-pub(crate) fn framework(attributes: &BTreeMap<String, String>) -> &'static str {
-    if attr(attributes, "query_source_safe") == "sdk"
-        || attr(attributes, "system_prompt_preview").contains("cc_entrypoint=sdk")
-    {
-        AGENT_SDK_FRAMEWORK
-    } else {
-        CLAUDE_CODE_AGENT
     }
 }
 
