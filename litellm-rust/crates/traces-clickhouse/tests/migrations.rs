@@ -2166,3 +2166,169 @@ async fn nullable_spend_upgrade_preserves_existing_costs_and_unknown_new_costs(
     );
     Ok(())
 }
+
+#[rstest]
+#[case::below_boundary(999, 0)]
+#[case::at_boundary(1000, 0)]
+#[case::above_boundary(1001, 0)]
+#[case::two_full_pages(2000, 0)]
+#[case::third_page(2001, 0)]
+#[case::combined_byte_limit(2000, 2500)]
+#[case::near_budget(2000, usize::MAX)]
+#[tokio::test]
+async fn trace_detail_loads_all_spans_with_bounded_reads(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] span_count: usize,
+    #[case] name_bytes: usize,
+) -> TestResult {
+    let database = database?;
+    ensure_schema(
+        &database.client,
+        &Connection::writer(&database.url)?,
+        "trace_test",
+        7,
+    )
+    .await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let name_budget = if name_bytes == usize::MAX {
+        let probe = serde_json::from_value(serde_json::json!({
+            "Timestamp": timestamp, "TraceId": "template-trace", "SpanId": "0000000000000000",
+            "TeamId": "visible", "ApiKeyHash": "key"
+        }))?;
+        insert_rows(&database, "otel_traces", vec![probe]).await?;
+        let probe = litellm_storage_clickhouse::fetch::<
+            litellm_traces_clickhouse::query::named::TraceSpans,
+        >(
+            &database.client,
+            &Connection::reader(&database.url, "trace_test")?,
+            &litellm_traces_clickhouse::query::named::TraceSpansParams {
+                access: litellm_traces_clickhouse::query::named::ReadAccessParams {
+                    all_teams: false,
+                    user_id: String::new(),
+                    team_ids: vec!["visible".into()],
+                },
+                trace_id: "template-trace".into(),
+                trace_ref: String::new(),
+            },
+        )
+        .await?;
+        let row_bytes = serde_json::to_vec(&probe[0])?.len();
+        litellm_storage_clickhouse::READ_LIMITS.response_bytes
+            - 512
+            - 10
+            - span_count * (row_bytes + 1)
+    } else {
+        span_count * name_bytes
+    };
+    let rows = (0..span_count)
+        .map(|index| {
+            serde_json::from_value(serde_json::json!({
+                "Timestamp": timestamp + (span_count - index) as i64, "TraceId": "boundary-trace",
+                "SpanId": format!("{index:016x}"), "SpanName": "x".repeat(name_budget / span_count + usize::from(index == 0) * (name_budget % span_count)),
+                "TeamId": "visible", "ApiKeyHash": "key"
+            }))
+        })
+        .chain(std::iter::once(serde_json::from_value(serde_json::json!({
+            "Timestamp": timestamp, "TraceId": "boundary-trace", "SpanId": "foreign",
+            "TeamId": "hidden", "ApiKeyHash": "key"
+        }))))
+        .collect::<Result<Vec<BTreeMap<String, serde_json::Value>>, _>>()?;
+    insert_rows(&database, "otel_traces", rows).await?;
+    let reader = Connection::reader(&database.url, "trace_test")?;
+    let response = litellm_traces_clickhouse::get_trace(
+        &database.client,
+        &reader,
+        &litellm_traces_clickhouse::query::named::ReadAccessParams {
+            all_teams: false,
+            user_id: String::new(),
+            team_ids: vec!["visible".into()],
+        },
+        "boundary-trace",
+        "",
+    )
+    .await;
+    let named = execute_named_read(
+        &database.client,
+        &reader,
+        ReadQuery::TraceSpans,
+        &BTreeMap::from([
+            ("all_teams".into(), Parameter::Unsigned(0)),
+            ("user_id".into(), Parameter::Text(String::new())),
+            (
+                "team_ids".into(),
+                Parameter::Strings(vec!["visible".into()]),
+            ),
+            ("trace_id".into(), Parameter::Text("boundary-trace".into())),
+            ("trace_ref".into(), Parameter::Text(String::new())),
+        ]),
+    )
+    .await;
+    if name_bytes > 0 && name_bytes != usize::MAX {
+        assert!(matches!(
+            response,
+            Err(Error::Storage(
+                litellm_storage_clickhouse::Error::ResponseTooLarge
+            ))
+        ));
+        assert!(matches!(
+            named,
+            Err(Error::Storage(
+                litellm_storage_clickhouse::Error::ResponseTooLarge
+            ))
+        ));
+        return Ok(());
+    }
+    let trace = response?.ok_or("missing trace")?;
+    assert_eq!(trace.spans.len(), span_count);
+    let ids: std::collections::BTreeSet<_> = trace
+        .spans
+        .iter()
+        .map(|span| span.span_id.clone())
+        .collect();
+    assert_eq!(
+        ids,
+        (0..span_count)
+            .map(|index| format!("{index:016x}"))
+            .collect()
+    );
+    let named: serde_json::Value = serde_json::from_str(&named?)?;
+    let spans = named["data"].as_array().ok_or("missing named spans")?;
+    assert_eq!(spans.len(), span_count);
+    assert_eq!(
+        spans
+            .iter()
+            .map(|span| span["span_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        (0..span_count)
+            .rev()
+            .map(|index| format!("{index:016x}"))
+            .collect::<Vec<_>>()
+    );
+    assert!(spans.iter().all(|span| span["team_id"] == "visible"));
+    if name_bytes == usize::MAX {
+        assert!(
+            serde_json::to_vec(&named)?.len()
+                > litellm_storage_clickhouse::READ_LIMITS.response_bytes - 1024
+        );
+        assert!(
+            serde_json::to_vec(&named)?.len()
+                <= litellm_storage_clickhouse::READ_LIMITS.response_bytes
+        );
+    }
+
+    if span_count > litellm_storage_clickhouse::READ_LIMITS.result_rows as usize {
+        assert!(matches!(
+            execute_read(
+                &database.client,
+                &reader,
+                "SELECT number FROM numbers(1001)",
+                &BTreeMap::new(),
+            )
+            .await,
+            Err(Error::Storage(
+                litellm_storage_clickhouse::Error::QueryFailed(_)
+            ))
+        ));
+    }
+    Ok(())
+}

@@ -16,8 +16,7 @@ use crate::{
     query::named::{
         ListTraces, ListTracesParams, ReadAccessParams, SpanDetail as SpanDetailQuery,
         SpanDetailParams, SpanError, SpanErrorParams, SpendByResponseIds, SpendByResponseIdsParams,
-        TraceIdentity, TraceIdentityParams, TracePageSpans, TracePageSpansParams, TraceSpans,
-        TraceSpansParams,
+        TraceIdentity, TraceIdentityParams, TracePageSpans, TracePageSpansParams, TraceSpansParams,
     },
 };
 
@@ -222,7 +221,7 @@ pub async fn get_trace(
         trace_id: trace_id.to_owned(),
         trace_ref: trace_ref.clone(),
     };
-    let rows: Vec<contracts::TraceSpansRow> = fetch::<TraceSpans>(client, connection, &params)
+    let rows: Vec<contracts::TraceSpansRow> = crate::sql::trace_spans(client, connection, &params)
         .await?
         .into_iter()
         .map(|row| row.0)

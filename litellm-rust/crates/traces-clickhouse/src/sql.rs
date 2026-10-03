@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use litellm_http::Client;
 use litellm_traces::ReadQuery;
@@ -18,7 +18,14 @@ pub async fn execute_named_read(
         ReadQuery::TraceIdentity => {
             named_json::<TraceIdentity>(client, connection, parameters).await
         }
-        ReadQuery::TraceSpans => named_json::<TraceSpans>(client, connection, parameters).await,
+        ReadQuery::TraceSpans => {
+            let value = serde_json::to_value(parameters).map_err(|_| Error::InvalidParameters)?;
+            let params = serde_json::from_value::<TraceSpansParams>(value)
+                .map_err(|_| Error::InvalidParameters)?;
+            let rows = trace_spans(client, connection, &params).await?;
+            serde_json::to_string(&serde_json::json!({"data": rows}))
+                .map_err(|_| Error::InvalidResponse)
+        }
         ReadQuery::TracePageSpans => {
             named_json::<TracePageSpans>(client, connection, parameters).await
         }
@@ -35,6 +42,73 @@ pub async fn execute_named_read(
         ReadQuery::Content => named_json::<LensContent>(client, connection, parameters).await,
         ReadQuery::Evidence => named_json::<LensEvidence>(client, connection, parameters).await,
     }
+}
+
+pub(crate) async fn trace_spans(
+    client: &Client,
+    connection: &Connection,
+    params: &TraceSpansParams,
+) -> Result<Vec<TraceSpansRow>, Error> {
+    use litellm_storage_clickhouse::{READ_LIMITS, execute_read};
+
+    let value = serde_json::to_value(params).map_err(|_| Error::InvalidParameters)?;
+    let parameters: BTreeMap<String, Parameter> =
+        serde_json::from_value(value).map_err(|_| Error::InvalidParameters)?;
+    let sql = format!(
+        "SELECT * FROM ({}) WHERE {{first_page:UInt8}} = 1 OR span_id > {{cursor:String}} \
+          ORDER BY span_id LIMIT {}",
+        TraceSpans::SQL,
+        READ_LIMITS.result_rows,
+    );
+    let read = async {
+        // rebind-ok: Owned pagination state avoids copying accumulated rows on each page
+        let mut rows = Vec::new();
+        let mut response_bytes = "{\"data\":[]}".len();
+        let mut cursor = String::new();
+        loop {
+            let page_parameters = serde_json::from_value::<BTreeMap<String, Parameter>>(
+                serde_json::to_value(&parameters).map_err(|_| Error::InvalidParameters)?,
+            )
+            .map_err(|_| Error::InvalidParameters)?;
+            let page_parameters = page_parameters
+                .into_iter()
+                .chain([
+                    (
+                        "first_page".into(),
+                        Parameter::Unsigned(u64::from(rows.is_empty())),
+                    ),
+                    ("cursor".into(), Parameter::Text(cursor.clone())),
+                ])
+                .collect();
+            let body = execute_read(client, connection, &sql, &page_parameters).await?;
+            #[derive(serde::Deserialize)]
+            struct Page {
+                data: Vec<TraceSpansRow>,
+            }
+            let page: Page = serde_json::from_str(&body).map_err(|_| Error::InvalidResponse)?;
+            let encoded = serde_json::to_vec(&page.data).map_err(|_| Error::InvalidResponse)?;
+            response_bytes +=
+                encoded.len() - 2 + usize::from(!rows.is_empty() && !page.data.is_empty());
+            if response_bytes > READ_LIMITS.response_bytes {
+                return Err(Error::Storage(
+                    litellm_storage_clickhouse::Error::ResponseTooLarge,
+                ));
+            }
+            let count = page.data.len();
+            if let Some(last) = page.data.last() {
+                cursor.clone_from(&last.0.span_id);
+            }
+            rows.extend(page.data);
+            if count < READ_LIMITS.result_rows as usize {
+                break;
+            }
+        }
+        rows.sort_by(|a, b| (a.0.start_ns, &a.0.span_id).cmp(&(b.0.start_ns, &b.0.span_id)));
+        Ok(rows)
+    };
+    tokio::time::timeout(Duration::from_secs(15), read)
+        .await
+        .map_err(|_| Error::Storage(litellm_storage_clickhouse::Error::Transport))?
 }
 
 async fn named_json<Q: Query>(
