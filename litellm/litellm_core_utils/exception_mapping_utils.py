@@ -2529,13 +2529,14 @@ def exception_type(
                     body=getattr(original_exception, "body", None),
                 )
             if custom_llm_provider == "aiand":
+                _aiand_model: Final = model if isinstance(model, str) else ""
                 _map_aiand_exception(
-                    model=model,
+                    model=_aiand_model,
                     original_exception=mappable_exception,
                     custom_llm_provider=custom_llm_provider,
                     error_str=error_str,
                     exception_type=exception_type,
-                    exception_provider=exception_provider,
+                    exception_provider="AiandException",
                     extra_information=extra_information,
                 )
             if (
