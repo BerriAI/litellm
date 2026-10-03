@@ -135,8 +135,8 @@ impl<'a> Resolution<'a> {
     }
 
     /// The request attempts a model call made: its transport descendants, or, for bridges that
-    /// emit the request beside the call instead of under it, the transport siblings when the call
-    /// is the only model call under that parent.
+    /// emit the request beside the call instead of under it, transport siblings inside the call's
+    /// time window when the call is the only model call under that parent.
     fn transports(&self, call: usize) -> Vec<usize> {
         let is_transport = |index: &usize| self.row(*index).call_keys.contains(&CallKey::Transport);
         let nested: Vec<usize> = self
@@ -157,7 +157,19 @@ impl<'a> Resolution<'a> {
         if !lone_call {
             return nested;
         }
-        siblings.into_iter().filter(is_transport).collect()
+        let call_row = self.row(call);
+        let call_start_ns = i128::from(call_row.start_ns);
+        let call_end_ns = call_start_ns + i128::from(call_row.duration_ns);
+        siblings
+            .into_iter()
+            .filter(is_transport)
+            .filter(|sibling| {
+                let transport = self.row(*sibling);
+                let transport_start_ns = i128::from(transport.start_ns);
+                let transport_end_ns = transport_start_ns + i128::from(transport.duration_ns);
+                transport_start_ns >= call_start_ns && transport_end_ns <= call_end_ns
+            })
+            .collect()
     }
 
     pub(super) fn unique_tools(&self) -> Vec<usize> {

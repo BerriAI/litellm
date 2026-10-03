@@ -573,7 +573,11 @@ fn sibling_transports_belong_to_the_only_model_call_under_their_parent(
     #[case] calls: usize,
     #[case] expected: Option<f64>,
 ) {
-    let mut transport = row("http", "step", "gateway.request", "framework", "");
+    let mut transport = at(
+        row("http", "step", "gateway.request", "framework", ""),
+        2,
+        10,
+    );
     transport.trace_id = "trace".into();
     transport.call_keys = vec!["transport:".parse().unwrap()];
     transport.call_evidence = Some(litellm_traces::CallEvidenceKind::Complete);
@@ -595,6 +599,57 @@ fn sibling_transports_belong_to_the_only_model_call_under_their_parent(
     let mut logged = spend("request", "", "team", "", "key", 0.5);
     logged.trace_id = "trace".into();
     logged.span_id = "http".into();
+    let trace = resolve_trace("trace", "ref", &rows, &[logged]).unwrap();
+    assert_eq!(trace.summary.spend, expected);
+    assert_eq!(trace.agents[0].spend, expected);
+}
+
+#[rstest]
+#[case::without_tool_http_sibling(None, Some(0.5))]
+#[case::after_call(Some((200, 10)), Some(0.5))]
+#[case::inside_call_without_spend(Some((10, 10)), None)]
+fn sibling_transport_does_not_lose_model_call_spend(
+    #[case] transport_timing: Option<(i64, u64)>,
+    #[case] expected: Option<f64>,
+) {
+    let call = owned(
+        TraceSpansRow {
+            trace_id: "trace".into(),
+            call_keys: vec![litellm_traces::CallKey::ProviderResponse(
+                "chatcmpl-1".into(),
+            )],
+            call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
+            ..llm("chat", "step", "agent", "chatcmpl-1")
+        },
+        "team",
+        "",
+        "key",
+    );
+    let base_rows = [
+        owned(
+            row("agent", "", "agent", "agent", "agent"),
+            "team",
+            "",
+            "key",
+        ),
+        owned(row("step", "agent", "step", "chain", ""), "team", "", "key"),
+        call,
+    ];
+    let rows: Vec<_> = base_rows
+        .into_iter()
+        .chain(transport_timing.into_iter().map(|(start, duration)| {
+            let mut transport = at(
+                row("tool-http", "step", "GET", "framework", ""),
+                start,
+                duration,
+            );
+            transport.trace_id = "trace".into();
+            transport.call_keys = vec![litellm_traces::CallKey::Transport];
+            transport.call_evidence = Some(litellm_traces::CallEvidenceKind::Complete);
+            owned(transport, "team", "", "key")
+        }))
+        .collect();
+    let logged = spend("chatcmpl-1", "chatcmpl-1", "team", "", "key", 0.5);
     let trace = resolve_trace("trace", "ref", &rows, &[logged]).unwrap();
     assert_eq!(trace.summary.spend, expected);
     assert_eq!(trace.agents[0].spend, expected);
