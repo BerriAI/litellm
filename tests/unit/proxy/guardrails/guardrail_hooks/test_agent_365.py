@@ -1353,6 +1353,37 @@ class TestPreflightCallerSignIn:
         assert verdict == Rejected(detail="the provided assertion has expired", claims="step-up")
 
     @pytest.mark.asyncio
+    async def test_configured_timeout_bounds_the_entra_exchange_leg(self):
+        seen: Final[list[object]] = []
+
+        class _Resp:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, object]:
+                return {"access_token": "exchanged", "expires_in": 3600}
+
+        class _Client:
+            async def post(self, *args: object, **kwargs: object) -> _Resp:
+                seen.append(kwargs.get("timeout"))
+                return _Resp()
+
+        guardrail: Final = Agent365Guardrail(
+            guardrail_name="a365",
+            tenant_id="tenant-abc",
+            client_id="cid",
+            client_secret="csecret",
+            request_timeout=0.5,
+            async_handler=FakeHandler([]),
+        )
+
+        with patch(_HTTP_CLIENT, return_value=_Client()):
+            verdict: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), FAKE_ASSERTION)
+
+        assert verdict == SignedIn()
+        assert seen == [0.5], "the Entra token POST must carry the guardrail's own request_timeout"
+
+    @pytest.mark.asyncio
     async def test_malformed_assertion_is_rejected_at_connect_even_fail_open(self):
         exchanger: Final = OboTokenExchanger(_post_exchange_endpoint)
         guardrail: Final = _make_guardrail(FakeHandler([]), exchanger=exchanger, unreachable_fallback="fail_open")

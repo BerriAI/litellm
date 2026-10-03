@@ -81,7 +81,7 @@ def _oauth_error_fields(response: httpx.Response) -> _OAuthErrorBody:
 
 
 async def _post_exchange_endpoint(
-    url: str, form: dict[str, str], client_auth_headers: dict[str, str]
+    url: str, form: dict[str, str], client_auth_headers: dict[str, str], *, timeout: float | None = None
 ) -> dict[str, object] | None:
     from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415
         get_async_httpx_client,  # pyright: ignore
@@ -95,7 +95,9 @@ async def _post_exchange_endpoint(
     headers: Final = {"Accept": "application/json", **client_auth_headers}
     try:
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore
-        response: Final = await client.post(url, headers=headers, data=form)  # pyright: ignore
+        response: Final = await client.post(  # pyright: ignore[reportUnknownMemberType]  # untyped handler
+            url, headers=headers, data=form, timeout=timeout
+        )
         response.raise_for_status()  # pyright: ignore
         parsed: Final[object] = response.json()  # pyright: ignore
     except httpx.HTTPStatusError as status_err:
@@ -133,9 +135,12 @@ async def _post_exchange_endpoint(
     return parsed  # pyright: ignore
 
 
-def build_token_exchanger() -> OboTokenExchanger:
+def build_token_exchanger(*, request_timeout: float | None = None) -> OboTokenExchanger:
+    async def post(url: str, form: dict[str, str], client_auth_headers: dict[str, str]) -> dict[str, object] | None:
+        return await _post_exchange_endpoint(url, form, client_auth_headers, timeout=request_timeout)
+
     return OboTokenExchanger(
-        _post_exchange_endpoint,
+        post,
         cache=InMemoryTokenCacheBackend(max_size=MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE),
         default_ttl_seconds=MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,
         min_ttl_seconds=MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,

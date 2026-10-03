@@ -185,7 +185,11 @@ class Agent365Guardrail(CustomGuardrail):
             resource=AGENT_365_PROD_API_BASE,
             config=self._exchange_config,
         )
-        self._token_exchanger: Final = token_exchanger if token_exchanger is not None else build_token_exchanger()
+        self._token_exchanger: Final = (
+            token_exchanger
+            if token_exchanger is not None
+            else build_token_exchanger(request_timeout=self.request_timeout)
+        )
         verbose_proxy_logger.info("Initialized Microsoft Agent 365 guardrail: %s", guardrail_name)
 
     @staticmethod

@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import SecretStr
 
-from litellm.proxy._experimental.mcp_server.outbound_credentials import Error, ServerSpec
+from litellm.proxy._experimental.mcp_server.outbound_credentials import Error, Ok, ServerSpec
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_provider import (
     _post_exchange_endpoint,
     build_token_exchanger,
@@ -38,7 +38,7 @@ def _client_raising_status(status: int, body: object):
             raise httpx.HTTPStatusError("bad request", request=request, response=response)
 
     class _Client:
-        async def post(self, url, headers, data):
+        async def post(self, url, headers, data, timeout=None):
             return _Resp()
 
     return _Client()
@@ -51,6 +51,36 @@ def test_build_token_exchanger_returns_an_exchanger():
 def test_build_gives_each_caller_an_independent_cache():
     # Separate builds must not share a cache, so one egress instance cannot serve another's tokens.
     assert build_token_exchanger() is not build_token_exchanger()
+
+
+def _recording_client(seen: list[float | None]):
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"access_token": "x", "expires_in": 60}
+
+    class _Client:
+        async def post(self, url, headers, data, timeout=None):
+            seen.append(timeout)
+            return _Resp()
+
+    return _Client()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_timeout", [0.5, None], ids=["bounded", "handler_default"])
+async def test_built_exchanger_posts_with_the_configured_request_timeout(request_timeout):
+    seen: list[float | None] = []
+    config = TokenExchangeConfig(
+        token_exchange_endpoint="https://idp/token", client_id="cid", client_secret=SecretStr("csec")
+    )
+    server = ServerSpec(server_id="srv", resource="https://up.example.com", config=config)
+    with patch(_HTTP_CLIENT, return_value=_recording_client(seen)):
+        result = await build_token_exchanger(request_timeout=request_timeout).exchange("jwt", server, config)
+    assert isinstance(result, Ok)
+    assert seen == [request_timeout]
 
 
 @pytest.mark.asyncio
@@ -70,7 +100,7 @@ async def test_post_parses_json_body_on_success():
             return {"access_token": "x", "expires_in": 60}
 
     class _Client:
-        async def post(self, url, headers, data):
+        async def post(self, url, headers, data, timeout=None):
             return _Resp()
 
     with patch(_HTTP_CLIENT, return_value=_Client()):
@@ -142,7 +172,7 @@ async def test_post_returns_none_on_non_object_json(payload):
             return payload
 
     class _Client:
-        async def post(self, url, headers, data):
+        async def post(self, url, headers, data, timeout=None):
             return _Resp()
 
     with patch(_HTTP_CLIENT, return_value=_Client()):

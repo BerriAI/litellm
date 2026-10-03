@@ -10500,6 +10500,43 @@ class TestPreemptive401ModeAware:
         assert moved_header == exact_header.replace("/gwx", f"/{requested}")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("kind", ["plain_obo", "oauth_passthrough"])
+    @pytest.mark.parametrize("shape", ["alias_case", "server_id", "x_mcp_servers"])
+    async def test_moved_obo_and_passthrough_shapes_get_the_exact_name_routes_challenge(self, kind, shape, monkeypatch):
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        server = (
+            _make_obo_server("obx")
+            if kind == "plain_obo"
+            else MCPServer(
+                server_id="id-obx",
+                name="obx",
+                alias="obx",
+                server_name="obx",
+                url="https://obx.test/mcp",
+                transport=MCPTransport.http,
+                auth_type=MCPAuth.none,
+                extra_headers=["Authorization"],
+                oauth_passthrough=True,
+                mcp_info={"server_name": "obx"},
+            )
+        )
+        requested, path, exact_path = {
+            "alias_case": ("OBX", "/mcp/OBX", "/mcp/obx"),
+            "server_id": (server.server_id, f"/mcp/{server.server_id}", "/mcp/obx"),
+            "x_mcp_servers": ("OBX", "/mcp", "/mcp"),
+        }[shape]
+
+        exact = await self._connect_with_a_grant(server, "obx", exact_path)
+        moved = await self._connect_with_a_grant(server, requested, path)
+
+        assert exact.status_code == 401
+        assert (moved.status_code, moved.detail) == (exact.status_code, exact.detail)
+        exact_header = {k.lower(): v for k, v in (exact.headers or {}).items()}["www-authenticate"]
+        moved_header = {k.lower(): v for k, v in (moved.headers or {}).items()}["www-authenticate"]
+        assert "/obx" in exact_header
+        assert moved_header == exact_header.replace("/obx", f"/{requested}")
+
+    @pytest.mark.asyncio
     async def test_aggregate_connect_without_a_server_selection_is_not_challenged(self):
         from litellm.proxy._experimental.mcp_server import server as server_module
 
