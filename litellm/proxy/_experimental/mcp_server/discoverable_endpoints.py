@@ -1015,7 +1015,7 @@ async def authorize_with_server(
         dcr_token_endpoint_auth_method=ephemeral_dcr_client.token_endpoint_auth_method
         if ephemeral_dcr_client
         else None,
-        expected_issuer=resolved_server.issuer,
+        expected_issuer=resolved_server.authorization_response_issuer or resolved_server.issuer,
         authorization_response_iss_parameter_supported=resolved_server.authorization_response_iss_parameter_supported,
     )
     relay_state: Final = secrets.token_urlsafe(_OAUTH_STATE_HANDLE_BYTES)
@@ -1445,10 +1445,13 @@ def _apply_persisted_dcr_credentials(mcp_server: MCPServer, credentials: _Persis
     return True
 
 
-async def _load_store_dcr_credentials(mcp_server: MCPServer) -> _PersistedDcrCredentials | None:
+async def _load_store_dcr_credentials(
+    mcp_server: MCPServer, *, raise_on_error: bool = False
+) -> _PersistedDcrCredentials | None:
     """DCR client persisted in the server-scoped OAuth-client store for a config-declared server
     (which has no LiteLLM_MCPServerTable row). Returns None when the store has no usable client_id
-    or the DB is unreachable."""
+    or the DB is unreachable. Registration writes request strict reads so a failed lookup cannot
+    be mistaken for an absent client."""
     from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # avoids circular import
         get_mcp_server_oauth_client_credentials,
     )
@@ -1460,6 +1463,8 @@ async def _load_store_dcr_credentials(mcp_server: MCPServer) -> _PersistedDcrCre
             prisma_client=prisma_client, server_id=mcp_server.server_id
         )
     except Exception as exc:  # noqa: BLE001  # best-effort read; DB may be unreachable
+        if raise_on_error:
+            raise
         verbose_logger.debug(
             "register_client_with_server: failed to read stored DCR client for server_id=%s: %s",
             mcp_server.server_id,
@@ -1489,6 +1494,8 @@ async def hydrate_config_server_dcr_client(mcp_server: MCPServer) -> bool:
 
 async def _resolve_persisted_dcr_client(
     mcp_server: MCPServer,
+    *,
+    raise_on_error: bool = False,
 ) -> tuple[Optional["LiteLLM_MCPServerTable"], _PersistedDcrCredentials | None]:
     """Resolve a server's persisted DCR client using the same two-level rule the write path uses, so
     read and write always agree. First, whether the server HAS a LiteLLM_MCPServerTable row: a row is
@@ -1509,6 +1516,8 @@ async def _resolve_persisted_dcr_client(
         prisma_client = get_prisma_client_or_throw("Database not connected. Cannot read MCP OAuth client registration.")
         row: Final = await get_mcp_server(prisma_client=prisma_client, server_id=mcp_server.server_id)
     except Exception as exc:  # noqa: BLE001  # best-effort read; DB may be unreachable
+        if raise_on_error:
+            raise
         verbose_logger.debug(
             "register_client_with_server: failed to read persisted DCR client for server_id=%s: %s",
             mcp_server.server_id,
@@ -1526,7 +1535,7 @@ async def _resolve_persisted_dcr_client(
             return row, credentials
         return row, None
     if global_mcp_server_manager.is_config_declared_server(mcp_server.server_id):
-        return None, await _load_store_dcr_credentials(mcp_server)
+        return None, await _load_store_dcr_credentials(mcp_server, raise_on_error=raise_on_error)
     return None, None
 
 
@@ -1638,9 +1647,6 @@ async def _persist_dcr_client_registration(
         )
         return "failed"
 
-    if await _reuse_persisted_dcr_client_if_available(mcp_server, current_redirect_uri=current_redirect_uri):
-        return "reused"
-
     token_endpoint_auth_method: Final = (
         "client_secret_basic" if registration.token_endpoint_auth_method == "client_secret_basic" else None
     )
@@ -1655,7 +1661,6 @@ async def _persist_dcr_client_registration(
 
     from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # avoids circular import
         McpIdentifierConflict,
-        get_mcp_server,
         update_mcp_server,
         upsert_mcp_server_oauth_client_credentials,
     )
@@ -1669,19 +1674,26 @@ async def _persist_dcr_client_registration(
         prisma_client: Final = get_prisma_client_or_throw(
             "Database not connected. Cannot persist MCP OAuth client registration."
         )
-        stored: Final = await get_mcp_server(prisma_client=prisma_client, server_id=mcp_server.server_id)
+    except HTTPException:
+        # This getter only raises when no database is configured. The existing single-process
+        # temporary-session mode keeps registrations in memory; database write errors below fail.
+        _apply_persisted_dcr_credentials(mcp_server, _PersistedDcrCredentials.model_validate(credentials))
+        return "persisted"
+
+    try:
+        stored, latest_credentials = await _resolve_persisted_dcr_client(mcp_server, raise_on_error=True)
         if stored is not None and (
             stored.url != mcp_server.url
             or stored.auth_type != mcp_server.auth_type
             or (stored.issuer and mcp_server.issuer and not issuer_identities_match(stored.issuer, mcp_server.issuer))
         ):
             return "failed"
-        latest_credentials: Final = _get_persisted_dcr_credentials(stored.credentials) if stored else None
         if (
             latest_credentials is not None
             and not _redirect_uri_not_registered(latest_credentials, current_redirect_uri)
             and _apply_persisted_dcr_credentials(mcp_server, latest_credentials)
         ):
+            await _refresh_persisted_dcr_server(stored)
             return "reused"
         updated_row: Final = await update_mcp_server(
             prisma_client=prisma_client,

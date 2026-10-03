@@ -845,6 +845,7 @@ def _carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_serv
     )
     if may_carry and new_server.issuer is None:
         new_server.issuer = previous_server.issuer
+        new_server.authorization_response_issuer = previous_server.authorization_response_issuer
         new_server.authorization_response_iss_parameter_supported = (
             previous_server.authorization_response_iss_parameter_supported
         )
@@ -2042,6 +2043,7 @@ class MCPServerManager:
         resolved: Final = server.model_copy()
         resolved.scopes = server.scopes or metadata.scopes
         resolved.issuer = server.issuer or discovered_issuer
+        resolved.authorization_response_issuer = discovered_issuer
         resolved.authorization_response_iss_parameter_supported = (
             metadata.authorization_response_iss_parameter_supported
         )
@@ -2573,6 +2575,7 @@ class MCPServerManager:
                 scopes=resolved_scopes,
                 configured_scopes=tuple(configured_scopes) if configured_scopes else None,
                 issuer=effective_issuer,
+                authorization_response_issuer=discovered_issuer,
                 authorization_response_iss_parameter_supported=(
                     gated_oauth_metadata.authorization_response_iss_parameter_supported
                     if gated_oauth_metadata
@@ -3147,6 +3150,7 @@ class MCPServerManager:
             scopes=resolved_scopes,
             configured_scopes=configured_scopes,
             issuer=effective_issuer,
+            authorization_response_issuer=discovered_issuer,
             authorization_response_iss_parameter_supported=(
                 gated_oauth_metadata.authorization_response_iss_parameter_supported if gated_oauth_metadata else False
             ),

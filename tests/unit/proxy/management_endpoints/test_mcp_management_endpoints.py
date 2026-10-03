@@ -1876,7 +1876,7 @@ class TestTemporaryMCPSessionEndpoints:
             url="https://temp.example.com",
             transport=MCPTransport.http,
         )
-        existing_server = MagicMock(dcr_issuer=None, dcr_server_url=None)
+        existing_server = MagicMock(dcr_issuer=None, dcr_server_url=None, token_endpoint_auth_method=None)
         existing_server.authentication_token = "token-abc"
         existing_server.client_id = "client-123"
         existing_server.client_secret = "secret-xyz"
@@ -1912,7 +1912,7 @@ class TestTemporaryMCPSessionEndpoints:
 
     @staticmethod
     def _inherit_with(payload_credentials, **server_overrides):
-        existing_server = MagicMock(dcr_issuer=None, dcr_server_url=None)
+        existing_server = MagicMock(dcr_issuer=None, dcr_server_url=None, token_endpoint_auth_method=None)
         existing_server.authentication_token = None
         existing_server.client_id = "client-123"
         existing_server.client_secret = "secret-xyz"
@@ -2618,6 +2618,7 @@ class TestTemporaryMCPSessionEndpoints:
         inherited_server = MagicMock(
             dcr_issuer=None,
             dcr_server_url=None,
+            token_endpoint_auth_method=None,
             authentication_token="token-abc",
             client_id="client-id",
             client_secret="client-secret",
@@ -11194,6 +11195,54 @@ def test_staged_url_edit_clears_resubmitted_issuer_and_endpoints(monkeypatch):
     assert staged.registration_url is None
     assert staged.oauth2_flow == "authorization_code"
     assert saved.issuer == "https://old.example"
+
+
+@pytest.mark.asyncio
+async def test_issuer_formatting_edit_reuses_saved_session_client(monkeypatch):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    saved = MCPServer(
+        server_id="saved-oauth", name="saved", transport="http", auth_type="oauth2",
+        url="https://resource.example/mcp", issuer="https://idp.example",
+        client_id="saved-client", client_secret="saved-secret",
+    )
+    monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, server_name="saved", transport="http", auth_type="oauth2",
+        url=saved.url, issuer="https://IDP.example:443/",
+    )
+    staged = management._inherit_credentials_from_existing_server(payload)
+    assert staged.credentials["client_id"] == "saved-client"
+    assert staged.credentials["client_secret"] == "saved-secret"
+    assert await management._resolve_session_server_id(staged) == saved.server_id
+
+
+@pytest.mark.asyncio
+async def test_url_edit_stages_existing_client_with_previous_issuer_binding(monkeypatch):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    saved = MCPServer(
+        server_id="saved-oauth", name="saved", transport="http", auth_type="oauth2",
+        url="https://resource.example/mcp", issuer="https://idp.example",
+        client_id="static-client", client_secret="static-secret", authentication_token="old-token",
+        token_endpoint_auth_method="client_secret_basic",
+    )
+    monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, server_name="saved", transport="http", auth_type="oauth2",
+        url=saved.url + "?v=2", issuer=saved.issuer,
+    )
+    staged = management._inherit_credentials_from_existing_server(payload)
+    assert staged.credentials["client_id"] == "static-client"
+    assert staged.credentials["client_secret"] == "static-secret"
+    assert staged.credentials["dcr_issuer"] == saved.issuer
+    assert staged.credentials["dcr_server_url"] == saved.url
+    assert staged.credentials["token_endpoint_auth_method"] == "client_secret_basic"
+    assert "auth_value" not in staged.credentials
+    assert staged.issuer is None
+    assert await management._resolve_session_server_id(staged) != saved.server_id
 
 
 @pytest.mark.asyncio

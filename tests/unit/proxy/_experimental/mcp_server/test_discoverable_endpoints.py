@@ -1853,8 +1853,9 @@ async def test_register_client_returns_reused_client_when_concurrent_persist_win
 
     persisted_server = LiteLLM_MCPServerTable.model_validate(oauth2_server.model_dump(exclude_none=True))
     persisted_server.credentials = {"client_id": "persisted-client"}
-    mock_get_mcp_server = AsyncMock(side_effect=[None, None, persisted_server] if late_winner else [None, persisted_server])
-    mock_update_mcp_server = AsyncMock()
+    empty_server = persisted_server.model_copy(update={"credentials": None})
+    mock_get_mcp_server = AsyncMock(side_effect=[empty_server, empty_server, persisted_server] if late_winner else [empty_server, persisted_server])
+    mock_update_mcp_server = AsyncMock(return_value=None)
     mock_update_server = AsyncMock()
 
     with (
@@ -1886,11 +1887,11 @@ async def test_register_client_returns_reused_client_when_concurrent_persist_win
     assert response["client_id"] == "remote_server"
     assert oauth2_server.client_id == "persisted-client"
     mock_async_client.post.assert_called_once()
-    mock_update_mcp_server.assert_not_called()
     if late_winner:
-        mock_update_server.assert_not_called()
+        mock_update_mcp_server.assert_awaited_once()
     else:
-        mock_update_server.assert_called_once_with(persisted_server)
+        mock_update_mcp_server.assert_not_called()
+    mock_update_server.assert_called_once_with(persisted_server)
 
 
 def _dcr_redirect_test_server(client_id):
@@ -12957,6 +12958,27 @@ async def test_callback_rejects_missing_advertised_issuer(monkeypatch):
     assert b"upstream-auth-code" not in response.body
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured,discovered", [
+    ("https://idp.example.com/", "https://idp.example.com"),
+    ("https://idp.example.com", "https://idp.example.com/"),
+])
+async def test_callback_compares_discovered_issuer_without_changing_configured_issuer(monkeypatch, configured, discovered):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata
+
+    resolved = MCPServerManager._merge_discovered_oauth_metadata(
+        _issuer_anchored_oauth_server(configured),
+        MCPOAuthMetadata(discovered_issuer=discovered, authorization_response_iss_parameter_supported=True),
+    )
+    response, state = await _authorize_then_callback(resolved, iss=discovered, monkeypatch=monkeypatch)
+    assert response.status_code == 302
+    assert state["expected_issuer"] == discovered
+    assert resolved.issuer == configured
+    rejected, _ = await _authorize_then_callback(resolved, iss=configured, monkeypatch=monkeypatch)
+    assert rejected.status_code == 400
+
+
 @pytest.mark.parametrize("issuer,url", [
     ("https://other.example", "https://resource.example/mcp"),
     (None, "https://other.example/mcp"),
@@ -13101,6 +13123,77 @@ async def test_registration_replaces_mismatched_client_and_reports_persistence_f
 
 
 @pytest.mark.asyncio
+async def test_registration_without_database_keeps_client_in_temporary_server(monkeypatch):
+    from fastapi import Request
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    server = _dcr_redirect_test_server(None).model_copy(update={"issuer": "https://idp.example", "url": "https://resource.example/mcp"})
+    monkeypatch.setattr(endpoints, "_server_with_oauth_endpoints", AsyncMock(return_value=server))
+    upstream = MagicMock()
+    upstream.json.return_value = {"client_id": "temporary-client", "client_secret": "temporary-secret"}
+    monkeypatch.setattr(endpoints, "_post_dcr_registration", AsyncMock(return_value=upstream))
+    request = MagicMock(spec=Request)
+    request.base_url = "https://gateway.example/"
+    request.headers = {}
+    response = await endpoints.register_client_with_server(
+        request=request, mcp_server=server, client_name="app", grant_types=["authorization_code"],
+        response_types=["code"], token_endpoint_auth_method="none", persist_credentials=True,
+    )
+    assert response.status_code == 200
+    assert json.loads(response.body)["client_id"] == "temporary-client"
+    assert server.client_id == "temporary-client"
+    assert server.client_secret == "temporary-secret"
+    assert server.dcr_issuer == server.issuer
+    assert server.dcr_server_url == server.url
+
+
+@pytest.mark.asyncio
+async def test_registration_reuses_one_row_read_for_identity_and_revision(monkeypatch):
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints, db
+    from litellm.proxy._types import LiteLLM_MCPServerTable
+    from litellm.proxy import utils
+
+    server = _dcr_redirect_test_server(None).model_copy(update={"url": "https://upstream.example/mcp"})
+    row = LiteLLM_MCPServerTable.model_validate(server.model_dump(exclude_none=True))
+    read = AsyncMock(return_value=row)
+    update = AsyncMock(return_value=row)
+    monkeypatch.setattr(utils, "get_prisma_client_or_throw", lambda _: MagicMock())
+    monkeypatch.setattr(db, "get_mcp_server", read)
+    monkeypatch.setattr(db, "update_mcp_server", update)
+    monkeypatch.setattr(endpoints, "_refresh_persisted_dcr_server", AsyncMock())
+    result = await endpoints._persist_dcr_client_registration(server, {"client_id": "new-client"}, "https://gateway.example/callback")
+    assert result == "persisted"
+    assert server.client_id == "new-client"
+    assert update.await_args.kwargs["expected_updated_at"] == row.updated_at
+    read.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config_store", [False, True])
+async def test_registration_does_not_overwrite_credentials_after_failed_identity_read(monkeypatch, config_store):
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints, db
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy import utils
+
+    server = _dcr_redirect_test_server(None)
+    monkeypatch.setattr(utils, "get_prisma_client_or_throw", lambda _: MagicMock())
+    monkeypatch.setattr(db, "get_mcp_server", AsyncMock(return_value=None, side_effect=None if config_store else RuntimeError("unavailable")))
+    monkeypatch.setattr(db, "get_mcp_server_oauth_client_credentials", AsyncMock(side_effect=RuntimeError("unavailable")))
+    monkeypatch.setattr(global_mcp_server_manager, "is_config_declared_server", lambda _: config_store)
+    update = AsyncMock()
+    upsert = AsyncMock()
+    monkeypatch.setattr(db, "update_mcp_server", update)
+    monkeypatch.setattr(db, "upsert_mcp_server_oauth_client_credentials", upsert)
+    result = await endpoints._persist_dcr_client_registration(server, {"client_id": "new-client"}, "https://gateway.example/callback")
+    assert result == "failed"
+    assert server.client_id is None
+    update.assert_not_awaited()
+    upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("winner_available", [False, True])
 async def test_registration_losing_conditional_write_reuses_only_a_matching_winner(monkeypatch, winner_available):
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints, db
@@ -13109,14 +13202,18 @@ async def test_registration_losing_conditional_write_reuses_only_a_matching_winn
 
     server = _dcr_redirect_test_server(None).model_copy(update={"url": "https://upstream.example/mcp"})
     row = LiteLLM_MCPServerTable.model_validate(server.model_dump(exclude_none=True))
-    reuse = AsyncMock(side_effect=[False, winner_available])
-    monkeypatch.setattr(endpoints, "_reuse_persisted_dcr_client_if_available", reuse)
+    winner = row.model_copy(update={"credentials": {
+        "client_id": "winner-client", "redirect_uris": ["https://gateway.example/callback"],
+        "dcr_server_url": server.url,
+    }}) if winner_available else row
     monkeypatch.setattr(utils, "get_prisma_client_or_throw", lambda _: MagicMock())
-    monkeypatch.setattr(db, "get_mcp_server", AsyncMock(return_value=row))
+    read = AsyncMock(side_effect=[row, winner])
+    monkeypatch.setattr(db, "get_mcp_server", read)
+    monkeypatch.setattr(endpoints, "_refresh_persisted_dcr_server", AsyncMock())
     update = AsyncMock(return_value=None)
     monkeypatch.setattr(db, "update_mcp_server", update)
     result = await endpoints._persist_dcr_client_registration(server, {"client_id": "losing-client"}, "https://gateway.example/callback")
     assert result == ("reused" if winner_available else "failed")
     assert update.await_args.kwargs["expected_updated_at"] == row.updated_at
-    assert reuse.await_count == 2
-    assert server.client_id is None
+    assert read.await_count == 2
+    assert server.client_id == ("winner-client" if winner_available else None)

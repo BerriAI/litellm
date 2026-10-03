@@ -20,7 +20,10 @@ from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
     credential_binding_matches,
     enforce_oauth_identity_binding,
 )
-from litellm.proxy._experimental.mcp_server.oauth_utils import build_upstream_oauth2_token_request
+from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    build_upstream_oauth2_token_request,
+    issuer_identities_match,
+)
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPApprovalStatus,
@@ -129,7 +132,7 @@ def stale_mcp_auth_fields(submitted: Mapping[str, object], previous_value: Calla
     }
 
 
-def _blank_to_none(value: str | None) -> str | None:
+def _blank_to_none(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     return value.strip() or None
@@ -159,6 +162,31 @@ _CLIENT_FORWARDED_AUTH_TYPES: Final["frozenset[str]"] = frozenset({"true_passthr
 
 # Minted token material that must never survive a client rotation on a persisted row.
 _MINTED_TOKEN_CREDENTIAL_FIELDS: Final["frozenset[str]"] = frozenset({"access_token", "refresh_token", "expires_in"})
+
+
+def oauth_credentials_for_upstream_edit(
+    credentials: Mapping[str, object],
+    previous_issuer: str | None,
+    previous_url: str | None,
+    *,
+    issuer_changed: bool,
+) -> dict[str, object]:
+    """Bind an existing client on an explicit edit, so discovery can verify reuse at the new URL.
+
+    No first-use backfill: unchanged legacy rows never enter this path. Without a known previous
+    issuer, or after a known issuer change, the old client cannot be carried to the new resource.
+    """
+    registered_issuer: Final = _blank_to_none(credentials.get("dcr_issuer")) or previous_issuer
+    keep_client: Final = bool(registered_issuer and credentials.get("client_id") and not issuer_changed)
+    removed: Final = (
+        _MINTED_TOKEN_CREDENTIAL_FIELDS | {"auth_value"}
+        if keep_client
+        else _OAUTH_CLIENT_CREDENTIAL_FIELDS | {"auth_value"}
+    )
+    retained: Final = {key: value for key, value in credentials.items() if key not in removed}
+    if keep_client:
+        retained.update(dcr_issuer=registered_issuer, dcr_server_url=credentials.get("dcr_server_url") or previous_url)
+    return retained
 
 
 class _OAuthCredentialAccessToken(TypedDict):
@@ -1247,17 +1275,25 @@ async def update_mcp_server(
     url_changed: Final = bool(url_provided and existing and existing.url != data_dict["url"])
     old_issuer: Final = _blank_to_none(getattr(existing, "issuer", None)) if existing else None
     issuer_changed: Final = bool(
-        issuer_provided and existing is not None and _blank_to_none(data_dict.get("issuer")) != old_issuer
+        issuer_provided
+        and existing is not None
+        and not issuer_identities_match(_blank_to_none(data_dict.get("issuer")) or "", old_issuer or "")
     )
 
-    stale_oauth_client: Final = bool(existing and existing.auth_type == "oauth2" and (url_changed or issuer_changed))
-    retained_credentials: Final = {
-        key: value
-        for key, value in _credentials_blob_to_mutable_dict((existing.credentials or {}) if existing else {}).items()
-        if not stale_oauth_client or key not in _OAUTH_CLIENT_CREDENTIAL_FIELDS
-    }
-    cleared_credentials: Final = {"credentials": safe_dumps(retained_credentials)} if stale_oauth_client else {}
-    data_dict.update({**cleared_credentials, **data_dict})
+    oauth_upstream_edited: Final = bool(existing and existing.auth_type == "oauth2" and (url_changed or issuer_changed))
+    existing_credentials: Final = _credentials_blob_to_mutable_dict((existing.credentials or {}) if existing else {})
+    retained_credentials: Final = (
+        oauth_credentials_for_upstream_edit(
+            existing_credentials,
+            old_issuer,
+            existing.url if existing else None,
+            issuer_changed=issuer_changed or auth_type_changed,
+        )
+        if oauth_upstream_edited
+        else existing_credentials
+    )
+    edited_credentials: Final = {"credentials": safe_dumps(retained_credentials)} if oauth_upstream_edited else {}
+    data_dict.update({**edited_credentials, **data_dict})
 
     # Clear stale credentials when auth_type changes but no new credentials provided
     if auth_type_changed and "credentials" not in data_dict:
