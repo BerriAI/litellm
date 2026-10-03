@@ -195,7 +195,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         ranked: Final = sorted(valid, key=lambda dep: dep[1], reverse=True)
         if len(ranked) > 1:
             chosen_url, _, chosen_name = ranked[0]
-            others: Final = [name for _, _, name in ranked[1:]]
+            others: Final = [(name, url) for url, _, name in ranked[1:]]
             litellm.verbose_logger.warning(
                 "SAP: %d orchestration deployments found; using newest (name=%r, url=%r). Others ignored: %r.",
                 len(ranked),
@@ -275,7 +275,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             or os.environ.get("AICORE_ORCHESTRATION_DEPLOYMENT_URL")
             or self.deployment_url
         )
-        return f"{deployment_url}/v2/completion"
+        return f"{deployment_url.rstrip('/')}/v2/completion"
 
     def _build_prompt_module(
         self,

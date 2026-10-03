@@ -1,6 +1,14 @@
+from __future__ import annotations
+
 import warnings
+from typing import TYPE_CHECKING, Final
+from unittest.mock import MagicMock
+
 import pytest
 from pydantic import ValidationError
+
+if TYPE_CHECKING:
+    from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
 
 
 class TestSAPTransformationIntegration:
@@ -641,13 +649,15 @@ class TestSAPTransformationIntegration:
             )
 
 
+
+
 class TestDeploymentUrlResolution:
     """get_complete_url must skip discovery when an override is given, and
     deployment_url must fail gracefully, not with a bare IndexError, when
     discovery finds nothing."""
 
     @pytest.fixture
-    def mock_config(self):
+    def mock_config(self) -> GenAIHubOrchestrationConfig:
         from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
 
         config = GenAIHubOrchestrationConfig()
@@ -658,10 +668,8 @@ class TestDeploymentUrlResolution:
         return config
 
     @staticmethod
-    def _mock_client(*names: str):
-        from unittest.mock import MagicMock
-
-        resources = [
+    def _mock_client(*names: str) -> MagicMock:
+        resources: list[dict[str, str]] = [
             {
                 "scenarioId": "orchestration",
                 "configurationId": f"cfg-{n}",
@@ -670,9 +678,11 @@ class TestDeploymentUrlResolution:
             }
             for i, n in enumerate(names)
         ]
-        configs = {f"cfg-{n}": {"executableId": "orchestration", "name": n} for n in names}
+        configs: dict[str, dict[str, str]] = {
+            f"cfg-{n}": {"executableId": "orchestration", "name": n} for n in names
+        }
 
-        def fake_get(url, headers=None):
+        def fake_get(url: str, headers: dict[str, str] | None = None) -> MagicMock:
             resp = MagicMock()
             if "/lm/deployments" in url:
                 resp.json.return_value = {"resources": resources}
@@ -685,10 +695,10 @@ class TestDeploymentUrlResolution:
         client.get.side_effect = fake_get
         return client
 
-    def test_optional_param_skips_discovery(self, mock_config, monkeypatch):
-        from unittest.mock import MagicMock
-
-        explicit = "https://custom.sap.com/deployments/abc"
+    def test_optional_param_skips_discovery(
+        self, mock_config: GenAIHubOrchestrationConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        explicit: Final[str] = "https://custom.sap.com/deployments/abc"
         mock_client = MagicMock()
         monkeypatch.setattr("litellm.module_level_client", mock_client)
 
@@ -697,10 +707,21 @@ class TestDeploymentUrlResolution:
         assert url == f"{explicit}/v2/completion"
         assert not mock_client.get.called
 
-    def test_env_var_skips_discovery(self, mock_config, monkeypatch):
-        from unittest.mock import MagicMock
+    def test_optional_param_strips_trailing_slash(
+        self, mock_config: GenAIHubOrchestrationConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("litellm.module_level_client", MagicMock())
 
-        env_url = "https://env.sap.com/deployments/env"
+        url = mock_config.get_complete_url(
+            None, None, "gpt-4o", {"deployment_url": "https://custom.sap.com/deployments/abc/"}, {}
+        )
+
+        assert url == "https://custom.sap.com/deployments/abc/v2/completion"
+
+    def test_env_var_skips_discovery(
+        self, mock_config: GenAIHubOrchestrationConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        env_url: Final[str] = "https://env.sap.com/deployments/env"
         mock_client = MagicMock()
         monkeypatch.setattr("litellm.module_level_client", mock_client)
         monkeypatch.setenv("AICORE_ORCHESTRATION_DEPLOYMENT_URL", env_url)
@@ -710,7 +731,9 @@ class TestDeploymentUrlResolution:
         assert url == f"{env_url}/v2/completion"
         assert not mock_client.get.called
 
-    def test_no_deployments_raises_orchestration_error(self, mock_config, monkeypatch):
+    def test_no_deployments_raises_orchestration_error(
+        self, mock_config: GenAIHubOrchestrationConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from litellm.llms.sap.chat.handler import GenAIHubOrchestrationError
 
         monkeypatch.setattr("litellm.module_level_client", self._mock_client())
@@ -719,7 +742,12 @@ class TestDeploymentUrlResolution:
         with pytest.raises(GenAIHubOrchestrationError, match="No orchestration deployment found"):
             mock_config.get_complete_url(None, None, "gpt-4o", {}, {})
 
-    def test_discovery_picks_newest_of_multiple_and_warns(self, mock_config, monkeypatch, caplog):
+    def test_discovery_picks_newest_of_multiple_and_warns(
+        self,
+        mock_config: GenAIHubOrchestrationConfig,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
         monkeypatch.setattr("litellm.module_level_client", self._mock_client("older", "newer"))
         monkeypatch.setenv("AICORE_ORCHESTRATION_DEPLOYMENT_URL", "")
 
@@ -728,6 +756,8 @@ class TestDeploymentUrlResolution:
 
         assert url == "https://deploy-newer.sap.com/v2/completion"
         assert any(
-            "2 orchestration deployments found" in record.getMessage() and "'older'" in record.getMessage()
+            "2 orchestration deployments found" in record.getMessage()
+            and "'older'" in record.getMessage()
+            and "deploy-older.sap.com" in record.getMessage()
             for record in caplog.records
         )
