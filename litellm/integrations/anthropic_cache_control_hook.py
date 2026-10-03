@@ -25,12 +25,10 @@ from litellm.integrations.prompt_management_base import PromptManagementClient
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     with_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    find_anthropic_server_tool_result,
-)
 from litellm.llms.anthropic.common_utils import (
     is_claude_code_one_shot_subagent_request,
     supports_anthropic_cache_control,
+    tool_call_is_rebuilt_as_server_tool_use,
 )
 from litellm.types.integrations.anthropic_cache_control_hook import (
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
@@ -146,18 +144,8 @@ def _tool_call_carries_cache_breakpoint(tool_call: object, message: object) -> b
     if _attribute_or_key(tool_call, "cache_control") is None:
         return False
 
-    tool_call_id: Final = _attribute_or_key(tool_call, "id")
-    provider_specific_fields: Final = _validated_object_mapping(_attribute_or_key(message, "provider_specific_fields"))
-    if not isinstance(tool_call_id, str) or provider_specific_fields is None:
-        return True
-
-    return (
-        find_anthropic_server_tool_result(
-            tool_call_id,
-            _as_object_list(provider_specific_fields.get("web_search_results")),
-            _as_object_list(provider_specific_fields.get("tool_results")),
-        )
-        is None
+    return not tool_call_is_rebuilt_as_server_tool_use(
+        _attribute_or_key(tool_call, "id"), _attribute_or_key(message, "provider_specific_fields")
     )
 
 
