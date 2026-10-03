@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use litellm_llms_types::recognized::Recognized;
+use serde::{Deserialize, de::IgnoredAny};
 use serde_json::Value;
 
 use super::{Extraction, Format, Payload, SpanFacts};
@@ -13,6 +15,31 @@ use crate::{
 
 /// Arize OpenInference: spans carry `openinference.span.kind`.
 pub(crate) struct OpenInference;
+
+#[derive(Deserialize)]
+struct ResponseIdentity {
+    #[serde(default, deserialize_with = "messages::present")]
+    id: Option<Recognized<String>>,
+    #[serde(flatten)]
+    _other: BTreeMap<String, IgnoredAny>,
+}
+
+#[derive(Deserialize)]
+struct ProviderResponse {
+    raw: Option<Recognized<ResponseIdentity>>,
+    #[serde(flatten)]
+    response: ResponseIdentity,
+}
+
+impl ProviderResponse {
+    fn id(&self) -> Option<&str> {
+        let identity = match &self.response.id {
+            Some(id) => return id.known().map(String::as_str),
+            None => self.raw.as_ref()?.known()?,
+        };
+        identity.id.as_ref()?.known().map(String::as_str)
+    }
+}
 
 fn role(context: &SpanContext<'_>) -> Option<RoleEvidence> {
     let root = context.parent_span_id.is_empty();
@@ -33,10 +60,8 @@ fn calls(output: &str) -> CallEvidence {
     let Ok(value) = serde_json::from_str::<Value>(output) else {
         return CallEvidence::Unknown;
     };
-    if let Some(id) = value
-        .get("id")
-        .or_else(|| value.get("raw")?.get("id"))
-        .and_then(Value::as_str)
+    if let Ok(response) = ProviderResponse::deserialize(&value)
+        && let Some(id) = response.id()
     {
         return CallEvidence::complete(CallKey::ProviderResponse(id.to_owned()));
     }

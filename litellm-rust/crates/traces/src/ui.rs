@@ -4,7 +4,7 @@
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
-use crate::normalize::{HIDDEN_BLOCK_TYPES, encode};
+use crate::normalize::{HIDDEN_BLOCK_TYPES, MessagePayload, encode};
 
 #[macro_rules_attribute::apply(response_type)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -201,10 +201,9 @@ fn content_text(content: Option<Value>) -> String {
 }
 
 fn messages(parsed: &Value) -> Option<Vec<UiMessage>> {
-    let raw = match parsed {
-        Value::Object(_) => vec![RawMessage::deserialize(parsed).ok()?],
-        _ => Vec::<RawMessage>::deserialize(parsed).ok()?,
-    };
+    let raw = MessagePayload::<RawMessage>::deserialize(parsed)
+        .ok()?
+        .into_messages();
     let unwrapped: Vec<RawMessage> = raw.into_iter().map(RawMessage::unwrapped).collect();
     if unwrapped.is_empty() || !unwrapped.iter().all(RawMessage::is_message) {
         return None;
@@ -393,6 +392,10 @@ mod tests {
     #[case::plain_words("plain words", "plain words")]
     #[case::number("42", "42")]
     #[case::non_message_list("[1, 2]", "[1, 2]")]
+    #[case::message_fields_are_not_a_message(
+        r#"["user",null,"hello",null,null,null]"#,
+        r#"["user",null,"hello",null,null,null]"#
+    )]
     #[case::empty_list("[]", "[]")]
     #[case::empty("", "")]
     fn other_payloads_are_text(#[case] raw: &str, #[case] expected: &str) {

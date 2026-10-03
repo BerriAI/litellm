@@ -6,6 +6,7 @@ use futures_util::{
     stream::{self, TryStreamExt},
 };
 use litellm_http::Client;
+use litellm_traces::query::guide::{Example, QueryGuide, Section};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use strum::IntoEnumIterator;
@@ -295,8 +296,8 @@ pub struct QueryHelp {
     metadata: MetadataCatalog,
     attributes: Vec<AttributeCatalog>,
     relationships: &'static [Relationship],
-    #[cfg_attr(feature = "schema", schemars(with = "Vec<guide::Example>"))]
-    examples: [guide::Example; 9],
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<Example>"))]
+    examples: [Example; 9],
     #[cfg_attr(feature = "schema", schemars(with = "Vec<String>"))]
     gotchas: [String; 13],
     guide: String,
@@ -478,13 +479,33 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Quer
         attributes: &attributes,
         limits: &READER_LIMITS,
     };
+    let bodies = guide.sections()?;
+    let sections = [
+        "Live ClickHouse schema",
+        "Normalized span fields",
+        "Observed LLM call metadata",
+        "Observed span and resource attributes",
+    ]
+    .into_iter()
+    .zip(&bodies)
+    .map(|(title, body)| Section { title, body })
+    .collect::<Vec<_>>();
+    let examples = guide.examples()?;
+    let gotchas = guide.gotchas()?;
+    let rendered = QueryGuide {
+        sections: &sections,
+        examples: &examples,
+        gotchas: &gotchas,
+    }
+    .render()
+    .map_err(|_| Error::InvalidResponse)?;
     Ok(QueryHelp {
         dialect: "ClickHouse SQL",
         access: "Request-log visibility enforced by ClickHouse row policies; proxy admins see all rows, users see their own rows and permitted teams",
         response: "ClickHouse JSON envelope: meta, data, rows, statistics; 64-bit integers may be strings",
-        examples: guide.examples()?,
-        gotchas: guide.gotchas()?,
-        guide: guide::render(&guide)?,
+        examples,
+        gotchas,
+        guide: rendered,
         normalized_fields: NORMALIZED_FIELD_DEFINITIONS
             .iter()
             .map(NormalizedField::from)

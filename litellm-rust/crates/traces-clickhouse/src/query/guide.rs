@@ -1,10 +1,15 @@
 use askama::Template;
+use litellm_traces::query::guide::Example;
 
 use super::{AttributeCatalog, Discovery, MetadataCatalog, TableSchema};
 use crate::{Error, NormalizedFieldDefinition, query_access::ReaderLimits};
 
 #[derive(Template)]
 #[template(path = "query_help.jinja", escape = "none", blocks = [
+    "live_schema",
+    "normalized_fields",
+    "metadata",
+    "attributes",
     "recent_spans_name",
     "recent_spans_sql",
     "custom_metadata_name",
@@ -45,14 +50,16 @@ pub(super) struct QueryGuide<'a> {
     pub limits: &'a ReaderLimits,
 }
 
-#[macro_rules_attribute::apply(response_type)]
-#[cfg_attr(feature = "schema", schemars(rename = "TraceQueryExample"))]
-pub(super) struct Example {
-    name: String,
-    sql: String,
-}
-
 impl QueryGuide<'_> {
+    pub fn sections(&self) -> Result<[String; 4], Error> {
+        Ok([
+            render(&self.as_live_schema())?,
+            render(&self.as_normalized_fields())?,
+            render(&self.as_metadata())?,
+            render(&self.as_attributes())?,
+        ])
+    }
+
     pub fn examples(&self) -> Result<[Example; 9], Error> {
         Ok([
             Example {

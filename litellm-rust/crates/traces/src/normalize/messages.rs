@@ -2,7 +2,7 @@
 //! `{role, content, tool_calls?, name?}` that the UI renders as a conversation.
 
 use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, ser::Formatter};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -51,6 +51,96 @@ pub(super) struct ToolCall(IndexMap<String, Value>);
 #[derive(Deserialize)]
 pub(super) struct ResponseMetadata {
     pub id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub(crate) enum MessagePayload<T> {
+    Single {
+        #[serde(flatten)]
+        message: T,
+    },
+    Batch(Vec<T>),
+}
+
+impl<T> MessagePayload<T> {
+    pub(crate) fn into_messages(self) -> Vec<T> {
+        match self {
+            Self::Single { message } => vec![message],
+            Self::Batch(messages) => messages,
+        }
+    }
+}
+
+pub(super) fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+#[derive(Default, Deserialize)]
+struct EventFields {
+    #[serde(default, deserialize_with = "present")]
+    role: Option<Value>,
+    #[serde(default, deserialize_with = "present")]
+    content: Option<Value>,
+    #[serde(default, deserialize_with = "present")]
+    tool_calls: Option<Value>,
+    #[serde(flatten)]
+    indexed: BTreeMap<String, Value>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct EventMessage {
+    #[serde(rename = "event.name")]
+    name: Option<Recognized<String>>,
+    #[serde(default, deserialize_with = "present")]
+    message: Option<Recognized<EventFields>>,
+    #[serde(rename = "message.role", default, deserialize_with = "present")]
+    role: Option<Value>,
+    #[serde(rename = "message.content", default, deserialize_with = "present")]
+    content: Option<Value>,
+    #[serde(flatten)]
+    body: EventFields,
+}
+
+impl EventMessage {
+    pub(super) fn recorded(&self) -> Option<(bool, Value)> {
+        self.normalized(self.name.as_ref()?.known()?)
+    }
+
+    fn normalized(&self, name: &str) -> Option<(bool, Value)> {
+        let (output, role) = match name {
+            "gen_ai.system.message" => (false, "system"),
+            "gen_ai.user.message" | "gen_ai.content.prompt" => (false, "user"),
+            "gen_ai.assistant.message" | "gen_ai.choice" | "gen_ai.content.completion" => {
+                (true, "assistant")
+            }
+            "gen_ai.tool.message" => (true, "tool"),
+            _ => return None,
+        };
+        let empty = EventFields::default();
+        let body = match &self.message {
+            Some(Recognized::Known(message)) => message,
+            Some(Recognized::Unrecognized(_)) => &empty,
+            None => &self.body,
+        };
+        let content = body.content.as_ref().or(self.content.as_ref());
+        let calls = event_tool_calls(body);
+        if content.is_none() && calls.is_none() {
+            return None;
+        }
+        Some((
+            output,
+            serde_json::json!({
+                "role": body.role.as_ref().or(self.role.as_ref()).cloned().unwrap_or(Value::from(role)),
+                "content": content.cloned().unwrap_or(Value::from("")),
+                "tool_calls": calls,
+            }),
+        ))
+    }
 }
 
 /// One part of an OpenTelemetry GenAI (`type` + `content`) or Gemini (`text`) message.
@@ -186,14 +276,9 @@ fn display_value(value: &Value) -> String {
 
 /// The conversation `value` holds: an array of messages or a single message.
 pub(super) fn parse(value: &Value) -> Option<Vec<Message>> {
-    let raw: Vec<RawMessage> = match value {
-        Value::Array(items) => items
-            .iter()
-            .map(|item| serde_json::from_value(item.clone()).ok())
-            .collect::<Option<_>>()?,
-        Value::Object(_) => vec![serde_json::from_value(value.clone()).ok()?],
-        _ => return None,
-    };
+    let raw = MessagePayload::<RawMessage>::deserialize(value)
+        .ok()?
+        .into_messages();
     (!raw.is_empty() && raw.iter().all(RawMessage::is_message))
         .then(|| raw.iter().map(RawMessage::normalized).collect())
 }
@@ -280,14 +365,14 @@ pub(super) fn indexed(attributes: &BTreeMap<String, String>, prefix: &str) -> Op
                     })
                     .collect(),
             );
-            let content = fields.get("content");
-            let calls = event_tool_calls(&fields);
-            if content.is_none() && calls.is_none() {
+            let message = EventFields::deserialize(&fields).ok()?;
+            let calls = event_tool_calls(&message);
+            if message.content.is_none() && calls.is_none() {
                 return None;
             }
             Some(serde_json::json!({
-                "role": fields.get("role")?,
-                "content": content.cloned().unwrap_or(Value::from("")),
+                "role": message.role?,
+                "content": message.content.unwrap_or(Value::from("")),
                 "tool_calls": calls,
             }))
         })
@@ -295,12 +380,12 @@ pub(super) fn indexed(attributes: &BTreeMap<String, String>, prefix: &str) -> Op
     (!values.is_empty()).then(|| canonical(&encode(&values)))
 }
 
-fn event_tool_calls(value: &Value) -> Option<Value> {
-    if let Some(calls) = value.get("tool_calls") {
+fn event_tool_calls(value: &EventFields) -> Option<Value> {
+    if let Some(calls) = &value.tool_calls {
         return Some(calls.clone());
     }
     let indices: BTreeSet<usize> = value
-        .as_object()?
+        .indexed
         .keys()
         .filter_map(|key| {
             key.strip_prefix("tool_calls.")?
@@ -315,9 +400,9 @@ fn event_tool_calls(value: &Value) -> Option<Value> {
         .filter_map(|index| {
             let prefix = format!("tool_calls.{index}");
             Some(serde_json::json!({
-                "id": value.get(format!("{prefix}.id")),
-                "name": value.get(format!("{prefix}.function.name"))?,
-                "arguments": value.get(format!("{prefix}.function.arguments")),
+                "id": value.indexed.get(&format!("{prefix}.id")),
+                "name": value.indexed.get(&format!("{prefix}.function.name"))?,
+                "arguments": value.indexed.get(&format!("{prefix}.function.arguments")),
             }))
         })
         .collect();
@@ -325,29 +410,7 @@ fn event_tool_calls(value: &Value) -> Option<Value> {
 }
 
 pub(super) fn event_message(name: &str, value: &Value) -> Option<(bool, Value)> {
-    let (output, role) = match name {
-        "gen_ai.system.message" => (false, "system"),
-        "gen_ai.user.message" | "gen_ai.content.prompt" => (false, "user"),
-        "gen_ai.assistant.message" | "gen_ai.choice" | "gen_ai.content.completion" => {
-            (true, "assistant")
-        }
-        "gen_ai.tool.message" => (true, "tool"),
-        _ => return None,
-    };
-    let body = value.get("message").unwrap_or(value);
-    let content = body.get("content").or_else(|| value.get("message.content"));
-    let calls = event_tool_calls(body);
-    if content.is_none() && calls.is_none() {
-        return None;
-    }
-    Some((
-        output,
-        serde_json::json!({
-            "role": body.get("role").or_else(|| value.get("message.role")).cloned().unwrap_or(Value::from(role)),
-            "content": content.cloned().unwrap_or(Value::from("")),
-            "tool_calls": calls,
-        }),
-    ))
+    EventMessage::deserialize(value).ok()?.normalized(name)
 }
 
 pub(super) fn event_payload(events: &[(bool, Value)], output: bool) -> Option<String> {
@@ -402,7 +465,7 @@ struct Generation {
 
 #[derive(Deserialize)]
 struct LlmResult {
-    generations: Vec<Value>,
+    generations: Vec<Recognized<Vec<Recognized<Generation>>>>,
     llm_output: Option<LlmOutput>,
 }
 
@@ -417,19 +480,19 @@ pub(super) struct Generations {
 /// prompt). The evidence is complete only when every prompt yields exactly one id and no entry
 /// failed to parse.
 pub(super) fn langchain_result(value: &Value) -> Option<Generations> {
-    let result: LlmResult = serde_json::from_value(value.clone()).ok()?;
+    let result = LlmResult::deserialize(value).ok()?;
     let mut complete = true;
     let mut first = None;
     let mut keys = BTreeSet::new();
     for prompt in &result.generations {
-        let Some(candidates) = prompt.as_array() else {
+        let Recognized::Known(candidates) = prompt else {
             complete = false;
             continue;
         };
         let mut ids = BTreeSet::new();
         for candidate in candidates {
-            match serde_json::from_value::<Generation>(candidate.clone()) {
-                Ok(generation) => {
+            match candidate {
+                Recognized::Known(generation) => {
                     let message = generation.message.unwrapped();
                     if let Some(id) = message
                         .response_metadata
@@ -442,7 +505,7 @@ pub(super) fn langchain_result(value: &Value) -> Option<Generations> {
                         first = Some(generation.message.normalized());
                     }
                 }
-                Err(_) => complete = false,
+                Recognized::Unrecognized(_) => complete = false,
             }
         }
         if ids.is_empty()
@@ -520,7 +583,7 @@ pub(super) fn state_conversation(input: &str) -> Option<Vec<Message>> {
     }
     let conversation: Vec<Message> = items
         .iter()
-        .filter_map(|item| serde_json::from_value::<RawMessage>(item.clone()).ok())
+        .filter_map(|item| RawMessage::deserialize(item).ok())
         .map(|message| message.normalized())
         .collect();
     (!conversation.is_empty()).then_some(conversation)

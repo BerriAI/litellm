@@ -20,7 +20,7 @@ mod metadata;
 pub(crate) const CLAUDE_CODE_SCOPE: &str = "com.anthropic.claude_code.tracing";
 pub(crate) const CLAUDE_CODE_AGENT: &str = "claude-code";
 use instrumentation::Instrumentation;
-pub(crate) use messages::{HIDDEN_BLOCK_TYPES, encode};
+pub(crate) use messages::{HIDDEN_BLOCK_TYPES, MessagePayload, encode};
 pub use metadata::{AgentMetadata, AgentType, Integration};
 
 #[macro_rules_attribute::apply(wire_type)]

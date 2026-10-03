@@ -1545,9 +1545,31 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
             )));
         }
     }
-    for gotcha in help["gotchas"].as_array().ok_or("missing gotchas")? {
-        assert!(guide.contains(gotcha.as_str().ok_or("gotcha text")?));
+    let gotchas = help["gotchas"].as_array().ok_or("missing gotchas")?;
+    let gotcha_positions = gotchas
+        .iter()
+        .map(|gotcha| {
+            guide
+                .find(gotcha.as_str().expect("gotcha text"))
+                .expect("rendered gotcha")
+        })
+        .collect::<Vec<_>>();
+    assert!(gotcha_positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(
+        guide.contains(
+            help["metadata"]["sample_sql"]
+                .as_str()
+                .ok_or("sampling SQL")?
+        )
+    );
+    for catalog in help["attributes"].as_array().ok_or("attributes")? {
+        assert!(guide.contains(catalog["discovery_sql"].as_str().ok_or("discovery SQL")?));
+        assert!(guide.contains(&format!("Truncated: {}", catalog["truncated"])));
     }
+    assert_eq!(
+        guide.contains("No attribute keys found in the sampled spans"),
+        !populated
+    );
     let tables = help["tables"].as_array().ok_or("missing tables")?;
     assert_eq!(tables.len(), 3);
     let columns = tables[0]["columns"].as_array().ok_or("missing columns")?;
@@ -1619,7 +1641,21 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
             assert_ne!(values["data"][0]["value"], "");
         }
     }
-    for example in help["examples"].as_array().ok_or("missing examples")? {
+    let examples = help["examples"].as_array().ok_or("missing examples")?;
+    let example_positions = examples
+        .iter()
+        .map(|example| {
+            let rendered = format!(
+                "{}\n{}",
+                example["name"].as_str().expect("name"),
+                example["sql"].as_str().expect("SQL")
+            );
+            guide.find(&rendered).expect("rendered example")
+        })
+        .collect::<Vec<_>>();
+    assert!(example_positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(example_positions.last() < gotcha_positions.first());
+    for example in examples {
         let sql = example["sql"].as_str().ok_or("missing example SQL")?;
         assert!(guide.contains(example["name"].as_str().ok_or("missing example name")?));
         assert!(guide.contains(sql));
@@ -1710,6 +1746,18 @@ async fn query_help_preserves_schema_and_guide_when_discovery_hits_reader_limits
         guide.contains("Attribute discovery unavailable:"),
         span_rows > 1
     );
+    assert!(!guide.contains("No metadata paths found in the sampled rows"));
+    assert!(!guide.contains("No attribute keys found in the sampled spans"));
+    assert!(
+        guide.contains(
+            help["metadata"]["sample_sql"]
+                .as_str()
+                .ok_or("sampling SQL")?
+        )
+    );
+    for catalog in help["attributes"].as_array().ok_or("attributes")? {
+        assert!(guide.contains(catalog["discovery_sql"].as_str().ok_or("discovery SQL")?));
+    }
     for (catalog, unavailable) in [
         (&help["metadata"], spend_rows > 1),
         (&help["attributes"][0], span_rows > 1),
@@ -1721,6 +1769,56 @@ async fn query_help_preserves_schema_and_guide_when_discovery_hits_reader_limits
             catalog["fields"].as_array().ok_or("fields")?.is_empty(),
             unavailable
         );
+    }
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn query_help_displays_discovery_truncation(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    execute_write(
+        &database,
+        "INSERT INTO trace_test.otel_traces (Timestamp, TraceId, SpanId, SpanAttributes, ResourceAttributes) \
+         SELECT now64(9), 'trace', 'span', \
+         mapFromArrays(arrayMap(x -> concat('key-', toString(x)), range(1000)), arrayMap(x -> 'value', range(1000))) AS attributes, \
+         attributes FROM numbers(1)",
+    )
+    .await?;
+    execute_write(
+        &database,
+        "INSERT INTO trace_test.spend_logs (request_id, start_time, end_time, metadata) \
+         SELECT toString(number), now64(3), now64(3), '{\"key\":true}' FROM numbers(1000)",
+    )
+    .await?;
+    let help = serde_json::to_value(
+        litellm_traces_clickhouse::query_help(&database.client, &writer).await?,
+    )?;
+    let guide = help["guide"].as_str().ok_or("guide")?;
+    assert_eq!(help["metadata"]["truncated"], true);
+    assert!(guide.contains("truncated: true"));
+    for catalog in help["attributes"].as_array().ok_or("attributes")? {
+        assert_eq!(catalog["truncated"], true);
+        let displayed = format!(
+            "{}.{}",
+            catalog["table"].as_str().ok_or("table")?,
+            catalog["column"].as_str().ok_or("column")?
+        );
+        let section = guide.split(&displayed).nth(1).ok_or("attribute section")?;
+        assert!(
+            section
+                .split("\n\n")
+                .next()
+                .ok_or("catalog body")?
+                .contains("Truncated: true")
+        );
+        for field in catalog["fields"].as_array().ok_or("fields")? {
+            assert!(section.contains(field["expression"].as_str().ok_or("expression")?));
+        }
     }
     Ok(())
 }

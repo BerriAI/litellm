@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use serde_json::Value;
 
 use super::{Extraction, Format, SpanFacts, genai::GenAi};
@@ -37,7 +38,7 @@ impl Format for Logfire {
             .unwrap_or_default();
         let events: Vec<_> = values
             .iter()
-            .filter_map(|value| messages::event_message(value.get("event.name")?.as_str()?, value))
+            .filter_map(|value| messages::EventMessage::deserialize(value).ok()?.recorded())
             .collect();
         Ok(Extraction {
             facts: base.facts.or(SpanFacts {

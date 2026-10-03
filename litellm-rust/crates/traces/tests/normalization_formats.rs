@@ -287,10 +287,49 @@ fn genai_message_events_extract_content_and_choice_tools(span: Span) {
 }
 
 #[rstest]
+#[case::single_message(
+    json!({"role":"user","content":"hello"}),
+    json!([{"role":"user","content":"hello"}])
+)]
+#[case::message_batch(
+    json!([{"role":"user","content":"hello"},{"role":"assistant","content":"answer"}]),
+    json!([{"role":"user","content":"hello"},{"role":"assistant","content":"answer"}])
+)]
+#[case::malformed_batch(
+    json!([{"role":"user","content":"hello"},null]),
+    json!([{"role":"user","content":"hello"},null])
+)]
+#[case::message_fields_are_not_a_message(
+    json!([null,null,null,"user","hello",null,null,null,null]),
+    json!([null,null,null,"user","hello",null,null,null,null])
+)]
+#[case::role_without_content(json!({"role":"user"}), json!({"role":"user"}))]
+fn genai_message_payloads_preserve_non_conversations(
+    span: Span,
+    #[case] payload: Value,
+    #[case] expected: Value,
+) {
+    let decoded = decode(
+        span,
+        "custom",
+        &[("gen_ai.input.messages", &payload.to_string())],
+        vec![],
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&decoded.normalized.input).unwrap(),
+        expected
+    );
+}
+
+#[rstest]
 #[case::all_messages("all_messages_events")]
 #[case::events("events")]
 fn logfire_splits_recorded_message_events(span: Span, #[case] key: &str) {
     let events = json!([
+        null,
+        {"event.name":7,"content":"ignored"},
+        {"event.name":"unrelated","content":"ignored"},
         {"event.name":"gen_ai.user.message","content":"query"},
         {"event.name":"gen_ai.choice","message":{"role":"assistant","content":"result"}},
     ]);
@@ -299,6 +338,74 @@ fn logfire_splits_recorded_message_events(span: Span, #[case] key: &str) {
     let output: Value = serde_json::from_str(&decoded.normalized.output).unwrap();
     assert_eq!(output[0]["content"], "result");
     assert!(decoded.consumed_attributes.contains(&key));
+}
+
+#[rstest]
+#[case::nested_wins(
+    json!({"content":"root","role":"tool","message.content":"dotted","message.role":"user","message":{"content":"nested","role":"assistant"}}),
+    json!([{"role":"assistant","content":"nested"}])
+)]
+#[case::nested_missing_uses_dotted(
+    json!({"content":"root","role":"tool","message":{},"message.content":"dotted","message.role":"assistant"}),
+    json!([{"role":"assistant","content":"dotted"}])
+)]
+#[case::null_message_uses_dotted(
+    json!({"message":null,"content":"root","message.content":"dotted"}),
+    json!([{"role":"assistant","content":"dotted"}])
+)]
+#[case::null_content_shadows_dotted(
+    json!({"content":null,"message.content":"dotted"}),
+    json!([{"role":"assistant","content":null,"tool_calls":null}])
+)]
+#[case::null_role_shadows_dotted(
+    json!({"message":{"role":null,"content":"answer"},"message.role":"assistant"}),
+    json!([{"role":null,"content":"answer","tool_calls":null}])
+)]
+#[case::null_calls_shadow_indexed(
+    json!({"content":"answer","tool_calls":null,"tool_calls.0.function.name":"ignored"}),
+    json!([{"role":"assistant","content":"answer"}])
+)]
+#[case::nested_indexed_calls(
+    json!({"message":{"tool_calls.2.id":"call-2","tool_calls.2.function.name":"lookup","tool_calls.2.function.arguments":"{}"},"tool_calls.0.function.name":"ignored"}),
+    json!([{"role":"assistant","content":"","tool_calls":[{"id":"call-2","name":"lookup","arguments":"{}"}]}])
+)]
+fn genai_event_envelopes_preserve_field_precedence(
+    span: Span,
+    #[case] payload: Value,
+    #[case] expected: Value,
+) {
+    let decoded = decode(
+        span,
+        "custom",
+        &[],
+        vec![event(
+            "gen_ai.choice",
+            &[("gen_ai.event.content", &payload.to_string())],
+        )],
+    )
+    .unwrap();
+    let output: Value = serde_json::from_str(&decoded.normalized.output).unwrap();
+    assert_eq!(output, expected);
+}
+
+#[rstest]
+#[case::null(Value::Null)]
+#[case::array(json!([]))]
+#[case::number(json!(7))]
+fn invalid_nested_event_messages_do_not_use_root_fields(span: Span, #[case] message: Value) {
+    let payload =
+        json!({"message":message,"content":"ignored","tool_calls.0.function.name":"ignored"});
+    let decoded = decode(
+        span,
+        "custom",
+        &[],
+        vec![event(
+            "gen_ai.choice",
+            &[("gen_ai.event.content", &payload.to_string())],
+        )],
+    )
+    .unwrap();
+    assert!(decoded.normalized.output.is_empty());
 }
 
 #[rstest]

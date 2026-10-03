@@ -4453,6 +4453,7 @@ dependencies = [
 name = "litellm-traces"
 version = "0.1.0"
 dependencies = [
+ "askama",
  "criterion",
  "indexmap 2.14.0",
  "litellm-llms-types",

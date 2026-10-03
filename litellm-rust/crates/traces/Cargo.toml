@@ -9,6 +9,7 @@ repository.workspace = true
 schema = ["dep:schemars"]
 
 [dependencies]
+askama.workspace = true
 macro_rules_attribute.workspace = true
 schemars = { workspace = true, optional = true }
 indexmap = { version = "2", features = ["serde"] }

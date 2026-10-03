@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Deserializer, de::DeserializeOwned};
+use serde::{
+    Deserialize, Deserializer,
+    de::{DeserializeOwned, IgnoredAny},
+};
 use serde_json::Value;
 
 use super::{Extraction, Format, SpanFacts, genai::GenAi};
@@ -83,6 +86,13 @@ struct ContentValue {
     content: Value,
 }
 
+#[derive(Deserialize)]
+struct WrappedOutput {
+    output: Value,
+    #[serde(flatten)]
+    _other: BTreeMap<String, IgnoredAny>,
+}
+
 struct SpanIo {
     input: String,
     output: String,
@@ -100,12 +110,14 @@ fn normalized_messages(messages: &[RawMessage]) -> String {
 
 fn tool_output(raw_completion: &str) -> String {
     let completion = serde_json::from_str::<Value>(raw_completion).unwrap_or(Value::Null);
-    let raw = completion.get("output").cloned().unwrap_or(completion);
-    let selected = serde_json::from_value::<Command>(raw.clone())
+    let raw = WrappedOutput::deserialize(&completion)
+        .map(|wrapped| wrapped.output)
+        .unwrap_or(completion);
+    let selected = Command::deserialize(&raw)
         .ok()
         .and_then(|command| command.update.messages.into_iter().last())
         .unwrap_or(raw);
-    let output = serde_json::from_value::<ContentValue>(selected.clone())
+    let output = ContentValue::deserialize(&selected)
         .map(|message| message.content)
         .unwrap_or(selected);
     output
@@ -195,7 +207,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use rstest::rstest;
-    use serde_json::Value;
+    use serde_json::{Value, json};
 
     use super::{CallEvidence, ObservationType, span_io};
     use crate::normalize::CallKey;
@@ -223,13 +235,27 @@ mod tests {
     }
 
     #[rstest]
-    fn explicit_null_tool_output_is_preserved() {
-        let attributes = BTreeMap::from([(
-            "gen_ai.completion".to_owned(),
-            r#"{"output":null}"#.to_owned(),
-        )]);
+    #[case::null(r#"{"output":null}"#, Value::Null)]
+    #[case::string(r#""answer""#, json!("answer"))]
+    #[case::wrapped_string(r#"{"output":"answer","other":7}"#, json!("answer"))]
+    #[case::repeated_output(r#"{"output":"first","output":"last"}"#, json!("last"))]
+    #[case::wrapped_content(r#"{"output":{"content":"answer"}}"#, json!("answer"))]
+    #[case::last_command_message(r#"{"output":{"update":{"messages":[{"content":"first"},{"content":"last"}]}}}"#, json!("last"))]
+    #[case::direct_command(r#"{"update":{"messages":[{"content":"answer"}]}}"#, json!("answer"))]
+    #[case::empty_command(r#"{"update":{"messages":[]}}"#, json!({"update":{"messages":[]}}))]
+    #[case::arbitrary_object(r#"{"result":7}"#, json!({"result":7}))]
+    #[case::arbitrary_array(r#"[1,2]"#, json!([1,2]))]
+    #[case::malformed("not-json", Value::Null)]
+    fn tool_outputs_preserve_content_and_fallbacks(
+        #[case] completion: &str,
+        #[case] expected: Value,
+    ) {
+        let attributes = BTreeMap::from([("gen_ai.completion".to_owned(), completion.to_owned())]);
         let io = span_io(ObservationType::Tool, &attributes);
-        assert_eq!(io.output, "null");
+        match expected {
+            Value::String(text) => assert_eq!(io.output, text),
+            value => assert_eq!(serde_json::from_str::<Value>(&io.output).unwrap(), value),
+        }
     }
 
     #[rstest]
