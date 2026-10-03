@@ -293,6 +293,7 @@ LLM_CONFIG_NAMES: Final = (
     # Alias for backwards compatibility
     "VolcEngineConfig",  # Alias for VolcEngineChatConfig
     "LlamafileChatConfig",
+    "LlmmanChatConfig",
     "LiteLLMProxyChatConfig",
     "VLLMConfig",
     "DeepSeekChatConfig",
@@ -1146,6 +1147,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "LlamafileChatConfig": (
         ".llms.llamafile.chat.transformation",
         "LlamafileChatConfig",
+    ),
+    "LlmmanChatConfig": (
+        ".llms.llmman.chat.transformation",
+        "LlmmanChatConfig",
     ),
     "LiteLLMProxyChatConfig": (
         ".llms.litellm_proxy.chat.transformation",
