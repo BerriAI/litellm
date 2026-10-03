@@ -195,12 +195,18 @@ describe("Lens findings and runs", () => {
     return { user, detail: within(screen.getByRole("dialog", { name: finding.title })) };
   }
 
-  it.each(["Claude Code", "Codex"])("copies the issue brief as markdown for %s", async (agent) => {
+  it.each(["Claude Code", "Codex"])("renders the issue brief and copies its markdown for %s", async (agent) => {
     const { user, detail } = await openIssue({ ...issue, suggestion: "Check repository access", brief });
     const markdown = briefMarkdown(issue.title, brief);
-    expect(detail.getByText(brief.problem, { exact: false })).toHaveTextContent(markdown, {
-      normalizeWhitespace: false,
-    });
+    expect(detail.getByRole("heading", { level: 1, name: issue.title })).toBeVisible();
+    for (const section of ["Problem", "User goal", "What happened", "Test cases"]) {
+      expect(detail.getByRole("heading", { level: 2, name: section })).toBeVisible();
+    }
+    expect(detail.getByText(brief.problem)).toBeVisible();
+    expect(detail.getByRole("listitem")).toHaveTextContent(
+      `Input: ${brief.test_cases[0].input} Expect: ${brief.test_cases[0].expected}`,
+    );
+    expect(detail.queryByText("## Problem", { exact: false })).not.toBeInTheDocument();
     expect(detail.queryByText("Check repository access")).not.toBeInTheDocument();
     await user.click(detail.getByRole("button", { name: `Copy for ${agent}` }));
     expect(await navigator.clipboard.readText()).toBe(markdown);
