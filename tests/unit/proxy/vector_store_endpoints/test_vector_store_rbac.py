@@ -5,6 +5,7 @@ Verifies that check_feature_access_for_user is called and that a 403 is
 raised when vector stores are disabled for internal users.
 """
 
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -40,9 +41,7 @@ async def test_list_vector_stores_blocked_when_disabled():
     )
 
     user = _make_internal_user()
-    with patch.dict(
-        "litellm.proxy.proxy_server.general_settings", _DISABLED_GS, clear=True
-    ):
+    with patch.dict("litellm.proxy.proxy_server.general_settings", _DISABLED_GS, clear=True):
         with pytest.raises(HTTPException) as exc_info:
             await list_vector_stores(user_api_key_dict=user)
     assert exc_info.value.status_code == 403
@@ -59,13 +58,9 @@ async def test_list_vector_stores_allowed_when_not_disabled():
 
     user = _make_internal_user()
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(
-        return_value=[]
-    )
+    mock_prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[])
 
-    with patch.dict(
-        "litellm.proxy.proxy_server.general_settings", _ENABLED_GS, clear=True
-    ):
+    with patch.dict("litellm.proxy.proxy_server.general_settings", _ENABLED_GS, clear=True):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             with patch.object(litellm, "vector_store_registry", None):
                 with patch(
@@ -92,9 +87,7 @@ async def test_new_vector_store_blocked_when_disabled():
     user = _make_internal_user()
     vs = LiteLLM_ManagedVectorStore(vector_store_id="vs-1", custom_llm_provider="openai")  # type: ignore[call-arg]
 
-    with patch.dict(
-        "litellm.proxy.proxy_server.general_settings", _DISABLED_GS, clear=True
-    ):
+    with patch.dict("litellm.proxy.proxy_server.general_settings", _DISABLED_GS, clear=True):
         with pytest.raises(HTTPException) as exc_info:
             await new_vector_store(vector_store=vs, user_api_key_dict=user)
     assert exc_info.value.status_code == 403
@@ -120,13 +113,9 @@ async def test_list_vector_stores_admin_not_blocked():
     )
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(
-        return_value=[]
-    )
+    mock_prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[])
 
-    with patch.dict(
-        "litellm.proxy.proxy_server.general_settings", _DISABLED_GS, clear=True
-    ):
+    with patch.dict("litellm.proxy.proxy_server.general_settings", _DISABLED_GS, clear=True):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             with patch.object(litellm, "vector_store_registry", None):
                 with patch(
@@ -135,3 +124,48 @@ async def test_list_vector_stores_admin_not_blocked():
                 ):
                     # Must not raise any HTTPException — admin is always allowed.
                     await list_vector_stores(user_api_key_dict=admin)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page_size", [0, -5])
+async def test_list_vector_stores_rejects_non_positive_page_size_with_400(page_size):
+    from litellm.proxy.vector_store_endpoints.management_endpoints import (
+        list_vector_stores,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await list_vector_stores(user_api_key_dict=_make_internal_user(), page=1, page_size=page_size)
+
+    assert exc_info.value.status_code == 400, exc_info.value.detail
+    assert "page_size" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page", [0, -1])
+async def test_list_vector_stores_accepts_non_positive_page_like_base(page):
+    from litellm.proxy.vector_store_endpoints.management_endpoints import (
+        list_vector_stores,
+    )
+
+    import litellm
+
+    admin: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        user_id="admin-1",
+    )
+
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[])
+
+    with patch.dict("litellm.proxy.proxy_server.general_settings", _DISABLED_GS, clear=True):
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+            with patch.object(litellm, "vector_store_registry", None):
+                with patch(
+                    "litellm.proxy.vector_store_endpoints.management_endpoints.VectorStoreRegistry._get_vector_stores_from_db",
+                    new=AsyncMock(return_value=[]),
+                ):
+                    response: Final = await list_vector_stores(user_api_key_dict=admin, page=page, page_size=10)
+
+    assert response["current_page"] == page
+    assert response["total_count"] == 0
+    assert response["data"] == []

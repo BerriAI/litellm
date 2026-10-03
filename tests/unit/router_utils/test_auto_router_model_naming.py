@@ -39,6 +39,7 @@ SEMANTIC_FIELDS = frozenset({"auto_router_config", "auto_router_default_model", 
         ("typesafe", "jev-preview", "typesafe"),
         ("jev", "jev-preview", "typesafe"),
         ("laya", "english", "laya"),
+        ("bespoke", "nimble-latest", "bespoke"),
     ],
 )
 def test_open_source_classifier_enumerates_its_accounting_model(

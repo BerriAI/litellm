@@ -397,7 +397,7 @@ def test_mcp_advertised_versions_reject_unavailable_revisions(versions):
         ConfigGeneralSettings(mcp_advertised_versions=versions)
 
 
-@pytest.mark.parametrize("revision", ["2026-07-28", "unknown", None])
+@pytest.mark.parametrize("revision", ["unknown", None])
 def test_mcp_metadata_rejects_unavailable_upstream_protocol(revision):
     from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
 
@@ -466,3 +466,13 @@ def test_an_http_mcp_server_is_unaffected_by_the_stdio_flag(monkeypatch, request
 def test_a_non_mapping_mcp_server_payload_gets_a_validation_error(request_model):
     with pytest.raises(ValidationError, match="valid dictionary"):
         request_model.model_validate("not-a-server")
+
+
+@pytest.mark.parametrize("request_model", MCP_SERVER_REQUESTS)
+def test_modern_http_upstream_protocol_is_available(request_model):
+    parsed = request_model.model_validate({
+        "server_id": "modern", "transport": "http", "url": "https://example.com/mcp",
+        "mcp_info": {"protocol_version": "2026-07-28"},
+    })
+    assert parsed.mcp_info["protocol_version"] == "2026-07-28"
+    assert parsed.transport == "http"

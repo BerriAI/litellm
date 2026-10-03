@@ -24,11 +24,11 @@ export const buildSavedJevConnectionTestRequest = (
   const result = z
     .object({
       classifier_type: z.enum(["jev", "oss_classifier"]),
-      tiers: z.record(z.unknown()),
+      tiers: z.record(z.string(), z.unknown()),
       jev_classifier_config: jevClassifierConfigSchema.optional(),
       opensource_classifier_config: jevClassifierConfigSchema.optional(),
     })
-    .passthrough()
+    .loose()
     .safeParse(parsed);
   if (!result.success) return undefined;
   const { jev_classifier_config, opensource_classifier_config, ...config } = result.data;

@@ -23,9 +23,7 @@ export interface TraceToolCall {
   args: unknown;
 }
 
-export interface TraceMessage {
+export type TraceMessage = Omit<UIMessage, "role" | "tool_calls"> & {
   role: string;
-  content: string;
-  name?: string;
   tool_calls?: TraceToolCall[];
-}
+};

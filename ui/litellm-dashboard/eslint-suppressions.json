@@ -1779,10 +1779,10 @@
       "count": 5
     },
     "no-restricted-syntax": {
-      "count": 146
+      "count": 140
     },
     "prefer-const": {
-      "count": 31
+      "count": 29
     }
   },
   "src/components/object_permissions_view.tsx": {
@@ -2303,11 +2303,6 @@
     }
   },
   "src/components/view_logs/columns.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/index.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     }
