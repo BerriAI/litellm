@@ -127,6 +127,10 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
             ) from e
 
 
+def is_mantle_claude_model(model: str) -> bool:
+    return "claude" in model.lower()
+
+
 def mantle_supports_responses(model: str | None, model_cost: dict) -> bool:
     """Whether a Bedrock Mantle model can serve the native Responses API.
 

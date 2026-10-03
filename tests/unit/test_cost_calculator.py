@@ -1,5 +1,6 @@
 import datetime
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, cast
@@ -3862,6 +3863,35 @@ def test_completion_cost_mantle_native_messages_prices_unversioned_claude_from_t
             model=model,
             custom_llm_provider="bedrock_mantle",
         ) == pytest.approx(expected), model
+
+
+@pytest.mark.parametrize("model", ["anthropic.claude-opus-5-5", "anthropic.claude-sonnet-5-5"])
+def test_completion_cost_region_without_its_own_row_prices_mantle_claude_from_the_mantle_row(
+    _local_model_cost_map, model: str
+):
+    """The proxy resolves a Mantle region for every call. A region with no
+    bedrock_mantle/<region>/<model> row must fall back to the model's own bedrock_mantle/ row, not to the
+    bare Bedrock row that the bedrock provider family also matches."""
+
+    response = litellm.ModelResponse(
+        id="msg_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model=model,
+        usage={"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
+    )
+    mantle: Final[Mapping[str, float]] = litellm.model_cost[f"bedrock_mantle/{model}"]
+    bedrock: Final[Mapping[str, float]] = litellm.model_cost[model]
+    expected: Final = 100 * mantle["input_cost_per_token"] + 10 * mantle["output_cost_per_token"]
+    assert expected != 100 * bedrock["input_cost_per_token"] + 10 * bedrock["output_cost_per_token"]
+
+    for deployment in (model, f"bedrock_mantle/{model}", f"bedrock_mantle/us-east-1/{model}"):
+        assert litellm.completion_cost(
+            completion_response=response,
+            model=deployment,
+            custom_llm_provider="bedrock_mantle",
+            region_name="us-east-1",
+        ) == pytest.approx(expected), deployment
+    assert litellm.get_model_info(f"bedrock_mantle/us-east-1/{model}", "bedrock_mantle")["key"] == f"bedrock_mantle/{model}"
 
 
 @pytest.mark.parametrize("model", ["anthropic.claude-opus-5-5", "anthropic.claude-sonnet-5-5"])
