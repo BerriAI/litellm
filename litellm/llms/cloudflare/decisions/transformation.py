@@ -24,6 +24,9 @@ class CloudflareDecisionsEndpoint:
             return None
         return f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run"
 
+    def missing_api_base_message(self, provider: str) -> str:
+        return "Missing CLOUDFLARE_ACCOUNT_ID - set CLOUDFLARE_ACCOUNT_ID or pass api_base explicitly"
+
     def canonical_model(self, model: str) -> str:
         if model.startswith("@cf/"):
             return model

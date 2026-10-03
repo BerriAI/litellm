@@ -13,6 +13,9 @@ class JevCompatibleDecisionsEndpoint:
     def default_api_base(self) -> str | None:
         return self.default_api_base_value
 
+    def missing_api_base_message(self, provider: str) -> str:
+        return f"api_base is required for Decisions provider '{provider}'"
+
     def canonical_model(self, model: str) -> str:
         return model
 
@@ -37,6 +40,8 @@ class DecisionsProviderConfig(Protocol):
     def api_key_required(self) -> bool: ...
 
     def default_api_base(self) -> str | None: ...
+
+    def missing_api_base_message(self, provider: str) -> str: ...
 
     def canonical_model(self, model: str) -> str: ...
 

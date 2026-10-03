@@ -122,13 +122,8 @@ def _prepare_request(
     default_api_base: Final = endpoint.default_api_base()
     resolved_api_base: Final = api_base or env_api_base or default_api_base
     if resolved_api_base is None:
-        message: Final = (
-            "Missing CLOUDFLARE_ACCOUNT_ID - set CLOUDFLARE_ACCOUNT_ID or pass api_base explicitly"
-            if provider == "cloudflare"
-            else f"api_base is required for Decisions provider '{provider}'"
-        )
         raise litellm.BadRequestError(
-            message=message,
+            message=endpoint.missing_api_base_message(provider),
             model=model,
             llm_provider=provider,
         )

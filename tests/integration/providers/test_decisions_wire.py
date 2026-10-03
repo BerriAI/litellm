@@ -2,6 +2,7 @@ import json
 import math
 import socket
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -158,14 +159,17 @@ def _chat(gateway: Gateway, model: str, *, key: str | None = None, **extra: Json
     return gateway.request("POST", "/v1/chat/completions", {"model": model, **_CHAT_BODY, **extra}, key=key)
 
 
-def _upstream_calls(gateway: Gateway, handle: ScenarioHandle) -> list[dict[str, JsonValue]]:
+def _observed_requests(gateway: Gateway) -> tuple[dict[str, JsonValue], ...]:
     with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream:
-        requests: Final = upstream.get("/__observations").json()["requests"]
-    return [
-        request
-        for request in map(object_value, requests)
-        if string_value(request["path"]).startswith(f"/{handle.scenario_id}/")
-    ]
+        return tuple(map(object_value, upstream.get("/__observations").json()["requests"]))
+
+
+def _calls_to(requests: Sequence[dict[str, JsonValue]], handle: ScenarioHandle) -> list[dict[str, JsonValue]]:
+    return [request for request in requests if string_value(request["path"]).startswith(f"/{handle.scenario_id}/")]
+
+
+def _upstream_calls(gateway: Gateway, handle: ScenarioHandle) -> list[dict[str, JsonValue]]:
+    return _calls_to(_observed_requests(gateway), handle)
 
 
 def _spend_row(call_id: str) -> dict[str, JsonValue]:
@@ -368,13 +372,14 @@ def test_a_deployment_opted_into_client_api_base_sends_decisions_and_chat_to_the
         chat: Final = _chat(gateway, model, api_base=chat_target.api_base())
         assert decisions.status_code == 200, decisions.text
         assert chat.status_code == 200, chat.text
-        assert [call["path"] for call in _upstream_calls(gateway, decisions_target)] == [
+        observed: Final = _observed_requests(gateway)
+        assert [call["path"] for call in _calls_to(observed, decisions_target)] == [
             f"/{decisions_target.scenario_id}/v1/decisions"
         ]
-        assert [call["path"] for call in _upstream_calls(gateway, chat_target)] == [
+        assert [call["path"] for call in _calls_to(observed, chat_target)] == [
             f"/{chat_target.scenario_id}/chat/completions"
         ]
-        assert _upstream_calls(gateway, configured) == []
+        assert _calls_to(observed, configured) == []
 
 
 def test_a_config_pass_through_at_v1_decisions_keeps_answering_and_the_native_api_serves_decisions(
@@ -395,14 +400,15 @@ def test_a_config_pass_through_at_v1_decisions_keeps_answering_and_the_native_ap
             )
         assert through.status_code == 200, through.text
         assert through.json() == {"model": _PASS_THROUGH_MODEL, "answers": _ANSWERS, "usage": _USAGE}
-        (forwarded,) = _upstream_calls(gateway, pass_through_target)
+        observed: Final = _observed_requests(gateway)
+        (forwarded,) = _calls_to(observed, pass_through_target)
         assert (forwarded["path"], forwarded["authorization"], object_value(forwarded["body"])["model"]) == (
             f"/{pass_through_target.scenario_id}/v1/decisions",
             _PASS_THROUGH_AUTHORIZATION,
             _PASS_THROUGH_MODEL,
         )
         assert native.status_code == 200, native.text
-        assert [call["path"] for call in _upstream_calls(gateway, native_target)] == [
+        assert [call["path"] for call in _calls_to(observed, native_target)] == [
             f"/{native_target.scenario_id}/v1/decisions"
         ]
 
