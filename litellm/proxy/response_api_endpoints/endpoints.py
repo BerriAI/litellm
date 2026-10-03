@@ -1324,9 +1324,7 @@ def _resolve_responses_ws_session_limit_seconds() -> float:
         ).responses_websocket_session_limit_seconds
     except ValidationError as e:
         default: Final = ConfigGeneralSettings.model_fields[field].default
-        verbose_proxy_logger.warning(
-            "invalid general_settings.%s=%r (%s); using default %ss", field, raw, e, default
-        )
+        verbose_proxy_logger.warning("invalid general_settings.%s=%r (%s); using default %ss", field, raw, e, default)
         return float(default)
 
 
