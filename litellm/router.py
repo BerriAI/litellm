@@ -72,7 +72,7 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.otel.runtime import phase_span
+from litellm.integrations.otel.runtime import phase_event, phase_span
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
@@ -477,6 +477,27 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
 _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
+_ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
+
+
+def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object] | None) -> Mapping[str, str | int]:
+    """Bounded attributes for one deployment pick; attempt is 1-based within the current model group."""
+    kwargs: Final = request_kwargs or {}
+    metadata: Final = kwargs.get("litellm_metadata", kwargs.get("metadata"))
+    attempted_retries: Final = metadata.get("attempted_retries") if isinstance(metadata, Mapping) else None
+    retries: Final = attempted_retries if isinstance(attempted_retries, int) else 0
+    fallback_depth: Final = kwargs.get("fallback_depth")
+    reason: Final = (
+        "retry" if retries > 0 else "fallback" if isinstance(fallback_depth, int) and fallback_depth > 0 else "initial"
+    )
+    return MappingProxyType(
+        {
+            "litellm.deployment.attempt": retries + 1,
+            "litellm.deployment.reason": reason,
+            "litellm.deployment.model_group": model,
+        }
+    )
 
 
 def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
@@ -13342,6 +13363,9 @@ class Router:
             # the hook can replace `model` and routing-group lookup must key
             # off the final model name.
             strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
+            pick_attributes: Final = _deployment_pick_attributes(
+                model, _ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs)
+            )
             routing_read_batch: Final = RoutingReadBatch.for_strategy(strategy, strategy_selector)
 
             with RoutingReadBatch.scoped(routing_read_batch):
@@ -13357,6 +13381,7 @@ class Router:
                 await self._async_override_selector_pre_call_check(
                     strategy, strategy_selector, healthy_deployments, parent_otel_span
                 )
+                phase_event(_DEPLOYMENT_SELECTED_EVENT, pick_attributes)
                 return healthy_deployments
 
             # When encrypted content affinity pins to a specific deployment,
@@ -13364,16 +13389,19 @@ class Router:
                 await self._async_override_selector_pre_call_check(
                     strategy, strategy_selector, healthy_deployments[0], parent_otel_span
                 )
+                phase_event(_DEPLOYMENT_SELECTED_EVENT, pick_attributes)
                 return healthy_deployments[0]
 
             start_time: Final = time.time()
             if strategy == "simple-shuffle":
-                return simple_shuffle(
+                shuffled: Final = simple_shuffle(
                     resolve_model_alias=self._get_model_from_alias,
                     healthy_deployments=healthy_deployments,
                     model=model,
                     request_kwargs=request_kwargs,
                 )
+                phase_event(_DEPLOYMENT_SELECTED_EVENT, pick_attributes)
+                return shuffled
             with PrefetchedUsage.scoped(
                 routing_read_batch.prefetched_usage if routing_read_batch is not None else None
             ):
@@ -13416,6 +13444,7 @@ class Router:
                 )
             )
 
+            phase_event(_DEPLOYMENT_SELECTED_EVENT, pick_attributes)
             return deployment
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
@@ -14207,6 +14236,9 @@ class Router:
             request_kwargs=request_kwargs,
         )
         strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
+        pick_attributes: Final = _deployment_pick_attributes(
+            model, _ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs)
+        )
 
         if isinstance(healthy_deployments, dict):
             if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
@@ -14216,6 +14248,7 @@ class Router:
                     llm_provider="",
                 )
             self._override_selector_pre_call_check(strategy, strategy_selector, healthy_deployments)
+            phase_event(_DEPLOYMENT_SELECTED_EVENT, pick_attributes)
             return healthy_deployments
 
         parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(request_kwargs)
@@ -14295,12 +14328,14 @@ class Router:
         if strategy == "simple-shuffle":
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
             ############## Check 'weight' param set for weighted pick #################
-            return simple_shuffle(
+            shuffled: Final = simple_shuffle(
                 resolve_model_alias=self._get_model_from_alias,
                 healthy_deployments=healthy_deployments,
                 model=model,
                 request_kwargs=request_kwargs,
             )
+            phase_event(_DEPLOYMENT_SELECTED_EVENT, pick_attributes)
+            return shuffled
         deployment: Final = self._select_deployment_sync(
             strategy=strategy,
             selector=strategy_selector,
@@ -14332,6 +14367,7 @@ class Router:
             self.print_deployment(deployment),
             model,
         )
+        phase_event(_DEPLOYMENT_SELECTED_EVENT, pick_attributes)
         return deployment
 
     def get_available_deployment_for_pass_through(
