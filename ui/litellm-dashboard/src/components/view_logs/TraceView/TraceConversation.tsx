@@ -59,7 +59,7 @@ export function TraceConversation({
             className="group/conversation relative space-y-3"
             aria-label={`Conversation step ${item.span.name}`}
           >
-            {item.span.status === "error" && item.span.type !== "tool" && <ErrorBlock span={item.span} />}
+            {item.showError && <ErrorBlock span={item.span} />}
             {item.messages.map((message, index) => (
               <ConversationMessage key={index} message={message} />
             ))}

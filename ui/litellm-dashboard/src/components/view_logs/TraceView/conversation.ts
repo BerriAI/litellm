@@ -75,6 +75,7 @@ export interface ConversationItem {
   messages: TraceMessage[];
   toolCall?: TraceToolCall;
   toolResult?: string;
+  showError?: boolean;
 }
 
 function toolItem(
@@ -149,6 +150,30 @@ function conversationEvents(
     );
 }
 
+function isDescendant(id: string, ancestorId: string, byId: ReadonlyMap<string, Span>): boolean {
+  let parentId = byId.get(id)?.parent_span_id;
+  const visited = new Set<string>();
+  while (parentId && !visited.has(parentId)) {
+    if (parentId === ancestorId) return true;
+    visited.add(parentId);
+    parentId = byId.get(parentId)?.parent_span_id;
+  }
+  return false;
+}
+
+function withoutForwardedAnswers(
+  spanId: string,
+  output: TraceMessage[],
+  completedOutputs: ReadonlyMap<string, TraceMessage[]>,
+  byId: ReadonlyMap<string, Span>,
+): TraceMessage[] {
+  return [...completedOutputs].reduce(
+    (fresh, [childId, childOutput]) =>
+      isDescendant(childId, spanId, byId) ? newConversationMessages(childOutput, fresh) : fresh,
+    output,
+  );
+}
+
 export function buildConversation(
   spans: readonly Span[],
   details: ReadonlyMap<string, SpanDetail>,
@@ -156,6 +181,7 @@ export function buildConversation(
 ): ConversationItem[] {
   const byId = new Map(spans.map((span) => [span.span_id, span]));
   const histories = new Map<string, TraceMessage[]>();
+  const completedOutputs = new Map<string, TraceMessage[]>();
   const pendingCalls = new Map<string, TraceToolCall[]>();
   const items: ConversationItem[] = [];
   const events = conversationEvents(conversationSteps(spans), byId, details, complete);
@@ -177,8 +203,15 @@ export function buildConversation(
     const history = histories.get(key) ?? [];
     if (event.output) {
       const output = messages(detail.output, detail.output_ui, "assistant");
-      const fresh = newConversationMessages(history, output);
-      if (fresh.length) items.push({ id: `${span.span_id}-output`, span, messages: fresh });
+      const fresh = withoutForwardedAnswers(
+        span.span_id,
+        newConversationMessages(history, output),
+        completedOutputs,
+        byId,
+      );
+      const item = { id: `${span.span_id}-output`, span, messages: fresh, showError: span.status === "error" };
+      if (fresh.length || item.showError) items.push(item);
+      completedOutputs.set(span.span_id, output);
       histories.set(key, [...history, ...fresh]);
       continue;
     }
@@ -193,7 +226,7 @@ export function buildConversation(
     const fresh = newConversationMessages(history, input);
     if (span.type === "agent" || span.parent_span_id === null) {
       histories.set(key, input);
-      if (fresh.length || span.status === "error") items.push({ id: span.span_id, span, messages: fresh });
+      if (fresh.length) items.push({ id: span.span_id, span, messages: fresh });
       continue;
     }
     const combined = [...fresh, ...output];
@@ -203,20 +236,21 @@ export function buildConversation(
       key,
       output.flatMap((message) => message.tool_calls ?? []),
     );
-    if (combined.length || span.status === "error")
-      items.push({
-        id: span.span_id,
-        span,
-        messages: combined.map((message) => ({
-          ...message,
-          tool_calls: message.tool_calls ? [...message.tool_calls] : undefined,
-        })),
-      });
+    const item = {
+      id: span.span_id,
+      span,
+      showError: span.status === "error",
+      messages: combined.map((message) => ({
+        ...message,
+        tool_calls: message.tool_calls ? [...message.tool_calls] : undefined,
+      })),
+    };
+    if (combined.length || item.showError) items.push(item);
   }
   return items
     .map((item) => ({
       ...item,
       messages: item.messages.filter((message) => Boolean(message.content) || Boolean(message.tool_calls?.length)),
     }))
-    .filter((item) => item.messages.length || item.toolResult !== undefined || item.span.status === "error");
+    .filter((item) => item.messages.length || item.toolResult !== undefined || item.showError);
 }

@@ -126,4 +126,36 @@ describe("TraceConversation", () => {
     expect(screen.getAllByRole("button", { name: "Expand read_file tool call" })).toHaveLength(1);
     expect(screen.getByText("End of conversation")).toBeVisible();
   });
+
+  it.each(["Partial investigation", ""])(
+    "shows a failed child agent's error once after its work, with output %j",
+    async (output) => {
+      const agent = {
+        ...root,
+        span_id: "child",
+        parent_span_id: "root",
+        name: "Investigate release",
+        type: "agent",
+        start_offset_ms: 1,
+        duration_ms: 10,
+        status: "error",
+        error: "Investigation timed out",
+      };
+      const childTool = { ...tool, parent_span_id: "child", start_offset_ms: 2, duration_ms: 2 };
+      const traced = { ...trace, spans: [root, agent, childTool] } as Trace;
+      vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) => {
+        if (id === "child") return { ...rootDetail, span_id: id, input: "Investigate failed checks", output };
+        return id === "root" ? rootDetail : toolDetail;
+      });
+      renderWithProviders(<TraceConversation trace={traced} accessToken="test" onOpenStep={vi.fn()} />);
+
+      expect(await screen.findByText("End of conversation")).toBeVisible();
+      expect(screen.getAllByText("Investigation timed out")).toHaveLength(1);
+      const entries = screen.getAllByRole("region", { name: "Conversation step Investigate release" });
+      expect(within(entries[0]).getByText("Investigate failed checks")).toBeVisible();
+      expect(within(entries[0]).queryByText("Investigation timed out")).not.toBeInTheDocument();
+      expect(within(entries[1]).getByText("Investigation timed out")).toBeVisible();
+      if (output) expect(within(entries[1]).getByText(output)).toBeVisible();
+    },
+  );
 });

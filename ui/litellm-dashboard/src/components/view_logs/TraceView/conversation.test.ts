@@ -239,4 +239,16 @@ describe("trace conversation", () => {
     expect(items[0].toolResult).toBe("Shipped");
     expect(items[0].messages).toEqual([]);
   });
+
+  it("removes forwarded child answers from ancestors while preserving identical answers in sibling branches", () => {
+    const parent = { ...root, start_offset_ms: 0, duration_ms: 100 };
+    const agent = { ...parent, span_id: "agent", parent_span_id: "root", start_offset_ms: 1, duration_ms: 20 };
+    const nested = { ...agent, span_id: "nested", parent_span_id: "agent", start_offset_ms: 2, duration_ms: 5 };
+    const other = { ...agent, span_id: "other", start_offset_ms: 4, duration_ms: 30 };
+    const spans = [parent, agent, nested, other];
+    const details = new Map(spans.map((span) => [span.span_id, detail(span.span_id, [], [answer])]));
+    const items = buildConversation(spans, details, true);
+    expect(items.map((item) => item.id)).toEqual(["nested-output", "other-output"]);
+    expect(items.flatMap((item) => item.messages)).toEqual([answer, answer]);
+  });
 });
