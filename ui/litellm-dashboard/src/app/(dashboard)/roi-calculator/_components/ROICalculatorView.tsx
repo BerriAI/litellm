@@ -72,9 +72,15 @@ export default function ROICalculatorView({
   const [selectedPull, setSelectedPull] = React.useState<ROIPull | null>(null);
   const [matchingPerson, setMatchingPerson] = React.useState<PersonMatchSelection | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [demoError, setDemoError] = React.useState<string | null>(null);
+  const [reportError, setReportError] = React.useState<string | null>(null);
+  const [syncError, setSyncError] = React.useState<string | null>(null);
   const [loadingInitialData, setLoadingInitialData] = React.useState(true);
+  const [loadingLiveData, setLoadingLiveData] = React.useState(true);
   const statusRef = React.useRef<ROISyncStatus>(IDLE_STATUS);
-  const settingsLoaded = settings !== null && !loadingInitialData;
+  const reportNeedsRefresh = React.useRef(false);
+  const settingsLoaded = settings !== null && !loadingInitialData && !loadingLiveData;
+  const requestError = [error, demoError, reportError, syncError].filter(Boolean).join(" ");
   const [query, setQuery] = React.useState("");
 
   const loadReport = React.useCallback(async () => {
@@ -88,20 +94,34 @@ export default function ROICalculatorView({
     let cancelled = false;
     const demoRequested = new URLSearchParams(window.location.search).get("demo") === "1";
     const settingsRequest = apiClient.get<ROISettings>("/roi-calculator/settings", { accessToken });
-    const liveData = Promise.all([
-      apiClient.get<ROIReportResponse>("/roi-calculator/report", { accessToken }),
-      apiClient.get<ROISyncStatus>("/roi-calculator/sync", { accessToken }),
-    ])
-      .then(([reportResponse, syncStatus]) => {
-        if (cancelled) return null;
-        setSummary(reportResponse.report);
-        setStatus(syncStatus);
-        statusRef.current = syncStatus;
-        return null;
+    const reportRequest = apiClient
+      .get<ROIReportResponse>("/roi-calculator/report", { accessToken })
+      .then((response) => {
+        if (cancelled) return;
+        setSummary(response.report);
+        setReportError(null);
+        reportNeedsRefresh.current = false;
       })
       .catch((reason: unknown) => {
-        if (!cancelled) setError(extractErrorMessage(reason));
-        return null;
+        if (cancelled) return;
+        setReportError(extractErrorMessage(reason));
+        reportNeedsRefresh.current = true;
+      });
+    const statusRequest = apiClient
+      .get<ROISyncStatus>("/roi-calculator/sync", { accessToken })
+      .then((syncStatus) => {
+        if (cancelled) return;
+        setStatus(syncStatus);
+        statusRef.current = syncStatus;
+        setSyncError(null);
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) setSyncError(extractErrorMessage(reason));
+      });
+    const liveData = Promise.all([reportRequest, statusRequest])
+      .then(() => null)
+      .finally(() => {
+        if (!cancelled) setLoadingLiveData(false);
       });
     Promise.all([
       settingsRequest,
@@ -109,7 +129,10 @@ export default function ROICalculatorView({
         ? apiClient
             .get<ROIReportResponse>("/roi-calculator/report", { accessToken, query: { mode: "demo" } })
             .catch((reason: unknown) => {
-              if (!cancelled) setError(`Could not load demo data: ${extractErrorMessage(reason)}`);
+              if (!cancelled) {
+                setDemoError(`Could not load demo data: ${extractErrorMessage(reason)}`);
+                updateDemoUrl(false);
+              }
               return liveData;
             })
         : liveData,
@@ -118,6 +141,8 @@ export default function ROICalculatorView({
         if (cancelled) return;
         setSettings(nextSettings);
         setSampleSummary(sampleResponse?.report ?? null);
+        setError(null);
+        if (sampleResponse) setDemoError(null);
       })
       .catch((reason: unknown) => {
         if (!cancelled) setError(extractErrorMessage(reason));
@@ -134,7 +159,6 @@ export default function ROICalculatorView({
     if (!accessToken || !settingsLoaded) return;
     let cancelled = false;
     let requestInFlight = false;
-    let reportNeedsRefresh = false;
     const interval = window.setInterval(() => {
       if (requestInFlight) return;
       requestInFlight = true;
@@ -145,19 +169,24 @@ export default function ROICalculatorView({
           const previousStatus = statusRef.current;
           statusRef.current = nextStatus;
           setStatus(nextStatus);
+          setSyncError(null);
           const finished = !nextStatus.running && nextStatus.phase === "complete";
           const reportChanged = previousStatus.running || nextStatus.finished_at !== previousStatus.finished_at;
-          if (finished && (reportChanged || reportNeedsRefresh)) {
-            reportNeedsRefresh = true;
-            const report = await loadReport();
-            if (cancelled) return;
-            setSummary(report);
-            reportNeedsRefresh = false;
+          if (reportNeedsRefresh.current || (finished && reportChanged)) {
+            reportNeedsRefresh.current = true;
+            try {
+              const report = await loadReport();
+              if (cancelled) return;
+              setSummary(report);
+              setReportError(null);
+              reportNeedsRefresh.current = false;
+            } catch (reason: unknown) {
+              if (!cancelled) setReportError(extractErrorMessage(reason));
+            }
           }
-          if (!cancelled) setError(null);
         })
         .catch((reason: unknown) => {
-          if (!cancelled) setError(extractErrorMessage(reason));
+          if (!cancelled) setSyncError(extractErrorMessage(reason));
         })
         .finally(() => {
           requestInFlight = false;
@@ -176,6 +205,7 @@ export default function ROICalculatorView({
       const nextStatus = await apiClient.post<ROISyncStatus>("/roi-calculator/sync", { accessToken });
       statusRef.current = nextStatus;
       setStatus(nextStatus);
+      setSyncError(null);
       setSettingsOpen(false);
     } catch (reason) {
       setError(extractErrorMessage(reason));
@@ -185,7 +215,11 @@ export default function ROICalculatorView({
   const cancelSync = React.useCallback(async () => {
     if (!accessToken || readOnly) return;
     try {
-      setStatus(await apiClient.delete<ROISyncStatus>("/roi-calculator/sync", { accessToken }));
+      const nextStatus = await apiClient.delete<ROISyncStatus>("/roi-calculator/sync", { accessToken });
+      setStatus(nextStatus);
+      statusRef.current = nextStatus;
+      setSyncError(null);
+      setError(null);
     } catch (reason) {
       setError(extractErrorMessage(reason));
     }
@@ -199,6 +233,8 @@ export default function ROICalculatorView({
         body: payload,
       });
       setSummary(response.report);
+      setReportError(null);
+      reportNeedsRefresh.current = false;
       setSettings((current) => (current ? { ...current, identity_map: response.identity_map } : current));
     },
     [accessToken, readOnly],
@@ -217,9 +253,11 @@ export default function ROICalculatorView({
     );
   }
 
-  if (!settings || loadingInitialData) {
+  const awaitingLiveData = !sampleSummary && loadingLiveData;
+  if (!settings || loadingInitialData || awaitingLiveData) {
     return (
       <div className="space-y-6 p-8">
+        <p role="status">Loading ROI Calculator…</p>
         <Skeleton className="h-16 w-96" />
         <Skeleton className="h-96 w-full" />
       </div>
@@ -233,24 +271,30 @@ export default function ROICalculatorView({
         query: { mode: "demo" },
       });
       setSampleSummary(response.report);
+      setDemoError(null);
       updateDemoUrl(true);
       setView("branches");
       setQuery("");
     } catch (reason) {
-      setError(extractErrorMessage(reason));
+      setDemoError(`Could not load demo data: ${extractErrorMessage(reason)}`);
     }
   };
   const resetView = (updated: ROISettings, resetSyncStatus = true) => {
     setSettings(updated);
     setSummary(null);
+    setReportError(null);
+    reportNeedsRefresh.current = false;
     setSettingsOpen(false);
     setView("overview");
     if (resetSyncStatus) {
       setStatus(IDLE_STATUS);
       statusRef.current = IDLE_STATUS;
+      setSyncError(null);
+      setError(null);
     }
   };
   const showLiveStatus = !sampleSummary && !status.running;
+  const showReportActions = summary !== null || reportError !== null;
   const progress = status.total > 0 ? Math.min(100, (status.done / status.total) * 100) : 0;
   const statusIsIdleOrComplete = status.phase === "idle" || status.phase === "complete";
   const syncIsUpToDate = !status.running && statusIsIdleOrComplete;
@@ -271,13 +315,13 @@ export default function ROICalculatorView({
                   Preview sample report
                 </Button>
               )}
-              {summary && (
+              {showReportActions && (
                 <Button variant="outline" onClick={() => setSettingsOpen(true)}>
                   <Settings2 />
                   Settings
                 </Button>
               )}
-              {summary && !readOnly && (
+              {showReportActions && !readOnly && (
                 <Button onClick={() => void startSync()} disabled={status.running || !settings.ready}>
                   <RefreshCw className={status.running ? "animate-spin" : ""} />
                   {status.running ? "Syncing…" : "Run analysis"}
@@ -323,10 +367,10 @@ export default function ROICalculatorView({
         </Tabs>
       )}
 
-      {!sampleSummary && error && (
+      {!sampleSummary && requestError && (
         <Alert variant="destructive">
           <AlertTitle>ROI Calculator request failed</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>{requestError}</AlertDescription>
         </Alert>
       )}
       {!sampleSummary && status.error && (
@@ -371,7 +415,7 @@ export default function ROICalculatorView({
         </Card>
       )}
 
-      {!summary && !status.running ? (
+      {!summary && !status.running && !reportError ? (
         <ROISettingsPanel
           accessToken={accessToken}
           initialSettings={settings}

@@ -462,7 +462,7 @@ describe("ROICalculatorView", () => {
   });
 
   it("keeps the live calculator usable when a demo link cannot load sample data", async () => {
-    window.history.replaceState(null, "", "/roi-calculator/?demo=1");
+    window.history.replaceState(null, "", "/roi-calculator/?demo=1&from=review#overview");
     vi.mocked(apiClient.get).mockImplementation((path: string, options) => {
       if (path === "/roi-calculator/settings") return Promise.resolve(settings);
       if (options?.query?.mode === "demo") return Promise.reject(new Error("Sample data unavailable"));
@@ -476,6 +476,72 @@ describe("ROICalculatorView", () => {
     expect(screen.getByRole("button", { name: "Settings" })).toBeEnabled();
     expect(screen.queryByText("You’re viewing demo data")).not.toBeInTheDocument();
     expect(apiClient.post).not.toHaveBeenCalled();
+    expect(window.location.search).toBe("?from=review");
+    expect(window.location.hash).toBe("#overview");
+  });
+
+  it.each(["report", "sync"])("waits for the live %s when exiting a demo", async (pendingRequest) => {
+    window.history.replaceState(null, "", "/roi-calculator/?demo=1");
+    const pending = Promise.withResolvers<{ report: typeof summary } | typeof idleStatus>();
+    vi.mocked(apiClient.get).mockImplementation((path: string, options) => {
+      if (path === "/roi-calculator/settings") return Promise.resolve(settings);
+      if (options?.query?.mode === "demo") return Promise.resolve({ report: { ...summary, mode: "demo" } });
+      if (path === `/roi-calculator/${pendingRequest}`) return pending.promise;
+      if (path === "/roi-calculator/report") return Promise.resolve({ report: summary });
+      return Promise.resolve(idleStatus);
+    });
+    render(<ROICalculatorView accessToken="token" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Exit demo" }));
+    expect(screen.getByText("Loading ROI Calculator…")).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Connect your repositories" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
+    expect(window.location.search).toBe("");
+
+    pending.resolve(pendingRequest === "report" ? { report: summary } : idleStatus);
+    expect(await screen.findByText("Gateway AI cost")).toBeVisible();
+    expect(screen.getByText("$20.00")).toBeVisible();
+    expect(screen.queryByText("Loading ROI Calculator…")).not.toBeInTheDocument();
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it.each(["report", "demo"])("retains a failed %s load after a successful sync poll", async (failedRequest) => {
+    if (failedRequest === "demo") window.history.replaceState(null, "", "/roi-calculator/?demo=1");
+    const message = `The ${failedRequest} is unavailable`;
+    vi.mocked(apiClient.get).mockImplementation((path: string, options) => {
+      if (path === "/roi-calculator/settings") return Promise.resolve(settings);
+      if (options?.query?.mode === "demo") return Promise.reject(new Error(message));
+      if (path === "/roi-calculator/report") {
+        return failedRequest === "report" ? Promise.reject(new Error(message)) : Promise.resolve({ report: summary });
+      }
+      return Promise.resolve(idleStatus);
+    });
+    render(<ROICalculatorView accessToken="token" />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    const running = { ...idleStatus, running: true, phase: "estimating", total: 1 };
+    vi.mocked(apiClient.get).mockImplementation((path: string) => {
+      if (path === "/roi-calculator/report") return Promise.reject(new Error(message));
+      return Promise.resolve(running);
+    });
+    expect(await screen.findByRole("progressbar", { name: "Sync progress" }, { timeout: 3000 })).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(message);
+  });
+
+  it("retries a failed initial report and clears its error only when the report recovers", async () => {
+    vi.mocked(apiClient.get).mockImplementation((path: string) => {
+      if (path === "/roi-calculator/settings") return Promise.resolve(settings);
+      if (path === "/roi-calculator/report") return Promise.reject(new Error("Report unavailable"));
+      return Promise.resolve(idleStatus);
+    });
+    render(<ROICalculatorView accessToken="token" />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Report unavailable");
+    expect(screen.getByRole("button", { name: "Settings" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Run analysis" })).toBeEnabled();
+    vi.mocked(apiClient.get).mockImplementation((path: string) =>
+      Promise.resolve(path === "/roi-calculator/report" ? { report: summary } : idleStatus),
+    );
+    expect(await screen.findByText("Gateway AI cost", {}, { timeout: 3000 })).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Connect your repositories" })).not.toBeInTheDocument();
   });
 
   it("returns to Overview and shows the last sync time when completion is polled from Settings", async () => {
