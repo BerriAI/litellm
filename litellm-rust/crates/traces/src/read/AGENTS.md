@@ -1,4 +1,0 @@
-- Own read orchestration over `TraceStore`: snapshot cache, cursors, paging, response-size splitting, spend windows, and run batching
-- Never name a storage engine
-- Storage adapters implement `TraceStore`
-- Put tests in `tests/read.rs` against a fake store

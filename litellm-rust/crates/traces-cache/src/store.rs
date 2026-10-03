@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use crate::query::named::{
+use litellm_traces::query::named::{
     ListTracesParams, ListTracesRow, SpanDetailParams, SpanDetailRow, SpanErrorParams,
     SpanErrorRow, SpendByResponseIdsParams, SpendByResponseIdsRow, TraceIdentityParams,
     TracePageSpansParams, TraceSpansParams, TraceSpansRow,
@@ -16,6 +16,9 @@ pub enum StoreError<E> {
 
 pub trait TraceStore: Sync {
     type Error: std::error::Error + Send + Sync + 'static;
+
+    /// Identifies the backing storage for snapshot cache keys.
+    fn source(&self) -> &str;
 
     fn trace_refs(
         &self,

@@ -7,14 +7,14 @@ use std::{
 };
 
 use litellm_traces::{
-    CallEvidenceKind, CallKey, ObservationType, ReadError, SpanStatus, StoreError, TraceReader,
-    TraceStore,
+    CallEvidenceKind, CallKey, ObservationType, SpanStatus,
     query::named::{
         ListTracesParams, ListTracesRow, ReadAccessParams, SpanDetailParams, SpanDetailRow,
         SpanErrorParams, SpanErrorRow, SpendByResponseIdsParams, SpendByResponseIdsRow,
         TraceIdentityParams, TracePageSpansParams, TraceSpansParams, TraceSpansRow,
     },
 };
+use litellm_traces_cache::{ReadError, StoreError, TraceReader, TraceStore};
 use rstest::rstest;
 
 const START_NS: i64 = 1_790_742_989_000_000_000;
@@ -137,6 +137,10 @@ impl FakeStore {
 
 impl TraceStore for FakeStore {
     type Error = FakeError;
+
+    fn source(&self) -> &str {
+        "fake"
+    }
 
     async fn trace_refs(
         &self,
@@ -400,7 +404,7 @@ async fn response_size_splits_pages_and_rejects_a_single_oversized_span() {
         .await
         .unwrap()
         .unwrap();
-    let response_bytes = serde_json::to_vec(&one_span).unwrap().len();
+    let response_bytes = serde_json::to_vec(&one_span).unwrap().len() + 128;
     let reader = TraceReader::new(response_bytes);
     let store = FakeStore::with_spans("ref", spans.clone());
     let page = reader

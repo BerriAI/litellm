@@ -15,7 +15,6 @@ mod normalize;
 mod otlp;
 pub mod query;
 mod query_access;
-mod read;
 mod resolve;
 #[cfg(feature = "schema")]
 pub mod schema;
@@ -26,7 +25,7 @@ mod ui;
 mod view;
 pub mod wire;
 
-pub use error::{Error, InvalidCallKey, InvalidQuery, InvalidScope, ReadError};
+pub use error::{Error, InvalidCallKey, InvalidQuery, InvalidScope};
 pub use normalize::{
     AgentMetadata, AgentType, CallEvidence, CallEvidenceKind, CallKey, Integration, NormalizedSpan,
     ObservationType,
@@ -34,7 +33,6 @@ pub use normalize::{
 pub use otlp::{DecodedEvent, DecodedSpan, decode_otlp};
 pub use query::ReadQuery;
 pub use query_access::QueryScope;
-pub use read::{MAX_GRAPH_BYTES, MAX_GRAPH_SPANS, StoreError, TraceReader, TraceStore};
 pub use resolve::{SpendLookup, iso_time, listed_summary, resolve_trace};
 pub use shared::{Shared, SharedIdentity};
 pub use tenant::Tenant;

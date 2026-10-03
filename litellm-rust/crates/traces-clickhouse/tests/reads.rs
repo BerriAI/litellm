@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
 use litellm_http::Client;
-use litellm_traces::{ReadError, TraceReader, query::named::ReadAccessParams};
+use litellm_traces::query::named::ReadAccessParams;
+use litellm_traces_cache::{ReadError, TraceReader};
 use litellm_traces_clickhouse::{
     ClickHouseTraces, Connection, InsertTable, QueryScope, insert_rows,
 };
@@ -15,7 +16,7 @@ mod support;
 use fixtures::{DATABASE, SeededDatabase, migrated_database, seeded_database};
 use support::TestResult;
 
-fn reader(client: &Client, connection: Connection) -> (TraceReader, ClickHouseTraces) {
+fn make_reader(client: &Client, connection: Connection) -> (TraceReader, ClickHouseTraces) {
     (
         TraceReader::new(litellm_storage_clickhouse::READ_LIMITS.response_bytes),
         ClickHouseTraces::new(client.clone(), connection),
@@ -85,7 +86,7 @@ async fn list_costs_match_each_run_when_response_ids_are_reused(
         .readers
         .connection(client, &QueryScope::All, "fixture-secret")
         .await?;
-    let (reader, store) = reader(client, connection);
+    let (reader, store) = make_reader(client, connection);
     let access = ReadAccessParams {
         all_teams: false,
         user_id: user_id.into(),
@@ -206,7 +207,7 @@ async fn large_runs_remain_complete_under_default_reader_limits(
         .readers
         .connection(client, &QueryScope::All, "fixture-secret")
         .await?;
-    let (reader, store) = reader(client, connection);
+    let (reader, store) = make_reader(client, connection);
     let access = ReadAccessParams {
         all_teams: false,
         user_id: String::new(),
@@ -359,7 +360,7 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
         .readers
         .connection(client, &QueryScope::All, "fixture-secret")
         .await?;
-    let (reader, store) = reader(client, connection);
+    let (reader, store) = make_reader(client, connection);
     let access = ReadAccessParams {
         all_teams: true,
         user_id: String::new(),
@@ -487,7 +488,7 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
         .error_for_status()?;
     let uncached_connection =
         Connection::reader(&format!("{}?max_threads=1", fixture.database.url), DATABASE)?;
-    let (uncached_reader, uncached_store) = reader(client, uncached_connection);
+    let (uncached_reader, uncached_store) = make_reader(client, uncached_connection);
     let changed = uncached_reader
         .get_trace_page(
             &uncached_store,
@@ -516,7 +517,7 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
         .readers
         .connection(client, &QueryScope::All, "fixture-secret")
         .await?;
-    let (reader, store) = reader(client, connection);
+    let (reader, store) = make_reader(client, connection);
     let access = ReadAccessParams {
         all_teams: true,
         user_id: String::new(),

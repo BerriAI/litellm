@@ -5,7 +5,8 @@ use std::{future::Future, marker::PhantomData};
 
 use litellm_http::Client;
 use litellm_storage_clickhouse::{Query, fetch};
-use litellm_traces::{MAX_GRAPH_BYTES, MAX_GRAPH_SPANS, StoreError, query::named as contracts};
+use litellm_traces::query::named as contracts;
+use litellm_traces_cache::{MAX_GRAPH_BYTES, MAX_GRAPH_SPANS, StoreError};
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{

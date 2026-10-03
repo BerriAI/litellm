@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 
 use crate::{
-    ReadError, TraceReader, TraceStore, TraceSummary, listed_summary,
-    query::named::{ListTracesRow, ReadAccessParams, TracePageSpansParams, TraceSpansRow},
-    resolve_trace,
-};
-
-use super::{
-    map_store_error,
+    ReadError, TraceReader, TraceStore,
+    reader::{map_store_error, now_ms},
     spend::{spend, spend_window, spend_within},
     store::StoreError,
+};
+use litellm_traces::{
+    TraceSummary, listed_summary,
+    query::named::{ListTracesRow, ReadAccessParams, TracePageSpansParams, TraceSpansRow},
+    resolve_trace,
 };
 
 const RUNS_PER_SPAN_READ: usize = 16;
@@ -42,7 +42,7 @@ pub(super) async fn list_summaries<S: TraceStore>(
         start_ms,
         end_ms: end_ms.saturating_add(1),
     };
-    let spans = match store.run_spans(&params, super::now_ms()).await {
+    let spans = match store.run_spans(&params, now_ms()).await {
         Ok(spans) => spans,
         Err(StoreError::TooLarge) => {
             let mut summaries = Vec::with_capacity(runs.len());

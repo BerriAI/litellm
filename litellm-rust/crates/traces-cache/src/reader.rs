@@ -1,15 +1,15 @@
-mod cursor;
-mod list;
-mod snapshot;
-mod spend;
-mod store;
-
-use std::sync::Arc;
-
-use sha2::{Digest, Sha256};
+use std::time::Duration;
 
 use crate::{
-    ReadError, SpanDetail, SpanErrorPage, Trace, TracePage,
+    ReadError, Snapshot, SnapshotCache, SnapshotKey, StoreError, TraceStore,
+    cursor::{
+        ErrorPosition, SpanPosition, decode_cursor, encode_cursor, error_position, trace_position,
+    },
+    list::{list_summaries, run_batches},
+    spend::spend,
+};
+use litellm_traces::{
+    SpanDetail, SpanErrorPage, Trace, TracePage,
     query::named::{
         ListTracesParams, ReadAccessParams, SpanDetailParams, SpanErrorParams, TraceIdentityParams,
         TraceSpansParams,
@@ -17,30 +17,18 @@ use crate::{
     resolve_trace, to_ui_content,
 };
 
-use self::{
-    cursor::{
-        ErrorPosition, SpanPosition, decode_cursor, encode_cursor, error_position, trace_position,
-    },
-    list::{list_summaries, run_batches},
-    snapshot::{Snapshot, cache},
-    spend::spend,
-};
-
-pub use store::{StoreError, TraceStore};
-
 pub const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_GRAPH_SPANS: usize = 100_000;
 
-#[derive(Clone)]
 pub struct TraceReader {
-    snapshots: moka::future::Cache<String, Arc<Snapshot>>,
+    snapshots: SnapshotCache,
     response_bytes: usize,
 }
 
 impl TraceReader {
     pub fn new(response_bytes: usize) -> Self {
         Self {
-            snapshots: cache(),
+            snapshots: SnapshotCache::new(MAX_GRAPH_BYTES, Duration::from_secs(120)),
             response_bytes,
         }
     }
@@ -143,9 +131,14 @@ impl TraceReader {
                 version: String::new(),
             },
         };
-        let key_bytes = serde_json::to_vec(&(access, trace_id, &trace_ref, position.snapshot_ms))
-            .map_err(|_| ReadError::InvalidParameters)?;
-        let key = format!("{:x}", Sha256::digest(key_bytes));
+        let key = SnapshotKey::new(
+            store.source(),
+            access,
+            trace_id,
+            &trace_ref,
+            position.snapshot_ms,
+        )
+        .map_err(|_| ReadError::InvalidParameters)?;
         let snapshot = if let Some(snapshot) = self.snapshots.get(&key).await {
             snapshot
         } else {
@@ -162,22 +155,18 @@ impl TraceReader {
             let Some(trace) = resolve_trace(trace_id, &trace_ref, &rows, &spend_rows) else {
                 return Ok(None);
             };
-            let snapshot = Arc::new(Snapshot::new(trace)?);
-            self.snapshots.insert(key, Arc::clone(&snapshot)).await;
-            snapshot
+            self.snapshots
+                .insert(key, trace)
+                .await
+                .map_err(map_snapshot_error)?
         };
-        if cursor.is_some() && position.version != snapshot.version {
+        if cursor.is_some() && position.version != snapshot.version() {
             return Err(ReadError::TraceChanged);
         }
-        if position.offset > snapshot.trace.spans.len() {
+        if position.offset > snapshot.trace().spans.len() {
             return Err(ReadError::InvalidCursor("span"));
         }
-        Ok(Some(snapshot::page(
-            &snapshot,
-            &position,
-            page_size,
-            self.response_bytes,
-        )?))
+        page(&snapshot, &position, page_size, self.response_bytes).map(Some)
     }
 
     pub async fn get_span<S: TraceStore>(
@@ -271,13 +260,55 @@ async fn reference<S: TraceStore>(
     Ok(identities.into_iter().next())
 }
 
-fn map_store_error<E>(error: StoreError<E>) -> ReadError<E> {
+fn map_snapshot_error<E>(error: crate::Error) -> ReadError<E> {
+    match error {
+        crate::Error::ReadTooLarge => ReadError::TooLarge,
+        crate::Error::Serialization(error) => ReadError::Encode(error),
+    }
+}
+
+fn page<E>(
+    snapshot: &Snapshot,
+    position: &SpanPosition,
+    page_size: u32,
+    response_bytes: usize,
+) -> Result<Trace, ReadError<E>> {
+    let spans = &snapshot.trace().spans;
+    let create_page = |count: usize| {
+        let end = position.offset.saturating_add(count).min(spans.len());
+        Trace {
+            summary: snapshot.trace().summary.clone(),
+            agents: snapshot.trace().agents.clone(),
+            spans: spans[position.offset..end].to_vec(),
+            next_cursor: (end < spans.len()).then(|| {
+                encode_cursor(&SpanPosition {
+                    trace_ref: position.trace_ref.clone(),
+                    snapshot_ms: position.snapshot_ms,
+                    offset: end,
+                    version: snapshot.version().to_owned(),
+                })
+            }),
+        }
+    };
+    let mut trace = create_page(page_size as usize);
+    loop {
+        if serde_json::to_vec(&trace).map_err(ReadError::Encode)?.len() <= response_bytes {
+            return Ok(trace);
+        }
+        if trace.spans.len() <= 1 {
+            return Err(ReadError::TooLarge);
+        }
+        trace = create_page(trace.spans.len() / 2);
+    }
+}
+
+pub(super) fn now_ms() -> u64 {
+    (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as u64
+}
+
+pub(super) fn map_store_error<E>(error: StoreError<E>) -> ReadError<E> {
     match error {
         StoreError::TooLarge => ReadError::TooLarge,
         StoreError::Failed(error) => ReadError::Store(error),
     }
-}
-
-fn now_ms() -> u64 {
-    (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as u64
 }

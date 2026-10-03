@@ -1,7 +1,8 @@
 use std::ops::Range;
 
-use crate::{
-    SpendLookup, TraceStore,
+use crate::TraceStore;
+use litellm_traces::{
+    SpendLookup,
     query::named::{
         ReadAccessParams, SpendByResponseIdsParams, SpendByResponseIdsRow, TraceSpansRow,
     },

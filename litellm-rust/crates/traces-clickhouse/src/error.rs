@@ -39,12 +39,3 @@ pub enum Error {
     #[error(transparent)]
     Cached(#[from] std::sync::Arc<Error>),
 }
-
-impl From<litellm_traces_cache::Error> for Error {
-    fn from(error: litellm_traces_cache::Error) -> Self {
-        match error {
-            litellm_traces_cache::Error::Serialization(_) => Self::InvalidResponse,
-            litellm_traces_cache::Error::ReadTooLarge => Self::ReadTooLarge,
-        }
-    }
-}

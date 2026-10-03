@@ -1,9 +1,8 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use litellm_http::ClientVariant;
-use litellm_traces::{
-    QueryScope, ReadError, ReadQuery, Tenant, TraceReader, query::named::ReadAccessParams,
-};
+use litellm_traces::{QueryScope, ReadQuery, Tenant, query::named::ReadAccessParams};
+use litellm_traces_cache::{ReadError, TraceReader};
 use litellm_traces_clickhouse::{
     ClickHouseTraces, Config, Error, InsertTable, Parameter, QueryReaders,
 };
@@ -125,7 +124,7 @@ impl NativeTraceConfig {
 pub struct NativeTraceStorage {
     config: Config,
     query_readers: QueryReaders,
-    reader: TraceReader,
+    reader: Arc<TraceReader>,
 }
 
 #[pymethods]
@@ -137,7 +136,9 @@ impl NativeTraceStorage {
                 config.inner.storage().writer().clone(),
                 config.inner.storage().database().to_owned(),
             ),
-            reader: TraceReader::new(litellm_storage_clickhouse::READ_LIMITS.response_bytes),
+            reader: Arc::new(TraceReader::new(
+                litellm_storage_clickhouse::READ_LIMITS.response_bytes,
+            )),
             config: config.inner.clone(),
         })
     }
@@ -233,7 +234,7 @@ impl NativeTraceStorage {
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
-        let reader = self.reader.clone();
+        let reader = Arc::clone(&self.reader);
         crate::execution::run_async(
             py,
             async move {
@@ -258,7 +259,7 @@ impl NativeTraceStorage {
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
-        let reader = self.reader.clone();
+        let reader = Arc::clone(&self.reader);
         crate::execution::run_async(
             py,
             async move {
@@ -296,7 +297,7 @@ impl NativeTraceStorage {
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
-        let reader = self.reader.clone();
+        let reader = Arc::clone(&self.reader);
         crate::execution::run_async(
             py,
             async move {
@@ -321,7 +322,7 @@ impl NativeTraceStorage {
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
-        let reader = self.reader.clone();
+        let reader = Arc::clone(&self.reader);
         crate::execution::run_async(
             py,
             async move {
