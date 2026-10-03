@@ -725,9 +725,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     return () => subscription.unsubscribe();
   }, [form]);
 
-  const isOAuthPending = oauthStatus === "authorizing" || oauthStatus === "exchanging";
+  const isOAuthPending = ["authorizing", "exchanging"].includes(oauthStatus);
 
   const submitForm = async () => {
+    if (isOAuthPending) return;
     const isValid = await form.trigger(mountedPaths(registry) as string[]);
     if (!isValid) {
       return;
@@ -736,7 +737,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   };
 
   const handleSave = async (values: EditServerFormValues) => {
-    if (!accessToken || isOAuthPending) return;
+    if (!accessToken) return;
     const duplicate = findDuplicateMcpServer(
       existingServers,
       values.server_name || mcpServer.server_name,
