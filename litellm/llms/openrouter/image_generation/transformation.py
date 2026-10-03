@@ -106,11 +106,13 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         """
         usage_data: Final = response_json.get("usage", {})
         if usage_data:
-            prompt_tokens: Final = usage_data.get("prompt_tokens", 0)
-            total_tokens: Final = usage_data.get("total_tokens", 0)
+            # The /images usage schema allows null for completion_tokens_details and image_tokens, and
+            # per-image priced models report only completion_tokens
+            prompt_tokens: Final = usage_data.get("prompt_tokens") or 0
+            total_tokens: Final = usage_data.get("total_tokens") or 0
 
-            completion_tokens_details: Final = usage_data.get("completion_tokens_details", {})
-            image_tokens: Final = completion_tokens_details.get("image_tokens", 0)
+            completion_tokens_details: Final = usage_data.get("completion_tokens_details") or {}
+            image_tokens: Final = completion_tokens_details.get("image_tokens")
 
             model_response.usage = ImageUsage(
                 input_tokens=prompt_tokens,
@@ -118,7 +120,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
                     image_tokens=0,  # Input doesn't contain images for generation
                     text_tokens=prompt_tokens,
                 ),
-                output_tokens=image_tokens,
+                output_tokens=image_tokens if image_tokens is not None else usage_data.get("completion_tokens") or 0,
                 total_tokens=total_tokens,
             )
 

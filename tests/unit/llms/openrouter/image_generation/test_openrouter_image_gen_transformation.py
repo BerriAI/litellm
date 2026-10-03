@@ -297,6 +297,35 @@ def test_transform_response_reports_openrouter_usage_and_cost():
     assert response._hidden_params["model"] == IMAGE_ONLY_MODEL
 
 
+# The ImageGenerationUsage schema in https://openrouter.ai/openapi.json (2026-10-03) requires only
+# prompt_tokens, completion_tokens and total_tokens, allows null for completion_tokens_details and
+# image_tokens, and its example for a per-image priced model has no completion_tokens_details
+PER_IMAGE_USAGE: Final = {"prompt_tokens": 0, "completion_tokens": 4175, "total_tokens": 4175, "cost": 0.04}
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        PER_IMAGE_USAGE,
+        {**PER_IMAGE_USAGE, "completion_tokens_details": None},
+        {**PER_IMAGE_USAGE, "completion_tokens_details": {"image_tokens": None}},
+    ],
+    ids=["no-details", "null-details", "null-image-tokens"],
+)
+def test_transform_response_without_image_tokens_reports_completion_tokens_and_cost(usage: dict[str, object]):
+    response = _transform_response(
+        httpx.Response(200, json={"created": 1790994427, "data": [{"b64_json": "aW1hZ2Ux"}], "usage": usage})
+    )
+
+    assert response.usage == ImageUsage(
+        input_tokens=0,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=0),
+        output_tokens=usage["completion_tokens"],
+        total_tokens=usage["total_tokens"],
+    )
+    assert response._hidden_params["additional_headers"] == {"llm_provider-x-litellm-response-cost": usage["cost"]}
+
+
 def test_transform_response_with_non_json_body_raises_openrouter_exception():
     with pytest.raises(OpenRouterException, match="Error parsing OpenRouter response") as exc_info:
         _transform_response(httpx.Response(502, content=b"<html>bad gateway</html>"))
