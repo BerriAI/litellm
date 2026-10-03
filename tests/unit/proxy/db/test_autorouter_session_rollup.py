@@ -111,13 +111,18 @@ class TestBuildTransaction:
         [
             {"status": "failure"},
             {"api_key": ""},
-            {"session_id": None},
             {"model": ""},
             {"startTime": "not-a-time"},
         ],
     )
     def test_incomplete_payloads_are_skipped(self, payload_overrides: dict):
         assert _build(payload=_payload(**payload_overrides)) is None
+
+    @pytest.mark.parametrize("session_id", [None, ""])
+    def test_a_request_without_a_session_keeps_its_router_day_money(self, session_id: str | None) -> None:
+        transaction: Final = _build(payload=_payload(session_id=session_id))
+        assert transaction is not None
+        assert (transaction.session_id, transaction.router_name, transaction.spend) == ("", "live-auto", 0.01)
 
     @pytest.mark.parametrize("metadata", [{}, {"routing_decision": None}, {"routing_decision": {}}])
     def test_requests_without_a_routing_decision_are_skipped(self, metadata: dict):

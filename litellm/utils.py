@@ -1207,7 +1207,7 @@ def function_setup(
         elif call_type == CallTypes.moderation.value or call_type == CallTypes.amoderation.value:
             messages = args[1] if len(args) > 1 else kwargs["input"]
         elif call_type == CallTypes.atext_completion.value or call_type == CallTypes.text_completion.value:
-            messages = args[0] if len(args) > 0 else kwargs["prompt"]
+            messages = args[0] if len(args) > 0 else kwargs.get("prompt")
         elif call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value:
             messages = kwargs.get("query")
         elif call_type in (CallTypes.search.value, CallTypes.asearch.value):
@@ -8861,8 +8861,13 @@ class ProviderConfigManager:
             return litellm.AzureAIRerankConfig()
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityRerankConfig()
-        elif litellm.LlmProviders.JINA_AI == provider:
-            return litellm.JinaAIRerankConfig()
+        elif provider in (litellm.LlmProviders.JINA_AI, litellm.LlmProviders.SCALEWAY):
+            # Scaleway's rerank API matches Jina's, so its config extends Jina's.
+            return (
+                litellm.ScalewayRerankConfig()
+                if provider == litellm.LlmProviders.SCALEWAY
+                else litellm.JinaAIRerankConfig()
+            )
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMRerankConfig()
         elif litellm.LlmProviders.HUGGINGFACE == provider:

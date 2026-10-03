@@ -31,8 +31,14 @@ class _GitHubUser(_GitHubModel):
     login: str | None = None
 
 
+class _GitHubHeadRepository(_GitHubModel):
+    full_name: str = ""
+
+
 class _GitHubHead(_GitHubModel):
     sha: str = ""
+    ref: str = ""
+    repo: _GitHubHeadRepository | None = None
 
 
 class GitHubPullListItem(_GitHubModel):
@@ -315,6 +321,7 @@ class GitHub:
     ) -> None:
         if client is not None and transport is not None:
             raise ValueError("Pass either an injected GitHub client or a transport.")
+        self._settings: Final = settings
         self._profiles: Mapping[str, str | None] = MappingProxyType({})
         token: Final = settings.github_token.get_secret_value()
         self._headers: Final[Mapping[str, str]] = (
@@ -472,7 +479,11 @@ class GitHub:
             if address
         )
         changed_files: Final = detail.changed_files if detail.changed_files is not None else len(files)
+        from litellm.proxy.roi_calculator.source import repository_tag
+
         evidence: Final[ROIPullEvidence] = {
+            "source_repo": repository_tag(self._settings, detail.head.repo.full_name) if detail.head.repo else "",
+            "source_branch": detail.head.ref,
             "repo": repo,
             "number": detail.number,
             "title": detail.title,

@@ -49,14 +49,17 @@ describe("RunView", () => {
     vi.mocked(copyToClipboard).mockClear();
   });
 
-  it("shows a one-line run header: agent name, trace id, duration and steps", async () => {
+  it("shows the run name, copyable ID and run totals", async () => {
     renderRun(research);
 
     const header = await screen.findByRole("banner");
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(research.summary));
-    expect(header).toHaveTextContent(research.summary.trace_id);
-    expect(header).toHaveTextContent("duration 40.20s");
-    expect(header).toHaveTextContent(`steps ${research.summary.span_count}`);
+    expect(within(header).getByRole("button", { name: "Copy trace ID" })).toHaveAttribute(
+      "title",
+      research.summary.trace_id,
+    );
+    expect(header).toHaveTextContent("Duration 40.20s");
+    expect(header).toHaveTextContent(`Steps ${research.summary.span_count}`);
     expect(header).not.toHaveTextContent("failed");
   });
 
@@ -86,7 +89,7 @@ describe("RunView", () => {
 
     const tree = await screen.findByRole("tree", { name: "Spans in time order" });
     expect(tree).toHaveTextContent("researcher×12");
-    expect(screen.getByRole("banner")).toHaveTextContent(`failed ${swarm.summary.error_count}`);
+    expect(screen.getByRole("banner")).toHaveTextContent(`Step errors ${swarm.summary.error_count}`);
   });
 
   it("opens a failed run on its first failed span", async () => {
@@ -127,6 +130,8 @@ describe("RunView", () => {
     const pane = await screen.findByTestId("detail-pane");
     const root = rootSpanId(research);
     expect(pane).toHaveAttribute("data-row-id", root);
+    await user.keyboard("{Meta>}j{/Meta}{Control>}j{/Control}");
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", root);
     await user.keyboard("j");
     expect(screen.getByTestId("detail-pane").getAttribute("data-row-id")).not.toBe(root);
     await user.keyboard("k");
@@ -161,6 +166,57 @@ describe("RunView", () => {
     expect(onBack).toHaveBeenCalledTimes(1);
   });
 
+  it("finds a step beyond a folded group's first page and reveals it after search clears", async () => {
+    const user = userEvent.setup();
+    const root = research.spans.find((span) => span.parent_span_id === null)!;
+    const children = Array.from(
+      { length: 45 },
+      (_, index): Span => ({
+        ...root,
+        span_id: `case-${index}`,
+        parent_span_id: root.span_id,
+        type: "tool",
+        name: "check_case",
+        input_preview: `Case ${index}`,
+        start_offset_ms: index + 1,
+        status: index === 44 ? "error" : "ok",
+      }),
+    );
+    renderRun({ ...research, spans: [root, ...children] });
+    const search = await screen.findByRole("textbox", { name: "Search steps" });
+    await user.type(search, "case 43");
+    expect(screen.getAllByRole("treeitem")).toHaveLength(1);
+    await user.click(screen.getByRole("treeitem"));
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", "case-43");
+    await user.click(screen.getByRole("button", { name: "Clear step search" }));
+    expect(screen.getByRole("treeitem", { selected: true })).toHaveAttribute("data-row-id", "case-43");
+    await user.click(screen.getByRole("button", { name: /^Errors/ }));
+    expect(screen.getAllByRole("treeitem")).toHaveLength(1);
+    expect(screen.getByRole("treeitem")).toHaveAttribute("data-row-id", "case-44");
+    await user.type(search, "not present");
+    expect(screen.getByText("No matching steps")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getAllByRole("treeitem").length).toBeGreaterThan(1);
+  });
+
+  it("does not navigate steps while typing or moving the search cursor", async () => {
+    const user = userEvent.setup();
+    renderRun(research);
+    const search = await screen.findByRole("textbox", { name: "Search steps" });
+    const selected = screen.getByTestId("detail-pane").getAttribute("data-row-id");
+    await user.type(search, "jk{ArrowDown}{ArrowUp}");
+    expect(search).toHaveValue("jk");
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", selected);
+  });
+
+  it("distinguishes a completed run with recovered step errors from a failed run", async () => {
+    renderRun({ ...research, summary: { ...research.summary, status: "ok", error_count: 2 } });
+    const header = await screen.findByRole("banner");
+    expect(header).toHaveTextContent("Completed");
+    expect(header).toHaveTextContent("Step errors 2");
+    expect(header).not.toHaveTextContent("Failed");
+  });
+
   it("copies a curl one-liner for Claude / Codex", async () => {
     const user = userEvent.setup();
     renderRun(research);
@@ -186,6 +242,16 @@ describe("initialRunSelection", () => {
     const toolFailure = child(toolFields);
     const trace = { ...research, spans: [base, hiddenFailure, toolFailure] };
     expect(initialRunSelection(trace).selectedId).toBe("tool");
+  });
+
+  it("folds other agent branches while revealing the failed step", () => {
+    const first = child({ span_id: "first", type: "agent" });
+    const second = child({ span_id: "second", type: "agent" });
+    const failure = child({ span_id: "failed", parent_span_id: "second", type: "tool", status: "error" });
+    const { selectedId, state } = initialRunSelection({ ...research, spans: [base, first, second, failure] });
+    expect(selectedId).toBe("failed");
+    expect(state.collapsedSpanIds.has("first")).toBe(true);
+    expect(state.collapsedSpanIds.has("second")).toBe(false);
   });
 
   it("falls back to the nearest visible ancestor when only a hidden span failed", () => {
