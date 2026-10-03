@@ -1439,6 +1439,7 @@ _PROJECTS: Final = (
     _ProjectRow("p-b1", "team-b1"),
     _ProjectRow("p-orgless", "team-orgless"),
     _ProjectRow("p-teamless", None),
+    _ProjectRow("p-deleted-team", "team-deleted"),
 )
 _USERS: Final = {
     user.user_id: user
@@ -1569,6 +1570,7 @@ async def test_project_info_allows_team_members_and_org_admins_of_the_team_org(p
         ("org-admin-a", "p-b1"),
         ("org-admin-a", "p-orgless"),
         ("org-admin-a", "p-teamless"),
+        ("member", "p-deleted-team"),
     ],
 )
 async def test_project_info_denies_callers_who_cannot_view_the_team(project_access_db, user_id, project_id):

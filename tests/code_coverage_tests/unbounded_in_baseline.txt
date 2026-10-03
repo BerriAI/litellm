@@ -1,7 +1,6 @@
 # Grandfathered findings of check_unbounded_in_lists.py: path::scope::kind::subject::occurrence.
 # Fix a site and delete its line; regenerate with `check_unbounded_in_lists.py --update-baseline`.
 enterprise/litellm_enterprise/proxy/common_utils/check_responses_cost.py CheckResponsesCost.check_responses_cost prisma id.in `[job.id for job in completed_jobs]` 0
-enterprise/litellm_enterprise/proxy/management_endpoints/project_endpoints.py list_projects prisma team_id.in `user_team_ids` 0
 litellm/integrations/shadow_eval_logger.py ShadowEvalLogger._active_jobs prisma job_id.in `[str(record.id) for record in records]` 0
 litellm/llms/litellm_proxy/skills/handler.py LiteLLMSkillsHandler.list_skills prisma created_by.in `owner_scopes` 0
 litellm/proxy/_experimental/mcp_server/db.py get_mcp_servers prisma server_id.in `server_ids` 0
