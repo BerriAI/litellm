@@ -1788,6 +1788,35 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
             else:
                 raise ValueError(f"Chat provider: Invalid text delta {parsed_chunk}")
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED:
+            # A url_citation / file_citation arrived for the in-flight message.
+            # Emit it on the delta exactly once in Chat Completions format —
+            # this is the only event that carries it, so later
+            # output_item.done / response.completed events must not repeat it
+            # or accumulating clients would see duplicates (issue #43817).
+            raw_annotation: Final = parsed_chunk.get("annotation", None)
+            annotation: Final = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
+                [raw_annotation] if raw_annotation is not None else None
+            )
+            if annotation:
+                return ModelResponseStream(
+                    choices=[
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(annotations=annotation),
+                            finish_reason=None,
+                        )
+                    ]
+                )
+            return ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(),
+                        finish_reason=None,
+                    )
+                ]
+            )
         elif event_type == "response.reasoning_summary_text.delta":
             content_part = parsed_chunk.get("delta", None)
             if content_part:
