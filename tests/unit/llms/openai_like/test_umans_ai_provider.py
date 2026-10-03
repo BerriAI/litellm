@@ -185,3 +185,195 @@ async def test_umans_ai_anthropic_messages_request(monkeypatch: pytest.MonkeyPat
     assert body["model"] == "umans-deepseek-v4-flash-0731"
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert response["content"][0]["text"] == "Hello from Umans AI"
+
+
+UMANS_PRICING: Final = (
+    # model, then USD per token for input, output and cache read (app.umans.ai/pricing)
+    ("umans-ai/umans-deepseek-v4-flash-0731", 1.4e-07, 2.8e-07, 2.8e-08),
+    ("umans-ai/umans-deepseek-v4.1-flash", 1.5e-07, 6e-07, 2.8e-08),
+    ("umans-ai/umans-glm-5.3-flash", 1.5e-07, 5e-07, 3e-08),
+    ("umans-ai/umans-kimi-k3", 3e-06, 1.5e-05, 3e-07),
+    ("umans-ai/umans-flash", 1.5e-07, 1e-06, 5e-08),
+    ("umans-ai/umans-coder", 1.5e-07, 5e-07, 3e-08),
+)
+
+
+def _load_cost_map(filename: str = "model_prices_and_context_window.json") -> dict:
+    with open(Path(__file__).parents[4] / filename) as f:
+        return json.load(f)
+
+
+@pytest.mark.parametrize(("model", "input_cost", "output_cost", "cache_read_cost"), UMANS_PRICING)
+def test_umans_ai_models_are_priced(model: str, input_cost: float, output_cost: float, cache_read_cost: float):
+    entry: Final = _load_cost_map()[model]
+
+    assert entry["litellm_provider"] == "umans-ai"
+    assert entry["mode"] == "chat"
+    assert entry["input_cost_per_token"] == input_cost
+    assert entry["output_cost_per_token"] == output_cost
+    assert entry["cache_read_input_token_cost"] == cache_read_cost
+    assert _load_cost_map("litellm/model_prices_and_context_window_backup.json")[model] == entry
+
+
+def test_umans_ai_usage_is_billed():
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model="umans-ai/umans-deepseek-v4-flash-0731",
+        prompt_tokens=1_000_000,
+        completion_tokens=1_000_000,
+    )
+
+    assert prompt_cost == pytest.approx(0.14)
+    assert completion_cost == pytest.approx(0.28)
+
+
+def _sse(*events: dict) -> bytes:
+    return b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in events) + b"data: [DONE]\n\n"
+
+
+def _typed_sse(*events: dict) -> bytes:
+    return b"".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events)
+
+
+def test_umans_ai_chat_completion_streaming_request():
+    chunk: Final = {
+        "id": "chatcmpl_umans",
+        "object": "chat.completion.chunk",
+        "created": 1_789_550_000,
+        "model": "umans-deepseek-v4-flash-0731",
+    }
+    stream_body: Final = _sse(
+        {
+            **chunk,
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hello from "}, "finish_reason": None}],
+        },
+        {**chunk, "choices": [{"index": 0, "delta": {"content": "Umans AI"}, "finish_reason": None}]},
+        {**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+    )
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.code.umans.ai/v1/chat/completions").respond(
+            200, content=stream_body, headers={"content-type": "text/event-stream"}
+        )
+        chunks: Final = list(
+            litellm.completion(
+                model="umans-ai/umans-deepseek-v4-flash-0731",
+                messages=[{"role": "user", "content": "Say hello"}],
+                api_key="umans-test-key",
+                stream=True,
+            )
+        )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert route.call_count == 1
+    assert str(route.calls.last.request.url) == "https://api.code.umans.ai/v1/chat/completions"
+    assert body["stream"] is True
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "Hello from Umans AI"
+
+
+def test_umans_ai_responses_streaming_request():
+    response: Final = {
+        "id": "resp_umans",
+        "object": "response",
+        "created_at": 1_789_550_000,
+        "model": "umans-deepseek-v4-flash-0731",
+        "status": "in_progress",
+        "output": [],
+    }
+    message: Final = {
+        "id": "msg_umans",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": "Hello from Umans AI", "annotations": []}],
+    }
+    stream_body: Final = _typed_sse(
+        {"type": "response.created", "sequence_number": 0, "response": response},
+        {
+            "type": "response.output_text.delta",
+            "sequence_number": 1,
+            "item_id": "msg_umans",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Hello from Umans AI",
+        },
+        {
+            "type": "response.completed",
+            "sequence_number": 2,
+            "response": {
+                **response,
+                "status": "completed",
+                "output": [message],
+                "usage": {"input_tokens": 4, "output_tokens": 3, "total_tokens": 7},
+            },
+        },
+    )
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.code.umans.ai/v1/responses").respond(
+            200, content=stream_body, headers={"content-type": "text/event-stream"}
+        )
+        events: Final = list(
+            litellm.responses(
+                model="umans-ai/umans-deepseek-v4-flash-0731",
+                input="Say hello",
+                api_key="umans-test-key",
+                stream=True,
+            )
+        )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert route.call_count == 1
+    assert str(route.calls.last.request.url) == "https://api.code.umans.ai/v1/responses"
+    assert body["stream"] is True
+    assert "".join(event.delta for event in events if event.type == "response.output_text.delta") == (
+        "Hello from Umans AI"
+    )
+    assert events[-1].type == "response.completed"
+
+
+@pytest.mark.asyncio
+async def test_umans_ai_anthropic_messages_streaming_request(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    stream_body: Final = _typed_sse(
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_umans",
+                "type": "message",
+                "role": "assistant",
+                "model": "umans-deepseek-v4-flash-0731",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 4, "output_tokens": 0},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello from Umans AI"}},
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 3},
+        },
+        {"type": "message_stop"},
+    )
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.code.umans.ai/v1/messages").respond(
+            200, content=stream_body, headers={"content-type": "text/event-stream"}
+        )
+        stream = await litellm.anthropic.messages.acreate(
+            model="umans-ai/umans-deepseek-v4-flash-0731",
+            messages=[{"role": "user", "content": "Say hello"}],
+            max_tokens=32,
+            api_key="umans-test-key",
+            stream=True,
+        )
+        streamed: Final = b"".join([chunk async for chunk in stream]).decode()
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert route.call_count == 1
+    assert str(route.calls.last.request.url) == "https://api.code.umans.ai/v1/messages"
+    assert body["stream"] is True
+    assert "event: message_start" in streamed
+    assert "Hello from Umans AI" in streamed
+    assert "event: message_stop" in streamed
