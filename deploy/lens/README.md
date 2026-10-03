@@ -4,13 +4,28 @@ Lens reviews recorded activity and saves evidence-linked findings in the LiteLLM
 
 ## Start a worker
 
-Upgrade your existing LiteLLM proxy to a release that includes Lens with PostgreSQL, agent tracing (`general_settings.tracing: {store: clickhouse}`), and ClickHouse configured through `CLICKHOUSE_URL` and a separate SELECT-only `CLICKHOUSE_READER_URL`. Enable the ClickHouse callback and request/response logging to analyze LLM requests. Lens can only inspect content you actually retain
+Upgrade your existing LiteLLM proxy to a release that includes Lens with PostgreSQL and agent tracing. Configure one ClickHouse URL for trace writes, bounded reads, and Lens queries:
 
-In Lens, click **Set up analysis**, choose an existing virtual key or **Create worker key**, then **Generate setup command**. The LiteLLM address is filled in for you; change it only if the server running Docker needs a different network address. Copy the command and run it on your server. The dialog changes to **Analyzer connected** when the container checks in
+```yaml
+general_settings:
+  tracing:
+    store:
+      type: clickhouse
+      url: os.environ/CLICKHOUSE_URL
+      retention_days: 14
+```
+
+The URL, database, and retention settings can also come from `CLICKHOUSE_URL`, `CLICKHOUSE_DATABASE`, and `AGENT_TRACING_RETENTION_DAYS` when omitted from YAML. A YAML value wins when both are set. The database defaults to `litellm`. `retention_days` defaults to 14 and applies to both traces and spend logs
+
+Retention changes require a proxy restart. ClickHouse removes expired rows during background merges, not immediately at startup. Enable request/response logging to analyze LLM requests. Lens can only inspect content you actually retain
+
+In **Lens > Investigations**, click **Connect worker**, choose an analysis model and monthly limit, then **Get install command**. Use **Advanced options** to select an existing virtual key or change the proxy URL if the server running Docker needs a different network address. Copy the command and run it on your server. The dashboard shows **Worker connected** when the container checks in
 
 The command already contains the compatible worker image and one worker token. The selected virtual key stays on the proxy; its secret is never sent to the worker. No source checkout, environment file, or second LiteLLM deployment is needed. Keep the command private because it includes the token. The LiteLLM release provides the dashboard and APIs; the container only runs background analysis
 
-The dashboard and Compose file pin a verified worker image by digest. The image uses Linux amd64, and the generated command selects that platform. Worker image releases are independent of proxy releases: update the pinned image when changing their API contract. CI also publishes immutable commit tags for reproducible builds
+The dashboard and Compose file pin a verified worker image by digest. The image uses Linux amd64, and the generated command selects that platform. CI also publishes immutable `:sha-<commit>` tags for successful worker builds on `main`. Keep the worker image compatible with your gateway version
+
+After upgrading the gateway, update the worker image and redeploy it while keeping its proxy URL and token. Existing containers do not update automatically. If an investigation reports a worker compatibility error, update the image before retrying
 
 For deployments managed with Compose, download `compose.yaml` and provide `LITELLM_URL` and `LENS_WORKER_TOKEN` in an environment file. Its default image is already selected:
 
@@ -18,7 +33,7 @@ For deployments managed with Compose, download `compose.yaml` and provide `LITEL
 docker compose --env-file /path/to/lens.env -f compose.yaml up -d
 ```
 
-Developers can build locally with `LENS_WORKER_IMAGE=litellm-lens-worker:local docker compose -f deploy/lens/compose.yaml -f deploy/lens/compose.build.yaml up -d --build`
+Developers can build locally with `LENS_WORKER_IMAGE=litellm-lens-worker:local docker compose -f deploy/lens/compose.yaml -f deploy/lens/compose.build.yaml up -d --build`. To work on Lens itself, `make lens-dev` runs the proxy, a worker from source and the hot-reload dashboard together; set `LENS_DEV_PROXY_PORT` / `LENS_DEV_UI_PORT` to move them off 4000/3000
 
 The generated command gives the worker 1 GiB of temporary memory-backed storage, shared across parallel reviews. Change `size=1g` in the Docker command or set `LENS_WORKER_TMP_SIZE` with Compose to fit your server and workload. A storage failure marks the scan as failed, cleans up temporary traces, and leaves the worker available for other scans; it does not silently truncate the review. Existing workers must be recreated with the new image and mount options
 

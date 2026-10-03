@@ -5,7 +5,7 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +15,10 @@ from typing import Final
 import httpx
 import psutil
 from integration._support.client import GATEWAY_LIMITS, Gateway
+
+DB_PUSH: Final = ("--use_prisma_db_push",)
+MIGRATE_DEPLOY: Final = ()
+LEGACY_MIGRATE_DEPLOY: Final = ("--use_legacy_migration_resolver",)
 
 
 def proxy_database_environment() -> Mapping[str, str]:
@@ -46,12 +50,16 @@ def signal_group(group: int, action: int) -> None:
         pass
 
 
+def graceful_stop_seconds() -> float:
+    return max(30.0, float(os.environ.get("INTEGRATION_PROXY_READY_SECONDS", "70")))
+
+
 def stop_root_process(process: subprocess.Popen[bytes]) -> bool:
     if process.poll() is not None:
         return True
     process.terminate()
     try:
-        process.wait(timeout=30)
+        process.wait(timeout=graceful_stop_seconds())
     except subprocess.TimeoutExpired:
         return False
     return True
@@ -73,9 +81,16 @@ def owned_proxy(
     config: Path | None = None,
     remove_environment: tuple[str, ...] = (),
     workers: int = 1,
+    database_setup: tuple[str, ...] = DB_PUSH,
 ) -> Iterator[Gateway]:
     with owned_proxy_process(
-        gateway, directory, overrides, config=config, remove_environment=remove_environment, workers=workers
+        gateway,
+        directory,
+        overrides,
+        config=config,
+        remove_environment=remove_environment,
+        workers=workers,
+        database_setup=database_setup,
     ) as owned:
         yield owned.gateway
 
@@ -133,7 +148,7 @@ def _lost_port_race(launch: _Launch) -> bool:
 
 def _wait_until_ready(launch: _Launch) -> None:
     with httpx.Client(base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False) as client:
-        deadline: Final = time.monotonic() + 70
+        deadline: Final = time.monotonic() + float(os.environ.get("INTEGRATION_PROXY_READY_SECONDS", "70"))
         while launch.process.poll() is None:
             try:
                 if client.get("/health/readiness", timeout=2).status_code == 200:
@@ -171,6 +186,8 @@ def owned_proxy_process(
     config: Path | None = None,
     remove_environment: tuple[str, ...] = (),
     workers: int = 1,
+    database_setup: tuple[str, ...] = DB_PUSH,
+    extra_arguments: tuple[str, ...] = (),
 ) -> Iterator[OwnedProxy]:
     root: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
     environment: Final = {
@@ -196,8 +213,8 @@ def owned_proxy_process(
         "127.0.0.1",
         "--num_workers",
         str(workers),
-        "--use_prisma_db_push",
-        "--enforce_prisma_migration_check",
+        *database_setup,
+        *extra_arguments,
     )
     launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS)
     process: Final = launch.process
@@ -208,3 +225,65 @@ def owned_proxy_process(
             yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, launch.log)
     finally:
         _stop(process)
+
+
+_UPSTREAM_READY_SECONDS: Final = 60
+
+
+class UpstreamSlot:
+    """A scripted upstream a test module owns on a fixed port, so a cell can take it down and bring it back."""
+
+    __slots__ = ("directory", "port", "process", "root")
+
+    def __init__(self, directory: Path, port: int, root: Path) -> None:
+        self.directory = directory
+        self.port = port
+        self.root = root
+        self.process: subprocess.Popen[bytes] | None = None
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def start(self) -> None:
+        assert self.process is None, "Owned upstream is already running"
+        output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR") or self.directory)
+        log_path: Final = output / f"owned-upstream-{self.port}-{uuid.uuid4().hex}.log"
+        with log_path.open("w") as log:
+            process: Final = subprocess.Popen(
+                [sys.executable, "-m", "integration._support.upstream", "--port", str(self.port)],
+                cwd=self.root,
+                env=dict(os.environ),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        self.process = process
+        deadline: Final = time.monotonic() + _UPSTREAM_READY_SECONDS
+        while process.poll() is None:
+            try:
+                if httpx.get(f"{self.url}/health", timeout=2, trust_env=False).status_code == 200:
+                    return
+            except httpx.TransportError:
+                pass
+            assert time.monotonic() < deadline, f"Owned upstream readiness deadline exceeded: {log_path}"
+            time.sleep(0.1)
+        raise AssertionError(f"Owned upstream exited before readiness: {log_path}")
+
+    def stop(self) -> None:
+        process: Final = self.process
+        assert process is not None, "Owned upstream is not running"
+        self.process = None
+        _stop(process)
+
+
+@contextmanager
+def owned_upstream(directory: Path) -> Generator[UpstreamSlot]:
+    root: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
+    slot: Final = UpstreamSlot(directory, _free_port(), root)
+    slot.start()
+    try:
+        yield slot
+    finally:
+        if slot.process is not None:
+            slot.stop()

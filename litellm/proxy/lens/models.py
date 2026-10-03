@@ -1,7 +1,27 @@
-from datetime import datetime
-from typing import Final, Literal
+from datetime import datetime, timedelta, timezone
+from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+
+
+def calendar_lookback(hours: int) -> int:
+    try:
+        datetime.now(timezone.utc) - timedelta(hours=hours)
+    except OverflowError as error:
+        raise ValueError("Lookback exceeds the supported calendar range") from error
+    return hours
+
+
+def calendar_interval(minutes: int) -> int:
+    try:
+        datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    except OverflowError as error:
+        raise ValueError("Interval exceeds the supported calendar range") from error
+    return minutes
+
+
+LookbackHours: TypeAlias = Annotated[int, Field(ge=1), AfterValidator(calendar_lookback)]
+IntervalMinutes: TypeAlias = Annotated[int, Field(ge=1), AfterValidator(calendar_interval)]
 
 
 class Record(BaseModel):
@@ -15,33 +35,34 @@ class Scope(Record):
 
 
 class MetadataFilter(Record):
-    key: str = Field(min_length=1, max_length=200)
-    value: str = Field(min_length=1, max_length=500)
+    key: str = Field(min_length=1)
+    value: str = Field(min_length=1)
 
 
 class Check(Record):
-    id: str = Field(min_length=1, max_length=80)
-    instruction: str = Field(min_length=3, max_length=3000)
+    id: str = Field(min_length=1)
+    instruction: str = Field(min_length=3)
     enabled: bool = True
 
 
 class LensSettings(Record):
-    name: str = Field(min_length=1, max_length=100)
-    context: str = Field(default="", max_length=6000)
+    name: str = Field(min_length=1)
+    context: str = Field(default="")
     source: Literal["traces", "requests", "both"] = "traces"
-    lookback_hours: int = Field(default=24, ge=1, le=720)
-    service: str = Field(default="", max_length=200)
-    filters: tuple[MetadataFilter, ...] = Field(default=(), max_length=8)
+    lookback_hours: LookbackHours = 24
+    service: str = Field(default="")
+    agent_name: str = Field(default="")
+    filters: tuple[MetadataFilter, ...] = Field(default=())
     checks: tuple[Check, ...] = ()
-    model: str = Field(min_length=1, max_length=200)
+    model: str = Field(min_length=1)
     enabled: bool = True
-    interval_minutes: int = Field(default=15, ge=1, le=10080)
+    interval_minutes: IntervalMinutes = 15
     sample_size: int | None = Field(default=None, ge=1)
     sample_percent: float = Field(default=100, gt=0, le=100, allow_inf_nan=False)
     concurrency: int = Field(default=8, ge=1)
     team_id: str = ""
     execution_ids: tuple[str, ...] = ()
-    monthly_budget: float = Field(default=20, gt=0, le=100000, allow_inf_nan=False)
+    monthly_budget: float = Field(default=100, gt=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def unique_checks(self) -> "LensSettings":
@@ -71,19 +92,32 @@ class LensSettings(Record):
 class Evidence(Record):
     execution_id: str
     span_id: str
-    quote: str = Field(min_length=1, max_length=1000)
+    quote: str = Field(min_length=1)
     role: Literal["support", "counterexample"] = "support"
 
 
+class AgentTestCase(Record):
+    input: str = Field(min_length=1)
+    expected: str = Field(min_length=1)
+
+
+class IssueBrief(Record):
+    problem: str = Field(min_length=10)
+    user_goal: str = Field(min_length=3)
+    what_happened: str = Field(min_length=3)
+    test_cases: tuple[AgentTestCase, ...] = Field(min_length=1)
+
+
 class FindingDraft(Record):
-    title: str = Field(min_length=3, max_length=160)
-    description: str = Field(min_length=10, max_length=4000)
+    title: str = Field(min_length=3)
+    description: str = Field(min_length=10)
     check_id: str
     kind: Literal["issue", "pattern"] = "issue"
     priority: Literal["high", "medium", "low"] = "medium"
-    suggestion: str = Field(default="", max_length=2000)
-    limitation: str = Field(default="", max_length=600)
-    evidence: tuple[Evidence, ...] = Field(min_length=1, max_length=20)
+    suggestion: str = Field(default="")
+    limitation: str = Field(default="")
+    brief: IssueBrief | None = None
+    evidence: tuple[Evidence, ...] = Field(min_length=1)
     existing_finding_id: str | None = None
 
 
@@ -156,6 +190,20 @@ class RunAssessment(Record):
     cannot_assess: bool = False
 
 
+MAX_STEPS = 200
+
+
+class Step(Record):
+    at: datetime
+    kind: Literal["stage", "model", "error"]
+    label: str = Field(max_length=200)
+    model: str = Field(default="", max_length=200)
+    purpose: str = Field(default="", max_length=40)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost: float = 0
+
+
 class Job(Record):
     id: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"] = "queued"
@@ -175,6 +223,8 @@ class Job(Record):
     cost: float = 0
     findings: tuple[Finding, ...] | None = None
     assessments: tuple[RunAssessment, ...] = ()
+    steps: tuple[Step, ...] = ()
+    trigger: Literal["schedule", "manual"] = "schedule"
 
 
 class Lens(Record):
@@ -214,12 +264,34 @@ class LensList(Record):
 
 class RunRequest(Record):
     settings: LensSettings | None = None
-    lookback_hours: int | None = Field(default=None, ge=1, le=720)
+    lookback_hours: LookbackHours | None = None
+    start: datetime | None = None
+    end: datetime | None = None
+    agent_name: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def ordered_window(self) -> "RunRequest":
+        if (self.start is None) != (self.end is None):
+            raise ValueError("Choose both a start and an end time")
+        if self.start is not None and self.end is not None and self.start >= self.end:
+            raise ValueError("Start time must be before end time")
+        return self
+
+
+class WatchSkipped(Record):
+    id: str
+    name: str
+    reason: str
+
+
+class WatchAllResult(Record):
+    watching: tuple[str, ...]
+    skipped: tuple[WatchSkipped, ...] = ()
 
 
 class FindingUpdate(Record):
     status: Literal["open", "resolved", "dismissed"]
-    reason: str = Field(default="", max_length=2000)
+    reason: str = Field(default="")
 
 
 class Claim(Record):
@@ -229,7 +301,7 @@ class Claim(Record):
 
 
 class Progress(Record):
-    stage: str = Field(max_length=100)
+    stage: str = Field()
     coverage: Coverage = Coverage()
 
 
@@ -237,14 +309,15 @@ class Result(Record):
     assessments: tuple[RunAssessment, ...] = ()
     findings: tuple[FindingDraft, ...] = ()
     coverage: Coverage
-    error: str = Field(default="", max_length=1000)
+    error: str = Field(default="")
 
 
 class ModelRequest(Record):
-    prompt: str = Field(min_length=1, max_length=100000)
+    prompt: str = Field(min_length=1)
     purpose: Literal["extract", "cluster", "investigate"]
 
 
 class ModelResult(Record):
     content: str
     cost: float
+    finish_reason: Literal["length", "content_filter"] | None = Field(default=None, exclude=True)

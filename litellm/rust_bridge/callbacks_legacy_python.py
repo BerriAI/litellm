@@ -124,7 +124,7 @@ class LoggingSurface(Protocol):
     ) -> object: ...
 
     def handle_sync_success_callbacks_for_async_calls(
-        self, result: object, start_time: datetime.datetime, end_time: datetime.datetime, cache_hit: object = None
+        self, result: object, start_time: datetime.datetime, end_time: datetime.datetime, cache_hit: bool | None = None
     ) -> None: ...
 
     def failure_handler(

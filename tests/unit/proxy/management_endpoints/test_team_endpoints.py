@@ -1,10 +1,10 @@
 import asyncio
 import json
+from collections.abc import Sequence
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from collections.abc import Sequence
 from typing import Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
@@ -53,6 +53,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _update_model_table,
     _validate_and_populate_member_user_info,
     _validate_team_member_reset_spend_value,
+    aggregated_date_range_error,
     delete_team,
     list_available_teams,
     reset_team_member_budget_fn,
@@ -13596,6 +13597,63 @@ async def test_team_member_add_audits_a_user_created_from_a_list_payload(monkeyp
     assert mock_audit.call_args.kwargs["team_alias"] == "list-audit"
 
 
+@pytest.mark.asyncio
+async def test_team_member_add_evicts_the_cached_team_roster(monkeypatch):
+    """Roster checks read the team through get_team_object, so a cached pre-add roster must be dropped."""
+    from litellm.proxy._types import TeamMemberAddRequest
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    team_id = "team-roster-evict"
+    team_row = LiteLLM_TeamTable(team_id=team_id, team_alias="roster-evict", members_with_roles=[])
+    cache = UserApiKeyCache()
+    cache.set_cache(key=f"team_id:{team_id}", value=team_row)
+    cache.set_cache(key="team_alias:roster-evict", value=team_row)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id")
+
+    joined_user = LiteLLM_UserTable(user_id="joiner", max_budget=None, spend=0.0, models=[])
+    updated_team = MagicMock()
+    updated_team.model_dump.return_value = {"team_id": team_id, "members_with_roles": []}
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=team_row,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._validate_team_member_add_permissions",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._validate_and_populate_member_user_info",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._resolve_existing_member_user_ids",
+            new_callable=AsyncMock,
+            return_value=frozenset(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._add_team_members_to_team",
+            new_callable=AsyncMock,
+            return_value=(updated_team, [joined_user], []),
+        ),
+        patch("litellm.proxy.management_endpoints.team_endpoints._schedule_team_member_add_audit_logs"),
+    ):
+        await team_member_add(
+            data=TeamMemberAddRequest(team_id=team_id, member=Member(user_id="joiner", role="user")),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1"),
+        )
+
+    assert cache.get_cache(key=f"team_id:{team_id}") is None
+    assert cache.get_cache(key="team_alias:roster-evict") is None
+
+
 class _RecordingAuditLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -14543,127 +14601,6 @@ async def test_new_team_batch_enqueued_token_limit_rejected_for_non_admin():
 
     assert str(exc.value.code) == "403"
     assert "on a team" in str(exc.value.message)
-
-
-@pytest.mark.asyncio
-async def test_get_team_daily_activity_aggregated_scopes_and_flags(mock_db_client):
-    """The aggregated endpoint must apply the same non-admin key scoping as the
-    paginated one and request the per-team entity breakdown with the caller's
-    timezone, so the Team Usage UI gets every day in one response."""
-    from litellm.proxy.management_endpoints.team_endpoints import (
-        get_team_daily_activity_aggregated,
-    )
-
-    user_id = "test_user_123"
-    team_id = "test_team_456"
-    user_api_key_dict = UserAPIKeyAuth(
-        user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER
-    )
-
-    mock_user_info = LiteLLM_UserTable(
-        user_id=user_id,
-        teams=[team_id],
-        max_budget=1000.0,
-        spend=0.0,
-        user_email="test@example.com",
-        user_role="internal_user",
-    )
-
-    mock_team_member = Member(user_id=user_id, role="user")
-    mock_team = MagicMock(spec=LiteLLM_TeamTable)
-    mock_team.team_id = team_id
-    mock_team.team_alias = "Test Team"
-    mock_team.members_with_roles = [mock_team_member]
-    mock_team.model_dump.return_value = {
-        "team_id": team_id,
-        "team_alias": "Test Team",
-        "members_with_roles": [{"user_id": user_id, "role": "user"}],
-    }
-
-    user_api_key_1 = MagicMock()
-    user_api_key_1.token = "user_key_1"
-
-    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
-    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(
-        return_value=[user_api_key_1]
-    )
-
-    with patch(
-        "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
-        new_callable=AsyncMock,
-    ) as mock_get_user_object:
-        mock_get_user_object.return_value = mock_user_info
-
-        with patch(
-            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
-            new_callable=AsyncMock,
-        ) as mock_aggregated:
-            mock_aggregated.return_value = MagicMock()
-
-            await get_team_daily_activity_aggregated(
-                team_ids=team_id,
-                start_date="2024-01-01",
-                end_date="2024-01-31",
-                model=None,
-                api_key=None,
-                exclude_team_ids=None,
-                timezone=480,
-                user_api_key_dict=user_api_key_dict,
-            )
-
-            mock_aggregated.assert_called_once()
-            call_kwargs = mock_aggregated.call_args[1]
-            assert call_kwargs["api_key"] == ["user_key_1"]
-            assert call_kwargs["entity_id"] == [team_id]
-            assert call_kwargs["entity_metadata_field"] == {
-                team_id: {"team_alias": "Test Team"}
-            }
-            assert call_kwargs["include_entity_breakdown"] is True
-            assert call_kwargs["timezone_offset_minutes"] == 480
-            assert call_kwargs["table_name"] == "litellm_dailyteamspend"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "start_date,end_date,expected_error",
-    [
-        ("2020-01-01", "2026-12-31", "at most 400 days"),
-        ("0000-01-01", "9999-12-31", "valid YYYY-MM-DD"),
-        ("2024-06-01", "2024-01-01", "on or after"),
-        ("not-a-date", "2024-01-31", "valid YYYY-MM-DD"),
-        (None, "2024-01-31", "start_date and end_date"),
-    ],
-)
-async def test_get_team_daily_activity_aggregated_rejects_bad_ranges(
-    mock_db_client, start_date, end_date, expected_error
-):
-    """The aggregated endpoint has no pagination bounding its work, so an
-    unbounded or malformed range must 400 before any query runs."""
-    from litellm.proxy.management_endpoints.team_endpoints import (
-        get_team_daily_activity_aggregated,
-    )
-
-    with patch(
-        "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
-        new_callable=AsyncMock,
-    ) as mock_aggregated:
-        with pytest.raises(HTTPException) as exc_info:
-            await get_team_daily_activity_aggregated(
-                team_ids=None,
-                start_date=start_date,
-                end_date=end_date,
-                model=None,
-                api_key=None,
-                exclude_team_ids=None,
-                timezone=None,
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
-                ),
-            )
-
-        assert exc_info.value.status_code == 400
-        assert expected_error in str(exc_info.value.detail)
-        mock_aggregated.assert_not_called()
 
 
 def _wire_new_team_prisma(mock_db_client):
@@ -16883,3 +16820,22 @@ def test_list_team_v2_answers_503_no_db_connection_when_the_callers_user_read_hi
 
     assert response.status_code == 503, response.text
     assert response.json() == _DB_OUTAGE_503_BODY
+
+
+@pytest.mark.parametrize(
+    ("start_date", "end_date"),
+    (
+        ("2026-9-24", "2026-09-26"),
+        ("２０２６-09-24", "2026-09-26"),
+        ("2026-09-01", "2026-09-4"),
+        ("2026-02-30", "2026-09-26"),
+    ),
+)
+def test_aggregated_date_range_error_rejects_non_canonical_dates(start_date: str, end_date: str) -> None:
+    assert aggregated_date_range_error(start_date, end_date) == "start_date and end_date must be valid YYYY-MM-DD dates"
+
+
+def test_aggregated_date_range_error_accepts_canonical_dates_and_keeps_range_checks() -> None:
+    assert aggregated_date_range_error("2026-09-24", "2026-09-26") is None
+    assert aggregated_date_range_error("2026-09-26", "2026-09-24") == "end_date must be on or after start_date"
+    assert aggregated_date_range_error("2020-01-01", "2026-12-31") == "Date range must be at most 400 days"

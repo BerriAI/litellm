@@ -28,6 +28,7 @@ from types import MappingProxyType
 from typing import Any, Final
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache, RedisPipelineIncrementOperation, log_redis_failure
@@ -127,6 +128,7 @@ class RouterBudgetLimiting(CustomLogger):
         if isinstance(litellm.callbacks, list):
             litellm.logging_callback_manager.add_litellm_callback(self)
 
+    @with_service_target("router_budgets")
     async def async_filter_deployments(
         self,
         model: str,
@@ -468,6 +470,7 @@ class RouterBudgetLimiting(CustomLogger):
             flush_task.result()
             raise
 
+    @with_service_target("router_budgets")
     async def _write_queued_increment_operations(self, redis_cache: RedisCache) -> bool:
         increment_operations_to_flush: Final = await self._detach_queued_increment_operations()
         if len(increment_operations_to_flush) == 0:
@@ -488,6 +491,7 @@ class RouterBudgetLimiting(CustomLogger):
         await self._clear_detached_increment_operations()
         return True
 
+    @with_service_target("router_budgets")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Original method now uses helper functions"""
         verbose_router_logger.debug("in RouterBudgetLimiting.async_log_success_event")
@@ -594,6 +598,7 @@ class RouterBudgetLimiting(CustomLogger):
 
         verbose_router_logger.debug("Incremented spend for %s by %s", spend_key, response_cost)
 
+    @with_service_target("router_budgets")
     async def periodic_sync_in_memory_spend_with_redis(self):
         """
         Handler that triggers sync_in_memory_spend_with_redis every DEFAULT_REDIS_SYNC_INTERVAL seconds
@@ -750,6 +755,7 @@ class RouterBudgetLimiting(CustomLogger):
                 budget_limit=budget_limit,
             )
 
+    @with_service_target("router_budgets")
     async def _get_current_provider_spend(self, provider: str) -> float | None:
         """
         GET the current spend for a provider from cache
@@ -776,6 +782,7 @@ class RouterBudgetLimiting(CustomLogger):
             current_spend = await self.dual_cache.async_get_cache(spend_key)
         return float(current_spend) if current_spend is not None else 0.0
 
+    @with_service_target("router_budgets")
     async def _get_current_provider_budget_reset_at(self, provider: str) -> str | None:
         budget_config: Final = self._get_budget_config_for_provider(provider)
         if budget_config is None:
