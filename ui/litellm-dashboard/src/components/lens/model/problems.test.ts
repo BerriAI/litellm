@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createLensDemoData } from "../demo/createLensDemo";
-import { problemsOverview } from "./problems";
+import { problemsOverview, readableQuote } from "./problems";
 import type { Finding, Job, Lens } from "./types";
 
 type Execution = NonNullable<Job["sample"]>["executions"][number];
@@ -24,6 +24,18 @@ function labelAgents(lens: Lens): Lens {
   });
   return { ...lens, settings: { ...lens.settings, agent_name: "" }, jobs: lens.jobs.map(relabel) };
 }
+
+describe("readableQuote", () => {
+  it("shows only the message text from a recorded message payload", () => {
+    const payload = 'Output: [{"role": "assistant", "content": "The cache is **30% faster**."}]';
+    expect(readableQuote(payload)).toBe("The cache is **30% faster**.");
+  });
+
+  it("leaves plain quotes and non-message JSON untouched", () => {
+    expect(readableQuote("I'll check and get back to you.")).toBe("I'll check and get back to you.");
+    expect(readableQuote('{"query": "order #1042"}')).toBe('{"query": "order #1042"}');
+  });
+});
 
 describe("problemsOverview", () => {
   it("lists only open issues from each investigation's latest completed run", () => {
