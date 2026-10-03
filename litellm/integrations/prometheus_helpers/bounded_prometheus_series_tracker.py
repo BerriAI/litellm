@@ -19,14 +19,6 @@ class PrometheusSeriesLimits:
     ttl_seconds: float | None
     cleanup_interval_seconds: float | None
 
-    def __post_init__(self) -> None:
-        if self.max_series is not None and self.max_series <= 0:
-            raise ValueError(
-                f"prometheus_metrics_max_series_per_metric must be a positive integer, got {self.max_series}"
-            )
-        if self.ttl_seconds is not None and self.ttl_seconds <= 0:
-            raise ValueError(f"prometheus_metrics_ttl_seconds must be a positive number, got {self.ttl_seconds}")
-
     @property
     def enabled(self) -> bool:
         return self.max_series is not None or self.ttl_seconds is not None

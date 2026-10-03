@@ -1,3 +1,4 @@
+import logging
 import re
 from pathlib import Path
 from threading import Thread
@@ -368,8 +369,18 @@ def test_series_stay_unbounded_unless_a_limit_is_configured():
         ("prometheus_metrics_ttl_seconds", -1.0),
     ],
 )
-def test_non_positive_series_limits_fail_logger_startup(setting: str, value: float):
+def test_a_non_positive_series_limit_is_ignored_with_a_warning_and_metrics_keep_flowing(
+    setting: str, value: float, clock, caplog
+):
+    litellm.prometheus_metrics_cleanup_interval_seconds = 0.0
     setattr(litellm, setting, value)
 
-    with pytest.raises(ValueError, match=setting):
-        PrometheusLogger()
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        logger: Final = PrometheusLogger()
+    for index in range(3):
+        _count_request(logger, f"agent-{index}")
+        clock[0] += 100.0
+
+    series: Final = _scraped_series("litellm_proxy_total_requests_metric_total")
+    assert _label_values(series, "user_agent") == {"agent-0", "agent-1", "agent-2"}
+    assert setting in caplog.text

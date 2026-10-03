@@ -255,6 +255,19 @@ class _LabeledMetric:
 
 _MetricLike: TypeAlias = "NoOpMetric | _LabeledMetric | MetricWrapperBase"
 
+_SeriesLimitT: Final = TypeVar("_SeriesLimitT", int, float)
+
+
+def _positive_or_ignored(setting: str, value: _SeriesLimitT | None) -> _SeriesLimitT | None:
+    if value is None or value > 0:
+        return value
+    verbose_logger.warning(
+        "%s is ignored because it is not greater than 0 (got %s). Prometheus metrics are emitted without it",
+        setting,
+        value,
+    )
+    return None
+
 
 def _get_budget_metrics_per_request_timeout() -> float:
     raw: Final = os.getenv("PROMETHEUS_BUDGET_METRICS_PER_REQUEST_TIMEOUT")
@@ -1285,8 +1298,10 @@ class PrometheusLogger(CustomLogger):
     @staticmethod
     def _configured_series_limits(multiprocess_mode: bool) -> PrometheusSeriesLimits:
         limits: Final = PrometheusSeriesLimits(
-            max_series=litellm.prometheus_metrics_max_series_per_metric,
-            ttl_seconds=litellm.prometheus_metrics_ttl_seconds,
+            max_series=_positive_or_ignored(
+                "prometheus_metrics_max_series_per_metric", litellm.prometheus_metrics_max_series_per_metric
+            ),
+            ttl_seconds=_positive_or_ignored("prometheus_metrics_ttl_seconds", litellm.prometheus_metrics_ttl_seconds),
             cleanup_interval_seconds=litellm.prometheus_metrics_cleanup_interval_seconds,
         )
         if limits.ttl_seconds is None or not multiprocess_mode:
