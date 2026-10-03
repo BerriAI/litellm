@@ -25841,6 +25841,13 @@ export interface components {
             /** Url */
             url: string;
         };
+        /** AgentTestCase */
+        AgentTestCase: {
+            /** Expected */
+            expected: string;
+            /** Input */
+            input: string;
+        };
         /**
          * AlertType
          * @description Enum for alert types and management event types
@@ -31930,6 +31937,7 @@ export interface components {
         };
         /** Finding */
         Finding: {
+            brief?: components["schemas"]["IssueBrief"] | null;
             /** Check Id */
             check_id: string;
             /** Description */
@@ -31995,6 +32003,7 @@ export interface components {
         };
         /** FindingDraft */
         FindingDraft: {
+            brief?: components["schemas"]["IssueBrief"] | null;
             /** Check Id */
             check_id: string;
             /** Description */
@@ -33178,6 +33187,17 @@ export interface components {
             invitation_id: string;
             /** Is Accepted */
             is_accepted: boolean;
+        };
+        /** IssueBrief */
+        IssueBrief: {
+            /** Problem */
+            problem: string;
+            /** Test Cases */
+            test_cases: components["schemas"]["AgentTestCase"][];
+            /** User Goal */
+            user_goal: string;
+            /** What Happened */
+            what_happened: string;
         };
         /**
          * ItemReference

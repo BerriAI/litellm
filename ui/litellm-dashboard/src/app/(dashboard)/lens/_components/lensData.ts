@@ -262,3 +262,15 @@ export function nextCheckStatus(lens: Lens, now: number): string | null {
   const time = formatActivityTimestamp(lens.next_run_at);
   return `Next check ${time} · ${relative}`;
 }
+
+export type IssueBrief = NonNullable<Finding["brief"]>;
+
+export function briefMarkdown(title: string, brief: IssueBrief): string {
+  return [
+    `# ${title}`,
+    `## Problem\n${brief.problem}`,
+    `## User goal\n${brief.user_goal}`,
+    `## What happened\n${brief.what_happened}`,
+    `## Test cases\n${brief.test_cases.map((t, i) => `${i + 1}. **Input:** ${t.input}  \n   **Expect:** ${t.expected}`).join("\n")}`,
+  ].join("\n\n");
+}

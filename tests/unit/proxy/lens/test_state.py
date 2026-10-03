@@ -3,7 +3,17 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy.lens.models import Check, Lens, LensSettings, Evidence, FindingDraft, Scope, Worker
+from litellm.proxy.lens.models import (
+    AgentTestCase,
+    Check,
+    Evidence,
+    FindingDraft,
+    IssueBrief,
+    Lens,
+    LensSettings,
+    Scope,
+    Worker,
+)
 from litellm.proxy.lens.state import can_access, claim_job, current_job, merge_finding, queue_job, renew_budget
 
 NOW: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
@@ -86,7 +96,15 @@ def test_behavior_description_is_sufficient_without_separate_checks() -> None:
 
 
 @pytest.mark.parametrize(
-    "field,value", (("sample_percent", 0), ("sample_percent", 101), ("sample_size", 0), ("concurrency", 0), ("lookback_hours", 0), ("lookback_hours", 8761))
+    "field,value",
+    (
+        ("sample_percent", 0),
+        ("sample_percent", 101),
+        ("sample_size", 0),
+        ("concurrency", 0),
+        ("lookback_hours", 0),
+        ("lookback_hours", 8761),
+    ),
 )
 def test_invalid_selection_and_parallelism_are_rejected(field: str, value: int) -> None:
     from pydantic import ValidationError
@@ -162,6 +180,32 @@ def test_finding_keeps_uncertainty_separate_from_the_main_summary() -> None:
     saved: Final = merge_finding(lens(), draft, 1, NOW)
     assert saved.limitation == draft.limitation
     assert saved.description == draft.description
+
+
+def issue_brief(problem: str) -> IssueBrief:
+    return IssueBrief(
+        problem=problem,
+        user_goal="Open a pull request",
+        what_happened="The agent replied that it lacked repository access",
+        test_cases=(AgentTestCase(input="Open a PR fixing the typo", expected="A PR URL is returned"),),
+    )
+
+
+def test_issue_brief_survives_merges_and_refreshes_only_when_a_new_one_is_found() -> None:
+    draft: Final = finding("run1").model_copy(update={"brief": issue_brief("No repo tool")})
+    first: Final = merge_finding(lens(), draft, 1, NOW)
+    assert first.brief == issue_brief("No repo tool")
+    reviewed: Final = lens().model_copy(update={"findings": (first,)})
+    assert merge_finding(reviewed, finding("run2"), 2, NOW).brief == first.brief
+    refreshed: Final = finding("run2").model_copy(update={"brief": issue_brief("Token expired")})
+    assert merge_finding(reviewed, refreshed, 2, NOW).brief == refreshed.brief
+
+
+def test_issue_brief_requires_a_test_case() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        IssueBrief.model_validate({**issue_brief("No repo tool").model_dump(), "test_cases": ()})
 
 
 @pytest.mark.parametrize("interval", (1, 2, 37, 90, 10080))

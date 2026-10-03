@@ -110,6 +110,7 @@ def merge_finding(lens: Lens, draft: FindingDraft, revision: int, now: datetime)
             priority=draft.priority,
             suggestion=draft.suggestion,
             limitation=draft.limitation,
+            brief=draft.brief,
             evidence=draft.evidence,
             existing_finding_id=draft.existing_finding_id,
             id=identity,
@@ -130,6 +131,7 @@ def merge_finding(lens: Lens, draft: FindingDraft, revision: int, now: datetime)
                     ).values()
                 )[-20:],
                 "status": "open" if previous.status == "resolved" and new_occurrence else previous.status,
+                "brief": draft.brief or previous.brief,
             }
         )
     )
