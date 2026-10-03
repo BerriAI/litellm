@@ -812,6 +812,7 @@ PROVIDERS_WITH_A_HANDLER = (
     "azure",
     "azure_ai",
     "bedrock",
+    "clinepass",
     "cloudflare",
     "cohere",
     "databricks",
