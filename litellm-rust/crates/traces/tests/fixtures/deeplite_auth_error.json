@@ -1,0 +1,1614 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.45.0"
+            }
+          },
+          {
+            "key": "service.instance.id",
+            "value": {
+              "stringValue": "cedd2594-abc5-48f2-a9d1-b892921fadfd"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "deeplite"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "langsmith"
+          },
+          "spans": [
+            {
+              "traceId": "7b787d5c997d768a725a3a2f0278e857",
+              "spanId": "93886a81b22f3dab",
+              "parentSpanId": "11f6195c25249ab1",
+              "name": "__start__",
+              "kind": 1,
+              "startTimeUnixNano": "1790967512073597952",
+              "endTimeUnixNano": "1790967512075591936",
+              "attributes": [
+                {
+                  "key": "langsmith.span.kind",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.name",
+                  "value": {
+                    "stringValue": "__start__"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.session_name",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "langchain"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.ls_integration",
+                  "value": {
+                    "stringValue": "langgraph"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_step",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_node",
+                  "value": {
+                    "stringValue": "__start__"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_triggers",
+                  "value": {
+                    "stringValue": "[\"__start__\"]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_path",
+                  "value": {
+                    "stringValue": "[\"__pregel_pull\",\"__start__\"]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_checkpoint_ns",
+                  "value": {
+                    "stringValue": "__start__:af3b0b0a-9397-3b9d-0717-b11174443ca9"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_OTLP_TRACES_ENDPOINT",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:58108/langsmith/v1/traces"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_PROJECT",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING",
+                  "value": {
+                    "stringValue": "true"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING_MODE",
+                  "value": {
+                    "stringValue": "otel"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.revision_id",
+                  "value": {
+                    "stringValue": "abd4db9"
+                  }
+                },
+                {
+                  "key": "langsmith.span.tags",
+                  "value": {
+                    "stringValue": "graph:step:0, langsmith:hidden"
+                  }
+                },
+                {
+                  "key": "gen_ai.prompt",
+                  "value": {
+                    "bytesValue": "eyJtZXNzYWdlcyI6W3sicm9sZSI6InVzZXIiLCJjb250ZW50IjoiRm9yIGEgc3ludGhldGljIHRyYWNpbmcgZml4dHVyZSwgZXhwbGFpbiBQeXRob24gdHVwbGUgdmVyc3VzIGxpc3QgaW1tdXRhYmlsaXR5IGluIGF0IG1vc3QgMTIwIHdvcmRzLiBVc2Ugb25seSBvZmZpY2lhbCBQeXRob24gZG9jdW1lbnRhdGlvbiBpZiB5b3Ugc2VhcmNoLiBIYXZlIHRoZSBza2VwdGljIGFuZCB2ZXJpZmllciBjaGVjayBpdCwgdGhlbiBoYXZlIHRoZSBlZGl0b3Igd3JpdGUgL2Fuc3dlci5tZC4gS2VlcCB0aGUgcnVuIHNob3J0IGFuZCBkbyBub3QgYXNrIGZvbGxvdy11cCBxdWVzdGlvbnMuIn1dfQ=="
+                  }
+                },
+                {
+                  "key": "gen_ai.completion",
+                  "value": {
+                    "bytesValue": "eyJtZXNzYWdlcyI6W3sicm9sZSI6InVzZXIiLCJjb250ZW50IjoiRm9yIGEgc3ludGhldGljIHRyYWNpbmcgZml4dHVyZSwgZXhwbGFpbiBQeXRob24gdHVwbGUgdmVyc3VzIGxpc3QgaW1tdXRhYmlsaXR5IGluIGF0IG1vc3QgMTIwIHdvcmRzLiBVc2Ugb25seSBvZmZpY2lhbCBQeXRob24gZG9jdW1lbnRhdGlvbiBpZiB5b3Ugc2VhcmNoLiBIYXZlIHRoZSBza2VwdGljIGFuZCB2ZXJpZmllciBjaGVjayBpdCwgdGhlbiBoYXZlIHRoZSBlZGl0b3Igd3JpdGUgL2Fuc3dlci5tZC4gS2VlcCB0aGUgcnVuIHNob3J0IGFuZCBkbyBub3QgYXNrIGZvbGxvdy11cCBxdWVzdGlvbnMuIn1dfQ=="
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "7b787d5c997d768a725a3a2f0278e857",
+              "spanId": "aa1eaf69717f1df1",
+              "parentSpanId": "93886a81b22f3dab",
+              "name": "route_to_active_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1790967512074637056",
+              "endTimeUnixNano": "1790967512075297024",
+              "attributes": [
+                {
+                  "key": "langsmith.span.kind",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.name",
+                  "value": {
+                    "stringValue": "route_to_active_agent"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.session_name",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "langchain"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.ls_integration",
+                  "value": {
+                    "stringValue": "langgraph"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_step",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_node",
+                  "value": {
+                    "stringValue": "__start__"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_triggers",
+                  "value": {
+                    "stringValue": "[\"__start__\"]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_path",
+                  "value": {
+                    "stringValue": "[\"__pregel_pull\",\"__start__\"]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_checkpoint_ns",
+                  "value": {
+                    "stringValue": "__start__:af3b0b0a-9397-3b9d-0717-b11174443ca9"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_OTLP_TRACES_ENDPOINT",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:58108/langsmith/v1/traces"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_PROJECT",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING",
+                  "value": {
+                    "stringValue": "true"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING_MODE",
+                  "value": {
+                    "stringValue": "otel"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.revision_id",
+                  "value": {
+                    "stringValue": "abd4db9"
+                  }
+                },
+                {
+                  "key": "langsmith.span.tags",
+                  "value": {
+                    "stringValue": "langsmith:hidden, seq:step:2"
+                  }
+                },
+                {
+                  "key": "gen_ai.prompt",
+                  "value": {
+                    "bytesValue": "eyJtZXNzYWdlcyI6W3siY29udGVudCI6IkZvciBhIHN5bnRoZXRpYyB0cmFjaW5nIGZpeHR1cmUsIGV4cGxhaW4gUHl0aG9uIHR1cGxlIHZlcnN1cyBsaXN0IGltbXV0YWJpbGl0eSBpbiBhdCBtb3N0IDEyMCB3b3Jkcy4gVXNlIG9ubHkgb2ZmaWNpYWwgUHl0aG9uIGRvY3VtZW50YXRpb24gaWYgeW91IHNlYXJjaC4gSGF2ZSB0aGUgc2tlcHRpYyBhbmQgdmVyaWZpZXIgY2hlY2sgaXQsIHRoZW4gaGF2ZSB0aGUgZWRpdG9yIHdyaXRlIC9hbnN3ZXIubWQuIEtlZXAgdGhlIHJ1biBzaG9ydCBhbmQgZG8gbm90IGFzayBmb2xsb3ctdXAgcXVlc3Rpb25zLiIsImFkZGl0aW9uYWxfa3dhcmdzIjp7fSwicmVzcG9uc2VfbWV0YWRhdGEiOnt9LCJ0eXBlIjoiaHVtYW4iLCJpZCI6Ijk0ZDk3NzJjLWI2NTYtNGUyNS05YmRiLTliZWQxZTRkNzIxZiJ9XX0="
+                  }
+                },
+                {
+                  "key": "gen_ai.completion",
+                  "value": {
+                    "bytesValue": "eyJvdXRwdXQiOiJyZXNlYXJjaGVyIn0="
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "7b787d5c997d768a725a3a2f0278e857",
+              "spanId": "88d2e1bce2887a89",
+              "parentSpanId": "b580832fc04b0921",
+              "name": "ChatAnthropic",
+              "kind": 1,
+              "startTimeUnixNano": "1790967512090679808",
+              "endTimeUnixNano": "1790967512605561856",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.serialized.name",
+                  "value": {
+                    "stringValue": "ChatAnthropic"
+                  }
+                },
+                {
+                  "key": "langsmith.span.kind",
+                  "value": {
+                    "stringValue": "llm"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.name",
+                  "value": {
+                    "stringValue": "ChatAnthropic"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.session_name",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "anthropic"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-sonnet"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.definitions",
+                  "value": {
+                    "stringValue": "[{\"name\":\"ls\",\"input_schema\":{\"properties\":{\"path\":{\"description\":\"Absolute path to the directory to list. Must be absolute, not relative.\",\"type\":\"string\"}},\"required\":[\"path\"],\"type\":\"object\"},\"description\":\"Lists all files in a directory.\\n\\nThis is useful for exploring the filesystem and finding the right file to read or edit.\\nYou should almost ALWAYS use this tool before using the read_file or edit_file tools.\"},{\"name\":\"read_file\",\"input_schema\":{\"properties\":{\"file_path\":{\"description\":\"Absolute path to the file to read. Must be absolute, not relative.\",\"type\":\"string\"},\"offset\":{\"default\":0,\"description\":\"Line number to start reading from (0-indexed). Use for pagination of large files.\",\"type\":\"integer\"},\"limit\":{\"default\":100,\"description\":\"Maximum number of lines to read. Use for pagination of large files.\",\"type\":\"integer\"}},\"required\":[\"file_path\"],\"type\":\"object\"},\"description\":\"Reads a file from the filesystem. Assume any path the user provides is valid; reading a missing file returns an error.\\n\\nUsage:\\n- By default, it reads up to 100 lines starting from the beginning of the file. Use `offset`/`limit` to page through large files instead of reading them whole.\\n- A status header, `@@ field | field | ... @@`, sits above the file content, and every line after it is verbatim file content. When content is truncated, there may be an explanation before the header. Never include the header when editing.\\n- Speculatively batch multiple `read_file` calls in one response when several files may be useful.\\n- An empty file returns a system-reminder warning in place of contents.\\n- Large tool results may be offloaded to a file; the tool message gives the path. Read that path here, paging with `offset`/`limit`.\\n- Images (`.png`, `.jpg`, etc.), audio, video, and PDFs return multimodal content blocks (https://docs.langchain.com/oss/python/langchain/messages#multimodal).\\n- For images and PDFs, pagination via `offset`/`limit` is text-only - supply `file_path` only\\n- Always read a file before editing it.\"},{\"name\":\"glob\",\"input_schema\":{\"properties\":{\"pattern\":{\"description\":\"Glob pattern to match files (e.g., '*.py', '**/*.py', '/subdir/**/*.md'). A pattern without '/' matches the file name at any depth; a pattern containing '/' matches the search-root-relative path; a leading '/' anchors to the search root ('/*.py' matches only top-level files). Leading-dot names are excluded unless the pattern segment starts with '.', so prefer the bare form '*.py' over '**/*.py' -- '**' will not descend into dot-directories like '.github'.\",\"type\":\"string\"},\"path\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"description\":\"Base directory to search from. Defaults to the backend's default root.\"}},\"required\":[\"pattern\"],\"type\":\"object\"},\"description\":\"Find files matching a glob pattern, returning absolute paths.\\n\\nSupports `*` (any characters within a path segment), `**` (any directories), `?` (single character), `[abc]` (one character from a set), and `{a,b}` (alternatives), e.g. `*.py`, `src/**/*.py`, `*.{yml,yaml}`.\\n\\nA pattern without `/` matches the file name at any depth under the search root (`*.py` matches `src/app/main.py`). A pattern containing `/` matches the search-root-relative path (`src/**/*.py`). A leading `/` anchors to the search root (`/*.py` matches only top-level Python files).\\n\\nLeading-dot names are only matched when the pattern segment itself starts with `.` (use `.env`, or `.github/**/*.yml`). Because `**` will not descend into dot-directories, the bare form `*.yml` is *broader* than `**/*.yml` and is usually what you want.\"},{\"name\":\"grep\",\"input_schema\":{\"properties\":{\"pattern\":{\"description\":\"Text pattern to search for (literal string, not regex).\",\"type\":\"string\"},\"path\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"description\":\"Directory to search in. Defaults to current working directory.\"},\"glob\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"default\":null,\"description\":\"Glob pattern (NOT regex) limiting which files are searched (e.g. '*.py', '*.ts'). A pattern without '/' matches the file name at any depth; a pattern containing '/' matches the search-root-relative path (e.g. 'src/**/*.py'). This is an in-tool file filter, not a call to the separate glob tool. Brace expansion (e.g. '*.{ts,tsx}') is not supported on all backends; run a separate search per extension for reliable results.\"},\"output_mode\":{\"default\":\"files_with_matches\",\"description\":\"Shape of the returned text. 'files_with_matches' (default): newline-separated matching file paths. 'content': matching lines grouped by file under a '<path>:' header, each line indented and formatted '<line_number>: <line text>' (only the matched line, no surrounding context). 'count': one '<path>: <match_count>' line per file.\",\"enum\":[\"files_with_matches\",\"content\",\"count\"],\"type\":\"string\"},\"max_count\":{\"anyOf\":[{\"exclusiveMinimum\":0,\"type\":\"integer\"},{\"type\":\"null\"}],\"default\":null,\"description\":\"Optional cap on the total number of matches returned across all files. Leave unset to use the configured default. When the cap is hit, results are truncated and a note says so; narrow the pattern or path to see the rest.\"}},\"required\":[\"pattern\"],\"type\":\"object\"},\"description\":\"Search for a LITERAL text pattern across files (NOT regex).\\n\\nThe pattern is matched verbatim: regex metacharacters are ordinary characters, not operators. To match any of several strings, run a separate grep for each; `grep(pattern=\\\"foo|bar\\\")` searches for the literal text \\\"foo|bar\\\", and `.*` or `\\\\.` match those characters literally.\\n\\nReturns matching files or content per `output_mode`. Offloaded large tool results live under the artifacts root (`/large_tool_results/` by default); grep that directory to search them when you do not know the exact path.\"},{\"name\":\"web_search\",\"input_schema\":{\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"],\"type\":\"object\"},\"description\":\"Search the web with Exa for current facts and return excerpts with source URLs\"},{\"name\":\"transfer_to_skeptic\",\"input_schema\":{\"properties\":{},\"type\":\"object\"},\"description\":\"Send findings to the skeptic for critique\"},{\"name\":\"transfer_to_verifier\",\"input_schema\":{\"properties\":{},\"type\":\"object\"},\"description\":\"Send revised findings for source verification\"}]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.ls_integration",
+                  "value": {
+                    "stringValue": "langchain_chat_model"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_step",
+                  "value": {
+                    "intValue": "1"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_node",
+                  "value": {
+                    "stringValue": "model"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_triggers",
+                  "value": {
+                    "stringValue": "[\"branch:to:model\"]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_path",
+                  "value": {
+                    "stringValue": "[\"__pregel_pull\",\"model\"]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_checkpoint_ns",
+                  "value": {
+                    "stringValue": "researcher:816a3f65-9150-0b6d-54aa-920fdcfe25cd|model:2e4e0d8e-70a5-697c-c7f4-e1f685fb1a31"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.lc_agent_name",
+                  "value": {
+                    "stringValue": "researcher"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.checkpoint_ns",
+                  "value": {
+                    "stringValue": "researcher:816a3f65-9150-0b6d-54aa-920fdcfe25cd"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.ls_provider",
+                  "value": {
+                    "stringValue": "anthropic"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.ls_model_name",
+                  "value": {
+                    "stringValue": "claude-sonnet"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.ls_model_type",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.ls_max_tokens",
+                  "value": {
+                    "intValue": "4096"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.lc_versions",
+                  "value": {
+                    "stringValue": "{\"langchain-core\":\"1.6.6\",\"langchain\":\"1.4.3\",\"langchain-anthropic\":\"1.7.5\"}"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.ls_method",
+                  "value": {
+                    "stringValue": "traceable"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.model",
+                  "value": {
+                    "stringValue": "claude-sonnet"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.max_tokens",
+                  "value": {
+                    "intValue": "4096"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.model_kwargs",
+                  "value": {
+                    "stringValue": "{}"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.streaming",
+                  "value": {
+                    "boolValue": false
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.max_retries",
+                  "value": {
+                    "intValue": "2"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata._type",
+                  "value": {
+                    "stringValue": "anthropic-chat"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_OTLP_TRACES_ENDPOINT",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:58108/langsmith/v1/traces"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_PROJECT",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING",
+                  "value": {
+                    "stringValue": "true"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING_MODE",
+                  "value": {
+                    "stringValue": "otel"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.revision_id",
+                  "value": {
+                    "stringValue": "abd4db9"
+                  }
+                },
+                {
+                  "key": "langsmith.span.tags",
+                  "value": {
+                    "stringValue": "seq:step:1"
+                  }
+                },
+                {
+                  "key": "gen_ai.prompt",
+                  "value": {
+                    "bytesValue": "eyJtZXNzYWdlcyI6W1t7ImxjIjoxLCJ0eXBlIjoiY29uc3RydWN0b3IiLCJpZCI6WyJsYW5nY2hhaW4iLCJzY2hlbWEiLCJtZXNzYWdlcyIsIlN5c3RlbU1lc3NhZ2UiXSwia3dhcmdzIjp7ImNvbnRlbnQiOiJZb3UgYXJlIHRoZSByZXNlYXJjaGVyLiBTZWFyY2ggZm9yIGV2aWRlbmNlIGFuZCBzaGFyZSBzb3VyY2UgVVJMcy4gWW91IG1heSByZWFkIHNoYXJlZCB2aXJ0dWFsIGZpbGVzLCBidXQgb25seSB0aGUgZWRpdG9yIHdyaXRlcyB0aGVtLiBTZW5kIGluaXRpYWwgZmluZGluZ3MgdG8gdGhlIHNrZXB0aWMuIElmIGFub3RoZXIgYWdlbnQgcmV0dXJucyB3aXRoIGNvcnJlY3Rpb25zLCByZXZpc2UgeW91ciBmaW5kaW5ncyBhbmQgc2VuZCB0aGVtIHRvIHRoZSB2ZXJpZmllci4gRG8gbm90IGdpdmUgdGhlIGZpbmFsIGFuc3dlci4iLCJ0eXBlIjoic3lzdGVtIn19LHsibGMiOjEsInR5cGUiOiJjb25zdHJ1Y3RvciIsImlkIjpbImxhbmdjaGFpbiIsInNjaGVtYSIsIm1lc3NhZ2VzIiwiSHVtYW5NZXNzYWdlIl0sImt3YXJncyI6eyJjb250ZW50IjoiRm9yIGEgc3ludGhldGljIHRyYWNpbmcgZml4dHVyZSwgZXhwbGFpbiBQeXRob24gdHVwbGUgdmVyc3VzIGxpc3QgaW1tdXRhYmlsaXR5IGluIGF0IG1vc3QgMTIwIHdvcmRzLiBVc2Ugb25seSBvZmZpY2lhbCBQeXRob24gZG9jdW1lbnRhdGlvbiBpZiB5b3Ugc2VhcmNoLiBIYXZlIHRoZSBza2VwdGljIGFuZCB2ZXJpZmllciBjaGVjayBpdCwgdGhlbiBoYXZlIHRoZSBlZGl0b3Igd3JpdGUgL2Fuc3dlci5tZC4gS2VlcCB0aGUgcnVuIHNob3J0IGFuZCBkbyBub3QgYXNrIGZvbGxvdy11cCBxdWVzdGlvbnMuIiwidHlwZSI6Imh1bWFuIiwiaWQiOiJlOGZkNzFmYi1hZjE3LTRiZTgtYjU5OS0xOTc3ODUwNTFlZTYifX1dXX0="
+                  }
+                },
+                {
+                  "key": "gen_ai.completion",
+                  "value": {
+                    "bytesValue": "eyJnZW5lcmF0aW9ucyI6W1t7InRleHQiOiIiLCJnZW5lcmF0aW9uX2luZm8iOm51bGwsInR5cGUiOiJDaGF0R2VuZXJhdGlvbiIsIm1lc3NhZ2UiOnsibGMiOjEsInR5cGUiOiJjb25zdHJ1Y3RvciIsImlkIjpbImxhbmdjaGFpbiIsInNjaGVtYSIsIm1lc3NhZ2VzIiwiQUlNZXNzYWdlIl0sImt3YXJncyI6eyJjb250ZW50IjoiIiwicmVzcG9uc2VfbWV0YWRhdGEiOnsiYm9keSI6eyJ0eXBlIjoiZXJyb3IiLCJlcnJvciI6eyJ0eXBlIjoiYXV0aGVudGljYXRpb25fZXJyb3IiLCJtZXNzYWdlIjoibGl0ZWxsbS5BdXRoZW50aWNhdGlvbkVycm9yOiBBbnRocm9waWNFeGNlcHRpb24gLSB7XCJ0eXBlXCI6XCJlcnJvclwiLFwiZXJyb3JcIjp7XCJ0eXBlXCI6XCJhdXRoZW50aWNhdGlvbl9lcnJvclwiLFwibWVzc2FnZVwiOlwiQVBJIGtleSBpcyBpbnZhbGlkLlwifSxcInJlcXVlc3RfaWRcIjpudWxsfVxuXG5MaXRlTExNOiBtb2RlbCBncm91cCAnY2xhdWRlLXNvbm5ldCcgZmFpbGVkIHdpdGggdGhlIGVycm9yIGFib3ZlLiBObyBmYWxsYmFjayB3YXMgYXR0ZW1wdGVkLiJ9fSwiaGVhZGVycyI6eyJkYXRlIjoiRnJpLCAwMiBPY3QgMjAyNiAxODo1ODozMSBHTVQiLCJ4LWxpdGVsbG0tY2FsbC1pZCI6IjQ4OTRkMzhhLTVkYjctNGViYS1iZjFiLTE1ODM2NjZkNTc5NSIsIngtbGl0ZWxsbS1tb2RlbC1pZCI6ImNjMTViNDA2Y2QxNDZkM2YyMzNiMTQ0MGNkZThhYjZjMjExMTNjZGZjZDk3YmI0NTkyNzBkZjQ3NGNjZDY3MGMiLCJ4LWxpdGVsbG0tdmVyc2lvbiI6IjEuMTA1LjAiLCJ4LWxpdGVsbG0tcmVzcG9uc2UtY29zdCI6IjAiLCJ4LWxpdGVsbG0ta2V5LXNwZW5kIjoiMC4wIiwieC1saXRlbGxtLXRpbWVvdXQiOiI2MDAuMCIsImNvbnRlbnQtbGVuZ3RoIjoiMzM3IiwiY29udGVudC10eXBlIjoiYXBwbGljYXRpb24vanNvbiIsIngtZnJhbWUtb3B0aW9ucyI6IkRFTlkiLCJjb250ZW50LXNlY3VyaXR5LXBvbGljeSI6ImZyYW1lLWFuY2VzdG9ycyAnbm9uZSciLCJ4LWNvbnRlbnQtdHlwZS1vcHRpb25zIjoibm9zbmlmZiJ9LCJzdGF0dXNfY29kZSI6NDAxLCJyZXF1ZXN0X2lkIjpudWxsfSwidHlwZSI6ImFpIiwidG9vbF9jYWxscyI6W10sImludmFsaWRfdG9vbF9jYWxscyI6W119fX1dXSwibGxtX291dHB1dCI6bnVsbCwicnVuIjpudWxsLCJ0eXBlIjoiTExNUmVzdWx0In0="
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1790967512686323000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "Exception"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "AnthropicAuthenticationError('Error code: 401 - {\\'type\\': \\'error\\', \\'error\\': {\\'type\\': \\'authentication_error\\', \\'message\\': \\'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\\\n\\\\nLiteLLM: model group \\\\\\'claude-sonnet\\\\\\' failed with the error above. No fallback was attempted.\\'}}')Traceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2597, in _generate\n    raw_response = self._create(payload)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2176, in _create\n    return self._client.messages.with_raw_response.create(**payload)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_response.py\", line 797, in wrapped\n    return cast(APIResponse[R], func(*args, **kwargs))\n                                ~~~~^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_utils/_utils.py\", line 294, in wrapper\n    return func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/resources/messages/messages.py\", line 1027, in create\n    return self._post(\n           ~~~~~~~~~~^\n        \"/v1/messages\",\n        ^^^^^^^^^^^^^^^\n    ...<23 lines>...\n        stream_cls=Stream[RawMessageStreamEvent],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1543, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1208, in request\n    raise self._make_status_error_from_response(response) from None\n\n\nanthropic.AuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n\n\nThe above exception was the direct cause of the following exception:\n\n\n\nTraceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1684, in generate\n    self._generate_with_cache(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        m,\n        ^^\n    ...<2 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 2022, in _generate_with_cache\n    result = self._generate(\n        messages, stop=stop, run_manager=run_manager, **kwargs\n    )\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2601, in _generate\n    _handle_anthropic_api_error(e)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 1295, in _handle_anthropic_api_error\n    raise AnthropicAuthenticationError(\n        message=e.message, response=e.response, body=e.body\n    ) from e\n\n\nlangchain_anthropic.chat_models.AnthropicAuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Exception: AnthropicAuthenticationError('Error code: 401 - {\\'type\\': \\'error\\', \\'error\\': {\\'type\\': \\'authentication_error\\', \\'message\\': \\'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\\\n\\\\nLiteLLM: model group \\\\\\'claude-sonnet\\\\\\' failed with the error above. No fallback was attempted.\\'}}')Traceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2597, in _generate\n    raw_response = self._create(payload)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2176, in _create\n    return self._client.messages.with_raw_response.create(**payload)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_response.py\", line 797, in wrapped\n    return cast(APIResponse[R], func(*args, **kwargs))\n                                ~~~~^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_utils/_utils.py\", line 294, in wrapper\n    return func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/resources/messages/messages.py\", line 1027, in create\n    return self._post(\n           ~~~~~~~~~~^\n        \"/v1/messages\",\n        ^^^^^^^^^^^^^^^\n    ...<23 lines>...\n        stream_cls=Stream[RawMessageStreamEvent],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1543, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1208, in request\n    raise self._make_status_error_from_response(response) from None\n\n\nanthropic.AuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n\n\nThe above exception was the direct cause of the following exception:\n\n\n\nTraceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1684, in generate\n    self._generate_with_cache(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        m,\n        ^^\n    ...<2 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 2022, in _generate_with_cache\n    result = self._generate(\n        messages, stop=stop, run_manager=run_manager, **kwargs\n    )\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2601, in _generate\n    _handle_anthropic_api_error(e)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 1295, in _handle_anthropic_api_error\n    raise AnthropicAuthenticationError(\n        message=e.message, response=e.response, body=e.body\n    ) from e\n\n\nlangchain_anthropic.chat_models.AnthropicAuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "7b787d5c997d768a725a3a2f0278e857",
+              "spanId": "b580832fc04b0921",
+              "parentSpanId": "382ca31426f8f943",
+              "name": "UnsupportedContentMiddleware.wrap_model_call",
+              "kind": 1,
+              "startTimeUnixNano": "1790967512081928960",
+              "endTimeUnixNano": "1790967512610889984",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "gen_ai.prompt",
+                  "value": {
+                    "bytesValue": "e30="
+                  }
+                },
+                {
+                  "key": "langsmith.span.kind",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.name",
+                  "value": {
+                    "stringValue": "UnsupportedContentMiddleware.wrap_model_call"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.session_name",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "langchain"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.ls_integration",
+                  "value": {
+                    "stringValue": "langchain_create_agent"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_step",
+                  "value": {
+                    "intValue": "1"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_node",
+                  "value": {
+                    "stringValue": "model"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_triggers",
+                  "value": {
+                    "stringValue": "[\"branch:to:model\"]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_path",
+                  "value": {
+                    "stringValue": "[\"__pregel_pull\",\"model\"]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_checkpoint_ns",
+                  "value": {
+                    "stringValue": "researcher:816a3f65-9150-0b6d-54aa-920fdcfe25cd|model:2e4e0d8e-70a5-697c-c7f4-e1f685fb1a31"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.lc_agent_name",
+                  "value": {
+                    "stringValue": "researcher"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.checkpoint_ns",
+                  "value": {
+                    "stringValue": "researcher:816a3f65-9150-0b6d-54aa-920fdcfe25cd"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.ls_method",
+                  "value": {
+                    "stringValue": "traceable"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_OTLP_TRACES_ENDPOINT",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:58108/langsmith/v1/traces"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_PROJECT",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING",
+                  "value": {
+                    "stringValue": "true"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING_MODE",
+                  "value": {
+                    "stringValue": "otel"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.revision_id",
+                  "value": {
+                    "stringValue": "abd4db9"
+                  }
+                },
+                {
+                  "key": "gen_ai.completion",
+                  "value": {
+                    "bytesValue": "eyJvdXRwdXQiOm51bGx9"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1790967512686465000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "Exception"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "AnthropicAuthenticationError('Error code: 401 - {\\'type\\': \\'error\\', \\'error\\': {\\'type\\': \\'authentication_error\\', \\'message\\': \\'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\\\n\\\\nLiteLLM: model group \\\\\\'claude-sonnet\\\\\\' failed with the error above. No fallback was attempted.\\'}}')\n\nTraceback (most recent call last):\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2597, in _generate\n    raw_response = self._create(payload)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2176, in _create\n    return self._client.messages.with_raw_response.create(**payload)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_response.py\", line 797, in wrapped\n    return cast(APIResponse[R], func(*args, **kwargs))\n                                ~~~~^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_utils/_utils.py\", line 294, in wrapper\n    return func(*args, **kwargs)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/resources/messages/messages.py\", line 1027, in create\n    return self._post(\n           ~~~~~~~~~~^\n        \"/v1/messages\",\n        ^^^^^^^^^^^^^^^\n    ...<23 lines>...\n        stream_cls=Stream[RawMessageStreamEvent],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1543, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1208, in request\n    raise self._make_status_error_from_response(response) from None\nanthropic.AuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/unsupported_content.py\", line 191, in wrap_model_call\n    return handler(self._filter_request(request))\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1506, in _execute_model_sync\n    output = model_.invoke(messages)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py\", line 6014, in invoke\n    return self.bound.invoke(\n           ~~~~~~~~~~~~~~~~~^\n        input,\n        ^^^^^^\n        self._merge_configs(config),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        **{**self.kwargs, **kwargs},\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 488, in invoke\n    self.generate_prompt(\n    ~~~~~~~~~~~~~~~~~~~~^\n        [self._convert_input(input)],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<6 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ).generations[0][0],\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1877, in generate_prompt\n    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)\n           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1684, in generate\n    self._generate_with_cache(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        m,\n        ^^\n    ...<2 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 2022, in _generate_with_cache\n    result = self._generate(\n        messages, stop=stop, run_manager=run_manager, **kwargs\n    )\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2601, in _generate\n    _handle_anthropic_api_error(e)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 1295, in _handle_anthropic_api_error\n    raise AnthropicAuthenticationError(\n        message=e.message, response=e.response, body=e.body\n    ) from e\nlangchain_anthropic.chat_models.AnthropicAuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Exception: AnthropicAuthenticationError('Error code: 401 - {\\'type\\': \\'error\\', \\'error\\': {\\'type\\': \\'authentication_error\\', \\'message\\': \\'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\\\n\\\\nLiteLLM: model group \\\\\\'claude-sonnet\\\\\\' failed with the error above. No fallback was attempted.\\'}}')\n\nTraceback (most recent call last):\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2597, in _generate\n    raw_response = self._create(payload)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2176, in _create\n    return self._client.messages.with_raw_response.create(**payload)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_response.py\", line 797, in wrapped\n    return cast(APIResponse[R], func(*args, **kwargs))\n                                ~~~~^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_utils/_utils.py\", line 294, in wrapper\n    return func(*args, **kwargs)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/resources/messages/messages.py\", line 1027, in create\n    return self._post(\n           ~~~~~~~~~~^\n        \"/v1/messages\",\n        ^^^^^^^^^^^^^^^\n    ...<23 lines>...\n        stream_cls=Stream[RawMessageStreamEvent],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1543, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1208, in request\n    raise self._make_status_error_from_response(response) from None\nanthropic.AuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/unsupported_content.py\", line 191, in wrap_model_call\n    return handler(self._filter_request(request))\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1506, in _execute_model_sync\n    output = model_.invoke(messages)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py\", line 6014, in invoke\n    return self.bound.invoke(\n           ~~~~~~~~~~~~~~~~~^\n        input,\n        ^^^^^^\n        self._merge_configs(config),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        **{**self.kwargs, **kwargs},\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 488, in invoke\n    self.generate_prompt(\n    ~~~~~~~~~~~~~~~~~~~~^\n        [self._convert_input(input)],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<6 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ).generations[0][0],\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1877, in generate_prompt\n    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)\n           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1684, in generate\n    self._generate_with_cache(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        m,\n        ^^\n    ...<2 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 2022, in _generate_with_cache\n    result = self._generate(\n        messages, stop=stop, run_manager=run_manager, **kwargs\n    )\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2601, in _generate\n    _handle_anthropic_api_error(e)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 1295, in _handle_anthropic_api_error\n    raise AnthropicAuthenticationError(\n        message=e.message, response=e.response, body=e.body\n    ) from e\nlangchain_anthropic.chat_models.AnthropicAuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "7b787d5c997d768a725a3a2f0278e857",
+              "spanId": "382ca31426f8f943",
+              "parentSpanId": "e247cc846cdbc99e",
+              "name": "FilesystemMiddleware.wrap_model_call",
+              "kind": 1,
+              "startTimeUnixNano": "1790967512080943104",
+              "endTimeUnixNano": "1790967512614221056",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "gen_ai.prompt",
+                  "value": {
+                    "bytesValue": "e30="
+                  }
+                },
+                {
+                  "key": "langsmith.span.kind",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.name",
+                  "value": {
+                    "stringValue": "FilesystemMiddleware.wrap_model_call"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.session_name",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "langchain"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.ls_integration",
+                  "value": {
+                    "stringValue": "langchain_create_agent"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_step",
+                  "value": {
+                    "intValue": "1"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_node",
+                  "value": {
+                    "stringValue": "model"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_triggers",
+                  "value": {
+                    "stringValue": "[\"branch:to:model\"]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_path",
+                  "value": {
+                    "stringValue": "[\"__pregel_pull\",\"model\"]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_checkpoint_ns",
+                  "value": {
+                    "stringValue": "researcher:816a3f65-9150-0b6d-54aa-920fdcfe25cd|model:2e4e0d8e-70a5-697c-c7f4-e1f685fb1a31"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.lc_agent_name",
+                  "value": {
+                    "stringValue": "researcher"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.checkpoint_ns",
+                  "value": {
+                    "stringValue": "researcher:816a3f65-9150-0b6d-54aa-920fdcfe25cd"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.ls_method",
+                  "value": {
+                    "stringValue": "traceable"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_OTLP_TRACES_ENDPOINT",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:58108/langsmith/v1/traces"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_PROJECT",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING",
+                  "value": {
+                    "stringValue": "true"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING_MODE",
+                  "value": {
+                    "stringValue": "otel"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.revision_id",
+                  "value": {
+                    "stringValue": "abd4db9"
+                  }
+                },
+                {
+                  "key": "gen_ai.completion",
+                  "value": {
+                    "bytesValue": "eyJvdXRwdXQiOm51bGx9"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1790967512686562000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "Exception"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "AnthropicAuthenticationError('Error code: 401 - {\\'type\\': \\'error\\', \\'error\\': {\\'type\\': \\'authentication_error\\', \\'message\\': \\'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\\\n\\\\nLiteLLM: model group \\\\\\'claude-sonnet\\\\\\' failed with the error above. No fallback was attempted.\\'}}')\n\nTraceback (most recent call last):\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2597, in _generate\n    raw_response = self._create(payload)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2176, in _create\n    return self._client.messages.with_raw_response.create(**payload)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_response.py\", line 797, in wrapped\n    return cast(APIResponse[R], func(*args, **kwargs))\n                                ~~~~^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_utils/_utils.py\", line 294, in wrapper\n    return func(*args, **kwargs)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/resources/messages/messages.py\", line 1027, in create\n    return self._post(\n           ~~~~~~~~~~^\n        \"/v1/messages\",\n        ^^^^^^^^^^^^^^^\n    ...<23 lines>...\n        stream_cls=Stream[RawMessageStreamEvent],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1543, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1208, in request\n    raise self._make_status_error_from_response(response) from None\nanthropic.AuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/filesystem.py\", line 3218, in wrap_model_call\n    response = handler(request)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 347, in inner_handler\n    inner_result = inner(req, handler)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/unsupported_content.py\", line 191, in wrap_model_call\n    return handler(self._filter_request(request))\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1506, in _execute_model_sync\n    output = model_.invoke(messages)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py\", line 6014, in invoke\n    return self.bound.invoke(\n           ~~~~~~~~~~~~~~~~~^\n        input,\n        ^^^^^^\n        self._merge_configs(config),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        **{**self.kwargs, **kwargs},\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 488, in invoke\n    self.generate_prompt(\n    ~~~~~~~~~~~~~~~~~~~~^\n        [self._convert_input(input)],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<6 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ).generations[0][0],\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1877, in generate_prompt\n    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)\n           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1684, in generate\n    self._generate_with_cache(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        m,\n        ^^\n    ...<2 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 2022, in _generate_with_cache\n    result = self._generate(\n        messages, stop=stop, run_manager=run_manager, **kwargs\n    )\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2601, in _generate\n    _handle_anthropic_api_error(e)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 1295, in _handle_anthropic_api_error\n    raise AnthropicAuthenticationError(\n        message=e.message, response=e.response, body=e.body\n    ) from e\nlangchain_anthropic.chat_models.AnthropicAuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Exception: AnthropicAuthenticationError('Error code: 401 - {\\'type\\': \\'error\\', \\'error\\': {\\'type\\': \\'authentication_error\\', \\'message\\': \\'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\\\n\\\\nLiteLLM: model group \\\\\\'claude-sonnet\\\\\\' failed with the error above. No fallback was attempted.\\'}}')\n\nTraceback (most recent call last):\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2597, in _generate\n    raw_response = self._create(payload)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2176, in _create\n    return self._client.messages.with_raw_response.create(**payload)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_response.py\", line 797, in wrapped\n    return cast(APIResponse[R], func(*args, **kwargs))\n                                ~~~~^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_utils/_utils.py\", line 294, in wrapper\n    return func(*args, **kwargs)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/resources/messages/messages.py\", line 1027, in create\n    return self._post(\n           ~~~~~~~~~~^\n        \"/v1/messages\",\n        ^^^^^^^^^^^^^^^\n    ...<23 lines>...\n        stream_cls=Stream[RawMessageStreamEvent],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1543, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1208, in request\n    raise self._make_status_error_from_response(response) from None\nanthropic.AuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/filesystem.py\", line 3218, in wrap_model_call\n    response = handler(request)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 347, in inner_handler\n    inner_result = inner(req, handler)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/unsupported_content.py\", line 191, in wrap_model_call\n    return handler(self._filter_request(request))\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1506, in _execute_model_sync\n    output = model_.invoke(messages)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py\", line 6014, in invoke\n    return self.bound.invoke(\n           ~~~~~~~~~~~~~~~~~^\n        input,\n        ^^^^^^\n        self._merge_configs(config),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        **{**self.kwargs, **kwargs},\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 488, in invoke\n    self.generate_prompt(\n    ~~~~~~~~~~~~~~~~~~~~^\n        [self._convert_input(input)],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<6 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ).generations[0][0],\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1877, in generate_prompt\n    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)\n           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1684, in generate\n    self._generate_with_cache(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        m,\n        ^^\n    ...<2 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 2022, in _generate_with_cache\n    result = self._generate(\n        messages, stop=stop, run_manager=run_manager, **kwargs\n    )\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2601, in _generate\n    _handle_anthropic_api_error(e)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 1295, in _handle_anthropic_api_error\n    raise AnthropicAuthenticationError(\n        message=e.message, response=e.response, body=e.body\n    ) from e\nlangchain_anthropic.chat_models.AnthropicAuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "7b787d5c997d768a725a3a2f0278e857",
+              "spanId": "e247cc846cdbc99e",
+              "parentSpanId": "77a5ba07fbe8fb8b",
+              "name": "model",
+              "kind": 1,
+              "startTimeUnixNano": "1790967512077792000",
+              "endTimeUnixNano": "1790967512617573888",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "gen_ai.completion",
+                  "value": {
+                    "bytesValue": "e30="
+                  }
+                },
+                {
+                  "key": "langsmith.span.kind",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.name",
+                  "value": {
+                    "stringValue": "model"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.session_name",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "langchain"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.ls_integration",
+                  "value": {
+                    "stringValue": "langchain_create_agent"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_step",
+                  "value": {
+                    "intValue": "1"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_node",
+                  "value": {
+                    "stringValue": "model"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_triggers",
+                  "value": {
+                    "stringValue": "[\"branch:to:model\"]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_path",
+                  "value": {
+                    "stringValue": "[\"__pregel_pull\",\"model\"]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_checkpoint_ns",
+                  "value": {
+                    "stringValue": "researcher:816a3f65-9150-0b6d-54aa-920fdcfe25cd|model:2e4e0d8e-70a5-697c-c7f4-e1f685fb1a31"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.lc_agent_name",
+                  "value": {
+                    "stringValue": "researcher"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.checkpoint_ns",
+                  "value": {
+                    "stringValue": "researcher:816a3f65-9150-0b6d-54aa-920fdcfe25cd"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_OTLP_TRACES_ENDPOINT",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:58108/langsmith/v1/traces"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_PROJECT",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING",
+                  "value": {
+                    "stringValue": "true"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING_MODE",
+                  "value": {
+                    "stringValue": "otel"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.revision_id",
+                  "value": {
+                    "stringValue": "abd4db9"
+                  }
+                },
+                {
+                  "key": "langsmith.span.tags",
+                  "value": {
+                    "stringValue": "graph:step:1"
+                  }
+                },
+                {
+                  "key": "gen_ai.prompt",
+                  "value": {
+                    "bytesValue": "eyJtZXNzYWdlcyI6W3siY29udGVudCI6IkZvciBhIHN5bnRoZXRpYyB0cmFjaW5nIGZpeHR1cmUsIGV4cGxhaW4gUHl0aG9uIHR1cGxlIHZlcnN1cyBsaXN0IGltbXV0YWJpbGl0eSBpbiBhdCBtb3N0IDEyMCB3b3Jkcy4gVXNlIG9ubHkgb2ZmaWNpYWwgUHl0aG9uIGRvY3VtZW50YXRpb24gaWYgeW91IHNlYXJjaC4gSGF2ZSB0aGUgc2tlcHRpYyBhbmQgdmVyaWZpZXIgY2hlY2sgaXQsIHRoZW4gaGF2ZSB0aGUgZWRpdG9yIHdyaXRlIC9hbnN3ZXIubWQuIEtlZXAgdGhlIHJ1biBzaG9ydCBhbmQgZG8gbm90IGFzayBmb2xsb3ctdXAgcXVlc3Rpb25zLiIsImFkZGl0aW9uYWxfa3dhcmdzIjp7fSwicmVzcG9uc2VfbWV0YWRhdGEiOnt9LCJ0eXBlIjoiaHVtYW4iLCJpZCI6ImU4ZmQ3MWZiLWFmMTctNGJlOC1iNTk5LTE5Nzc4NTA1MWVlNiJ9XX0="
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1790967512686704000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "Exception"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "AnthropicAuthenticationError('Error code: 401 - {\\'type\\': \\'error\\', \\'error\\': {\\'type\\': \\'authentication_error\\', \\'message\\': \\'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\\\n\\\\nLiteLLM: model group \\\\\\'claude-sonnet\\\\\\' failed with the error above. No fallback was attempted.\\'}}')Traceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2597, in _generate\n    raw_response = self._create(payload)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2176, in _create\n    return self._client.messages.with_raw_response.create(**payload)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_response.py\", line 797, in wrapped\n    return cast(APIResponse[R], func(*args, **kwargs))\n                                ~~~~^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_utils/_utils.py\", line 294, in wrapper\n    return func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/resources/messages/messages.py\", line 1027, in create\n    return self._post(\n           ~~~~~~~~~~^\n        \"/v1/messages\",\n        ^^^^^^^^^^^^^^^\n    ...<23 lines>...\n        stream_cls=Stream[RawMessageStreamEvent],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1543, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1208, in request\n    raise self._make_status_error_from_response(response) from None\n\n\nanthropic.AuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n\n\nThe above exception was the direct cause of the following exception:\n\n\n\nTraceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 707, in invoke\n    input = context.run(step.invoke, input, config, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 447, in invoke\n    ret = self.func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1543, in model_node\n    result = wrap_model_call_handler(request, _execute_model_sync)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 357, in composed\n    outer_result = outer(request, inner_handler)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/filesystem.py\", line 3218, in wrap_model_call\n    response = handler(request)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 347, in inner_handler\n    inner_result = inner(req, handler)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/unsupported_content.py\", line 191, in wrap_model_call\n    return handler(self._filter_request(request))\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1506, in _execute_model_sync\n    output = model_.invoke(messages)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py\", line 6014, in invoke\n    return self.bound.invoke(\n           ~~~~~~~~~~~~~~~~~^\n        input,\n        ^^^^^^\n        self._merge_configs(config),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        **{**self.kwargs, **kwargs},\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 488, in invoke\n    self.generate_prompt(\n    ~~~~~~~~~~~~~~~~~~~~^\n        [self._convert_input(input)],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<6 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ).generations[0][0],\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1877, in generate_prompt\n    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)\n           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1684, in generate\n    self._generate_with_cache(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        m,\n        ^^\n    ...<2 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 2022, in _generate_with_cache\n    result = self._generate(\n        messages, stop=stop, run_manager=run_manager, **kwargs\n    )\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2601, in _generate\n    _handle_anthropic_api_error(e)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 1295, in _handle_anthropic_api_error\n    raise AnthropicAuthenticationError(\n        message=e.message, response=e.response, body=e.body\n    ) from e\n\n\nlangchain_anthropic.chat_models.AnthropicAuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Exception: AnthropicAuthenticationError('Error code: 401 - {\\'type\\': \\'error\\', \\'error\\': {\\'type\\': \\'authentication_error\\', \\'message\\': \\'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\\\n\\\\nLiteLLM: model group \\\\\\'claude-sonnet\\\\\\' failed with the error above. No fallback was attempted.\\'}}')Traceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2597, in _generate\n    raw_response = self._create(payload)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2176, in _create\n    return self._client.messages.with_raw_response.create(**payload)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_response.py\", line 797, in wrapped\n    return cast(APIResponse[R], func(*args, **kwargs))\n                                ~~~~^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_utils/_utils.py\", line 294, in wrapper\n    return func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/resources/messages/messages.py\", line 1027, in create\n    return self._post(\n           ~~~~~~~~~~^\n        \"/v1/messages\",\n        ^^^^^^^^^^^^^^^\n    ...<23 lines>...\n        stream_cls=Stream[RawMessageStreamEvent],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1543, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1208, in request\n    raise self._make_status_error_from_response(response) from None\n\n\nanthropic.AuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n\n\nThe above exception was the direct cause of the following exception:\n\n\n\nTraceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 707, in invoke\n    input = context.run(step.invoke, input, config, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 447, in invoke\n    ret = self.func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1543, in model_node\n    result = wrap_model_call_handler(request, _execute_model_sync)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 357, in composed\n    outer_result = outer(request, inner_handler)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/filesystem.py\", line 3218, in wrap_model_call\n    response = handler(request)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 347, in inner_handler\n    inner_result = inner(req, handler)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/unsupported_content.py\", line 191, in wrap_model_call\n    return handler(self._filter_request(request))\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1506, in _execute_model_sync\n    output = model_.invoke(messages)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py\", line 6014, in invoke\n    return self.bound.invoke(\n           ~~~~~~~~~~~~~~~~~^\n        input,\n        ^^^^^^\n        self._merge_configs(config),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        **{**self.kwargs, **kwargs},\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 488, in invoke\n    self.generate_prompt(\n    ~~~~~~~~~~~~~~~~~~~~^\n        [self._convert_input(input)],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<6 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ).generations[0][0],\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1877, in generate_prompt\n    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)\n           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1684, in generate\n    self._generate_with_cache(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        m,\n        ^^\n    ...<2 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 2022, in _generate_with_cache\n    result = self._generate(\n        messages, stop=stop, run_manager=run_manager, **kwargs\n    )\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2601, in _generate\n    _handle_anthropic_api_error(e)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 1295, in _handle_anthropic_api_error\n    raise AnthropicAuthenticationError(\n        message=e.message, response=e.response, body=e.body\n    ) from e\n\n\nlangchain_anthropic.chat_models.AnthropicAuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "7b787d5c997d768a725a3a2f0278e857",
+              "spanId": "77a5ba07fbe8fb8b",
+              "parentSpanId": "7b77a08f725c2a60",
+              "name": "researcher",
+              "kind": 1,
+              "startTimeUnixNano": "1790967512076764160",
+              "endTimeUnixNano": "1790967512623192064",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "gen_ai.completion",
+                  "value": {
+                    "bytesValue": "e30="
+                  }
+                },
+                {
+                  "key": "langsmith.span.kind",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.name",
+                  "value": {
+                    "stringValue": "researcher"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.session_name",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "langchain"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.ls_integration",
+                  "value": {
+                    "stringValue": "langchain_create_agent"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_step",
+                  "value": {
+                    "intValue": "1"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_node",
+                  "value": {
+                    "stringValue": "researcher"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_triggers",
+                  "value": {
+                    "stringValue": "[\"branch:to:researcher\"]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_path",
+                  "value": {
+                    "stringValue": "[\"__pregel_pull\",\"researcher\"]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_checkpoint_ns",
+                  "value": {
+                    "stringValue": "researcher:816a3f65-9150-0b6d-54aa-920fdcfe25cd"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.lc_agent_name",
+                  "value": {
+                    "stringValue": "researcher"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.checkpoint_ns",
+                  "value": {
+                    "stringValue": "researcher:816a3f65-9150-0b6d-54aa-920fdcfe25cd"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_OTLP_TRACES_ENDPOINT",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:58108/langsmith/v1/traces"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_PROJECT",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING",
+                  "value": {
+                    "stringValue": "true"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING_MODE",
+                  "value": {
+                    "stringValue": "otel"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.revision_id",
+                  "value": {
+                    "stringValue": "abd4db9"
+                  }
+                },
+                {
+                  "key": "langsmith.span.tags",
+                  "value": {
+                    "stringValue": "seq:step:1"
+                  }
+                },
+                {
+                  "key": "gen_ai.prompt",
+                  "value": {
+                    "bytesValue": "eyJtZXNzYWdlcyI6W3siY29udGVudCI6IkZvciBhIHN5bnRoZXRpYyB0cmFjaW5nIGZpeHR1cmUsIGV4cGxhaW4gUHl0aG9uIHR1cGxlIHZlcnN1cyBsaXN0IGltbXV0YWJpbGl0eSBpbiBhdCBtb3N0IDEyMCB3b3Jkcy4gVXNlIG9ubHkgb2ZmaWNpYWwgUHl0aG9uIGRvY3VtZW50YXRpb24gaWYgeW91IHNlYXJjaC4gSGF2ZSB0aGUgc2tlcHRpYyBhbmQgdmVyaWZpZXIgY2hlY2sgaXQsIHRoZW4gaGF2ZSB0aGUgZWRpdG9yIHdyaXRlIC9hbnN3ZXIubWQuIEtlZXAgdGhlIHJ1biBzaG9ydCBhbmQgZG8gbm90IGFzayBmb2xsb3ctdXAgcXVlc3Rpb25zLiIsImFkZGl0aW9uYWxfa3dhcmdzIjp7fSwicmVzcG9uc2VfbWV0YWRhdGEiOnt9LCJ0eXBlIjoiaHVtYW4iLCJpZCI6ImU4ZmQ3MWZiLWFmMTctNGJlOC1iNTk5LTE5Nzc4NTA1MWVlNiJ9XX0="
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1790967512687171000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "Exception"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "AnthropicAuthenticationError('Error code: 401 - {\\'type\\': \\'error\\', \\'error\\': {\\'type\\': \\'authentication_error\\', \\'message\\': \\'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\\\n\\\\nLiteLLM: model group \\\\\\'claude-sonnet\\\\\\' failed with the error above. No fallback was attempted.\\'}}')Traceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2597, in _generate\n    raw_response = self._create(payload)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2176, in _create\n    return self._client.messages.with_raw_response.create(**payload)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_response.py\", line 797, in wrapped\n    return cast(APIResponse[R], func(*args, **kwargs))\n                                ~~~~^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_utils/_utils.py\", line 294, in wrapper\n    return func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/resources/messages/messages.py\", line 1027, in create\n    return self._post(\n           ~~~~~~~~~~^\n        \"/v1/messages\",\n        ^^^^^^^^^^^^^^^\n    ...<23 lines>...\n        stream_cls=Stream[RawMessageStreamEvent],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1543, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1208, in request\n    raise self._make_status_error_from_response(response) from None\n\n\nanthropic.AuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n\n\nThe above exception was the direct cause of the following exception:\n\n\n\nTraceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py\", line 2967, in stream\n    for _ in runner.tick(\n             ~~~~~~~~~~~^\n        [t for t in loop.tasks.values() if not t.writes],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<2 lines>...\n        schedule_task=loop.accept_push,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ):\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_runner.py\", line 207, in tick\n    run_with_retry(\n    ~~~~~~~~~~~~~~^\n        t,\n        ^^\n    ...<10 lines>...\n        },\n        ^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_retry.py\", line 617, in run_with_retry\n    return task.proc.invoke(task.input, config)\n           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 707, in invoke\n    input = context.run(step.invoke, input, config, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 447, in invoke\n    ret = self.func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1543, in model_node\n    result = wrap_model_call_handler(request, _execute_model_sync)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 357, in composed\n    outer_result = outer(request, inner_handler)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/filesystem.py\", line 3218, in wrap_model_call\n    response = handler(request)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 347, in inner_handler\n    inner_result = inner(req, handler)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/unsupported_content.py\", line 191, in wrap_model_call\n    return handler(self._filter_request(request))\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1506, in _execute_model_sync\n    output = model_.invoke(messages)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py\", line 6014, in invoke\n    return self.bound.invoke(\n           ~~~~~~~~~~~~~~~~~^\n        input,\n        ^^^^^^\n        self._merge_configs(config),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        **{**self.kwargs, **kwargs},\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 488, in invoke\n    self.generate_prompt(\n    ~~~~~~~~~~~~~~~~~~~~^\n        [self._convert_input(input)],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<6 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ).generations[0][0],\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1877, in generate_prompt\n    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)\n           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1684, in generate\n    self._generate_with_cache(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        m,\n        ^^\n    ...<2 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 2022, in _generate_with_cache\n    result = self._generate(\n        messages, stop=stop, run_manager=run_manager, **kwargs\n    )\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2601, in _generate\n    _handle_anthropic_api_error(e)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 1295, in _handle_anthropic_api_error\n    raise AnthropicAuthenticationError(\n        message=e.message, response=e.response, body=e.body\n    ) from e\n\n\nlangchain_anthropic.chat_models.AnthropicAuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n\nDuring task with name 'model' and id '2e4e0d8e-70a5-697c-c7f4-e1f685fb1a31'"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Exception: AnthropicAuthenticationError('Error code: 401 - {\\'type\\': \\'error\\', \\'error\\': {\\'type\\': \\'authentication_error\\', \\'message\\': \\'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\\\n\\\\nLiteLLM: model group \\\\\\'claude-sonnet\\\\\\' failed with the error above. No fallback was attempted.\\'}}')Traceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2597, in _generate\n    raw_response = self._create(payload)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2176, in _create\n    return self._client.messages.with_raw_response.create(**payload)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_response.py\", line 797, in wrapped\n    return cast(APIResponse[R], func(*args, **kwargs))\n                                ~~~~^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_utils/_utils.py\", line 294, in wrapper\n    return func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/resources/messages/messages.py\", line 1027, in create\n    return self._post(\n           ~~~~~~~~~~^\n        \"/v1/messages\",\n        ^^^^^^^^^^^^^^^\n    ...<23 lines>...\n        stream_cls=Stream[RawMessageStreamEvent],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1543, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1208, in request\n    raise self._make_status_error_from_response(response) from None\n\n\nanthropic.AuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n\n\nThe above exception was the direct cause of the following exception:\n\n\n\nTraceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py\", line 2967, in stream\n    for _ in runner.tick(\n             ~~~~~~~~~~~^\n        [t for t in loop.tasks.values() if not t.writes],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<2 lines>...\n        schedule_task=loop.accept_push,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ):\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_runner.py\", line 207, in tick\n    run_with_retry(\n    ~~~~~~~~~~~~~~^\n        t,\n        ^^\n    ...<10 lines>...\n        },\n        ^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_retry.py\", line 617, in run_with_retry\n    return task.proc.invoke(task.input, config)\n           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 707, in invoke\n    input = context.run(step.invoke, input, config, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 447, in invoke\n    ret = self.func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1543, in model_node\n    result = wrap_model_call_handler(request, _execute_model_sync)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 357, in composed\n    outer_result = outer(request, inner_handler)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/filesystem.py\", line 3218, in wrap_model_call\n    response = handler(request)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 347, in inner_handler\n    inner_result = inner(req, handler)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/unsupported_content.py\", line 191, in wrap_model_call\n    return handler(self._filter_request(request))\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1506, in _execute_model_sync\n    output = model_.invoke(messages)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py\", line 6014, in invoke\n    return self.bound.invoke(\n           ~~~~~~~~~~~~~~~~~^\n        input,\n        ^^^^^^\n        self._merge_configs(config),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        **{**self.kwargs, **kwargs},\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 488, in invoke\n    self.generate_prompt(\n    ~~~~~~~~~~~~~~~~~~~~^\n        [self._convert_input(input)],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<6 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ).generations[0][0],\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1877, in generate_prompt\n    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)\n           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1684, in generate\n    self._generate_with_cache(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        m,\n        ^^\n    ...<2 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 2022, in _generate_with_cache\n    result = self._generate(\n        messages, stop=stop, run_manager=run_manager, **kwargs\n    )\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2601, in _generate\n    _handle_anthropic_api_error(e)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 1295, in _handle_anthropic_api_error\n    raise AnthropicAuthenticationError(\n        message=e.message, response=e.response, body=e.body\n    ) from e\n\n\nlangchain_anthropic.chat_models.AnthropicAuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n\nDuring task with name 'model' and id '2e4e0d8e-70a5-697c-c7f4-e1f685fb1a31'\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "7b787d5c997d768a725a3a2f0278e857",
+              "spanId": "7b77a08f725c2a60",
+              "parentSpanId": "11f6195c25249ab1",
+              "name": "researcher",
+              "kind": 1,
+              "startTimeUnixNano": "1790967512076327168",
+              "endTimeUnixNano": "1790967512626224128",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "gen_ai.completion",
+                  "value": {
+                    "bytesValue": "e30="
+                  }
+                },
+                {
+                  "key": "langsmith.span.kind",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.name",
+                  "value": {
+                    "stringValue": "researcher"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.session_name",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "langchain"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.ls_integration",
+                  "value": {
+                    "stringValue": "langgraph"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_step",
+                  "value": {
+                    "intValue": "1"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_node",
+                  "value": {
+                    "stringValue": "researcher"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_triggers",
+                  "value": {
+                    "stringValue": "[\"branch:to:researcher\"]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_path",
+                  "value": {
+                    "stringValue": "[\"__pregel_pull\",\"researcher\"]"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.langgraph_checkpoint_ns",
+                  "value": {
+                    "stringValue": "researcher:816a3f65-9150-0b6d-54aa-920fdcfe25cd"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_OTLP_TRACES_ENDPOINT",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:58108/langsmith/v1/traces"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_PROJECT",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING",
+                  "value": {
+                    "stringValue": "true"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING_MODE",
+                  "value": {
+                    "stringValue": "otel"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.revision_id",
+                  "value": {
+                    "stringValue": "abd4db9"
+                  }
+                },
+                {
+                  "key": "langsmith.span.tags",
+                  "value": {
+                    "stringValue": "graph:step:1"
+                  }
+                },
+                {
+                  "key": "gen_ai.prompt",
+                  "value": {
+                    "bytesValue": "eyJtZXNzYWdlcyI6W3siY29udGVudCI6IkZvciBhIHN5bnRoZXRpYyB0cmFjaW5nIGZpeHR1cmUsIGV4cGxhaW4gUHl0aG9uIHR1cGxlIHZlcnN1cyBsaXN0IGltbXV0YWJpbGl0eSBpbiBhdCBtb3N0IDEyMCB3b3Jkcy4gVXNlIG9ubHkgb2ZmaWNpYWwgUHl0aG9uIGRvY3VtZW50YXRpb24gaWYgeW91IHNlYXJjaC4gSGF2ZSB0aGUgc2tlcHRpYyBhbmQgdmVyaWZpZXIgY2hlY2sgaXQsIHRoZW4gaGF2ZSB0aGUgZWRpdG9yIHdyaXRlIC9hbnN3ZXIubWQuIEtlZXAgdGhlIHJ1biBzaG9ydCBhbmQgZG8gbm90IGFzayBmb2xsb3ctdXAgcXVlc3Rpb25zLiIsImFkZGl0aW9uYWxfa3dhcmdzIjp7fSwicmVzcG9uc2VfbWV0YWRhdGEiOnt9LCJ0eXBlIjoiaHVtYW4iLCJpZCI6ImU4ZmQ3MWZiLWFmMTctNGJlOC1iNTk5LTE5Nzc4NTA1MWVlNiJ9XX0="
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1790967512687277000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "Exception"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "AnthropicAuthenticationError('Error code: 401 - {\\'type\\': \\'error\\', \\'error\\': {\\'type\\': \\'authentication_error\\', \\'message\\': \\'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\\\n\\\\nLiteLLM: model group \\\\\\'claude-sonnet\\\\\\' failed with the error above. No fallback was attempted.\\'}}')Traceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2597, in _generate\n    raw_response = self._create(payload)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2176, in _create\n    return self._client.messages.with_raw_response.create(**payload)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_response.py\", line 797, in wrapped\n    return cast(APIResponse[R], func(*args, **kwargs))\n                                ~~~~^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_utils/_utils.py\", line 294, in wrapper\n    return func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/resources/messages/messages.py\", line 1027, in create\n    return self._post(\n           ~~~~~~~~~~^\n        \"/v1/messages\",\n        ^^^^^^^^^^^^^^^\n    ...<23 lines>...\n        stream_cls=Stream[RawMessageStreamEvent],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1543, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1208, in request\n    raise self._make_status_error_from_response(response) from None\n\n\nanthropic.AuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n\n\nThe above exception was the direct cause of the following exception:\n\n\n\nTraceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 707, in invoke\n    input = context.run(step.invoke, input, config, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py\", line 3913, in invoke\n    for chunk in self.stream(\n                 ~~~~~~~~~~~^\n        input,\n        ^^^^^^\n    ...<11 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ):\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py\", line 2967, in stream\n    for _ in runner.tick(\n             ~~~~~~~~~~~^\n        [t for t in loop.tasks.values() if not t.writes],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<2 lines>...\n        schedule_task=loop.accept_push,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ):\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_runner.py\", line 207, in tick\n    run_with_retry(\n    ~~~~~~~~~~~~~~^\n        t,\n        ^^\n    ...<10 lines>...\n        },\n        ^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_retry.py\", line 617, in run_with_retry\n    return task.proc.invoke(task.input, config)\n           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 707, in invoke\n    input = context.run(step.invoke, input, config, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 447, in invoke\n    ret = self.func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1543, in model_node\n    result = wrap_model_call_handler(request, _execute_model_sync)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 357, in composed\n    outer_result = outer(request, inner_handler)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/filesystem.py\", line 3218, in wrap_model_call\n    response = handler(request)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 347, in inner_handler\n    inner_result = inner(req, handler)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/unsupported_content.py\", line 191, in wrap_model_call\n    return handler(self._filter_request(request))\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1506, in _execute_model_sync\n    output = model_.invoke(messages)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py\", line 6014, in invoke\n    return self.bound.invoke(\n           ~~~~~~~~~~~~~~~~~^\n        input,\n        ^^^^^^\n        self._merge_configs(config),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        **{**self.kwargs, **kwargs},\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 488, in invoke\n    self.generate_prompt(\n    ~~~~~~~~~~~~~~~~~~~~^\n        [self._convert_input(input)],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<6 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ).generations[0][0],\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1877, in generate_prompt\n    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)\n           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1684, in generate\n    self._generate_with_cache(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        m,\n        ^^\n    ...<2 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 2022, in _generate_with_cache\n    result = self._generate(\n        messages, stop=stop, run_manager=run_manager, **kwargs\n    )\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2601, in _generate\n    _handle_anthropic_api_error(e)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 1295, in _handle_anthropic_api_error\n    raise AnthropicAuthenticationError(\n        message=e.message, response=e.response, body=e.body\n    ) from e\n\n\nlangchain_anthropic.chat_models.AnthropicAuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n\nDuring task with name 'model' and id '2e4e0d8e-70a5-697c-c7f4-e1f685fb1a31'"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Exception: AnthropicAuthenticationError('Error code: 401 - {\\'type\\': \\'error\\', \\'error\\': {\\'type\\': \\'authentication_error\\', \\'message\\': \\'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\\\n\\\\nLiteLLM: model group \\\\\\'claude-sonnet\\\\\\' failed with the error above. No fallback was attempted.\\'}}')Traceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2597, in _generate\n    raw_response = self._create(payload)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2176, in _create\n    return self._client.messages.with_raw_response.create(**payload)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_response.py\", line 797, in wrapped\n    return cast(APIResponse[R], func(*args, **kwargs))\n                                ~~~~^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_utils/_utils.py\", line 294, in wrapper\n    return func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/resources/messages/messages.py\", line 1027, in create\n    return self._post(\n           ~~~~~~~~~~^\n        \"/v1/messages\",\n        ^^^^^^^^^^^^^^^\n    ...<23 lines>...\n        stream_cls=Stream[RawMessageStreamEvent],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1543, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1208, in request\n    raise self._make_status_error_from_response(response) from None\n\n\nanthropic.AuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n\n\nThe above exception was the direct cause of the following exception:\n\n\n\nTraceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 707, in invoke\n    input = context.run(step.invoke, input, config, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py\", line 3913, in invoke\n    for chunk in self.stream(\n                 ~~~~~~~~~~~^\n        input,\n        ^^^^^^\n    ...<11 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ):\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py\", line 2967, in stream\n    for _ in runner.tick(\n             ~~~~~~~~~~~^\n        [t for t in loop.tasks.values() if not t.writes],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<2 lines>...\n        schedule_task=loop.accept_push,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ):\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_runner.py\", line 207, in tick\n    run_with_retry(\n    ~~~~~~~~~~~~~~^\n        t,\n        ^^\n    ...<10 lines>...\n        },\n        ^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_retry.py\", line 617, in run_with_retry\n    return task.proc.invoke(task.input, config)\n           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 707, in invoke\n    input = context.run(step.invoke, input, config, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 447, in invoke\n    ret = self.func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1543, in model_node\n    result = wrap_model_call_handler(request, _execute_model_sync)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 357, in composed\n    outer_result = outer(request, inner_handler)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/filesystem.py\", line 3218, in wrap_model_call\n    response = handler(request)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 347, in inner_handler\n    inner_result = inner(req, handler)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/unsupported_content.py\", line 191, in wrap_model_call\n    return handler(self._filter_request(request))\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1506, in _execute_model_sync\n    output = model_.invoke(messages)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py\", line 6014, in invoke\n    return self.bound.invoke(\n           ~~~~~~~~~~~~~~~~~^\n        input,\n        ^^^^^^\n        self._merge_configs(config),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        **{**self.kwargs, **kwargs},\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 488, in invoke\n    self.generate_prompt(\n    ~~~~~~~~~~~~~~~~~~~~^\n        [self._convert_input(input)],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<6 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ).generations[0][0],\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1877, in generate_prompt\n    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)\n           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1684, in generate\n    self._generate_with_cache(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        m,\n        ^^\n    ...<2 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 2022, in _generate_with_cache\n    result = self._generate(\n        messages, stop=stop, run_manager=run_manager, **kwargs\n    )\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2601, in _generate\n    _handle_anthropic_api_error(e)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 1295, in _handle_anthropic_api_error\n    raise AnthropicAuthenticationError(\n        message=e.message, response=e.response, body=e.body\n    ) from e\n\n\nlangchain_anthropic.chat_models.AnthropicAuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n\nDuring task with name 'model' and id '2e4e0d8e-70a5-697c-c7f4-e1f685fb1a31'\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "7b787d5c997d768a725a3a2f0278e857",
+              "spanId": "11f6195c25249ab1",
+              "parentSpanId": "9e65698af98970b0",
+              "name": "LangGraph",
+              "kind": 1,
+              "startTimeUnixNano": "1790967512019313152",
+              "endTimeUnixNano": "1790967512630693888",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "gen_ai.completion",
+                  "value": {
+                    "bytesValue": "e30="
+                  }
+                },
+                {
+                  "key": "langsmith.span.kind",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.name",
+                  "value": {
+                    "stringValue": "LangGraph"
+                  }
+                },
+                {
+                  "key": "langsmith.trace.session_name",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "langchain"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.ls_integration",
+                  "value": {
+                    "stringValue": "langgraph"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_OTLP_TRACES_ENDPOINT",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:58108/langsmith/v1/traces"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_PROJECT",
+                  "value": {
+                    "stringValue": "litellm-fixture"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING",
+                  "value": {
+                    "stringValue": "true"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.LANGSMITH_TRACING_MODE",
+                  "value": {
+                    "stringValue": "otel"
+                  }
+                },
+                {
+                  "key": "langsmith.metadata.revision_id",
+                  "value": {
+                    "stringValue": "abd4db9"
+                  }
+                },
+                {
+                  "key": "gen_ai.prompt",
+                  "value": {
+                    "bytesValue": "eyJtZXNzYWdlcyI6W3sicm9sZSI6InVzZXIiLCJjb250ZW50IjoiRm9yIGEgc3ludGhldGljIHRyYWNpbmcgZml4dHVyZSwgZXhwbGFpbiBQeXRob24gdHVwbGUgdmVyc3VzIGxpc3QgaW1tdXRhYmlsaXR5IGluIGF0IG1vc3QgMTIwIHdvcmRzLiBVc2Ugb25seSBvZmZpY2lhbCBQeXRob24gZG9jdW1lbnRhdGlvbiBpZiB5b3Ugc2VhcmNoLiBIYXZlIHRoZSBza2VwdGljIGFuZCB2ZXJpZmllciBjaGVjayBpdCwgdGhlbiBoYXZlIHRoZSBlZGl0b3Igd3JpdGUgL2Fuc3dlci5tZC4gS2VlcCB0aGUgcnVuIHNob3J0IGFuZCBkbyBub3QgYXNrIGZvbGxvdy11cCBxdWVzdGlvbnMuIn1dfQ=="
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1790967512687350000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "Exception"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "AnthropicAuthenticationError('Error code: 401 - {\\'type\\': \\'error\\', \\'error\\': {\\'type\\': \\'authentication_error\\', \\'message\\': \\'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\\\n\\\\nLiteLLM: model group \\\\\\'claude-sonnet\\\\\\' failed with the error above. No fallback was attempted.\\'}}')Traceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2597, in _generate\n    raw_response = self._create(payload)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2176, in _create\n    return self._client.messages.with_raw_response.create(**payload)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_response.py\", line 797, in wrapped\n    return cast(APIResponse[R], func(*args, **kwargs))\n                                ~~~~^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_utils/_utils.py\", line 294, in wrapper\n    return func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/resources/messages/messages.py\", line 1027, in create\n    return self._post(\n           ~~~~~~~~~~^\n        \"/v1/messages\",\n        ^^^^^^^^^^^^^^^\n    ...<23 lines>...\n        stream_cls=Stream[RawMessageStreamEvent],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1543, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1208, in request\n    raise self._make_status_error_from_response(response) from None\n\n\nanthropic.AuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n\n\nThe above exception was the direct cause of the following exception:\n\n\n\nTraceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py\", line 2967, in stream\n    for _ in runner.tick(\n             ~~~~~~~~~~~^\n        [t for t in loop.tasks.values() if not t.writes],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<2 lines>...\n        schedule_task=loop.accept_push,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ):\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_runner.py\", line 207, in tick\n    run_with_retry(\n    ~~~~~~~~~~~~~~^\n        t,\n        ^^\n    ...<10 lines>...\n        },\n        ^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_retry.py\", line 617, in run_with_retry\n    return task.proc.invoke(task.input, config)\n           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 707, in invoke\n    input = context.run(step.invoke, input, config, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py\", line 3913, in invoke\n    for chunk in self.stream(\n                 ~~~~~~~~~~~^\n        input,\n        ^^^^^^\n    ...<11 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ):\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py\", line 2967, in stream\n    for _ in runner.tick(\n             ~~~~~~~~~~~^\n        [t for t in loop.tasks.values() if not t.writes],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<2 lines>...\n        schedule_task=loop.accept_push,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ):\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_runner.py\", line 207, in tick\n    run_with_retry(\n    ~~~~~~~~~~~~~~^\n        t,\n        ^^\n    ...<10 lines>...\n        },\n        ^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_retry.py\", line 617, in run_with_retry\n    return task.proc.invoke(task.input, config)\n           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 707, in invoke\n    input = context.run(step.invoke, input, config, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 447, in invoke\n    ret = self.func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1543, in model_node\n    result = wrap_model_call_handler(request, _execute_model_sync)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 357, in composed\n    outer_result = outer(request, inner_handler)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/filesystem.py\", line 3218, in wrap_model_call\n    response = handler(request)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 347, in inner_handler\n    inner_result = inner(req, handler)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/unsupported_content.py\", line 191, in wrap_model_call\n    return handler(self._filter_request(request))\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1506, in _execute_model_sync\n    output = model_.invoke(messages)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py\", line 6014, in invoke\n    return self.bound.invoke(\n           ~~~~~~~~~~~~~~~~~^\n        input,\n        ^^^^^^\n        self._merge_configs(config),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        **{**self.kwargs, **kwargs},\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 488, in invoke\n    self.generate_prompt(\n    ~~~~~~~~~~~~~~~~~~~~^\n        [self._convert_input(input)],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<6 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ).generations[0][0],\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1877, in generate_prompt\n    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)\n           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1684, in generate\n    self._generate_with_cache(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        m,\n        ^^\n    ...<2 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 2022, in _generate_with_cache\n    result = self._generate(\n        messages, stop=stop, run_manager=run_manager, **kwargs\n    )\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2601, in _generate\n    _handle_anthropic_api_error(e)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 1295, in _handle_anthropic_api_error\n    raise AnthropicAuthenticationError(\n        message=e.message, response=e.response, body=e.body\n    ) from e\n\n\nlangchain_anthropic.chat_models.AnthropicAuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n\nDuring task with name 'model' and id '2e4e0d8e-70a5-697c-c7f4-e1f685fb1a31'\n\n\nDuring task with name 'researcher' and id '816a3f65-9150-0b6d-54aa-920fdcfe25cd'"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Exception: AnthropicAuthenticationError('Error code: 401 - {\\'type\\': \\'error\\', \\'error\\': {\\'type\\': \\'authentication_error\\', \\'message\\': \\'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\\\n\\\\nLiteLLM: model group \\\\\\'claude-sonnet\\\\\\' failed with the error above. No fallback was attempted.\\'}}')Traceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2597, in _generate\n    raw_response = self._create(payload)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2176, in _create\n    return self._client.messages.with_raw_response.create(**payload)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_response.py\", line 797, in wrapped\n    return cast(APIResponse[R], func(*args, **kwargs))\n                                ~~~~^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_utils/_utils.py\", line 294, in wrapper\n    return func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/resources/messages/messages.py\", line 1027, in create\n    return self._post(\n           ~~~~~~~~~~^\n        \"/v1/messages\",\n        ^^^^^^^^^^^^^^^\n    ...<23 lines>...\n        stream_cls=Stream[RawMessageStreamEvent],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1543, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1208, in request\n    raise self._make_status_error_from_response(response) from None\n\n\nanthropic.AuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n\n\nThe above exception was the direct cause of the following exception:\n\n\n\nTraceback (most recent call last):\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py\", line 2967, in stream\n    for _ in runner.tick(\n             ~~~~~~~~~~~^\n        [t for t in loop.tasks.values() if not t.writes],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<2 lines>...\n        schedule_task=loop.accept_push,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ):\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_runner.py\", line 207, in tick\n    run_with_retry(\n    ~~~~~~~~~~~~~~^\n        t,\n        ^^\n    ...<10 lines>...\n        },\n        ^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_retry.py\", line 617, in run_with_retry\n    return task.proc.invoke(task.input, config)\n           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 707, in invoke\n    input = context.run(step.invoke, input, config, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py\", line 3913, in invoke\n    for chunk in self.stream(\n                 ~~~~~~~~~~~^\n        input,\n        ^^^^^^\n    ...<11 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ):\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py\", line 2967, in stream\n    for _ in runner.tick(\n             ~~~~~~~~~~~^\n        [t for t in loop.tasks.values() if not t.writes],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<2 lines>...\n        schedule_task=loop.accept_push,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ):\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_runner.py\", line 207, in tick\n    run_with_retry(\n    ~~~~~~~~~~~~~~^\n        t,\n        ^^\n    ...<10 lines>...\n        },\n        ^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_retry.py\", line 617, in run_with_retry\n    return task.proc.invoke(task.input, config)\n           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 707, in invoke\n    input = context.run(step.invoke, input, config, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 447, in invoke\n    ret = self.func(*args, **kwargs)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1543, in model_node\n    result = wrap_model_call_handler(request, _execute_model_sync)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 357, in composed\n    outer_result = outer(request, inner_handler)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/filesystem.py\", line 3218, in wrap_model_call\n    response = handler(request)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 347, in inner_handler\n    inner_result = inner(req, handler)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/unsupported_content.py\", line 191, in wrap_model_call\n    return handler(self._filter_request(request))\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1506, in _execute_model_sync\n    output = model_.invoke(messages)\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py\", line 6014, in invoke\n    return self.bound.invoke(\n           ~~~~~~~~~~~~~~~~~^\n        input,\n        ^^^^^^\n        self._merge_configs(config),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        **{**self.kwargs, **kwargs},\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 488, in invoke\n    self.generate_prompt(\n    ~~~~~~~~~~~~~~~~~~~~^\n        [self._convert_input(input)],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<6 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ).generations[0][0],\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1877, in generate_prompt\n    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)\n           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1684, in generate\n    self._generate_with_cache(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        m,\n        ^^\n    ...<2 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    )\n    ^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 2022, in _generate_with_cache\n    result = self._generate(\n        messages, stop=stop, run_manager=run_manager, **kwargs\n    )\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2601, in _generate\n    _handle_anthropic_api_error(e)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^\n\n\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 1295, in _handle_anthropic_api_error\n    raise AnthropicAuthenticationError(\n        message=e.message, response=e.response, body=e.body\n    ) from e\n\n\nlangchain_anthropic.chat_models.AnthropicAuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\n\nDuring task with name 'model' and id '2e4e0d8e-70a5-697c-c7f4-e1f685fb1a31'\n\n\nDuring task with name 'researcher' and id '816a3f65-9150-0b6d-54aa-920fdcfe25cd'\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            }
+          ]
+        },
+        {
+          "scope": {
+            "name": "deeplite"
+          },
+          "spans": [
+            {
+              "traceId": "7b787d5c997d768a725a3a2f0278e857",
+              "spanId": "9e65698af98970b0",
+              "name": "deeplite.run",
+              "kind": 1,
+              "startTimeUnixNano": "1790967512013991000",
+              "endTimeUnixNano": "1790967512696195000",
+              "attributes": [
+                {
+                  "key": "langsmith.span.kind",
+                  "value": {
+                    "stringValue": "chain"
+                  }
+                },
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "For a synthetic tracing fixture, explain Python tuple versus list immutability in at most 120 words. Use only official Python documentation if you search. Have the skeptic and verifier check it, then have the editor write /answer.md. Keep the run short and do not ask follow-up questions."
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1790967512696180000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "langchain_anthropic.chat_models.AnthropicAuthenticationError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Traceback (most recent call last):\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2597, in _generate\n    raw_response = self._create(payload)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2176, in _create\n    return self._client.messages.with_raw_response.create(**payload)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_response.py\", line 797, in wrapped\n    return cast(APIResponse[R], func(*args, **kwargs))\n                                ~~~~^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_utils/_utils.py\", line 294, in wrapper\n    return func(*args, **kwargs)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/resources/messages/messages.py\", line 1027, in create\n    return self._post(\n           ~~~~~~~~~~^\n        \"/v1/messages\",\n        ^^^^^^^^^^^^^^^\n    ...<23 lines>...\n        stream_cls=Stream[RawMessageStreamEvent],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1543, in post\n    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))\n                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/anthropic/_base_client.py\", line 1208, in request\n    raise self._make_status_error_from_response(response) from None\nanthropic.AuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/opentelemetry/trace/__init__.py\", line 602, in use_span\n    yield span\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/opentelemetry/sdk/trace/__init__.py\", line 1136, in start_as_current_span\n    yield span\n  File \"/workspace/deeplite/src/deeplite/cli.py\", line 22, in run_task\n    result: Final = agent.invoke(\n                    ~~~~~~~~~~~~^\n        {\"messages\": [{\"role\": \"user\", \"content\": task}]}, config={\"recursion_limit\": 40}\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py\", line 3913, in invoke\n    for chunk in self.stream(\n                 ~~~~~~~~~~~^\n        input,\n        ^^^^^^\n    ...<11 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ):\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py\", line 2967, in stream\n    for _ in runner.tick(\n             ~~~~~~~~~~~^\n        [t for t in loop.tasks.values() if not t.writes],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<2 lines>...\n        schedule_task=loop.accept_push,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ):\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_runner.py\", line 207, in tick\n    run_with_retry(\n    ~~~~~~~~~~~~~~^\n        t,\n        ^^\n    ...<10 lines>...\n        },\n        ^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_retry.py\", line 617, in run_with_retry\n    return task.proc.invoke(task.input, config)\n           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 707, in invoke\n    input = context.run(step.invoke, input, config, **kwargs)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py\", line 3913, in invoke\n    for chunk in self.stream(\n                 ~~~~~~~~~~~^\n        input,\n        ^^^^^^\n    ...<11 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ):\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/main.py\", line 2967, in stream\n    for _ in runner.tick(\n             ~~~~~~~~~~~^\n        [t for t in loop.tasks.values() if not t.writes],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<2 lines>...\n        schedule_task=loop.accept_push,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ):\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_runner.py\", line 207, in tick\n    run_with_retry(\n    ~~~~~~~~~~~~~~^\n        t,\n        ^^\n    ...<10 lines>...\n        },\n        ^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/pregel/_retry.py\", line 617, in run_with_retry\n    return task.proc.invoke(task.input, config)\n           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 707, in invoke\n    input = context.run(step.invoke, input, config, **kwargs)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langgraph/_internal/_runnable.py\", line 447, in invoke\n    ret = self.func(*args, **kwargs)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1543, in model_node\n    result = wrap_model_call_handler(request, _execute_model_sync)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 357, in composed\n    outer_result = outer(request, inner_handler)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/filesystem.py\", line 3218, in wrap_model_call\n    response = handler(request)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 347, in inner_handler\n    inner_result = inner(req, handler)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/deepagents/middleware/unsupported_content.py\", line 191, in wrap_model_call\n    return handler(self._filter_request(request))\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain/agents/factory.py\", line 1506, in _execute_model_sync\n    output = model_.invoke(messages)\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py\", line 6014, in invoke\n    return self.bound.invoke(\n           ~~~~~~~~~~~~~~~~~^\n        input,\n        ^^^^^^\n        self._merge_configs(config),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        **{**self.kwargs, **kwargs},\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 488, in invoke\n    self.generate_prompt(\n    ~~~~~~~~~~~~~~~~~~~~^\n        [self._convert_input(input)],\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<6 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    ).generations[0][0],\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1877, in generate_prompt\n    return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)\n           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 1684, in generate\n    self._generate_with_cache(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        m,\n        ^^\n    ...<2 lines>...\n        **kwargs,\n        ^^^^^^^^^\n    )\n    ^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py\", line 2022, in _generate_with_cache\n    result = self._generate(\n        messages, stop=stop, run_manager=run_manager, **kwargs\n    )\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 2601, in _generate\n    _handle_anthropic_api_error(e)\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^\n  File \"/workspace/deeplite/.venv/lib/python3.13/site-packages/langchain_anthropic/chat_models.py\", line 1295, in _handle_anthropic_api_error\n    raise AnthropicAuthenticationError(\n        message=e.message, response=e.response, body=e.body\n    ) from e\nlangchain_anthropic.chat_models.AnthropicAuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}\nDuring task with name 'model' and id '2e4e0d8e-70a5-697c-c7f4-e1f685fb1a31'\nDuring task with name 'researcher' and id '816a3f65-9150-0b6d-54aa-920fdcfe25cd'\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "AnthropicAuthenticationError: Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'litellm.AuthenticationError: AnthropicException - {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}\\n\\nLiteLLM: model group \\'claude-sonnet\\' failed with the error above. No fallback was attempted.'}}",
+                "code": 2
+              },
+              "flags": 256
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -20,6 +20,7 @@ from litellm.constants import (
     SPEND_LOG_RUN_LOOPS,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import (
     RunOutcome,
     SpendLogCleanupMetrics,
@@ -289,7 +290,7 @@ class SpendLogCleanup:
         return remaining
 
     async def _execute_delete_batch(
-        self, prisma_client: PrismaClient, delete_sql: str, cutoff_date: Cutoff, deadline: float
+        self, prisma_client: PrismaClient, delete_sql: str, cutoff_date: Cutoff, table_name: str, deadline: float
     ) -> int | None:
         """
         Run one delete batch under a Postgres statement and lock timeout.
@@ -305,7 +306,7 @@ class SpendLogCleanup:
         fault, so the caller stops instead of retrying.
         """
         timeout_ms: Final = self._timeout_ms(deadline)
-        async with prisma_client.db.tx() as tx:
+        async with db_span("cleanup_expired_rows", table_name), prisma_client.db.tx() as tx:
             await tx.execute_raw(f"SET LOCAL statement_timeout = {timeout_ms}")
             await tx.execute_raw(f"SET LOCAL lock_timeout = {timeout_ms}")
             deleted_result: Final = await tx.execute_raw(delete_sql, cutoff_date, self.batch_size)
@@ -330,7 +331,7 @@ class SpendLogCleanup:
             ) capped
             """
         try:
-            async with prisma_client.db.tx() as tx:
+            async with db_span("count_expired_rows", table_name), prisma_client.db.tx() as tx:
                 await tx.execute_raw(f"SET LOCAL statement_timeout = {self._timeout_ms(deadline)}")
                 rows: Final = _REMAINING_ROWS.validate_python(
                     await tx.query_raw(count_sql, cutoff_date, SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP)
@@ -388,7 +389,9 @@ class SpendLogCleanup:
             # Find rows and delete them in one go without fetching to application
             batch_started_at = time.monotonic()
             try:
-                batch_result = await self._execute_delete_batch(prisma_client, delete_sql, cutoff_date, deadline)
+                batch_result = await self._execute_delete_batch(
+                    prisma_client, delete_sql, cutoff_date, table_name, deadline
+                )
             except Exception as batch_exc:
                 if time.monotonic() >= deadline:
                     # The statement timeout was clamped to the budget that was
@@ -540,6 +543,18 @@ class SpendLogCleanup:
             deadline=deadline,
         )
 
+    async def _delete_old_autorouter_daily_rows(
+        self, prisma_client: PrismaClient, cutoff_day: str, deadline: float
+    ) -> TableCleanupResult:
+        return await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff_day,
+            table_name="LiteLLM_AutoRouterDailySpend",
+            key_columns=("date", "api_key", "user_id", "router_name", "router_type"),
+            time_column="date",
+            deadline=deadline,
+        )
+
     async def _delete_old_health_check_rows(
         self, prisma_client: PrismaClient, cutoff_date: datetime, deadline: float
     ) -> TableCleanupResult:
@@ -623,16 +638,20 @@ class SpendLogCleanup:
             except Exception:  # noqa: BLE001  # retained observations are retried by the next cleanup job
                 verbose_proxy_logger.warning("Auto-router baseline retention remains pending")
         sessions_result: Final = await self._delete_old_autorouter_session_rows(
-            prisma_client, session_cutoff, self._group_deadline(deadline, 2)
+            prisma_client, session_cutoff, self._group_deadline(deadline, 3)
         )
         verbose_proxy_logger.info("Deleted %s expired auto-router session rollup rows", sessions_result.rows_deleted)
         user_sessions_result: Final = await self._delete_old_autorouter_user_session_rows(
-            prisma_client, session_cutoff, deadline
+            prisma_client, session_cutoff, self._group_deadline(deadline, 2)
         )
         verbose_proxy_logger.info(
             "Deleted %s expired auto-router user session rollup rows", user_sessions_result.rows_deleted
         )
-        return (sessions_result, user_sessions_result)
+        days_result: Final = await self._delete_old_autorouter_daily_rows(
+            prisma_client, session_cutoff.date().isoformat(), deadline
+        )
+        verbose_proxy_logger.info("Deleted %s expired auto-router daily rollup rows", days_result.rows_deleted)
+        return (sessions_result, user_sessions_result, days_result)
 
     async def _clean_health_checks(
         self, prisma_client: PrismaClient, retention_seconds: int, deadline: float

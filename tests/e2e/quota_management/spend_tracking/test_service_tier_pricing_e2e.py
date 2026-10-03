@@ -17,9 +17,10 @@ sets rather than on whatever the model happens to do by default.
 The streaming cases pin the served-tier contract: OpenAI stamps the tier it actually
 used on every stream chunk, and that echo is what the caller sees and what the bill
 must be computed on. The request sets no service_tier, so the only place the tier
-can come from is the provider's response. The spend row must record the served tier
-and price input at that tier's rate, and every chunk the proxy relays must carry the
-same service_tier the provider sent.
+can come from is the provider's response. The spend row must record the tier the bill
+was priced on and price input at that tier's rate, and every chunk the proxy relays must
+carry the same service_tier the provider sent. A served `default` tier is base pricing,
+which the bill records as no tier
 """
 
 import json
@@ -35,6 +36,7 @@ from cost_rows import (
 )
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Capability, Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import (
     AnthropicMessagesBody,
@@ -60,7 +62,8 @@ PRIORITY_OUTPUT_RATE = 1.6e-04
 
 REASONING_EFFORT = "high"
 
-TIER_INPUT_RATES = {"default": INPUT_RATE, "priority": PRIORITY_INPUT_RATE}
+PRICING_BASIS_FOR_SERVED_TIER: dict[str, str | None] = {"default": None, "priority": "priority"}
+INPUT_RATE_FOR_PRICING_BASIS: dict[str | None, float] = {None: INPUT_RATE, "priority": PRIORITY_INPUT_RATE}
 
 
 class _StreamChunk(BaseModel):
@@ -97,6 +100,15 @@ def _served_tier(chunks: list[_StreamChunk]) -> str:
 
 class TestServiceTierPricing:
     @pytest.mark.covers("quota_management.spend_tracking.service_tier.bills_tier_rates")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.OPENAI,),
+            models=(BACKEND,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_priority_tier_bills_priority_rates(
         self, client: SpendClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -203,17 +215,20 @@ class TestServiceTierPricing:
         )
         chunks = _stream_chunks(result.stream_events)
         served_tier = _served_tier(chunks)
-        assert served_tier in TIER_INPUT_RATES, f"no custom rate registered for served tier {served_tier!r}"
+        assert served_tier in PRICING_BASIS_FOR_SERVED_TIER, (
+            f"no custom rate registered for served tier {served_tier!r}"
+        )
+        pricing_basis = PRICING_BASIS_FOR_SERVED_TIER[served_tier]
         stream_id = chunks[0].id
         assert stream_id, f"first stream chunk carried no id: {result.stream_events[0][:200]}"
 
         row = poll_cost_row(client.proxy, stream_id)
         assert row is not None, f"no spend row with a cost breakdown landed for {stream_id}"
-        assert row.breakdown.service_tier == served_tier, (
-            f"the provider served tier {served_tier!r} on every chunk but the bill records "
-            f"pricing basis {row.breakdown.service_tier!r}"
+        assert row.breakdown.service_tier == pricing_basis, (
+            f"the provider served tier {served_tier!r} on every chunk, so the bill should record pricing "
+            f"basis {pricing_basis!r}, but it records {row.breakdown.service_tier!r}"
         )
-        assert_fresh_tokens_billed_at(row, TIER_INPUT_RATES[served_tier])
+        assert_fresh_tokens_billed_at(row, INPUT_RATE_FOR_PRICING_BASIS[pricing_basis])
         assert_total_is_sum_of_components(row)
 
     @pytest.mark.covers("llm.chat_completions.openai.service_tier.stream.echoes_served_tier")
@@ -254,7 +269,14 @@ class TestServiceTierPricing:
             client.proxy,
             resources,
             "tier-responses-stream",
-            LiteLLMParamsBody(model=STREAM_BACKEND, api_key=OPENAI_API_KEY),
+            LiteLLMParamsBody(
+                model=STREAM_BACKEND,
+                api_key=OPENAI_API_KEY,
+                input_cost_per_token=INPUT_RATE,
+                output_cost_per_token=OUTPUT_RATE,
+                input_cost_per_token_priority=PRIORITY_INPUT_RATE,
+                output_cost_per_token_priority=PRIORITY_OUTPUT_RATE,
+            ),
         )
 
         result = client.proxy.responses_stream(
@@ -272,14 +294,18 @@ class TestServiceTierPricing:
         )
         served_tier = completed.response.service_tier
         assert served_tier, f"response.completed carried no service_tier: {completed.response}"
-        assert served_tier in TIER_INPUT_RATES, f"no custom rate registered for served tier {served_tier!r}"
+        assert served_tier in PRICING_BASIS_FOR_SERVED_TIER, (
+            f"no custom rate registered for served tier {served_tier!r}"
+        )
+        pricing_basis = PRICING_BASIS_FOR_SERVED_TIER[served_tier]
 
         row = poll_cost_row_where(client.proxy, scoped_key, lambda r: r.spend is not None and r.spend > 0)
         assert row is not None, f"no spend row with a cost breakdown landed for the streamed responses call on {model}"
-        assert row.breakdown.service_tier == served_tier, (
-            f"response.completed served tier {served_tier!r} but the bill records "
-            f"pricing basis {row.breakdown.service_tier!r}"
+        assert row.breakdown.service_tier == pricing_basis, (
+            f"response.completed served tier {served_tier!r}, so the bill should record pricing basis "
+            f"{pricing_basis!r}, but it records {row.breakdown.service_tier!r}"
         )
+        assert_fresh_tokens_billed_at(row, INPUT_RATE_FOR_PRICING_BASIS[pricing_basis])
 
     @pytest.mark.covers("quota_management.spend_tracking.service_tier_stream.messages_records_served_tier")
     def test_messages_stream_records_the_served_tier(
@@ -289,7 +315,14 @@ class TestServiceTierPricing:
             client.proxy,
             resources,
             "tier-messages-stream",
-            LiteLLMParamsBody(model=STREAM_BACKEND, api_key=OPENAI_API_KEY),
+            LiteLLMParamsBody(
+                model=STREAM_BACKEND,
+                api_key=OPENAI_API_KEY,
+                input_cost_per_token=INPUT_RATE,
+                output_cost_per_token=OUTPUT_RATE,
+                input_cost_per_token_priority=PRIORITY_INPUT_RATE,
+                output_cost_per_token_priority=PRIORITY_OUTPUT_RATE,
+            ),
         )
 
         result = client.proxy.messages_stream(
@@ -312,8 +345,9 @@ class TestServiceTierPricing:
 
         row = poll_cost_row_where(client.proxy, scoped_key, lambda r: r.spend is not None and r.spend > 0)
         assert row is not None, f"no spend row with a cost breakdown landed for the streamed messages call on {model}"
-        served_tier = row.breakdown.service_tier
-        assert served_tier in TIER_INPUT_RATES and served_tier is not None, (
+        pricing_basis = row.breakdown.service_tier
+        assert pricing_basis in INPUT_RATE_FOR_PRICING_BASIS, (
             "the anthropic wire format carries no service_tier, so the bill is the only record of "
-            f"the tier OpenAI served; the row recorded pricing basis {served_tier!r}"
+            f"the tier OpenAI served; the row recorded pricing basis {pricing_basis!r}"
         )
+        assert_fresh_tokens_billed_at(row, INPUT_RATE_FOR_PRICING_BASIS[pricing_basis])

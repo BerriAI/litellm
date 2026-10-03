@@ -2,7 +2,7 @@ import asyncio
 import time
 from types import TracebackType
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -579,6 +579,28 @@ async def test_realtime_health_check_names_the_batch_mode_for_chirp_models():
         await realtime_main._realtime_health_check(model="chirp_3", custom_llm_provider="vertex_ai", api_key=None)
 
 
+class _ClosableGaClientWebSocket:
+    def __init__(self) -> None:
+        self.scope: Final = {"headers": ()}
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_arealtime_openai_forwards_the_intent_query_param_to_the_upstream_url():
+    connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
+    with patch("websockets.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="openai/gpt-realtime",
+            websocket=_ClosableGaClientWebSocket(),
+            api_key="fake-key",
+            query_params={"model": "openai/gpt-realtime", "intent": "chat"},
+            litellm_logging_obj=FakeLogging(),
+        )
+    assert connect.url == "wss://api.openai.com/v1/realtime?model=gpt-realtime&intent=chat"
+
+
 @pytest.mark.parametrize(
     ("client_query_params", "expected_backend_url"),
     [
@@ -600,7 +622,7 @@ async def test_arealtime_openai_drops_model_from_the_upstream_url_only_for_trans
     with patch("websockets.connect", connect):
         await realtime_main._arealtime.__wrapped__(
             model="openai/gpt-live-transcribe",
-            websocket=AsyncMock(),
+            websocket=_ClosableGaClientWebSocket(),
             api_base="https://api.openai.com/",
             api_key="fake-key",
             litellm_logging_obj=FakeLogging(),

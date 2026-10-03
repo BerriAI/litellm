@@ -24,6 +24,7 @@ export interface MemberTableColumn {
   key: string;
   render: (member: Member) => React.ReactNode;
   sortValue?: (member: Member) => MemberTableSortValue;
+  numeric?: boolean;
 }
 
 export interface MemberTableProps {
@@ -87,6 +88,7 @@ const extraColumnDef = (column: MemberTableColumn): ColumnDef<Member> => {
       header: () => <span className="font-medium">{column.title}</span>,
       enableSorting: false,
       enableGlobalFilter: false,
+      meta: { numeric: column.numeric },
       cell: ({ row }) => column.render(row.original),
     };
   }
@@ -97,6 +99,7 @@ const extraColumnDef = (column: MemberTableColumn): ColumnDef<Member> => {
     sortDescFirst: false,
     sortUndefined: "last",
     enableGlobalFilter: false,
+    meta: { numeric: column.numeric },
     cell: ({ row }) => column.render(row.original),
   };
 };

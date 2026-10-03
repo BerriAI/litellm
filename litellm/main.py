@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 import dotenv
 import httpx
 import openai
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import assert_never, overload
 
 import litellm
@@ -116,7 +116,11 @@ from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
-from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.bedrock.common_utils import (
+    BedrockModelInfo,
+    bedrock_route_for_request,
+    without_bedrock_route_prefix,
+)
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -4167,6 +4171,10 @@ def _complete_sagemaker(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     )
 
 
+_ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
+_OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
 def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
@@ -4205,7 +4213,12 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
         if "aws_region_name" not in optional_params or optional_params["aws_region_name"] is None:
             optional_params["aws_region_name"] = aws_bedrock_client.meta.region_name
 
-    bedrock_route: Final = BedrockModelInfo.get_bedrock_route(model)
+    additional_drop_params: Final = (
+        _ADDITIONAL_DROP_PARAMS_ADAPTER.validate_python(ctx.kwargs["additional_drop_params"])
+        if ctx.kwargs.get("additional_drop_params") is not None
+        else None
+    )
+    bedrock_route: Final = bedrock_route_for_request(model, ctx.request_params, additional_drop_params)
     if bedrock_route == "claude_platform":
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model,
@@ -4232,7 +4245,7 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
             provider_config=provider_config,
         )
     elif bedrock_route == "converse":
-        model = model.replace("converse/", "")
+        model = without_bedrock_route_prefix(model)
         response = bedrock_converse_chat_completion.completion(
             model=model,
             messages=messages,
@@ -5841,6 +5854,9 @@ def completion(
             optional_params=optional_params,
             organization=organization,
             provider_config=provider_config,
+            request_params=MappingProxyType(
+                _OPTIONAL_PARAMS_ADAPTER.validate_python({**optional_param_args, **non_default_params})
+            ),
             shared_session=shared_session,
             stream=stream,
             temperature=temperature,
@@ -7828,11 +7844,11 @@ async def amoderation(
             },
             custom_llm_provider=custom_llm_provider,
         )
-        moderation_request: Final = {"input": input, "model": model}  # mutable-ok: logged as the raw request body
+        moderation_request: Final = {"input": input, "model": model}
         litellm_logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+            additional_args={
                 "complete_input_dict": moderation_request,
                 "api_base": str(_openai_client.base_url),
             },
@@ -7931,6 +7947,7 @@ def transcription(
     api_version: str | None = None,
     max_retries: int | None = None,
     custom_llm_provider=None,
+    base_url: str | None = None,
     **kwargs,
 ) -> TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]:
     """
@@ -7964,7 +7981,7 @@ def transcription(
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
-        api_base=api_base,
+        api_base=api_base or base_url,
         api_key=api_key,
     )
 
@@ -8237,6 +8254,7 @@ def speech(
     headers: dict | None = None,
     custom_llm_provider: str | None = None,
     aspeech: bool | None = None,
+    base_url: str | None = None,
     **kwargs,
 ) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
     user: Final = kwargs.get("user", None)
@@ -8246,7 +8264,7 @@ def speech(
     model_info: Final = kwargs.get("model_info", None)
     shared_session: Final = kwargs.get("shared_session", None)
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base or base_url
     )
     kwargs.pop("tags", [])
 
@@ -8550,7 +8568,7 @@ def speech(
             extra_headers=headers,
             base_llm_http_handler=base_llm_http_handler,
             aspeech=aspeech or False,
-            api_base=generic_optional_params.api_base,
+            api_base=api_base,
             api_key=None,  # Vertex AI uses OAuth, not API key
             **kwargs,
         )
@@ -8916,8 +8934,8 @@ def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional
 
 def _joined_streamed_citations(streamed_citations: "tuple[object, ...]") -> "list[object]":
     if all(isinstance(citation, list) for citation in streamed_citations):
-        return list(streamed_citations)  # mutable-ok: JSON list field
-    return [list(streamed_citations)]  # mutable-ok: JSON list field
+        return list(streamed_citations)
+    return [list(streamed_citations)]
 
 
 def _stream_builder_model_map_cost(response: ModelResponse) -> float | None:
@@ -9197,11 +9215,9 @@ def stream_chunk_builder(
                 fields["citation"] for fields in provider_field_dicts if fields.get("citation") is not None
             )
             citation_fields: Final = (
-                {"citations": _joined_streamed_citations(streamed_citations)}  # mutable-ok: JSON dict field
-                if streamed_citations
-                else {}  # mutable-ok: JSON dict field
+                {"citations": _joined_streamed_citations(streamed_citations)} if streamed_citations else {}
             )
-            combined_provider_fields: Final = {  # mutable-ok: Message.provider_specific_fields is a plain dict field
+            combined_provider_fields: Final = {
                 key: value
                 for fields in (citation_fields, *provider_field_dicts)
                 for key, value in fields.items()

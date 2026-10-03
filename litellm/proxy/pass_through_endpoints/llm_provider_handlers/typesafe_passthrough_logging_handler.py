@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,  # pyright: ignore[reportUnknownVariableType]  # legacy helper has an untyped signature
 )
+from litellm.llms.laya.common_utils import laya_response_model
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.types.utils import ModelResponse, StandardPassThroughResponseObject, Usage
 
@@ -69,9 +70,11 @@ class TypeSafePassthroughLoggingHandler:
         **kwargs: object,
     ) -> PassThroughEndpointLoggingTypedDict:
         response: Final = _parse_typesafe_response(response_body)
-        response_model: Final = response.model
         request_model_value: Final = request_body.get("model")
         request_model: Final = request_model_value if isinstance(request_model_value, str) else None
+        response_model: Final = (
+            laya_response_model(response_body, request_model) if custom_llm_provider == "laya" else response.model
+        )
         logged_model: Final = response_model or request_model or "unknown"
         model_name: Final = f"{custom_llm_provider}/{logged_model}"
         usage: Final = response.usage or _TypeSafeUsage()
@@ -89,7 +92,7 @@ class TypeSafePassthroughLoggingHandler:
             completion_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,
         )
-        updated_kwargs: Final = {  # mutable-ok: pass-through logging contract requires mutable kwargs
+        updated_kwargs: Final = {
             **kwargs,
             "model": model_name,
             "custom_llm_provider": custom_llm_provider,
@@ -109,9 +112,9 @@ class TypeSafePassthroughLoggingHandler:
             logging_obj=logging_obj,
             status="success",
         )
-        return {  # mutable-ok: pass-through logging contract requires mutable result
+        return {
             "result": StandardPassThroughResponseObject(response=result),
-            "kwargs": {  # mutable-ok: pass-through logging contract requires mutable kwargs
+            "kwargs": {
                 **updated_kwargs,
                 "standard_logging_object": standard_logging_object,
             },

@@ -167,7 +167,7 @@ def anthropic_system_messages(message: object) -> tuple[AnthropicMessagesSystemM
         return ()
     wire: Final[AnthropicMessagesSystemMessageParam] = {
         "role": "system",
-        "content": list(blocks),  # mutable-ok: wire payload; cache_control hooks edit content blocks in place
+        "content": list(blocks),
     }
     return (wire,)
 
