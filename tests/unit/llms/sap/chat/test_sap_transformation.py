@@ -1,4 +1,5 @@
 import warnings
+
 import pytest
 from pydantic import ValidationError
 
@@ -639,3 +640,609 @@ class TestSAPTransformationIntegration:
                 config["config"]["modules"][1]["translation"]["input"]["type"]
                 == "sap_document_translation"
             )
+
+class TestGetSupportedOpenaiParams:
+    """Unit tests for GenAIHubOrchestrationConfig.get_supported_openai_params."""
+
+    @pytest.fixture
+    def config(self):
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        return GenAIHubOrchestrationConfig.__new__(GenAIHubOrchestrationConfig)
+
+    def test_new_params_present_for_standard_models(self, config):
+        for model in ("gpt-4o", "anthropic--claude-4-sonnet", "gemini-2.5-flash"):
+            params = config.get_supported_openai_params(model)
+            assert "reasoning_effort" in params, f"reasoning_effort missing for {model}"
+            assert "thinking" in params, f"thinking missing for {model}"
+
+    def test_response_format_excluded_for_unsupported_models(self, config):
+        for model in ("amazon--titan", "cohere--command", "alephalpha--luminous", "gpt-4"):
+            assert "response_format" not in config.get_supported_openai_params(model)
+
+    def test_tool_choice_excluded_for_gemini_and_amazon(self, config):
+        for model in ("gemini-2.5-flash", "amazon--titan"):
+            assert "tool_choice" not in config.get_supported_openai_params(model)
+
+    def test_tool_choice_present_for_gpt_and_anthropic(self, config):
+        for model in ("gpt-4o", "anthropic--claude-4-sonnet"):
+            assert "tool_choice" in config.get_supported_openai_params(model)
+
+
+class TestNormalizeReasoningContent:
+    """Unit tests for GenAIHubOrchestrationConfig._normalize_reasoning_content."""
+
+    from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+    _normalize = staticmethod(GenAIHubOrchestrationConfig._normalize_reasoning_content)
+
+    def test_list_reasoning_content_mapped_to_thinking_blocks(self):
+        """List-shaped reasoning_content is converted to thinking_blocks."""
+        raw = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Latin.",
+                    "reasoning_content": [
+                        {"content": "Romans spoke Latin.", "signature": "sig1"},
+                        {"content": "That is well known.", "signature": "sig2"},
+                    ],
+                }
+            }]
+        }
+        out = self._normalize(raw)
+        msg = out["choices"][0]["message"]
+        assert msg["thinking_blocks"] == [
+            {"type": "thinking", "thinking": "Romans spoke Latin.", "signature": "sig1"},
+            {"type": "thinking", "thinking": "That is well known.", "signature": "sig2"},
+        ]
+        assert msg["reasoning_content"] == "Romans spoke Latin.\nThat is well known."
+
+    def test_string_reasoning_content_unchanged(self):
+        """String reasoning_content is left as-is (already the right type)."""
+        raw = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "42",
+                    "reasoning_content": "I thought about it.",
+                }
+            }]
+        }
+        out = self._normalize(raw)
+        msg = out["choices"][0]["message"]
+        assert msg["reasoning_content"] == "I thought about it."
+        assert "thinking_blocks" not in msg
+
+    def test_no_reasoning_content_unchanged(self):
+        """A message without reasoning_content is not modified."""
+        raw = {"choices": [{"message": {"role": "assistant", "content": "Hi."}}]}
+        out = self._normalize(raw)
+        assert out == raw
+
+    def test_empty_list_reasoning_content_sets_none(self):
+        """An empty list produces None for reasoning_content and empty thinking_blocks."""
+        raw = {"choices": [{"message": {"reasoning_content": []}}]}
+        out = self._normalize(raw)
+        msg = out["choices"][0]["message"]
+        assert msg["thinking_blocks"] == []
+        assert msg["reasoning_content"] is None
+
+    def test_multiple_choices_all_normalized(self):
+        """All choices in the response are normalized."""
+        raw = {
+            "choices": [
+                {"message": {"reasoning_content": [{"content": "thought A", "signature": None}]}},
+                {"message": {"reasoning_content": [{"content": "thought B", "signature": "s"}]}},
+            ]
+        }
+        out = self._normalize(raw)
+        assert out["choices"][0]["message"]["reasoning_content"] == "thought A"
+        assert out["choices"][1]["message"]["reasoning_content"] == "thought B"
+
+
+    def test_null_content_in_block_uses_empty_string(self):
+        """Explicit null content value must not leak None into thinking field."""
+        raw = {
+            "choices": [{
+                "message": {
+                    "reasoning_content": [{"content": None, "signature": "s"}],
+                }
+            }]
+        }
+        out = self._normalize(raw)
+        block = out["choices"][0]["message"]["thinking_blocks"][0]
+        assert block["thinking"] == ""
+        assert out["choices"][0]["message"]["reasoning_content"] is None
+
+    def test_transform_response_normalizes_list_reasoning_content(self):
+        """Production path: transform_response must produce a ModelResponse
+        with thinking_blocks populated when the raw payload carries a
+        list-shaped reasoning_content.
+        """
+        import json
+        from unittest.mock import MagicMock
+
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        config = GenAIHubOrchestrationConfig()
+
+        final_result = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gemini-test",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The answer is 42.",
+                    "reasoning_content": [
+                        {"content": "Let me think.", "signature": "sig1"},
+                        {"content": "Yes, 42.", "signature": "sig2"},
+                    ],
+                },
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+
+        raw_response = MagicMock()
+        raw_response.text = json.dumps({"final_result": final_result})
+        raw_response.json.return_value = {"final_result": final_result}
+
+        response = config.transform_response(
+            model="gemini-test",
+            raw_response=raw_response,
+            model_response=MagicMock(),
+            logging_obj=MagicMock(),
+            api_key="test",
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        choice = response.choices[0]
+        assert hasattr(choice.message, "thinking_blocks"), "thinking_blocks missing from message"
+        assert choice.message.thinking_blocks == [
+            {"type": "thinking", "thinking": "Let me think.", "signature": "sig1"},
+            {"type": "thinking", "thinking": "Yes, 42.", "signature": "sig2"},
+        ]
+        assert choice.message.reasoning_content == "Let me think.\nYes, 42."
+
+
+class TestNormalizeChoice:
+    """Unit tests for GenAIHubOrchestrationConfig._normalize_choice (message and delta shapes)."""
+
+    from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+    _normalize_choice = staticmethod(GenAIHubOrchestrationConfig._normalize_choice)
+
+    def test_message_list_reasoning_content_normalized(self):
+        choice = {
+            "index": 0,
+            "message": {"role": "assistant", "content": "hi", "reasoning_content": [{"content": "thought", "signature": "s1"}]},
+            "finish_reason": "stop",
+        }
+        result = self._normalize_choice(choice)
+        msg = result["message"]
+        assert msg["reasoning_content"] == "thought"
+        assert msg["thinking_blocks"] == [{"type": "thinking", "thinking": "thought", "signature": "s1"}]
+
+    def test_delta_list_reasoning_content_normalized(self):
+        choice = {
+            "index": 0,
+            "delta": {"role": "assistant", "reasoning_content": [{"content": "delta thought", "signature": None}]},
+            "finish_reason": None,
+        }
+        result = self._normalize_choice(choice)
+        delta = result["delta"]
+        assert delta["reasoning_content"] == "delta thought"
+        assert delta["thinking_blocks"][0]["thinking"] == "delta thought"
+
+    def test_string_reasoning_content_unchanged(self):
+        choice = {"index": 0, "message": {"reasoning_content": "already a string"}}
+        assert self._normalize_choice(choice) == choice
+
+    def test_no_reasoning_content_unchanged(self):
+        choice = {"index": 0, "delta": {"content": "hello"}}
+        assert self._normalize_choice(choice) == choice
+
+    def test_normalize_reasoning_content_covers_delta_path(self):
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        raw = {
+            "id": "c1",
+            "object": "chat.completion.chunk",
+            "choices": [
+                {"index": 0, "delta": {"reasoning_content": [{"content": "stream thought", "signature": "sig"}]}, "finish_reason": None}
+            ],
+        }
+        result = GenAIHubOrchestrationConfig._normalize_reasoning_content(raw)
+        delta = result["choices"][0]["delta"]
+        assert delta["reasoning_content"] == "stream thought"
+        assert delta["thinking_blocks"][0]["type"] == "thinking"
+
+
+class TestMessagesToSapTemplateReasoningContent:
+    """_messages_to_sap_template must forward reasoning_content on assistant turns."""
+
+    def test_assistant_message_with_reasoning_content_is_preserved(self):
+        from litellm.llms.sap.chat.transformation import _messages_to_sap_template
+
+        messages = [
+            {"role": "user", "content": "What is 2+2?"},
+            {
+                "role": "assistant",
+                "content": "4",
+                "reasoning_content": [
+                    {"content": "Simple arithmetic.", "signature": "sig1"}
+                ],
+            },
+            {"role": "user", "content": "Are you sure?"},
+        ]
+        result = _messages_to_sap_template(messages)
+        assistant_msg = result[1]
+        assert assistant_msg["reasoning_content"] == [
+            {"content": "Simple arithmetic.", "signature": "sig1"}
+        ]
+
+
+class TestFileContentModel:
+    def test_file_content_serializes_type_alias(self):
+        from litellm.llms.sap.chat.models import FileContent
+
+        fc = FileContent(**{"type": "file", "file_data": "base64=="})
+        dumped = fc.model_dump(by_alias=True, exclude_unset=True)
+        assert dumped["type"] == "file"
+        assert dumped["file_data"] == "base64=="
+
+    def test_file_content_filename_omitted_when_not_set(self):
+        from litellm.llms.sap.chat.models import FileContent
+
+        fc = FileContent(**{"type": "file", "file_data": "abc"})
+        dumped = fc.model_dump(by_alias=True, exclude_unset=True)
+        assert "filename" not in dumped
+
+    def test_file_content_filename_included_when_set(self):
+        from litellm.llms.sap.chat.models import FileContent
+
+        fc = FileContent(**{"type": "file", "file_data": "abc", "filename": "report.pdf"})
+        dumped = fc.model_dump(by_alias=True, exclude_unset=True)
+        assert dumped["filename"] == "report.pdf"
+
+    def test_file_content_requires_file_data(self):
+        import pytest
+        from pydantic import ValidationError
+
+        from litellm.llms.sap.chat.models import FileContent
+
+        with pytest.raises(ValidationError):
+            FileContent(**{"type": "file"})
+
+
+class TestSAPUserMessageWithFileContent:
+    def test_user_message_accepts_file_content(self):
+        from litellm.llms.sap.chat.models import FileContent, SAPUserMessage
+
+        fc = FileContent(**{"type": "file", "file_data": "base64=="})
+        msg = SAPUserMessage(role="user", content=fc)
+        dumped = msg.model_dump(by_alias=True, exclude_unset=True)
+        assert dumped["content"]["type"] == "file"
+        assert dumped["content"]["file_data"] == "base64=="
+
+    def test_user_message_accepts_list_with_text_and_file(self):
+        from litellm.llms.sap.chat.models import FileContent, SAPUserMessage, TextContent
+
+        parts = [
+            TextContent(**{"type": "text", "text": "Analyze this:"}),
+            FileContent(**{"type": "file", "file_data": "base64==", "filename": "data.csv"}),
+        ]
+        msg = SAPUserMessage(role="user", content=parts)
+        dumped = msg.model_dump(by_alias=True, exclude_unset=True)
+        assert dumped["content"][0]["type"] == "text"
+        assert dumped["content"][1]["type"] == "file"
+        assert dumped["content"][1]["filename"] == "data.csv"
+
+
+class TestMessagesToSapTemplateWithFileContent:
+    def test_file_content_message_round_trips_through_template(self):
+        from litellm.llms.sap.chat.transformation import _messages_to_sap_template
+
+        messages = [
+            {
+                "role": "user",
+                "content": {"type": "file", "file_data": "base64==", "filename": "doc.pdf"},
+            }
+        ]
+        result = _messages_to_sap_template(messages)
+        assert result[0]["role"] == "user"
+        assert result[0]["content"]["type"] == "file"
+        assert result[0]["content"]["file_data"] == "base64=="
+        assert result[0]["content"]["filename"] == "doc.pdf"
+
+    def test_file_content_without_filename_omitted_in_template(self):
+        from litellm.llms.sap.chat.transformation import _messages_to_sap_template
+
+        messages = [
+            {
+                "role": "user",
+                "content": {"type": "file", "file_data": "xyz"},
+            }
+        ]
+        result = _messages_to_sap_template(messages)
+        assert "filename" not in result[0]["content"]
+
+    def test_mixed_list_with_file_and_text_in_template(self):
+        from litellm.llms.sap.chat.transformation import _messages_to_sap_template
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize:"},
+                    {"type": "file", "file_data": "base64=="},
+                ],
+            }
+        ]
+        result = _messages_to_sap_template(messages)
+        content = result[0]["content"]
+        assert content[0]["type"] == "text"
+        assert content[1]["type"] == "file"
+
+
+class TestProviderSpecificFields:
+    """Tests for provider_specific_fields propagation through normalize_choice,
+    _StreamParser, and transform_response (spec lines 1161 / 1181)."""
+
+    # ------------------------------------------------------------------
+    # normalize_choice
+    # ------------------------------------------------------------------
+
+    def test_normalize_choice_preserves_provider_specific_fields(self):
+        """provider_specific_fields present in a choice must survive normalize_choice."""
+        from litellm.llms.sap.chat.handler import normalize_choice
+
+        choice = {
+            "index": 0,
+            "message": {"role": "assistant", "content": "hi"},
+            "finish_reason": "stop",
+            "provider_specific_fields": {"raw_finish_reason": "end_turn", "extra": 42},
+        }
+        result = normalize_choice(choice)
+        assert result["provider_specific_fields"] == {"raw_finish_reason": "end_turn", "extra": 42}
+
+    def test_normalize_choice_no_provider_specific_fields_unchanged(self):
+        """When provider_specific_fields is absent the key must not be injected."""
+        from litellm.llms.sap.chat.handler import normalize_choice
+
+        choice = {"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}
+        result = normalize_choice(choice)
+        assert "provider_specific_fields" not in result
+
+    def test_normalize_choice_preserves_psf_alongside_reasoning_content(self):
+        """provider_specific_fields must survive even when reasoning_content is also normalized."""
+        from litellm.llms.sap.chat.handler import normalize_choice
+
+        choice = {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "answer",
+                "reasoning_content": [{"content": "thought", "signature": "s1"}],
+            },
+            "finish_reason": "stop",
+            "provider_specific_fields": {"raw_finish_reason": "end_turn"},
+        }
+        result = normalize_choice(choice)
+        assert result["provider_specific_fields"] == {"raw_finish_reason": "end_turn"}
+        # reasoning normalization must still have happened
+        assert result["message"]["reasoning_content"] == "thought"
+
+    # ------------------------------------------------------------------
+    # _StreamParser._from_orchestration_result
+    # ------------------------------------------------------------------
+
+    def test_stream_parser_passes_provider_specific_fields(self):
+        """_from_orchestration_result must forward provider_specific_fields per choice."""
+        from litellm.llms.sap.chat.handler import _StreamParser
+
+        evt = {
+            "orchestration_result": {
+                "id": "chunk-1",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": "gpt-4o",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": "hello"},
+                        "finish_reason": None,
+                        "provider_specific_fields": {"raw_finish_reason": None, "extra_flag": True},
+                    }
+                ],
+            }
+        }
+        chunk = _StreamParser.to_openai_chunk(evt)
+        assert chunk is not None
+        choice = chunk.choices[0]
+        assert hasattr(choice, "provider_specific_fields")
+        assert choice.provider_specific_fields == {"raw_finish_reason": None, "extra_flag": True}
+
+    def test_stream_parser_omits_key_when_absent(self):
+        """When provider_specific_fields is absent the key is not injected into the chunk."""
+        from litellm.llms.sap.chat.handler import _StreamParser
+
+        evt = {
+            "orchestration_result": {
+                "id": "chunk-2",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": "gpt-4o",
+                "choices": [{"index": 0, "delta": {"content": "world"}, "finish_reason": None}],
+            }
+        }
+        chunk = _StreamParser.to_openai_chunk(evt)
+        assert chunk is not None
+        choice = chunk.choices[0]
+        # either absent or None is acceptable — must not be a non-None populated dict
+        psf = getattr(choice, "provider_specific_fields", None)
+        assert not psf
+
+    # ------------------------------------------------------------------
+    # transform_response (non-streaming)
+    # ------------------------------------------------------------------
+
+    def test_transform_response_copies_provider_specific_fields(self):
+        """transform_response must attach provider_specific_fields from each raw choice
+        onto the corresponding ModelResponse choice."""
+        import json
+        from unittest.mock import MagicMock
+
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        config = GenAIHubOrchestrationConfig()
+
+        final_result = {
+            "id": "chatcmpl-psf-test",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4o",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hello!"},
+                    "finish_reason": "stop",
+                    "provider_specific_fields": {
+                        "finish_reason": "end_turn",
+                        "sap_extra": "metadata",
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        }
+
+        raw_response = MagicMock()
+        raw_response.text = json.dumps({"final_result": final_result})
+        raw_response.json.return_value = {"final_result": final_result}
+        raw_response.headers = {}
+
+        response = config.transform_response(
+            model="gpt-4o",
+            raw_response=raw_response,
+            model_response=MagicMock(),
+            logging_obj=MagicMock(),
+            api_key="test",
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        choice = response.choices[0]
+        assert hasattr(choice, "provider_specific_fields"), "provider_specific_fields missing from choice"
+        assert choice.provider_specific_fields == {
+            "finish_reason": "end_turn",
+            "sap_extra": "metadata",
+        }
+
+    def test_transform_response_no_provider_specific_fields_skipped(self):
+        """When provider_specific_fields is absent on raw choices, nothing is attached."""
+        import json
+        from unittest.mock import MagicMock
+
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        config = GenAIHubOrchestrationConfig()
+
+        final_result = {
+            "id": "chatcmpl-nopsf",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4o",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hi."},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+        }
+
+        raw_response = MagicMock()
+        raw_response.text = json.dumps({"final_result": final_result})
+        raw_response.json.return_value = {"final_result": final_result}
+        raw_response.headers = {}
+
+        response = config.transform_response(
+            model="gpt-4o",
+            raw_response=raw_response,
+            model_response=MagicMock(),
+            logging_obj=MagicMock(),
+            api_key="test",
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        choice = response.choices[0]
+        psf = getattr(choice, "provider_specific_fields", None)
+        assert not psf
+
+    def test_transform_response_multiple_choices_each_gets_own_psf(self):
+        """Each choice gets its own provider_specific_fields (different values per choice)."""
+        import json
+        from unittest.mock import MagicMock
+
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        config = GenAIHubOrchestrationConfig()
+
+        final_result = {
+            "id": "chatcmpl-multi",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4o",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "A"},
+                    "finish_reason": "stop",
+                    "provider_specific_fields": {"raw_finish_reason": "end_turn"},
+                },
+                {
+                    "index": 1,
+                    "message": {"role": "assistant", "content": "B"},
+                    "finish_reason": "length",
+                    "provider_specific_fields": {"raw_finish_reason": "max_tokens"},
+                },
+            ],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+        }
+
+        raw_response = MagicMock()
+        raw_response.text = json.dumps({"final_result": final_result})
+        raw_response.json.return_value = {"final_result": final_result}
+        raw_response.headers = {}
+
+        response = config.transform_response(
+            model="gpt-4o",
+            raw_response=raw_response,
+            model_response=MagicMock(),
+            logging_obj=MagicMock(),
+            api_key="test",
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert response.choices[0].provider_specific_fields == {"raw_finish_reason": "end_turn"}
+        assert response.choices[1].provider_specific_fields == {"raw_finish_reason": "max_tokens"}

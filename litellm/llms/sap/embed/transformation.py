@@ -47,7 +47,7 @@ class EmbeddingModel(BaseModel):
     name: str
     version: str = "latest"
     params: dict = Field(default_factory=dict)
-    timeout: int | None = Field(default=None, ge=1, le=600)
+    timeout: int | None = Field(default=None, ge=1, le=1200)
     max_retries: int | None = Field(default=None, ge=0, le=5)
 
 
