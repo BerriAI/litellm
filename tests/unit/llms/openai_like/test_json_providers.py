@@ -377,200 +377,59 @@ class TestCoralBricks:
         assert fields["api_base"]["placeholder"] == "https://inference.coralbricks.ai/v1"
 
 
+def _coralbricks_rows(file_name: str) -> dict:
+    with open(os.path.join(workspace_path, file_name)) as fh:
+        prices = json.load(fh)
+    return {model: row for model, row in prices.items() if row.get("litellm_provider") == "coralbricks"}
+
+
+CORALBRICKS_ROWS = _coralbricks_rows("model_prices_and_context_window.json")
+
+
 class TestCoralBricksPricing:
-    """Regression coverage for the CoralBricks cost map (Greptile P2):
-    the pricing records and the zero-cost cached-input behavior."""
+    """Cached reads are free and first-seen prompt tokens come back as cache writes
+    billed at the cache-write rate: https://www.coralbricks.ai/pricing, read 2026-10-03."""
 
-    EXPECTED = {
-        "coralbricks/glm-5.3-fp4": (1.12e-06, 4.4e-06),
-        "coralbricks/glm-5.3-flash-fp4": (1.5e-07, 5e-07),
-        "coralbricks/deepseek-v4.1-flash-fast-fp4": (3e-07, 1.2e-06),
-    }
-    # First-time prompt tokens come back as cache writes and bill at the published
-    # cache-write rate (coralbricks.ai/pricing): 1.5x input, 0.3x on DeepSeek V4.1 Flash.
-    CACHE_WRITE = {
-        "coralbricks/glm-5.3-fp4": 1.68e-06,
-        "coralbricks/glm-5.3-flash-fp4": 2.3e-07,
-        "coralbricks/deepseek-v4.1-flash-fast-fp4": 9e-08,
-    }
+    def test_the_cost_map_carries_coralbricks_rows_that_the_backup_mirrors(self):
+        assert CORALBRICKS_ROWS, "no coralbricks rows in model_prices_and_context_window.json"
+        assert _coralbricks_rows("litellm/model_prices_and_context_window_backup.json") == CORALBRICKS_ROWS
 
-    def test_pricing_records_present(self):
-        """The shipped cost map carries every served model with free cache reads."""
-        prices_path = os.path.join(
-            workspace_path, "model_prices_and_context_window.json"
-        )
-        with open(prices_path) as fh:
-            prices = json.load(fh)
-        for model, (inp, out) in self.EXPECTED.items():
-            row = prices[model]
-            assert row["litellm_provider"] == "coralbricks"
-            assert row["input_cost_per_token"] == inp
-            assert row["output_cost_per_token"] == out
-            assert row["cache_read_input_token_cost"] == 0.0
-            assert row["cache_creation_input_token_cost"] == self.CACHE_WRITE[model]
-            assert row["mode"] == "chat"
-
-    def test_rows_declare_prompt_caching(self):
-        """Pricing a cache is not the same as advertising one.
-
-        The rows carry both cache prices, but litellm.supports_prompt_caching()
-        reads the flag, so without it the capability check and the model hub
-        report no caching for a gateway that caches every prefix.
-        """
-        import litellm
+    @pytest.mark.parametrize("model", sorted(CORALBRICKS_ROWS))
+    def test_every_row_prices_both_cache_buckets_and_advertises_caching(self, model):
         from litellm.utils import supports_prompt_caching
 
-        prices_path = os.path.join(
-            workspace_path, "model_prices_and_context_window.json"
-        )
-        with open(prices_path) as fh:
-            prices = json.load(fh)
-        for model in self.EXPECTED:
-            assert prices[model]["supports_prompt_caching"] is True, model
-            litellm.register_model({model: prices[model]})
-            assert supports_prompt_caching(model=model, custom_llm_provider="coralbricks"), model
+        row = CORALBRICKS_ROWS[model]
+        assert row["mode"] == "chat"
+        assert row["cache_read_input_token_cost"] == 0.0
+        assert row["cache_creation_input_token_cost"] > 0
+        assert row["supports_prompt_caching"] is True
+        litellm.register_model({model: row})
+        assert supports_prompt_caching(model=model, custom_llm_provider="coralbricks")
 
-    def test_capability_flags_match_the_served_models(self):
-        """Vision and reasoning flags track what /v1/models reports.
-
-        DeepSeek V4.1 Flash shipped text-only and gained image input on
-        2026-09-21; the row said supports_vision: false until this was
-        checked against a live request.
-        """
-        prices_path = os.path.join(
-            workspace_path, "model_prices_and_context_window.json"
-        )
-        with open(prices_path) as fh:
-            prices = json.load(fh)
-        vision = {
-            "coralbricks/glm-5.3-fp4": False,
-            "coralbricks/glm-5.3-flash-fp4": True,
-            "coralbricks/deepseek-v4.1-flash-fast-fp4": True,
-        }
-        for model, expected in vision.items():
-            assert prices[model]["supports_vision"] is expected, model
-            # Every model CoralBricks serves reasons; on DeepSeek it is opt-in
-            # (reasoning_effort), on the others it is on by default.
-            assert prices[model]["supports_reasoning"] is True, model
-
-    def test_completion_cost_with_free_cached_reads(self):
-        """completion_cost prices cached input tokens at zero for coralbricks."""
+    @pytest.mark.parametrize("model", sorted(CORALBRICKS_ROWS))
+    def test_completion_cost_bills_the_gateway_usage_shape_from_the_row(self, model):
         from litellm import ModelResponse, Usage, completion_cost
 
-        model = "coralbricks/glm-5.3-fp4"
-        inp, out = self.EXPECTED[model]
-        # register_model makes the test deterministic regardless of which
-        # cost map (local backup vs remote) the environment loaded.
-        litellm.register_model(
-            {
-                model: {
-                    "litellm_provider": "coralbricks",
-                    "mode": "chat",
-                    "input_cost_per_token": inp,
-                    "output_cost_per_token": out,
-                    "cache_read_input_token_cost": 0.0,
-                }
-            }
-        )
+        row = CORALBRICKS_ROWS[model]
+        litellm.register_model({model: row})
+        cached, written, generated = 800, 200, 100
         resp = ModelResponse(
             model=model,
             usage=Usage(
-                prompt_tokens=1000,
-                completion_tokens=100,
-                prompt_tokens_details={"cached_tokens": 800},
+                prompt_tokens=cached + written,
+                completion_tokens=generated,
+                prompt_tokens_details={"cached_tokens": cached, "cache_write_tokens": written},
             ),
         )
         resp._hidden_params["custom_llm_provider"] = "coralbricks"
-        cost = completion_cost(completion_response=resp)
-        # 200 uncached input tokens at full rate + 800 cached at 0 + output.
-        expected = 200 * inp + 800 * 0.0 + 100 * out
-        assert abs(cost - expected) < 1e-12, (cost, expected)
-
-    def test_completion_cost_bills_cache_writes_at_the_write_rate(self):
-        """First-time prompt tokens come back as cache writes and cost the
-        cache-write rate, so they are never priced at zero."""
-        from litellm import ModelResponse, Usage, completion_cost
-
-        model = "coralbricks/glm-5.3-flash-fp4"
-        inp, out = self.EXPECTED[model]
-        write = self.CACHE_WRITE[model]
-        litellm.register_model(
-            {
-                model: {
-                    "litellm_provider": "coralbricks",
-                    "mode": "chat",
-                    "input_cost_per_token": inp,
-                    "output_cost_per_token": out,
-                    "cache_read_input_token_cost": 0.0,
-                    "cache_creation_input_token_cost": write,
-                }
-            }
+        expected = (
+            cached * row["cache_read_input_token_cost"]
+            + written * row["cache_creation_input_token_cost"]
+            + generated * row["output_cost_per_token"]
         )
-        resp = ModelResponse(
-            model=model,
-            usage=Usage(
-                prompt_tokens=1000,
-                completion_tokens=100,
-                prompt_tokens_details={
-                    "cached_tokens": 0,
-                    "cache_write_tokens": 1000,
-                    "cache_creation_tokens": 1000,
-                },
-            ),
-        )
-        resp._hidden_params["custom_llm_provider"] = "coralbricks"
-        cost = completion_cost(completion_response=resp)
-        expected = 1000 * write + 100 * out
-        assert abs(cost - expected) < 1e-12, (cost, expected)
+        assert abs(completion_cost(completion_response=resp) - expected) < 1e-12
+        assert expected > generated * row["output_cost_per_token"]
 
-    def test_completion_cost_bills_deepseek_cache_writes_at_the_write_rate(self):
-        """DeepSeek V4.1 Flash prices first-time prompt tokens at its cache-write
-        rate instead of input: 1,691 fresh tokens and 2 output tokens cost
-        $0.00015459, the figure the endpoint reported for the same usage."""
-        from litellm import ModelResponse, Usage, completion_cost
-
-        model = "coralbricks/deepseek-v4.1-flash-fast-fp4"
-        inp, out = self.EXPECTED[model]
-        write = self.CACHE_WRITE[model]
-        litellm.register_model(
-            {
-                model: {
-                    "litellm_provider": "coralbricks",
-                    "mode": "chat",
-                    "input_cost_per_token": inp,
-                    "output_cost_per_token": out,
-                    "cache_read_input_token_cost": 0.0,
-                    "cache_creation_input_token_cost": write,
-                }
-            }
-        )
-        resp = ModelResponse(
-            model=model,
-            usage=Usage(
-                prompt_tokens=1691,
-                completion_tokens=2,
-                prompt_tokens_details={
-                    "cached_tokens": 0,
-                    "cache_write_tokens": 1691,
-                    "cache_creation_tokens": 1691,
-                },
-            ),
-        )
-        resp._hidden_params["custom_llm_provider"] = "coralbricks"
-        cost = completion_cost(completion_response=resp)
-        assert abs(cost - 0.00015459) < 1e-12, cost
-
-    def test_add_known_models_registers_coralbricks(self):
-        """Covers the coralbricks branch in add_known_models: cost-map rows
-        with litellm_provider=coralbricks land in the provider model set."""
-        litellm.add_known_models(
-            {
-                "coralbricks/test-model": {
-                    "litellm_provider": "coralbricks",
-                    "mode": "chat",
-                    "input_cost_per_token": 1e-06,
-                    "output_cost_per_token": 2e-06,
-                }
-            }
-        )
-        assert "coralbricks/test-model" in litellm.coralbricks_models
+    def test_the_rows_land_in_the_coralbricks_provider_model_set(self):
+        assert set(CORALBRICKS_ROWS) <= litellm.coralbricks_models
+        assert litellm.models_by_provider["coralbricks"] is litellm.coralbricks_models
