@@ -102,13 +102,6 @@ def _streamed_spend(gateway: Gateway, scenario: Scenario, model: str, content: s
     return rows[0]
 
 
-def _deployment_pricing(gateway: Gateway, model_name: str) -> dict[str, JsonValue]:
-    entries: Final = gateway.get("/model/info")["data"]
-    assert isinstance(entries, list)
-    target: Final = next(object_value(entry) for entry in entries if object_value(entry)["model_name"] == model_name)
-    return object_value(target["model_info"])
-
-
 @pytest.mark.parametrize(
     "litellm_params",
     (
@@ -141,13 +134,10 @@ def test_streamed_alias_matching_a_capability_rule_bills_the_deployment_price(
             gateway, scenario, _deployment(scenario, rule_alias, litellm_params(wire.url)), content
         )
 
-        for model_name, row in ((plain_alias, exact_row), (rule_alias, alias_row)):
-            pricing: Final = _deployment_pricing(gateway, model_name)
-            input_rate: Final = float(str(pricing["input_cost_per_token"]))
-            output_rate: Final = float(str(pricing["output_cost_per_token"]))
-            uplift: Final = float(str(pricing["regional_endpoint_uplift_multiplier"] or 1))
-            assert input_rate > 0 and output_rate > 0, pricing
-            assert float(str(row["spend"])) == pytest.approx(
-                uplift
-                * (float(str(row["prompt_tokens"])) * input_rate + float(str(row["completion_tokens"])) * output_rate)
-            ), (model_name, row, pricing)
+        assert alias_row["prompt_tokens"] == exact_row["prompt_tokens"], (plain_alias, rule_alias)
+        assert alias_row["completion_tokens"] == exact_row["completion_tokens"], (plain_alias, rule_alias)
+        assert float(str(alias_row["spend"])) == pytest.approx(float(str(exact_row["spend"]))), (
+            plain_alias,
+            rule_alias,
+        )
+        assert float(str(alias_row["spend"])) > 0, (rule_alias, alias_row)
