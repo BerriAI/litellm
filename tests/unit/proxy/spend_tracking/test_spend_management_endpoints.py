@@ -7871,12 +7871,21 @@ async def test_management_team_lookup_without_memberships_keeps_own_user_scope()
         key="caller", value=LiteLLM_UserTable(user_id="caller", teams=[]), model_type=LiteLLM_UserTable
     )
     auth = UserAPIKeyAuth(user_id="caller", user_role=LitellmUserRoles.INTERNAL_USER)
+    team_reads = []
+
+    class TeamTable:
+        async def find_many(self, where):
+            team_reads.append(where)
+            return []
+
+    prisma = MagicMock(db=MagicMock(litellm_teamtable=TeamTable()))
 
     async def lookup():
         return await load_permitted_log_team_ids(
-            auth, prisma_client=None, user_api_key_cache=cache, proxy_logging_obj=ps.proxy_logging_obj
+            auth, prisma_client=prisma, user_api_key_cache=cache, proxy_logging_obj=ps.proxy_logging_obj
         )
 
     assert await lookup() == ()
     scope = await resolve_owned_read_scope(auth.user_id, lookup)
     assert scope == OwnedRows("caller")
+    assert team_reads == []
