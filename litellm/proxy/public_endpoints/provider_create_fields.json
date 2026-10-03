@@ -3454,6 +3454,34 @@
     "default_model_placeholder": "typesafe/jev-latest"
   },
   {
+    "provider": "UMANS_AI",
+    "provider_display_name": "Umans AI",
+    "litellm_provider": "umans-ai",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.code.umans.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "umans-ai/umans-deepseek-v4-flash-0731"
+  },
+  {
     "provider": "V0",
     "provider_display_name": "V0",
     "litellm_provider": "v0",
