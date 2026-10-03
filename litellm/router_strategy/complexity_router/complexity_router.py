@@ -4390,6 +4390,13 @@ class ComplexityRouter(CustomLogger):
                         )
                     )
 
+        if (
+            cache_key is not None
+            and not pin_replay_allowed
+            and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
+        ):
+            await self.litellm_router_instance.cache.async_delete_cache(key=cache_key)
+
         routed_response: Final = await self._classify_and_route(
             model=model,
             request_kwargs=request_kwargs,
