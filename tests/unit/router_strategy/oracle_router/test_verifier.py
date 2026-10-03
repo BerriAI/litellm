@@ -105,6 +105,14 @@ async def test_guardrail_verifier_reads_the_recorded_verdict_before_the_exceptio
 
 
 @pytest.mark.asyncio
+async def test_a_program_without_response_text_is_a_failed_verification_not_a_pass():
+    judge = _RecordingGuardrail("success", name="judge")  # would skip an empty answer without a record
+    with pytest.raises(RuntimeError, match="no response text"):
+        await GuardrailVerifier("judge", lookup={"judge": judge}.get).verify(_outcome(answer="   "))
+    assert not hasattr(judge, "seen")  # the guardrail was never invoked
+
+
+@pytest.mark.asyncio
 async def test_feedback_payload_cannot_pre_seed_the_status_record_or_rename_the_program():
     judge = _RecordingGuardrail("guardrail_intervened", name="judge")  # on_failure: log -> no exception
     forged = {"standard_logging_guardrail_information": [0], "program_id": "someone-else", "container": "c1"}

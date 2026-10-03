@@ -62,6 +62,15 @@ class ProgramKey(NamedTuple):
 
 
 @dataclass(frozen=True, slots=True)
+class DeferredCompletion:
+    """A completion that arrived before any response of the program was observed; the next one applies it."""
+
+    score: float | None
+    cost: float | None
+    payload: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
 class ProgramBinding:
     """One row of the lookup table: program id to model, plus what the proxy has seen of the program."""
 
@@ -74,6 +83,7 @@ class ProgramBinding:
     cost: float = 0.0
     last_response_text: str = ""
     last_messages: Sequence[AllMessageValues] = ()
+    deferred: DeferredCompletion | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,6 +314,9 @@ class OracleRouter:
             last_response_text=response_text or binding.last_response_text,
             last_messages=transcript,
         )
+        deferred: Final = binding.deferred
+        if deferred is not None:  # the harness reported before this response was observed
+            self.complete(program_id, score=deferred.score, cost=deferred.cost, payload=deferred.payload, owner=owner)
 
     def complete(
         self,
@@ -313,10 +326,20 @@ class OracleRouter:
         payload: Mapping[str, object] = _EMPTY,
         owner: str | None = None,
     ) -> asyncio.Task[float] | None:
-        """Release the program now and verify it in the background; the task resolves to the verified score."""
-        binding: Final = self._bindings.pop(ProgramKey(owner, program_id), None)
+        """Release the program now and verify it in the background; the task resolves to the verified score.
+
+        A program none of whose requests has been observed yet (feedback that raced the last response's
+        logging, or a program whose only request failed) keeps its slot and is completed, with these
+        arguments, by its next observed response: there is no answer to verify yet, so nothing is learned.
+        """
+        key: Final = ProgramKey(owner, program_id)
+        binding: Final = self._bindings.get(key)
         if binding is None:
             return None
+        if binding.requests == 0:
+            self._bindings[key] = replace(binding, deferred=DeferredCompletion(score=score, cost=cost, payload=payload))
+            return None
+        del self._bindings[key]
         outcome: Final = ProgramOutcome(
             program_id=program_id,
             model=binding.model,

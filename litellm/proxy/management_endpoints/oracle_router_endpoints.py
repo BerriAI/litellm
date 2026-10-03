@@ -70,7 +70,9 @@ async def submit_oracle_router_feedback(
     """Complete a program: its model slot is released now, its verifier runs in the background.
 
     Programs are private to the key that started them; an admin may complete any key's program. 404 when
-    the caller holds no program with that id, which also covers programs completed earlier.
+    the caller holds no program with that id, which also covers programs completed earlier. A program none
+    of whose responses has been observed yet is not completed: ``deferred`` is true and its next observed
+    response completes it with this feedback.
     """
     routers: Final = _oracle_routers()
     if not routers:
@@ -87,6 +89,7 @@ async def submit_oracle_router_feedback(
         router_name=holder.router_name,
         model=binding.model,
         pending_verifications=holder.pending_verifications,
+        deferred=binding.requests == 0,
     )
 
 

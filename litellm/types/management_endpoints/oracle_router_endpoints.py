@@ -21,6 +21,10 @@ class OracleRouterFeedbackResponse(BaseModel):
     router_name: str
     model: str
     pending_verifications: int
+    deferred: bool = Field(
+        default=False,
+        description="No response of the program has been observed yet; its next one completes it with this feedback",
+    )
 
 
 class OracleRouterStateResponse(BaseModel):

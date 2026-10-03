@@ -48,8 +48,13 @@ never reaches the decision maker.
 
 Either mark the last request with `metadata.program_done: true` (plus `program_score` for the reported
 verifier), or call `POST /oracle_router/feedback {"program_id": ..., "score": ..., "cost": ...}` from
-the harness once the task is graded. `GET /oracle_router/state` (admin) shows bindings, decision-maker
-state and recent feedback. The response header `x-litellm-oracle-router-model` names the bound model.
+the harness once the task is graded. Feedback that arrives before any response of the program was
+observed (it raced the last response's logging, or every request failed) is deferred: the reply says
+`deferred: true` and the next observed response completes the program with it, so nothing is ever
+verified or learned without an answer. A guardrail verifier also fails the verification of a program
+whose final response has no text, rather than reading a judge's skip as a pass. `GET /oracle_router/state`
+(admin) shows bindings, decision-maker state and recent feedback. The response header
+`x-litellm-oracle-router-model` names the bound model.
 
 ## Security
 

@@ -142,6 +142,7 @@ async def test_a_non_finite_verifier_score_is_a_failed_verification():
     await router.async_pre_routing_hook(
         model="oracle", request_kwargs={"metadata": {"program_id": "t"}}, messages=_messages()
     )
+    router.observe_request("t", cost=0.1, response_text="answer")
     result = await router.complete("t")
     assert result != result and router.verifications_failed == 1 and maker.updates == []
     assert router.binding("t") is None  # the slot was released all the same
@@ -166,6 +167,7 @@ async def test_complete_releases_the_slot_now_and_learns_in_verification_order()
         )
     router.observe_request("t1", cost=0.4, response_text="patch")
     router.observe_request("t1", cost=0.2, response_text="tests pass")
+    router.observe_request("t2", cost=0.1, response_text="wrong")
     t1 = router.complete("t1", score=1.0)
     t2 = router.complete("t2", score=0.0)
     assert router.binding("t1") is None and router.binding("t2") is None
@@ -210,6 +212,7 @@ async def test_failed_verification_is_counted_and_does_not_update():
     await router.async_pre_routing_hook(
         model="oracle", request_kwargs={"metadata": {"program_id": "t"}}, messages=_messages()
     )
+    router.observe_request("t", cost=0.1, response_text="answer")
     result = await router.complete("t")
     assert result != result and router.verifications_failed == 1 and maker.updates == []
 
@@ -253,9 +256,26 @@ async def test_the_same_program_id_under_another_key_is_another_program():
     assert router.programs_bound == 2 and maker.selections == 2
     assert router.binding("t1") is None  # no key: not the same program either
     assert [binding.api_key_hash for binding in router.bindings_named("t1")] == ["key-a", "key-b"]
+    router.observe_request("t1", cost=0.1, response_text="answer", owner="key-b")
     router.complete("t1", score=1.0, owner="key-b")
     assert router.binding("t1", "key-a") is not None and router.binding("t1", "key-b") is None
     await router.drain()
+
+
+@pytest.mark.asyncio
+async def test_completion_before_any_observed_response_is_deferred_to_the_next_one():
+    router, maker = _router()
+    await router.async_pre_routing_hook(
+        model="oracle", request_kwargs={"metadata": {"program_id": "t"}}, messages=_messages()
+    )
+    assert router.complete("t", score=1.0, cost=2.0, payload={"run": "r1"}) is None  # nothing answered yet
+    binding = router.binding("t")
+    assert binding is not None and binding.deferred is not None and router.programs_completed == 0
+    assert maker.updates == []
+    router.observe_request("t", cost=0.3, response_text="answer")  # the response the feedback raced
+    assert router.binding("t") is None and router.programs_completed == 1
+    await router.drain()
+    assert maker.updates == [("t", "smart", 1.0)]
 
 
 @pytest.mark.asyncio

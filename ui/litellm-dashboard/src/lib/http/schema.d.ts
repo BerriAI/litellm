@@ -11450,7 +11450,9 @@ export interface paths {
          * @description Complete a program: its model slot is released now, its verifier runs in the background.
          *
          *     Programs are private to the key that started them; an admin may complete any key's program. 404 when
-         *     the caller holds no program with that id, which also covers programs completed earlier.
+         *     the caller holds no program with that id, which also covers programs completed earlier. A program none
+         *     of whose responses has been observed yet is not completed: ``deferred`` is true and its next observed
+         *     response completes it with this feedback.
          */
         post: operations["submit_oracle_router_feedback_oracle_router_feedback_post"];
         delete?: never;
@@ -39415,6 +39417,12 @@ export interface components {
         };
         /** OracleRouterFeedbackResponse */
         OracleRouterFeedbackResponse: {
+            /**
+             * Deferred
+             * @description No response of the program has been observed yet; its next one completes it with this feedback
+             * @default false
+             */
+            deferred: boolean;
             /** Model */
             model: string;
             /** Pending Verifications */

@@ -170,6 +170,9 @@ class GuardrailVerifier:
         guardrail: Final = self._lookup(self._name)
         if guardrail is None:
             raise LookupError(f"guardrail {self._name!r} is not initialized on this proxy")
+        if not outcome.response_text.strip():
+            # A judge skips an empty answer without recording a verdict; that must not read as a pass.
+            raise RuntimeError(f"guardrail {self._name!r}: the program has no response text to verify")
         transcript: Final = list(outcome.messages) or [{"role": "user", "content": outcome.prompt}]
         inputs: Final = GenericGuardrailAPIInputs(
             texts=[outcome.response_text], model=outcome.model, structured_messages=transcript

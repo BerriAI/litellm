@@ -100,11 +100,14 @@ async def test_a_non_finite_program_score_is_treated_as_no_score(bound):
 
 
 @pytest.mark.asyncio
-async def test_failure_event_does_not_add_spend_but_still_honours_program_done(bound):
+async def test_failure_event_adds_no_spend_and_program_done_on_it_waits_for_a_response(bound):
     router, maker, hook = bound
     await hook.async_log_failure_event(_kwargs(cost=0.5), None, None, None)
     assert router.binding("t1").cost == 0.0
     await hook.async_log_failure_event(_kwargs(program_done=True), None, None, None)
+    assert router.binding("t1") is not None and maker.updates == []  # no answer to verify yet: deferred
+    await hook.async_log_success_event(_kwargs(cost=0.1), _response("late answer"), None, None)
+    assert router.binding("t1") is None
     await router.drain()
     assert maker.updates == [("smart", 0.0)]
 

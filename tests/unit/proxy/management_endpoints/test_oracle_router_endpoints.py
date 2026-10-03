@@ -72,6 +72,7 @@ async def test_feedback_completes_the_program_and_the_router_learns(oracle):
         "router_name": "oracle",
         "model": "smart",
         "pending_verifications": 1,
+        "deferred": False,
     }
     assert oracle.binding("task-1", "owner-hash") is None
     await oracle.drain()
@@ -81,6 +82,7 @@ async def test_feedback_completes_the_program_and_the_router_learns(oracle):
 @pytest.mark.asyncio
 async def test_another_key_does_not_see_the_program_but_an_admin_may_complete_it(oracle):
     await _bind(oracle, "task-1")
+    oracle.observe_request("task-1", cost=0.2, response_text="done", owner="owner-hash")
     with patch("litellm.proxy.proxy_server.llm_router", _LLMRouter(oracle)):
         with pytest.raises(HTTPException) as unseen:
             await submit_oracle_router_feedback(OracleRouterFeedbackRequest(program_id="task-1", score=1.0), STRANGER)
@@ -96,6 +98,7 @@ async def test_another_key_does_not_see_the_program_but_an_admin_may_complete_it
 async def test_feedback_reaches_only_the_callers_program_when_ids_collide_across_keys(oracle):
     await _bind(oracle, "task-1", "owner-hash")
     await _bind(oracle, "task-1", "other-hash")
+    oracle.observe_request("task-1", cost=0.2, response_text="done", owner="other-hash")
     with patch("litellm.proxy.proxy_server.llm_router", _LLMRouter(oracle)):
         response = await submit_oracle_router_feedback(
             OracleRouterFeedbackRequest(program_id="task-1", score=0.5), STRANGER
@@ -103,6 +106,21 @@ async def test_feedback_reaches_only_the_callers_program_when_ids_collide_across
     assert response.program_id == "task-1"
     assert oracle.binding("task-1", "other-hash") is None and oracle.binding("task-1", "owner-hash") is not None
     await oracle.drain()
+
+
+@pytest.mark.asyncio
+async def test_feedback_before_any_response_is_deferred_until_one_is_observed(oracle):
+    await _bind(oracle, "task-1")  # bound, but its first response has not been observed yet
+    with patch("litellm.proxy.proxy_server.llm_router", _LLMRouter(oracle)):
+        response = await submit_oracle_router_feedback(
+            OracleRouterFeedbackRequest(program_id="task-1", score=1.0), OWNER
+        )
+    assert response.deferred is True and response.pending_verifications == 0
+    assert oracle.binding("task-1", "owner-hash") is not None and oracle.maker.updates == []
+    oracle.observe_request("task-1", cost=0.2, response_text="done", owner="owner-hash")
+    assert oracle.binding("task-1", "owner-hash") is None
+    await oracle.drain()
+    assert oracle.maker.updates == [("smart", 1.0)]
 
 
 @pytest.mark.asyncio
