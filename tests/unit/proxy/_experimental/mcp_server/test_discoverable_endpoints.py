@@ -1393,7 +1393,12 @@ async def test_register_client_persists_dcr_client_identity():
     import json
 
     assert response.status_code == 200
-    assert json.loads(response.body.decode("utf-8"))["client_id"] == mock_response.json.return_value["client_id"]
+    assert json.loads(response.body.decode("utf-8")) == {
+        **mock_response.json.return_value,
+        "dcr_issuer": None,
+        "dcr_server_url": None,
+        "dcr_redirect_uris": ["https://proxy.litellm.example/callback"],
+    }
 
     mock_update.assert_called_once()
     update_data = mock_update.call_args.kwargs["data"]
@@ -1478,7 +1483,12 @@ async def _register_persistence_attempted_for_auth_type(auth_type: MCPAuth) -> b
             persist_credentials=True,
         )
 
-    assert json.loads(response.body.decode("utf-8"))["client_id"] == mock_response.json.return_value["client_id"]
+    expected_binding = {
+        "dcr_issuer": None,
+        "dcr_server_url": None,
+        "dcr_redirect_uris": ["https://proxy.litellm.example/callback"],
+    } if auth_type == MCPAuth.oauth2 else {}
+    assert json.loads(response.body.decode("utf-8")) == {**mock_response.json.return_value, **expected_binding}
     return mock_update.await_count > 0
 
 
