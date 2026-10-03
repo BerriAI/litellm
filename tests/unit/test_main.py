@@ -3263,6 +3263,33 @@ def test_stream_chunk_builder_text_completion_combines_text_and_usage():
     assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
 
 
+@pytest.mark.parametrize("trailer_choices", [[], [{"text": None, "index": 0, "logprobs": None, "finish_reason": None}]])
+def test_stream_chunk_builder_text_completion_keeps_finish_reason_and_provider_usage(trailer_choices):
+    """vLLM-style include_usage stream: finish_reason arrives on a text-less chunk, then a
+    usage-only trailer. The rebuilt response must keep both instead of reading chunks[-1]
+    and recounting the prompt from `messages` (which a text completion doesn't have)."""
+    from litellm.main import stream_chunk_builder_text_completion
+    from litellm.types.utils import TextCompletionResponse
+
+    def chunk(choices, **extra):
+        return TextCompletionResponse(
+            id="cmpl-1", object="text_completion", created=1, model="my-model", choices=choices, **extra
+        )
+
+    chunks = [
+        chunk([{"text": "Hello", "index": 0, "logprobs": None, "finish_reason": None}]),
+        chunk([{"text": " world", "index": 0, "logprobs": None, "finish_reason": None}]),
+        chunk([{"text": "", "index": 0, "logprobs": None, "finish_reason": "length"}]),
+        chunk(trailer_choices, usage={"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9}),
+    ]
+
+    response = stream_chunk_builder_text_completion(chunks=chunks, messages=None)
+
+    assert response.choices[0].text == "Hello world"
+    assert response.choices[0].finish_reason == "length"
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (7, 2, 9)
+
+
 def test_completion_forwards_store_and_prompt_cache_key_to_openai():
     """
     Regression test for https://github.com/BerriAI/litellm/issues/33184

@@ -8843,8 +8843,14 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Sequence | None
     created: Final = chunks[0]["created"]
     model: Final = chunks[0]["model"]
     system_fingerprint: Final = chunks[0].get("system_fingerprint", None)
-    finish_reason: Final = chunks[-1]["choices"][0]["finish_reason"]
-    logprobs: Final = chunks[-1]["choices"][0]["logprobs"]
+    # With stream_options.include_usage the last chunk is a usage-only trailer, and some providers
+    # (e.g. vLLM) send finish_reason on a text-less chunk before it, so scan rather than read chunks[-1].
+    chunks_with_choices: Final = [chunk for chunk in chunks if chunk["choices"]]
+    finish_reason: Final = next(
+        (c["choices"][0]["finish_reason"] for c in reversed(chunks_with_choices) if c["choices"][0]["finish_reason"]),
+        None,
+    )
+    logprobs: Final = chunks_with_choices[-1]["choices"][0]["logprobs"] if chunks_with_choices else None
 
     content_list: Final = []
     for chunk in chunks:
@@ -8857,16 +8863,26 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Sequence | None
     # Combine the "content" strings into a single string || combine the 'function' strings into a single string
     combined_content: Final = "".join(content_list)
 
-    try:
-        prompt_tokens = token_counter(model=model, messages=messages)
-    except Exception:  # don't allow this failing to block a complete streaming response from being returned
-        print_verbose("token_counter failed, assuming prompt tokens is 0")
-        prompt_tokens = 0
-    completion_tokens: Final = token_counter(
-        model=model,
-        text=combined_content,
-        count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
+    # Prefer the usage the provider reported (the include_usage trailer) over a local recount, which
+    # cannot see a text-completion prompt (it is not in `messages`) and so reports 0 prompt tokens.
+    provider_usage: Final = next(
+        (c.get("usage") for c in reversed(chunks) if c.get("usage") and c["usage"].get("total_tokens")),
+        None,
     )
+    if provider_usage is not None:
+        prompt_tokens = provider_usage.get("prompt_tokens") or 0
+        completion_tokens = provider_usage.get("completion_tokens") or 0
+    else:
+        try:
+            prompt_tokens = token_counter(model=model, messages=messages)
+        except Exception:  # don't allow this failing to block a complete streaming response from being returned
+            print_verbose("token_counter failed, assuming prompt tokens is 0")
+            prompt_tokens = 0
+        completion_tokens = token_counter(
+            model=model,
+            text=combined_content,
+            count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
+        )
 
     response: Final = {
         "id": id,
