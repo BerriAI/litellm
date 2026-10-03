@@ -599,3 +599,33 @@ async def test_arealtime_openai_forwards_the_intent_query_param_to_the_upstream_
             litellm_logging_obj=FakeLogging(),
         )
     assert connect.url == "wss://api.openai.com/v1/realtime?model=gpt-realtime&intent=chat"
+
+
+@pytest.mark.parametrize(
+    ("client_query_params", "expected_backend_url"),
+    [
+        (
+            {"model": "my-transcribe-alias", "intent": "transcription"},
+            "wss://api.openai.com/v1/realtime?intent=transcription",
+        ),
+        (
+            {"model": "my-realtime-alias"},
+            "wss://api.openai.com/v1/realtime?model=gpt-live-transcribe",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_arealtime_openai_drops_model_from_the_upstream_url_only_for_transcription_sessions(
+    client_query_params, expected_backend_url
+):
+    connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
+    with patch("websockets.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="openai/gpt-live-transcribe",
+            websocket=_ClosableGaClientWebSocket(),
+            api_base="https://api.openai.com/",
+            api_key="fake-key",
+            litellm_logging_obj=FakeLogging(),
+            query_params=client_query_params,
+        )
+    assert connect.url == expected_backend_url

@@ -84,7 +84,12 @@ class OpenAIRealtime(OpenAIChatCompletion):
 
     def _construct_url(self, api_base: str, query_params: RealtimeQueryParams) -> str:
         """
-        Construct the backend websocket URL with all query parameters (including 'model').
+        Construct the backend websocket URL with the client's query parameters.
+
+        `model` is left out for `intent=transcription`: OpenAI reads `?model=` as
+        selecting a conversation session and rejects transcription sessions with
+        `invalid_model`. The transcription model is applied to the session instead
+        (see `force_transcription_model`), mirroring the Azure GA handler.
         """
         from httpx import URL
 
@@ -93,9 +98,12 @@ class OpenAIRealtime(OpenAIChatCompletion):
         url = URL(api_base)
         # Set the correct path
         url = url.copy_with(path="/v1/realtime")
-        # Include all query parameters including 'model'
-        if query_params:
-            url = url.copy_with(params=query_params)
+        is_transcription: Final = query_params.get("intent") == "transcription"
+        upstream_params: Final = tuple(
+            (key, value) for key, value in query_params.items() if not (is_transcription and key == "model")
+        )
+        if upstream_params:
+            url = url.copy_with(params=upstream_params)
         return str(url)
 
     def _make_event_normalizer(self) -> RealtimeEventNormalizer | None:
