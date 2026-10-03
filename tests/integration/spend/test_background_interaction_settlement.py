@@ -294,8 +294,9 @@ def _rates(replica: Gateway, model: str) -> tuple[float, float]:
 
 
 def _reservation_pin(replica: Gateway, model: str) -> float:
-    """What one background create reserves on the key before its usage is known: the output tokens the
-    estimator assumes, at the deployment's output rate, with the prompt's few input tokens left as slack."""
+    """What one background create estimates before its usage is known: the output tokens the estimator assumes,
+    at the deployment's output rate, with the prompt's few input tokens left as slack. A key budget below that
+    is filled by the first create's reservation, so the next create is refused until a settlement releases it."""
     info: Final = _model_info(replica, model)
     max_output: Final = info["max_output_tokens"]
     output_rate: Final = info["output_cost_per_token"]
@@ -663,7 +664,7 @@ def test_identical_creates_settle_as_separate_interactions(rig: Rig) -> None:
 def test_settlement_on_another_replica_releases_the_creators_budget_reservation(rig: Rig) -> None:
     with rig.creator.scenario() as scenario:
         model: Final = rig.models.in_progress
-        key: Final = scenario.key(max_budget=1.5 * _reservation_pin(rig.creator, model))
+        key: Final = scenario.key(max_budget=0.5 * _reservation_pin(rig.creator, model))
         first: Final = _create(rig.creator, model, key)
         pinned: Final = rig.creator.request(
             "POST", "/v1beta/interactions", {"model": model, "input": "settle pinned", "background": True}, key=key

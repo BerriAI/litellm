@@ -329,7 +329,8 @@ class Provider:
         if state.delay_seconds:
             await asyncio.sleep(state.delay_seconds)
         if request.method == "DELETE":
-            del self.interactions[interaction_id]
+            if self.interactions.pop(interaction_id, None) is None:
+                return JSONResponse(_interaction_not_found(interaction_id), status_code=404)
             return JSONResponse({})
         if state.get_status != 200:
             return JSONResponse(
