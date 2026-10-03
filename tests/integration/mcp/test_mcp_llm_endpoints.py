@@ -1,7 +1,7 @@
 import asyncio
 import json
 import uuid
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -29,6 +29,7 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from openai.types.responses.tool_param import Mcp
+from pydantic import JsonValue, TypeAdapter
 
 Surface = Literal["chat", "responses", "messages", "messages_bridge"]
 SURFACES: Final[tuple[Surface, ...]] = ("chat", "responses", "messages", "messages_bridge")
@@ -37,6 +38,8 @@ ANSWER: Final = "the sum is 5"
 GATEWAY_REF: Final = {"type": "mcp", "server_url": "litellm_proxy", "server_label": "litellm"}
 AUTO: Final = {**GATEWAY_REF, "require_approval": "never"}
 OUTAGE: Final = "bridge-outage"
+JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 def _json(body: Mapping[str, object]) -> Reply:
@@ -70,16 +73,16 @@ class Turn:
     answer: str
 
 
-def _fixed_turn(tool: str) -> Callable[[Mapping[str, object]], Turn]:
+def _fixed_turn(tool: str) -> Callable[[Mapping[str, JsonValue]], Turn]:
     return lambda _: Turn(tool, json.dumps(ADD), ANSWER)
 
 
-def _echoing_turn(body: Mapping[str, object]) -> Turn:
+def _echoing_turn(body: Mapping[str, JsonValue]) -> Turn:
     names: Final = _tool_names(body)
     return Turn(names[0] if names else "", json.dumps({"query": _prompt(body)}), _tool_result_text(body) or "")
 
 
-def _prompt(body: Mapping[str, object]) -> str:
+def _prompt(body: Mapping[str, JsonValue]) -> str:
     inputs: Final = body.get("input")
     if isinstance(inputs, str):
         return inputs
@@ -88,7 +91,7 @@ def _prompt(body: Mapping[str, object]) -> str:
     return str(first["content"]) if isinstance(first, dict) and isinstance(first.get("content"), str) else ""
 
 
-def _tool_result_text(body: Mapping[str, object]) -> str | None:
+def _tool_result_text(body: Mapping[str, JsonValue]) -> str | None:
     inputs: Final = body.get("input")
     messages: Final = body.get("messages")
     items: Final = inputs if isinstance(inputs, list) else messages if isinstance(messages, list) else ()
@@ -99,14 +102,20 @@ def _tool_result_text(body: Mapping[str, object]) -> str | None:
             return str(item["output"])
         if item.get("role") == "tool":
             return str(item["content"])
-        blocks: Final = item.get("content") if isinstance(item.get("content"), list) else ()
-        for block in blocks:
-            if isinstance(block, dict) and block.get("type") == "tool_result":
-                return str(block["content"])
+        if (block := _tool_result_block(item)) is not None:
+            return block
     return None
 
 
-def _responses_stream(response: Mapping[str, object], item: Mapping[str, object]) -> Reply:
+def _tool_result_block(item: Mapping[str, JsonValue]) -> str | None:
+    content: Final = item.get("content")
+    for block in content if isinstance(content, list) else ():
+        if isinstance(block, dict) and block.get("type") == "tool_result":
+            return str(block["content"])
+    return None
+
+
+def _responses_stream(response: Mapping[str, JsonValue], item: Mapping[str, JsonValue]) -> Reply:
     events: Final = (
         {"type": "response.created", "sequence_number": 0, "response": {**response, "status": "in_progress"}},
         {"type": "response.in_progress", "sequence_number": 1, "response": {**response, "status": "in_progress"}},
@@ -120,12 +129,11 @@ def _responses_stream(response: Mapping[str, object], item: Mapping[str, object]
     )
 
 
-def _model_double(plan: Callable[[Mapping[str, object]], Turn]) -> Callable[[Request], Reply]:
+def _model_double(plan: Callable[[Mapping[str, JsonValue]], Turn]) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         if request.method == "GET" and request.target.endswith("/models"):
             return _json({"object": "list", "data": []})
-        body: Final = json.loads(request.body)
-        assert isinstance(body, dict), request.body
+        body: Final = JSON_OBJECT.validate_json(request.body)
         if OUTAGE in _prompt(body):
             outage: Final = {"error": {"message": "scripted provider outage", "type": "server_error", "code": None}}
             return Reply(status=500, body=json.dumps(outage).encode())
@@ -199,7 +207,7 @@ def _model_double(plan: Callable[[Mapping[str, object]], Turn]) -> Callable[[Req
                 }
             )
         assert request.target.endswith("/responses"), request.target
-        item: Final = (
+        item: Final[dict[str, JsonValue]] = (
             {
                 "type": "message",
                 "id": f"msg_{identity}",
@@ -217,7 +225,7 @@ def _model_double(plan: Callable[[Mapping[str, object]], Turn]) -> Callable[[Req
                 "status": "completed",
             }
         )
-        response: Final = {
+        response: Final[dict[str, JsonValue]] = {
             "id": f"resp_{identity}",
             "object": "response",
             "created_at": 1,
@@ -498,17 +506,26 @@ HOOK_CODE: Final = (
     '{"description": function.get("description"), "parameters": function.get("parameters")}))\n'
     "    return allow()\n"
 )
-LOOKUP: Final = ("Look up one record", {"type": "object", "properties": {"query": {"type": "string"}}})
-REPORT: Final = ("Write one report", {"type": "object", "properties": {"query": {"type": "string"}, "format": {}}})
-COLD: Final = ("", {"type": "object", "properties": {}, "additionalProperties": False})
+LOOKUP: Final[tuple[str, dict[str, JsonValue]]] = (
+    "Look up one record",
+    {"type": "object", "properties": {"query": {"type": "string"}}},
+)
+REPORT: Final[tuple[str, dict[str, JsonValue]]] = (
+    "Write one report",
+    {"type": "object", "properties": {"query": {"type": "string"}, "format": {}}},
+)
+COLD: Final[tuple[str, dict[str, JsonValue]]] = (
+    "",
+    {"type": "object", "properties": {}, "additionalProperties": False},
+)
 RELOAD_FAST: Final = {"PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "5"}
 CALL_ID: Final = "x-litellm-call-id"
 T = TypeVar("T")
-Definition = tuple[str, str, object]
-Echo = tuple[str | None, object]
+Definition = tuple[str, str, JsonValue]
+Echo = tuple[JsonValue, JsonValue]
 
 
-def _served(listing: tuple[str, Mapping[str, object]]) -> Echo:
+def _served(listing: tuple[str, Mapping[str, JsonValue]]) -> Echo:
     return listing[0], {**listing[1], "additionalProperties": False}
 
 
@@ -521,7 +538,7 @@ class Hooked:
 @pytest.fixture(scope="module")
 def hooked(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Hooked]:
     directory: Final = tmp_path_factory.mktemp("bridge-hooks")
-    base: Final = object_value(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    base: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     with wire_server(lambda _: _json({"flagged": False, "session_id": "scripted"})) as sink:
         echo: Final = {"guardrail": "custom_code", "mode": "pre_mcp_call", "default_on": True, "custom_code": HOOK_CODE}
         pillar: Final = {
@@ -586,28 +603,21 @@ class BridgeRig:
         return httpx.post(self.url("/v1/messages"), headers=headers, json=body_m, timeout=90)
 
     def upstream_by_prompt(self) -> Mapping[str, tuple[tuple[Definition, ...], ...]]:
-        bodies: Final = tuple(json.loads(request.body) for request in self.wire.drain() if request.method == "POST")
+        bodies: Final = tuple(
+            JSON_OBJECT.validate_json(request.body) for request in self.wire.drain() if request.method == "POST"
+        )
         prompts: Final = frozenset(_prompt(body) for body in bodies)
         return {prompt: tuple(_definitions(body) for body in bodies if _prompt(body) == prompt) for prompt in prompts}
 
-    def peer_calls(self) -> tuple[tuple[str, object], ...]:
-        return tuple(
-            (str(call["body"]["params"]["name"]), call["body"]["params"]["arguments"])
-            for call in tool_calls(self.peer.drain())
-            if isinstance(call["body"], dict) and isinstance(call["body"].get("params"), dict)
-        )
+    def peer_calls(self) -> tuple[tuple[str, JsonValue], ...]:
+        return tuple(_peer_call(call) for call in tool_calls(self.peer.drain()))
 
     def hook_messages(self, marker: str) -> tuple[str, ...]:
         posted: Final = tuple(
-            json.loads(request.body) for request in self.hooked.sink.drain() if request.method == "POST"
+            JSON_OBJECT.validate_json(request.body) for request in self.hooked.sink.drain() if request.method == "POST"
         )
-        return tuple(
-            str(message["content"])
-            for payload in posted
-            if isinstance(payload, dict)
-            for message in payload.get("messages", ())
-            if isinstance(message, dict) and _synthetic(str(message.get("content")), marker)
-        )
+        contents: Final = tuple(content for payload in posted for content in _contents(payload))
+        return tuple(content for content in contents if _synthetic(content, marker))
 
 
 AUTO_MCP: Final[Mcp] = {
@@ -618,14 +628,26 @@ AUTO_MCP: Final[Mcp] = {
 }
 
 
-def _function(tool: object) -> Mapping[str, object] | None:
+def _peer_call(call: Mapping[str, object]) -> tuple[str, JsonValue]:
+    params: Final = object_value(object_value(JSON_VALUE.validate_python(call["body"]))["params"])
+    return str(params["name"]), params["arguments"]
+
+
+def _contents(payload: Mapping[str, JsonValue]) -> Iterator[str]:
+    messages: Final = payload.get("messages")
+    for message in messages if isinstance(messages, list) else ():
+        if isinstance(message, dict):
+            yield str(message.get("content"))
+
+
+def _function(tool: JsonValue) -> dict[str, JsonValue] | None:
     if not isinstance(tool, dict):
         return None
     function: Final = tool.get("function", tool)
     return function if isinstance(function, dict) else None
 
 
-def _definitions(body: Mapping[str, object]) -> tuple[Definition, ...]:
+def _definitions(body: Mapping[str, JsonValue]) -> tuple[Definition, ...]:
     tools: Final = body.get("tools")
     functions: Final = tuple(_function(tool) for tool in tools) if isinstance(tools, list) else ()
     return tuple(
@@ -642,29 +664,30 @@ def _uniform(upstream: Mapping[str, tuple[tuple[Definition, ...], ...]]) -> Mapp
     }
 
 
-def _strings(value: object) -> Iterator[str]:
+def _strings(value: JsonValue) -> Iterator[str]:
     if isinstance(value, str):
         yield value
         return
-    children: Final = value.values() if isinstance(value, Mapping) else value if isinstance(value, list) else ()
+    children: Final = value.values() if isinstance(value, dict) else value if isinstance(value, list) else ()
     for child in children:
         yield from _strings(child)
 
 
-def _echoed(value: object) -> Echo:
+def _echoed(value: JsonValue) -> Echo:
     carrier: Final = next((text for text in _strings(value) if HOOK_ECHO in text), None)
     assert carrier is not None, value
-    echoed, _ = json.JSONDecoder().raw_decode(carrier.split(HOOK_ECHO, 1)[1])
-    assert isinstance(echoed, dict), carrier
+    payload: Final = carrier.split(HOOK_ECHO, 1)[1]
+    end: Final = json.JSONDecoder().raw_decode(payload)[1]
+    echoed: Final = JSON_OBJECT.validate_json(payload[:end])
     return echoed.get("description"), echoed.get("parameters")
 
 
 @contextmanager
-def _bridge_rig(hooked: Hooked, bridge: Bridge) -> Iterator[BridgeRig]:
+def _bridge_rig(hooked: Hooked, bridge: Bridge) -> Generator[BridgeRig, None, None]:
     alias: Final = "brg" + uuid.uuid4().hex[:8]
     lookup: Final = ScriptedTool(
         "lookup",
-        lambda params: text_result("found:" + json.dumps(object_value(params)["arguments"])),
+        lambda params: text_result("found:" + json.dumps(JSON_OBJECT.validate_python(params)["arguments"])),
         description=LOOKUP[0],
         input_schema=LOOKUP[1],
     )
@@ -776,7 +799,7 @@ def _on_worker(gateway: Gateway, act: Callable[[httpx.Client], T]) -> tuple[int,
     with httpx.Client(base_url=str(gateway.client.base_url), timeout=30) as client:
         summary: Final = client.get("/debug/memory/summary", headers={"Authorization": f"Bearer {gateway.key}"})
         assert summary.status_code == 200, summary.text
-        pid: Final = object_value(summary.json())["worker_pid"]
+        pid: Final = JSON_OBJECT.validate_json(summary.content)["worker_pid"]
         assert isinstance(pid, int), summary.text
         return pid, act(client)
 
@@ -790,17 +813,17 @@ def _both_workers(gateway: Gateway) -> frozenset[int]:
 def _master_listing(rig: BridgeRig, client: httpx.Client) -> frozenset[str]:
     headers: Final = {"x-litellm-api-key": rig.hooked.proxy.key}
     response: Final = client.get("/mcp-rest/tools/list", headers=headers, params={"server_id": rig.server_id})
-    tools: Final = object_value(response.json()).get("tools") if response.status_code == 200 else None
+    tools: Final = JSON_OBJECT.validate_json(response.content).get("tools") if response.status_code == 200 else None
     return frozenset(str(object_value(tool)["name"]) for tool in tools) if isinstance(tools, list) else frozenset()
 
 
 def _direct_probe(rig: BridgeRig, key: str, name: str, client: httpx.Client) -> Echo:
     body: Final = {"server_id": rig.server_id, "name": rig.tool(name), "arguments": {"query": HOOK_PROBE}}
     response: Final = client.post("/mcp-rest/tools/call", headers={"x-litellm-api-key": key}, json=body)
-    return _echoed(response.json())
+    return _echoed(JSON_VALUE.validate_json(response.content))
 
 
-def _spend_row(key: str, call_id: str) -> dict[str, object]:
+def _spend_row(key: str, call_id: str) -> dict[str, JsonValue]:
     rows: Final = eventually(
         lambda: read_rows(
             'SELECT api_key, call_type, status, cache_hit FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s', (call_id,)
@@ -847,9 +870,12 @@ def test_direct_call_after_bridge_only_discovery_stays_cold(hooked: Hooked, brid
             lambda: tuple(
                 _on_worker(rig.hooked.proxy, lambda client: _direct_probe(rig, key, "lookup", client)) for _ in range(6)
             ),
-            lambda seen: {pid for pid, _ in seen} == workers,
+            lambda seen: frozenset(pid for pid, _ in seen) == workers,
         )
-        assert all(echo == COLD for _, echo in direct) and {pid for pid, _ in direct} == workers, (direct, workers)
+        assert all(echo == COLD for _, echo in direct) and frozenset(pid for pid, _ in direct) == workers, (
+            direct,
+            workers,
+        )
         assert rig.peer_calls() == ()
 
 
@@ -860,10 +886,12 @@ def test_concurrent_requests_of_one_key_with_different_allowed_tools_each_see_th
     with _bridge_rig(hooked, bridge) as rig:
         key: Final = _bridge_key(rig)
         prompts: Final = {name: f"{name} {uuid.uuid4().hex} {HOOK_PROBE}" for name in ("lookup", "report")}
+
+        def ask(name: str) -> Seen:
+            return _ask(rig, key, prompts[name], [rig.mcp(name)], False, "sync")
+
         with ThreadPoolExecutor(2) as pool:
-            lookup, report = pool.map(
-                lambda name: _ask(rig, key, prompts[name], [rig.mcp(name)], False, "sync"), ("lookup", "report")
-            )
+            lookup, report = pool.map(ask, ("lookup", "report"))
         assert (_echoed(lookup.text), _echoed(report.text)) == (_served(LOOKUP), _served(REPORT)), (lookup, report)
         upstream: Final = rig.upstream_by_prompt()
         assert _uniform(upstream) == {
@@ -915,6 +943,6 @@ def test_messages_bridge_hook_keeps_the_base_shape_without_request_local_metadat
         assert found.status_code == 200, found.text
         blocked: Final = rig.post(key, probe, [rig.mcp("lookup")])
         assert blocked.status_code == 200, blocked.text
-        assert _echoed(blocked.json()) == COLD, blocked.text
+        assert _echoed(JSON_VALUE.validate_json(blocked.content)) == COLD, blocked.text
         assert rig.peer_calls() == (("lookup", {"query": marker}),)
         assert rig.hook_messages(marker) == (f"Tool: lookup\nArguments: {dict(query=marker)}",)
