@@ -7,7 +7,11 @@ crashed with exit 139 whenever any CustomLogger was registered).
 """
 
 import asyncio
+import json
 import time
+from collections.abc import AsyncIterator
+from datetime import datetime
+from typing import cast
 
 import httpx
 import pytest
@@ -15,10 +19,12 @@ import pytest
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import thread_pool_executor as thread_pool_executor_module
-from litellm.responses import streaming_iterator as responses_streaming_iterator_module
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses import streaming_iterator as responses_streaming_iterator_module
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamingResponse
+from litellm.types.utils import StandardLoggingPayload
 
 
 class RecordingCustomLogger(CustomLogger):
@@ -156,3 +162,132 @@ async def test_sync_callbacks_run_only_after_async_handler_completes(recording_e
     submit_times = recording_executor.submit_times_for(logging_obj)
     assert len(submit_times) == 1
     assert submit_times[0] >= recorder.async_hook_finished
+
+
+class FailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failure_payloads: tuple[StandardLoggingPayload, ...] = ()
+        self.success_payloads: tuple[StandardLoggingPayload, ...] = ()
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.failure_payloads = (*self.failure_payloads, cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.success_payloads = (*self.success_payloads, cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+
+
+class _ChunkRecorder:
+    def __init__(self) -> None:
+        self.chunks: tuple[ResponsesAPIStreamingResponse, ...] = ()
+
+    async def drain(self, iterator: ResponsesAPIStreamingIterator) -> None:
+        async for chunk in iterator:
+            self.chunks = (*self.chunks, chunk)
+
+
+_SEA_DELTAS = ("The sea ", "is wide ", "and deep.")
+_SEA_PROMPT = "Write a 300 word story about the sea."
+_UNREACHABLE_IMAGE_INPUT: list[dict[str, object]] = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "Describe this picture."},
+            {"type": "input_image", "image_url": "http://images.invalid/photo.png", "detail": "high"},
+        ],
+    }
+]
+
+
+class _UpstreamThatTimesOutAfterThreeDeltas:
+    headers: dict[str, str] = {}
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        for sequence_number, delta in enumerate(_SEA_DELTAS):
+            event = {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": delta,
+                "sequence_number": sequence_number,
+            }
+            yield f"data: {json.dumps(event)}\n\n".encode()
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+
+async def _failure_payload_after_mid_stream_timeout(
+    monkeypatch: pytest.MonkeyPatch, request_input: str | list[dict[str, object]]
+) -> tuple[FailureRecorder, StandardLoggingPayload]:
+    recorder = FailureRecorder()
+    monkeypatch.setattr(litellm, "failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    logging_obj = _make_logging_obj()
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano",
+        optional_params={"stream": True},
+        litellm_params={"custom_llm_provider": "openai", "aresponses": True},
+    )
+    iterator = ResponsesAPIStreamingIterator(
+        response=cast(httpx.Response, _UpstreamThatTimesOutAfterThreeDeltas()),
+        model="gpt-5.4-nano",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        request_data={"model": "gpt-5.4-nano", "input": request_input, "stream": True},
+    )
+    received = _ChunkRecorder()
+
+    with pytest.raises(httpx.ReadTimeout, match="Timeout on reading data from socket"):
+        await received.drain(iterator)
+    assert [getattr(chunk, "delta", None) for chunk in received.chunks] == list(_SEA_DELTAS)
+
+    await iterator._await_pending_logging()
+    (payload,) = recorder.failure_payloads
+    return recorder, payload
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_read_timeout_logs_failure_with_partial_usage_and_no_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder, payload = await _failure_payload_after_mid_stream_timeout(monkeypatch, _SEA_PROMPT)
+
+    assert payload["status"] == "failure"
+    assert payload["prompt_tokens"] == litellm.token_counter(
+        model="gpt-5.4-nano", messages=[{"role": "user", "content": _SEA_PROMPT}]
+    )
+    assert payload["completion_tokens"] == litellm.token_counter(
+        model="gpt-5.4-nano", text="".join(_SEA_DELTAS), count_response_tokens=True
+    )
+    assert payload["response_cost"] > 0
+    assert recorder.success_payloads == ()
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_failure_usage_estimate_never_fetches_image_dimensions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, payload = await _failure_payload_after_mid_stream_timeout(monkeypatch, _UNREACHABLE_IMAGE_INPUT)
+
+    assert payload["status"] == "failure"
+    assert payload["prompt_tokens"] == litellm.token_counter(
+        model="gpt-5.4-nano",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this picture."},
+                    {"type": "image_url", "image_url": {"url": "http://images.invalid/photo.png", "detail": "high"}},
+                ],
+            }
+        ],
+        use_default_image_token_count=True,
+    )
+    assert payload["completion_tokens"] > 0
