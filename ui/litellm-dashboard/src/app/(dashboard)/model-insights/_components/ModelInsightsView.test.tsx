@@ -6,7 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInsightsView from "./ModelInsightsView";
 import { apiClient } from "@/components/networking";
 
-vi.mock("@/components/networking", () => ({ apiClient: { get: vi.fn() } }));
+vi.mock("@/components/networking", () => ({ apiClient: { get: vi.fn(), put: vi.fn() } }));
+vi.mock("./TaskClassifierSetup", () => ({
+  default: ({ canEdit }: { canEdit: boolean }) => <div data-testid="task-classifier" data-can-edit={String(canEdit)} />,
+}));
 vi.mock("@/components/ui/chart", () => ({
   ChartContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   ChartTooltip: () => null,
@@ -166,5 +169,26 @@ describe("ModelInsightsView", () => {
     expect(chart).toHaveAttribute("data-buckets", "12");
     expect(chart).toHaveAttribute("data-first", "2026-07-13");
     expect(screen.getByText("Weekly tokens across your gateway")).toBeInTheDocument();
+  });
+
+  it("explains an empty task breakdown instead of drawing a blank chart", async () => {
+    mockApi(Promise.resolve({ ...taskResponse, tasks: [] }));
+    render(<ModelInsightsView accessToken="token" />);
+
+    expect(await screen.findByText("No task data yet")).toBeInTheDocument();
+  });
+
+  it("suggests share of requests when the selected task metric adds up to zero", async () => {
+    mockApi(Promise.resolve({ ...taskResponse, tasks: [{ ...taskResponse.tasks[0], value: 0, share: 0 }] }));
+    render(<ModelInsightsView accessToken="token" />);
+
+    expect(await screen.findByText("No spend recorded for these tasks")).toBeInTheDocument();
+    expect(screen.getByText(/Try Share of requests/)).toBeInTheDocument();
+  });
+
+  it("passes the admin edit permission to the task classifier setup", async () => {
+    render(<ModelInsightsView accessToken="token" canEditTaskClassifier />);
+
+    expect(await screen.findByTestId("task-classifier")).toHaveAttribute("data-can-edit", "true");
   });
 });

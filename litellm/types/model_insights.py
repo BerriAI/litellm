@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 ModelInsightsMetric = Literal["requests", "spend", "tokens"]
 
@@ -54,3 +54,25 @@ class ModelInsightTasksResponse(BaseModel):
     start_date: str
     end_date: str
     tasks: list[ModelInsightTaskSummary]
+
+
+class TaskClassifierModel(BaseModel):
+    id: str
+    name: str
+    provider: Literal["typesafe", "laya", "bespoke"]
+    model: str
+
+
+class TaskClassifierResponse(BaseModel):
+    enabled: bool
+    model_id: str | None
+    models: list[TaskClassifierModel]
+    batch_size: int
+    message_logging_enabled: bool
+
+
+class TaskClassifierUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    model_id: str | None = Field(default=None, min_length=1, max_length=256)
