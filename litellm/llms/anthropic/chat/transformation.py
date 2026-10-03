@@ -2683,7 +2683,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model_response._hidden_params = {
             **model_response._hidden_params,
             "additional_headers": process_anthropic_headers(dict(raw_response.headers)),
-            "original_response": completion_response["content"],
             "provider_specific_fields": provider_specific_fields,
         }
         return model_response
