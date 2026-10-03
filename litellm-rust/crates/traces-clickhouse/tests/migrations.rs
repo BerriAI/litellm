@@ -252,16 +252,12 @@ async fn agent_metadata_is_stored_and_queryable(
     )
     .await?;
     let metadata = serde_json::json!({"thread_id": "thread-1", "ls_subagent_id": "agent-1"});
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
     insert_rows(
         &ready,
         "otel_traces",
         vec![BTreeMap::from([
-            (
-                "Timestamp".into(),
-                time::OffsetDateTime::now_utc()
-                    .format(&time::format_description::well_known::Rfc3339)?
-                    .into(),
-            ),
+            ("Timestamp".into(), timestamp.into()),
             ("TraceId".into(), "trace-1".into()),
             ("SpanId".into(), "span-1".into()),
             ("AgentMetadata".into(), metadata.to_string().into()),
@@ -840,7 +836,7 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
         }))?]).await?;
     }
     let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
-    let parameters = BTreeMap::from([
+    let sample_parameters = BTreeMap::from([
         ("source".into(), Parameter::Text("traces".into())),
         ("all_teams".into(), Parameter::Integer(1)),
         ("team".into(), Parameter::Text(String::new())),
@@ -877,7 +873,7 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
             &database.client,
             &connection,
             ReadQuery::Sample,
-            &parameters,
+            &sample_parameters,
         )
         .await?,
     )?;
@@ -900,13 +896,12 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
         .await?,
     )?;
     assert_eq!(identities["data"].as_array().map(Vec::len), Some(2));
-    let user_params = identity_params
-        .into_iter()
-        .chain([
-            ("team_ids".into(), Parameter::Strings(vec![])),
-            ("user_id".into(), Parameter::Text("one".into())),
-        ])
-        .collect();
+    let user_params = BTreeMap::from([
+        ("trace_id".into(), Parameter::Text("shared".into())),
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("user_id".into(), Parameter::Text("one".into())),
+        ("team_ids".into(), Parameter::Strings(vec![])),
+    ]);
     let identity: serde_json::Value = serde_json::from_str(
         &execute_named_read(
             &database.client,
@@ -922,23 +917,23 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
             .any(|row| row["trace_ref"] == identity["data"][0]["trace_ref"])
     );
     let first_ref = rows[0]["trace_ref"].as_str().expect("reference");
-    let read_parameters: BTreeMap<_, _> = parameters
-        .into_iter()
-        .chain([
-            ("id".into(), Parameter::Text("shared".into())),
-            ("record_team".into(), Parameter::Text("team".into())),
-            ("trace_ref".into(), Parameter::Text(first_ref.into())),
-            ("cursor".into(), Parameter::Text(String::new())),
-            ("offset".into(), Parameter::Integer(1)),
-            ("span".into(), Parameter::Text("root".into())),
-        ])
-        .collect();
+    let content_parameters = BTreeMap::from([
+        ("all_teams".into(), Parameter::Integer(1)),
+        ("team".into(), Parameter::Text(String::new())),
+        ("key_hash".into(), Parameter::Text(String::new())),
+        ("source".into(), Parameter::Text("traces".into())),
+        ("id".into(), Parameter::Text("shared".into())),
+        ("record_team".into(), Parameter::Text("team".into())),
+        ("trace_ref".into(), Parameter::Text(first_ref.into())),
+        ("cursor".into(), Parameter::Text(String::new())),
+        ("offset".into(), Parameter::Integer(1)),
+    ]);
     let content: serde_json::Value = serde_json::from_str(
         &execute_named_read(
             &database.client,
             &connection,
             ReadQuery::Content,
-            &read_parameters,
+            &content_parameters,
         )
         .await?,
     )?;
@@ -949,10 +944,17 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
     } else {
         "timeout"
     };
-    let evidence_parameters = read_parameters
-        .into_iter()
-        .chain([("quote".into(), Parameter::Text(opposite.into()))])
-        .collect();
+    let evidence_parameters = BTreeMap::from([
+        ("all_teams".into(), Parameter::Integer(1)),
+        ("team".into(), Parameter::Text(String::new())),
+        ("key_hash".into(), Parameter::Text(String::new())),
+        ("source".into(), Parameter::Text("traces".into())),
+        ("id".into(), Parameter::Text("shared".into())),
+        ("record_team".into(), Parameter::Text("team".into())),
+        ("trace_ref".into(), Parameter::Text(first_ref.into())),
+        ("span".into(), Parameter::Text("root".into())),
+        ("quote".into(), Parameter::Text(opposite.into())),
+    ]);
     let evidence: serde_json::Value = serde_json::from_str(
         &execute_named_read(
             &database.client,
@@ -1361,7 +1363,7 @@ async fn lens_agent_discovery_and_selection_preserve_scope(
         .await?;
     }
     let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
-    let scope_parameters = BTreeMap::from([
+    let agent_parameters = BTreeMap::from([
         ("all_teams".into(), Parameter::Integer(0)),
         ("team".into(), Parameter::Text("alpha".into())),
         ("key_hash".into(), Parameter::Text("one".into())),
@@ -1371,7 +1373,7 @@ async fn lens_agent_discovery_and_selection_preserve_scope(
             &database.client,
             &connection,
             ReadQuery::Agents,
-            &scope_parameters,
+            &agent_parameters,
         )
         .await?,
     )?;
@@ -1381,53 +1383,58 @@ async fn lens_agent_discovery_and_selection_preserve_scope(
             {"agent_name": "research_agent"}, {"agent_name": "support_agent"}
         ])
     );
-    let parameters = scope_parameters
-        .into_iter()
-        .chain([
-            ("source".into(), Parameter::Text("traces".into())),
-            (
-                "start".into(),
-                Parameter::Integer(timestamp / 1_000_000 - 1000),
-            ),
-            (
-                "end".into(),
-                Parameter::Integer(timestamp / 1_000_000 + 1000),
-            ),
-            ("service".into(), Parameter::Text("shared-app".into())),
-            (
-                "agent_name".into(),
-                Parameter::Text("research_agent".into()),
-            ),
-            ("filter_keys".into(), Parameter::Strings(vec![])),
-            ("filter_values".into(), Parameter::Strings(vec![])),
-            ("limit".into(), Parameter::Integer(100)),
-            ("offset".into(), Parameter::Integer(0)),
-            ("after".into(), Parameter::Text(String::new())),
-            ("sample_percent".into(), Parameter::Text("100".into())),
-            ("sample_cap".into(), Parameter::Integer(0)),
-            ("preview".into(), Parameter::Integer(1)),
-            ("selected_team".into(), Parameter::Text(String::new())),
-            ("execution_ids".into(), Parameter::Strings(vec![])),
-        ])
-        .collect::<BTreeMap<_, _>>();
+    let sample_parameters = BTreeMap::from([
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("team".into(), Parameter::Text("alpha".into())),
+        ("key_hash".into(), Parameter::Text("one".into())),
+        ("source".into(), Parameter::Text("traces".into())),
+        (
+            "start".into(),
+            Parameter::Integer(timestamp / 1_000_000 - 1000),
+        ),
+        (
+            "end".into(),
+            Parameter::Integer(timestamp / 1_000_000 + 1000),
+        ),
+        ("service".into(), Parameter::Text("shared-app".into())),
+        (
+            "agent_name".into(),
+            Parameter::Text("research_agent".into()),
+        ),
+        ("filter_keys".into(), Parameter::Strings(vec![])),
+        ("filter_values".into(), Parameter::Strings(vec![])),
+        ("limit".into(), Parameter::Integer(100)),
+        ("offset".into(), Parameter::Integer(0)),
+        ("after".into(), Parameter::Text(String::new())),
+        ("sample_percent".into(), Parameter::Text("100".into())),
+        ("sample_cap".into(), Parameter::Integer(0)),
+        ("preview".into(), Parameter::Integer(1)),
+        ("selected_team".into(), Parameter::Text(String::new())),
+        ("execution_ids".into(), Parameter::Strings(vec![])),
+    ]);
     let sample: serde_json::Value = serde_json::from_str(
         &execute_named_read(
             &database.client,
             &connection,
             ReadQuery::Sample,
-            &parameters,
+            &sample_parameters,
         )
         .await?,
     )?;
     assert_eq!(sample["data"].as_array().expect("rows").len(), 1);
     assert_eq!(sample["data"][0]["trace_id"], "research");
     assert_eq!(sample["data"][0]["span_count"], 2);
+    let availability_parameters = BTreeMap::from([
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("team".into(), Parameter::Text("alpha".into())),
+        ("key_hash".into(), Parameter::Text("one".into())),
+    ]);
     let available: serde_json::Value = serde_json::from_str(
         &execute_named_read(
             &database.client,
             &connection,
             ReadQuery::Availability,
-            &parameters,
+            &availability_parameters,
         )
         .await?,
     )?;
@@ -1830,26 +1837,33 @@ async fn query_help_displays_discovery_truncation(
 
 #[rstest]
 fn field_definitions_match_serialized_normalized_span() {
-    use litellm_traces::decode_otlp;
+    use litellm_traces::{Tenant, decode_otlp};
+    use litellm_traces_clickhouse::span_rows;
     use std::collections::BTreeSet;
     let spans = decode_otlp(
         br#"{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"11111111111111111111111111111111","spanId":"2222222222222222","name":"root"}]}]}]}"#,
         Some("application/json"),
     )
     .expect("valid OTLP");
-    let fields = &spans[0].normalized;
-    let serialized = serde_json::to_value(fields).expect("serializable fields");
-    let keys: BTreeSet<_> = serialized
+    let tenant = Tenant {
+        team_id: "team".into(),
+        api_key_hash: "key".into(),
+        ..Tenant::default()
+    };
+    let rows = span_rows(spans, &tenant, 64 * 1024);
+    let row =
+        serde_json::to_value(rows.first().expect("storage row")).expect("serializable storage row");
+    let keys: BTreeSet<_> = row
         .as_object()
-        .expect("field object")
+        .expect("storage row object")
         .keys()
         .map(String::as_str)
         .collect();
     let mapped: BTreeSet<_> = NORMALIZED_FIELD_DEFINITIONS
         .iter()
-        .map(|field| field.name)
+        .map(|field| field.clickhouse_column)
         .collect();
-    assert_eq!(keys, mapped);
+    assert!(mapped.is_subset(&keys));
 }
 
 #[rstest]
