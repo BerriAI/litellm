@@ -38,6 +38,15 @@ class MockSyncClient:
         self.closed = True
 
 
+def test_client_cache_returns_live_client_reference():
+    cache = LLMClientCache()
+    client = MockSyncClient()
+
+    cache.set_cache("client", client)
+
+    assert cache.get_cache("client") is client
+
+
 @pytest.mark.asyncio
 async def test_remove_key_does_not_close_async_client():
     """
