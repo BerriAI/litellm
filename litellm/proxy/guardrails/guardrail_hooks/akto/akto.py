@@ -28,6 +28,11 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import get_tool_calls_from_response
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
+    effective_skip_system_message_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -76,6 +81,8 @@ DEFAULT_REQUEST_PATH: Final = "/v1/chat/completions"
 MCP_PATH: Final = "/mcp"
 MCP_TOOL_PREFIX: Final = "mcp"
 DEFAULT_BLOCK_REASON: Final = "Blocked by Akto Guardrails"
+RESPONSES_API_CALL_TYPES: Final = frozenset((CallTypes.responses.value, CallTypes.aresponses.value))
+MESSAGES_API_CALL_TYPES: Final = frozenset((CallTypes.anthropic_messages.value, CallTypes.aanthropic_messages.value))
 UNMASKABLE_REASON: Final = "Content masked by Akto guardrail policy could not be applied"
 MALFORMED_ATTACHMENT_REASON: Final = "Attachment could not be read for the Akto guardrail check"
 UNREACHABLE_REASON: Final = "Akto guardrail service unreachable"
@@ -190,6 +197,26 @@ def masked_texts(texts: tuple[str, ...], sent: object, modified_payload: object)
     ):
         return None
     return tuple(changes.get(text, text) for text in texts)
+
+
+def scoped_message(message: object, *, only_tool_results: bool) -> object | None:
+    """A Messages API message keeping only its tool_result blocks, or only the rest; None when nothing is left."""
+    mapping: Final = as_mapping(message)
+    content: Final = mapping.get("content")
+    if not isinstance(content, list):
+        return None if only_tool_results else message
+    kept: Final = tuple(
+        block for block in content if (as_mapping(block).get("type") == "tool_result") == only_tool_results
+    )
+    return {**mapping, "content": kept} if kept else None
+
+
+def call_type_of(request_data: Mapping[str, object]) -> object:
+    return getattr(request_data.get("litellm_logging_obj"), "call_type", None)
+
+
+def client_sent(request_data: Mapping[str, object], key: str) -> bool:
+    return key in as_mapping(as_mapping(request_data.get("proxy_server_request")).get("body"))
 
 
 def call_details(request_data: Mapping[str, object]) -> Mapping[str, object]:
@@ -355,9 +382,30 @@ class AktoGuardrail(CustomGuardrail):
             }
         )
 
-    @staticmethod
+    def messages_api_messages(self, request_data: Mapping[str, object]) -> tuple[object, ...] | None:
+        """/v1/messages forwards its messages as sent, and the translated copy drops document and search_result text.
+
+        The guardrail's skip-system, skip-tool and scan-only-tool-results scoping is applied to them here.
+        """
+        raw_messages: Final = request_data.get("messages")
+        if call_type_of(request_data) not in MESSAGES_API_CALL_TYPES or not isinstance(raw_messages, list):
+            return None
+        only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(self)
+        skip_tools: Final = effective_skip_tool_message_for_guardrail(self)
+        skip_system: Final = only_tool_results or effective_skip_system_message_for_guardrail(self)
+        system: Final = None if skip_system else request_data.get("system")
+        scoped: Final = (
+            (scoped_message(message, only_tool_results=only_tool_results) for message in raw_messages)
+            if only_tool_results or skip_tools
+            else iter(raw_messages)
+        )
+        return (
+            *((MappingProxyType({"role": "system", "content": system}),) if system else ()),
+            *(message for message in scoped if message is not None),
+        )
+
     def build_request_body(
-        inputs: GenericGuardrailAPIInputs, request_data: Mapping[str, object]
+        self, inputs: GenericGuardrailAPIInputs, request_data: Mapping[str, object]
     ) -> Mapping[str, object]:
         texts: Final = inputs.get("texts") or ()
         scanned: Final = tuple(MappingProxyType({"role": "user", "content": text}) for text in texts)
@@ -365,8 +413,15 @@ class AktoGuardrail(CustomGuardrail):
         request_input: Final = (
             (MappingProxyType({"role": "user", "content": raw_input}),) if isinstance(raw_input, str) else raw_input
         )
+        api_messages: Final = self.messages_api_messages(request_data)
+        # The Responses API sends "input", so a "messages" key there is a decoy
+        raw_messages: Final = (
+            None if call_type_of(request_data) in RESPONSES_API_CALL_TYPES else request_data.get("messages")
+        )
         messages: Final = (
-            inputs.get("structured_messages") or request_data.get("messages") or scanned or request_input or ()
+            api_messages
+            if api_messages is not None
+            else inputs.get("structured_messages") or raw_messages or scanned or request_input or ()
         )
         model: Final = request_data.get("model") or inputs.get("model") or ""
         tools: Final = inputs.get("tools") or request_data.get("tools")
@@ -383,8 +438,7 @@ class AktoGuardrail(CustomGuardrail):
     @staticmethod
     def model_response(request_data: Mapping[str, object]) -> object:
         """Translators keep a "response" already in the request, so one the client sent isn't the model's."""
-        client_body: Final = as_mapping(as_mapping(request_data.get("proxy_server_request")).get("body"))
-        return None if "response" in client_body else request_data.get("response")
+        return None if client_sent(request_data, "response") else request_data.get("response")
 
     @staticmethod
     def build_response_body(
@@ -424,12 +478,8 @@ class AktoGuardrail(CustomGuardrail):
         tag: Mapping[str, str],
         response_payload: str | None = None,
     ) -> Mapping[str, object]:
-        client_headers: Final = self.client_headers(request_data)
-        # The proxy's own requester_ip_address first, since clients control their forwarding headers
-        forwarded: Final = self.resolve_metadata_value(request_data, "requester_ip_address") or client_headers.get(
-            "x-forwarded-for", ""
-        )
-        ip: Final = forwarded.split(",")[0].strip() or client_headers.get("x-real-ip", "")
+        # Only the proxy's own record, since clients control forwarding headers
+        ip: Final = (self.resolve_metadata_value(request_data, "requester_ip_address") or "").split(",")[0].strip()
         tag_json: Final = to_json(tag)
         return MappingProxyType(
             {
@@ -789,23 +839,23 @@ class AktoGuardrail(CustomGuardrail):
                 self.check_attachments(inputs, request_data),
             )
 
-        # Only the complete response is under "response"; mid-stream checks get "responses"
-        complete_response: Final = request_data.get("response")
         streamed: Final = bool(request_data.get("stream"))
         model_response: Final = self.model_response(request_data)
+        # A stream's complete response arrives under "response"; a client-sent one may add checks, never skip them
+        complete: Final = not streamed or model_response is not None or client_sent(request_data, "response")
         tool_call_source: Final = (
             model_response
             if model_response is not None
             else {"choices": [{"message": {"tool_calls": list(inputs.get("tool_calls") or ())}}]}
         )
-        tool_calls: Final = self.response_mcp_tool_calls(tool_call_source) if complete_response is not None else ()
+        tool_calls: Final = self.response_mcp_tool_calls(tool_call_source) if complete else ()
         return await self.settle(
             self.check_and_record(
                 inputs,
                 self.build_akto_payload(inputs, request_data, include_response=True),
                 response=True,
-                record=complete_response is not None,
-                can_mask=complete_response is not None and not streamed,
+                record=complete,
+                can_mask=complete and not streamed,
                 streamed=streamed,
             ),
             *(

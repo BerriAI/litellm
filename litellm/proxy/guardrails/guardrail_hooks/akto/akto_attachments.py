@@ -1,7 +1,7 @@
 """Attachment blocks sent to Akto's file guardrail, including those inside ``tool_result`` blocks:
 
   OpenAI chat     ``image_url``, ``input_audio``, ``file``, ``video_url``
-  Anthropic       ``image``, ``document``
+  Anthropic       ``image``, ``document`` (except text documents, which stay in the text check)
   Responses API   ``input_image``, ``input_file``
 
 A block with neither inline bytes nor a URL (an OpenAI ``file_id``) is unsendable.
@@ -24,7 +24,7 @@ AttachmentType: TypeAlias = Literal["image", "audio", "file"]
 
 _REMOTE_URI_SCHEMES: Final = ("http://", "https://")
 _URL_SAFE_TO_STANDARD: Final = str.maketrans("-_", "+/")
-# Per attachment type, the fields the file check sends; the text check keeps every other field, as the model reads them
+# Per attachment type, the fields dropped from the text check because they hold bytes, URLs or file references
 _FILE_CHECKED_FIELDS: Final = MappingProxyType(
     {
         "image_url": frozenset(("image_url", "url")),
@@ -34,10 +34,10 @@ _FILE_CHECKED_FIELDS: Final = MappingProxyType(
         "file": frozenset(("file",)),
         "input_file": frozenset(("file_data", "file_url", "file_id")),
         "image": frozenset(("source",)),
-        "document": frozenset(("source", "title", "context")),
-        "search_result": frozenset(("content", "source", "title")),
+        "document": frozenset(("source",)),
     }
 )
+_TEXT_SOURCE_TYPES: Final = frozenset(("text", "content"))
 _FILE_SOURCE_FIELDS: Final = frozenset(("file_data", "file_id"))
 _ATTACHMENT_BLOCK_TYPES: Final = frozenset(_FILE_CHECKED_FIELDS)
 _OBJECT_MAPPING: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
@@ -135,11 +135,6 @@ class _Source(_Model):
     content: object = None
 
 
-class _TextBlock(_Model):
-    type: Literal["text"]
-    text: str
-
-
 class _ImageBlock(_Model):
     type: Literal["image"]
     source: _Source
@@ -149,14 +144,6 @@ class _DocumentBlock(_Model):
     type: Literal["document"]
     source: _Source
     title: _Metadata = None
-    context: _Metadata = None
-
-
-class _SearchResultBlock(_Model):
-    type: Literal["search_result"]
-    source: _Metadata = None
-    title: _Metadata = None
-    content: object = None
 
 
 class _ToolResultBlock(_Model):
@@ -182,14 +169,12 @@ _AttachmentBlock: TypeAlias = (
     | _InputFileBlock
     | _ImageBlock
     | _DocumentBlock
-    | _SearchResultBlock
     | _ToolResultBlock
 )
 _BLOCK_ADAPTER: Final[TypeAdapter[_AttachmentBlock]] = TypeAdapter(
     Annotated[_AttachmentBlock, Field(discriminator="type")]
 )
 _Block: TypeAlias = _AttachmentBlock | _MalformedBlock
-_TEXT_BLOCK_ADAPTER: Final[TypeAdapter[_TextBlock]] = TypeAdapter(_TextBlock)
 _MESSAGE_ADAPTER: Final[TypeAdapter[_Message]] = TypeAdapter(_Message)
 _ITEMS_ADAPTER: Final[TypeAdapter[list[object]]] = TypeAdapter(list[object])
 
@@ -261,12 +246,7 @@ def _block_attachments(block: _Block, index: int) -> tuple[_Classified, ...]:
         case _InputImageBlock():
             return _file_sources((_url(block.image_url), _url(block.url)), block.file_id, None, index, "image")
         case _DocumentBlock():
-            prompt_text: Final = _lines((block.title, block.context))
-            described: Final = (_text_file(prompt_text, None, index, "file"),) if prompt_text else ()
-            return (_from_source(block.source, block.title, index, "file"), *described)
-        case _SearchResultBlock():
-            text: Final = _lines((block.source, block.title, _joined_text(block.content)))
-            return (_text_file(text, block.title, index, "file") if text else _NOT_AN_ATTACHMENT,)
+            return (_from_source(block.source, block.title, index, "file"),)
         case _:
             return (_classify_block(block, index),)
 
@@ -302,10 +282,6 @@ def _classify_block(block: _Block, index: int) -> _Classified:
             return _NOT_AN_ATTACHMENT
 
 
-def _lines(parts: tuple[str | None, ...]) -> str:
-    return "\n".join(part for part in parts if part)
-
-
 def _url(value: _ImageURL | str | None) -> str | None:
     return value.url if isinstance(value, _ImageURL) else value
 
@@ -321,31 +297,16 @@ def _from_uri(raw_uri: str | None, name: str | None, index: int, kind: Attachmen
 
 
 def _from_source(source: _Source, name: str | None, index: int, kind: AttachmentType) -> _Classified:
-    """base64, plain text, text blocks or a URL; a file_id has nothing to send."""
+    """base64 or a URL; text sources stay in the text check, and a file_id has nothing to send."""
     match source:
         case _Source(type="base64", data=str(data)):
             return _from_base64(data, name, index, kind, source.media_type)
-        case _Source(type="text", data=str(data)):
-            content: Final = base64.b64encode(data.encode(errors="surrogatepass")).decode()
-            return Attachment(_filename(name, index, source.media_type or "text/plain"), kind, content=content), False
-        case _Source(type="content", content=text_blocks) if text := _joined_text(text_blocks):
-            return _text_file(text, name, index, kind)
+        case _Source(type=str(source_type)) if source_type in _TEXT_SOURCE_TYPES and kind == "file":
+            return _NOT_AN_ATTACHMENT
         case _Source(type="url", url=str(url)) if url:
             return Attachment(_filename(name, index, url=url), kind, url=url), False
         case _:
             return _UNSENDABLE
-
-
-def _text_file(text: str, name: str | None, index: int, kind: AttachmentType) -> _Classified:
-    encoded: Final = base64.b64encode(text.encode(errors="surrogatepass")).decode()
-    return Attachment(_filename(name, index, "text/plain"), kind, content=encoded), False
-
-
-def _joined_text(content: object) -> str:
-    if isinstance(content, str):
-        return content
-    blocks: Final = (_parse(_TEXT_BLOCK_ADAPTER, item) for item in _parse(_ITEMS_ADAPTER, content) or ())
-    return "\n".join(block.text for block in blocks if block is not None)
 
 
 def _from_base64(data: str, name: str | None, index: int, kind: AttachmentType, media_type: str | None) -> _Classified:
@@ -421,6 +382,11 @@ def _block_without_content(block: object) -> object:
     dropped: Final = _FILE_CHECKED_FIELDS.get(block_type) if isinstance(block_type, str) else None
     if dropped is None:
         return block
+    source: Final = _parse(_OBJECT_MAPPING, mapping.get("source")) or {}
+    source_type: Final = source.get("type")
+    if block_type == "document" and isinstance(source_type, str) and source_type in _TEXT_SOURCE_TYPES:
+        # A text document is prompt text, so it is checked here; only images nested in it go to the file check
+        return {**mapping, "source": _without_content(source, "content")}
     kept: Final = {key: value for key, value in mapping.items() if key not in dropped}
     file: Final = _parse(_OBJECT_MAPPING, mapping.get("file")) if block_type == "file" else None
     if file is None:
