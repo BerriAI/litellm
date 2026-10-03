@@ -5,6 +5,24 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 )
 
+// mcpServerAuthTypes mirrors the LiteLLM API's MCPAuth enum (litellm/types/mcp.py).
+// Values are sent to the API verbatim, so the provider must only accept the
+// API's canonical values. Note the API expects "bearer_token", not "bearer".
+var mcpServerAuthTypes = []string{
+	"none",
+	"api_key",
+	"bearer_token",
+	"basic",
+	"authorization",
+	"oauth2",
+	"aws_sigv4",
+	"token",
+	"oauth2_token_exchange",
+	"oauth2_id_jag",
+	"true_passthrough",
+	"oauth_delegate",
+}
+
 func resourceLiteLLMMCPServer() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceLiteLLMMCPServerCreate,
@@ -53,15 +71,17 @@ func resourceLiteLLMMCPServer() *schema.Resource {
 				Description: "MCP specification version",
 			},
 			"auth_type": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Default:  "none",
-				ValidateFunc: validation.StringInSlice([]string{
-					"none",
-					"bearer",
-					"basic",
-				}, false),
-				Description: "Authentication type (none, bearer, basic)",
+				Type:         schema.TypeString,
+				Optional:     true,
+				Default:      "none",
+				ValidateFunc: validation.StringInSlice(mcpServerAuthTypes, false),
+				Description:  "Authentication type. Must be a LiteLLM MCPAuth value (none, api_key, bearer_token, basic, authorization, oauth2, aws_sigv4, token, oauth2_token_exchange, oauth2_id_jag, true_passthrough, oauth_delegate). Use bearer_token for bearer auth. Defaults to none",
+			},
+			"auth_value": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Sensitive:   true,
+				Description: "Authentication credential sent to the LiteLLM API as credentials.auth_value (e.g. the bearer token for auth_type \"bearer_token\", the API key for auth_type \"api_key\"). Sensitive: hidden from plan output. Only needed when the chosen auth_type requires a credential; ignored when unset.",
 			},
 			"mcp_access_groups": {
 				Type:        schema.TypeList,

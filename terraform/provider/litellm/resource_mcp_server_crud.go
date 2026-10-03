@@ -25,6 +25,13 @@ func buildMCPServerRequest(d *schema.ResourceData) *MCPServerRequest {
 		AuthType:    d.Get("auth_type").(string),
 	}
 
+	// Set the credential when one is configured. The API redacts credentials
+	// on read, so auth_value is never written back from responses (same as
+	// the sensitive "env" field): the configured value stays in state.
+	if authValue, ok := d.GetOk("auth_value"); ok {
+		req.Credentials = &MCPCredentials{AuthValue: authValue.(string)}
+	}
+
 	// Set optional fields
 	if alias, ok := d.GetOk("alias"); ok {
 		req.Alias = alias.(string)
