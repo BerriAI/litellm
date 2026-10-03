@@ -7,9 +7,13 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
+import httpx
 import pytest
+import respx
 from starlette.routing import WebSocketRoute
 
+import litellm
+from litellm.llms.openai.workload_identity import _workload_identity_auth
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _OPENAI_WS_DISABLED_REFUSAL,
@@ -172,6 +176,65 @@ async def test_openai_websocket_accepts_first_client_subprotocol():
     assert websocket.accepts == ["realtime"]
     assert [call.accept_websocket for call in served.relay.calls] == [False]
     assert websocket.closed is None
+
+
+TOKEN_EXCHANGE_URL: Final = "https://auth.openai.com/oauth/token"
+
+
+@pytest.fixture
+def openai_wif_token_file(monkeypatch, tmp_path):
+    token_file = tmp_path / "subject_token.jwt"
+    token_file.write_text("subject-token-from-file")
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setenv("OPENAI_IDENTITY_PROVIDER_ID", "idp_test123")
+    monkeypatch.setenv("OPENAI_SERVICE_ACCOUNT_ID", "user-test456")
+    monkeypatch.setenv("OPENAI_IDENTITY_TOKEN_FILE", str(token_file))
+    _workload_identity_auth.cache_clear()
+    return token_file
+
+
+@pytest.mark.asyncio
+async def test_openai_websocket_uses_workload_identity_token_without_static_key(openai_wif_token_file):
+    websocket = _FakeWebSocket("/openai_passthrough/v1/realtime", "model=gpt-realtime")
+
+    with patch(GET_CREDENTIALS, return_value=None), respx.mock(assert_all_called=True) as upstream:
+        upstream.post(TOKEN_EXCHANGE_URL).mock(
+            return_value=httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})
+        )
+        served = await _serve(websocket, "v1/realtime", UserAPIKeyAuth(), ENABLED)
+
+    assert [call.custom_headers for call in served.relay.calls] == [
+        MappingProxyType({"Authorization": "Bearer wif-bearer"})
+    ]
+    assert websocket.closed is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "subject_token_present, exchange_outcome",
+    [
+        (True, httpx.Response(401, json={"error": "invalid_grant"})),
+        (True, httpx.ConnectError("auth.openai.com unreachable")),
+        (False, httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})),
+    ],
+    ids=["rejected", "unreachable", "missing_subject_token"],
+)
+async def test_openai_websocket_closes_cleanly_when_workload_identity_exchange_fails(
+    openai_wif_token_file, subject_token_present, exchange_outcome
+):
+    if not subject_token_present:
+        openai_wif_token_file.unlink()
+    websocket = _FakeWebSocket("/openai_passthrough/v1/realtime", "model=gpt-realtime")
+
+    with patch(GET_CREDENTIALS, return_value=None), respx.mock(assert_all_called=False) as upstream:
+        upstream.post(TOKEN_EXCHANGE_URL).mock(side_effect=exchange_outcome)
+        served = await _serve(websocket, "v1/realtime", UserAPIKeyAuth(), ENABLED)
+
+    assert websocket.closed == (1011, "OpenAI workload identity token exchange failed")
+    assert websocket.accepts == []
+    assert served.relay.calls == []
 
 
 @pytest.mark.asyncio
