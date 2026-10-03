@@ -168,7 +168,7 @@ class InMemoryCache(BaseCache):
             return
 
         self.cache_dict[key] = value
-        if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
+        if kwargs.get("refresh_ttl", False) or self.allow_ttl_override(key):
             if "ttl" in kwargs and kwargs["ttl"] is not None:
                 self.ttl_dict[key] = self._clock() + float(kwargs["ttl"])
                 heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))

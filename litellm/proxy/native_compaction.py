@@ -13,6 +13,10 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     inherit_message_logging_privacy,
     initialize_standard_callback_dynamic_params,
 )
+from litellm.litellm_core_utils.internal_call_metadata import (
+    evaluation_billing_context,
+    get_evaluation_billing_owner,
+)
 from litellm.llms.custom_httpx.asgi_handler import get_async_asgi_client
 from litellm.proxy.litellm_pre_call_utils import UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS
 from litellm.router_strategy.complexity_router.context_compaction import (
@@ -40,6 +44,7 @@ async def with_proxy_compaction_executor(call: Awaitable[_ResultT], request: Req
         protocol: Literal["chat", "messages"], payload: Mapping[str, object], parent_model: str | None = None
     ) -> Mapping[str, object]:
         logging_disabled: Final = initialize_standard_callback_dynamic_params().get("turn_off_message_logging") is True
+        billing_owner: Final = get_evaluation_billing_owner()
 
         async def dispatch() -> Mapping[str, object]:
             scope: Final = _JSON_OBJECT.validate_python(request.scope)
@@ -55,6 +60,7 @@ async def with_proxy_compaction_executor(call: Awaitable[_ResultT], request: Req
             with (
                 native_compaction_call(parent_model, str(payload["model"])),
                 inherit_message_logging_privacy(logging_disabled),
+                evaluation_billing_context(billing_owner),
             ):
                 with get_async_asgi_client(
                     app=_ASGI_APP.validate_python(scope["app"]),

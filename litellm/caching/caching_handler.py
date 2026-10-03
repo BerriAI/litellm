@@ -738,10 +738,13 @@ class LLMCachingHandler:
             end_time (datetime): The end time of the operation.
             cache_hit (bool): Whether it was a cache hit.
         """
+        from litellm.litellm_core_utils.litellm_logging import evaluation_logging_snapshot
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
+        receipt_logger: Final = evaluation_logging_snapshot(logging_obj)
+
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine=logging_obj.async_success_handler(
+            async_coroutine=receipt_logger.async_success_handler(
                 result=cached_result,
                 start_time=start_time,
                 end_time=end_time,

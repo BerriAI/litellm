@@ -470,7 +470,13 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             model=model,
             resolved=resolved,
         )
-        current_spend: Final = _as_spend(await self._cached_spend(spend_key))
+        from litellm.proxy.spend_tracking.evaluation_budget import model_budget_spend
+
+        current_spend: Final = (
+            await model_budget_spend(self.dual_cache, spend_key)
+            if entity_type == Litellm_EntityType.USER
+            else _as_spend(await self._cached_spend(spend_key))
+        )
         if legacy_spend_key is None or legacy_spend_key == spend_key:
             return current_spend
         return current_spend + _as_spend(await self._cached_spend(legacy_spend_key))
@@ -499,6 +505,14 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         Example: key=sk-1234567890, model=gpt-4o, max_budget=100, time_period=1d
         """
+        from litellm.litellm_core_utils.internal_call_metadata import EVALUATION_BUDGET_RESERVATION_KEY
+        from litellm.proxy.spend_tracking.evaluation_budget import EvaluationAttempt
+
+        if (
+            isinstance(attempt := kwargs.get(EVALUATION_BUDGET_RESERVATION_KEY), EvaluationAttempt)
+            and attempt.model is not None
+        ):
+            return
         verbose_proxy_logger.debug("in RouterBudgetLimiting.async_log_success_event")
         standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
         if standard_logging_payload is None:
