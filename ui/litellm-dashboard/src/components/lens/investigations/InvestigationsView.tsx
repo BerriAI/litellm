@@ -186,9 +186,13 @@ export function InvestigationsView({
   const detailAgents = lens && finding ? findingAgents(lens, finding) : [];
   const sheetAgents = peeked ? peeked.agents : detailAgents;
 
+  const onDetail = !!selected && !peek;
+  const showDetailNav = onDetail && !showEmpty;
+  const showTables = !onDetail && lenses.length > 0;
+  const showMissing = missingSelection && !lens && !peek;
   return (
     <section aria-label="Investigations" className="flex w-full min-w-0 flex-1 flex-col gap-3">
-      {!showEmpty && !!selected && !peek && (
+      {showDetailNav && (
         <InvestigationNavigation
           lens={lens}
           showActions={showActions}
@@ -220,7 +224,7 @@ export function InvestigationsView({
         />
       )}
       {showReadiness && !ready && <ReadinessBanner activityReady={activityReady} className="py-2 text-xs" />}
-      {(!selected || peek) && lenses.length > 0 && (
+      {showTables && (
         <div className="flex min-h-0 flex-1 flex-col gap-2">
           {active && (
             <HeaderActions>
@@ -262,7 +266,7 @@ export function InvestigationsView({
           )}
         </div>
       )}
-      {missingSelection && !lens && !peek && <InvestigationMissing selectLens={selectLens} />}
+      {showMissing && <InvestigationMissing selectLens={selectLens} />}
       {lens && !peek && (
         <InvestigationDetail
           lens={lens}
