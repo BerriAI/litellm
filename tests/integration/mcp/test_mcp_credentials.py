@@ -26,6 +26,7 @@ from integration._support.mcp import (
 )
 from integration._support.oauth_server import oauth_server
 from integration._support.process import owned_proxy
+from pydantic import TypeAdapter
 
 ADD: Final = {"a": 2, "b": 3}
 STATIC_MODES: Final = (
@@ -351,6 +352,7 @@ def _echoed_description(outcome: Outcome) -> str:
 
 
 _PROBE_ARGUMENTS: Final = {"probe": _PROBE}
+_HEADERS: Final = TypeAdapter(dict[str, str])
 
 
 def _store_byok_credential(scenario: Scenario, identity: str, key: str, secret: str) -> None:
@@ -446,4 +448,43 @@ def test_callers_with_different_server_scoped_auth_headers_are_evaluated_against
             _echoed_description(globex.call(f"{alias}-add", _PROBE_ARGUMENTS)),
         )
         assert seen == (f"Adds for Bearer {acme_token}", f"Adds for Bearer {globex_token}"), seen
+        assert tool_calls(peer.drain()) == (), "a blocked probe reached the peer"
+
+
+def test_deprecated_string_x_mcp_auth_callers_on_a_user_less_key_own_separate_listings(echo_rig: Gateway) -> None:
+    tool: Final = ScriptedTool(
+        "add",
+        lambda _: text_result("3"),
+        description=lambda headers: "Adds for " + headers.get("authorization", "nobody"),
+    )
+    with scripted_peer(tool) as peer, echo_rig.scenario() as scenario:
+        alias: Final = "legacy" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias, auth_type="bearer_token")
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        first_token: Final = "first-" + uuid.uuid4().hex
+        second_token: Final = "second-" + uuid.uuid4().hex
+        first: Final = McpCaller(echo_rig, key, "mcp", alias, {"x-mcp-auth": f"Bearer {first_token}"})
+        second: Final = McpCaller(echo_rig, key, "mcp", alias, {"x-mcp-auth": f"Bearer {second_token}"})
+        assert _echoed_description(first.call(f"{alias}-add", _PROBE_ARGUMENTS)) == _UNLISTED
+        peer.drain()
+        assert first.list_tools().ok
+        listings: Final = _listings(peer)
+        assert len(listings) == 1, listings
+        listed_with: Final = _HEADERS.validate_python(listings[0]["headers"])
+        assert listed_with.get("authorization") == f"Bearer {first_token}", listed_with
+        warm: Final = eventually(
+            lambda: _echoed_description(first.call(f"{alias}-add", _PROBE_ARGUMENTS)),
+            lambda seen: seen != _UNLISTED,
+        )
+        assert warm == f"Adds for Bearer {first_token}", warm
+        assert _echoed_description(second.call(f"{alias}-add", _PROBE_ARGUMENTS)) == _UNLISTED
+        assert second.list_tools().ok
+        seen: Final = eventually(
+            lambda: (
+                _echoed_description(first.call(f"{alias}-add", _PROBE_ARGUMENTS)),
+                _echoed_description(second.call(f"{alias}-add", _PROBE_ARGUMENTS)),
+            ),
+            lambda pair: _UNLISTED not in pair,
+        )
+        assert seen == (f"Adds for Bearer {first_token}", f"Adds for Bearer {second_token}"), seen
         assert tool_calls(peer.drain()) == (), "a blocked probe reached the peer"
