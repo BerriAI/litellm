@@ -4,8 +4,9 @@ Helper functions to handle images passed in messages
 
 import asyncio
 import base64
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
@@ -15,6 +16,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
+from litellm.litellm_core_utils.prompt_templates.common_utils import infer_content_type_from_url_and_content
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, safe_get
 from litellm.types.llms.openai import AllMessageValues
 
@@ -55,23 +57,16 @@ def _process_image_response(response: Response, url: str) -> str:
 
     base64_image: Final = base64.b64encode(image_bytes).decode("utf-8")
 
-    image_type: Final = response.headers.get("Content-Type")
-    if image_type is None:
-        img_type = url.split(".")[-1].lower()
-        _img_type: Final = {
-            "jpg": "image/jpeg",
-            "jpeg": "image/jpeg",
-            "png": "image/png",
-            "gif": "image/gif",
-            "webp": "image/webp",
-        }.get(img_type)
-        if _img_type is None:
-            raise Exception(
-                f"Error: Unsupported image format. Format={_img_type}. Supported types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']"
-            )
-        img_type = _img_type
-    else:
-        img_type = image_type
+    try:
+        img_type: Final = infer_content_type_from_url_and_content(
+            url=url,
+            content=bytes(image_bytes),
+            current_content_type=response.headers.get("Content-Type"),
+        )
+    except ValueError as e:
+        raise litellm.ImageFetchError(
+            f"Error: Unable to determine image content type from the server's headers, the URL, or the image bytes. url={url}"
+        ) from e
 
     result: Final = f"data:{img_type};base64,{base64_image}"
     in_memory_cache.set_cache(url, result)
@@ -308,18 +303,30 @@ async def _fetch_data_urls(remote_urls: tuple[str, ...]) -> tuple[str, ...]:
         raise
 
 
+def _remote_urls_to_inline(
+    messages: Iterable[AllMessageValues], should_inline: Callable[[RemoteMedia], bool]
+) -> tuple[str, ...]:
+    parts: Final = chain.from_iterable(_content_parts(message) for message in messages)
+    remotes: Final = (remote for part in parts if (remote := _parse_remote_part(part)) is not None)
+    return tuple(dict.fromkeys(remote.url for remote in remotes if should_inline(_remote_media(remote))))
+
+
+def inline_remote_media(
+    messages: list[AllMessageValues],  # mutable-ok: every transform_request takes list[AllMessageValues]
+    should_inline: Callable[[RemoteMedia], bool] = inline_every_remote_url,
+) -> list[AllMessageValues]:  # mutable-ok: every transform_request takes list[AllMessageValues]
+    remote_urls: Final = _remote_urls_to_inline(messages, should_inline)
+    if not remote_urls:
+        return messages
+    data_urls: Final = MappingProxyType({url: convert_url_to_base64(url) for url in remote_urls})
+    return [_inline_message(message, data_urls, should_inline) for message in messages]
+
+
 async def async_inline_remote_media(
     messages: list[AllMessageValues],  # mutable-ok: every transform_request takes list[AllMessageValues]
     should_inline: Callable[[RemoteMedia], bool] = inline_every_remote_url,
 ) -> list[AllMessageValues]:  # mutable-ok: every transform_request takes list[AllMessageValues]
-    remote_urls: Final = tuple(
-        dict.fromkeys(
-            remote.url
-            for message in messages
-            for part in _content_parts(message)
-            if (remote := _parse_remote_part(part)) is not None and should_inline(_remote_media(remote))
-        )
-    )
+    remote_urls: Final = _remote_urls_to_inline(messages, should_inline)
     if not remote_urls:
         return messages
     data_urls: Final = await _fetch_data_urls(remote_urls)
