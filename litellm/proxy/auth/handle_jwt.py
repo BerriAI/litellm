@@ -27,6 +27,7 @@ from fastapi import HTTPException, status
 from jwt.api_jwk import PyJWK
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
@@ -65,6 +66,7 @@ from litellm.proxy.auth.resolvers.grants import GrantResolver, UserLookup, canon
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.team_grants import team_grants, team_model_aliases
 from litellm.proxy.common_utils.user_api_key_cache import (
+    AUTH_OBJECTS_TARGET,
     UserApiKeyCache,
     get_management_object_ttl,
 )
@@ -783,15 +785,18 @@ class JWTHandler:
         except httpx.TransportError as e:
             raise JWKSUnreachableError(f"{type(e).__name__} fetching {url} after {JWKS_FETCH_ATTEMPTS} attempts") from e
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def _get_cached_value(self, cache_key: str) -> _CachedValueT | None:
         cached: Final = await self.user_api_key_cache.async_get_cache(cache_key)
         return cast("_CachedValueT | None", cached)  # cast-ok: cache reads are untyped
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def _get_cached_timestamp(self, cache_key: str) -> float | None:
         cached: Final = await self.user_api_key_cache.async_get_cache(cache_key)
         # A JSON round-trip through Redis hands a whole-number epoch back as an int.
         return float(cached) if isinstance(cached, (int, float)) else None
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def _put_cached_value(self, cache_key: str, value: JWKKeyValue | str | float, ttl: float) -> None:
         await self.user_api_key_cache.async_set_cache(key=cache_key, value=value, ttl=ttl)
 
@@ -1006,6 +1011,7 @@ class JWTHandler:
         else:
             return False
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def get_oidc_userinfo(self, token: str) -> dict:
         """
         Fetch user information from OIDC UserInfo endpoint.
@@ -2057,6 +2063,7 @@ class JWTAuthManager:
         return
 
     @staticmethod
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def sync_user_role_and_teams(
         jwt_handler: JWTHandler,
         jwt_valid_token: dict,

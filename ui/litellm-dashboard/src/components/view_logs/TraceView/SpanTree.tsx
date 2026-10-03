@@ -1,30 +1,30 @@
 "use client";
 
-import {
-  Bot,
-  BrainCircuit,
-  ChevronDown,
-  ChevronRight,
-  CircleDot,
-  CornerDownRight,
-  MoreHorizontal,
-  Network,
-  Wrench,
-} from "lucide-react";
-import { useEffect, useRef } from "react";
+import { MoreHorizontal, PanelRightOpen, Search, X } from "lucide-react";
+import { useEffect, useMemo, useRef } from "react";
 
-import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
 
-import { DurationBar } from "./DurationBar";
-import type { TreeRow } from "./traceTree";
-import type { SpanType } from "./traceTypes";
-import { fmtMs } from "./traceUtils";
+import { FoldChevron } from "./Collapse";
+import { groupFacts, SpanHoverCard, spanFacts } from "./SpanHoverCard";
+import { SpanIcon } from "./SpanIcon";
+import type { GroupRowData, SpanRowData, TreeRow } from "./traceTree";
+import type { TraceSummary } from "./traceTypes";
+import { fmtMs, previewText, type TreeGuide, treeGuides } from "./traceUtils";
 
 interface SpanTreeProps {
   rows: TreeRow[];
-  spanCount: number;
-  totalMs: number;
+  summary: TraceSummary;
   selectedId: string;
   hideFramework: boolean;
   onSelect: (id: string) => void;
@@ -32,23 +32,240 @@ interface SpanTreeProps {
   onToggleSpan: (id: string) => void;
   onToggleGroup: (id: string) => void;
   onLoadMore: (groupId: string) => void;
+  onOpenDetails?: () => void;
+  /** Inside the side drawer J/K switch runs, so spans move with the arrow keys. */
+  embedded?: boolean;
+  query: string;
+  onQueryChange: (query: string) => void;
+  errorsOnly: boolean;
+  onErrorsOnlyChange: (enabled: boolean) => void;
+  filtering: boolean;
+  onClearFilters: () => void;
+  onCollapseAll: () => void;
 }
-
-const ROW_GRID = "grid h-8 w-full grid-cols-[minmax(275px,1fr)_minmax(94px,27%)_64px] items-center px-2";
-const INDENT_PX = 15;
 
 const rowClass = (selected: boolean): string =>
   cn(
-    ROW_GRID,
-    "border-b border-border/60 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
-    selected ? "bg-accent shadow-[inset_2px_0_0_var(--foreground)]" : "hover:bg-muted/60",
+    "relative flex w-full items-stretch border-l-2 px-3.5 text-left outline-none transition-colors duration-150 ease-[cubic-bezier(0.4,0,0.2,1)] focus-visible:shadow-[inset_0_0_0_2px_var(--ring)] motion-reduce:transition-none",
+    selected ? "border-l-primary bg-accent" : "border-l-transparent hover:bg-muted/60",
   );
 
-/** Span list with a framework toggle, a timeline column and keyboard hints. */
+const LINE = "border-dashed border-border [border-width:0] [border-left-width:1px]";
+const ELBOW = "border-dashed border-border [border-width:0] [border-left-width:1px] [border-bottom-width:1px]";
+const NAME = "line-clamp-2 break-words text-[13px] leading-[1.2] font-medium";
+const META = "text-xs leading-4 text-muted-foreground tabular-nums";
+
+/** One 20px column per ancestor: pass-through rails for open branches, an elbow into this row's tile. */
+function Gutters({ depth, guide }: { depth: number; guide: TreeGuide }) {
+  return Array.from({ length: depth }, (_, level) => {
+    const parentColumn = level === depth - 1;
+    const passThrough = parentColumn ? !guide.last : guide.rails[level] === true;
+    return (
+      <span key={level} aria-hidden="true" data-testid="tree-gutter" className="relative w-5 shrink-0">
+        {passThrough && (
+          <span data-guide="rail" className={cn("absolute inset-y-0 left-[calc(50%-0.5px)] w-px", LINE)} />
+        )}
+        {parentColumn && (
+          <span data-guide="elbow" className={cn("absolute top-0 left-[calc(50%-0.5px)] h-3.5 w-1/2", ELBOW)} />
+        )}
+      </span>
+    );
+  });
+}
+
+function TileColumn({ tile, stem }: { tile: React.ReactNode; stem: boolean }) {
+  return (
+    <span className="flex w-5 shrink-0 flex-col items-center pt-1">
+      <span className="relative z-raised">{tile}</span>
+      {stem && <span aria-hidden="true" data-guide="stem" className={cn("w-px grow", LINE)} />}
+    </span>
+  );
+}
+
+interface RowProps {
+  guide: TreeGuide;
+  selected: boolean;
+  traceStartMs: number;
+  totalMs: number;
+  onSelect: (id: string) => void;
+  onToggleSpan: (id: string) => void;
+  onToggleGroup: (id: string) => void;
+  filtering: boolean;
+}
+
+function Caret({ open, onToggle, label }: { open: boolean; onToggle: () => void; label: string }) {
+  return (
+    <span
+      role="button"
+      tabIndex={-1}
+      aria-label={label}
+      className="grid size-6 shrink-0 place-items-center self-start rounded-[4px] p-0.5 text-muted-foreground transition-colors duration-150 hover:bg-muted motion-reduce:transition-none"
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle();
+      }}
+    >
+      <FoldChevron open={open} className="size-4" />
+    </span>
+  );
+}
+
+function RowBody({ children, trailing }: { children: React.ReactNode; trailing: React.ReactNode }) {
+  return (
+    <span className="ml-2 grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 py-1">
+      <span className="flex min-w-0 flex-col gap-1">{children}</span>
+      {trailing}
+    </span>
+  );
+}
+
+interface WaterfallProps {
+  startMs: number;
+  durationMs: number;
+  totalMs: number;
+  tone: string;
+}
+
+/** Thin bar showing where this span sits inside the run's timeline. */
+function Waterfall({ startMs, durationMs, totalMs, tone }: WaterfallProps) {
+  const left = totalMs > 0 ? Math.min(99, (startMs / totalMs) * 100) : 0;
+  const width = totalMs > 0 ? Math.max(0.8, Math.min(100 - left, (durationMs / totalMs) * 100)) : 0.8;
+  return (
+    <span
+      aria-hidden="true"
+      data-testid="span-waterfall"
+      className="relative block h-[3px] w-full overflow-hidden rounded-full bg-muted"
+    >
+      <span className={cn("absolute inset-y-0 rounded-full", tone)} style={{ left: `${left}%`, width: `${width}%` }} />
+    </span>
+  );
+}
+
+const barTone = (type: string, failed: boolean): string => {
+  if (failed) return "bg-destructive";
+  if (type === "tool") return "bg-muted-foreground/40";
+  if (type === "llm") return "bg-muted-foreground/50";
+  return "bg-muted-foreground/60";
+};
+
+function SpanRow({
+  row,
+  guide,
+  selected,
+  traceStartMs,
+  totalMs,
+  onSelect,
+  onToggleSpan,
+  filtering,
+}: RowProps & { row: SpanRowData }) {
+  const { span } = row;
+  const failed = span.status === "error";
+  const duration = <span className={cn(META, "shrink-0")}>{fmtMs(span.duration_ms)}</span>;
+  const caret = row.hasChildren && (
+    <Caret open={!row.collapsed} label={row.collapsed ? "Expand" : "Collapse"} onToggle={() => onToggleSpan(row.id)} />
+  );
+  const leafDuration = !row.hasChildren && <span className="flex min-h-5 items-center">{duration}</span>;
+  return (
+    <SpanHoverCard facts={spanFacts(span)} traceStartMs={traceStartMs}>
+      <button
+        type="button"
+        role="treeitem"
+        aria-expanded={row.hasChildren ? !row.collapsed : undefined}
+        aria-selected={selected}
+        data-row-id={row.id}
+        onClick={() => onSelect(row.id)}
+        onDoubleClick={() => row.hasChildren && onToggleSpan(row.id)}
+        className={rowClass(selected)}
+      >
+        <Gutters depth={row.depth} guide={guide} />
+        <TileColumn tile={<SpanIcon type={span.type} model={span.model} error={failed} />} stem={guide.stem} />
+        <RowBody trailing={caret || leafDuration}>
+          <span className={cn("flex min-w-0 items-center gap-2", row.hasChildren ? "min-h-6" : "min-h-5")}>
+            <span className={cn(NAME, failed ? "text-destructive" : "text-foreground")}>{span.name}</span>
+            {row.hasChildren && duration}
+          </span>
+          {span.type === "agent" && span.parent_span_id && span.input_preview ? (
+            <span className="truncate text-xs text-muted-foreground" title={previewText(span.input_preview)}>
+              {previewText(span.input_preview)}
+            </span>
+          ) : (
+            filtering && (
+              <span className="truncate text-xs text-muted-foreground">
+                {previewText(span.input_preview) || span.agent}
+              </span>
+            )
+          )}
+          <Waterfall
+            startMs={span.start_offset_ms}
+            durationMs={span.duration_ms}
+            totalMs={totalMs}
+            tone={barTone(span.type, failed)}
+          />
+        </RowBody>
+      </button>
+    </SpanHoverCard>
+  );
+}
+
+function GroupRow({
+  row,
+  guide,
+  selected,
+  traceStartMs,
+  totalMs,
+  onSelect,
+  onToggleGroup,
+}: RowProps & { row: GroupRowData }) {
+  const groupStart = Math.min(...row.members.map((m) => m.start_offset_ms));
+  const groupEnd = Math.max(...row.members.map((m) => m.start_offset_ms + m.duration_ms));
+  return (
+    <SpanHoverCard facts={groupFacts(row)} traceStartMs={traceStartMs}>
+      <button
+        type="button"
+        role="treeitem"
+        aria-expanded={row.expanded}
+        aria-selected={selected}
+        data-row-id={row.id}
+        onClick={() => {
+          onSelect(row.id);
+          onToggleGroup(row.id);
+        }}
+        className={rowClass(selected)}
+      >
+        <Gutters depth={row.depth} guide={guide} />
+        <TileColumn
+          tile={<SpanIcon type={row.type} model={row.members[0]?.model ?? null} error={row.failedCount > 0} />}
+          stem={guide.stem}
+        />
+        <RowBody
+          trailing={
+            <Caret
+              open={row.expanded}
+              label={row.expanded ? "Collapse" : "Expand"}
+              onToggle={() => onToggleGroup(row.id)}
+            />
+          }
+        >
+          <span className="flex min-h-6 min-w-0 items-center gap-2">
+            <span className={cn(NAME, row.isFailureGroup ? "text-destructive" : "text-foreground")}>{row.name}</span>
+            <span className={cn(META, "shrink-0")}>×{row.members.length}</span>
+          </span>
+          {row.failedCount > 0 && <span className={cn(META, "text-destructive")}>{row.failedCount} failed</span>}
+          <Waterfall
+            startMs={groupStart}
+            durationMs={groupEnd - groupStart}
+            totalMs={totalMs}
+            tone={barTone(row.type, row.isFailureGroup)}
+          />
+        </RowBody>
+      </button>
+    </SpanHoverCard>
+  );
+}
+
 export function SpanTree({
   rows,
-  spanCount,
-  totalMs,
+  summary,
   selectedId,
   hideFramework,
   onSelect,
@@ -56,8 +273,19 @@ export function SpanTree({
   onToggleSpan,
   onToggleGroup,
   onLoadMore,
+  onOpenDetails,
+  embedded = false,
+  query,
+  onQueryChange,
+  errorsOnly,
+  onErrorsOnlyChange,
+  filtering,
+  onClearFilters,
+  onCollapseAll,
 }: SpanTreeProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const guides = useMemo(() => treeGuides(rows.map((row) => row.depth)), [rows]);
+  const traceStartMs = Date.parse(summary.start_time);
 
   useEffect(() => {
     scrollRef.current
@@ -67,52 +295,143 @@ export function SpanTree({
 
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col border-r border-border bg-card" aria-label="Run spans">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-muted/40 px-2.5">
-        <span className="shrink-0 font-mono text-[9px] text-muted-foreground tabular-nums">
-          {`${spanCount.toLocaleString()} spans`}
-        </span>
-        <label className="ml-auto flex shrink-0 cursor-pointer items-center gap-2 font-mono text-[9px] text-muted-foreground">
-          hide framework
-          <Switch
-            size="sm"
-            checked={hideFramework}
-            onCheckedChange={(checked) => onToggleHideFramework(checked)}
-            aria-label="Hide framework spans"
+      <div className="shrink-0 space-y-3 border-b px-3 py-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-medium">
+            Steps{" "}
+            <span className="ml-1 text-xs font-normal text-muted-foreground">
+              {summary.span_count.toLocaleString()}
+            </span>
+          </span>
+          <div className="flex items-center gap-1">
+            {onOpenDetails && (
+              <Button variant="ghost" size="icon-xs" onClick={onOpenDetails} aria-label="Show details">
+                <PanelRightOpen className="size-4" />
+              </Button>
+            )}
+            <DropdownMenu>
+              <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label="Step display options" />}>
+                <MoreHorizontal className="size-4" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuCheckboxItem checked={hideFramework} onCheckedChange={onToggleHideFramework}>
+                  Hide framework spans
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={onCollapseAll}>Collapse branches</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+        <div className="relative">
+          <Search className="pointer-events-none absolute top-2.5 left-2.5 size-3.5 text-muted-foreground" />
+          <Input
+            aria-label="Search steps"
+            placeholder="Search steps"
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            className="h-8 pr-8 pl-8 text-xs shadow-none md:text-xs"
           />
-        </label>
+          {query && (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Clear step search"
+              className="absolute top-1 right-1"
+              onClick={() => onQueryChange("")}
+            >
+              <X className="size-3" />
+            </Button>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          <Button
+            variant={!errorsOnly ? "secondary" : "ghost"}
+            size="xs"
+            aria-pressed={!errorsOnly}
+            onClick={() => onErrorsOnlyChange(false)}
+          >
+            All steps
+          </Button>
+          <Button
+            variant={errorsOnly ? "secondary" : "ghost"}
+            size="xs"
+            aria-pressed={errorsOnly}
+            onClick={() => onErrorsOnlyChange(true)}
+          >
+            Errors <span className="ml-1 text-muted-foreground">{summary.error_count}</span>
+          </Button>
+          {filtering && (
+            <span className="ml-auto text-xs text-muted-foreground" role="status">
+              {rows.length} found
+            </span>
+          )}
+        </div>
       </div>
-      <div
-        className={cn(
-          ROW_GRID,
-          "h-7 shrink-0 border-b border-border bg-muted/60 font-mono text-[8px] tracking-[0.1em] text-muted-foreground uppercase",
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto py-2">
+        {rows.length === 0 && (
+          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+            <p>No matching steps</p>
+            <Button variant="link" size="sm" onClick={onClearFilters}>
+              Clear filters
+            </Button>
+          </div>
         )}
-      >
-        <span className="pl-6">Span</span>
-        <span>Timeline</span>
-        <span className="text-right">Time</span>
+        <div role="tree" aria-label="Spans in time order">
+          {rows.map((row, i) => {
+            if (row.kind === "load-more") {
+              return (
+                <button
+                  key={row.id}
+                  type="button"
+                  onClick={() => onLoadMore(row.groupId)}
+                  className={cn(rowClass(false), "h-8 text-[13px] tracking-[-0.26px] text-muted-foreground")}
+                >
+                  <Gutters depth={row.depth} guide={guides[i]} />
+                  <span className="ml-0.5 flex items-center gap-2">
+                    <MoreHorizontal className="relative z-raised size-3.5" /> Load 20 more
+                    <span className="text-muted-foreground">({row.remaining} remaining)</span>
+                  </span>
+                </button>
+              );
+            }
+            const shared = {
+              guide: guides[i],
+              selected: selectedId === row.id,
+              traceStartMs,
+              totalMs: summary.duration_ms,
+              onSelect,
+              onToggleSpan,
+              onToggleGroup,
+              filtering,
+            };
+            return row.kind === "group" ? (
+              <GroupRow key={row.id} row={row} {...shared} />
+            ) : (
+              <SpanRow key={row.id} row={row} {...shared} />
+            );
+          })}
+        </div>
       </div>
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto" role="tree" aria-label="Spans in time order">
-        {rows.map((row) => (
-          <TreeRowItem
-            key={row.id}
-            row={row}
-            selected={selectedId === row.id}
-            totalMs={totalMs}
-            onSelect={onSelect}
-            onToggleSpan={onToggleSpan}
-            onToggleGroup={onToggleGroup}
-            onLoadMore={onLoadMore}
-          />
-        ))}
-      </div>
-      <div className="flex h-7 shrink-0 items-center gap-3 border-t border-border bg-muted/60 px-3 font-mono text-[8px] text-muted-foreground">
-        <span>
-          <Kbd>J</Kbd>/<Kbd>K</Kbd> move
-        </span>
-        <span>
+      <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-3 py-2 text-[10px] text-muted-foreground">
+        {embedded ? (
+          <>
+            <span className="whitespace-nowrap">
+              <Kbd>↑</Kbd>/<Kbd>↓</Kbd> step
+            </span>
+            <span className="whitespace-nowrap">
+              <Kbd>J</Kbd>/<Kbd>K</Kbd> trace
+            </span>
+          </>
+        ) : (
+          <span className="whitespace-nowrap">
+            <Kbd>J</Kbd>/<Kbd>K</Kbd> move
+          </span>
+        )}
+        <span className="whitespace-nowrap">
           <Kbd>←</Kbd>/<Kbd>→</Kbd> fold
         </span>
-        <span>
+        <span className="whitespace-nowrap">
           <Kbd>Esc</Kbd> close
         </span>
       </div>
@@ -126,142 +445,4 @@ function Kbd({ children }: { children: React.ReactNode }) {
       {children}
     </kbd>
   );
-}
-
-interface TreeRowItemProps {
-  row: TreeRow;
-  selected: boolean;
-  totalMs: number;
-  onSelect: (id: string) => void;
-  onToggleSpan: (id: string) => void;
-  onToggleGroup: (id: string) => void;
-  onLoadMore: (groupId: string) => void;
-}
-
-function TreeRowItem({ row, selected, totalMs, onSelect, onToggleSpan, onToggleGroup, onLoadMore }: TreeRowItemProps) {
-  if (row.kind === "load-more") {
-    return (
-      <button
-        type="button"
-        onClick={() => onLoadMore(row.groupId)}
-        className="flex h-8 w-full items-center gap-2 border-b border-border/60 px-2 font-mono text-[9px] text-foreground hover:bg-muted/60"
-        style={{ paddingLeft: `${18 + row.depth * INDENT_PX}px` }}
-      >
-        <MoreHorizontal className="size-3" /> load 20 more{" "}
-        <span className="text-muted-foreground">({row.remaining} remaining)</span>
-      </button>
-    );
-  }
-
-  if (row.kind === "group") {
-    const start = Math.min(...row.members.map((m) => m.start_offset_ms));
-    const end = Math.max(...row.members.map((m) => m.start_offset_ms + m.duration_ms));
-    return (
-      <button
-        type="button"
-        role="treeitem"
-        aria-expanded={row.expanded}
-        aria-selected={selected}
-        data-row-id={row.id}
-        onClick={() => {
-          onSelect(row.id);
-          onToggleGroup(row.id);
-        }}
-        className={rowClass(selected)}
-      >
-        <div className="flex min-w-0 items-center" style={{ paddingLeft: `${row.depth * INDENT_PX}px` }}>
-          {row.expanded ? (
-            <ChevronDown className="mr-0.5 size-3 shrink-0 text-muted-foreground" />
-          ) : (
-            <ChevronRight className="mr-0.5 size-3 shrink-0 text-muted-foreground" />
-          )}
-          <TypeIcon type={row.type} error={row.failedCount > 0} />
-          <span
-            className={cn(
-              "ml-1.5 truncate font-mono text-[10px]",
-              row.isFailureGroup ? "text-destructive" : "text-foreground",
-            )}
-          >
-            {row.name}
-          </span>
-          <span className="ml-1 font-mono text-[9px] text-muted-foreground">×{row.members.length}</span>
-          <span className="ml-2 hidden truncate font-mono text-[8px] text-muted-foreground xl:block">
-            p50={fmtMs(row.p50Duration)}
-          </span>
-          {row.failedCount > 0 && (
-            <span className="ml-2 shrink-0 font-mono text-[8px] text-destructive">{row.failedCount} failed</span>
-          )}
-        </div>
-        <DurationBar startMs={start} durationMs={end - start} totalMs={totalMs} error={row.isFailureGroup} />
-        <span className="text-right font-mono text-[9px] text-muted-foreground tabular-nums">
-          {fmtMs(row.p50Duration)}
-        </span>
-      </button>
-    );
-  }
-
-  const { span } = row;
-  const failed = span.status === "error";
-  return (
-    <button
-      type="button"
-      role="treeitem"
-      aria-expanded={row.hasChildren ? !row.collapsed : undefined}
-      aria-selected={selected}
-      data-row-id={row.id}
-      onClick={() => onSelect(row.id)}
-      onDoubleClick={() => row.hasChildren && onToggleSpan(row.id)}
-      className={rowClass(selected)}
-    >
-      <div className="flex min-w-0 items-center" style={{ paddingLeft: `${row.depth * INDENT_PX}px` }}>
-        {row.hasChildren ? (
-          <span
-            role="button"
-            tabIndex={-1}
-            aria-label={row.collapsed ? "Expand" : "Collapse"}
-            className="mr-0.5 shrink-0"
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggleSpan(row.id);
-            }}
-          >
-            {row.collapsed ? (
-              <ChevronRight className="size-3 text-muted-foreground" />
-            ) : (
-              <ChevronDown className="size-3 text-muted-foreground" />
-            )}
-          </span>
-        ) : (
-          <CornerDownRight className="mr-0.5 size-3 shrink-0 text-muted-foreground/50" />
-        )}
-        <TypeIcon type={span.type} error={failed} />
-        <span className={cn("ml-1.5 truncate font-mono text-[10px]", failed ? "text-destructive" : "text-foreground")}>
-          {span.name}
-        </span>
-        {span.model && (
-          <span className="ml-2 hidden truncate font-mono text-[8px] text-muted-foreground 2xl:block">
-            {span.model.split("/").pop()}
-          </span>
-        )}
-      </div>
-      <DurationBar startMs={span.start_offset_ms} durationMs={span.duration_ms} totalMs={totalMs} error={failed} />
-      <span
-        className={cn(
-          "text-right font-mono text-[9px] tabular-nums",
-          failed ? "text-destructive" : "text-muted-foreground",
-        )}
-      >
-        {fmtMs(span.duration_ms)}
-      </span>
-    </button>
-  );
-}
-
-function TypeIcon({ type, error }: { type: SpanType; error: boolean }) {
-  const className = cn("size-3 shrink-0", error ? "text-destructive" : "text-muted-foreground");
-  if (type === "agent") return <Bot className={className} />;
-  if (type === "llm") return <BrainCircuit className={className} />;
-  if (type === "tool") return <Wrench className={className} />;
-  if (type === "framework") return <Network className={className} />;
-  return <CircleDot className={className} />;
 }

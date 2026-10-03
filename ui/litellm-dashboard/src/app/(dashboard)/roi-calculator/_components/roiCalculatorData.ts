@@ -25,8 +25,14 @@ const SYNCED_AT_FORMAT_OPTIONS: Intl.DateTimeFormatOptions = {
 
 export const formatMoney = (value: number | null | undefined): string => {
   if (value == null) return "—";
-  if (value > 0 && value < 0.01) return "<$0.01";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(value);
+  if (value > 0 && value < 0.000001) return "<$0.000001";
+  const options: Intl.NumberFormatOptions = {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: Math.abs(value) > 0 && Math.abs(value) < 0.01 ? 6 : 2,
+  };
+  return new Intl.NumberFormat("en-US", options).format(value);
 };
 
 export const formatNumber = (value: number | null | undefined): string =>
@@ -45,7 +51,8 @@ export const effortNote = (basis: string | null | undefined): string =>
 
 export const coverageLabel = (summary: {
   metrics: Pick<ROISummary["metrics"], "matched_prs" | "merged_prs">;
-}): string => `${summary.metrics.matched_prs} of ${summary.metrics.merged_prs} PRs have email matches`;
+  source_provider?: string;
+}): string => `${summary.metrics.matched_prs} of ${summary.metrics.merged_prs} matched`;
 
 export const estimateLabel = (estimate: ROIEstimate): string => {
   if (estimate.status === "estimated") return `${formatNumber(estimate.hours)} hrs`;
@@ -57,9 +64,17 @@ export const filterPulls = (pulls: ROIPull[], query: string): ROIPull[] => {
   const normalized = query.trim().toLocaleLowerCase();
   if (!normalized) return pulls;
   return pulls.filter((pull) =>
-    `${pull.title} ${pull.repo} ${pull.number} ${pull.login}`.toLocaleLowerCase().includes(normalized),
+    `${pull.title} ${pull.repo} ${pull.number} ${pull.login} ${pull.source_branch ?? ""}`
+      .toLocaleLowerCase()
+      .includes(normalized),
   );
 };
+
+export const highestCostPulls = (pulls: ROIPull[]): ROIPull[] =>
+  pulls
+    .filter((pull) => pull.branch_cost?.status === "matched")
+    .sort((left, right) => (right.branch_cost?.spend ?? 0) - (left.branch_cost?.spend ?? 0))
+    .slice(0, 5);
 
 export const peopleCsv = (summary: Pick<ROISummary, "people" | "start" | "end" | "effort_basis">): string => {
   const escape = (value: unknown): string => {
@@ -83,7 +98,7 @@ export const peopleCsv = (summary: Pick<ROISummary, "people" | "start" | "end" |
   return [
     [
       "email",
-      "github_logins",
+      "source_logins",
       "gateway_spend_usd",
       "estimated_hours",
       "merged_prs",
@@ -98,4 +113,33 @@ export const peopleCsv = (summary: Pick<ROISummary, "people" | "start" | "end" |
   ]
     .map((row) => row.map(escape).join(","))
     .join("\r\n");
+};
+
+export const branchCostLabel = (pull: ROIPull): string => {
+  if (!pull.branch_cost || pull.branch_cost.status === "unavailable") return "Sync to calculate";
+  if (pull.branch_cost.status === "ambiguous") return "Ambiguous branch";
+  if (pull.branch_cost.status === "unattributed") return "No tagged requests";
+  return formatMoney(pull.branch_cost.spend);
+};
+
+export const estimatorModelOptions = (settings: Pick<ROISettings, "available_models" | "estimator_models">) => {
+  const details = new Map(settings.estimator_models?.map((model) => [model.model_name, model]));
+  const isLuna = (name: string) => /(?:^|\/)gpt-6-luna(?:-\d{4}-\d{2}-\d{2})?$/i.test(name);
+  return settings.available_models
+    .map((name) => {
+      const models = details.get(name)?.provider_models ?? [];
+      const recommended = models.length > 0 && models.every(isLuna);
+      const label = [...new Set(models.map((model) => (isLuna(model) ? "GPT-6 Luna" : model)))].join(", ") || name;
+      return {
+        value: name,
+        label,
+        sublabel: [recommended ? "Recommended" : "", label !== name ? `Gateway name: ${name}` : ""]
+          .filter(Boolean)
+          .join(" · "),
+        recommended,
+      };
+    })
+    .sort(
+      (left, right) => Number(right.recommended) - Number(left.recommended) || left.label.localeCompare(right.label),
+    );
 };

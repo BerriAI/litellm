@@ -196,6 +196,19 @@ class TestBaseRepository:
         budgets = await repo.find_many(where={"budget_id": "b1"}, skip=0, take=10, order={"budget_id": "asc"})
         assert len(budgets) == 1
 
+    @pytest.mark.asyncio
+    async def test_find_many_in_returns_models_from_every_chunk(self, prisma_client):
+        budget_ids: Final = tuple(f"b{i}" for i in range(IN_LIST_CHUNK_SIZE + 1))
+
+        async def find_many(where: dict[str, Any]) -> list[MockRecord]:
+            return [MockRecord({"budget_id": budget_id, "max_budget": 1.0}) for budget_id in where["budget_id"]["in"]]
+
+        prisma_client.db.litellm_budgettable.find_many = AsyncMock(side_effect=find_many)
+        budgets = await BudgetRepository(prisma_client).find_many_in("budget_id", budget_ids)
+        assert [budget.budget_id for budget in budgets] == list(budget_ids)
+        assert all(isinstance(budget, LiteLLM_BudgetTable) for budget in budgets)
+        assert prisma_client.db.litellm_budgettable.find_many.await_count == 2
+
     def test_record_to_dict_branches(self):
         from litellm.repositories.base_repository import record_to_dict
 

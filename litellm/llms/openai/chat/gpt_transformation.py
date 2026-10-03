@@ -459,7 +459,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             if self._targets_openai_hosted_endpoint(provider, raw_api_base if isinstance(raw_api_base, str) else None)
             else drop_non_python_regex_patterns
         )
-        sanitized: Final = [  # mutable-ok: request tools are a JSON list
+        sanitized: Final = [
             tool_with_sanitized_parameters(tool, sanitize) if isinstance(tool, dict) else tool for tool in tools
         ]
         return MappingProxyType({"tools": sanitized})
@@ -831,7 +831,7 @@ class OpenAIUnknownModelConfig(OpenAIGPTConfig):
     forward reasoning_effort and let the server decide whether it is supported."""
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: inherited contract
-        return super().get_supported_openai_params(model) + ["reasoning_effort"]  # mutable-ok: inherited contract
+        return super().get_supported_openai_params(model) + ["reasoning_effort"]
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):

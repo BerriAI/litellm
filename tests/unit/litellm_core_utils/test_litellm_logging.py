@@ -321,6 +321,18 @@ async def test_mcp_direct_content_edit_invalidates_stale_structured_data(logging
     assert "SECRET-1234" not in result.model_dump_json()
 
 
+def test_with_client_facing_stream_model_stamps_a_copy_of_the_priced_response(logging_obj):
+    response = ModelResponse(model="claude-opus-4-6@default")
+    logging_obj.client_facing_stream_model = "claude-opus-4.6"
+    logged = logging_obj._with_client_facing_stream_model(response)
+    assert (logged.model, response.model) == ("claude-opus-4.6", "claude-opus-4-6@default")
+
+
+def test_with_client_facing_stream_model_keeps_the_response_when_the_proxy_set_no_model(logging_obj):
+    response = ModelResponse(model="claude-opus-4-6@default")
+    assert logging_obj._with_client_facing_stream_model(response) is response
+
+
 def test_get_combined_callback_list_preserves_insertion_order(logging_obj):
     assert logging_obj.get_combined_callback_list(
         dynamic_success_callbacks=["prometheus", "langfuse", "datadog", "otel", "s3"],
@@ -3227,6 +3239,7 @@ async def test_e2e_generate_cold_storage_object_key_successful():
             prefix="",  # No prefix for cold storage
             start_time=start_time,
             s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
+            partition_granularity="day",
         )
 
         # Verify the result
@@ -3276,6 +3289,7 @@ async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path()
             prefix="",
             start_time=start_time,
             s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
+            partition_granularity="day",
         )
 
         # Verify the result
@@ -3320,6 +3334,7 @@ async def test_e2e_generate_cold_storage_object_key_with_logger_no_s3_path():
             prefix="",
             start_time=start_time,
             s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
+            partition_granularity="day",
         )
 
         # Verify the result

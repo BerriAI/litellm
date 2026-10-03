@@ -915,11 +915,9 @@ if MCP_AVAILABLE:
     ) -> UserAPIKeyAuth:
         """The one credential this tools request acts as.
 
-        A toolset name narrows the caller's own credential to that toolset; otherwise a dashboard
-        session is swapped for its admitted subject. The two are mutually exclusive by construction,
-        which is why they share an owner: the admitted subject resolves per grant source and a team
-        source deliberately carries none of the caller's ``object_permission``, so a toolset
-        narrowing layered on top would evaporate on every team-granted server."""
+        A toolset name pins the acting principal to that toolset through ``_apply_toolset_scope``,
+        which itself swaps a dashboard session for its admitted subject; otherwise the swap happens
+        here so both shapes resolve as the same identity."""
         if not toolset_name:
             return await acting_user_auth(user_api_key_dict)
 
@@ -1756,7 +1754,7 @@ if MCP_AVAILABLE:
                     "MCP tools/list preview timed out after %s seconds while paginating upstream tools",
                     listing_deadline,
                 )
-                return {  # mutable-ok: error response payload
+                return {
                     "status": "error",
                     "error": True,
                     "message": f"Timed out listing tools after {listing_deadline} seconds. "

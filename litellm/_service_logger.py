@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import litellm
+from litellm._internal_context import current_service_target
 from litellm._logging import verbose_logger
 
 from .integrations.custom_logger import CustomLogger
@@ -250,6 +251,7 @@ class ServiceLogging(CustomLogger):
             duration=duration,
             call_type=call_type,
             caller=caller,
+            target=current_service_target() if service == ServiceTypes.REDIS else None,
             event_metadata=event_metadata,
         )
 
@@ -356,6 +358,7 @@ class ServiceLogging(CustomLogger):
             duration=duration,
             call_type=call_type,
             caller=caller,
+            target=current_service_target() if service == ServiceTypes.REDIS else None,
             event_metadata=event_metadata,
         )
 
