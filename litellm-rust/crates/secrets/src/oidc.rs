@@ -3,8 +3,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use jsonwebtoken::dangerous::insecure_decode_claims;
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use litellm_core_utils::settings::Lookup;
+use litellm_http::Client;
 use moka::future::Cache;
 use serde::Deserialize;
 
@@ -67,49 +68,67 @@ struct OidcTokenClaims {
 enum NumericDate {
     Number(f64),
     String(String),
+    Boolean(bool),
 }
 
 impl NumericDate {
     fn seconds(self) -> Option<f64> {
         match self {
             Self::Number(value) => Some(value),
-            Self::String(value) => value.parse().ok(),
+            Self::String(value) => value.trim().parse().ok(),
+            Self::Boolean(value) => Some(f64::from(u8::from(value))),
         }
         .filter(|value| value.is_finite())
     }
 }
 
 pub struct OidcResolver {
-    client: reqwest::Client,
+    client: Client,
     google_identity_endpoint: reqwest::Url,
     cache: Cache<String, (SecretValue, SystemTime)>,
     clock: fn() -> SystemTime,
+    #[cfg(feature = "azure")]
+    azure_token_provider: std::sync::Arc<dyn litellm_secrets_azure::AzureTokenProvider>,
 }
 
-impl Default for OidcResolver {
-    fn default() -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(600))
-            .connect_timeout(Duration::from_secs(5))
-            .build()
-            .expect("HTTP client configuration");
-        Self::new(
-            client,
-            reqwest::Url::parse("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity").expect("static URL"),
-        )
-    }
-}
+const GOOGLE_IDENTITY_ENDPOINT: &str =
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity";
+
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 
 impl OidcResolver {
-    pub fn new(client: reqwest::Client, google_identity_endpoint: reqwest::Url) -> Self {
+    pub fn new(client: Client) -> Self {
         Self {
             client,
-            google_identity_endpoint,
+            google_identity_endpoint: reqwest::Url::parse(GOOGLE_IDENTITY_ENDPOINT)
+                .expect("static URL"),
             cache: Cache::builder()
                 .max_capacity(200)
                 .time_to_live(GOOGLE_TOKEN_MAX_TTL)
                 .build(),
             clock: SystemTime::now,
+            #[cfg(feature = "azure")]
+            azure_token_provider: std::sync::Arc::new(
+                litellm_secrets_azure::NativeAzureTokenProvider::default(),
+            ),
+        }
+    }
+
+    pub fn with_google_identity_endpoint(self, google_identity_endpoint: reqwest::Url) -> Self {
+        Self {
+            google_identity_endpoint,
+            ..self
+        }
+    }
+
+    #[cfg(feature = "azure")]
+    pub fn with_azure_token_provider(
+        self,
+        provider: std::sync::Arc<dyn litellm_secrets_azure::AzureTokenProvider>,
+    ) -> Self {
+        Self {
+            azure_token_provider: provider,
+            ..self
         }
     }
 
@@ -141,6 +160,15 @@ impl OidcResolver {
                 if let Some(path) = environment.get(AZURE_FEDERATED_TOKEN_FILE) {
                     return read_file(&path).await.map(Some);
                 }
+                #[cfg(feature = "azure")]
+                {
+                    self.azure_token_provider
+                        .get_token(audience, environment)
+                        .await
+                        .map(Some)
+                        .map_err(Error::Azure)
+                }
+                #[cfg(not(feature = "azure"))]
                 Err(Error::UnsupportedOidc)
             }
             OidcProvider::Github => {
@@ -152,6 +180,7 @@ impl OidcResolver {
                 let response = self
                     .client
                     .get(url)
+                    .timeout(REQUEST_TIMEOUT)
                     .query(&[("audience", audience)])
                     .bearer_auth(authorization)
                     .header("Accept", "application/json; api-version=2.0")
@@ -186,6 +215,7 @@ impl OidcResolver {
                 let response = self
                     .client
                     .get(self.google_identity_endpoint.clone())
+                    .timeout(REQUEST_TIMEOUT)
                     .query(&[("audience", audience)])
                     .header("Metadata-Flavor", "Google")
                     .send()
@@ -256,7 +286,14 @@ async fn read_allowed_file(
 
 fn oidc_token_cache_ttl(token: &str, now: SystemTime, max_ttl: Duration) -> Option<Duration> {
     let fallback = Some(max_ttl);
-    let Ok(claims) = insecure_decode_claims::<OidcTokenClaims>(token) else {
+    let segments: Vec<_> = token.split('.').collect();
+    let [_, payload, _] = segments.as_slice() else {
+        return fallback;
+    };
+    let Ok(decoded) = URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')) else {
+        return fallback;
+    };
+    let Ok(claims) = serde_json::from_slice::<OidcTokenClaims>(&decoded) else {
         return fallback;
     };
     let Some(exp) = claims.exp.and_then(NumericDate::seconds) else {

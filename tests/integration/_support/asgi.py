@@ -4,8 +4,8 @@ import queue
 import socket
 import threading
 import time
+from collections.abc import Callable, Iterator
 from concurrent.futures import Future
-from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Final
 
@@ -14,7 +14,7 @@ from starlette.types import ASGIApp
 
 
 @contextmanager
-def asgi_server(app: ASGIApp) -> Iterator[str]:
+def asgi_server(app: ASGIApp, *, before_stop: Callable[[], None] | None = None) -> Iterator[str]:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port: Final = listener.getsockname()[1]
@@ -47,7 +47,7 @@ def asgi_server(app: ASGIApp) -> Iterator[str]:
         class Capture(logging.Handler):
             def emit(self, record: logging.LogRecord) -> None:
                 if record.thread == worker.ident and record.levelno >= logging.ERROR:
-                    errors.put(record.getMessage())
+                    errors.put(self.format(record))
 
         handler: Final = Capture()
         logger: Final = logging.getLogger("uvicorn.error")
@@ -60,6 +60,8 @@ def asgi_server(app: ASGIApp) -> Iterator[str]:
                 time.sleep(0.01)
             yield f"http://127.0.0.1:{port}"
         finally:
+            if before_stop is not None:
+                before_stop()
             server.should_exit = True
             worker.join(timeout=8)
             forced: Final = worker.is_alive()

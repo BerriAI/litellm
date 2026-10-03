@@ -1,12 +1,12 @@
 model_list:
-  - model_name: gemini-2.5-flash-lite
+  - model_name: gemini-3.5-flash-lite
     litellm_params:
-      model: gemini/gemini-2.5-flash-lite
+      model: gemini/gemini-3.5-flash-lite
       api_key: os.environ/GEMINI_API_KEY
 
-  - model_name: vertex-gemini-2.5-flash-lite
+  - model_name: vertex-gemini-3.5-flash-lite
     litellm_params:
-      model: vertex_ai/gemini-2.5-flash-lite
+      model: vertex_ai/gemini-3.5-flash-lite
       vertex_location: global
 
 router_settings:

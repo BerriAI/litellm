@@ -7,6 +7,8 @@ through _hidden_params to the x-litellm-callback-duration-ms response header.
 
 import asyncio
 import datetime
+import time
+from collections.abc import Iterator
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -427,6 +429,15 @@ class TestCallbackDurationInCustomHeaders:
         assert "x-litellm-callback-duration-ms" not in headers
 
 
+@pytest.fixture(params=["UTC", "Asia/Kolkata", "America/Los_Angeles"])
+def process_timezone(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    monkeypatch.setenv("TZ", request.param)
+    time.tzset()
+    yield request.param
+    monkeypatch.undo()
+    time.tzset()
+
+
 class TestDetailedTiming:
     """Tests for detailed per-phase timing headers behind LITELLM_DETAILED_TIMING."""
 
@@ -472,13 +483,14 @@ class TestDetailedTiming:
         assert hidden.get("timing_pre_processing_ms") == 20.0
         assert hidden.get("timing_post_processing_ms") == 10.0  # 530 - 20 - 500
 
-    def test_detailed_timing_pre_processing_uses_receive_anchor(self, monkeypatch):
+    @pytest.mark.skipif(not hasattr(time, "tzset"), reason="switching the process timezone needs time.tzset()")
+    def test_detailed_timing_pre_processing_uses_receive_anchor(self, monkeypatch, process_timezone: str):
         monkeypatch.setattr(response_metadata_mod, "LITELLM_DETAILED_TIMING", True)
 
         result = ModelResponse()
         received_at = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
         start = received_at + datetime.timedelta(milliseconds=200)
-        api_call_start = start.replace(tzinfo=None)
+        api_call_start = start.astimezone().replace(tzinfo=None)
         end = start + datetime.timedelta(milliseconds=530)
         logging_obj = self._make_logging_obj(
             llm_api_duration_ms=500.0,
@@ -595,8 +607,7 @@ def test_update_response_metadata_prices_per_second_deployment_from_its_stamped_
     litellm.register_model(
         model_cost={
             deployment_id: {
-                "input_cost_per_second": 0.02,
-                "output_cost_per_second": 0.04,
+                "cost_per_second": 0.02,
                 "litellm_provider": "openai",
                 "mode": "chat",
             }
@@ -615,8 +626,7 @@ def test_update_response_metadata_prices_per_second_deployment_from_its_stamped_
     logging_obj.update_environment_variables(
         model="gpt-5.4-nano",
         litellm_params={
-            "input_cost_per_second": 0.02,
-            "output_cost_per_second": 0.04,
+            "cost_per_second": 0.02,
             "metadata": {"model_info": {"id": deployment_id}},
         },
         optional_params={},
@@ -638,4 +648,4 @@ def test_update_response_metadata_prices_per_second_deployment_from_its_stamped_
     )
 
     assert result._response_ms == pytest.approx(2000)
-    assert result._hidden_params["response_cost"] == pytest.approx((0.02 + 0.04) * 2)
+    assert result._hidden_params["response_cost"] == pytest.approx(0.02 * 2)

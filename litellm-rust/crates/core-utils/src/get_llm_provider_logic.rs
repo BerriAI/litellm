@@ -1,7 +1,24 @@
+use strum::{EnumString, IntoStaticStr};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CustomLlmProvider<'a> {
     pub model: &'a str,
     pub custom_llm_provider: &'a str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+pub enum LlmProviders {
+    Anthropic,
+    AwsTextract,
+    AzureAi,
+    Bedrock,
+    Cohere,
+    Mistral,
+    Openai,
+    OpenaiLike,
+    Reducto,
+    VertexAi,
 }
 
 pub fn get_custom_llm_provider<'a>(

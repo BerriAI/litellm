@@ -124,6 +124,20 @@ class LLMUsage:
     total_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     cache_read_input_tokens: int | None = None
+    reasoning_tokens: int | None = None
+
+    @property
+    def uncached_input_tokens(self) -> int | None:
+        if self.input_tokens is None:
+            return None
+        cached: Final = (self.cache_read_input_tokens or 0) + (self.cache_creation_input_tokens or 0)
+        return max(self.input_tokens - cached, 0)
+
+    @property
+    def non_reasoning_output_tokens(self) -> int | None:
+        if self.output_tokens is None:
+            return None
+        return max(self.output_tokens - (self.reasoning_tokens or 0), 0)
 
     @classmethod
     def from_standard_logging_payload(cls, payload: StandardLoggingPayload) -> LLMUsage:
@@ -134,6 +148,10 @@ class LLMUsage:
         raw_details: Final = usage_object.get("prompt_tokens_details")
         prompt_details: Final[Mapping[str, object]] = (
             raw_details if isinstance(raw_details, Mapping) else MappingProxyType({})
+        )
+        raw_completion_details: Final = usage_object.get("completion_tokens_details")
+        completion_details: Final[Mapping[str, object]] = (
+            raw_completion_details if isinstance(raw_completion_details, Mapping) else MappingProxyType({})
         )
         return cls(
             input_tokens=as_int(payload.get("prompt_tokens")),
@@ -150,6 +168,7 @@ class LLMUsage:
                 prompt_details.get("cached_tokens"),
                 usage_object.get("prompt_cache_hit_tokens"),
             ),
+            reasoning_tokens=_cache_token_value(completion_details.get("reasoning_tokens")),
         )
 
 
@@ -309,6 +328,7 @@ class GuardrailSpanData:
 class ServiceSpanData:
     service_name: str
     call_type: str | None = None
+    caller: str | None = None
     error: SpanError | None = None
     # Caller-supplied attributes to stamp on the service span, passed through
     # from ``async_service_*_hook(event_metadata=...)``. The mapper owns how
@@ -330,6 +350,7 @@ class ServiceSpanData:
         return cls(
             service_name=payload.service.value,
             call_type=payload.call_type,
+            caller=payload.caller,
             error=SpanError(message=payload.error) if payload.error else None,
             event_metadata=sanitize_event_metadata(event_metadata),
         )
@@ -407,6 +428,7 @@ class LLMCallSpanData:
     call_type: str | None = None
     request_route: str | None = None
     trace: TraceControls = field(default_factory=TraceControls)
+    session_id: str | None = None
     embedding_output: EmbeddingOutput | None = None
 
     @classmethod
@@ -417,6 +439,7 @@ class LLMCallSpanData:
         time_to_first_chunk_seconds: float | None = None,
         request_route: str | None = None,
         trace: TraceControls | None = None,
+        session_id: str | None = None,
     ) -> LLMCallSpanData:
         params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
         # The single parse of the request's metadata — the request-vs-provider
@@ -463,6 +486,7 @@ class LLMCallSpanData:
             call_type=call_type or None,
             request_route=request_route or context.identity.request_route,
             trace=trace or TraceControls(),
+            session_id=session_id or None,
             embedding_output=embedding_output if capture_content else None,
         )
 
@@ -760,6 +784,8 @@ def _output_choices(response: Mapping[str, object]) -> tuple[Mapping[str, object
         or _ocr_choices(response)
         or _transcription_choices(response)
         or _moderation_choices(response)
+        or _rerank_choices(response)
+        or _search_choices(response)
         or _image_choices(response)
         or _binary_choices(response)
     )
@@ -774,9 +800,15 @@ def _joined_choice(parts: tuple[str, ...]) -> tuple[_Choice, ...]:
     return (_text_choice("\n\n".join(parts)),) if parts else ()
 
 
+def _text_completion_choice(choice: Mapping[str, object], text: str) -> Mapping[str, object]:
+    synthesized: Final = _text_choice(text, as_str(choice.get("finish_reason")))
+    merged: Final = (*choice.items(), *synthesized.items())
+    return {k: v for k, v in merged if k != "text"}
+
+
 def _completion_choices(response: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     return tuple(
-        _text_choice(text, as_str(choice.get("finish_reason")))
+        _text_completion_choice(choice, text)
         if "message" not in choice and isinstance(text := choice.get("text"), str)
         else choice
         for choice in _dicts(response.get("choices"))
@@ -813,6 +845,32 @@ def _moderation_verdict(flagged: bool, categories: object) -> str:
         else ()
     )
     return f"flagged: {', '.join(hits)}" if hits else "flagged"
+
+
+def _rerank_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
+    return _joined_choice(
+        tuple(
+            _rerank_line(index, score, result.get("document"))
+            for result in _dicts(response.get("results"))
+            if (index := as_int(result.get("index"))) is not None
+            if (score := as_float(result.get("relevance_score"))) is not None
+        )
+    )
+
+
+def _rerank_line(index: int, score: float, document: object) -> str:
+    text: Final = as_str((as_str_mapping(document) or {}).get("text"))
+    return f"[{index}] {score}\n{text}" if text else f"[{index}] {score}"
+
+
+def _search_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
+    return _joined_choice(
+        tuple(
+            line
+            for result in _dicts(response.get("results"))
+            if (line := "\n".join(part for key in ("title", "url", "snippet") if (part := as_str(result.get(key)))))
+        )
+    )
 
 
 def _image_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:

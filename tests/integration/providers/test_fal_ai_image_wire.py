@@ -4,11 +4,14 @@ from pathlib import Path
 from typing import Final
 
 import httpx
-import litellm
 import pytest
-from integration._support.client import Gateway
+import yaml
+from integration._support.client import Gateway, object_value
+from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
+
+import litellm
 
 _GPT_IMAGE_MODEL: Final = "openai/gpt-image-2.5/flare/text-to-image"
 _FLUX_MODEL: Final = "fal-ai/flux/dev"
@@ -301,6 +304,44 @@ def test_fal_flux_lora_depth_edit_sends_single_image_url_and_charges_flat_row(ga
         ]
         cost: Final = _response_cost(response)
         assert cost == _approx(_catalog_cost("fal_ai/fal-ai/flux-lora-depth"))
-        assert [(request.method, request.target) for request in wire.drain()] == [
-            ("POST", "/fal-ai/flux-lora-depth")
-        ]
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/fal-ai/flux-lora-depth")]
+
+
+@pytest.mark.covers("other.provider_wire.fal_ai.global_api_base_routes_image_generation")
+def test_fal_flux_dev_generation_without_deployment_api_base_uses_global_api_base(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.headers["authorization"] == "Key synthetic-fal-key"
+        assert request.target == "/fal-ai/flux/dev"
+        assert _JSON_OBJECT.validate_json(request.body) == {"prompt": _PROMPT, "num_images": 1}
+        return Reply(body=_image_response(((f"{wire_url}/files/global.png", 1024, 1024),), _PROMPT))
+
+    with wire_server(respond) as wire:
+        wire_url: Final = wire.url
+        configuration: Final = _JSON_OBJECT.validate_python(
+            yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        )
+        configuration["litellm_settings"] = {
+            **object_value(configuration["litellm_settings"]),
+            "api_base": wire.url,
+        }
+        path: Final = tmp_path / "global-api-base.yaml"
+        path.write_text(yaml.safe_dump(configuration))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(model=f"fal_ai/{_FLUX_MODEL}", api_key="synthetic-fal-key", api_base=None)
+            response: Final = candidate.request(
+                "POST", "/v1/images/generations", {"model": model, "prompt": _PROMPT, "n": 1}
+            )
+            assert response.status_code == 200, response.text
+            payload: Final = _JSON_OBJECT.validate_json(response.content)
+            assert payload["data"] == [
+                {
+                    "url": f"{wire.url}/files/global.png",
+                    "b64_json": None,
+                    "revised_prompt": None,
+                    "provider_specific_fields": {"width": 1024, "height": 1024, "content_type": "image/png"},
+                }
+            ]
+            assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/fal-ai/flux/dev")]
