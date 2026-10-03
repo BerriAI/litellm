@@ -997,6 +997,19 @@ class TestBedrockMantleClaudeChatRoute:
         assert str(sent.url) == "https://bedrock-mantle.us-east-2.api.aws/v1/chat/completions"
         assert response.choices[0].message.content == "ok"
 
+    @pytest.mark.parametrize("request_type", ["chat_completion", "embeddings"])
+    def test_supported_openai_params_follow_the_route_the_model_takes(self, request_type):
+        claude_params = litellm.get_supported_openai_params(
+            model="anthropic.claude-opus-5-5", custom_llm_provider="bedrock_mantle", request_type=request_type
+        )
+        open_weight_params = litellm.get_supported_openai_params(
+            model="openai.gpt-oss-120b", custom_llm_provider="bedrock_mantle", request_type=request_type
+        )
+
+        assert claude_params is not None and open_weight_params is not None
+        assert "thinking" in claude_params
+        assert "thinking" not in open_weight_params
+
 
 class TestBedrockMantlePricing:
     """Tests that verify Bedrock Mantle uses correct AWS Bedrock pricing, not OpenAI pricing."""
