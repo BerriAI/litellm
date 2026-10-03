@@ -5778,9 +5778,7 @@ async def _execute_virtual_key_regeneration(
         upsert=object_permission_upsert,
         prisma_client=prisma_client,
     )
-    update_data: Final = MappingProxyType(
-        {"token": new_token_hash, "key_name": new_token_key_name, **update_values}
-    )
+    update_data: Final = MappingProxyType({"token": new_token_hash, "key_name": new_token_key_name, **update_values})
 
     jsonified_update_data: Final[Mapping[str, object]] = prisma_client.jsonify_object(data=update_data)
 
