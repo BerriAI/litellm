@@ -53,6 +53,7 @@ import runwayLogo from "../../public/assets/logos/runway.png";
 import sambanovaLogo from "../../public/assets/logos/sambanova.svg";
 import sapLogo from "../../public/assets/logos/sap.png";
 import scxAiLogo from "../../public/assets/logos/scx_ai.svg";
+import aiandLogo from "../../public/assets/logos/aiand.svg";
 import snowflakeLogo from "../../public/assets/logos/snowflake.svg";
 import sonioxLogo from "../../public/assets/logos/soniox.svg";
 import tencentLogo from "../../public/assets/logos/tencent.svg";
@@ -165,6 +166,7 @@ export enum Providers {
   Sambanova = "Sambanova",
   SAP = "SAP Generative AI Hub",
   SCX_AI = "SCX.ai",
+  AIAND = "ai&",
   Snowflake = "Snowflake",
   Soniox = "Soniox",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
@@ -285,6 +287,7 @@ export const provider_map: Record<string, string> = {
   Sambanova: "sambanova",
   SAP: "sap",
   SCX_AI: "scx-ai",
+  AIAND: "aiand",
   Snowflake: "snowflake",
   Soniox: "soniox",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
@@ -385,6 +388,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Sambanova]: sambanovaLogo.src,
   [Providers.SAP]: sapLogo.src,
   [Providers.SCX_AI]: scxAiLogo.src,
+  [Providers.AIAND]: aiandLogo.src,
   [Providers.Snowflake]: snowflakeLogo.src,
   [Providers.Soniox]: sonioxLogo.src,
   [Providers.Tencent]: tencentLogo.src,
@@ -456,6 +460,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.SageMaker]: "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
   [Providers.Sail]: "sail/openai/gpt-oss-120b",
   [Providers.SCX_AI]: "scx-ai/GLM-5.2",
+  [Providers.AIAND]: "aiand/deepseek-ai/deepseek-v4.1-flash",
   [Providers.Snowflake]: "snowflake/mistral-7b",
   [Providers.Tencent]: "tencent/deepseek-v4-pro",
   [Providers.Vertex_AI]: "gemini-pro",

@@ -73,6 +73,19 @@ describe("provider_info_helpers", () => {
       expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.SCX_AI]);
     });
 
+    it("should map aiand slug to the ai& display name and logo", () => {
+      const fromSlug = getProviderLogoAndName("aiand");
+      expect(fromSlug.displayName).toBe(Providers.AIAND);
+      expect(fromSlug.logo).toBe(providerLogoMap[Providers.AIAND]);
+      expect(fromSlug.logo).toBeTruthy();
+    });
+
+    it("should map AIAND enum key to the ai& display name and logo", () => {
+      const fromEnumKey = getProviderLogoAndName("AIAND");
+      expect(fromEnumKey.displayName).toBe(Providers.AIAND);
+      expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.AIAND]);
+    });
+
     it("should map bedrock_mantle slug to Bedrock Mantle display name and logo", () => {
       const result = getProviderLogoAndName("bedrock_mantle");
       expect(result.displayName).toBe(Providers.BedrockMantle);
@@ -227,6 +240,10 @@ describe("provider_info_helpers", () => {
 
     it("should return an scx-ai model placeholder for SCX_AI provider", () => {
       expect(getPlaceholder(Providers.SCX_AI)).toBe("scx-ai/GLM-5.2");
+    });
+
+    it("should return an aiand model placeholder for AIAND provider", () => {
+      expect(getPlaceholder(Providers.AIAND)).toBe("aiand/deepseek-ai/deepseek-v4.1-flash");
     });
 
     it("should return an edenai model placeholder for EDENAI provider", () => {
