@@ -1,15 +1,15 @@
-import { screen, waitFor, within, fireEvent } from "@testing-library/react";
+import { act, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { vi, it, expect, beforeEach, describe, Mock, MockedFunction } from "vitest";
-import { chooseSelectOption, renderWithProviders } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
 import { KEY_TABLE_HIDDEN_COLUMNS, KEY_TABLE_SORT_FIELDS } from "./keyTableColumns";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
-import { regenerateKeyCall } from "../networking";
+import { regenerateKeyCall, teamInfoCall } from "../networking";
 
 // Resolve debounced values synchronously so an applied filter lands in the useKeys query within the test tick.
 vi.mock("@tanstack/react-pacer/debouncer", async () => {
@@ -30,6 +30,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("../networking", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../networking")>()),
   regenerateKeyCall: vi.fn(),
+  teamInfoCall: vi.fn(),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
@@ -43,6 +44,7 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  teamKeys: { all: ["teams"] },
   useAllTeams: vi.fn(() => ({
     data: [{ team_id: "team-1", team_alias: "Test Team" }],
     isLoading: false,
@@ -85,6 +87,7 @@ const mockKey: KeyResponse = {
   spend: 5.5,
   total_spend: 42.25,
   max_budget: 100,
+  key_type: null,
   expires: "2999-12-31T23:59:59Z",
   models: ["gpt-3.5-turbo", "gpt-4"],
   aliases: {},
@@ -103,7 +106,10 @@ const mockKey: KeyResponse = {
   allowed_routes: [],
   permissions: {},
   model_spend: { "gpt-3.5-turbo": 2.5, "gpt-4": 3.0 },
-  model_max_budget: { "gpt-3.5-turbo": 50, "gpt-4": 50 },
+  model_max_budget: {
+    "gpt-3.5-turbo": { budget_limit: 50, time_period: "1m" },
+    "gpt-4": { budget_limit: 50, time_period: "1m" },
+  },
   soft_budget_cooldown: false,
   blocked: false,
   litellm_budget_table: {},
@@ -191,6 +197,7 @@ const lastHistoryMode = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => onUrlUpdate.
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(teamInfoCall).mockReset();
   localStorage.clear();
 
   mockUseKeys.mockReturnValue(keysResult([mockKey]));
@@ -246,6 +253,31 @@ it("should display key information correctly", async () => {
     expect(screen.getByText("$5.5000")).toBeInTheDocument();
     expect(screen.getByText("of $100")).toBeInTheDocument();
   });
+});
+
+it("shows the team-member budget for a key without its own budget", async () => {
+  vi.mocked(teamInfoCall).mockResolvedValue({
+    team_info: {
+      team_id: "member-budget-table-team",
+      team_alias: "Test Team",
+      team_member_budget_table: { max_budget: 50, budget_duration: "30d" },
+    },
+    team_memberships: [{ user_id: "user-1", litellm_budget_table: null }],
+  } as never);
+  mockUseKeys.mockReturnValue(
+    keysResult([{ ...mockKey, team_id: "member-budget-table-team", max_budget: null } as unknown as KeyResponse]),
+  );
+
+  renderWithProviders(<VirtualKeysTable />);
+
+  expect(await screen.findByText("· $0.00 of $50 (team member)")).toBeInTheDocument();
+  expect(teamInfoCall).toHaveBeenCalledWith("test-token", "member-budget-table-team", { keyLimit: 1 });
+
+  await act(async () => {
+    await testQueryClient.invalidateQueries({ queryKey: ["teams"] });
+  });
+
+  expect(teamInfoCall).toHaveBeenCalledTimes(2);
 });
 
 it("shows lifetime spend in its own column next to the period spend meter", async () => {

@@ -5,7 +5,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import { keyDeleteCall, keyUpdateCall } from "../networking";
+import { keyDeleteCall, keyUpdateCall, teamInfoCall } from "../networking";
 import { QueryClient } from "@tanstack/react-query";
 import KeyInfoView, { needsLifetimeSpendBackfill } from "./key_info_view";
 
@@ -86,6 +86,7 @@ vi.mock("../networking", () => ({
   serverRootPath: "",
   keyDeleteCall: vi.fn().mockResolvedValue({}),
   keyUpdateCall: vi.fn().mockResolvedValue({}),
+  teamInfoCall: vi.fn(),
   getPolicyInfoWithGuardrails: vi.fn().mockResolvedValue({
     resolved_guardrails: ["guardrail-1", "guardrail-2"],
   }),
@@ -108,6 +109,7 @@ vi.mock("@/utils/dataUtils", () => ({
 
 describe("KeyInfoView", () => {
   beforeEach(() => {
+    vi.mocked(teamInfoCall).mockReset();
     vi.mocked(useTeams).mockReturnValue({
       teams: [],
       setTeams: vi.fn(),
@@ -122,6 +124,7 @@ describe("KeyInfoView", () => {
     total_spend: 0,
     max_budget: 0,
     expires: "null",
+    key_type: null,
     models: [],
     aliases: {},
     config: {},
@@ -148,6 +151,7 @@ describe("KeyInfoView", () => {
     litellm_budget_table: {},
     organization_id: null,
     created_at: "2025-10-29T01:26:41.613000Z",
+    last_active: null,
     updated_at: "2025-10-29T01:47:33.980000Z",
     team_spend: 100,
     team_alias: "",
@@ -190,12 +194,28 @@ describe("KeyInfoView", () => {
     accessToken: "test-token",
     userId: "test-user",
     userRole: "admin",
+    userRoleLabel: "Admin",
     premiumUser: true,
     token: "test-token",
     userEmail: null,
     disabledPersonalKeyCreation: null,
+    isLoading: false,
+    isAuthorized: true,
+    isViewOnly: false,
+    loginMethod: null,
+    passwordResetRequired: false,
     showSSOBanner: false,
   };
+
+  const authorizedForTeamBudget = {
+    ...baseUseAuthorizedMock,
+    isLoading: false,
+    isAuthorized: true,
+    userRoleLabel: "Admin",
+    isViewOnly: false,
+    loginMethod: null,
+    passwordResetRequired: false,
+  } satisfies ReturnType<typeof useAuthorized>;
 
   const openMoreKeyActions = async () => {
     await userEvent.click(await screen.findByRole("button", { name: /more key actions/i }));
@@ -288,6 +308,66 @@ describe("KeyInfoView", () => {
 
     expect(await screen.findByText("$0.2500")).toBeInTheDocument();
     expect(screen.getByTestId("key-lifetime-spend")).toHaveTextContent("Lifetime spend: $340.5000");
+  });
+
+  it("shows a team-member budget for a key without its own budget", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(authorizedForTeamBudget);
+    vi.mocked(teamInfoCall).mockResolvedValue({
+      team_info: {
+        team_id: "member-budget-info-team",
+        team_alias: "Test Team",
+        team_member_budget_table: { max_budget: 50, budget_duration: "30d" },
+      },
+      team_memberships: [{ user_id: "owner-user-id", spend: 45, litellm_budget_table: null }],
+    } as never);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={
+          {
+            ...MOCK_KEY_DATA,
+            max_budget: null,
+            team_id: "member-budget-info-team",
+            user_id: "owner-user-id",
+            user: { user_id: "owner-user-id", user_email: "owner@example.com", user_alias: null },
+          } as unknown as KeyResponse
+        }
+        onClose={() => {}}
+        keyId="test-key-id"
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByText("Team member spend $45.0000 of $50.00 (team member budget)")).toBeInTheDocument();
+    expect(screen.queryByText("of Unlimited")).not.toBeInTheDocument();
+    expect(teamInfoCall).toHaveBeenCalledWith("test-token", "member-budget-info-team", { keyLimit: 1 });
+
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(await screen.findByText("$50.00 (team member budget)")).toBeInTheDocument();
+  });
+
+  it("keeps an own key budget in the Overview when a team-member budget exists", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(authorizedForTeamBudget);
+    vi.mocked(teamInfoCall).mockResolvedValue({
+      team_info: {
+        team_id: "own-budget-info-team",
+        team_alias: "Test Team",
+        team_member_budget_table: { max_budget: 50, budget_duration: "30d" },
+      },
+      team_memberships: [],
+    } as never);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, max_budget: 20, team_id: "own-budget-info-team", user_id: "owner-user-id" }}
+        onClose={() => {}}
+        keyId="test-key-id"
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByText("of $20.00")).toBeInTheDocument();
+    expect(teamInfoCall).not.toHaveBeenCalled();
   });
 
   it("shows the backfill hint when lifetime spend trails the period spend", async () => {
