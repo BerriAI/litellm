@@ -222,6 +222,9 @@ def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Pa
             down.set()
             with ThreadPoolExecutor(max_workers=5) as pool:
                 second: Final = tuple(chain.from_iterable(pool.map(lambda i: burst(100 + i), range(3))))
+            assert all(response.status_code == 200 for response in second), [
+                (response.status_code, response.text[:200]) for response in second
+            ]
             second_ids: Final = call_ids(second)
             outage_probe: Final = eventually(
                 lambda: (len(rejected), {event["litellm_call_id"] for event in events_for(second_ids)}),
